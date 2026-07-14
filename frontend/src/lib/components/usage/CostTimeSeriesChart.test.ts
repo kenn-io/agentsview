@@ -14,6 +14,7 @@ import type {
   DailyUsageEntry,
   UsageSummaryResponse,
 } from "../../api/types/usage.js";
+import { projectColor } from "../../utils/projectColor.js";
 
 const OBSERVED_WIDTH = 1648;
 
@@ -118,6 +119,23 @@ function usageSummary(): UsageSummaryResponse {
   };
 }
 
+function modelDailyEntry(
+  index: number,
+  models: Array<{ modelName: string; cost: number }>,
+): DailyUsageEntry {
+  const entry = dailyEntry(index);
+  entry.projectBreakdowns = undefined;
+  entry.modelBreakdowns = models.map(({ modelName, cost }) => ({
+    modelName,
+    inputTokens: 60,
+    outputTokens: 30,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    cost,
+  }));
+  return entry;
+}
+
 describe("CostTimeSeriesChart", () => {
   beforeEach(() => {
     globalThis.ResizeObserver =
@@ -180,28 +198,14 @@ describe("CostTimeSeriesChart", () => {
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary.daily = [
-      {
-        ...usage.summary.daily[0]!,
-        projectBreakdowns: undefined,
-        modelBreakdowns: [
-          {
-            modelName: "claude-sonnet-5",
-            inputTokens: 60,
-            outputTokens: 30,
-            cacheCreationTokens: 0,
-            cacheReadTokens: 0,
-            cost: 6,
-          },
-          {
-            modelName: "claude-opus-4-8",
-            inputTokens: 40,
-            outputTokens: 20,
-            cacheCreationTokens: 0,
-            cacheReadTokens: 0,
-            cost: 4,
-          },
-        ],
-      },
+      modelDailyEntry(0, [
+        { modelName: "claude-sonnet-5", cost: 6 },
+        { modelName: "claude-opus-4-8", cost: 4 },
+      ]),
+      modelDailyEntry(1, [
+        { modelName: "claude-sonnet-5", cost: 3 },
+        { modelName: "claude-opus-4-8", cost: 2 },
+      ]),
     ];
 
     const component = mount(CostTimeSeriesChart, { target: document.body });
@@ -210,11 +214,60 @@ describe("CostTimeSeriesChart", () => {
     const paths = Array.from(
       document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
     ).map((path) => path.getAttribute("fill"));
+    const pathData = Array.from(
+      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+    ).map((path) => path.getAttribute("d"));
     const dots = Array.from(
       document.querySelectorAll<HTMLElement>(".legend-dot"),
     ).map((dot) => dot.style.background);
     expect(new Set(paths).size).toBe(2);
+    expect(pathData.every((d) => d?.startsWith("M40,"))).toBe(true);
     expect(dots).toEqual(paths);
+    unmount(component);
+  });
+
+  it("keeps a single rendered model series on its established color", async () => {
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary.daily = [
+      modelDailyEntry(0, [{ modelName: "single-model", cost: 6 }]),
+      modelDailyEntry(1, [{ modelName: "single-model", cost: 3 }]),
+    ];
+
+    const component = mount(CostTimeSeriesChart, { target: document.body });
+    await tick();
+
+    const paths = document.querySelectorAll<SVGPathElement>(
+      "path[opacity='0.7']",
+    );
+    expect(paths).toHaveLength(1);
+    expect(paths[0]!.getAttribute("fill")).toBe(projectColor("single-model"));
+    expect(document.querySelectorAll(".legend-item")).toHaveLength(0);
+    unmount(component);
+  });
+
+  it("keeps rendered other-series output muted", async () => {
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    const models = Array.from({ length: 6 }, (_, index) => ({
+      modelName: `model-${index}`,
+      cost: 6 - index,
+    }));
+    usage.summary.daily = [modelDailyEntry(0, models)];
+
+    const component = mount(CostTimeSeriesChart, { target: document.body });
+    await tick();
+
+    const paths = Array.from(
+      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+    );
+    const dots = Array.from(
+      document.querySelectorAll<HTMLElement>(".legend-dot"),
+    );
+    expect(paths).toHaveLength(6);
+    expect(dots).toHaveLength(6);
+    expect(paths.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
+    expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
     unmount(component);
   });
 });

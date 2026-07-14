@@ -199,4 +199,23 @@ describe("AttributionPanel colors", () => {
     expect(new Set(colors).size).toBe(2);
     unmount(component);
   });
+
+  it("routes distinct model colors through the treemap and rail", async () => {
+    usage.summary = summaryWithModels();
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "treemap";
+
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    const tileColors = Array.from(
+      document.querySelectorAll<SVGRectElement>(".tile rect"),
+    ).map((tile) => tile.getAttribute("fill"));
+    const railColors = Array.from(
+      document.querySelectorAll<HTMLElement>(".rail-dot"),
+    ).map((dot) => dot.style.background);
+    expect(new Set(tileColors).size).toBe(2);
+    expect(railColors).toEqual(tileColors);
+    unmount(component);
+  });
 });
