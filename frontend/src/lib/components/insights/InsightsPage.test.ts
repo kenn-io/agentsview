@@ -145,6 +145,7 @@ const state = vi.hoisted(() => {
       select: vi.fn(),
       selectTask: vi.fn(),
       cancelAll: vi.fn(),
+      cancelInFlightReads: vi.fn(),
       cancelTask: vi.fn(),
       dismissTask: vi.fn(),
       deleteItem: mocks.deleteItem,

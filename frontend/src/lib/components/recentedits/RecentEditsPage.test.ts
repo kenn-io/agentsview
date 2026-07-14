@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
     ],
     has_more: false,
   })),
+  signals: [] as AbortSignal[],
 }));
 
 vi.mock("../../api/generated/index", () => ({
@@ -47,7 +48,11 @@ vi.mock("../../api/generated/index", () => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: (fn: () => unknown) => fn(),
+  callGenerated: (fn: () => unknown, signal?: AbortSignal) => {
+    if (signal) mocks.signals.push(signal);
+    return fn();
+  },
+  isAbortError: vi.fn(() => false),
   configureGeneratedClient: () => {},
 }));
 
@@ -79,7 +84,22 @@ describe("RecentEditsPage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.signals.length = 0;
     setLocale("en");
+  });
+
+  it("aborts the visible page read when unmounted", async () => {
+    mocks.getApiV1RecentEdits.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    component = mount(RecentEditsPage, { target: document.body });
+    await tick();
+    const signal = mocks.signals[0];
+
+    unmount(component);
+    component = undefined;
+
+    expect(signal?.aborted).toBe(true);
   });
 
   afterEach(() => {

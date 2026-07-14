@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import {
@@ -18,6 +19,8 @@
   $effect(() => {
     pins.loadAll(sessions.filters.project || undefined);
   });
+
+  onDestroy(() => pins.cancelAllPinsRead());
 
   /** Set of expanded pin IDs. */
   let expanded: Set<number> = $state(new Set());

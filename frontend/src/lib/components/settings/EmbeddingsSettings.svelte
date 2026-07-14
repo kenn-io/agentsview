@@ -5,7 +5,12 @@
   import { EmbeddingsService } from "../../api/generated/index";
   import type { VectorBuildStatus } from "../../api/generated/index";
   import type { VectorGenerationInfo } from "../../api/generated/models/VectorGenerationInfo";
-  import { ApiError, callGenerated } from "../../api/runtime.js";
+  import {
+    ApiError,
+    callGenerated,
+    isAbortError,
+  } from "../../api/runtime.js";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   // Poll fast only while a build is actually running; when idle the section
   // only needs to notice an externally started build (CLI, scheduler)
@@ -26,6 +31,8 @@
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
   let activePollsSinceGenerations = 0;
+  const statusRead = new LatestRead();
+  const generationsRead = new LatestRead();
 
   const numberFormat = $derived(new Intl.NumberFormat(getLocale()));
   const percentFormat = $derived(
@@ -72,11 +79,13 @@
   }
 
   async function refresh(withGenerations: boolean): Promise<void> {
+    const signal = statusRead.begin();
     try {
       const next = await callGenerated(() =>
         EmbeddingsService.getApiV1EmbeddingsStatus(),
+        signal,
       );
-      if (disposed) return;
+      if (disposed || !statusRead.isCurrent(signal)) return;
       const wasRunning = status?.running ?? false;
       status = next;
       unavailableReason = null;
@@ -87,7 +96,11 @@
         await refreshGenerations();
       }
     } catch (e) {
-      if (disposed) return;
+      if (
+        disposed ||
+        isAbortError(e) ||
+        !statusRead.isCurrent(signal)
+      ) return;
       elapsedMs = null;
       if (e instanceof ApiError && e.status === 501) {
         unavailableReason = e.message;
@@ -101,16 +114,22 @@
             : m.settings_embeddings_load_failed();
       }
     } finally {
-      loaded = true;
+      if (statusRead.finish(signal)) loaded = true;
     }
   }
 
   async function refreshGenerations(): Promise<void> {
-    const res = await callGenerated(() =>
-      EmbeddingsService.getApiV1EmbeddingsGenerations(),
-    );
-    if (disposed) return;
-    generations = (res.generations ?? []) as VectorGenerationInfo[];
+    const signal = generationsRead.begin();
+    try {
+      const res = await callGenerated(() =>
+        EmbeddingsService.getApiV1EmbeddingsGenerations(),
+        signal,
+      );
+      if (disposed || !generationsRead.isCurrent(signal)) return;
+      generations = (res.generations ?? []) as VectorGenerationInfo[];
+    } finally {
+      generationsRead.finish(signal);
+    }
   }
 
   function updateElapsed(s: VectorBuildStatus): void {
@@ -126,6 +145,8 @@
   function onVisibilityChange(): void {
     if (document.hidden) {
       clearTimer();
+      statusRead.cancel();
+      generationsRead.cancel();
       return;
     }
     clearTimer();
@@ -137,6 +158,8 @@
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       disposed = true;
+      statusRead.cancel();
+      generationsRead.cancel();
       clearTimer();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };

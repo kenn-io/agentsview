@@ -9,9 +9,14 @@
     InsightsService,
     SessionsService,
   } from "../../api/generated/index";
-  import { configureGeneratedClient } from "../../api/runtime.js";
+  import {
+    callGenerated,
+    configureGeneratedClient,
+    isAbortError,
+  } from "../../api/runtime.js";
   import type { PublishResponse } from "../../api/types.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   type View = "setup" | "progress" | "success" | "error";
 
@@ -20,6 +25,7 @@
   let errorMessage: string = $state("");
   let result: PublishResponse | null = $state(null);
   let closed = false;
+  const configRead = new LatestRead();
 
   const target = ui.publishTarget ??
     (sessions.activeSessionId
@@ -37,17 +43,24 @@
   }
 
   async function init() {
+    const signal = configRead.begin();
     try {
       configureGeneratedClient();
-      const config = await ConfigService.getApiV1ConfigGithub();
-      if (isClosed()) return;
+      const config = await callGenerated(
+        () => ConfigService.getApiV1ConfigGithub(),
+        signal,
+      );
+      if (isClosed() || !configRead.isCurrent(signal)) return;
       if (config.configured) {
         await doPublish();
       } else {
         view = "setup";
       }
-    } catch {
+    } catch (e) {
+      if (isAbortError(e) || !configRead.isCurrent(signal)) return;
       view = "setup";
+    } finally {
+      configRead.finish(signal);
     }
   }
 
@@ -119,6 +132,7 @@
 
   onDestroy(() => {
     closed = true;
+    configRead.cancel();
   });
 
   init();

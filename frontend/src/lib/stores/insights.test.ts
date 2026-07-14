@@ -28,13 +28,20 @@ const api = vi.hoisted(() => {
 
 const ApiError = api.ApiError;
 
+const runtimeMocks = vi.hoisted(() => ({
+  callGenerated: vi.fn(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  ),
+}));
+
 vi.mock("../api/client.js", () => ({
   generateInsight: api.generateInsight,
 }));
 
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  callGenerated: runtimeMocks.callGenerated,
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -98,9 +105,48 @@ beforeEach(() => {
   insights.setAutomatedScope("human");
   insights.setSessionFilters(undefined);
   insights.promptText = "";
+  runtimeMocks.callGenerated.mockReset();
+  runtimeMocks.callGenerated.mockImplementation(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  );
 });
 
 describe("load", () => {
+  it("aborts an obsolete list read without aborting generation", async () => {
+    const signals: AbortSignal[] = [];
+    runtimeMocks.callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    vi.mocked(api.listInsights)
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({ insights: [] });
+
+    void insights.load();
+    await Promise.resolve();
+    await insights.load();
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(api.generateInsight).not.toHaveBeenCalled();
+  });
+
+  it("aborts the list read on page teardown", async () => {
+    const signals: AbortSignal[] = [];
+    runtimeMocks.callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    vi.mocked(api.listInsights).mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void insights.load();
+    await Promise.resolve();
+    insights.cancelInFlightReads();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it("fetches insights and updates state", async () => {
     const s1 = makeInsight({ id: 1 });
     const s2 = makeInsight({ id: 2, project: "my-app" });

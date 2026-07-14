@@ -24,6 +24,8 @@
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
   import { AnalyticsService } from "../../api/generated/index.js";
+  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { LatestRead } from "../../utils/latest-read.js";
   import type {
     AgentName,
     AutomatedScope,
@@ -72,6 +74,7 @@
   let signalExamplesError: string | null = $state(null);
   let signalExamplesFilterKey: string | null = $state(null);
   let signalExamplesRequest = 0;
+  const signalEvidenceRead = new LatestRead();
   // A materialized page default is not date intent. Only picker input, a
   // dated URL, or a shared seed may serialize dates back into the URL.
   let insightDateIntentEstablished = false;
@@ -402,17 +405,22 @@
     const params = analytics.signalEvidenceParams();
     const requestKey = signalEvidenceKey(signal, params);
     const request = ++signalExamplesRequest;
+    const requestSignal = signalEvidenceRead.begin();
     selectedSignalId = signal;
     signalExamplesFilterKey = requestKey;
     signalExamplesLoading = true;
     signalExamplesError = null;
     try {
-      const response = await AnalyticsService.getApiV1AnalyticsSignalSessions({
-        ...params,
-        signal,
-        limit: 8,
-      });
+      const response = await callGenerated(
+        () => AnalyticsService.getApiV1AnalyticsSignalSessions({
+          ...params,
+          signal,
+          limit: 8,
+        }),
+        requestSignal,
+      );
       if (
+        signalEvidenceRead.isCurrent(requestSignal) &&
         selectedSignalId === signal &&
         signalExamplesFilterKey === requestKey &&
         signalExamplesRequest === request
@@ -420,6 +428,10 @@
         signalExamples = response.sessions ?? [];
       }
     } catch (err) {
+      if (
+        isAbortError(err) ||
+        !signalEvidenceRead.isCurrent(requestSignal)
+      ) return;
       if (
         selectedSignalId === signal &&
         signalExamplesFilterKey === requestKey &&
@@ -431,6 +443,7 @@
       }
     } finally {
       if (
+        signalEvidenceRead.finish(requestSignal) &&
         selectedSignalId === signal &&
         signalExamplesFilterKey === requestKey &&
         signalExamplesRequest === request
@@ -723,6 +736,9 @@
   });
 
   onDestroy(() => {
+    insights.cancelInFlightReads();
+    analytics.cancelInFlightReads();
+    signalEvidenceRead.cancel();
     const state = currentInsightPanelDate();
     if (state) {
       analyticsPageDates.retain(
@@ -1030,8 +1046,10 @@
                 class="text-btn"
                 type="button"
                 onclick={() => {
+                  signalEvidenceRead.cancel();
                   selectedSignalId = null;
                   signalExamples = [];
+                  signalExamplesLoading = false;
                   signalExamplesError = null;
                   signalExamplesFilterKey = null;
                 }}

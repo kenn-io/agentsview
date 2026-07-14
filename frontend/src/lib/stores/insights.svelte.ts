@@ -12,13 +12,18 @@ import {
   ApiError as GeneratedApiError,
   InsightsService,
 } from "../api/generated/index";
-import { configureGeneratedClient } from "../api/runtime.js";
+import {
+  callGenerated,
+  configureGeneratedClient,
+  isAbortError,
+} from "../api/runtime.js";
 import {
   generateInsight,
   type GenerateInsightHandle,
   type InsightLogEvent,
 } from "../api/client.js";
 import { localDateStr } from "../utils/dates.js";
+import { LatestRead } from "../utils/latest-read.js";
 
 export interface InsightTask {
   clientId: string;
@@ -72,6 +77,7 @@ class InsightsStore {
 
   #handles = new Map<string, GenerateInsightHandle>();
   #version = 0;
+  #listRead = new LatestRead();
 
   get selectedItem(): Insight | undefined {
     return this.items.find(
@@ -94,12 +100,15 @@ class InsightsStore {
 
   async load() {
     const v = ++this.#version;
+    const signal = this.#listRead.begin();
     this.loading = true;
     try {
       configureGeneratedClient();
-      const res =
-        await InsightsService.getApiV1Insights({}) as unknown as InsightsResponse;
-      if (this.#version === v) {
+      const res = await callGenerated(
+        () => InsightsService.getApiV1Insights({}),
+        signal,
+      ) as unknown as InsightsResponse;
+      if (this.#version === v && this.#listRead.isCurrent(signal)) {
         this.items = res.insights;
         if (
           this.selectedId !== null &&
@@ -110,15 +119,22 @@ class InsightsStore {
           this.selectedId = null;
         }
       }
-    } catch {
+    } catch (e) {
+      if (isAbortError(e) || !this.#listRead.isCurrent(signal)) return;
       if (this.#version === v) {
         this.items = [];
       }
     } finally {
-      if (this.#version === v) {
+      if (this.#listRead.finish(signal)) {
         this.loading = false;
       }
     }
+  }
+
+  cancelInFlightReads(): void {
+    this.#version++;
+    this.#listRead.cancel();
+    this.loading = false;
   }
 
   setDateFrom(date: string) {

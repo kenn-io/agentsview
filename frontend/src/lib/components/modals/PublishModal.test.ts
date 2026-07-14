@@ -56,6 +56,8 @@ const sessionState = vi.hoisted(() => ({
 
 vi.mock("../../api/runtime.js", () => ({
   configureGeneratedClient: services.configureGeneratedClient,
+  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../../api/generated/index", () => ({

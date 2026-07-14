@@ -3,12 +3,13 @@
   import { PencilIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { RecentEditsService } from "../../api/generated/index";
-  import { callGenerated } from "../../api/runtime.js";
+  import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { formatRelativeTime } from "../../utils/format.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   interface Edit {
     session_id: string;
@@ -47,6 +48,7 @@
   let requestSeq = 0;
   // Debounce timer for the file-path search box; plain, gates control flow.
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  const pageRead = new LatestRead();
 
   function key(f: FileRow) {
     return JSON.stringify([f.project, f.file_path]);
@@ -59,6 +61,7 @@
 
   async function load(reset = false) {
     const seq = ++requestSeq;
+    const signal = pageRead.begin();
     const project = sessions.filters.project || undefined;
     const searchTerm = search.trim() || undefined;
     // Derive the page offset from what is already loaded so a failed page
@@ -77,17 +80,19 @@
           project,
           search: searchTerm,
         }),
+        signal,
       )) as unknown as Resp;
       // A newer project change, refresh, or load-more supersedes this one.
-      if (seq !== requestSeq) return;
+      if (seq !== requestSeq || !pageRead.isCurrent(signal)) return;
       files = reset
         ? (res.files ?? [])
         : [...files, ...(res.files ?? [])];
       hasMore = res.has_more ?? false;
-    } catch {
+    } catch (e) {
+      if (isAbortError(e) || !pageRead.isCurrent(signal)) return;
       // leave current list; empty state covers first load
     } finally {
-      if (seq === requestSeq) loading = false;
+      if (pageRead.finish(signal)) loading = false;
     }
   }
 
@@ -123,7 +128,10 @@
   }
 
   // Drop a pending debounced search if the page unmounts mid-typing.
-  $effect(() => () => clearTimeout(searchTimer));
+  $effect(() => () => {
+    clearTimeout(searchTimer);
+    pageRead.cancel();
+  });
 
   // Initial load, and reload when the header's project filter changes.
   // No SSE subscription: feed only reloads on open, explicit refresh,

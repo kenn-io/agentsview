@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -10,6 +11,7 @@
     setAuthToken,
     isRemoteConnection,
   } from "../../api/runtime.js";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   let serverUrl: string = $state(getServerUrl());
   let tokenInput: string = $state(getAuthToken());
@@ -21,10 +23,12 @@
 
   let isRemote: boolean = $derived(isRemoteConnection());
   let copied: boolean = $state(false);
+  const versionRead = new LatestRead();
 
   async function handleTestConnection() {
     if (!serverUrl.trim()) return;
     testing = true;
+    const signal = versionRead.begin();
     testResult = null;
     try {
       const base = serverUrl.replace(/\/+$/, "");
@@ -32,7 +36,8 @@
       if (tokenInput.trim()) {
         headers["Authorization"] = `Bearer ${tokenInput.trim()}`;
       }
-      const res = await fetch(`${base}/api/v1/version`, { headers });
+      const res = await fetch(`${base}/api/v1/version`, { headers, signal });
+      if (!versionRead.isCurrent(signal)) return;
       if (res.ok) {
         const data = await res.json();
         testResult = {
@@ -43,14 +48,17 @@
         testResult = { ok: false, message: m.settings_remote_server_returned({ status: res.status }) };
       }
     } catch (e) {
+      if (signal.aborted || !versionRead.isCurrent(signal)) return;
       testResult = {
         ok: false,
         message: e instanceof Error ? e.message : m.settings_remote_connection_failed(),
       };
     } finally {
-      testing = false;
+      if (versionRead.finish(signal)) testing = false;
     }
   }
+
+  onDestroy(() => versionRead.cancel());
 
   function handleConnect() {
     if (!serverUrl.trim()) return;
