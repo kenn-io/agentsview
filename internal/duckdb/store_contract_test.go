@@ -267,6 +267,13 @@ func duckContractMessagesSearchAndSecrets(
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, duckMessageOrdinals(all))
 
+	modelCounts, err := store.GetResumeModelCounts(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.Equal(t, []db.ModelCount{{
+		Model: "claude-test",
+		Count: 1,
+	}}, modelCounts)
+
 	activity, err := store.GetSessionActivity(ctx, fixture.alphaID)
 	require.NoError(t, err)
 	require.NotNil(t, activity)

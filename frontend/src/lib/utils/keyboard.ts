@@ -4,6 +4,7 @@ import { starred } from "../stores/starred.svelte.js";
 import { sync } from "../stores/sync.svelte.js";
 import { router } from "../stores/router.svelte.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
+import { messages } from "../stores/messages.svelte.js";
 import { getExportUrl } from "../api/client.js";
 import {
   SessionsService,
@@ -55,6 +56,12 @@ function handleEscape(): void {
   if (sessions.activeSessionId && !isInputFocused()) {
     sessions.deselectSession();
   }
+}
+
+function activeResumeModel(sessionId: string): string {
+  return messages.sessionId === sessionId && !messages.loading && !messages.hasOlder
+    ? messages.mainModel
+    : "";
 }
 
 /**
@@ -210,12 +217,14 @@ export function registerShortcuts(
             ) || buildResumeCommand(
               session.agent,
               session.id,
+              { model: activeResumeModel(session.id) },
             );
             if (cmd) copyToClipboard(cmd);
           }).catch(() => {
             const cmd = buildResumeCommand(
               session.agent,
               session.id,
+              { model: activeResumeModel(session.id) },
             );
             if (cmd) copyToClipboard(cmd);
           });

@@ -19,6 +19,7 @@ import {
 import { messages } from "../../stores/messages.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
+import { copyToClipboard } from "../../utils/clipboard.js";
 
 const { generateForSession } = vi.hoisted(() => ({
   generateForSession: vi.fn(),
@@ -333,6 +334,300 @@ describe("SessionBreadcrumb", () => {
     });
 
     unmount(component);
+  });
+
+  it("keeps the backend default resume command authoritative when a local model exists", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+      launched: false,
+      command: "claude --resume run:123456789abcdef",
+      cwd: "/tmp/project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          file_path: "/tmp/project/session.jsonl",
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const defaultTerminal = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Default terminal"));
+    defaultTerminal?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume run:123456789abcdef",
+      );
+    });
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("pins the active model when the backend resume request fails", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const defaultTerminal = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Default terminal"));
+    defaultTerminal?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume 'run:123456789abcdef' --model 'claude sonnet'",
+      );
+    });
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("does not pin a partial-history model when older messages remain unloaded", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    messages.hasOlder = true;
+    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", { message_count: 3001 }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const defaultTerminal = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Default terminal"));
+    defaultTerminal?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume 'run:123456789abcdef'",
+      );
+    });
+    expect(document.querySelector(".model-badge")?.textContent).toBe("claude sonnet");
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("does not pin a reloading stable model in the resume fallback", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.loading = true;
+    (messages as any)._stableMainModel = "claude sonnet";
+    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", { message_count: 3001 }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const defaultTerminal = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Default terminal"));
+    defaultTerminal?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume 'run:123456789abcdef'",
+      );
+    });
+    expect(document.querySelector(".model-badge")?.textContent).toBe("claude sonnet");
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("pins the active model when handleResumeIn falls back locally", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    openersService.getApiV1Openers.mockResolvedValue({
+      openers: [{
+        id: "test-terminal",
+        name: "Test Terminal",
+        kind: "terminal",
+        bin: "wt.exe",
+      }],
+    });
+    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".resume-btn")).toBeTruthy();
+    });
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const opener = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Test Terminal"));
+    opener?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume 'run:123456789abcdef' --model 'claude sonnet'",
+      );
+    });
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("keeps backend opener commands authoritative when a local model exists", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    openersService.getApiV1Openers.mockResolvedValue({
+      openers: [{
+        id: "test-terminal",
+        name: "Test Terminal",
+        kind: "terminal",
+        bin: "wt.exe",
+      }],
+    });
+    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+      launched: false,
+      command: "claude --resume run:123456789abcdef",
+      cwd: "/tmp/project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const opener = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Test Terminal"));
+    opener?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume run:123456789abcdef",
+      );
+    });
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("pins the active model when handleCopyResumeCommand falls back locally", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(
+      new Error("backend unavailable"),
+    );
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const copyCommand = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Copy command"));
+    copyCommand?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume 'run:123456789abcdef' --model 'claude sonnet'",
+      );
+    });
+
+    unmount(component);
+    messages.clear();
+  });
+
+  it("keeps backend command-only responses authoritative when a local model exists", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+      launched: false,
+      command: "claude --resume run:123456789abcdef",
+      cwd: "/tmp/project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    const copyCommand = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Copy command"));
+    copyCommand?.click();
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(
+        "claude --resume run:123456789abcdef",
+      );
+    });
+
+    unmount(component);
+    messages.clear();
   });
 
   it("offers a Codex Desktop deep link for a local terminal-created session", async () => {

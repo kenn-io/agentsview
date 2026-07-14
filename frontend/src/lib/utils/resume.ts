@@ -31,6 +31,7 @@ export interface ClaudeResumeFlags {
   skipPermissions?: boolean;
   forkSession?: boolean;
   print?: boolean;
+  model?: string;
 }
 
 /** Minimal shape of a backend resume response used for clipboard copy. */
@@ -93,6 +94,11 @@ export function buildResumeCommand(
 
   const rawId = stripIdPrefix(sessionId, agent);
   let cmd = builder(rawId);
+
+  if (flags?.model) {
+    if (agent === "claude") cmd += ` --model ${shellQuote(flags.model)}`;
+    if (agent === "codex") cmd += ` -m ${shellQuote(flags.model)}`;
+  }
 
   if (agent === "claude" && flags) {
     if (flags.skipPermissions)

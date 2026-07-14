@@ -236,6 +236,37 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 	return msgs, nil
 }
 
+func (s *Store) GetResumeModelCounts(
+	ctx context.Context, sessionID string,
+) ([]db.ModelCount, error) {
+	rows, err := s.queryContext(ctx, `
+		SELECT model, COUNT(*)
+		FROM messages
+		WHERE session_id = ?
+			AND role = 'assistant'
+			AND model != ''
+			AND model != '<synthetic>'
+		GROUP BY model`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb resume model counts: %w", err)
+	}
+	defer rows.Close()
+	var counts []db.ModelCount
+	for rows.Next() {
+		var count db.ModelCount
+		if err := rows.Scan(&count.Model, &count.Count); err != nil {
+			return nil, fmt.Errorf("scanning duckdb resume model count: %w", err)
+		}
+		counts = append(counts, count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating duckdb resume model counts: %w", err)
+	}
+	return counts, nil
+}
+
 func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 	var msgs []db.Message
 	for rows.Next() {
