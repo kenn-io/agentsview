@@ -9,6 +9,10 @@ const api = vi.hoisted(() => ({
   getSession: vi.fn(),
 }));
 
+const runtimeMocks = vi.hoisted(() => ({
+  signals: [] as AbortSignal[],
+}));
+
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
@@ -25,7 +29,10 @@ vi.mock("../api/runtime.js", () => ({
     };
     return candidate.isCancelled === true || candidate.name === "CancelError";
   },
-  withAbort: <T>(promise: Promise<T>) => promise,
+  withAbort: <T>(promise: Promise<T>, signal: AbortSignal) => {
+    runtimeMocks.signals.push(signal);
+    return promise;
+  },
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -122,6 +129,31 @@ describe("MessagesStore", () => {
     messages.clear();
     readProgress.reset();
     vi.clearAllMocks();
+    runtimeMocks.signals.length = 0;
+  });
+
+  it('aborts in-flight reads without clearing cached messages', async () => {
+    await setupSession('s1', 1, [makeMessage(0)]);
+    const cached = messages.messages;
+    const pending = createDeferred<Session>();
+    vi.mocked(api.getSession).mockReturnValueOnce(pending.promise);
+
+    void messages.reload();
+    await Promise.resolve();
+    const signal = runtimeMocks.signals.at(-1)!;
+    messages.cancelInFlight();
+
+    expect(signal.aborted).toBe(true);
+    expect(messages.messages).toBe(cached);
+
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession('s1', 1));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0)]),
+    );
+    const resumed = messages.loadSession('s1');
+    expect(messages.messages).toBe(cached);
+    await resumed;
+    expect(messages.messages).toHaveLength(1);
   });
 
   it("should clear reload state when loading a new session", async () => {

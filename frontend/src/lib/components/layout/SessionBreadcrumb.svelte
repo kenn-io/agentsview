@@ -14,7 +14,7 @@
     SearchIcon,
     SquareTerminalIcon,
   } from "../../icons.js";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import type { Session } from "../../api/types.js";
   import {
     OpenersService,
@@ -22,7 +22,11 @@
     type ResumeRequest,
     type ResumeResponse,
   } from "../../api/generated/index";
-  import { configureGeneratedClient } from "../../api/runtime.js";
+  import {
+    callGenerated,
+    configureGeneratedClient,
+    isAbortError,
+  } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import {
     agentColor,
@@ -44,6 +48,7 @@
   } from "../../utils/resume.js";
   import { codexDesktopLink } from "../../utils/codex.js";
   import { claudeCodeLink } from "../../utils/claude.js";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
@@ -68,6 +73,10 @@
   let openFeedback = $state("");
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let sessionDir = $state<string | null>(null);
+  const openersRead = new LatestRead();
+  const directoryRead = new LatestRead();
+  const costRead = new LatestRead();
+  const breakdownRead = new LatestRead();
 
   interface Opener {
     id: string;
@@ -100,36 +109,49 @@
   }
 
   onMount(() => {
+    const signal = openersRead.begin();
     configureGeneratedClient();
-    OpenersService.getApiV1Openers()
+    callGenerated(() => OpenersService.getApiV1Openers(), signal)
       .then((res) => {
+        if (!openersRead.isCurrent(signal)) return;
         openers = (res as unknown as OpenersResponse).openers;
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (!isAbortError(e)) openers = [];
+      })
+      .finally(() => openersRead.finish(signal));
+    return () => openersRead.cancel();
   });
 
   let resolvedSessionDirId: string | null = null;
   $effect(() => {
     if (!session) {
+      directoryRead.cancel();
       sessionDir = null;
       resolvedSessionDirId = null;
       return;
     }
     const id = session.id;
     if (id === resolvedSessionDirId) return;
+    const signal = directoryRead.begin();
     sessionDir = null;
     configureGeneratedClient();
-    SessionsService.getApiV1SessionsIdDirectory({ id })
+    callGenerated(
+      () => SessionsService.getApiV1SessionsIdDirectory({ id }),
+      signal,
+    )
       .then(({ path }) => {
-        if (session?.id === id) {
+        if (session?.id === id && directoryRead.isCurrent(signal)) {
           sessionDir = (path as SessionDirectoryResponse["path"]) || null;
           resolvedSessionDirId = id;
         }
       })
-      .catch(() => {
+      .catch((e) => {
+        if (isAbortError(e)) return;
         // Don't cache the ID on failure so the next
         // session refresh retries the lookup.
-      });
+      })
+      .finally(() => directoryRead.finish(signal));
   });
 
   let sessionCost = $state<number | null>(null);
@@ -171,6 +193,7 @@
 
   $effect(() => {
     if (!session) {
+      costRead.cancel();
       sessionCost = null;
       resetUsageBreakdown();
       costFetchKey = null;
@@ -190,50 +213,76 @@
       costFetchKey = null;
     }
     if (key === costFetchKey) return;
+    const signal = costRead.begin();
     costSessionId = id;
     const seq = ++costRequestSeq;
     configureGeneratedClient();
-    SessionsService.getApiV1SessionsIdUsage({ id })
+    callGenerated(
+      () => SessionsService.getApiV1SessionsIdUsage({ id }),
+      signal,
+    )
       .then((res) => {
-        if (seq !== costRequestSeq) return;
+        if (seq !== costRequestSeq || !costRead.isCurrent(signal)) return;
         costFetchKey = key;
         sessionCost = res.has_cost ? res.cost_usd : null;
         sessionUsageBreakdownCount = res.breakdown_count ?? 0;
       })
-      .catch(() => {
+      .catch((e) => {
+        if (isAbortError(e) || !costRead.isCurrent(signal)) return;
         if (seq !== costRequestSeq) return;
         sessionUsageBreakdownCount = 0;
         // Leave the fetch key unset so the next
         // session refresh retries the lookup.
-      });
+      })
+      .finally(() => costRead.finish(signal));
   });
 
   // Breakdown rows are fetched only when the menu opens; large
   // sessions can have thousands of entries and the count-only
   // /usage fetch above happens automatically on every session.
   $effect(() => {
-    if (!usageBreakdownOpen || !session) return;
+    if (!usageBreakdownOpen || !session) {
+      breakdownRead.cancel();
+      usageBreakdownLoading = false;
+      return;
+    }
     const id = session.id;
     const key = usageFetchKey(session);
     if (key === breakdownFetchKey) return;
     const seq = ++breakdownRequestSeq;
+    const signal = breakdownRead.begin();
     usageBreakdownLoading = true;
     configureGeneratedClient();
-    SessionsService.getApiV1SessionsIdUsage({ id, breakdown: true })
+    callGenerated(
+      () => SessionsService.getApiV1SessionsIdUsage({ id, breakdown: true }),
+      signal,
+    )
       .then((res) => {
-        if (seq !== breakdownRequestSeq) return;
+        if (
+          seq !== breakdownRequestSeq ||
+          !breakdownRead.isCurrent(signal)
+        ) return;
         breakdownFetchKey = key;
         usageBreakdownLoading = false;
         sessionUsageBreakdown = Array.isArray(res.breakdown)
           ? (res.breakdown as SessionUsageBreakdownEntry[])
           : [];
       })
-      .catch(() => {
+      .catch((e) => {
+        if (isAbortError(e) || !breakdownRead.isCurrent(signal)) return;
         if (seq !== breakdownRequestSeq) return;
         usageBreakdownLoading = false;
         sessionUsageBreakdown = [];
         // Leave the fetch key unset so reopening retries.
-      });
+      })
+      .finally(() => breakdownRead.finish(signal));
+  });
+
+  onDestroy(() => {
+    openersRead.cancel();
+    directoryRead.cancel();
+    costRead.cancel();
+    breakdownRead.cancel();
   });
 
   let sessionCostLabel = $derived(

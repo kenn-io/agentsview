@@ -7,7 +7,11 @@
     Session,
   } from "../../api/types.js";
   import { SessionsService } from "../../api/generated/index";
-  import { configureGeneratedClient } from "../../api/runtime.js";
+  import {
+    callGenerated,
+    configureGeneratedClient,
+    isAbortError,
+  } from "../../api/runtime.js";
   import { formatTokenUsage } from "../../utils/format.js";
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -18,6 +22,8 @@
     ExternalLinkIcon,
   } from "../../icons.js";
   import { m } from "../../i18n/index.js";
+  import { LatestRead } from "../../utils/latest-read.js";
+  import { onDestroy } from "svelte";
 
   interface Props {
     sessionId: string;
@@ -29,34 +35,62 @@
   let sessionMeta = $state<Session | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  const nestedRead = new LatestRead();
+
+  $effect(() => {
+    sessionId;
+    nestedRead.cancel();
+    expanded = false;
+    messages = null;
+    sessionMeta = null;
+    loading = false;
+    error = null;
+  });
+
+  onDestroy(() => nestedRead.cancel());
 
   let subagentSession = $derived(sessions.childSessions.get(sessionId) ?? null);
   let tokenSourceSession = $derived(sessionMeta ?? subagentSession);
 
   async function toggleExpand() {
     expanded = !expanded;
+    if (!expanded) {
+      nestedRead.cancel();
+      loading = false;
+      return;
+    }
     if (expanded && !messages) {
+      const signal = nestedRead.begin();
       loading = true;
       error = null;
       try {
         configureGeneratedClient();
         const [resp, meta] = await Promise.all([
-          SessionsService.getApiV1SessionsIdMessages({
-            id: sessionId,
-            limit: 1000,
-          }) as unknown as Promise<MessagesResponse>,
-          (SessionsService.getApiV1SessionsId({
-            id: sessionId,
-          }) as unknown as Promise<Session>).catch(() => null),
+          callGenerated(
+            () => SessionsService.getApiV1SessionsIdMessages({
+              id: sessionId,
+              limit: 1000,
+            }),
+            signal,
+          ) as unknown as Promise<MessagesResponse>,
+          (callGenerated(
+            () => SessionsService.getApiV1SessionsId({ id: sessionId }),
+            signal,
+          ) as unknown as Promise<Session>).catch((e) => {
+            if (isAbortError(e)) throw e;
+            return null;
+          }),
         ]);
+        if (!nestedRead.isCurrent(signal)) return;
         messages = resp.messages;
         sessionMeta = meta;
       } catch (e) {
+        if (isAbortError(e) || !nestedRead.isCurrent(signal)) return;
         error = e instanceof Error
           ? e.message
           : m.subagent_inline_failed_to_load();
       } finally {
-        loading = false;
+        if (nestedRead.finish(signal)) loading = false;
       }
     }
   }

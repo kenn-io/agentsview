@@ -35,6 +35,7 @@ class MessagesStore {
         : "",
   );
   private abortController: AbortController | null = null;
+  private cancelledSessionId: string | null = null;
   private reloadPromise: Promise<void> | null = null;
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
@@ -54,15 +55,24 @@ class MessagesStore {
   }
 
   async loadSession(id: string) {
-    if (this.sessionId === id && (this.messages.length > 0 || this.loading)) {
+    const resumesCancelledLoad =
+      this.sessionId === id && this.cancelledSessionId === id;
+    if (
+      this.sessionId === id &&
+      !resumesCancelledLoad &&
+      (this.messages.length > 0 || this.loading)
+    ) {
       return;
     }
     const readMarker = readProgress.get(id);
-    this.clear();
-    this._stableMainModel = "";
+    if (!resumesCancelledLoad) {
+      this.clear();
+      this._stableMainModel = "";
+      this.activeSessionToken = null;
+      this.activeSessionUnreadOrdinal = null;
+    }
     this.sessionId = id;
-    this.activeSessionToken = null;
-    this.activeSessionUnreadOrdinal = null;
+    this.cancelledSessionId = null;
     this.loading = true;
 
     const ac = new AbortController();
@@ -138,11 +148,11 @@ class MessagesStore {
   }
 
   clear() {
-    this.abortController?.abort();
-    this.abortController = null;
+    this.cancelInFlight();
     this.messages = [];
     clearContentCaches();
     this.sessionId = null;
+    this.cancelledSessionId = null;
     this.loading = false;
     this._stableMainModel = "";
     this.messageCount = 0;
@@ -161,7 +171,33 @@ class MessagesStore {
     this.pendingSessionUnreadOrdinal = null;
   }
 
-  private async fetchPages(id: string, opts: FetchPageOptions): Promise<Message[]> {
+  cancelInFlight(): void {
+    const hasInFlightRead =
+      this.loading ||
+      this.loadingOlder ||
+      this.reloadPromise !== null ||
+      this.loadOlderPromise !== null;
+    if (
+      hasInFlightRead &&
+      this.abortController &&
+      !this.abortController.signal.aborted
+    ) {
+      this.cancelledSessionId = this.sessionId;
+      this.abortController.abort();
+      this.abortController = null;
+    }
+    this.loading = false;
+    this.loadingOlder = false;
+    this.reloadPromise = null;
+    this.reloadSessionId = null;
+    this.pendingReload = false;
+    this.loadOlderPromise = null;
+  }
+
+  private async fetchPages(
+    id: string,
+    opts: FetchPageOptions,
+  ): Promise<Message[]> {
     const loaded: Message[] = [];
     let from = opts.from;
 

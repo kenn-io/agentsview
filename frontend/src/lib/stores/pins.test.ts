@@ -2,9 +2,16 @@ import { describe, it, expect, beforeEach, vi } from "vite-plus/test";
 import { PinsService } from "../api/generated/index";
 import { createPinsStore } from "./pins.svelte.js";
 
+const apiRuntimeMocks = vi.hoisted(() => ({
+  callGenerated: vi.fn(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  ),
+}));
+
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  callGenerated: apiRuntimeMocks.callGenerated,
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -31,7 +38,48 @@ describe("PinsStore.loadAll project filtering", () => {
 
   beforeEach(() => {
     store = createPinsStore();
+    apiRuntimeMocks.callGenerated.mockReset();
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+    );
     pinsService.getApiV1Pins.mockResolvedValue({ pins: [] });
+  });
+
+  it("aborts an obsolete all-pins read when the project changes", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    pinsService.getApiV1Pins
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({ pins: [PIN_BETA] });
+
+    void store.loadAll("alpha");
+    await Promise.resolve();
+    await store.loadAll("beta");
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("keeps all-pins and session-pins cancellation independent", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    pinsService.getApiV1Pins.mockImplementationOnce(() => new Promise(() => {}));
+    pinsService.getApiV1SessionsIdPins.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void store.loadAll();
+    void store.loadForSession("s1");
+    await Promise.resolve();
+    store.cancelSessionPinsRead();
+
+    expect(signals[0]?.aborted).toBe(false);
+    expect(signals[1]?.aborted).toBe(true);
   });
 
   it("populates pins on successful load", async () => {

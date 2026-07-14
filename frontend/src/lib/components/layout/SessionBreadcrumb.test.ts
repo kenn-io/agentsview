@@ -459,11 +459,16 @@ describe("SessionBreadcrumb", () => {
       expect(document.querySelector(".resume-btn")).toBeTruthy();
     });
     document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
-    await tick();
-    const opener = Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item")).find(
-      (button) => button.textContent?.includes("Test Terminal"),
-    );
-    opener?.click();
+    await vi.waitFor(() => {
+      const opener = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+      ).find((button) => button.textContent?.includes("Test Terminal"));
+      expect(opener).toBeTruthy();
+    });
+    const opener = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Test Terminal"));
+    opener!.click();
     await vi.waitFor(() => {
       expect(copyToClipboard).toHaveBeenCalledWith(
         "claude --resume 'run:123456789abcdef' --model 'claude sonnet'",

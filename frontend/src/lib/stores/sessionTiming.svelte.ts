@@ -1,5 +1,6 @@
 import { fetchSessionTiming } from "../api/timing.js";
 import type { SessionTiming } from "../api/types/timing.js";
+import { LatestRead } from "../utils/latest-read.js";
 
 /** Per-session timing snapshot fetched from
  *  GET /api/v1/sessions/{id}/timing and refreshed live by the
@@ -11,6 +12,7 @@ class SessionTimingStore {
 
   private currentSessionId: string | null = null;
   private loadVersion = 0;
+  private timingRead = new LatestRead();
 
   /** True when the current snapshot belongs to the given session. */
   isForSession(sessionId: string): boolean {
@@ -34,19 +36,27 @@ class SessionTimingStore {
     }
     this.currentSessionId = sessionId;
     const version = ++this.loadVersion;
+    const signal = this.timingRead.begin();
     this.loading = true;
     this.error = null;
     try {
-      const t = await fetchSessionTiming(sessionId);
-      if (version !== this.loadVersion) return;
+      const t = await fetchSessionTiming(sessionId, signal);
+      if (
+        version !== this.loadVersion ||
+        !this.timingRead.isCurrent(signal)
+      ) return;
       this.timing = t;
     } catch (e) {
-      if (version !== this.loadVersion) return;
+      if (
+        signal.aborted ||
+        version !== this.loadVersion ||
+        !this.timingRead.isCurrent(signal)
+      ) return;
       this.error =
         e instanceof Error ? e.message : String(e);
       this.timing = null;
     } finally {
-      if (version === this.loadVersion) {
+      if (this.timingRead.finish(signal)) {
         this.loading = false;
       }
     }
@@ -63,11 +73,18 @@ class SessionTimingStore {
 
   /** Drop cached state. Call when leaving session detail view. */
   reset(): void {
+    this.timingRead.cancel();
     this.loadVersion++;
     this.currentSessionId = null;
     this.timing = null;
     this.loading = false;
     this.error = null;
+  }
+
+  cancelInFlight(): void {
+    this.loadVersion++;
+    this.timingRead.cancel();
+    this.loading = false;
   }
 }
 
