@@ -1481,6 +1481,10 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"events-coalesce-interval", 10*time.Second,
 		"Minimum interval between SSE data_changed broadcasts (0 disables coalescing)",
 	)
+	fs.Duration(
+		"write-timeout", 30*time.Second,
+		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+	)
 }
 
 // RegisterServePFlags registers serve-command flags on fs.
@@ -1545,6 +1549,10 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 		"events-coalesce-interval", 10*time.Second,
 		"Minimum interval between SSE data_changed broadcasts (0 disables coalescing)",
 	)
+	fs.Duration(
+		"write-timeout", 30*time.Second,
+		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+	)
 }
 
 // applyFlags copies explicitly-set flags from fs into cfg.
@@ -1603,6 +1611,10 @@ func applyFlagValue(cfg *Config, name, value string) {
 	case "events-coalesce-interval":
 		if d, err := time.ParseDuration(value); err == nil {
 			cfg.EventsCoalesceInterval = d
+		}
+	case "write-timeout":
+		if d, err := time.ParseDuration(value); err == nil {
+			cfg.WriteTimeout = d
 		}
 	case "pg":
 		// Read-routing only. The CLI resolver combines this flag

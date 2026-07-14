@@ -31,6 +31,13 @@ func (s *Server) withTimeout(
 		}
 	}
 
+	// A non-positive write timeout disables the deadline, matching the typed
+	// (Huma) API path. Passing 0 to http.TimeoutHandler would instead fire
+	// immediately and 503 every request.
+	if s.cfg.WriteTimeout <= 0 {
+		return http.HandlerFunc(inner)
+	}
+
 	handler := http.TimeoutHandler(
 		inner, s.cfg.WriteTimeout, msg,
 	)
