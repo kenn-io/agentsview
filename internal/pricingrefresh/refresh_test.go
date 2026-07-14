@@ -124,6 +124,22 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 	assert.Zero(t, second.calls)
 }
 
+func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
+	database := testDB(t)
+	wantErr := errors.New("network down")
+	fetcher := &fetchRecorder{err: wantErr}
+
+	refreshed, err := Ensure(
+		database, false, fetcher.fetch, pricingTestNow(),
+	)
+
+	assert.ErrorIs(t, err, wantErr)
+	assert.False(t, refreshed)
+	fallback, priceErr := database.GetModelPricing("gpt-5.5")
+	require.NoError(t, priceErr)
+	require.NotNil(t, fallback)
+}
+
 func TestEnsureSkipsFetchWithinCooldown(t *testing.T) {
 	database := testDB(t)
 	now := pricingTestNow()

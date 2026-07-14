@@ -119,6 +119,27 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	assert.Equal(t, 8.0, rate.OutputPerMTok)
 }
 
+func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	ensureCalls := 0
+	backend.ensurePricing = func(database *db.DB) (bool, error) {
+		require.Same(t, backend.database, database)
+		ensureCalls++
+		return true, nil
+	}
+	target := &fakeTarget{}
+	pusher := backend.newPGPusher(
+		func(context.Context) error { return nil },
+		func() (pgTarget, error) { return target, nil },
+	)
+
+	require.NoError(t, pusher.push(
+		context.Background(), reasonChange, false,
+	))
+	assert.Equal(t, 1, ensureCalls)
+	assert.Equal(t, 1, target.pushes)
+}
+
 func TestLocalArchiveWriteBackendDuckDBPushStopsAfterCanceledLocalSync(t *testing.T) {
 	testLocalArchivePushStopsAfterCanceledSync(t,
 		func(backend *localArchiveWriteBackend, ctx context.Context) error {

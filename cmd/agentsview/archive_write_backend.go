@@ -402,6 +402,20 @@ func (b *localArchiveWriteBackend) ensureCurrentPricing() (bool, error) {
 	return pricingrefresh.EnsureCurrent(b.database)
 }
 
+func (b *localArchiveWriteBackend) newPGPusher(
+	localSync func(context.Context) error,
+	connect func() (pgTarget, error),
+) *pgPusher {
+	return &pgPusher{
+		localSync: localSync,
+		ensurePricing: func() error {
+			_, err := b.ensureCurrentPricing()
+			return err
+		},
+		connect: connect,
+	}
+}
+
 func (b *localArchiveWriteBackend) PGPush(
 	ctx context.Context,
 	target pgTargetSelection,
@@ -666,8 +680,8 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	vectorSource := pgVectorPushSource(b.appCfg, target, cfg)
 	defer closeVectorPushSource(vectorSource)
 
-	pusher := &pgPusher{
-		localSync: func(c context.Context) error {
+	pusher := b.newPGPusher(
+		func(c context.Context) error {
 			engine.SyncAll(c, nil)
 			// The push scans SQLite rows right after this returns;
 			// flush deferred signal recomputes so pushed sessions
@@ -675,11 +689,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			engine.FlushSignals()
 			return nil
 		},
-		ensurePricing: func() error {
-			_, ensureErr := b.ensureCurrentPricing()
-			return ensureErr
-		},
-		connect: func() (pgTarget, error) {
+		func() (pgTarget, error) {
 			applyClassifierConfig(b.appCfg)
 			s, cErr := postgres.New(
 				target.PG.URL, target.PG.Schema, b.database,
@@ -691,7 +701,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			}
 			return s, nil
 		},
-	}
+	)
 	defer pusher.reset()
 
 	fmt.Printf(
