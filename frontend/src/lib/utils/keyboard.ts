@@ -6,17 +6,9 @@ import { router } from "../stores/router.svelte.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
 import { getExportUrl } from "../api/client.js";
-import {
-  SessionsService,
-  type ResumeRequest,
-  type ResumeResponse,
-} from "../api/generated/index";
+import { SessionsService, type ResumeRequest, type ResumeResponse } from "../api/generated/index";
 import { configureGeneratedClient } from "../api/runtime.js";
-import {
-  supportsResume,
-  buildResumeCommand,
-  formatResumeResponseCommand,
-} from "./resume.js";
+import { supportsResume, buildResumeCommand, formatResumeResponseCommand } from "./resume.js";
 import { copyToClipboard } from "./clipboard.js";
 
 function isInputFocused(): boolean {
@@ -33,10 +25,7 @@ function isInputFocused(): boolean {
 
 function isFindInput(): boolean {
   const el = document.activeElement;
-  return (
-    el instanceof HTMLInputElement &&
-    el.getAttribute("aria-label") === "Search query"
-  );
+  return el instanceof HTMLInputElement && el.getAttribute("aria-label") === "Search query";
 }
 
 interface ShortcutOptions {
@@ -59,28 +48,21 @@ function handleEscape(): void {
 }
 
 function activeResumeModel(sessionId: string): string {
-  return messages.sessionId === sessionId && !messages.loading && !messages.hasOlder
-    ? messages.mainModel
-    : "";
+  return messages.resumeModelFor(sessionId);
 }
 
 /**
  * Register global keyboard shortcuts.
  * Returns a cleanup function to remove the listener.
  */
-export function registerShortcuts(
-  opts: ShortcutOptions,
-): () => void {
+export function registerShortcuts(opts: ShortcutOptions): () => void {
   function handler(e: KeyboardEvent) {
     const meta = e.metaKey || e.ctrlKey;
 
     // Cmd+K — always works
     if (meta && e.key === "k") {
       e.preventDefault();
-      ui.activeModal =
-        ui.activeModal === "commandPalette"
-          ? null
-          : "commandPalette";
+      ui.activeModal = ui.activeModal === "commandPalette" ? null : "commandPalette";
       return;
     }
 
@@ -181,10 +163,7 @@ export function registerShortcuts(
       r: () => sync.triggerSync(),
       e: () => {
         if (sessions.activeSessionId) {
-          window.open(
-            getExportUrl(sessions.activeSessionId),
-            "_blank",
-          );
+          window.open(getExportUrl(sessions.activeSessionId), "_blank");
         }
       },
       p: () => {
@@ -211,23 +190,21 @@ export function registerShortcuts(
             requestBody: {
               command_only: true,
             } satisfies ResumeRequest,
-          }).then((resp) => {
-            const cmd = formatResumeResponseCommand(
-              session.agent, resp as ResumeResponse,
-            ) || buildResumeCommand(
-              session.agent,
-              session.id,
-              { model: activeResumeModel(session.id) },
-            );
-            if (cmd) copyToClipboard(cmd);
-          }).catch(() => {
-            const cmd = buildResumeCommand(
-              session.agent,
-              session.id,
-              { model: activeResumeModel(session.id) },
-            );
-            if (cmd) copyToClipboard(cmd);
-          });
+          })
+            .then((resp) => {
+              const cmd =
+                formatResumeResponseCommand(session.agent, resp as ResumeResponse) ||
+                buildResumeCommand(session.agent, session.id, {
+                  model: activeResumeModel(session.id),
+                });
+              if (cmd) copyToClipboard(cmd);
+            })
+            .catch(() => {
+              const cmd = buildResumeCommand(session.agent, session.id, {
+                model: activeResumeModel(session.id),
+              });
+              if (cmd) copyToClipboard(cmd);
+            });
         }
       },
       "/": () => {
@@ -236,18 +213,12 @@ export function registerShortcuts(
         }
       },
       Delete: () => {
-        if (
-          router.route === "sessions" &&
-          sessions.activeSessionId
-        ) {
+        if (router.route === "sessions" && sessions.activeSessionId) {
           ui.activeModal = "confirmDelete";
         }
       },
       Backspace: () => {
-        if (
-          router.route === "sessions" &&
-          sessions.activeSessionId
-        ) {
+        if (router.route === "sessions" && sessions.activeSessionId) {
           ui.activeModal = "confirmDelete";
         }
       },

@@ -1,11 +1,4 @@
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  beforeEach,
-  afterEach,
-} from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { ui } from "../stores/ui.svelte.js";
 import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
@@ -19,10 +12,7 @@ vi.mock("../utils/clipboard.js", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
 }));
 
-function fireKey(
-  key: string,
-  opts: Partial<KeyboardEventInit> = {},
-) {
+function fireKey(key: string, opts: Partial<KeyboardEventInit> = {}) {
   const event = new KeyboardEvent("keydown", {
     key,
     bubbles: true,
@@ -274,11 +264,7 @@ describe("registerShortcuts", () => {
     }
 
     it("should navigate forward skipping unstarred when filterOnly is enabled", () => {
-      sessions.sessions = [
-        makeSession("s1"),
-        makeSession("s2"),
-        makeSession("s3"),
-      ];
+      sessions.sessions = [makeSession("s1"), makeSession("s2"), makeSession("s3")];
       sessions.activeSessionId = "s1";
       starred.star("s1");
       starred.star("s3");
@@ -291,11 +277,7 @@ describe("registerShortcuts", () => {
     });
 
     it("should navigate forward without filter when filterOnly is disabled", () => {
-      sessions.sessions = [
-        makeSession("s1"),
-        makeSession("s2"),
-        makeSession("s3"),
-      ];
+      sessions.sessions = [makeSession("s1"), makeSession("s2"), makeSession("s3")];
       sessions.activeSessionId = "s1";
       starred.star("s1");
       starred.star("s3");
@@ -308,11 +290,7 @@ describe("registerShortcuts", () => {
     });
 
     it("should navigate backward skipping unstarred when filterOnly is enabled", () => {
-      sessions.sessions = [
-        makeSession("s1"),
-        makeSession("s2"),
-        makeSession("s3"),
-      ];
+      sessions.sessions = [makeSession("s1"), makeSession("s2"), makeSession("s3")];
       sessions.activeSessionId = "s3";
       starred.star("s1");
       starred.star("s3");
@@ -325,10 +303,7 @@ describe("registerShortcuts", () => {
     });
 
     it("should be a no-op when filtered list is empty", () => {
-      sessions.sessions = [
-        makeSession("s1"),
-        makeSession("s2"),
-      ];
+      sessions.sessions = [makeSession("s1"), makeSession("s2")];
       sessions.activeSessionId = "s1";
       // No sessions are starred, so filtered list will be empty
       starred.filterOnly = true;
@@ -420,27 +395,31 @@ describe("registerShortcuts", () => {
     sessions.sessions = [session];
     sessions.activeSessionId = session.id;
     messages.sessionId = session.id;
-    messages.messages = [{
-      id: 1,
-      session_id: session.id,
-      ordinal: 0,
-      role: "assistant",
-      content: "answer",
-      timestamp: "",
-      has_thinking: false,
-      thinking_text: "",
-      has_tool_use: false,
-      content_length: 6,
-      model: "claude sonnet",
-      token_usage: null,
-      context_tokens: 0,
-      output_tokens: 0,
-      has_context_tokens: false,
-      has_output_tokens: false,
-      is_system: false,
-    }];
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume")
-      .mockRejectedValue(new Error("backend unavailable"));
+    messages.historyComplete = true;
+    messages.messages = [
+      {
+        id: 1,
+        session_id: session.id,
+        ordinal: 0,
+        role: "assistant",
+        content: "answer",
+        timestamp: "",
+        has_thinking: false,
+        thinking_text: "",
+        has_tool_use: false,
+        content_length: 6,
+        model: "claude sonnet",
+        token_usage: null,
+        context_tokens: 0,
+        output_tokens: 0,
+        has_context_tokens: false,
+        has_output_tokens: false,
+        is_system: false,
+      },
+    ];
+    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockRejectedValue(
+      new Error("backend unavailable"),
+    );
 
     fireKey("c");
     await vi.waitFor(() => {
@@ -470,37 +449,36 @@ describe("registerShortcuts", () => {
     sessions.sessions = [session];
     sessions.activeSessionId = session.id;
     messages.sessionId = session.id;
-    messages.messages = [{
-      id: 1,
-      session_id: session.id,
-      ordinal: 0,
-      role: "assistant",
-      content: "answer",
-      timestamp: "",
-      has_thinking: false,
-      thinking_text: "",
-      has_tool_use: false,
-      content_length: 6,
-      model: "claude sonnet",
-      token_usage: null,
-      context_tokens: 0,
-      output_tokens: 0,
-      has_context_tokens: false,
-      has_output_tokens: false,
-      is_system: false,
-    }];
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume")
-      .mockResolvedValue({
-        launched: false,
-        command: "claude --resume run:keyboard-session",
-        cwd: "/tmp/project",
-      });
+    messages.messages = [
+      {
+        id: 1,
+        session_id: session.id,
+        ordinal: 0,
+        role: "assistant",
+        content: "answer",
+        timestamp: "",
+        has_thinking: false,
+        thinking_text: "",
+        has_tool_use: false,
+        content_length: 6,
+        model: "claude sonnet",
+        token_usage: null,
+        context_tokens: 0,
+        output_tokens: 0,
+        has_context_tokens: false,
+        has_output_tokens: false,
+        is_system: false,
+      },
+    ];
+    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockResolvedValue({
+      launched: false,
+      command: "claude --resume run:keyboard-session",
+      cwd: "/tmp/project",
+    });
 
     fireKey("c");
     await vi.waitFor(() => {
-      expect(copyToClipboard).toHaveBeenCalledWith(
-        "claude --resume run:keyboard-session",
-      );
+      expect(copyToClipboard).toHaveBeenCalledWith("claude --resume run:keyboard-session");
     });
     messages.clear();
   });
@@ -524,34 +502,35 @@ describe("registerShortcuts", () => {
     sessions.sessions = [session];
     sessions.activeSessionId = session.id;
     messages.sessionId = session.id;
-    messages.messages = [{
-      id: 1,
-      session_id: session.id,
-      ordinal: 0,
-      role: "assistant",
-      content: "answer",
-      timestamp: "",
-      has_thinking: false,
-      thinking_text: "",
-      has_tool_use: false,
-      content_length: 6,
-      model: "claude sonnet",
-      token_usage: null,
-      context_tokens: 0,
-      output_tokens: 0,
-      has_context_tokens: false,
-      has_output_tokens: false,
-      is_system: false,
-    }];
+    messages.messages = [
+      {
+        id: 1,
+        session_id: session.id,
+        ordinal: 0,
+        role: "assistant",
+        content: "answer",
+        timestamp: "",
+        has_thinking: false,
+        thinking_text: "",
+        has_tool_use: false,
+        content_length: 6,
+        model: "claude sonnet",
+        token_usage: null,
+        context_tokens: 0,
+        output_tokens: 0,
+        has_context_tokens: false,
+        has_output_tokens: false,
+        is_system: false,
+      },
+    ];
     messages.hasOlder = true;
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume")
-      .mockRejectedValue(new Error("backend unavailable"));
+    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockRejectedValue(
+      new Error("backend unavailable"),
+    );
 
     fireKey("c");
     await vi.waitFor(() => {
-      expect(copyToClipboard).toHaveBeenCalledWith(
-        "claude --resume 'run:keyboard-session'",
-      );
+      expect(copyToClipboard).toHaveBeenCalledWith("claude --resume 'run:keyboard-session'");
     });
     messages.clear();
   });
@@ -577,14 +556,13 @@ describe("registerShortcuts", () => {
     messages.sessionId = session.id;
     messages.loading = true;
     (messages as any)._stableMainModel = "claude sonnet";
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume")
-      .mockRejectedValue(new Error("backend unavailable"));
+    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockRejectedValue(
+      new Error("backend unavailable"),
+    );
 
     fireKey("c");
     await vi.waitFor(() => {
-      expect(copyToClipboard).toHaveBeenCalledWith(
-        "claude --resume 'run:keyboard-session'",
-      );
+      expect(copyToClipboard).toHaveBeenCalledWith("claude --resume 'run:keyboard-session'");
     });
     messages.clear();
   });

@@ -273,11 +273,7 @@
   );
 
   let resumeModel = $derived(
-    messagesStore.sessionId === session?.id
-      && !messagesStore.loading
-      && !messagesStore.hasOlder
-      ? messagesStore.mainModel
-      : "",
+    session ? messagesStore.resumeModelFor(session.id) : "",
   );
 
   const gradeStyle = $derived(
