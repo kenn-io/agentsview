@@ -780,6 +780,9 @@ func directGenerationAction(
 func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, error) {
 	rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
 	if rt == nil {
+		if _, err := FindIncompatibleDaemonRuntime(cfg.DataDir, cfg.AuthToken); err != nil {
+			return embeddingsDaemonClient{}, err
+		}
 		return embeddingsDaemonClient{}, errors.New("no reachable local agentsview daemon found")
 	}
 	return embeddingsDaemonClient{baseURL: urlFromDaemonRuntime(rt), token: cfg.AuthToken}, nil

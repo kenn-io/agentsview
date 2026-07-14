@@ -144,8 +144,41 @@ func (ix *Index) scanInvalidRepairDocuments(
 		args = append(args, docKey)
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(documents)), ",")
+	type documentState struct {
+		expected int
+		seen     int
+		invalid  bool
+	}
+	states := make(map[string]*documentState, len(documents))
+	contentRows, err := ix.db.QueryContext(ctx, `
+SELECT d.doc_key, d.content
+  FROM `+ix.spec.DocsTable+` d
+  JOIN `+ix.spec.stampsTable()+` s
+    ON s.doc_key = d.doc_key AND s.ordinal = ?
+   AND s.revision IS d.content_hash
+ WHERE d.doc_key IN (`+placeholders+`)
+ ORDER BY d.doc_key`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("read repair document content: %w", err)
+	}
+	for contentRows.Next() {
+		var docKey, content string
+		if err := contentRows.Scan(&docKey, &content); err != nil {
+			contentRows.Close()
+			return nil, fmt.Errorf("scan repair document content: %w", err)
+		}
+		states[docKey] = &documentState{expected: len(kitvec.Split(content, ix.split))}
+	}
+	if err := contentRows.Err(); err != nil {
+		contentRows.Close()
+		return nil, fmt.Errorf("iterate repair document content: %w", err)
+	}
+	if err := contentRows.Close(); err != nil {
+		return nil, fmt.Errorf("close repair document content scan: %w", err)
+	}
+
 	rows, err := ix.db.QueryContext(ctx, `
-SELECT c.doc_key, d.content, c.chunk_index, v.embedding
+SELECT c.doc_key, c.chunk_index, v.embedding
   FROM `+ix.spec.chunksTable()+` c
   JOIN `+ix.spec.DocsTable+` d ON d.doc_key = c.doc_key
   JOIN `+ix.spec.stampsTable()+` s
@@ -159,42 +192,35 @@ SELECT c.doc_key, d.content, c.chunk_index, v.embedding
 	}
 	defer rows.Close()
 
-	var affected []string
-	currentDoc := ""
-	var expected []kitvec.Chunk
-	seen := 0
-	invalid := false
-	finishDocument := func() {
-		if currentDoc != "" && (invalid || seen != len(expected)) {
-			affected = append(affected, currentDoc)
-		}
-	}
 	for rows.Next() {
-		var docKey, content string
+		var docKey string
 		var chunkIndex int
 		var blob []byte
-		if err := rows.Scan(&docKey, &content, &chunkIndex, &blob); err != nil {
+		if err := rows.Scan(&docKey, &chunkIndex, &blob); err != nil {
 			return nil, fmt.Errorf("scan target generation vector: %w", err)
 		}
-		if docKey != currentDoc {
-			finishDocument()
-			currentDoc = docKey
-			expected = kitvec.Split(content, ix.split)
-			seen = 0
-			invalid = false
+		state := states[docKey]
+		if state == nil {
+			continue
 		}
-		if seen >= len(expected) || expected[seen].Index != chunkIndex {
-			invalid = true
+		if state.seen >= state.expected || state.seen != chunkIndex {
+			state.invalid = true
 		}
-		seen++
+		state.seen++
 		if validateStoredEmbeddingBlob(blob, dimension) != nil {
-			invalid = true
+			state.invalid = true
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate target generation vectors: %w", err)
 	}
-	finishDocument()
+	var affected []string
+	for _, docKey := range documents {
+		state := states[docKey]
+		if state != nil && (state.invalid || state.seen != state.expected) {
+			affected = append(affected, docKey)
+		}
+	}
 	return affected, nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -202,6 +203,35 @@ SELECT COUNT(*) FROM message_vectors_chunks
 	assert.Zero(t, badChunks)
 	assert.Zero(t, badStamps)
 	assert.Equal(t, 1, goodChunks)
+}
+
+func TestScanInvalidRepairDocumentsAllocatesContentOncePerDocument(t *testing.T) {
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 1024}
+	ctx := context.Background()
+	content := strings.Repeat("x", 256*1024)
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s1", "large", 0, content), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	gen := fakeGeneration("active-model")
+	require.NoError(t, buildWithoutResult(ix, ctx, src, gen))
+	ordinal, err := ix.ordinalForFingerprint(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	affected, err := ix.scanInvalidRepairDocuments(
+		ctx, ordinal, 3, fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, ordinal),
+		[]string{"u:s1:large"},
+	)
+	runtime.ReadMemStats(&after)
+	require.NoError(t, err)
+	assert.Empty(t, affected)
+
+	allocated := after.TotalAlloc - before.TotalAlloc
+	assert.Less(t, allocated, uint64(len(content)*32),
+		"repair scan allocations must scale with document content, not content times chunk count")
 }
 
 func TestBuildRepairInvalidRejectsBackstop(t *testing.T) {

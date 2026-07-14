@@ -950,6 +950,21 @@ func TestEmbeddingsActivateInvalidIDReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid generation id")
 }
 
+func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
+	dataDir := runtimeTestDir(t)
+	writeLiveRuntime(t, dataDir, false,
+		withRuntimeVersion("old"),
+		withRuntimeAPIVersion(daemonAPIVersion-1),
+	)
+	require.True(t, IsLocalDaemonActive(dataDir))
+	require.Nil(t, FindDaemonRuntime(dataDir))
+
+	_, err := resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon API version")
+	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
+}
+
 // startEmbeddingsTestDaemon starts an httptest server that answers the kit
 // daemon ping (so FindDaemonRuntime's probe succeeds) plus the given
 // embeddings endpoint handlers, writes a live writable runtime record for
