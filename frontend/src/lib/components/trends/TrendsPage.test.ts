@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../../api/generated/index", () => ({
