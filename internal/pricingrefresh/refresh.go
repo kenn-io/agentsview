@@ -103,10 +103,36 @@ func Ensure(
 
 // EnsureCurrent applies the standard online pricing lifecycle.
 func EnsureCurrent(ctx context.Context, database *db.DB) error {
-	fetch := func() ([]pricing.ModelPricing, error) {
-		return pricing.FetchLiteLLMPricingContext(ctx)
+	return ensureCurrent(
+		ctx, database, pricing.FetchLiteLLMPricingContext, time.Now(),
+	)
+}
+
+func ensureCurrent(
+	ctx context.Context,
+	database *db.DB,
+	fetch func(context.Context) ([]pricing.ModelPricing, error),
+	now time.Time,
+) error {
+	previousAttempt, err := database.GetPricingMeta(refreshAttemptMetaKey)
+	if err != nil {
+		return fmt.Errorf("reading pricing refresh meta: %w", err)
 	}
-	_, err := Ensure(database, false, fetch, time.Now())
+	fetchCurrent := func() ([]pricing.ModelPricing, error) {
+		return fetch(ctx)
+	}
+	_, err = Ensure(database, false, fetchCurrent, now)
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	if restoreErr := database.SetPricingMeta(
+		refreshAttemptMetaKey, previousAttempt,
+	); restoreErr != nil {
+		return fmt.Errorf(
+			"restoring pricing refresh attempt after cancellation: %v: %w",
+			restoreErr, err,
+		)
+	}
 	return err
 }
 

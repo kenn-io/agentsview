@@ -1,6 +1,7 @@
 package pricingrefresh
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -177,6 +178,33 @@ func TestEnsureOfflineSeedsFallbackWithoutFetch(t *testing.T) {
 	fallback, err := database.GetModelPricing("gpt-5.5")
 	require.NoError(t, err)
 	require.NotNil(t, fallback)
+}
+
+func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
+	database := testDB(t)
+	now := pricingTestNow()
+	previous := seedPricingAttempt(t, database, now, 2*time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	err := ensureCurrent(ctx, database, func(
+		context.Context,
+	) ([]pricing.ModelPricing, error) {
+		cancel()
+		return nil, ctx.Err()
+	}, now)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assertPricingAttemptMeta(t, database, previous)
+	retryCalls := 0
+	err = ensureCurrent(context.Background(), database, func(
+		context.Context,
+	) ([]pricing.ModelPricing, error) {
+		retryCalls++
+		return nil, nil
+	}, now.Add(time.Minute))
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, retryCalls)
 }
 
 func testDB(t *testing.T) *db.DB {
