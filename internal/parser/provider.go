@@ -484,6 +484,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQoderProviderFactory(def)
 	case AgentReasonix:
 		return newReasonixProviderFactory(def)
+	case AgentOmnigent:
+		return newOmnigentProviderFactory(def)
 	case AgentShelley:
 		return newShelleyProviderFactory(def)
 	case AgentVSCopilot:

@@ -61,6 +61,7 @@ const (
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
 	AgentIcodemate      AgentType = "icodemate"
+	AgentOmnigent       AgentType = "omnigent"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -711,6 +712,19 @@ var Registry = []AgentDef{
 		WatchSubdirs:   []string{"storage/session_diff"},
 		FileBased:      true,
 		WatchRootsFunc: ResolveIcodemateWatchRoots,
+	},
+	{
+		// Omnigent (github.com/omnigent-ai/omnigent) is an open-source
+		// meta-harness. Like Shelley, it stores every conversation in one
+		// shared SQLite database (chat.db); the provider fans it out into one
+		// session per conversation addressed by a "<db>#<id>" virtual path.
+		Type:        AgentOmnigent,
+		DisplayName: "Omnigent",
+		EnvVar:      "OMNIGENT_DIR",
+		ConfigKey:   "omnigent_dirs",
+		DefaultDirs: []string{".omnigent"},
+		IDPrefix:    "omnigent:",
+		FileBased:   true,
 	},
 }
 
