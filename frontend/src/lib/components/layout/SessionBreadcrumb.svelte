@@ -166,9 +166,7 @@
   // marker in the session API.
   let costFetchKey: string | null = null;
   let costSessionId: string | null = null;
-  let costRequestSeq = 0;
   let breakdownFetchKey: string | null = null;
-  let breakdownRequestSeq = 0;
 
   function usageFetchKey(s: Session): string {
     return [
@@ -183,12 +181,12 @@
   }
 
   function resetUsageBreakdown() {
+    breakdownRead.cancel();
     sessionUsageBreakdownCount = 0;
     sessionUsageBreakdown = [];
     usageBreakdownOpen = false;
     usageBreakdownLoading = false;
     breakdownFetchKey = null;
-    breakdownRequestSeq++;
   }
 
   $effect(() => {
@@ -198,7 +196,6 @@
       resetUsageBreakdown();
       costFetchKey = null;
       costSessionId = null;
-      costRequestSeq++;
       return;
     }
     const id = session.id;
@@ -215,21 +212,19 @@
     if (key === costFetchKey) return;
     const signal = costRead.begin();
     costSessionId = id;
-    const seq = ++costRequestSeq;
     configureGeneratedClient();
     callGenerated(
       () => SessionsService.getApiV1SessionsIdUsage({ id }),
       signal,
     )
       .then((res) => {
-        if (seq !== costRequestSeq || !costRead.isCurrent(signal)) return;
+        if (!costRead.isCurrent(signal)) return;
         costFetchKey = key;
         sessionCost = res.has_cost ? res.cost_usd : null;
         sessionUsageBreakdownCount = res.breakdown_count ?? 0;
       })
       .catch((e) => {
         if (isAbortError(e) || !costRead.isCurrent(signal)) return;
-        if (seq !== costRequestSeq) return;
         sessionUsageBreakdownCount = 0;
         // Leave the fetch key unset so the next
         // session refresh retries the lookup.
@@ -249,7 +244,6 @@
     const id = session.id;
     const key = usageFetchKey(session);
     if (key === breakdownFetchKey) return;
-    const seq = ++breakdownRequestSeq;
     const signal = breakdownRead.begin();
     usageBreakdownLoading = true;
     configureGeneratedClient();
@@ -258,10 +252,7 @@
       signal,
     )
       .then((res) => {
-        if (
-          seq !== breakdownRequestSeq ||
-          !breakdownRead.isCurrent(signal)
-        ) return;
+        if (!breakdownRead.isCurrent(signal)) return;
         breakdownFetchKey = key;
         usageBreakdownLoading = false;
         sessionUsageBreakdown = Array.isArray(res.breakdown)
@@ -270,7 +261,6 @@
       })
       .catch((e) => {
         if (isAbortError(e) || !breakdownRead.isCurrent(signal)) return;
-        if (seq !== breakdownRequestSeq) return;
         usageBreakdownLoading = false;
         sessionUsageBreakdown = [];
         // Leave the fetch key unset so reopening retries.

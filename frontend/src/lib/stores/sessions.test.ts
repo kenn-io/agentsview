@@ -62,6 +62,10 @@ vi.mock("../api/client.js", () => ({
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(
+    (error: unknown) =>
+      error instanceof DOMException && error.name === "AbortError",
+  ),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -96,6 +100,22 @@ function mockSidebarPage(
     sessions: [],
     total: 0,
     ...overrides,
+  });
+}
+
+function rejectGeneratedRequestOnAbort(
+  request: () => Promise<unknown>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const result = request();
+  if (!signal) return result;
+  return new Promise((resolve, reject) => {
+    signal.addEventListener(
+      "abort",
+      () => reject(new DOMException("aborted", "AbortError")),
+      { once: true },
+    );
+    void result.then(resolve, reject);
   });
 }
 
@@ -201,6 +221,9 @@ describe("SessionsStore", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(callGenerated).mockImplementation(
+      (request: () => Promise<unknown>) => request(),
+    );
     storageData.clear();
     mockSidebarPage();
     mockSidebarIndex();
@@ -2308,6 +2331,50 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe(
         "fetched during navigation",
       );
+    });
+  });
+
+  describe("route cancellation", () => {
+    it("aborts pagination and treats cancellation as normal completion", async () => {
+      const signals: AbortSignal[] = [];
+      vi.mocked(callGenerated).mockImplementation(
+        (request: () => Promise<unknown>, signal?: AbortSignal) => {
+          if (signal) signals.push(signal);
+          return rejectGeneratedRequestOnAbort(request, signal);
+        },
+      );
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValue(
+        new Promise(() => {}),
+      );
+      sessions.nextCursor = "next";
+
+      const load = sessions.loadMore();
+      await Promise.resolve();
+      sessions.cancelRouteReads();
+
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.aborted).toBe(true);
+      await expect(load).resolves.toBeUndefined();
+    });
+
+    it("keeps a replacement signal-detail request registered", async () => {
+      vi.mocked(callGenerated).mockImplementation(
+        rejectGeneratedRequestOnAbort,
+      );
+      vi.mocked(api.getSession).mockReturnValue(
+        new Promise(() => {}),
+      );
+
+      const obsolete = sessions.fetchSignalDetail("detail");
+      await Promise.resolve();
+      sessions.cancelRouteReads();
+      void sessions.fetchSignalDetail("detail");
+      await obsolete;
+
+      void sessions.fetchSignalDetail("detail");
+      await Promise.resolve();
+
+      expect(api.getSession).toHaveBeenCalledTimes(2);
     });
   });
 });

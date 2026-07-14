@@ -9,6 +9,21 @@ import {
 } from "./generated/index";
 
 describe("callGenerated", () => {
+  it("detaches abort handling after the transport settles", async () => {
+    const cancelTransport = vi.fn();
+    const request = Object.assign(Promise.resolve("done"), {
+      cancel: cancelTransport,
+    });
+    const controller = new AbortController();
+
+    await expect(
+      callGenerated(() => request, controller.signal),
+    ).resolves.toBe("done");
+    controller.abort();
+
+    expect(cancelTransport).not.toHaveBeenCalled();
+  });
+
   it("cancels the generated transport when its signal aborts", async () => {
     const cancelTransport = vi.fn();
     const request = new CancelablePromise<never>(

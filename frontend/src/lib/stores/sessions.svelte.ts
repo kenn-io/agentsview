@@ -6,6 +6,7 @@ import {
 import {
   callGenerated,
   configureGeneratedClient,
+  isAbortError,
 } from "../api/runtime.js";
 import type {
   Session,
@@ -594,6 +595,9 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+    } catch (error) {
+      if (signal.aborted || isAbortError(error)) return;
+      throw error;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -835,7 +839,15 @@ class SessionsStore {
     if (inflight) return inflight;
     const promise = this.doFetchSignalDetail(id);
     this.signalDetailInflight.set(id, promise);
-    await promise;
+    try {
+      await promise;
+    } finally {
+      if (this.signalDetailInflight.get(id) === promise) {
+        this.signalDetailInflight.delete(id);
+      }
+      this.signalDetailLoading =
+        this.signalDetailInflight.size > 0;
+    }
   }
 
   private async doFetchSignalDetail(id: string) {
@@ -855,10 +867,6 @@ class SessionsStore {
       this.mergeDetailIntoList(id);
     } catch {
       // Signal detail is non-critical
-    } finally {
-      this.signalDetailInflight.delete(id);
-      this.signalDetailLoading =
-        this.signalDetailInflight.size > 0;
     }
   }
 
