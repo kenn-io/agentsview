@@ -930,6 +930,10 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
+func TestCurrentDataVersionQueuedSystemMessages(t *testing.T) {
+	assert.Equal(t, 65, CurrentDataVersion(),
+		"queued system message parser changes require a data version bump")
+}
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")

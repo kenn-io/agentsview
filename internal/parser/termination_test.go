@@ -61,6 +61,24 @@ func TestClassify(t *testing.T) {
 			want: TerminationClean,
 		},
 		{
+			name: "awaiting_user: queued system notification after end_turn",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, Content: "done"},
+				{Role: RoleUser, Content: "queued notification", IsSystem: true},
+			},
+			stopReason: "end_turn",
+			want:       TerminationAwaitingUser,
+		},
+		{
+			name: "awaiting_user: queued system notification after task_complete",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, Content: "done"},
+				{Role: RoleUser, Content: "queued notification", IsSystem: true},
+			},
+			stopReason: "task_complete",
+			want:       TerminationAwaitingUser,
+		},
+		{
 			name: "clean: tool call resolved by tool result",
 			messages: []ParsedMessage{
 				{Role: RoleUser, Content: "read file"},
@@ -74,6 +92,35 @@ func TestClassify(t *testing.T) {
 			},
 			stopReason: "end_turn",
 			want:       TerminationAwaitingUser,
+		},
+		{
+			name: "clean: final tool call resolved by system tool result",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, ToolCalls: []ParsedToolCall{
+					{ToolUseID: "toolu_sys", ToolName: "Read"},
+				}},
+				{Role: RoleUser, ToolResults: []ParsedToolResult{
+					{ToolUseID: "toolu_sys"},
+				}, IsSystem: true},
+			},
+			want: TerminationClean,
+		},
+		{
+			name: "tool_call_pending: compact boundary after final tool call does not mask orphan",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, ToolCalls: []ParsedToolCall{
+					{ToolUseID: "toolu_boundary", ToolName: "Read"},
+				}},
+				{
+					Role:              RoleAssistant,
+					Content:           "Compacted earlier turns",
+					IsSystem:          true,
+					IsCompactBoundary: true,
+					SourceSubtype:     "compact_boundary",
+				},
+			},
+			stopReason: "tool_use",
+			want:       TerminationToolCallPending,
 		},
 		{
 			name: "tool_call_pending: last assistant has unmatched tool_use",

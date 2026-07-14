@@ -79,6 +79,31 @@ func TestDuckDBStoreContract(t *testing.T) {
 	}
 }
 
+func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
+	conn := openTestDuckDB(t)
+	rows, err := conn.Query(`
+		WITH candidates(label, role, content) AS (VALUES
+			('reminder-only', 'user', '<system-reminder>a</system-reminder><system-reminder>b</system-reminder>'),
+			('reminder-task', 'user', '<system-reminder>a</system-reminder><task-notification>done</task-notification>'),
+			('reminder-ordinary', 'user', '<system-reminder>a</system-reminder>real prompt'),
+			('reminder-malformed', 'user', '<system-reminder>a')
+		)
+		SELECT label FROM candidates
+		WHERE ` + db.DuckDBSystemPrefixSQL("content", "role") + `
+		ORDER BY label`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var label string
+		require.NoError(t, rows.Scan(&label))
+		got = append(got, label)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"reminder-malformed", "reminder-ordinary"}, got)
+}
+
 // TestDuckDBStoreHasSemanticFalse pins that the DuckDB store reports no
 // semantic search capability until it gets its own VectorSearcher seam.
 func TestDuckDBStoreHasSemanticFalse(t *testing.T) {

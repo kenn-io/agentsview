@@ -17,8 +17,7 @@ import (
 // classifySearchErr buckets a SearchContent failure into the two error
 // classes the HTTP layer maps to distinct status codes: "input" is a
 // *db.SearchInputError (400) and "unavailable" is db.ErrSemanticUnavailable
-// (501). An input error must never also satisfy errors.Is ErrSemanticUnavailable,
-// otherwise a 400 could be reported as a 501.
+// (501). An input error must never also satisfy errors.Is ErrSemanticUnavailable.
 func classifySearchErr(t *testing.T, err error) string {
 	t.Helper()
 	require.Error(t, err)
@@ -35,13 +34,10 @@ func classifySearchErr(t *testing.T, err error) string {
 	return ""
 }
 
-// TestSearchContentSemanticErrorParity pins that db.DB (SQLite) and
-// postgres.Store classify the same semantic/hybrid requests into the same
-// error class. Neither store has a VectorSearcher wired, so invalid inputs
-// must be rejected as *db.SearchInputError (400) before the capability gate,
-// while an otherwise-valid semantic/hybrid request falls through to
-// db.ErrSemanticUnavailable (501). Running one input table through both
-// backends is the cross-backend check the per-backend suites don't make.
+// TestSearchContentSemanticErrorParity runs the same semantic and hybrid
+// error-classification table through SQLite and PostgreSQL. The PostgreSQL
+// calls use setupContentSearch, so this parity proof executes against the
+// actual backend whenever TEST_PG_URL is available.
 func TestSearchContentSemanticErrorParity(t *testing.T) {
 	sqlite, err := db.Open(filepath.Join(t.TempDir(), "parity.db"))
 	require.NoError(t, err, "open sqlite")
@@ -54,62 +50,16 @@ func TestSearchContentSemanticErrorParity(t *testing.T) {
 		filter db.ContentSearchFilter
 		want   string
 	}{
-		{
-			name:   "semantic cursor rejected",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Cursor: 1},
-			want:   "input",
-		},
-		{
-			name:   "hybrid cursor rejected",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid", Cursor: 1},
-			want:   "input",
-		},
-		{
-			name: "semantic non-messages source rejected",
-			filter: db.ContentSearchFilter{
-				Pattern: "x", Mode: "semantic", Sources: []string{"tool_input"},
-			},
-			want: "input",
-		},
-		{
-			name: "hybrid non-messages source rejected",
-			filter: db.ContentSearchFilter{
-				Pattern: "x", Mode: "hybrid", Sources: []string{"tool_result"},
-			},
-			want: "input",
-		},
-		{
-			name:   "semantic bad scope rejected",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Scope: "bogus"},
-			want:   "input",
-		},
-		{
-			name:   "hybrid bad scope rejected",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid", Scope: "bogus"},
-			want:   "input",
-		},
-		{
-			name:   "unknown mode rejected",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "bogus"},
-			want:   "input",
-		},
-		{
-			name:   "valid semantic hits capability gate",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic"},
-			want:   "unavailable",
-		},
-		{
-			name:   "valid hybrid hits capability gate",
-			filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid"},
-			want:   "unavailable",
-		},
-		{
-			name: "valid semantic messages-only hits capability gate",
-			filter: db.ContentSearchFilter{
-				Pattern: "x", Mode: "semantic", Sources: []string{"messages"},
-			},
-			want: "unavailable",
-		},
+		{name: "semantic cursor rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Cursor: 1}, want: "input"},
+		{name: "hybrid cursor rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid", Cursor: 1}, want: "input"},
+		{name: "semantic non-messages source rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Sources: []string{"tool_input"}}, want: "input"},
+		{name: "hybrid non-messages source rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid", Sources: []string{"tool_result"}}, want: "input"},
+		{name: "semantic bad scope rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Scope: "bogus"}, want: "input"},
+		{name: "hybrid bad scope rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid", Scope: "bogus"}, want: "input"},
+		{name: "unknown mode rejected", filter: db.ContentSearchFilter{Pattern: "x", Mode: "bogus"}, want: "input"},
+		{name: "valid semantic hits capability gate", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic"}, want: "unavailable"},
+		{name: "valid hybrid hits capability gate", filter: db.ContentSearchFilter{Pattern: "x", Mode: "hybrid"}, want: "unavailable"},
+		{name: "valid semantic messages-only hits capability gate", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Sources: []string{"messages"}}, want: "unavailable"},
 	}
 
 	ctx := context.Background()

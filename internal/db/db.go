@@ -299,7 +299,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (62: Local session machine identity now uses the operating-system hostname
 // instead of the ambiguous literal "local". Re-parsing updates existing
 // source-backed rows while the resync archive copy preserves orphaned history.)
-const dataVersion = 63
+// (65: Claude leading system-reminder blocks are stripped from mixed
+// user prompts before persistence, while reminder-only content still
+// promotes to system_reminder. Existing rows need re-parsing so reminder
+// metadata stops hiding real prompts and inflating reminder-only storage.)
+const dataVersion = 65
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -81,6 +81,54 @@ describe("isSystemMessage", () => {
     ).toBe(false);
   });
 
+  it("does not match a prefix-adjacent task notification", () => {
+    expect(
+      isSystemMessage(msg({ content: "<task-notification-status>ready" })),
+    ).toBe(false);
+  });
+
+  it("hides reminder-only fallback content", () => {
+    expect(
+      isSystemMessage(
+        msg({ content: "<system-reminder>remember this</system-reminder>" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps reminder-prefixed real prompts visible", () => {
+    expect(
+      isSystemMessage(
+        msg({
+          content:
+            "<system-reminder>remember this</system-reminder>\n\nreal prompt",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    "<system-reminder>a</system-reminder><task-notification>done</task-notification>",
+    "<system-reminder>a</system-reminder><system-reminder>b</system-reminder>",
+    '<system-reminder>a</system-reminder><goal_context>state</goal_context>',
+  ])("classifies the terminal remainder: %s", (content) => {
+    expect(isSystemMessage(msg({ content }))).toBe(true);
+  });
+
+  it.each([
+    "<system-reminder>a</system-reminder>real prompt",
+    "<system-reminder>a",
+  ])("keeps non-classified reminder content visible: %s", (content) => {
+    expect(isSystemMessage(msg({ content }))).toBe(false);
+  });
+
+  it("hides system reminders without making them visible cards", () => {
+    expect(
+      isSystemMessage(
+        msg({ is_system: true, source_subtype: "system_reminder" }),
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     [
       "non-goal internal context",
