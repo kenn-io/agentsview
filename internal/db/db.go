@@ -1518,8 +1518,8 @@ func probeDatabaseConn(
 	return false, version < dataVersion, nil
 }
 
-// needsSchemaRepair probes for missing required legacy columns and obsolete
-// columns left by older repairs. Open normalizes them before initializing
+// needsSchemaRepair probes for required legacy columns that may be missing in
+// databases created by older releases. Open adds them before initializing
 // schema indexes, then triggers a non-destructive full resync.
 func needsSchemaRepair(conn *sql.DB) (bool, error) {
 	for _, migration := range legacySchemaColumnMigrations() {
@@ -1539,17 +1539,7 @@ func needsSchemaRepair(conn *sql.DB) (bool, error) {
 			return true, nil
 		}
 	}
-
-	var legacyInsightDateCount int
-	if err := conn.QueryRow(`
-		SELECT count(*) FROM pragma_table_info('insights')
-		WHERE name = 'date'
-	`).Scan(&legacyInsightDateCount); err != nil {
-		return false, fmt.Errorf(
-			"probing schema (insights.date): %w", err,
-		)
-	}
-	return legacyInsightDateCount > 0, nil
+	return false, nil
 }
 
 func readUserVersion(conn *sql.DB) (int, error) {
@@ -1578,14 +1568,6 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "parent_session_id",
 			"ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
-		},
-		{
-			"insights", "date_from",
-			"ALTER TABLE insights ADD COLUMN date_from TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			"insights", "date_to",
-			"ALTER TABLE insights ADD COLUMN date_to TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"tool_calls", "tool_use_id",
@@ -2034,44 +2016,6 @@ func applyColumnMigrations(
 	return nil
 }
 
-func migrateLegacyInsightDates(tx *sql.Tx) error {
-	var legacyDateCount int
-	if err := tx.QueryRow(
-		`SELECT count(*) FROM pragma_table_info('insights')
-		 WHERE name = 'date'`,
-	).Scan(&legacyDateCount); err != nil {
-		return fmt.Errorf("probing legacy insight date: %w", err)
-	}
-	if legacyDateCount == 0 {
-		return nil
-	}
-	if _, err := tx.Exec(`
-		UPDATE insights
-		SET date_from = CASE
-				WHEN date_from = '' THEN COALESCE(date, '')
-				ELSE date_from
-			END,
-			date_to = CASE
-				WHEN date_to = '' THEN COALESCE(date, '')
-				ELSE date_to
-			END
-		WHERE date_from = '' OR date_to = ''
-	`); err != nil {
-		return fmt.Errorf("backfilling legacy insight dates: %w", err)
-	}
-	if _, err := tx.Exec(
-		`DROP INDEX IF EXISTS idx_insights_lookup`,
-	); err != nil {
-		return fmt.Errorf("dropping legacy insight lookup index: %w", err)
-	}
-	if _, err := tx.Exec(
-		`ALTER TABLE insights DROP COLUMN date`,
-	); err != nil {
-		return fmt.Errorf("dropping legacy insight date column: %w", err)
-	}
-	return nil
-}
-
 // repairLegacySchemaBeforeInit adds legacy columns before schema initialization.
 // The stale data marker is committed in the same transaction so a restart
 // cannot skip the required full resync.
@@ -2089,9 +2033,6 @@ func repairLegacySchemaBeforeInit(w *writerHandle) error {
 		},
 		tx.Exec,
 	); err != nil {
-		return err
-	}
-	if err := migrateLegacyInsightDates(tx); err != nil {
 		return err
 	}
 	var version int

@@ -49,7 +49,7 @@ CREATE TABLE sessions (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );` + legacyMessagesAndToolCallsSchema
 
-const singleDateLegacySchema = `
+const v06LegacySchema = `
 CREATE TABLE sessions (
     id          TEXT PRIMARY KEY,
     project     TEXT NOT NULL,
@@ -59,40 +59,51 @@ CREATE TABLE sessions (
     started_at  TEXT,
     ended_at    TEXT,
     message_count INTEGER NOT NULL DEFAULT 0,
+    user_message_count INTEGER NOT NULL DEFAULT 0,
     file_path   TEXT,
     file_size   INTEGER,
     file_mtime  INTEGER,
     file_hash   TEXT,
     parent_session_id TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);` + legacyMessagesAndToolCallsSchema + `
+);
+CREATE TABLE messages (
+    id             INTEGER PRIMARY KEY,
+    session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    ordinal        INTEGER NOT NULL,
+    role           TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    timestamp      TEXT,
+    has_thinking   INTEGER NOT NULL DEFAULT 0,
+    has_tool_use   INTEGER NOT NULL DEFAULT 0,
+    content_length INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(session_id, ordinal)
+);
+CREATE TABLE tool_calls (
+    id         INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    tool_name  TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    tool_use_id TEXT,
+    input_json TEXT,
+    skill_name TEXT,
+    result_content_length INTEGER
+);
 CREATE TABLE insights (
     id          INTEGER PRIMARY KEY,
     type        TEXT NOT NULL,
-    date        TEXT NOT NULL,
+    date_from   TEXT NOT NULL,
+    date_to     TEXT NOT NULL,
     project     TEXT,
     agent       TEXT NOT NULL,
     model       TEXT,
     prompt      TEXT,
     content     TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);`
-
-const partiallyMigratedLegacySchema = `
-ALTER TABLE insights
-    ADD COLUMN date_from TEXT NOT NULL DEFAULT '';
-ALTER TABLE insights
-    ADD COLUMN date_to TEXT NOT NULL DEFAULT '';
-UPDATE insights SET date_from = date, date_to = date;
-ALTER TABLE tool_calls ADD COLUMN tool_use_id TEXT;
-ALTER TABLE tool_calls ADD COLUMN input_json TEXT;
-ALTER TABLE tool_calls ADD COLUMN skill_name TEXT;
-ALTER TABLE tool_calls ADD COLUMN result_content_length INTEGER;
-ALTER TABLE sessions
-    ADD COLUMN user_message_count INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE sessions
-    ADD COLUMN relationship_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE tool_calls ADD COLUMN subagent_session_id TEXT;`
+);
+CREATE INDEX idx_insights_lookup
+    ON insights(type, date_from, project);`
 
 const legacyArchiveRows = `
 INSERT INTO sessions (
@@ -115,25 +126,18 @@ INSERT INTO tool_calls (
 
 func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 	tests := []struct {
-		name             string
-		schema           string
-		wantInsightDate  string
-		partiallyMigrate bool
+		name            string
+		schema          string
+		wantInsightDate string
 	}{
 		{
 			name:   "pre-parent-link archive",
 			schema: preParentLegacySchema,
 		},
 		{
-			name:            "single-date insight and base tool calls",
-			schema:          singleDateLegacySchema,
+			name:            "v0.6 archive with range insight",
+			schema:          v06LegacySchema,
 			wantInsightDate: "2026-02-23",
-		},
-		{
-			name:             "partially migrated single-date insight",
-			schema:           singleDateLegacySchema,
-			wantInsightDate:  "2026-02-23",
-			partiallyMigrate: true,
 		},
 	}
 
@@ -151,15 +155,13 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			if tc.wantInsightDate != "" {
 				_, err = conn.Exec(`
 					INSERT INTO insights (
-						id, type, date, project, agent, model, prompt, content
+						id, type, date_from, date_to, project,
+						agent, model, prompt, content
 					) VALUES (
-						1, 'daily', '2026-02-23', 'project-a', 'claude',
-						'model-a', 'summarize', 'archived insight'
+						1, 'daily', '2026-02-23', '2026-02-23',
+						'project-a', 'claude', 'model-a',
+						'summarize', 'archived insight'
 					)`)
-				require.NoError(t, err)
-			}
-			if tc.partiallyMigrate {
-				_, err = conn.Exec(partiallyMigratedLegacySchema)
 				require.NoError(t, err)
 			}
 			_, err = conn.Exec(fmt.Sprintf(
