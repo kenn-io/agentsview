@@ -1,7 +1,7 @@
 {
   "$schema": "https://inlang.com/schema/project-settings",
   "baseLocale": "en",
-  "locales": ["en", "zh-CN", "zh-TW", "ko"],
+  "locales": ["en", "zh-CN", "zh-TW", "ko", "fr"],
   "modules": [
     "./node_modules/@inlang/plugin-message-format/dist/index.js",
     "./node_modules/@inlang/plugin-m-function-matcher/dist/index.js"
