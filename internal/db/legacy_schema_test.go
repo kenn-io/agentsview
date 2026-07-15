@@ -78,6 +78,22 @@ CREATE TABLE insights (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );`
 
+const partiallyMigratedLegacySchema = `
+ALTER TABLE insights
+    ADD COLUMN date_from TEXT NOT NULL DEFAULT '';
+ALTER TABLE insights
+    ADD COLUMN date_to TEXT NOT NULL DEFAULT '';
+UPDATE insights SET date_from = date, date_to = date;
+ALTER TABLE tool_calls ADD COLUMN tool_use_id TEXT;
+ALTER TABLE tool_calls ADD COLUMN input_json TEXT;
+ALTER TABLE tool_calls ADD COLUMN skill_name TEXT;
+ALTER TABLE tool_calls ADD COLUMN result_content_length INTEGER;
+ALTER TABLE sessions
+    ADD COLUMN user_message_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions
+    ADD COLUMN relationship_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE tool_calls ADD COLUMN subagent_session_id TEXT;`
+
 const legacyArchiveRows = `
 INSERT INTO sessions (
     id, project, machine, agent, first_message, message_count,
@@ -99,9 +115,10 @@ INSERT INTO tool_calls (
 
 func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 	tests := []struct {
-		name            string
-		schema          string
-		wantInsightDate string
+		name             string
+		schema           string
+		wantInsightDate  string
+		partiallyMigrate bool
 	}{
 		{
 			name:   "pre-parent-link archive",
@@ -111,6 +128,12 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			name:            "single-date insight and base tool calls",
 			schema:          singleDateLegacySchema,
 			wantInsightDate: "2026-02-23",
+		},
+		{
+			name:             "partially migrated single-date insight",
+			schema:           singleDateLegacySchema,
+			wantInsightDate:  "2026-02-23",
+			partiallyMigrate: true,
 		},
 	}
 
@@ -135,6 +158,10 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 					)`)
 				require.NoError(t, err)
 			}
+			if tc.partiallyMigrate {
+				_, err = conn.Exec(partiallyMigratedLegacySchema)
+				require.NoError(t, err)
+			}
 			_, err = conn.Exec(fmt.Sprintf(
 				"PRAGMA user_version = %d", dataVersion,
 			))
@@ -143,7 +170,7 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 
 			d, err := Open(path)
 			require.NoError(t, err)
-			require.True(t, d.NeedsResync())
+			assert.True(t, d.NeedsResync())
 
 			session := requireSessionExists(t, d, "legacy-session")
 			assert.Equal(t, "project-a", session.Project)

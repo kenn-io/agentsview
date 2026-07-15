@@ -1518,8 +1518,8 @@ func probeDatabaseConn(
 	return false, version < dataVersion, nil
 }
 
-// needsSchemaRepair probes for required legacy columns that may be missing in
-// databases created by older releases. Open repairs them before initializing
+// needsSchemaRepair probes for missing required legacy columns and obsolete
+// columns left by older repairs. Open normalizes them before initializing
 // schema indexes, then triggers a non-destructive full resync.
 func needsSchemaRepair(conn *sql.DB) (bool, error) {
 	for _, migration := range legacySchemaColumnMigrations() {
@@ -1539,7 +1539,17 @@ func needsSchemaRepair(conn *sql.DB) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, nil
+
+	var legacyInsightDateCount int
+	if err := conn.QueryRow(`
+		SELECT count(*) FROM pragma_table_info('insights')
+		WHERE name = 'date'
+	`).Scan(&legacyInsightDateCount); err != nil {
+		return false, fmt.Errorf(
+			"probing schema (insights.date): %w", err,
+		)
+	}
+	return legacyInsightDateCount > 0, nil
 }
 
 func readUserVersion(conn *sql.DB) (int, error) {
