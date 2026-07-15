@@ -12,8 +12,8 @@ restart-safe full resync.
 **Architecture:** Use one legacy column-migration catalog for both schema
 detection and transactional pre-initialization repair. Repair existing tables
 before `schema.sql` creates indexes, migrate the historical insight date in the
-same transaction, and leave modern additive migrations in their current
-post-initialization path.
+same transaction, remove the obsolete required `date` column and lookup index,
+and leave modern additive migrations in their current post-initialization path.
 
 **Tech Stack:** Go, `database/sql`, `mattn/go-sqlite3`, SQLite schema metadata,
 and `testify` assertions.
@@ -30,6 +30,7 @@ and `testify` assertions.
 - Keep PostgreSQL and CockroachDB unchanged because this path is SQLite-only.
 - Run `go fmt ./...` and `go vet ./...` before committing Go changes.
 - Do not bypass repository Git hooks.
+- Remove the design spec from the final tree as requested by the user.
 
 ______________________________________________________________________
 
@@ -551,3 +552,182 @@ legacy archive coverage.
 ```
 
 Do not amend the contributor's existing commit and do not bypass Git hooks.
+
+### Task 4: Normalize the repaired insights table
+
+**Files:**
+
+- Modify: `internal/db/legacy_schema_test.go`
+- Modify: `internal/db/db.go:2027-2076`
+- Delete: `docs/superpowers/specs/2026-07-14-preserve-legacy-archives-design.md`
+
+**Interfaces:**
+
+- Consumes: `DB.InsertInsight`, `DB.GetInsight`, the single-date historical
+  fixture, and the transaction owned by `repairLegacySchemaBeforeInit`.
+
+- Produces: `migrateLegacyInsightDates(*sql.Tx) error`, which preserves legacy
+  dates and removes the obsolete write constraint before schema
+  initialization.
+
+- [x] **Step 1: Extend the historical fixture with an immediate current write**
+
+Inside the single-date assertion block, add a current `InsertInsight` call and
+assert the inserted row is readable:
+
+```go
+id, err := d.InsertInsight(Insight{
+	Type:     "daily",
+	DateFrom: "2026-07-14",
+	DateTo:   "2026-07-14",
+	Agent:    "claude",
+	Content:  "new insight",
+})
+require.NoError(t, err)
+inserted, err := d.GetInsight(context.Background(), id)
+require.NoError(t, err)
+require.NotNil(t, inserted)
+assert.Equal(t, "2026-07-14", inserted.DateFrom)
+assert.Equal(t, "2026-07-14", inserted.DateTo)
+assert.Equal(t, "new insight", inserted.Content)
+```
+
+Add a persisted-index helper and invoke it for `idx_insights_lookup`:
+
+```go
+func requireIndexColumns(
+	t *testing.T, d *DB, index string, want []string,
+) {
+	t.Helper()
+	rows, err := d.getReader().Query(`
+		SELECT name FROM pragma_index_info(?) ORDER BY seqno
+	`, index)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		got = append(got, column)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, want, got)
+}
+```
+
+Call it after the legacy date assertions with the literal expectation:
+
+```go
+requireIndexColumns(t, d, "idx_insights_lookup", []string{
+	"type", "date_from", "date_to", "project",
+})
+```
+
+- [x] **Step 2: Run the focused regression and verify RED**
+
+Run:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/db \
+  -run '^TestOpenLegacySchemasPreservesArchiveAndRequestsResync$' -count=1
+```
+
+Expected: FAIL in the single-date subtest with
+`NOT NULL constraint failed: insights.date`. This proves the test protects the
+current write contract rather than merely inspecting migration source.
+
+- [x] **Step 3: Normalize the legacy column in the existing transaction**
+
+Rename `backfillLegacyInsightDates` to `migrateLegacyInsightDates` and extend it
+after the existing `UPDATE`:
+
+```go
+func migrateLegacyInsightDates(tx *sql.Tx) error {
+	var legacyDateCount int
+	if err := tx.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('insights')
+		 WHERE name = 'date'`,
+	).Scan(&legacyDateCount); err != nil {
+		return fmt.Errorf("probing legacy insight date: %w", err)
+	}
+	if legacyDateCount == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`
+		UPDATE insights
+		SET date_from = CASE
+				WHEN date_from = '' THEN COALESCE(date, '')
+				ELSE date_from
+			END,
+			date_to = CASE
+				WHEN date_to = '' THEN COALESCE(date, '')
+				ELSE date_to
+			END
+		WHERE date_from = '' OR date_to = ''
+	`); err != nil {
+		return fmt.Errorf("backfilling legacy insight dates: %w", err)
+	}
+	if _, err := tx.Exec(
+		`DROP INDEX IF EXISTS idx_insights_lookup`,
+	); err != nil {
+		return fmt.Errorf("dropping legacy insight lookup index: %w", err)
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE insights DROP COLUMN date`,
+	); err != nil {
+		return fmt.Errorf("dropping legacy insight date column: %w", err)
+	}
+	return nil
+}
+```
+
+Update `repairLegacySchemaBeforeInit` to call `migrateLegacyInsightDates(tx)`.
+Keep all work in its existing transaction so any failure rolls back the
+backfill, index removal, column removal, and stale marker together.
+
+- [x] **Step 4: Verify GREEN and package behavior**
+
+Run:
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/db \
+  -run '^TestOpenLegacySchemasPreservesArchiveAndRequestsResync$' -count=1
+CGO_ENABLED=1 go test -tags fts5 ./internal/db -count=1
+```
+
+Expected: both commands exit 0. Removing either the column normalization or
+index replacement makes the regression fail.
+
+- [x] **Step 5: Remove the approved design spec and verify the repository**
+
+Delete `docs/superpowers/specs/2026-07-14-preserve-legacy-archives-design.md`,
+then run:
+
+```bash
+go fmt ./...
+go vet -tags fts5 ./...
+make test
+make lint-ci
+git diff --check
+```
+
+Expected: all commands exit 0 and the final tree no longer contains the design
+spec.
+
+- [ ] **Step 6: Commit the review fix**
+
+Stage only `internal/db/db.go`, `internal/db/legacy_schema_test.go`, this plan,
+and the spec deletion. Commit without amending or bypassing hooks:
+
+```text
+fix(db): normalize repaired legacy insights
+
+Legacy insights retain a required date column that current writes do not know
+about, and their old lookup index masks the current definition. Normalize both
+inside the existing repair transaction so preserved archives remain writable
+even when resync is delayed.
+
+VALID (fixed): #1 -- remove the obsolete insight constraint after preserving
+its date and rebuild the current lookup index shape.
+```

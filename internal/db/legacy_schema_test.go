@@ -166,6 +166,25 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tc.wantInsightDate, dateFrom)
 				assert.Equal(t, tc.wantInsightDate, dateTo)
+
+				id, err := d.InsertInsight(Insight{
+					Type:     "daily",
+					DateFrom: "2026-07-14",
+					DateTo:   "2026-07-14",
+					Agent:    "claude",
+					Content:  "new insight",
+				})
+				require.NoError(t, err)
+				inserted, err := d.GetInsight(context.Background(), id)
+				require.NoError(t, err)
+				require.NotNil(t, inserted)
+				assert.Equal(t, "2026-07-14", inserted.DateFrom)
+				assert.Equal(t, "2026-07-14", inserted.DateTo)
+				assert.Equal(t, "new insight", inserted.Content)
+
+				requireIndexColumns(t, d, "idx_insights_lookup", []string{
+					"type", "date_from", "date_to", "project",
+				})
 			}
 
 			requireLegacyRepairIndexes(t, d)
@@ -177,6 +196,26 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			require.True(t, reopened.NeedsResync())
 		})
 	}
+}
+
+func requireIndexColumns(
+	t *testing.T, d *DB, index string, want []string,
+) {
+	t.Helper()
+	rows, err := d.getReader().Query(`
+		SELECT name FROM pragma_index_info(?) ORDER BY seqno
+	`, index)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		got = append(got, column)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, want, got)
 }
 
 func requireLegacyRepairIndexes(t *testing.T, d *DB) {

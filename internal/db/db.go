@@ -2024,7 +2024,7 @@ func applyColumnMigrations(
 	return nil
 }
 
-func backfillLegacyInsightDates(tx *sql.Tx) error {
+func migrateLegacyInsightDates(tx *sql.Tx) error {
 	var legacyDateCount int
 	if err := tx.QueryRow(
 		`SELECT count(*) FROM pragma_table_info('insights')
@@ -2049,6 +2049,16 @@ func backfillLegacyInsightDates(tx *sql.Tx) error {
 	`); err != nil {
 		return fmt.Errorf("backfilling legacy insight dates: %w", err)
 	}
+	if _, err := tx.Exec(
+		`DROP INDEX IF EXISTS idx_insights_lookup`,
+	); err != nil {
+		return fmt.Errorf("dropping legacy insight lookup index: %w", err)
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE insights DROP COLUMN date`,
+	); err != nil {
+		return fmt.Errorf("dropping legacy insight date column: %w", err)
+	}
 	return nil
 }
 
@@ -2071,7 +2081,7 @@ func repairLegacySchemaBeforeInit(w *writerHandle) error {
 	); err != nil {
 		return err
 	}
-	if err := backfillLegacyInsightDates(tx); err != nil {
+	if err := migrateLegacyInsightDates(tx); err != nil {
 		return err
 	}
 	var version int
