@@ -306,7 +306,9 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (66: Claude session identity metadata. Re-parsing populates the new
 // agent_label and entrypoint session columns from top-level agentSetting
 // and entrypoint fields on existing Claude rows.)
-const dataVersion = 66
+// (67: Antigravity CLI reader metadata. Re-parsing populates parent_session_id
+// and relationship_type from agyReader.parentCascadeId in trajectory sidecars.)
+const dataVersion = 67
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

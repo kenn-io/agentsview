@@ -930,9 +930,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionQueuedSystemMessages(t *testing.T) {
-	assert.Equal(t, 66, CurrentDataVersion(),
-		"queued system message parser changes require a data version bump")
+func TestCurrentDataVersionAntigravityParentLinks(t *testing.T) {
+	assert.Equal(t, 67, CurrentDataVersion(),
+		"Antigravity parent-link parsing requires a data version bump")
 }
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)

@@ -126,6 +126,72 @@ func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
 	assert.Equal(t, "listing files now", msgs[1].Content)
 }
 
+func TestSyncEngineAntigravityCLI_ParentLinkArrivalOrder(t *testing.T) {
+	tests := []struct {
+		name       string
+		firstChild bool
+	}{
+		{name: "child before parent", firstChild: true},
+		{name: "parent before child", firstChild: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
+			const (
+				parentID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+				childID  = "11111111-2222-4333-8444-555555555555"
+			)
+			convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+			require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+			writeSession := func(id, parent, prompt string) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(
+					filepath.Join(convDir, id+".pb"), []byte("pb-stub"), 0o644,
+				))
+				trajectory := antigravityCLISingleUserTrajectory(id, prompt)
+				if parent != "" {
+					trajectory = antigravityCLIParentedTrajectory(id, parent, prompt)
+				}
+				require.NoError(t, os.WriteFile(
+					filepath.Join(convDir, id+".trajectory.json"),
+					[]byte(trajectory), 0o644,
+				))
+			}
+			assertChildLink := func() {
+				t.Helper()
+				assertSessionState(t, env.db, "antigravity-cli:"+childID, func(sess *db.Session) {
+					require.NotNil(t, sess.ParentSessionID)
+					assert.Equal(t, "antigravity-cli:"+parentID, *sess.ParentSessionID)
+					assert.Equal(t, "subagent", sess.RelationshipType)
+				})
+			}
+
+			if tc.firstChild {
+				writeSession(childID, parentID, "child prompt")
+			} else {
+				writeSession(parentID, "", "parent prompt")
+			}
+			runSyncAndAssert(t, env.engine, sync.SyncStats{
+				TotalSessions: 1,
+				Synced:        1,
+			})
+			if tc.firstChild {
+				assertChildLink()
+				writeSession(parentID, "", "parent prompt")
+			} else {
+				writeSession(childID, parentID, "child prompt")
+			}
+			runSyncAndAssert(t, env.engine, sync.SyncStats{
+				TotalSessions: 2,
+				Synced:        1,
+				Skipped:       1,
+			})
+			assertChildLink()
+		})
+	}
+}
+
 func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	syncUUID := "44444444-5555-6666-7777-888888888888"
@@ -676,6 +742,21 @@ func antigravityCLISingleUserTrajectory(uuid, prompt string) string {
 			}
 		]
 	}`, uuid, prompt)
+}
+
+func antigravityCLIParentedTrajectory(uuid, parent, prompt string) string {
+	return fmt.Sprintf(`{
+		"trajectoryId": %q,
+		"agyReader": {"parentCascadeId": %q},
+		"steps": [
+			{
+				"type": "CORTEX_STEP_TYPE_USER_INPUT",
+				"status": "STATUS_COMPLETED",
+				"metadata": {"createdAt": "2026-05-20T22:45:00Z"},
+				"userInput": {"userResponse": %q}
+			}
+		]
+	}`, uuid, parent, prompt)
 }
 
 func copyAntigravityCLITestSchemaTemplate(t *testing.T, path string) {

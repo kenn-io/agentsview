@@ -105,6 +105,10 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	var messages []ParsedMessage
 	var usageEvents []ParsedUsageEvent
 	var hasTrajectory bool
+	// parentCascadeID is reader-owned lineage metadata from the sidecar.
+	// It is independent of which source wins transcript coverage, so a
+	// lagging sidecar can still contribute an authoritative parent pointer.
+	var parentCascadeID string
 	// hasGenMetadata records whether the .db source carried gen_metadata
 	// rows. Combined with the FINAL usageEvents (after the sidecar gap-fill
 	// below) it flags a gen_metadata table that decoded into zero usage.
@@ -139,6 +143,9 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		// as a current transcript.
 		sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
 		tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
+		if tErr == nil {
+			parentCascadeID = tRes.parentCascadeID
+		}
 		sidecarOK := tErr == nil &&
 			hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
 		sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
@@ -184,6 +191,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		// and even a sidecar older than the .pb beats the fallbacks.
 		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
 		if tRes, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+			parentCascadeID = tRes.parentCascadeID
 			// Usage events flow whenever the sidecar parses, even when
 			// no message is displayable, matching the message-less
 			// usage stance of the .db branch. The displayable gate
@@ -297,6 +305,10 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			Size:  size,
 			Mtime: mtime,
 		},
+	}
+	if parentCascadeID != "" && !strings.EqualFold(parentCascadeID, id) {
+		sess.ParentSessionID = antigravityCLIIDPrefix + parentCascadeID
+		sess.RelationshipType = RelSubagent
 	}
 	accumulateMessageTokenUsage(sess, messages)
 	applyUsageEventTokenTotals(sess, usageEvents)
@@ -977,6 +989,11 @@ type agyTrajectory struct {
 	CascadeID         string                 `json:"cascadeId"`
 	Steps             []agyStep              `json:"steps"`
 	GeneratorMetadata []agyGeneratorMetadata `json:"generatorMetadata"`
+	AgyReader         json.RawMessage        `json:"agyReader"`
+}
+
+type agyReaderMetadata struct {
+	ParentCascadeID string `json:"parentCascadeId"`
 }
 
 // agyGeneratorMetadata records one model generation: the trajectory
@@ -1298,9 +1315,42 @@ func agyToolDetail(name, inputJSON string) string {
 // same session), and the usage events extracted from
 // generatorMetadata.
 type agyTrajectoryParseResult struct {
-	messages    []ParsedMessage
-	rawSteps    int
-	usageEvents []ParsedUsageEvent
+	messages        []ParsedMessage
+	rawSteps        int
+	usageEvents     []ParsedUsageEvent
+	parentCascadeID string
+}
+
+func parseAgyReaderParentCascadeID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var metadata agyReaderMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return ""
+	}
+	return canonicalAgyCascadeID(metadata.ParentCascadeID)
+}
+
+func canonicalAgyCascadeID(value string) string {
+	if len(value) != 36 {
+		return ""
+	}
+	for i := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if value[i] != '-' {
+				return ""
+			}
+			continue
+		}
+		c := value[i]
+		if (c < '0' || c > '9') &&
+			(c < 'a' || c > 'f') &&
+			(c < 'A' || c > 'F') {
+			return ""
+		}
+	}
+	return strings.ToLower(value)
 }
 
 // parseAntigravityCLITrajectory reads a <uuid>.trajectory.json sidecar
@@ -1535,9 +1585,10 @@ func parseAntigravityCLITrajectory(
 
 	flushPendingResults()
 	return agyTrajectoryParseResult{
-		messages:    msgs,
-		rawSteps:    len(traj.Steps),
-		usageEvents: extractAgyGeneratorUsage(traj, plannerMsgIdx, msgs),
+		messages:        msgs,
+		rawSteps:        len(traj.Steps),
+		usageEvents:     extractAgyGeneratorUsage(traj, plannerMsgIdx, msgs),
+		parentCascadeID: parseAgyReaderParentCascadeID(traj.AgyReader),
 	}, nil
 }
 
