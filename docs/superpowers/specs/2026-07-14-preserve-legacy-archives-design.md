@@ -7,15 +7,18 @@ delete and recreate `sessions.db`. That loses sessions which no longer have a
 source transcript on disk, even though the missing columns can be added
 non-destructively.
 
-The current pull request changes startup to repair those archives before
-initializing the current schema, but it is incomplete. Its repair catalog adds
-only one sentinel column from each historical transition. Real archives from
-those releases also lack companion columns, so current index creation or later
-queries still fail. The legacy insights transition also replaced a single `date`
-value with `date_from` and `date_to`; adding empty range columns without copying
-that value discards archived insight semantics. Finally, the repair call
-currently passes a raw `*sql.DB` where a guarded writer handle is required, so
-the branch does not compile.
+The original pull request changed startup to repair those archives before
+initializing the current schema, but its repair catalog added only one sentinel
+column from each historical transition. Real archives from those releases also
+lack companion columns, so current index creation or later queries still fail.
+The legacy insights transition also replaced a single `date` value with
+`date_from` and `date_to`; adding empty range columns without copying that value
+discards archived insight semantics. Retaining the old `date` column afterward
+is also unsafe because it is `NOT NULL` without a default while current insight
+inserts omit it. The old lookup index has the same name as the current index, so
+`CREATE INDEX IF NOT EXISTS` would also preserve the obsolete index shape. The
+original repair call also passed a raw `*sql.DB` where a guarded writer handle
+was required, so the branch did not compile.
 
 ## Goals
 
@@ -25,6 +28,7 @@ the branch does not compile.
   `schema.sql` creates indexes that reference the new columns.
 - Preserve existing sessions, messages, tool calls, and insights.
 - Copy a legacy insight's `date` into both `date_from` and `date_to`.
+- Leave repaired archives immediately able to accept current insight writes.
 - Mark a repaired database for the normal non-destructive full resync, with the
   marker surviving a restart until resync succeeds.
 - Keep the repair atomic so a failed startup cannot leave a partially upgraded
@@ -33,7 +37,6 @@ the branch does not compile.
 
 ## Non-goals
 
-- Do not remove obsolete legacy columns after their data is migrated.
 - Do not synthesize parser-derived values during schema repair. The existing
   full-resync path remains responsible for repopulating those fields when
   source transcripts are available and preserving orphaned archive rows when
@@ -77,20 +80,23 @@ transaction and will:
 
 1. add every missing catalog column to an existing table;
 1. detect the historical `insights.date` column;
-1. copy non-empty legacy dates into empty `date_from` and `date_to` values; and
+1. copy non-empty legacy dates into empty `date_from` and `date_to` values;
+1. drop the legacy lookup index and obsolete `date` column; and
 1. lower a current `PRAGMA user_version` by one so the required resync remains
    observable after a process restart.
 
 Older `user_version` values remain unchanged. A database from a newer binary is
 still rejected before any repair begins. Any repair or commit error aborts
 startup and rolls back the transaction, leaving the archive available for a
-later retry.
+later retry. The embedded SQLite version supports `ALTER TABLE ... DROP COLUMN`;
+the repair does not recreate the database or the insights table.
 
 After the repair commits, ordinary schema initialization can create all current
-indexes safely. Existing column migrations and data backfills then run as they
-do for current archives. `Open` exposes `NeedsResync()` for either a stale data
-version or a repaired legacy schema and does not stamp the version current until
-the established resync workflow succeeds.
+indexes safely, including the current four-column insights lookup index.
+Existing column migrations and data backfills then run as they do for current
+archives. `Open` exposes `NeedsResync()` for either a stale data version or a
+repaired legacy schema and does not stamp the version current until the
+established resync workflow succeeds.
 
 ### Regression tests
 
@@ -110,6 +116,9 @@ behavior and persisted state:
 - the archive rows remain readable after startup;
 - all catalog columns and the current indexes that depend on them exist;
 - `date_from` and `date_to` both equal the historical insight date;
+- a current `InsertInsight` succeeds immediately after repair and its row is
+  readable;
+- the insights lookup index uses `type`, `date_from`, `date_to`, and `project`;
 - `NeedsResync()` is true after repair; and
 - closing and reopening the repaired archive still reports the pending resync.
 
