@@ -124,16 +124,19 @@
   });
 
   let resolvedSessionDirId: string | null = null;
+  let pendingSessionDirId: string | null = null;
   $effect(() => {
     if (!session) {
       directoryRead.cancel();
       sessionDir = null;
       resolvedSessionDirId = null;
+      pendingSessionDirId = null;
       return;
     }
     const id = session.id;
-    if (id === resolvedSessionDirId) return;
+    if (id === resolvedSessionDirId || id === pendingSessionDirId) return;
     const signal = directoryRead.begin();
+    pendingSessionDirId = id;
     sessionDir = null;
     configureGeneratedClient();
     callGenerated(
@@ -151,7 +154,14 @@
         // Don't cache the ID on failure so the next
         // session refresh retries the lookup.
       })
-      .finally(() => directoryRead.finish(signal));
+      .finally(() => {
+        if (
+          directoryRead.finish(signal) &&
+          pendingSessionDirId === id
+        ) {
+          pendingSessionDirId = null;
+        }
+      });
   });
 
   let sessionCost = $state<number | null>(null);

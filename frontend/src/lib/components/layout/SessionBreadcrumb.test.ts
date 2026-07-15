@@ -662,6 +662,51 @@ describe("SessionBreadcrumb", () => {
     await unmount(component);
   });
 
+  it("keeps the directory read across same-session metadata refreshes", async () => {
+    const directory = deferred<{ path: string }>();
+    sessionsService.getApiV1SessionsIdDirectory.mockReturnValue(
+      directory.promise,
+    );
+
+    const component = createClassComponent({
+      component: SessionBreadcrumb,
+      target: document.body,
+      props: {
+        session: makeSession("claude", { message_count: 2 }),
+        onBack: () => {},
+      },
+    });
+    await flushPromises();
+
+    component.$set({
+      session: makeSession("claude", { message_count: 3 }),
+    });
+    await flushPromises();
+    component.$set({
+      session: makeSession("claude", { message_count: 4 }),
+    });
+    await flushPromises();
+
+    expect(
+      sessionsService.getApiV1SessionsIdDirectory,
+    ).toHaveBeenCalledOnce();
+
+    directory.resolve({ path: "/tmp/refreshed-session" });
+    await flushPromises();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+
+    await vi.waitFor(() => {
+      expect(
+        document
+          .querySelector<HTMLAnchorElement>('[data-testid="claude-code-link"]')
+          ?.getAttribute("href"),
+      ).toBe("claude://code/new?folder=%2Ftmp%2Frefreshed-session");
+    });
+
+    component.$destroy();
+  });
+
   it("falls back to blue for unknown agents", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,
