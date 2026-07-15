@@ -976,6 +976,7 @@
   "analytics_agent_comparison": "Agent Comparison",
   "analytics_no_comparison_data": "No comparison data (need 2+ agents)",
   "analytics_agent": "Agent",
+  "analytics_model": "Model",
   "analytics_cycle_p50": "Cycle p50",
   "analytics_msgs_per_min": "Msgs/min",
   "analytics_tools_per_min": "Tools/min",

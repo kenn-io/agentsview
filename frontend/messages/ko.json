@@ -950,6 +950,7 @@
   "analytics_agent_comparison": "에이전트 비교",
   "analytics_no_comparison_data": "비교 데이터 없음 (에이전트 2개 이상 필요)",
   "analytics_agent": "에이전트",
+  "analytics_model": "모델",
   "analytics_cycle_p50": "사이클 p50",
   "analytics_msgs_per_min": "메시지/분",
   "analytics_tools_per_min": "도구/분",

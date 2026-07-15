@@ -536,7 +536,7 @@
       label={m.analytics_refresh()}
     />
     <FilterDropdown
-      label="Model"
+      label={m.analytics_model()}
       items={modelItems}
       excludedCsv={analytics.model}
       mode="include"

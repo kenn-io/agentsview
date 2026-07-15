@@ -948,6 +948,7 @@
   "analytics_agent_comparison": "代理對比",
   "analytics_no_comparison_data": "無對比數據（需要 2 個以上代理）",
   "analytics_agent": "代理",
+  "analytics_model": "模型",
   "analytics_cycle_p50": "周期 p50",
   "analytics_msgs_per_min": "消息/分",
   "analytics_tools_per_min": "工具/分",
