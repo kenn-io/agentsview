@@ -21,6 +21,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import SemanticSetupHelp from "./SemanticSetupHelp.svelte";
   import type { Session } from "../../api/types.js";
   import type {
     PaletteSearchResult,
@@ -254,6 +255,8 @@
       {#if showSearchResults}
         {#if searchStore.isSearching}
           <div class="palette-empty">{m.command_palette_searching()}</div>
+        {:else if searchStore.error?.kind === "semantic-unavailable"}
+          <SemanticSetupHelp onResolved={() => searchStore.retry()} />
         {:else if searchStore.error}
           <div class="palette-error" role="alert">
             {#if searchStore.error.kind === "timeout"}

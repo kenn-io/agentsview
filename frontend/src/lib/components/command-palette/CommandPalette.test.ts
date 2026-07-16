@@ -40,7 +40,7 @@ const { mockUi, mockSessions, mockSearchStore, mockRouter, mockCopyToClipboard }
       isSearching: false,
       error: null as {
         detail: string | null;
-        kind: "generic" | "timeout";
+        kind: "generic" | "timeout" | "semantic-unavailable";
       } | null,
       mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
       sort: "relevance" as "relevance" | "recency",
@@ -81,6 +81,22 @@ vi.mock("../../stores/messages.svelte.js", () => ({
 vi.mock("../../utils/clipboard.js", () => ({
   copyToClipboard: mockCopyToClipboard,
 }));
+
+// SemanticSetupHelp (mounted for the semantic-unavailable error kind) probes
+// the embeddings status on mount; keep the probe pending so palette tests
+// exercise the wiring without embeddings API behavior (covered in
+// SemanticSetupHelp.test.ts).
+vi.mock("../../api/generated/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../api/generated/index.js")>();
+  return {
+    ...actual,
+    EmbeddingsService: {
+      getApiV1EmbeddingsStatus: vi.fn(() => new Promise(() => {})),
+      postApiV1EmbeddingsBuild: vi.fn(),
+    },
+  };
+});
 
 // @ts-ignore
 import CommandPalette from "./CommandPalette.svelte";
@@ -537,6 +553,22 @@ describe("CommandPalette", () => {
     retry?.click();
     expect(mockSearchStore.retry).toHaveBeenCalledOnce();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
+    mockSearchStore.mode = "semantic";
+    mockSearchStore.error = {
+      detail:
+        "semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'",
+      kind: "semantic-unavailable",
+    };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+
+    expect(document.querySelector(".semantic-setup")).not.toBeNull();
+    expect(document.querySelector(".palette-error")).toBeNull();
 
     unmount(component);
   });
