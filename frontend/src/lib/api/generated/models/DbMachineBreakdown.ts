@@ -2,17 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type DbDailyUsageEntry = {
-  agentBreakdowns: any[] | null;
+export type DbMachineBreakdown = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  date: string;
+  cost: number;
   inputTokens: number;
-  machineBreakdowns: any[] | null;
-  modelBreakdowns: any[] | null;
-  modelsUsed: any[] | null;
+  machineName: string;
   outputTokens: number;
-  projectBreakdowns: any[] | null;
-  totalCost: number;
 };
-

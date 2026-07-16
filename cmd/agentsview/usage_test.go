@@ -107,6 +107,13 @@ func TestUsageDailyBreakdownGolden(t *testing.T) {
 		_, err = cmd.ExecuteC()
 	})
 	require.NoError(t, err, "usage daily json breakdown golden command")
+	var report db.DailyUsageResult
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+	require.NotEmpty(t, report.Daily)
+	for _, daily := range report.Daily {
+		require.Len(t, daily.MachineBreakdowns, 1)
+		assert.Equal(t, "golden-host", daily.MachineBreakdowns[0].MachineName)
+	}
 
 	assertGoldenBytes(t, "usage_daily_breakdown_v2.json", []byte(stdout))
 }
@@ -1119,6 +1126,7 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 		"date", "inputTokens", "outputTokens",
 		"cacheCreationTokens", "cacheReadTokens",
 		"totalCost", "modelsUsed", "modelBreakdowns",
+		"machineBreakdowns",
 	}
 	for _, f := range wantFields {
 		assert.Contains(t, daily[0], f,

@@ -51,6 +51,7 @@ export type { DbHeatmapResponse } from './models/DbHeatmapResponse';
 export type { DbHourOfWeekCell } from './models/DbHourOfWeekCell';
 export type { DbHourOfWeekResponse } from './models/DbHourOfWeekResponse';
 export type { DbInsight } from './models/DbInsight';
+export type { DbMachineBreakdown } from './models/DbMachineBreakdown';
 export type { DbMessage } from './models/DbMessage';
 export type { DbModelBreakdown } from './models/DbModelBreakdown';
 export type { DbPeakContextDistribution } from './models/DbPeakContextDistribution';
