@@ -430,8 +430,11 @@ func setupVectorServing(
 	scheduler := newEmbedScheduler(mgr, embedDebounceInterval, backstop, cfg.Vector.IncludeAutomated)
 
 	return vectorServing{
-		ServerOpts: []server.Option{server.WithEmbeddingsManager(mgr)},
-		Scheduler:  scheduler,
+		ServerOpts: []server.Option{
+			server.WithEmbeddingsManager(mgr),
+			server.WithEmbeddingsIncludeAutomatedDefault(cfg.Vector.IncludeAutomated),
+		},
+		Scheduler: scheduler,
 		Close: func() error {
 			ixErr := ix.Close()
 			lockErr := lock.Close()

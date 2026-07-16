@@ -10,9 +10,28 @@
     // Called when a build finishes successfully so the caller can re-run
     // the search that failed.
     onResolved: () => void;
+    // The search's own 501 message. Most carry the generic "enable [vector]
+    // ... run 'agentsview embeddings build'" remediation the panel replaces,
+    // but some name a specific recoverable state (stale index after an
+    // embedding-config change, vectors.db schema mismatch) that the status
+    // probe cannot distinguish — those are shown verbatim in the ready
+    // state so their remediation is not hidden.
+    searchDetail?: string | null;
   }
 
-  let { onResolved }: Props = $props();
+  let { onResolved, searchDetail = null }: Props = $props();
+
+  // db.ErrSemanticUnavailable's base message; search failures wrapping a
+  // more specific cause differ from it.
+  const GENERIC_SEARCH_UNAVAILABLE =
+    "semantic search not available: enable [vector] in config.toml and run " +
+    "'agentsview embeddings build'";
+
+  const specificSearchDetail = $derived(
+    searchDetail !== null && searchDetail !== GENERIC_SEARCH_UNAVAILABLE
+      ? searchDetail
+      : null,
+  );
 
   // The daemon returns this exact 501 message when [vector] is disabled in
   // config.toml (no embeddings manager wired). Any other 501 reason (e.g.
@@ -214,7 +233,11 @@ endpoint = "http://localhost:11434/v1"`;
     <span class="setup-text">{detail}</span>
   {:else if phase === "ready"}
     <strong>{m.command_palette_semantic_ready_title()}</strong>
-    <span class="setup-text">{m.command_palette_semantic_ready_intro()}</span>
+    {#if specificSearchDetail}
+      <span class="setup-text mono">{specificSearchDetail}</span>
+    {:else}
+      <span class="setup-text">{m.command_palette_semantic_ready_intro()}</span>
+    {/if}
     <div class="setup-action">
       <Button
         size="sm"
@@ -280,6 +303,11 @@ endpoint = "http://localhost:11434/v1"`;
 
   .setup-text {
     font-size: 12px;
+  }
+
+  .setup-text.mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
 
   .setup-hint {

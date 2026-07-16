@@ -2,10 +2,10 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { EmbeddingsBuildRequest } from '../models/EmbeddingsBuildRequest';
 import type { EmbeddingsBuildResponse } from '../models/EmbeddingsBuildResponse';
 import type { EmbeddingsGenerationActionRequest } from '../models/EmbeddingsGenerationActionRequest';
 import type { EmbeddingsGenerationsResponse } from '../models/EmbeddingsGenerationsResponse';
-import type { VectorBuildRequest } from '../models/VectorBuildRequest';
 import type { VectorBuildStatus } from '../models/VectorBuildStatus';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -19,7 +19,7 @@ export class EmbeddingsService {
   public static postApiV1EmbeddingsBuild({
     requestBody,
   }: {
-    requestBody: VectorBuildRequest,
+    requestBody: EmbeddingsBuildRequest,
   }): CancelablePromise<EmbeddingsBuildResponse> {
     return __request(OpenAPI, {
       method: 'POST',

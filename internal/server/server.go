@@ -116,6 +116,11 @@ type Server struct {
 	// startup because vectors.write.lock was held).
 	embeddingsUnavailableReason string
 
+	// embeddingsIncludeAutomatedDefault is the daemon's configured
+	// [vector].include_automated scope, applied to HTTP build requests
+	// that leave include_automated unset.
+	embeddingsIncludeAutomatedDefault bool
+
 	// vectorPushSource, when set, supplies the local vectors.db active
 	// generation to the daemon's pg push handler. Nil leaves the vector
 	// push phase skipped, e.g. when [vector] is disabled.

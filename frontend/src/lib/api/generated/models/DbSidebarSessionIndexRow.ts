@@ -22,3 +22,4 @@ export type DbSidebarSessionIndexRow = {
   transcript_revision?: string;
   user_message_count: number;
 };
+

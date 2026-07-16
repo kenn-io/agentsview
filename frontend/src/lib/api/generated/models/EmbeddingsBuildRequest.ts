@@ -2,7 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type VectorBuildRequest = {
+export type EmbeddingsBuildRequest = {
   backstop?: boolean;
   full_rebuild?: boolean;
   include_automated?: boolean;

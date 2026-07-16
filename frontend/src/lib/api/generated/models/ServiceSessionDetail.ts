@@ -5,6 +5,7 @@
 import type { DbQualitySignals } from './DbQualitySignals';
 export type ServiceSessionDetail = {
   agent: string;
+  agent_label?: string;
   compaction_count: number;
   consecutive_failure_max: number;
   context_pressure_max?: number;
@@ -16,6 +17,7 @@ export type ServiceSessionDetail = {
   edit_churn_count: number;
   ended_at: string | null;
   ended_with_role: string;
+  entrypoint?: string;
   file_device?: number;
   file_hash?: string;
   file_inode?: number;

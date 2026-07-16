@@ -90,10 +90,10 @@ describe("SemanticSetupHelp", () => {
     return document.body.textContent ?? "";
   }
 
-  function mountHelp(onResolved = vi.fn()) {
+  function mountHelp(onResolved = vi.fn(), searchDetail: string | null = null) {
     const component = mount(SemanticSetupHelp, {
       target: document.body,
-      props: { onResolved },
+      props: { onResolved, searchDetail },
     });
     return { component, onResolved };
   }
@@ -178,6 +178,41 @@ describe("SemanticSetupHelp", () => {
     );
     await settle(2000);
     expect(onResolved).toHaveBeenCalledOnce();
+
+    unmount(component);
+  });
+
+  it("shows a specific search 501 reason verbatim in the ready state", async () => {
+    const stale =
+      "semantic search not available: index is stale (embedding config " +
+      "changed): run 'agentsview embeddings build --full-rebuild'";
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
+
+    const { component } = mountHelp(vi.fn(), stale);
+    await settle();
+
+    expect(text()).toContain("Semantic index not built yet");
+    expect(text()).toContain(stale);
+    expect(text()).not.toContain(
+      "Semantic search is configured, but the embeddings index hasn't been built",
+    );
+
+    unmount(component);
+  });
+
+  it("replaces the generic search 501 message with localized ready copy", async () => {
+    const generic =
+      "semantic search not available: enable [vector] in config.toml and " +
+      "run 'agentsview embeddings build'";
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
+
+    const { component } = mountHelp(vi.fn(), generic);
+    await settle();
+
+    expect(text()).toContain(
+      "Semantic search is configured, but the embeddings index hasn't been built",
+    );
+    expect(text()).not.toContain("enable [vector] in config.toml");
 
     unmount(component);
   });
