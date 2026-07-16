@@ -168,10 +168,13 @@ docker run --rm -p 127.0.0.1:9494:9494 \
     --allow-insecure
 
 # Serve the web UI from a remote Quack endpoint.
+# The client url uses the native quack:HOST:PORT form; the Quack extension
+# does not accept quack:http:// or quack:https:// urls. A non-loopback host
+# needs --allow-insecure.
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -e AGENTSVIEW_DUCKDB_URL='quack:https://duckdb.example.com' \
+  -e AGENTSVIEW_DUCKDB_URL='quack:duckdb.example.com:9494' \
   -e AGENTSVIEW_DUCKDB_TOKEN="$QUACK_TOKEN" \
-  ghcr.io/kenn-io/agentsview:latest duckdb serve
+  ghcr.io/kenn-io/agentsview:latest duckdb serve --allow-insecure
 ```
 
 Keep Quack on loopback or behind TLS. Plain HTTP Quack on a non-loopback bind

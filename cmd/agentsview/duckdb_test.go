@@ -127,7 +127,7 @@ func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T
 
 func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 	duckCfg := config.DuckDBConfig{
-		URL:           "quack:https://duck.example.test",
+		URL:           "quack:127.0.0.1:9494",
 		Token:         "quack-token",
 		AllowInsecure: true,
 	}
@@ -173,7 +173,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, "quack:https://duck.example.test", req.DuckDB.URL)
+		assert.Equal(t, "quack:127.0.0.1:9494", req.DuckDB.URL)
 		assert.Equal(t, "secret", req.DuckDB.Token)
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
@@ -187,7 +187,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, "quack:https://duck.example.test", req.DuckDB.URL)
+		assert.Equal(t, "quack:127.0.0.1:9494", req.DuckDB.URL)
 		assert.Equal(t, "secret", req.DuckDB.Token)
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
@@ -199,7 +199,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	err := backend.DuckDBPushWatch(
 		ctx,
 		config.DuckDBConfig{
-			URL:   "quack:https://duck.example.test",
+			URL:   "quack:127.0.0.1:9494",
 			Token: "secret",
 		},
 		DuckDBPushConfig{},

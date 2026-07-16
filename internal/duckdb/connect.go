@@ -617,31 +617,25 @@ func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 		)
 	}
 	transport := strings.TrimPrefix(rawURL, "quack:")
-	if !strings.HasPrefix(transport, "http://") &&
-		!strings.HasPrefix(transport, "https://") {
-		host, err := quackURIHost(rawURL)
-		if err != nil {
-			return err
-		}
-		if !allowInsecure && !isLoopbackHost(host) {
-			return fmt.Errorf(
-				"duckdb native quack url host must be loopback unless allow_insecure is set",
-			)
-		}
-		return nil
-	}
-	u, err := neturl.Parse(transport)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if strings.HasPrefix(transport, "http://") ||
+		strings.HasPrefix(transport, "https://") {
+		// The Quack extension parses the string after "quack:" as a native
+		// HOST:PORT authority and rejects URL-scheme forms at ATTACH time
+		// with "Invalid Port". Reject them here with an actionable message
+		// instead of surfacing the cryptic extension error.
 		return fmt.Errorf(
-			"duckdb quack url must include an http:// or https:// endpoint",
+			"duckdb quack url must use the native form quack:HOST:PORT; " +
+				"the Quack extension does not accept http:// or https:// " +
+				"client urls",
 		)
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("duckdb quack url must use http or https")
+	host, err := quackURIHost(rawURL)
+	if err != nil {
+		return err
 	}
-	if u.Scheme == "http" && !allowInsecure && !isLoopbackHost(u.Hostname()) {
+	if !allowInsecure && !isLoopbackHost(host) {
 		return fmt.Errorf(
-			"duckdb quack url uses plain HTTP for a non-loopback host; use https or set allow_insecure",
+			"duckdb native quack url host must be loopback unless allow_insecure is set",
 		)
 	}
 	return nil

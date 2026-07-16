@@ -76,10 +76,16 @@ agentsview duckdb quack serve \
   --token "$AGENTSVIEW_DUCKDB_TOKEN"
 
 # Machine B (or another terminal): serve the UI from that endpoint
-AGENTSVIEW_DUCKDB_URL='quack:http://127.0.0.1:9494' \
+AGENTSVIEW_DUCKDB_URL='quack:127.0.0.1:9494' \
 AGENTSVIEW_DUCKDB_TOKEN="$AGENTSVIEW_DUCKDB_TOKEN" \
 agentsview duckdb serve
 ```
+
+The client `url` uses the native `quack:HOST:PORT` form. The Quack extension
+attaches only that authority form; URL-scheme forms such as
+`quack:http://HOST:PORT` are rejected at attach time, so AgentsView refuses them
+up front. A non-loopback client host requires `allow_insecure` (Quack speaks
+plain HTTP — put it behind TLS, a VPN, or an SSH tunnel first).
 
 `duckdb quack serve` flags:
 
@@ -107,7 +113,7 @@ DuckDB settings live in a `[duckdb]` section of `~/.agentsview/config.toml`:
 ```toml
 [duckdb]
 path = "~/.agentsview/sessions.duckdb"
-url = "quack:http://127.0.0.1:9494"
+url = "quack:127.0.0.1:9494"
 token = "..."
 machine_name = "my-laptop"
 allow_insecure = false

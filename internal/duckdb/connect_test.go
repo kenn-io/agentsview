@@ -19,9 +19,10 @@ func TestValidateQuackClientURL(t *testing.T) {
 		wantErr       string
 	}{
 		{
-			name:  "loopback http allowed",
-			url:   "quack:http://127.0.0.1:9494",
-			token: "secret",
+			name:    "loopback http url rejected",
+			url:     "quack:http://127.0.0.1:9494",
+			token:   "secret",
+			wantErr: "native form quack:HOST:PORT",
 		},
 		{
 			name:  "native loopback hostport allowed",
@@ -34,15 +35,23 @@ func TestValidateQuackClientURL(t *testing.T) {
 			token: "secret",
 		},
 		{
-			name:  "https remote allowed",
-			url:   "quack:https://duck.example.com",
-			token: "secret",
+			name:    "https url rejected",
+			url:     "quack:https://duck.example.com",
+			token:   "secret",
+			wantErr: "native form quack:HOST:PORT",
 		},
 		{
-			name:          "explicit insecure remote allowed",
+			name:          "http url rejected even with allow_insecure",
 			url:           "quack:http://duck.example.com",
 			token:         "secret",
 			allowInsecure: true,
+			wantErr:       "native form quack:HOST:PORT",
+		},
+		{
+			name:    "http url rejection names the scheme forms",
+			url:     "quack:http://127.0.0.1:9494",
+			token:   "secret",
+			wantErr: "http:// or https://",
 		},
 		{
 			name:    "native remote rejected",
@@ -57,15 +66,9 @@ func TestValidateQuackClientURL(t *testing.T) {
 			allowInsecure: true,
 		},
 		{
-			name:    "token required",
+			name:    "token required before scheme check",
 			url:     "quack:http://127.0.0.1:9494",
 			wantErr: "token is required",
-		},
-		{
-			name:    "plain remote rejected",
-			url:     "quack:http://duck.example.com",
-			token:   "secret",
-			wantErr: "plain HTTP",
 		},
 		{
 			name:    "quack scheme required",
