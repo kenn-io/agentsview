@@ -21,7 +21,7 @@ export interface PaletteSearchResult {
 
 export interface SearchFailure {
   detail: string | null;
-  kind: "generic" | "timeout";
+  kind: "generic" | "timeout" | "semantic-unavailable";
 }
 
 interface ContentSearchMatch {
@@ -112,6 +112,22 @@ function errorDetail(error: unknown): string | null {
 function isTimeoutDetail(detail: string | null): boolean {
   return detail !== null &&
     /(?:timed out|timeout|deadline exceeded)/i.test(detail);
+}
+
+// failureKind classifies semantic/hybrid failures the palette can act on.
+// A 501 means semantic search is not serving on this daemon (vector config
+// disabled, or no index built yet) — the palette renders setup guidance for
+// it instead of the raw backend error string.
+function failureKind(
+  mode: SearchMode,
+  error: unknown,
+  detail: string | null,
+): SearchFailure["kind"] {
+  if (mode === "fulltext") return "generic";
+  if (error instanceof ApiError && error.status === 501) {
+    return "semantic-unavailable";
+  }
+  return isTimeoutDetail(detail) ? "timeout" : "generic";
 }
 
 export class SearchStore {
@@ -258,12 +274,7 @@ export class SearchStore {
       }
       this.results = [];
       const detail = errorDetail(error);
-      this.error = {
-        detail,
-        kind: mode !== "fulltext" && isTimeoutDetail(detail)
-          ? "timeout"
-          : "generic",
-      };
+      this.error = { detail, kind: failureKind(mode, error, detail) };
     } finally {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;

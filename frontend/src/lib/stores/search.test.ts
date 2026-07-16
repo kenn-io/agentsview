@@ -245,22 +245,37 @@ describe("SearchStore", () => {
   });
 
   it.each([
-    [501, "Semantic search is unavailable: run agentsview embeddings build"],
-    [503, "Embedding provider is temporarily unavailable; retry shortly"],
-  ] as const)("preserves actionable backend detail for HTTP %i", async (status, detail) => {
-    const store = createSearchStore(
-      memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }),
-    );
-    searchService.getApiV1SearchContent.mockRejectedValueOnce(
-      generatedApiError(status, detail),
+    [501, "Semantic search is unavailable: run agentsview embeddings build", "semantic-unavailable"],
+    [503, "Embedding provider is temporarily unavailable; retry shortly", "generic"],
+  ] as const)(
+    "preserves actionable backend detail for HTTP %i",
+    async (status, detail, kind) => {
+      const store = createSearchStore(
+        memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }),
+      );
+      searchService.getApiV1SearchContent.mockRejectedValueOnce(
+        generatedApiError(status, detail),
+      );
+
+      store.search("failure");
+      await runDebounce();
+
+      expect(store.error).toEqual({ detail, kind });
+      expect(store.results).toEqual([]);
+      expect(store.isSearching).toBe(false);
+    },
+  );
+
+  it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockRejectedValueOnce(
+      generatedApiError(501, "not implemented"),
     );
 
-    store.search("failure");
+    store.search("fulltext failure");
     await runDebounce();
 
-    expect(store.error).toEqual({ detail, kind: "generic" });
-    expect(store.results).toEqual([]);
-    expect(store.isSearching).toBe(false);
+    expect(store.error).toEqual({ detail: "not implemented", kind: "generic" });
   });
 
   it("clears an earlier error when a new request starts and on clear", async () => {
