@@ -314,7 +314,8 @@ SELECT
 	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.machine
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s
@@ -342,7 +343,8 @@ SELECT
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 	END AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.machine
 FROM usage_events ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
@@ -366,7 +368,8 @@ SELECT
 	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.machine
 FROM %s m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s`
@@ -393,7 +396,8 @@ SELECT
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 	END AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.machine
 FROM %s ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
@@ -525,6 +529,7 @@ type pgDailyUsageScanRow struct {
 	usageDedupKey            string
 	project                  string
 	agent                    string
+	machine                  string
 }
 
 type pgTopSessionMetadata struct {
@@ -575,6 +580,16 @@ func pgUsageRowSelect() string {
 }
 
 func pgDailyUsageRowSelectFromRows(rowsSQL string) string {
+	return pgDailyUsageRowSelectFromRowsWithMachine(rowsSQL, false)
+}
+
+func pgDailyUsageRowSelectFromRowsWithMachine(
+	rowsSQL string, includeMachine bool,
+) string {
+	machineColumn := ""
+	if includeMachine {
+		machineColumn = ",\n\tu.machine"
+	}
 	return `
 SELECT
 	u.session_id,
@@ -594,7 +609,7 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
-	u.agent
+	u.agent` + machineColumn + `
 FROM (` + rowsSQL + `) u
 WHERE 1=1`
 }
@@ -739,7 +754,8 @@ SELECT
 	'' AS source_uuid,
 	cu.dedup_key AS usage_dedup_key,
 	'' AS project,
-	'cursor' AS agent
+	'cursor' AS agent,
+	'' AS machine
 FROM cursor_usage_events cu
 WHERE %s`
 
@@ -798,7 +814,7 @@ func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable boo
 			rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
 		}
 	}
-	return pgDailyUsageRowSelectFromRows(rowsSQL)
+	return pgDailyUsageRowSelectFromRowsWithMachine(rowsSQL, f.Breakdowns)
 }
 
 func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
@@ -839,8 +855,14 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 }
 
 func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
+	return scanPGDailyUsageRowWithMachine(rows, false)
+}
+
+func scanPGDailyUsageRowWithMachine(
+	rows *sql.Rows, includeMachine bool,
+) (pgDailyUsageScanRow, error) {
 	var r pgDailyUsageScanRow
-	err := rows.Scan(
+	dest := []any{
 		&r.sessionID,
 		&r.messageOrdinal,
 		&r.usageSource,
@@ -859,7 +881,11 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
-	)
+	}
+	if includeMachine {
+		dest = append(dest, &r.machine)
+	}
+	err := rows.Scan(dest...)
 	return r, err
 }
 
@@ -1265,6 +1291,7 @@ func (s *Store) GetDailyUsage(
 		date    string
 		project string
 		agent   string
+		machine string
 		model   string
 	}
 	type bucket struct {
@@ -1284,7 +1311,7 @@ func (s *Store) GetDailyUsage(
 	var totalSavings float64
 
 	for rows.Next() {
-		r, scanErr := scanPGDailyUsageRow(rows)
+		r, scanErr := scanPGDailyUsageRowWithMachine(rows, f.Breakdowns)
 		if scanErr != nil {
 			return db.DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", scanErr)
@@ -1326,7 +1353,7 @@ func (s *Store) GetDailyUsage(
 
 		key := accumKey{
 			date: date, project: r.project,
-			agent: r.agent, model: r.model,
+			agent: r.agent, machine: r.machine, model: r.model,
 		}
 		b, ok := accum[key]
 		if !ok {
@@ -1488,6 +1515,7 @@ func (s *Store) GetDailyUsage(
 		models   map[string]bucket
 		projects map[string]bucket
 		agents   map[string]bucket
+		machines map[string]bucket
 	}
 	days := make(map[string]*dayMaps, 64)
 	for key, b := range accum {
@@ -1497,6 +1525,7 @@ func (s *Store) GetDailyUsage(
 				models:   make(map[string]bucket, 4),
 				projects: make(map[string]bucket, 8),
 				agents:   make(map[string]bucket, 4),
+				machines: make(map[string]bucket, 4),
 			}
 			days[key.date] = dm
 		}
@@ -1523,6 +1552,14 @@ func (s *Store) GetDailyUsage(
 		cur.cacheRd += b.cacheRd
 		cur.cost += b.cost
 		dm.agents[key.agent] = cur
+
+		cur = dm.machines[key.machine]
+		cur.inputTok += b.inputTok
+		cur.outputTok += b.outputTok
+		cur.cacheCr += b.cacheCr
+		cur.cacheRd += b.cacheRd
+		cur.cost += b.cost
+		dm.machines[key.machine] = cur
 	}
 
 	dateKeys := make([]string, 0, len(days))
@@ -1610,6 +1647,27 @@ func (s *Store) GetDailyUsage(
 			return abd[i].Agent < abd[j].Agent
 		})
 		entry.AgentBreakdowns = abd
+
+		machineBreakdowns := make(
+			[]db.MachineBreakdown, 0, len(dm.machines),
+		)
+		for machine, b := range dm.machines {
+			machineBreakdowns = append(machineBreakdowns, db.MachineBreakdown{
+				MachineName:         machine,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		sort.Slice(machineBreakdowns, func(i, j int) bool {
+			if machineBreakdowns[i].Cost != machineBreakdowns[j].Cost {
+				return machineBreakdowns[i].Cost > machineBreakdowns[j].Cost
+			}
+			return machineBreakdowns[i].MachineName < machineBreakdowns[j].MachineName
+		})
+		entry.MachineBreakdowns = machineBreakdowns
 
 		daily = append(daily, entry)
 		totals.InputTokens += entry.InputTokens

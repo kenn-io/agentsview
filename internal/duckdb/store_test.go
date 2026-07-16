@@ -2794,8 +2794,17 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 		CacheReadPerMTok:     0.5,
 	}}))
 	sessionID := "duck-usage-breakdowns"
+	primarySession := syncSession(
+		sessionID, "alpha", "usage first", "2026-01-17T00:00:00.000Z", 1,
+	)
+	primarySession.Machine = "host-a"
+	secondaryID := "duck-usage-breakdowns-secondary"
+	secondarySession := syncSession(
+		secondaryID, "alpha", "usage second", "2026-01-17T00:02:00.000Z", 1,
+	)
+	secondarySession.Machine = "host-b"
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session:  syncSession(sessionID, "alpha", "usage first", "2026-01-17T00:00:00.000Z", 1),
+		Session:  primarySession,
 		Messages: []db.Message{syncMessage(sessionID, 0, "user", "usage first", "2026-01-17T00:00:00.000Z")},
 		UsageEvents: []db.UsageEvent{{
 			Source:               "hermes",
@@ -2808,11 +2817,32 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 		}},
 		DataVersion:     1,
 		ReplaceMessages: true,
+	}, {
+		Session:  secondarySession,
+		Messages: []db.Message{syncMessage(secondaryID, 0, "user", "usage second", "2026-01-17T00:02:00.000Z")},
+		UsageEvents: []db.UsageEvent{{
+			Source:       "hermes",
+			Model:        "claude-test",
+			InputTokens:  2,
+			OutputTokens: 1,
+			OccurredAt:   "2026-01-17T00:03:00.000Z",
+			DedupKey:     "breakdown-secondary",
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	_, err = syncer.DB().ExecContext(ctx, `
+		UPDATE sessions
+		SET machine = CASE id
+			WHEN ? THEN 'host-a'
+			WHEN ? THEN 'host-b'
+			ELSE machine
+		END`, sessionID, secondaryID)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2827,8 +2857,13 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	require.Len(t, day.ModelBreakdowns, 1)
 	require.Len(t, day.ProjectBreakdowns, 1)
 	require.Len(t, day.AgentBreakdowns, 1)
+	require.Len(t, day.MachineBreakdowns, 2)
 	assert.Equal(t, "alpha", day.ProjectBreakdowns[0].Project)
 	assert.Equal(t, "claude", day.AgentBreakdowns[0].Agent)
+	assert.Equal(t, "host-a", day.MachineBreakdowns[0].MachineName)
+	assert.Equal(t, "host-b", day.MachineBreakdowns[1].MachineName)
+	assert.InDelta(t, day.TotalCost,
+		day.MachineBreakdowns[0].Cost+day.MachineBreakdowns[1].Cost, 0.000001)
 	assert.InDelta(t, 0.00001, got.Totals.CacheSavings, 0.000001)
 
 	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{
