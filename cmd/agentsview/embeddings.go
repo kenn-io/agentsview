@@ -837,8 +837,29 @@ type daemonAPIError struct {
 
 func (e *daemonAPIError) Error() string { return e.message }
 
+// daemonBuildRequest is the wire form of a CLI-initiated daemon build.
+// include_automated is always sent (no omitempty): the CLI has already
+// resolved the config-plus-flag scope, and the daemon treats an omitted
+// field as "use my configured scope" — which would silently discard an
+// explicit `--include-automated=false` override when the daemon's config
+// says true.
+type daemonBuildRequest struct {
+	FullRebuild      bool   `json:"full_rebuild,omitempty"`
+	Backstop         bool   `json:"backstop,omitempty"`
+	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
+	IncludeAutomated bool   `json:"include_automated"`
+	Using            string `json:"using,omitempty"`
+}
+
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/embeddings/build", req, nil)
+	wire := daemonBuildRequest{
+		FullRebuild:      req.FullRebuild,
+		Backstop:         req.Backstop,
+		RepairInvalid:    req.RepairInvalid,
+		IncludeAutomated: req.IncludeAutomated,
+		Using:            req.Using,
+	}
+	return c.do(ctx, http.MethodPost, "/api/v1/embeddings/build", wire, nil)
 }
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {

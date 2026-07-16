@@ -1322,6 +1322,43 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	assert.GreaterOrEqual(t, statusCalls.Load(), int32(2))
 }
 
+// TestBuildViaDaemonAlwaysSendsIncludeAutomated pins the wire contract for
+// CLI-initiated daemon builds: include_automated must be present in the
+// request body even when false, because the daemon treats an omitted field
+// as "use my configured scope" — omitting it would let a daemon configured
+// with include_automated = true silently ignore an explicit
+// --include-automated=false override.
+func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
+	for _, includeAutomated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("include_automated=%t", includeAutomated), func(t *testing.T) {
+			var body map[string]json.RawMessage
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+			})
+			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+			})
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			client := embeddingsDaemonClient{baseURL: srv.URL}
+			var out bytes.Buffer
+			err := buildViaDaemon(context.Background(), &out, client,
+				vector.BuildRequest{IncludeAutomated: includeAutomated})
+			require.NoError(t, err)
+
+			raw, present := body["include_automated"]
+			require.True(t, present,
+				"include_automated must always be sent; omitted means daemon-config scope")
+			assert.Equal(t, fmt.Sprintf("%t", includeAutomated), string(raw))
+		})
+	}
+}
+
 // TestBuildViaDaemonLastErrorReturnsNonZero asserts a stopped build with a
 // non-empty LastError becomes the returned error, so the CLI exits
 // non-zero, matching the direct path's error propagation.
