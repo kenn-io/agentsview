@@ -237,6 +237,74 @@ func runDuckDBStatus() {
 	fmt.Printf("DuckDB messages: %d\n", status.DuckDBMessages)
 }
 
+func runDuckDBCompact() {
+	appCfg, err := config.LoadMinimal()
+	if err != nil {
+		log.Fatalf("loading config: %v", err)
+	}
+	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
+		log.Fatalf("creating data dir: %v", err)
+	}
+	setupLogFile(appCfg.DataDir)
+
+	duckCfg, err := appCfg.ResolveDuckDB()
+	if err != nil {
+		fatal("duckdb compact: %v", err)
+	}
+	if duckCfg.URL != "" {
+		fatal("duckdb compact: only local mirror files can be compacted, " +
+			"not remote Quack endpoints")
+	}
+	if duckCfg.Path == "" {
+		fatal("duckdb compact: mirror path is not configured")
+	}
+
+	ctx, stop := signal.NotifyContext(
+		context.Background(), duckDBLongRunningSignals()...,
+	)
+	defer stop()
+
+	fmt.Printf("Compacting DuckDB mirror: %s\n", duckCfg.Path)
+	result, err := duckdbsync.Compact(ctx, duckCfg.Path)
+	if err != nil {
+		fatal("duckdb compact: %v", err)
+	}
+	writeDuckDBCompactResult(os.Stdout, result)
+}
+
+func writeDuckDBCompactResult(w io.Writer, result duckdbsync.CompactResult) {
+	reclaimed := result.BeforeFileBytes - result.AfterFileBytes
+	fmt.Fprintf(
+		w,
+		"File size:   %s -> %s (reclaimed %s)\n",
+		formatBytes(result.BeforeFileBytes),
+		formatBytes(result.AfterFileBytes),
+		formatBytes(reclaimed),
+	)
+	fmt.Fprintf(
+		w,
+		"Free blocks: %d -> %d (%s -> %s allocated-but-free)\n",
+		result.Before.FreeBlocks,
+		result.After.FreeBlocks,
+		formatBytes(result.Before.FreeBytes()),
+		formatBytes(result.After.FreeBytes()),
+	)
+	fmt.Fprintf(
+		w,
+		"Blocks:      %d used / %d total -> %d used / %d total\n",
+		result.Before.UsedBlocks, result.Before.TotalBlocks,
+		result.After.UsedBlocks, result.After.TotalBlocks,
+	)
+	fmt.Fprintf(
+		w,
+		"Verified %d tables; sessions=%d, messages=%d\n",
+		len(result.RowCounts),
+		result.RowCounts["sessions"],
+		result.RowCounts["messages"],
+	)
+	fmt.Fprintf(w, "Done in %s\n", result.Duration.Round(time.Millisecond))
+}
+
 func loadDuckDBServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 	basePath, err := cmd.Flags().GetString("base-path")
 	if err != nil {

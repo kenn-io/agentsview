@@ -274,6 +274,33 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 	assert.Contains(t, got, "DuckDB push wrote: sessions 3 (claude=2, codex=1), messages 7")
 }
 
+func TestWriteDuckDBCompactResultReportsReclaimedSpace(t *testing.T) {
+	var out bytes.Buffer
+
+	writeDuckDBCompactResult(&out, duckdbsync.CompactResult{
+		Path:            "/tmp/agentsview.duckdb",
+		BeforeFileBytes: 1167 << 20,
+		AfterFileBytes:  635 << 20,
+		Before: duckdbsync.DuckDBSizeStats{
+			BlockSize: 262144, TotalBlocks: 4669, UsedBlocks: 2539, FreeBlocks: 2130,
+		},
+		After: duckdbsync.DuckDBSizeStats{
+			BlockSize: 262144, TotalBlocks: 2539, UsedBlocks: 2539, FreeBlocks: 0,
+		},
+		RowCounts: map[string]int64{
+			"sessions": 6000, "messages": 120000, "tool_calls": 42,
+		},
+		Duration: 3200 * time.Millisecond,
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "reclaimed 532.0 MB")
+	assert.Contains(t, got, "Free blocks: 2130 -> 0")
+	assert.Contains(t, got, "sessions=6000, messages=120000")
+	assert.Contains(t, got, "Verified 3 tables")
+	assert.Contains(t, got, "Done in 3.2s")
+}
+
 func TestWriteDuckDBQuackServeStartupDoesNotPrintToken(t *testing.T) {
 	var out bytes.Buffer
 	const token = "plain-quack-secret-token"

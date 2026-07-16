@@ -716,8 +716,25 @@ func newDuckDBCommand() *cobra.Command {
 	cmd.AddCommand(newDuckDBPushCommand())
 	cmd.AddCommand(newDuckDBStatusCommand())
 	cmd.AddCommand(newDuckDBServeCommand())
+	cmd.AddCommand(newDuckDBCompactCommand())
 	cmd.AddCommand(newDuckDBQuackCommand())
 	return cmd
+}
+
+func newDuckDBCompactCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "compact",
+		Short: "Reclaim free space in the DuckDB mirror file",
+		Long: "Rewrite the local DuckDB mirror into a fresh file to reclaim the " +
+			"allocated-but-free blocks that accumulate from repeated pushes, then " +
+			"atomically swap it into place. The mirror must not be in use by " +
+			"another process such as 'duckdb serve' or 'duckdb push --watch'.",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			runDuckDBCompact()
+		},
+	}
 }
 
 func newDuckDBPushCommand() *cobra.Command {
