@@ -256,7 +256,10 @@
         {#if searchStore.isSearching}
           <div class="palette-empty">{m.command_palette_searching()}</div>
         {:else if searchStore.error?.kind === "semantic-unavailable"}
-          <SemanticSetupHelp onResolved={() => searchStore.retry()} />
+          <SemanticSetupHelp
+            onResolved={() => searchStore.retry()}
+            searchDetail={searchStore.error.detail}
+          />
         {:else if searchStore.error}
           <div class="palette-error" role="alert">
             {#if searchStore.error.kind === "timeout"}

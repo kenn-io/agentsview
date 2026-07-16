@@ -160,6 +160,45 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
 }
 
+// TestEmbeddingsBuildIncludeAutomatedDefaulting pins the tri-state contract:
+// a request omitting include_automated builds with the daemon's configured
+// [vector].include_automated scope (matching scheduler and CLI builds), and
+// an explicit value overrides that scope in either direction.
+func TestEmbeddingsBuildIncludeAutomatedDefaulting(t *testing.T) {
+	tests := []struct {
+		name             string
+		configured       bool
+		body             string
+		wantIncludeAutom bool
+	}{
+		{"omitted uses configured true", true, `{}`, true},
+		{"omitted uses configured false", false, `{}`, false},
+		{"explicit false overrides configured true", true,
+			`{"include_automated":false}`, false},
+		{"explicit true overrides configured false", false,
+			`{"include_automated":true}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeEmbeddingsManager{}
+			s := testServer(t, 0,
+				WithEmbeddingsManager(fake),
+				WithEmbeddingsIncludeAutomatedDefault(tt.configured),
+			)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/embeddings/build",
+				strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			s.mux.ServeHTTP(w, req)
+			assertRecorderStatus(t, w, http.StatusAccepted)
+
+			require.Len(t, fake.startBuildCalls, 1)
+			assert.Equal(t, tt.wantIncludeAutom, fake.startBuildCalls[0].IncludeAutomated)
+		})
+	}
+}
+
 func TestEmbeddingsBuildInvalidRequestReturnsBadRequest(t *testing.T) {
 	tests := []struct {
 		name string

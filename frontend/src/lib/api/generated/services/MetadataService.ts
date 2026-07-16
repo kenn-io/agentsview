@@ -180,6 +180,8 @@ export class MetadataService {
    * @throws ApiError
    */
   public static getApiV1SessionStats({
+    includeOneShot,
+    includeAutomated,
     since,
     until,
     agent,
@@ -189,6 +191,14 @@ export class MetadataService {
     includeGitOutcomes,
     includeGithubOutcomes,
   }: {
+    /**
+     * Include one-shot sessions
+     */
+    includeOneShot?: boolean,
+    /**
+     * Include automated sessions
+     */
+    includeAutomated?: boolean,
     /**
      * Start of window
      */
@@ -226,6 +236,8 @@ export class MetadataService {
       method: 'GET',
       url: '/api/v1/session-stats',
       query: {
+        'include_one_shot': includeOneShot,
+        'include_automated': includeAutomated,
         'since': since,
         'until': until,
         'agent': agent,

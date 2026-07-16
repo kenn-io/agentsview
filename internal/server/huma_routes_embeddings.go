@@ -38,6 +38,15 @@ func WithEmbeddingsUnavailableReason(reason string) Option {
 	return func(s *Server) { s.embeddingsUnavailableReason = reason }
 }
 
+// WithEmbeddingsIncludeAutomatedDefault records the daemon's configured
+// [vector].include_automated scope, applied to build requests that leave
+// include_automated unset. Scheduler and CLI builds resolve the same config
+// value themselves; without this, an HTTP build request omitting the field
+// would silently build with include_automated=false regardless of config.
+func WithEmbeddingsIncludeAutomatedDefault(includeAutomated bool) Option {
+	return func(s *Server) { s.embeddingsIncludeAutomatedDefault = includeAutomated }
+}
+
 // embeddingsUnavailableError is the 501 every embeddings route returns while
 // no manager is wired, carrying the recorded cause when one exists.
 func (s *Server) embeddingsUnavailableError() error {
@@ -60,8 +69,21 @@ func (s *Server) registerEmbeddingsRoutes() {
 		s.humaEmbeddingsRetire)
 }
 
+// embeddingsBuildRequest mirrors vector.BuildRequest for the HTTP surface,
+// with IncludeAutomated as a tri-state: omitted (null) means "use the
+// daemon's configured [vector].include_automated scope", matching how
+// scheduler and CLI builds resolve it; an explicit value overrides the
+// config for this build only.
+type embeddingsBuildRequest struct {
+	FullRebuild      bool   `json:"full_rebuild,omitempty"`
+	Backstop         bool   `json:"backstop,omitempty"`
+	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
+	IncludeAutomated *bool  `json:"include_automated,omitempty"`
+	Using            string `json:"using,omitempty"`
+}
+
 type embeddingsBuildInput struct {
-	Body vector.BuildRequest
+	Body embeddingsBuildRequest
 }
 
 type embeddingsBuildResponse struct {
@@ -92,7 +114,18 @@ func (s *Server) humaEmbeddingsBuild(
 	if s.embeddingsManager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	if err := s.embeddingsManager.StartBuild(in.Body); err != nil {
+	includeAutomated := s.embeddingsIncludeAutomatedDefault
+	if in.Body.IncludeAutomated != nil {
+		includeAutomated = *in.Body.IncludeAutomated
+	}
+	req := vector.BuildRequest{
+		FullRebuild:      in.Body.FullRebuild,
+		Backstop:         in.Body.Backstop,
+		RepairInvalid:    in.Body.RepairInvalid,
+		IncludeAutomated: includeAutomated,
+		Using:            in.Body.Using,
+	}
+	if err := s.embeddingsManager.StartBuild(req); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, apiError(http.StatusConflict, err.Error())
 		}

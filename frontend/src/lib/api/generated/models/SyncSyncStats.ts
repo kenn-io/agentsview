@@ -8,8 +8,10 @@ export type SyncSyncStats = {
   anomalies?: SyncAnomalyStats;
   failed: number;
   orphaned_copied?: number;
+  rebuild_phases?: any[] | null;
   skipped: number;
   synced: number;
   total_sessions: number;
   warnings?: any[] | null;
 };
+

@@ -11,3 +11,4 @@ export type ProjectTotal = {
   project: string;
   project_key: string;
 };
+
