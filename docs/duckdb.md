@@ -32,6 +32,9 @@ agentsview duckdb serve
 
 # Keep the mirror current in the foreground
 agentsview duckdb push --watch
+
+# Reclaim free space that accumulates from repeated pushes
+agentsview duckdb compact
 ```
 
 `duckdb push` accepts the same project-filter and foreground watcher flags as
@@ -61,6 +64,44 @@ and `duckdb serve`.
 [`pg serve`](/pg-sync/#agentsview-pg-serve) (`--host`, `--port`, `--base-path`,
 proxy and TLS flags) and is read-only in the same way — no uploads, file
 watching, or local sync.
+
+## Reclaiming Space
+
+DuckDB never shrinks its database file on its own. Every `duckdb push` deletes
+and re-inserts changed sessions and rewrites the affected row groups, and the
+freed blocks stay allocated inside the file. Under steady-state `--watch` or a
+cron push loop, the mirror grows past its live size and only a rebuild reclaims
+the difference. On one measured ~6k-session archive a single `duckdb push
+--full` produced a 1167 MiB file whose live data was only 635 MiB — 46% of the
+file was allocated-but-free blocks.
+
+`duckdb compact` reclaims that space in place:
+
+```bash
+agentsview duckdb compact
+```
+
+It copies the mirror into a fresh file alongside the original
+(`sessions.duckdb.compact`), verifies that every table has the same row count in
+both files, and only then atomically swaps the new file over the original. The
+original is never deleted or truncated before the verified swap, and on any
+failure the temporary file is removed and the original is left untouched. The
+command reports the before/after file size, reclaimed bytes, and block stats.
+
+Compaction takes DuckDB's single-writer file lock for the duration of the copy.
+Stop any `duckdb serve` or `duckdb push --watch` process against the same mirror
+first; otherwise `compact` fails with a clear error rather than risking
+corruption. Compaction only applies to a local mirror file, not a remote Quack
+endpoint (`[duckdb].url`). A good cadence is to run `duckdb compact` periodically
+alongside a cron push, or whenever `duckdb status` and the on-disk file size have
+drifted far apart.
+
+!!! note "Text columns are stored uncompressed"
+    DuckDB stores the large text columns of the mirror — `messages.content`,
+    `tool_calls.result_content`, `tool_calls.input_json`, and
+    `tool_result_events.content` — Uncompressed. The columnar win over SQLite is
+    in index and fixed-width column cost, not text compression, so the compacted
+    file is not dramatically smaller than the live data it contains.
 
 ## Quack Remote Access
 
