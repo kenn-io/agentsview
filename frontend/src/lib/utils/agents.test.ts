@@ -45,6 +45,7 @@ describe("KNOWN_AGENTS", () => {
       "antigravity-cli",
       "vibe",
       "posit-assistant",
+      "roocode",
     ]);
   });
 
@@ -116,6 +117,9 @@ describe("agentColor", () => {
     );
     expect(agentColor("piebald")).toBe(
       "var(--accent-orange)",
+    );
+    expect(agentColor("roocode")).toBe(
+      "var(--accent-rose)",
     );
   });
 
@@ -192,6 +196,7 @@ describe("agentLabel", () => {
     expect(agentLabel("qwenpaw")).toBe("QwenPaw");
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");
     expect(agentLabel("qoder")).toBe("Qoder");
+    expect(agentLabel("roocode")).toBe("RooCode");
   });
 
   it("capitalizes simple agent names", () => {
