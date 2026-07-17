@@ -150,7 +150,8 @@ func collectCodexPGRepairs(
 	collabMessages := make(map[messageKey]bool)
 
 	rows, err := q.QueryContext(ctx, `
-SELECT tc.id, tc.session_id, tc.message_ordinal, tc.tool_name, tc.input_json
+SELECT tc.id, tc.session_id, tc.message_ordinal, tc.tool_name,
+       COALESCE(tc.input_json, '')
   FROM tool_calls tc
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
@@ -383,7 +384,7 @@ SELECT m.session_id, m.role, m.has_tool_use, m.content,
 	}
 
 	rows, err = q.QueryContext(ctx, `
-SELECT tc.session_id, tc.input_json
+SELECT tc.session_id, COALESCE(tc.input_json, '')
   FROM tool_calls tc
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'

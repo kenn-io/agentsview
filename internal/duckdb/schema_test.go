@@ -343,6 +343,23 @@ func TestEnsureSchemaNormalizesLegacyCodexPayloadsBeforeCertification(
 			message_id, session_id, tool_name, category, call_index, input_json
 		) VALUES (105, 'control-split', ?, 'Task', 0, ?)`, splitToolName, input)
 	require.NoError(t, err, "seed control-split legacy tool input")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, relationship_type,
+			data_version, first_message
+		) VALUES ('null-input', 'project', 'machine', 'codex', '', ?, 'safe')`,
+		legacyDataVersion)
+	require.NoError(t, err, "seed legacy session with nullable tool input")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, has_tool_use, content_length
+		) VALUES (106, 'null-input', 0, 'assistant', 'safe', TRUE, 4)`)
+	require.NoError(t, err, "seed message with nullable tool input")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, call_index, input_json
+		) VALUES (106, 'null-input', 'spawn_agent', 'Task', 0, NULL)`)
+	require.NoError(t, err, "seed nullable legacy tool input")
 
 	err = CheckSchemaCompat(ctx, database)
 	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
@@ -372,6 +389,16 @@ func TestEnsureSchemaNormalizesLegacyCodexPayloadsBeforeCertification(
 	assert.Equal(t, "spawn_agent", toolName)
 	assert.Equal(t, `{"message":"[encrypted]"}`, gotInput)
 	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+	var nullInputVersion int
+	var inputRemainsNull bool
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT s.data_version, tc.input_json IS NULL
+		  FROM sessions s
+		  JOIN tool_calls tc ON tc.session_id = s.id
+		 WHERE s.id = 'null-input'`,
+	).Scan(&nullInputVersion, &inputRemainsNull))
+	assert.Equal(t, codexEncryptedPayloadDataVersion, nullInputVersion)
+	assert.True(t, inputRemainsNull, "normalization must preserve an absent tool input")
 }
 
 func TestEnsureSchemaWithholdsWatermarkFromUncertifiedLegacyCodexPayloads(

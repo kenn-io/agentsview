@@ -367,6 +367,22 @@ INSERT INTO tool_calls (
     session_id, tool_name, category, message_ordinal, input_json
 ) VALUES ('control-split', $1, 'Task', 0, $2)`, splitToolName, input)
 	require.NoError(t, err, "seed control-split legacy tool input")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (
+    id, machine, project, agent, relationship_type, data_version, first_message
+) VALUES ('null-input', 'test-machine', 'project', 'codex', '', $1, 'safe')`,
+		legacyDataVersion)
+	require.NoError(t, err, "seed legacy session with nullable tool input")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO messages (
+    session_id, ordinal, role, content, has_tool_use, content_length
+) VALUES ('null-input', 0, 'assistant', 'safe', TRUE, 4)`)
+	require.NoError(t, err, "seed message with nullable tool input")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO tool_calls (
+    session_id, tool_name, category, message_ordinal, input_json
+) VALUES ('null-input', 'spawn_agent', 'Task', 0, NULL)`)
+	require.NoError(t, err, "seed nullable legacy tool input")
 
 	err = CheckCodexEncryptedPayloadCompat(ctx, pg)
 	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
@@ -396,6 +412,16 @@ SELECT s.first_message, m.role, m.content, m.content_length,
 	assert.Equal(t, "spawn_agent", toolName)
 	assert.Equal(t, `{"message":"[encrypted]"}`, gotInput)
 	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+	var nullInputVersion int
+	var inputRemainsNull bool
+	require.NoError(t, pg.QueryRowContext(ctx, `
+SELECT s.data_version, tc.input_json IS NULL
+  FROM sessions s
+  JOIN tool_calls tc ON tc.session_id = s.id
+ WHERE s.id = 'null-input'`,
+	).Scan(&nullInputVersion, &inputRemainsNull))
+	assert.Equal(t, codexEncryptedPayloadDataVersion, nullInputVersion)
+	assert.True(t, inputRemainsNull, "normalization must preserve an absent tool input")
 }
 
 func TestEnsureSchemaReplacesLegacyCodexGuardGeneration(t *testing.T) {
