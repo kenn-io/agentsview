@@ -4750,6 +4750,10 @@ func (e *Engine) processProviderFile(
 			noCacheSkip: true,
 		}, true
 	}
+	if parser.IsOmnigentContainerSource(source) &&
+		outcome.SkipReason != parser.SkipUnsupportedSource {
+		e.resyncOmnigentAdvanced.Store(true)
+	}
 	if err := validateProviderOutcome(
 		provider.Definition(),
 		source,
@@ -4784,14 +4788,6 @@ func (e *Engine) processProviderFile(
 			forceReplace:       outcome.ForceReplace,
 		}, true
 	}
-	if file.Agent == parser.AgentOmnigent {
-		path := providerDiscoveredPath(source)
-		_, _, virtual := parser.ParseVirtualSourcePath(path)
-		if !virtual {
-			e.resyncOmnigentAdvanced.Store(true)
-		}
-	}
-
 	parsedResults := parseOutcomeResults(outcome.Results)
 	parsedCount := len(parsedResults)
 	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
@@ -4818,7 +4814,7 @@ func (e *Engine) processProviderFile(
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
 		fingerprint.Hash != "" {
 		path := providerDiscoveredPath(source)
-		_, _, virtual := parser.ParseVirtualSourcePath(path)
+		_, _, virtual := parser.ParseOmnigentVirtualSourcePath(path)
 		res.cacheAfterWrite = !virtual
 	}
 	// Incremental-append providers (Claude and Codex) need the stored file
@@ -5214,7 +5210,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 	}
 	if agent == parser.AgentOmnigent {
 		path := providerDiscoveredPath(source)
-		if _, _, virtual := parser.ParseVirtualSourcePath(path); !virtual {
+		if _, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); !virtual {
 			// Whole-container Omnigent sources have only virtual member rows in
 			// the archive. The cache key already includes the physical database
 			// hash, so an exact cache hit is authoritative without a nonexistent
@@ -6955,7 +6951,7 @@ func (e *Engine) markOmnigentSourceRetry(agent parser.AgentType, path string) {
 	if agent != parser.AgentOmnigent {
 		return
 	}
-	_, memberID, virtual := parser.ParseVirtualSourcePath(path)
+	_, memberID, virtual := parser.ParseOmnigentVirtualSourcePath(path)
 	retry := omnigentRetrySource{filePath: path}
 	if virtual && memberID != "" {
 		retry.sessionID = string(parser.AgentOmnigent) + ":" + memberID
@@ -7004,7 +7000,7 @@ func (e *Engine) clearOmnigentSourceRetry(agent parser.AgentType, path string) {
 	if agent != parser.AgentOmnigent || path == "" {
 		return
 	}
-	_, memberID, virtual := parser.ParseVirtualSourcePath(path)
+	_, memberID, virtual := parser.ParseOmnigentVirtualSourcePath(path)
 	retry := omnigentRetrySource{filePath: path}
 	if virtual && memberID != "" {
 		retry.sessionID = string(parser.AgentOmnigent) + ":" + memberID

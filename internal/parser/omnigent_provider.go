@@ -77,6 +77,16 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
+// IsOmnigentContainerSource reports whether source addresses the whole
+// physical chat database rather than one virtual conversation member.
+func IsOmnigentContainerSource(source SourceRef) bool {
+	if source.Provider != AgentOmnigent {
+		return false
+	}
+	src, ok := source.Opaque.(multiSessionSource)
+	return ok && src.Container != "" && src.MemberID == ""
+}
+
 func omnigentLegacySessionIDs(
 	src multiSessionSource, results []ParseResult,
 ) []string {
@@ -940,4 +950,11 @@ func omnigentDBPathForEvent(root, path string) (string, bool) {
 
 func parseOmnigentVirtualPath(path string) (string, string, bool) {
 	return ParseVirtualSourcePathForBase(path, omnigentDBName)
+}
+
+// ParseOmnigentVirtualSourcePath recognizes only virtual member paths whose
+// separator follows the physical chat.db basename. Directory names containing
+// '#' therefore remain valid physical container paths.
+func ParseOmnigentVirtualSourcePath(path string) (string, string, bool) {
+	return parseOmnigentVirtualPath(path)
 }

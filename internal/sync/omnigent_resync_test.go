@@ -209,24 +209,35 @@ func TestCanceledResyncBeforeOmnigentParseDoesNotQueueContainer(t *testing.T) {
 		"cancellation before container parse must not force a later full parse")
 }
 
-func TestCanceledResyncAfterOmnigentParseQueuesContainer(t *testing.T) {
-	root := t.TempDir()
-	writeOmnigentResyncSource(t, root)
+func TestCanceledResyncAfterEmptyOmnigentParseQueuesHashPathContainer(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root#hash")
+	require.NoError(t, os.Mkdir(root, 0o755))
+	sourcePath := writeOmnigentResyncSource(t, root)
 	archive := openTestDB(t)
-	ctx, cancel := context.WithCancel(context.Background())
 	delegate, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
 	require.True(t, ok)
-	factory := cancelAfterOmnigentParseFactory{
-		delegate: delegate, cancel: cancel, once: &stdsync.Once{},
-	}
 	engine := NewEngine(archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
 		Machine:           "local",
-		ProviderFactories: []parser.ProviderFactory{factory},
+		ProviderFactories: []parser.ProviderFactory{delegate},
 	})
 	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+
+	writer, err := sql.Open("sqlite3", sourcePath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversation_items`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversations`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	engine.providerFactories[parser.AgentOmnigent] = cancelAfterOmnigentParseFactory{
+		delegate: delegate, cancel: cancel, once: &stdsync.Once{},
+	}
 
 	engine.syncMu.Lock()
 	stats, err := engine.resyncAllWithOptionsLocked(
@@ -239,5 +250,16 @@ func TestCanceledResyncAfterOmnigentParseQueuesContainer(t *testing.T) {
 	retryCount := len(engine.omnigentRetrySources)
 	engine.omnigentRetryMu.Unlock()
 	assert.Equal(t, 1, retryCount,
-		"discarding a parsed container must queue it for the live archive")
+		"discarding an empty parsed container must queue it for the live archive")
+	stored, err := archive.GetSession(context.Background(), "omnigent:conversation")
+	require.NoError(t, err)
+	assert.NotNil(t, stored,
+		"the canceled resync must leave the populated live archive unchanged")
+
+	recovered := engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, recovered.Failed)
+	stored, err = archive.GetSession(context.Background(), "omnigent:conversation")
+	require.NoError(t, err)
+	assert.Nil(t, stored,
+		"the queued hash-path container must reconcile the empty source")
 }
