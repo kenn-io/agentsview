@@ -1,0 +1,265 @@
+{
+ "alternation": {
+  "max_window_chars": 100000,
+  "messages": [
+   {
+    "ordinal": 0,
+    "role": "user",
+    "content": "please fix the login bug",
+    "is_system": 0
+   },
+   {
+    "ordinal": 1,
+    "role": "assistant",
+    "content": "looking at auth.py",
+    "is_system": 0
+   },
+   {
+    "ordinal": 2,
+    "role": "assistant",
+    "content": "patched session timeout",
+    "is_system": 0
+   },
+   {
+    "ordinal": 3,
+    "role": "user",
+    "content": "now add a test",
+    "is_system": 0
+   },
+   {
+    "ordinal": 4,
+    "role": "assistant",
+    "content": "added test_login.py",
+    "is_system": 0
+   }
+  ],
+  "units": [
+   {
+    "kind": "intent",
+    "text": "USER MESSAGE (ordinal 0):\nplease fix the login bug",
+    "ordinal_start": 0,
+    "ordinal_end": 0
+   },
+   {
+    "kind": "action_run",
+    "text": "[1] ASSISTANT:\nlooking at auth.py\n\n[2] ASSISTANT:\npatched session timeout",
+    "ordinal_start": 1,
+    "ordinal_end": 2
+   },
+   {
+    "kind": "intent",
+    "text": "USER MESSAGE (ordinal 3):\nnow add a test",
+    "ordinal_start": 3,
+    "ordinal_end": 3
+   },
+   {
+    "kind": "action_run",
+    "text": "[4] ASSISTANT:\nadded test_login.py",
+    "ordinal_start": 4,
+    "ordinal_end": 4
+   }
+  ]
+ },
+ "system_and_empty_skips": {
+  "max_window_chars": 100000,
+  "messages": [
+   {
+    "ordinal": 0,
+    "role": "user",
+    "content": "injected reminder",
+    "is_system": 1
+   },
+   {
+    "ordinal": 1,
+    "role": "user",
+    "content": "real request",
+    "is_system": 0
+   },
+   {
+    "ordinal": 2,
+    "role": "assistant",
+    "content": "   ",
+    "is_system": 0
+   },
+   {
+    "ordinal": 3,
+    "role": "assistant",
+    "content": "did the work",
+    "is_system": 0
+   },
+   {
+    "ordinal": 4,
+    "role": "assistant",
+    "content": "system noise",
+    "is_system": 1
+   },
+   {
+    "ordinal": 5,
+    "role": "assistant",
+    "content": "more work",
+    "is_system": 0
+   }
+  ],
+  "units": [
+   {
+    "kind": "intent",
+    "text": "USER MESSAGE (ordinal 1):\nreal request",
+    "ordinal_start": 1,
+    "ordinal_end": 1
+   },
+   {
+    "kind": "action_run",
+    "text": "[3] ASSISTANT:\ndid the work\n\n[5] ASSISTANT:\nmore work",
+    "ordinal_start": 3,
+    "ordinal_end": 5
+   }
+  ]
+ },
+ "packing_and_oversize": {
+  "max_window_chars": 400,
+  "messages": [
+   {
+    "ordinal": 0,
+    "role": "user",
+    "content": "go",
+    "is_system": 0
+   },
+   {
+    "ordinal": 1,
+    "role": "assistant",
+    "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "is_system": 0
+   },
+   {
+    "ordinal": 2,
+    "role": "assistant",
+    "content": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "is_system": 0
+   },
+   {
+    "ordinal": 3,
+    "role": "assistant",
+    "content": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "is_system": 0
+   },
+   {
+    "ordinal": 4,
+    "role": "assistant",
+    "content": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "is_system": 0
+   }
+  ],
+  "units": [
+   {
+    "kind": "intent",
+    "text": "USER MESSAGE (ordinal 0):\ngo",
+    "ordinal_start": 0,
+    "ordinal_end": 0
+   },
+   {
+    "kind": "action_run",
+    "text": "[1] ASSISTANT:\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\n[2] ASSISTANT:\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ordinal_start": 1,
+    "ordinal_end": 2
+   },
+   {
+    "kind": "action_run",
+    "text": "[3] ASSISTANT:\ncccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "ordinal_start": 3,
+    "ordinal_end": 3
+   },
+   {
+    "kind": "action_run",
+    "text": "[4] ASSISTANT:\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "ordinal_start": 4,
+    "ordinal_end": 4
+   }
+  ]
+ },
+ "leading_run_no_user": {
+  "max_window_chars": 100000,
+  "messages": [
+   {
+    "ordinal": 0,
+    "role": "assistant",
+    "content": "resumed work without a user turn",
+    "is_system": 0
+   },
+   {
+    "ordinal": 1,
+    "role": "user",
+    "content": "continue",
+    "is_system": 0
+   },
+   {
+    "ordinal": 2,
+    "role": "assistant",
+    "content": "done",
+    "is_system": 0
+   }
+  ],
+  "units": [
+   {
+    "kind": "action_run",
+    "text": "[0] ASSISTANT:\nresumed work without a user turn",
+    "ordinal_start": 0,
+    "ordinal_end": 0
+   },
+   {
+    "kind": "intent",
+    "text": "USER MESSAGE (ordinal 1):\ncontinue",
+    "ordinal_start": 1,
+    "ordinal_end": 1
+   },
+   {
+    "kind": "action_run",
+    "text": "[2] ASSISTANT:\ndone",
+    "ordinal_start": 2,
+    "ordinal_end": 2
+   }
+  ]
+ },
+ "unicode_content": {
+  "max_window_chars": 60,
+  "messages": [
+   {
+    "ordinal": 0,
+    "role": "user",
+    "content": "héllo wörld — fix the café bug",
+    "is_system": 0
+   },
+   {
+    "ordinal": 1,
+    "role": "assistant",
+    "content": "cafécafécafécafécafécafécafécafécafécafécafécafé",
+    "is_system": 0
+   },
+   {
+    "ordinal": 2,
+    "role": "assistant",
+    "content": "naïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïve",
+    "is_system": 0
+   }
+  ],
+  "units": [
+   {
+    "kind": "intent",
+    "text": "USER MESSAGE (ordinal 0):\nhéllo wörld — fix the café bug",
+    "ordinal_start": 0,
+    "ordinal_end": 0
+   },
+   {
+    "kind": "action_run",
+    "text": "[1] ASSISTANT:\ncafécafécafécafécafécafécafécafécafécafécafécafé",
+    "ordinal_start": 1,
+    "ordinal_end": 1
+   },
+   {
+    "kind": "action_run",
+    "text": "[2] ASSISTANT:\nnaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïvenaïve",
+    "ordinal_start": 2,
+    "ordinal_end": 2
+   }
+  ]
+ }
+}

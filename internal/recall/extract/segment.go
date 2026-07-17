@@ -1,0 +1,157 @@
+// Package extract derives distillation work units from session transcripts.
+//
+// A Segmenter turns a session's messages into an ordered list of units, each
+// destined for one model call. Derivation must be deterministic: resume
+// cursors index into the unit list, and entry identity embeds the unit index,
+// so replaying a session after a restart or upgrade must yield the same units
+// in the same order. A segmenter's name and parameters identify its output
+// alongside the prompt and model configuration, so different segmentation
+// strategies build separate, comparable corpora instead of mixing.
+package extract
+
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
+
+// PromptRole names the kind of prompt a unit should be distilled with.
+type PromptRole string
+
+const (
+	// RoleIntent marks a unit carrying what the user asked for.
+	RoleIntent PromptRole = "intent"
+	// RoleAction marks a unit carrying what the assistant did.
+	RoleAction PromptRole = "action"
+	// RoleGeneric marks a unit for strategies that do not distinguish
+	// speaker roles and use a single prompt.
+	RoleGeneric PromptRole = "generic"
+)
+
+// Message is the minimal transcript row a segmenter consumes. Callers adapt
+// their storage rows to it; ordinals must be the session's message ordinals
+// so unit evidence ranges point back into the transcript.
+type Message struct {
+	Ordinal  int
+	Role     string
+	Content  string
+	IsSystem bool
+}
+
+// Unit is one model call's worth of transcript, with the ordinal range it
+// covers as evidence provenance.
+type Unit struct {
+	Role         PromptRole
+	Text         string
+	OrdinalStart int
+	OrdinalEnd   int
+}
+
+// Segmenter derives units from a session deterministically. Name and Params
+// identify the strategy and its knobs; both become part of the extraction
+// configuration's identity. PromptRoles declares which prompt kinds the
+// strategy emits so prompt resolution can be validated up front.
+type Segmenter interface {
+	Name() string
+	Params() map[string]any
+	PromptRoles() []PromptRole
+	Units(messages []Message) []Unit
+}
+
+// TurnsV1 segments at user/assistant turn granularity: each non-system user
+// message becomes one intent unit, and each run of assistant messages between
+// user messages is packed into action units of at most MaxWindowChars
+// characters (counted as Unicode code points). A single assistant message
+// larger than the budget becomes its own oversized unit; the extraction
+// client is responsible for splitting text that exceeds the model context.
+type TurnsV1 struct {
+	MaxWindowChars int
+}
+
+// Name implements Segmenter.
+func (TurnsV1) Name() string { return "turns-v1" }
+
+// Params implements Segmenter.
+func (s TurnsV1) Params() map[string]any {
+	return map[string]any{"max_window_chars": s.MaxWindowChars}
+}
+
+// PromptRoles implements Segmenter.
+func (TurnsV1) PromptRoles() []PromptRole {
+	return []PromptRole{RoleIntent, RoleAction}
+}
+
+// Units implements Segmenter.
+func (s TurnsV1) Units(messages []Message) []Unit {
+	var units []Unit
+	var run []ordinalBlock
+	for _, message := range messages {
+		if message.IsSystem {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		switch message.Role {
+		case "user":
+			units = packRun(run, s.MaxWindowChars, units)
+			run = nil
+			units = append(units, Unit{
+				Role: RoleIntent,
+				Text: fmt.Sprintf("USER MESSAGE (ordinal %d):\n%s",
+					message.Ordinal, content),
+				OrdinalStart: message.Ordinal,
+				OrdinalEnd:   message.Ordinal,
+			})
+		case "assistant":
+			run = append(run, ordinalBlock{
+				ordinal: message.Ordinal,
+				text: fmt.Sprintf("[%d] ASSISTANT:\n%s",
+					message.Ordinal, content),
+			})
+		}
+	}
+	return packRun(run, s.MaxWindowChars, units)
+}
+
+type ordinalBlock struct {
+	ordinal int
+	text    string
+}
+
+// packRun appends action units built from consecutive assistant blocks,
+// starting a new unit whenever adding a block would exceed maxChars. Length
+// is counted in code points so the boundary decisions match regardless of
+// how the text is encoded.
+func packRun(blocks []ordinalBlock, maxChars int, units []Unit) []Unit {
+	var current []ordinalBlock
+	currentChars := 0
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		texts := make([]string, 0, len(current))
+		for _, block := range current {
+			texts = append(texts, block.text)
+		}
+		units = append(units, Unit{
+			Role:         RoleAction,
+			Text:         strings.Join(texts, "\n\n"),
+			OrdinalStart: current[0].ordinal,
+			OrdinalEnd:   current[len(current)-1].ordinal,
+		})
+	}
+	for _, block := range blocks {
+		blockChars := utf8.RuneCountInString(block.text)
+		if len(current) > 0 && currentChars+blockChars > maxChars {
+			flush()
+			current = nil
+			currentChars = 0
+		}
+		current = append(current, block)
+		currentChars += blockChars + 2
+	}
+	flush()
+	return units
+}
