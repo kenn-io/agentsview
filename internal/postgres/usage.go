@@ -1327,7 +1327,6 @@ func (s *Store) GetDailyUsage(
 		cost      float64
 	}
 	type creditKey struct {
-		date      string
 		sessionID string
 		agent     string
 	}
@@ -1403,7 +1402,7 @@ func (s *Store) GetDailyUsage(
 		b.cacheRd += cacheRdTok
 		b.cost += cost
 
-		ck := creditKey{date: date, sessionID: r.sessionID, agent: r.agent}
+		ck := creditKey{sessionID: r.sessionID, agent: r.agent}
 		credit := creditAccum[ck]
 		if credit == nil {
 			credit = &creditBucket{}

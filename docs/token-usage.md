@@ -408,9 +408,15 @@ When a Copilot session has reported credits, that total replaces the estimate
 derived from token cost. Historical sessions and Copilot-family agents without
 `totalNanoAiu` retain the existing fallback of cost divided by `$0.01`. Mixed
 windows sum reported sessions and estimated sessions without counting both for
-the same session and day. Model-filtered reports continue to use estimates
-because a session-level credit total cannot be allocated accurately across
-multiple models.
+the same session. Credit selection is resolved across all selected days for
+each session, so a reported total on the shutdown day suppresses estimates from
+earlier selected days of that session.
+
+The reported value is cumulative and cannot be allocated accurately to
+individual days. A window containing the final shutdown therefore receives the
+full session credit total; a window that selects only earlier rows uses the
+cost-based estimate. Model-filtered reports also continue to use estimates
+because the session-level total cannot be allocated accurately across models.
 
 The Usage dashboard shows credits as an optional summary card, and
 `agentsview session usage` prints an `AI Credits` line. API responses expose

@@ -3687,7 +3687,6 @@ func (s *Store) GetDailyUsage(
 	}
 	accum := map[usageAccumKey]*duckUsageBucket{}
 	type creditKey struct {
-		date      string
 		sessionID string
 		agent     string
 	}
@@ -3728,7 +3727,7 @@ func (s *Store) GetDailyUsage(
 		b.cacheCr += r.cacheCr
 		b.cacheRd += r.cacheRd
 		b.cost += cost
-		ck := creditKey{date: r.date, sessionID: r.sessionID, agent: r.agent}
+		ck := creditKey{sessionID: r.sessionID, agent: r.agent}
 		credit := creditAccum[ck]
 		if credit == nil {
 			credit = &creditBucket{}
