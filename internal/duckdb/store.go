@@ -176,7 +176,7 @@ func (r duckSingleRow) Scan(dest ...any) error {
 	if err := r.rows.Scan(dest...); err != nil {
 		return err
 	}
-	return r.rows.Err()
+	return r.rows.Close()
 }
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {

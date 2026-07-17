@@ -114,6 +114,12 @@ type lazyGuardErrConn struct{}
 
 type lazyGuardErrRows struct{ delivered bool }
 
+type closeGuardErrDriver struct{}
+
+type closeGuardErrConn struct{}
+
+type closeGuardErrRows struct{ delivered bool }
+
 var lazyGuardErrRegisterOnce sync.Once
 
 func (lazyGuardErrDriver) Open(string) (driver.Conn, error) {
@@ -150,6 +156,43 @@ func (r *lazyGuardErrRows) Next([]driver.Value) error {
 	)
 }
 
+func (closeGuardErrDriver) Open(string) (driver.Conn, error) {
+	return closeGuardErrConn{}, nil
+}
+
+func (closeGuardErrConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (closeGuardErrConn) Close() error { return nil }
+
+func (closeGuardErrConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("begin not implemented")
+}
+
+func (closeGuardErrConn) QueryContext(
+	context.Context, string, []driver.NamedValue,
+) (driver.Rows, error) {
+	return &closeGuardErrRows{}, nil
+}
+
+func (r *closeGuardErrRows) Columns() []string { return []string{"value"} }
+
+func (r *closeGuardErrRows) Close() error {
+	return errors.New(
+		"Invalid Input Error: " + codexEncryptedPayloadGuardMessage,
+	)
+}
+
+func (r *closeGuardErrRows) Next(dest []driver.Value) error {
+	if r.delivered {
+		return io.EOF
+	}
+	r.delivered = true
+	dest[0] = "guarded value"
+	return nil
+}
+
 func TestGuardMappedRowsRestoreSentinelOnIterationErrors(t *testing.T) {
 	lazyGuardErrRegisterOnce.Do(func() {
 		sql.Register("agentsview_lazy_guard_err", lazyGuardErrDriver{})
@@ -165,4 +208,22 @@ func TestGuardMappedRowsRestoreSentinelOnIterationErrors(t *testing.T) {
 	require.False(t, rows.Next(), "the deferred failure ends iteration")
 	require.ErrorIs(t, rows.Err(), ErrCodexEncryptedPayloadRepairRequired,
 		"iteration-time guard failures must map back to the repair sentinel")
+}
+
+func TestDuckSingleRowReturnsGuardFailureDeferredUntilClose(t *testing.T) {
+	sql.Register(t.Name(), closeGuardErrDriver{})
+	conn, err := sql.Open(t.Name(), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+
+	raw, err := conn.QueryContext(context.Background(), "SELECT 1")
+	require.NoError(t, err, "the fake driver defers the failure until close")
+	row := duckSingleRow{rows: codexGuardMappedRows{Rows: raw}}
+	var got string
+	err = row.Scan(&got)
+
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"a close-time guard failure must fail the single-row read")
+	assert.Equal(t, "guarded value", got,
+		"the row must have been scanned before the deferred failure")
 }
