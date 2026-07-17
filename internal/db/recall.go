@@ -234,6 +234,9 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	if err := copyRecallQueryEventsFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
+	if err := copyRecallExtractStateFromAttachedTx(ctx, tx); err != nil {
+		return err
+	}
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO recall_entries (

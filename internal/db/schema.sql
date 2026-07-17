@@ -419,6 +419,45 @@ CREATE TABLE IF NOT EXISTS recall_query_exposures (
 CREATE INDEX IF NOT EXISTS idx_recall_query_exposures_entry
     ON recall_query_exposures(entry_id);
 
+-- One extraction generation per distillation configuration: the fingerprint
+-- digests everything that changes output (model, segmenter identity, prompt
+-- digests, request shape). At most one generation is active at a time;
+-- changing configuration creates a new generation rather than mixing corpora.
+CREATE TABLE IF NOT EXISTS recall_extract_generations (
+    fingerprint TEXT PRIMARY KEY,
+    state       TEXT NOT NULL DEFAULT 'building'
+        CHECK (state IN ('building', 'active', 'retired')),
+    model       TEXT NOT NULL,
+    segmenter   TEXT NOT NULL,
+    params_json TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at  TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Per-session extraction progress for one generation. unit_cursor counts
+-- completed units of the session's deterministic unit list, so a daemon
+-- restart resumes mid-session; content_digest detects sessions that grew
+-- after extraction so they can be reset and topped up.
+CREATE TABLE IF NOT EXISTS recall_extract_progress (
+    session_id             TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    generation_fingerprint TEXT NOT NULL
+        REFERENCES recall_extract_generations(fingerprint) ON DELETE CASCADE,
+    unit_cursor    INTEGER NOT NULL DEFAULT 0,
+    units_total    INTEGER NOT NULL DEFAULT 0,
+    state          TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'partial', 'done', 'failed')),
+    content_digest TEXT NOT NULL DEFAULT '',
+    last_error     TEXT NOT NULL DEFAULT '',
+    updated_at     TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (session_id, generation_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_recall_extract_progress_state
+    ON recall_extract_progress(generation_fingerprint, state);
+
 -- Pinned messages table
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          INTEGER PRIMARY KEY,
