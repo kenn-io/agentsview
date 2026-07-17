@@ -447,6 +447,43 @@ func TestCheckSchemaCompatViaQuackReportsServerBehindOnOldVersion(
 		"remote version skew must tell the operator the fix")
 }
 
+func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingVersionRow(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+	_, err := db.ExecContext(ctx,
+		`DELETE FROM sync_metadata WHERE key = ?`,
+		schemaVersionMetadataKey,
+	)
+	require.NoError(t, err, "simulate server without a schema version row")
+
+	err = CheckSchemaCompatViaQuack(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), schemaVersionMetadataKey)
+	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+		"remote missing version row must tell the operator the fix")
+}
+
+func TestSchemaRepairErrorPointsRemoteRepairsAtServer(t *testing.T) {
+	require.NoError(t, schemaRepairError(nil, remoteSchema))
+
+	err := schemaRepairError([]string{"messages.id primary key"}, remoteSchema)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages.id primary key")
+	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+		"remote pending repairs must tell the operator the fix")
+	assert.NotContains(t, err.Error(),
+		"run full DuckDB schema migration on the base database")
+
+	err = schemaRepairError([]string{"messages.id primary key"}, localSchema)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"run full DuckDB schema migration on the base database",
+		"local pending repairs keep the base-database hint")
+}
+
 // TestEnsureSchemaCreatesToolCallsFilePathIndex verifies the DuckDB mirror
 // builds idx_tool_calls_file_path, the parity counterpart to SQLite's
 // Recent Edits index. DuckDB has no partial indexes, so it omits the

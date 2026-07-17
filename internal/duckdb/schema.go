@@ -1120,7 +1120,7 @@ func CheckSchemaCompat(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	return schemaRepairError(pendingRepairs)
+	return schemaRepairError(pendingRepairs, localSchema)
 }
 
 func CheckSchemaCompatViaQuack(ctx context.Context, db *sql.DB) error {
@@ -1183,6 +1183,14 @@ func checkSchemaShapeCompat(
 		schemaVersionMetadataKey,
 	).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
+		if location == remoteSchema {
+			return fmt.Errorf(
+				"duckdb schema incompatible; missing %s in sync_metadata; "+
+					"upgrade and restart the DuckDB server so it migrates "+
+					"its schema at startup",
+				schemaVersionMetadataKey,
+			)
+		}
 		return fmt.Errorf(
 			"duckdb schema incompatible; missing %s in sync_metadata",
 			schemaVersionMetadataKey,
@@ -1228,7 +1236,7 @@ func checkSchemaRepairsViaQuack(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	return schemaRepairError(pendingRepairs)
+	return schemaRepairError(pendingRepairs, remoteSchema)
 }
 
 func pendingSchemaRepairs(ctx context.Context, db *sql.DB) ([]string, error) {
@@ -1257,11 +1265,21 @@ func collectSchemaRepairIssues(rows *sql.Rows) ([]string, error) {
 	return pendingRepairs, nil
 }
 
-func schemaRepairError(pendingRepairs []string) error {
+func schemaRepairError(
+	pendingRepairs []string, location schemaLocation,
+) error {
 	if len(pendingRepairs) == 0 {
 		return nil
 	}
 	sort.Strings(pendingRepairs)
+	if location == remoteSchema {
+		return fmt.Errorf(
+			"duckdb schema incompatible; the DuckDB server has pending "+
+				"schema repairs; upgrade and restart the DuckDB server so "+
+				"it migrates its schema at startup; pending repairs: %s",
+			strings.Join(pendingRepairs, ", "),
+		)
+	}
 	return fmt.Errorf(
 		"duckdb schema incompatible; run full DuckDB schema migration on the base database; pending repairs: %s",
 		strings.Join(pendingRepairs, ", "),
