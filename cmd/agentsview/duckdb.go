@@ -305,8 +305,11 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		schemaErr = duckdbsync.CheckSchemaCompatViaQuack(ctx, store.DB())
 	}
 	if schemaErr != nil {
-		fatal("duckdb serve: schema incompatible: %v\n"+
-			"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
+		if duckCfg.URL == "" {
+			fatal("duckdb serve: schema incompatible: %v\n"+
+				"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
+		}
+		fatal("duckdb serve: schema incompatible: %v", schemaErr)
 	}
 
 	rtOpts := serveRuntimeOptions{
