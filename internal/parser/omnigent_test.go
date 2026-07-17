@@ -460,6 +460,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 	for _, archiveSize := range []int{5, 200} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			path := writeOmnigentCardinalityDB(t, archiveSize)
+			changedID := fmt.Sprintf("conv_%03d", archiveSize/2)
 			provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 				Roots: []string{filepath.Dir(path)}, Machine: "host",
 			})
@@ -477,14 +478,14 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 			require.NoError(t, err)
 			changedAt := time.Now().Unix()
 			_, err = writer.Exec(
-				`UPDATE conversations SET updated_at = ? WHERE id = 'conv_000'`,
-				changedAt)
+				`UPDATE conversations SET updated_at = ? WHERE id = ?`,
+				changedAt, changedID)
 			require.NoError(t, err)
 			_, err = writer.Exec(`INSERT INTO conversation_items
 				(id, conversation_id, position, type, data, search_text)
-				VALUES ('conv_000_i1', 'conv_000', 1, 'message',
+				VALUES (?, ?, 1, 'message',
 					'{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
-					'changed')`)
+					'changed')`, changedID+"_i1", changedID)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
 
@@ -494,7 +495,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 				})
 			require.NoError(t, err)
 			require.Len(t, changed, 1)
-			assert.Equal(t, VirtualSourcePath(path, "conv_000"), changed[0].DisplayPath)
+			assert.Equal(t, VirtualSourcePath(path, changedID), changed[0].DisplayPath)
 			outcome, err := provider.Parse(context.Background(), ParseRequest{
 				Source: changed[0],
 			})
@@ -506,8 +507,8 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 	}
 }
 
-func TestOmnigentChangedPathDetectsAppendWithoutTimestampAdvance(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 5)
+func TestOmnigentChangedPathEventuallyDetectsAppendWithoutTimestampAdvance(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 65)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 		Roots: []string{filepath.Dir(path)}, Machine: "host",
 	})
@@ -522,17 +523,64 @@ func TestOmnigentChangedPathDetectsAppendWithoutTimestampAdvance(t *testing.T) {
 	require.NoError(t, err)
 	_, err = writer.Exec(`INSERT INTO conversation_items
 		(id, conversation_id, position, type, data, search_text)
-		VALUES ('conv_000_i1', 'conv_000', 1, 'message',
+		VALUES ('conv_064_i1', 'conv_064', 1, 'message',
 			'{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
 			'changed')`)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	changed, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{Path: path, EventKind: "write"})
-	require.NoError(t, err)
+	var changed []SourceRef
+	for range 3 {
+		changed, err = provider.SourcesForChangedPath(
+			context.Background(), ChangedPathRequest{Path: path, EventKind: "write"})
+		require.NoError(t, err)
+		if len(changed) > 0 {
+			break
+		}
+	}
 	require.Len(t, changed, 1)
-	assert.Equal(t, VirtualSourcePath(path, "conv_000"), changed[0].DisplayPath)
+	assert.Equal(t, VirtualSourcePath(path, "conv_064"), changed[0].DisplayPath)
+}
+
+func TestOmnigentSplitWorkspaceClassificationIsBatched(t *testing.T) {
+	path := writeOmnigentSplitWorkspaceCardinalityDB(t, 100)
+	conn, err := openOmnigentDB(path)
+	require.NoError(t, err)
+	schema, err := detectOmnigentSchema(conn)
+	require.NoError(t, err)
+	metas, err := listOmnigentConversationMetas(conn, schema)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	tracker := newOmnigentChangeTracker()
+	tracker.replace(path, schema, metas)
+	tracker.mu.Lock()
+	tracked := tracker.containers[path]
+	tracked.probeKeys = nil
+	tracker.containers[path] = tracked
+	tracker.mu.Unlock()
+
+	writer, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	changedAt := time.Now().Unix()
+	_, err = writer.Exec(
+		`UPDATE conversations SET updated_at = ? WHERE workspace_id = 99 AND id = 'conv'`,
+		changedAt)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	var changed []multiSessionMatch
+	for attempt := range 4 {
+		changed, err = tracker.changedMembers(filepath.Dir(path), ChangedPathRequest{
+			Path: path, EventKind: "write",
+		})
+		require.NoError(t, err)
+		if attempt < 3 {
+			assert.Empty(t, changed)
+		}
+	}
+	require.Len(t, changed, 1)
+	assert.Equal(t, "99:conv", changed[0].MemberID)
 }
 
 func writeOmnigentCardinalityDB(t *testing.T, count int) string {
@@ -558,6 +606,36 @@ func writeOmnigentCardinalityDB(t *testing.T, count int) string {
 			VALUES (?, ?, 0, 'message',
 				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
 				'hi')`, id+"_i0", id)
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.Close())
+	return path
+}
+
+func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), omnigentDBName)
+	database, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	execOmnigentDDL(t, database, omnigentSplitGenDDL)
+	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('workspace-cardinality')`)
+	require.NoError(t, err)
+	for workspaceID := range count {
+		updatedAt := int64(1_700_000_000 + workspaceID)
+		_, err = database.Exec(`INSERT INTO conversations
+			(workspace_id, id, created_at, updated_at, title, root_conversation_id)
+			VALUES (?, 'conv', ?, ?, 'conversation', 'conv')`,
+			workspaceID, updatedAt-1, updatedAt)
+		require.NoError(t, err)
+		_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
+			(workspace_id, id, kind, workspace)
+			VALUES (?, 'conv', 1, '/work/project')`, workspaceID)
+		require.NoError(t, err)
+		_, err = database.Exec(`INSERT INTO conversation_items
+			(workspace_id, conversation_id, id, position, type, data, search_text)
+			VALUES (?, 'conv', 'item', 0, 1,
+				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
+				'hi')`, workspaceID)
 		require.NoError(t, err)
 	}
 	require.NoError(t, database.Close())

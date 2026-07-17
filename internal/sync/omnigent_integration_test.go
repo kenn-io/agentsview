@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -108,6 +109,7 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSyncDB(t, root, archiveSize)
+			changedID := fmt.Sprintf("conv_%04d", archiveSize/2)
 			archive := dbtest.OpenTestDB(t)
 			engine := sync.NewEngine(archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
@@ -123,14 +125,14 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
-			const changedAt = int64(1_800_000_000)
+			changedAt := time.Now().Unix()
 			_, err = writer.Exec(
-				`UPDATE conversations SET updated_at = ? WHERE id = 'conv_0000'`,
-				changedAt)
+				`UPDATE conversations SET updated_at = ? WHERE id = ?`,
+				changedAt, changedID)
 			require.NoError(t, err)
 			_, err = writer.Exec(`INSERT INTO conversation_items
 				(id, conversation_id, position, type, data, search_text)
-				VALUES ('conv_0000_1', 'conv_0000', 1, 'message', ?, 'changed')`,
+				VALUES (?, ?, 1, 'message', ?, 'changed')`, changedID+"_1", changedID,
 				`{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}`)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
@@ -138,14 +140,20 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			engine.SyncPaths([]string{dbPath + "-wal"})
 			assert.Equal(t, 1, engine.LastSyncStats().Synced,
 				"one changed conversation should produce one archive write")
-			changed, err := archive.GetSessionFull(context.Background(), "omnigent:conv_0000")
+			changed, err := archive.GetSessionFull(
+				context.Background(), "omnigent:"+changedID)
 			require.NoError(t, err)
 			require.NotNil(t, changed)
 			assert.Equal(t, 2, changed.MessageCount)
 			require.NotNil(t, changed.FileMtime)
 			assert.Equal(t, changedAt*1_000_000_000, *changed.FileMtime)
 
-			unchanged, err := archive.GetSession(context.Background(), "omnigent:conv_0001")
+			unchangedID := "conv_0001"
+			if changedID == unchangedID {
+				unchangedID = "conv_0000"
+			}
+			unchanged, err := archive.GetSession(
+				context.Background(), "omnigent:"+unchangedID)
 			require.NoError(t, err)
 			require.NotNil(t, unchanged)
 			assert.Equal(t, 1, unchanged.MessageCount)
@@ -184,7 +192,7 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 	}
 }
 
-func TestSyncOmnigentWorkspaceIdentityRetiresLegacyArchiveID(t *testing.T) {
+func TestSyncPathsOmnigentSchemaChangeRetiresLegacyArchiveID(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -197,7 +205,7 @@ func TestSyncOmnigentWorkspaceIdentityRetiresLegacyArchiveID(t *testing.T) {
 		},
 		Machine: "local",
 	})
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncPaths([]string{dbPath})
 	legacy, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
 	require.NoError(t, err)
 	require.NotNil(t, legacy)
@@ -227,7 +235,7 @@ func TestSyncOmnigentWorkspaceIdentityRetiresLegacyArchiveID(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncPaths([]string{dbPath})
 	legacy, err = archive.GetSession(context.Background(), "omnigent:conv_0000")
 	require.NoError(t, err)
 	assert.Nil(t, legacy)
@@ -235,6 +243,39 @@ func TestSyncOmnigentWorkspaceIdentityRetiresLegacyArchiveID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, qualified)
 	assert.Equal(t, "migrated", *qualified.DisplayName)
+}
+
+func TestSyncOmnigentPeriodicFullSyncReconcilesDeletedConversation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 65)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+	deleted, err := archive.GetSession(context.Background(), "omnigent:conv_0064")
+	require.NoError(t, err)
+	require.NotNil(t, deleted)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`DELETE FROM conversation_items WHERE conversation_id = 'conv_0064'`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_0064'`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	engine.SyncAll(context.Background(), nil)
+	deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0064")
+	require.NoError(t, err)
+	assert.Nil(t, deleted)
 }
 
 func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {

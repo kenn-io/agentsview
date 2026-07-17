@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,26 +14,35 @@ import (
 	"time"
 )
 
-const omnigentProbeBatchSize = 32
+const (
+	omnigentProbeBatchSize     = 32
+	omnigentWorkspaceBatchSize = 32
+)
 
 type omnigentTrackedContainer struct {
-	schema      omnigentSchema
-	metas       map[string]omnigentMeta
-	checkedAt   int64
-	count       int
-	maxRowID    int64
-	probeKeys   []string
-	probeCursor int
+	schema             omnigentSchema
+	metas              map[string]omnigentMeta
+	checkedAt          int64
+	count              int
+	maxRowID           int64
+	probeKeys          []string
+	probeCursor        int
+	workspaceIDs       []int64
+	workspaceCursor    int
+	workspaceCheckedAt map[int64]int64
+	workspaceCounts    map[int64]int
 }
 
 type omnigentChangeTracker struct {
-	mu         sync.Mutex
-	containers map[string]omnigentTrackedContainer
+	mu                sync.Mutex
+	containers        map[string]omnigentTrackedContainer
+	pendingExclusions map[string][]string
 }
 
 func newOmnigentChangeTracker() *omnigentChangeTracker {
 	return &omnigentChangeTracker{
-		containers: make(map[string]omnigentTrackedContainer),
+		containers:        make(map[string]omnigentTrackedContainer),
+		pendingExclusions: make(map[string][]string),
 	}
 }
 
@@ -61,7 +69,7 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithMemberParse(tracker.parseMember),
 				WithMemberPresence(omnigentMemberPresent),
 				WithUnsupportedSourceError(omnigentSchemaUnsupported),
-				WithExcludedSessionIDs(omnigentLegacySessionIDs),
+				WithExcludedSessionIDs(tracker.excludedSessionIDs),
 			)
 		},
 	)
@@ -89,6 +97,24 @@ func omnigentLegacySessionIDs(
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+func (t *omnigentChangeTracker) excludedSessionIDs(
+	src multiSessionSource, results []ParseResult,
+) []string {
+	ids := omnigentLegacySessionIDs(src, results)
+	if src.MemberID != "" {
+		return ids
+	}
+	t.mu.Lock()
+	ids = append(ids, t.pendingExclusions[src.Container]...)
+	delete(t.pendingExclusions, src.Container)
+	t.mu.Unlock()
+	if len(ids) < 2 {
+		return ids
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
 }
 
 func omnigentProviderCapabilities() Capabilities {
@@ -286,34 +312,49 @@ func (t *omnigentChangeTracker) changedMembers(
 
 	t.mu.Lock()
 	tracked, initialized := t.containers[match.Container]
-	if initialized {
-		copied := make(map[string]omnigentMeta, len(tracked.metas))
-		maps.Copy(copied, tracked.metas)
-		tracked.metas = copied
-		tracked.probeKeys = slices.Clone(tracked.probeKeys)
-	}
-	t.mu.Unlock()
 	if !initialized {
+		t.mu.Unlock()
 		metas, err := listOmnigentConversationMetas(conn, schema)
 		if err != nil {
 			return nil, err
 		}
 		return omnigentMatches(match.Container, schema, metas), nil
 	}
+	defer t.mu.Unlock()
+	if tracked.schema != schema {
+		// Member identities and joins change across schema generations. Reparse
+		// the whole container so every new identity is emitted and legacy IDs are
+		// retired even when the migrated rows reuse rowids and old timestamps.
+		return []multiSessionMatch{match}, nil
+	}
 
 	checkedAt := time.Now().Unix()
-	cutoff := max(tracked.checkedAt-1, 0)
 	// Omnigent's store advances updated_at on supported item appends and title
 	// changes. Use the last successful wall-clock observation as the cursor,
 	// rather than the greatest source timestamp: a future-dated row must not
 	// suppress every normally dated conversation. The one-second overlap covers
 	// multiple writes within the column's seconds precision.
-	workspaceIDs := omnigentTrackedWorkspaceIDs(tracked, schema)
-	changed, err := listOmnigentConversationMetasSince(
-		conn, schema, workspaceIDs, cutoff, checkedAt+1,
-	)
-	if err != nil {
-		return nil, err
+	var changed []omnigentMeta
+	workspaceBatch := omnigentWorkspaceBatch(tracked, schema)
+	if schema.splitMetadata {
+		for _, workspaceID := range workspaceBatch {
+			cutoff := max(tracked.workspaceCheckedAt[workspaceID]-1, 0)
+			workspaceMetas, err := listOmnigentConversationMetasSince(
+				conn, schema, []int64{workspaceID}, cutoff, checkedAt+1,
+			)
+			if err != nil {
+				return nil, err
+			}
+			changed = append(changed, workspaceMetas...)
+		}
+	} else {
+		cutoff := max(tracked.checkedAt-1, 0)
+		changed, err = listOmnigentConversationMetasSince(
+			conn, schema, nil, cutoff, checkedAt+1,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 	newRows, err := listOmnigentConversationMetasAfterRowID(
 		conn, schema, tracked.maxRowID,
@@ -407,9 +448,13 @@ func (t *omnigentChangeTracker) changedMembers(
 	slices.SortFunc(metas, func(a, b omnigentMeta) int {
 		return strings.Compare(a.member().key(schema), b.member().key(schema))
 	})
-	t.advanceClassification(
-		match.Container, checkedAt, probeCount, len(metas) == 0,
-	)
+	selectedWorkspaces := make(map[int64]struct{}, len(metas))
+	for _, meta := range metas {
+		selectedWorkspaces[meta.workspaceID] = struct{}{}
+	}
+	advanceOmnigentClassification(&tracked, checkedAt, probeCount,
+		workspaceBatch, selectedWorkspaces, len(metas) == 0)
+	t.containers[match.Container] = tracked
 	return omnigentMatches(match.Container, schema, metas), nil
 }
 
@@ -491,22 +536,15 @@ func queryOmnigentConversationMetas(
 	return metas, rows.Err()
 }
 
-func omnigentTrackedWorkspaceIDs(
+func omnigentWorkspaceBatch(
 	tracked omnigentTrackedContainer, schema omnigentSchema,
 ) []int64 {
-	if !schema.splitMetadata {
+	if !schema.splitMetadata || len(tracked.workspaceIDs) == 0 {
 		return nil
 	}
-	seen := make(map[int64]struct{})
-	for _, meta := range tracked.metas {
-		seen[meta.workspaceID] = struct{}{}
-	}
-	workspaceIDs := make([]int64, 0, len(seen))
-	for workspaceID := range seen {
-		workspaceIDs = append(workspaceIDs, workspaceID)
-	}
-	slices.Sort(workspaceIDs)
-	return workspaceIDs
+	start := min(tracked.workspaceCursor, len(tracked.workspaceIDs)-1)
+	end := min(start+omnigentWorkspaceBatchSize, len(tracked.workspaceIDs))
+	return tracked.workspaceIDs[start:end]
 }
 
 func listOmnigentConversationMetasAfterRowID(
@@ -575,22 +613,26 @@ func (t *omnigentChangeTracker) parseContainer(
 	return results, nil
 }
 
-func (t *omnigentChangeTracker) advanceClassification(
-	container string, checkedAt int64, probeCount int, noChanges bool,
+func advanceOmnigentClassification(
+	tracked *omnigentTrackedContainer, checkedAt int64, probeCount int,
+	workspaceBatch []int64, selectedWorkspaces map[int64]struct{}, noChanges bool,
 ) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	tracked, ok := t.containers[container]
-	if !ok {
-		return
-	}
 	if len(tracked.probeKeys) > 0 {
 		tracked.probeCursor = (tracked.probeCursor + probeCount) % len(tracked.probeKeys)
 	}
-	if noChanges {
+	if tracked.schema.splitMetadata {
+		for _, workspaceID := range workspaceBatch {
+			if _, selected := selectedWorkspaces[workspaceID]; !selected {
+				tracked.workspaceCheckedAt[workspaceID] = checkedAt
+			}
+		}
+		if len(tracked.workspaceIDs) > 0 {
+			tracked.workspaceCursor =
+				(tracked.workspaceCursor + len(workspaceBatch)) % len(tracked.workspaceIDs)
+		}
+	} else if noChanges {
 		tracked.checkedAt = checkedAt
 	}
-	t.containers[container] = tracked
 }
 
 func (t *omnigentChangeTracker) parseMember(
@@ -615,7 +657,7 @@ func (t *omnigentChangeTracker) parseMember(
 	}
 	meta, exists, metaErr := loadOmnigentConversationMeta(conn, schema, member)
 	if metaErr == nil {
-		t.observe(src.Container, schema, member.key(schema), meta, exists)
+		t.observe(src.Container, schema, member, meta, exists)
 	}
 	return result, nil
 }
@@ -626,6 +668,8 @@ func (t *omnigentChangeTracker) replace(
 	tracked := omnigentTrackedContainer{
 		schema: schema, metas: make(map[string]omnigentMeta, len(metas)),
 		checkedAt: time.Now().Unix(), count: len(metas),
+		workspaceCheckedAt: make(map[int64]int64),
+		workspaceCounts:    make(map[int64]int),
 	}
 	for _, meta := range metas {
 		key := meta.member().key(schema)
@@ -634,15 +678,42 @@ func (t *omnigentChangeTracker) replace(
 		if meta.rowID > tracked.maxRowID {
 			tracked.maxRowID = meta.rowID
 		}
+		if schema.splitMetadata {
+			tracked.workspaceCounts[meta.workspaceID]++
+		}
 	}
 	slices.Sort(tracked.probeKeys)
+	for workspaceID := range tracked.workspaceCounts {
+		tracked.workspaceIDs = append(tracked.workspaceIDs, workspaceID)
+		tracked.workspaceCheckedAt[workspaceID] = tracked.checkedAt
+	}
+	slices.Sort(tracked.workspaceIDs)
 	t.mu.Lock()
+	previous, hadPrevious := t.containers[container]
+	if hadPrevious {
+		currentIDs := make(map[string]struct{}, len(tracked.metas))
+		for key := range tracked.metas {
+			currentIDs[omnigentIDPrefix+key] = struct{}{}
+		}
+		var excluded []string
+		for key := range previous.metas {
+			id := omnigentIDPrefix + key
+			if _, present := currentIDs[id]; !present {
+				excluded = append(excluded, id)
+			}
+		}
+		slices.Sort(excluded)
+		t.pendingExclusions[container] = excluded
+	} else {
+		delete(t.pendingExclusions, container)
+	}
 	t.containers[container] = tracked
 	t.mu.Unlock()
 }
 
 func (t *omnigentChangeTracker) observe(
-	container string, schema omnigentSchema, key string, meta omnigentMeta, exists bool,
+	container string, schema omnigentSchema, member omnigentMemberID,
+	meta omnigentMeta, exists bool,
 ) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -650,9 +721,17 @@ func (t *omnigentChangeTracker) observe(
 	if !ok || tracked.schema != schema {
 		tracked = omnigentTrackedContainer{
 			schema: schema, metas: make(map[string]omnigentMeta),
+			workspaceCheckedAt: make(map[int64]int64),
+			workspaceCounts:    make(map[int64]int),
 		}
 	}
-	tracked.checkedAt = time.Now().Unix()
+	observedAt := time.Now().Unix()
+	if schema.splitMetadata {
+		tracked.workspaceCheckedAt[member.workspaceID] = observedAt
+	} else {
+		tracked.checkedAt = observedAt
+	}
+	key := member.key(schema)
 	_, wasPresent := tracked.metas[key]
 	if exists {
 		tracked.metas[key] = meta
@@ -660,14 +739,39 @@ func (t *omnigentChangeTracker) observe(
 			tracked.count++
 			tracked.probeKeys = append(tracked.probeKeys, key)
 			slices.Sort(tracked.probeKeys)
+			if schema.splitMetadata {
+				if tracked.workspaceCounts[meta.workspaceID] == 0 {
+					tracked.workspaceIDs = append(tracked.workspaceIDs, meta.workspaceID)
+					slices.Sort(tracked.workspaceIDs)
+				}
+				tracked.workspaceCounts[meta.workspaceID]++
+			}
 		}
 		if meta.rowID > tracked.maxRowID {
 			tracked.maxRowID = meta.rowID
 		}
 	} else {
+		previous := tracked.metas[key]
 		delete(tracked.metas, key)
 		if wasPresent && tracked.count > 0 {
 			tracked.count--
+		}
+		if wasPresent && schema.splitMetadata {
+			workspaceID := previous.workspaceID
+			tracked.workspaceCounts[workspaceID]--
+			if tracked.workspaceCounts[workspaceID] == 0 {
+				delete(tracked.workspaceCounts, workspaceID)
+				delete(tracked.workspaceCheckedAt, workspaceID)
+				tracked.workspaceIDs = slices.DeleteFunc(
+					tracked.workspaceIDs,
+					func(candidate int64) bool { return candidate == workspaceID },
+				)
+				if len(tracked.workspaceIDs) == 0 {
+					tracked.workspaceCursor = 0
+				} else {
+					tracked.workspaceCursor %= len(tracked.workspaceIDs)
+				}
+			}
 		}
 		tracked.probeKeys = slices.DeleteFunc(
 			tracked.probeKeys, func(candidate string) bool { return candidate == key },

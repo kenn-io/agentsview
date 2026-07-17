@@ -289,7 +289,10 @@ directory.
 Omnigent sessions are read from `~/.omnigent/chat.db`. AgentsView creates one
 session per conversation and supports older single-table and newer co-located
 split-table schemas. Set `OMNIGENT_DIR` or `omnigent_dirs` to override the
-default directory.
+default directory. Filesystem-event sync follows Omnigent's `updated_at`
+updates and checks bounded batches of conversations and workspaces. The
+periodic full sync reconciles deletions and direct database edits that do not
+advance `updated_at`; a detected schema-generation change is reparsed in full.
 
 **VS Code Copilot default directories** vary by platform:
 
