@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -2988,6 +2989,27 @@ func TestProviderProcessCacheKeyCodexIncludesContentHash(t *testing.T) {
 	assert.Equal(t, path+"?source_hash=second-content-hash", second)
 	assert.NotEqual(t, first, second,
 		"same-stat content rewrites must not reuse a rowless skip entry")
+}
+
+func TestProviderProcessCacheKeyOmnigentContainerIncludesDataVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	file := parser.DiscoveredFile{Path: path, Agent: parser.AgentOmnigent}
+	source := parser.SourceRef{
+		Provider: parser.AgentOmnigent, Key: path,
+		DisplayPath: path, FingerprintKey: path,
+	}
+	fingerprint := parser.SourceFingerprint{
+		Key: path, Hash: "container-content-hash",
+	}
+
+	key := providerProcessCacheKey(file, source, fingerprint)
+	legacy := path + "?source_hash=container-content-hash"
+	assert.Equal(t, legacy+"&data_version="+strconv.Itoa(db.CurrentDataVersion()), key)
+
+	restarted := &Engine{skipCache: map[string]int64{legacy: 123}}
+	_, staleHit := restarted.skipCache[key]
+	assert.False(t, staleHit,
+		"a persisted whole-container entry from an older parser version must miss")
 }
 
 func (p *incrementalRequestRecorder) Parse(

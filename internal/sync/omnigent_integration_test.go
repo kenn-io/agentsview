@@ -154,6 +154,41 @@ func writeOmnigentSyncDB(t *testing.T, root string, count int) string {
 	return path
 }
 
+func syncOmnigentArchive(
+	t *testing.T, engine *sync.Engine, archive *db.DB, want int,
+) {
+	t.Helper()
+	maxPasses := (want+omnigentMemberBatchForTest-1)/omnigentMemberBatchForTest + 2
+	for range maxPasses {
+		engine.SyncAll(context.Background(), nil)
+		stats := engine.LastSyncStats()
+		require.Zero(t, stats.Failed)
+		require.LessOrEqual(t, stats.Synced, omnigentMemberBatchForTest,
+			"each initialization pass must remain bounded")
+		page, err := archive.ListSessions(context.Background(), db.SessionFilter{
+			Agent:           string(parser.AgentOmnigent),
+			IncludeChildren: true,
+			Limit:           1,
+		})
+		require.NoError(t, err)
+		if page.Total == want {
+			settlePasses := (want+omnigentMemberBatchForTest-1)/omnigentMemberBatchForTest + 1
+			for range settlePasses {
+				engine.SyncAll(context.Background(), nil)
+				stats = engine.LastSyncStats()
+				require.Zero(t, stats.Failed)
+				require.Zero(t, stats.Synced,
+					"initial reconciliation must not rewrite unchanged sessions")
+				require.LessOrEqual(t, stats.TotalSessions, omnigentMemberBatchForTest,
+					"initial reconciliation must remain bounded")
+			}
+			return
+		}
+	}
+	require.FailNow(t, "Omnigent archive did not finish bounded initialization",
+		"wanted %d sessions", want)
+}
+
 func splitSQLStatements(ddl string) []string {
 	var statements []string
 	start := 0
@@ -185,8 +220,7 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 				},
 				Machine: "local",
 			})
-			engine.SyncAll(context.Background(), nil)
-			require.Equal(t, archiveSize, engine.LastSyncStats().Synced)
+			syncOmnigentArchive(t, engine, archive, archiveSize)
 			engine.SyncAll(context.Background(), nil)
 			assert.Zero(t, engine.LastSyncStats().Synced,
 				"unchanged full sync should not rewrite member sessions")
@@ -240,8 +274,8 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NoError(t, err)
 			_, err = tx.Exec(`INSERT INTO conversations
 				(id, created_at, updated_at, title, kind, root_conversation_id)
-				VALUES ('replacement', 1, 1800000001, 'replacement',
-					'default', 'replacement')`)
+				VALUES ('replacement', 1, ?, 'replacement',
+					'default', 'replacement')`, time.Now().Unix())
 			require.NoError(t, err)
 			_, err = tx.Exec(`INSERT INTO conversation_items
 				(id, conversation_id, position, type, data, search_text)
@@ -252,20 +286,26 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NoError(t, writer.Close())
 
 			var deleted *db.Session
-			for range (archiveSize+omnigentMemberBatchForTest-1)/omnigentMemberBatchForTest + 1 {
-				engine.SyncPaths([]string{dbPath})
+			var replacement *db.Session
+			maxPasses := 2*(archiveSize+omnigentMemberBatchForTest-1)/omnigentMemberBatchForTest + 3
+			for pass := range maxPasses {
+				if pass == 0 {
+					engine.SyncPaths([]string{dbPath})
+				} else {
+					engine.SyncAll(context.Background(), nil)
+				}
 				deleted, err = archive.GetSession(
 					context.Background(), "omnigent:conv_0001")
 				require.NoError(t, err)
-				if deleted == nil {
+				replacement, err = archive.GetSession(
+					context.Background(), "omnigent:replacement")
+				require.NoError(t, err)
+				if deleted == nil && replacement != nil {
 					break
 				}
 			}
 			assert.Nil(t, deleted,
 				"bounded rotating probes should eventually retire a deleted conversation")
-			replacement, err := archive.GetSession(
-				context.Background(), "omnigent:replacement")
-			require.NoError(t, err)
 			require.NotNil(t, replacement)
 		})
 	}
@@ -283,8 +323,8 @@ func TestSyncOmnigentColdChangedPathAdvancesPastFreshArchiveMembers(t *testing.T
 		AgentDirs: map[parser.AgentType][]string{parser.AgentOmnigent: {root}},
 		Machine:   "local",
 	})
-	seedEngine.SyncAll(context.Background(), nil)
-	require.Equal(t, archiveSize, seedEngine.LastSyncStats().Synced)
+	syncOmnigentArchive(t, seedEngine, archive, archiveSize)
+	seedEngine.Close()
 
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -339,7 +379,7 @@ func TestSyncOmnigentColdChangedPathAdvancesPastFreshArchiveMembers(t *testing.T
 	assert.Nil(t, deleted)
 }
 
-func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
+func TestSyncOmnigentUnchangedAfterBoundedInitializationDoesNoWork(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -358,8 +398,7 @@ func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
 		Machine:           "local",
 		ProviderFactories: []parser.ProviderFactory{factory},
 	})
-	engine.SyncAll(context.Background(), nil)
-	require.Equal(t, int64(1), parseCount.Load())
+	syncOmnigentArchive(t, engine, archive, 200)
 
 	parseCount.Store(0)
 	engine.SyncAll(context.Background(), nil)
@@ -367,7 +406,7 @@ func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
 		"unchanged container must not reparse every conversation")
 }
 
-func TestSyncOmnigentFreshTrackerUsesWarmContainerCache(t *testing.T) {
+func TestSyncOmnigentFreshTrackerWarmStartIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -381,7 +420,7 @@ func TestSyncOmnigentFreshTrackerUsesWarmContainerCache(t *testing.T) {
 		Machine:           "local",
 		ProviderFactories: []parser.ProviderFactory{omnigentDefaultProviderFactory(t)},
 	})
-	first.SyncAll(context.Background(), nil)
+	syncOmnigentArchive(t, first, archive, 200)
 	first.Close()
 
 	var parseCount atomic.Int64
@@ -397,8 +436,10 @@ func TestSyncOmnigentFreshTrackerUsesWarmContainerCache(t *testing.T) {
 	})
 	defer second.Close()
 	second.SyncAll(context.Background(), nil)
-	assert.Zero(t, parseCount.Load(),
-		"a fresh tracker should seed without defeating the persisted cache")
+	assert.LessOrEqual(t, parseCount.Load(), int64(omnigentMemberBatchForTest),
+		"a fresh tracker must not materialize the stored archive")
+	assert.Zero(t, second.LastSyncStats().Synced,
+		"warm-start discovery should not rewrite unchanged sessions")
 
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -408,7 +449,7 @@ func TestSyncOmnigentFreshTrackerUsesWarmContainerCache(t *testing.T) {
 	require.NoError(t, writer.Close())
 	parseCount.Store(0)
 	second.SyncAll(context.Background(), nil)
-	assert.Equal(t, int64(32), parseCount.Load(),
+	assert.LessOrEqual(t, parseCount.Load(), int64(omnigentMemberBatchForTest),
 		"the next change should use bounded member discovery")
 }
 
@@ -466,7 +507,7 @@ func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
 				Machine:           "local",
 				ProviderFactories: []parser.ProviderFactory{factory},
 			})
-			engine.SyncAll(context.Background(), nil)
+			syncOmnigentArchive(t, engine, archive, archiveSize)
 
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
@@ -483,8 +524,9 @@ func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
 			parseCount.Store(0)
 			resultCount.Store(0)
 			engine.SyncAll(context.Background(), nil)
-			assert.Equal(t, boundedMemberBatch, parseCount.Load())
-			assert.Equal(t, boundedMemberBatch, resultCount.Load(),
+			assert.Positive(t, parseCount.Load())
+			assert.LessOrEqual(t, parseCount.Load(), boundedMemberBatch)
+			assert.Equal(t, parseCount.Load(), resultCount.Load(),
 				"periodic work must not grow with unchanged archive size")
 			assert.Equal(t, 1, engine.LastSyncStats().Synced)
 
@@ -530,6 +572,15 @@ func TestSyncOmnigentRetriesFailedDirectEditProbe(t *testing.T) {
 		failPath: parser.VirtualSourcePath(dbPath, "conv_0000"),
 		failOnce: &failed,
 	}
+	seedEngine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	syncOmnigentArchive(t, seedEngine, archive, 65)
+	seedEngine.Close()
+
 	engine := sync.NewEngine(archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
@@ -538,8 +589,6 @@ func TestSyncOmnigentRetriesFailedDirectEditProbe(t *testing.T) {
 		ProviderFactories: []parser.ProviderFactory{factory},
 	})
 	defer engine.Close()
-	engine.SyncAll(context.Background(), nil)
-
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = writer.Exec(`UPDATE conversation_items
@@ -550,7 +599,7 @@ func TestSyncOmnigentRetriesFailedDirectEditProbe(t *testing.T) {
 	engine.SyncAll(context.Background(), nil)
 	assert.Equal(t, 1, engine.LastSyncStats().Failed)
 
-	engine.SyncAll(context.Background(), nil)
+	syncOmnigentArchive(t, engine, archive, 65)
 	messages, err := archive.GetMessages(
 		context.Background(), "omnigent:conv_0000", 0, 10, true,
 	)
@@ -961,7 +1010,7 @@ func TestSyncOmnigentPeriodicFullSyncReconcilesDeletedConversation(t *testing.T)
 		},
 		Machine: "local",
 	})
-	engine.SyncAll(context.Background(), nil)
+	syncOmnigentArchive(t, engine, archive, 65)
 	deleted, err := archive.GetSession(context.Background(), "omnigent:conv_0064")
 	require.NoError(t, err)
 	require.NotNil(t, deleted)
@@ -981,9 +1030,14 @@ func TestSyncOmnigentPeriodicFullSyncReconcilesDeletedConversation(t *testing.T)
 		},
 		Machine: "local",
 	})
-	engine.SyncAll(context.Background(), nil)
-	deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0064")
-	require.NoError(t, err)
+	for range 5 {
+		engine.SyncAll(context.Background(), nil)
+		deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0064")
+		require.NoError(t, err)
+		if deleted == nil {
+			break
+		}
+	}
 	assert.Nil(t, deleted)
 }
 

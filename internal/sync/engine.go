@@ -881,12 +881,17 @@ func (e *Engine) changedPathStoredSourcePaths(
 		paths, err := e.db.ListStoredSourcePathHints(string(agent), []string{watchRoot})
 		return paths, false, err
 	}
-	return e.nextOmnigentStoredHintPage(watchRoot, true)
+	return e.nextOmnigentStoredHintPage(
+		watchRoot, true, omnigentStoredHintBatchSize,
+	)
 }
 
 func (e *Engine) nextOmnigentStoredHintPage(
-	watchRoot string, activate bool,
+	watchRoot string, activate bool, limit int,
 ) ([]string, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
 	key := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(watchRoot)
 	e.omnigentHintMu.Lock()
 	defer e.omnigentHintMu.Unlock()
@@ -908,7 +913,7 @@ func (e *Engine) nextOmnigentStoredHintPage(
 	}
 	paths, err := e.db.ListStoredSourcePathHintPage(
 		string(parser.AgentOmnigent), watchRoot, cursor.after,
-		omnigentStoredHintBatchSize,
+		limit,
 	)
 	if err != nil {
 		return nil, false, err
@@ -924,8 +929,8 @@ func (e *Engine) nextOmnigentStoredHintPage(
 	}
 	cursor.inFlight = true
 	cursor.nextAfter = ""
-	cursor.completeOnDone = len(paths) < omnigentStoredHintBatchSize
-	if len(paths) == omnigentStoredHintBatchSize {
+	cursor.completeOnDone = len(paths) < limit
+	if len(paths) == limit {
 		cursor.nextAfter = paths[len(paths)-1]
 	}
 	e.omnigentHintCursors[key] = cursor
@@ -2917,8 +2922,15 @@ func (e *Engine) discoverProviderSources(
 			Machine:            e.machine,
 			ForceFullDiscovery: forceFullDiscovery,
 		})
+		reconcileOmnigentFirst := !forceFullDiscovery &&
+			agentType == parser.AgentOmnigent &&
+			e.omnigentStoredHintSweepActive(filteredRoots)
 		tDiscover := time.Now()
-		sources, err := provider.Discover(ctx)
+		var sources []parser.SourceRef
+		var err error
+		if !reconcileOmnigentFirst {
+			sources, err = provider.Discover(ctx)
+		}
 		// Log only providers whose discovery is slow enough to matter, so a
 		// single pathological provider (e.g. a per-source map rebuild) stands
 		// out instead of hiding inside the aggregate discovery timing.
@@ -2936,9 +2948,30 @@ func (e *Engine) discoverProviderSources(
 		currentSources := providerSourcePathSet(sources)
 		forceParseSources := map[string]struct{}{}
 		if !forceFullDiscovery && agentType == parser.AgentOmnigent {
+			activatedRoots := make(map[string]struct{})
+			for _, source := range sources {
+				if !source.ReconcileStoredHints {
+					continue
+				}
+				container := providerDiscoveredPath(source)
+				if parsed, _, virtual := parser.ParseOmnigentVirtualSourcePath(container); virtual {
+					container = parsed
+				}
+				watchRoot := filepath.Dir(container)
+				if _, activated := activatedRoots[watchRoot]; activated {
+					continue
+				}
+				activatedRoots[watchRoot] = struct{}{}
+				e.activateOmnigentStoredHintSweep(watchRoot)
+			}
+			sources = slices.DeleteFunc(sources, func(source parser.SourceRef) bool {
+				return source.ReconcileOnly
+			})
+			currentSources = providerSourcePathSet(sources)
 			reconciliationSources, reconciliationFailures :=
 				e.discoverOmnigentReconciliationSources(
 					ctx, provider, currentSources,
+					max(omnigentStoredHintBatchSize-len(sources), 0),
 				)
 			sources = append(sources, reconciliationSources...)
 			failures += reconciliationFailures
@@ -3116,7 +3149,11 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 	ctx context.Context,
 	provider parser.Provider,
 	currentSources map[string]struct{},
+	limit int,
 ) ([]parser.SourceRef, int) {
+	if limit <= 0 {
+		return nil, 0
+	}
 	plan, err := provider.WatchPlan(ctx)
 	if err != nil {
 		log.Printf("%s provider reconciliation watch plan: %v", parser.AgentOmnigent, err)
@@ -3125,7 +3162,9 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 	var sources []parser.SourceRef
 	var failures int
 	for _, watchRoot := range plan.Roots {
-		hints, claimed, err := e.nextOmnigentStoredHintPage(watchRoot.Path, false)
+		hints, claimed, err := e.nextOmnigentStoredHintPage(
+			watchRoot.Path, false, limit-len(sources),
+		)
 		if err != nil {
 			log.Printf("%s provider reconciliation hints: %v", parser.AgentOmnigent, err)
 			failures++
@@ -3147,7 +3186,7 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 				ctx,
 				parser.ChangedPathRequest{
 					Path:              container,
-					EventKind:         "poll",
+					EventKind:         parser.ChangedPathEventReconcile,
 					WatchRoot:         watchRoot.Path,
 					StoredSourcePaths: hints,
 				},
@@ -5399,12 +5438,22 @@ func providerProcessCacheKey(
 	if agent == "" {
 		agent = source.Provider
 	}
-	key := ""
-	if key := plannedSkipKey(source, fingerprint); key != "" {
-		return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	key := plannedSkipKey(source, fingerprint)
+	if key == "" {
+		key = file.Path
 	}
-	key = file.Path
-	return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	key = providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	if agent == parser.AgentOmnigent {
+		path := providerDiscoveredPath(source)
+		if _, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); !virtual {
+			separator := "?"
+			if strings.Contains(key, "?") {
+				separator = "&"
+			}
+			key += separator + "data_version=" + strconv.Itoa(db.CurrentDataVersion())
+		}
+	}
+	return key
 }
 
 func providerProcessCacheKeyWithHash(
@@ -5460,9 +5509,9 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 		path := providerDiscoveredPath(source)
 		if _, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); !virtual {
 			// Whole-container Omnigent sources have only virtual member rows in
-			// the archive. The cache key already includes the physical database
-			// hash, so an exact cache hit is authoritative without a nonexistent
-			// stored container row to validate against.
+			// the archive. Their cache identity includes both the physical database
+			// hash and parser data version, so a restart cannot accept an entry from
+			// an older parser version.
 			return true
 		}
 	}
@@ -7311,6 +7360,18 @@ func (e *Engine) activateOmnigentStoredHintSweep(watchRoot string) {
 		cursor.after = ""
 	}
 	e.omnigentHintCursors[key] = cursor
+}
+
+func (e *Engine) omnigentStoredHintSweepActive(watchRoots []string) bool {
+	e.omnigentHintMu.Lock()
+	defer e.omnigentHintMu.Unlock()
+	for _, watchRoot := range watchRoots {
+		key := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(watchRoot)
+		if e.omnigentHintCursors[key].active {
+			return true
+		}
+	}
+	return false
 }
 
 func omnigentRetryContainer(path string) (string, bool) {

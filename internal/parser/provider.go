@@ -190,6 +190,15 @@ type SourceRef struct {
 	// and must not be used for skip-cache or data-version freshness, which go
 	// through Fingerprint.
 	DiscoveryMTimeNS int64
+	// ReconcileStoredHints asks the engine to schedule bounded reconciliation
+	// against archived source paths. Shared-container providers set this only
+	// after observing a physical change that can include member deletions; it
+	// must not trigger an archive-wide hint query during ordinary discovery.
+	ReconcileStoredHints bool
+	// ReconcileOnly marks a scheduling signal rather than a parseable source.
+	// It is valid only together with ReconcileStoredHints and is removed after
+	// the engine activates the requested hint sweep.
+	ReconcileOnly bool
 	// Opaque is in-memory-only source state: never persisted and never required
 	// for lookup from persisted rows, so any source that must survive a restart
 	// has to be recoverable from Key, DisplayPath, FingerprintKey,
@@ -245,6 +254,11 @@ type ChangedPathRequest struct {
 // it can safely retain. Providers that do not recognize it may treat it like a
 // normal changed-path event.
 const ChangedPathEventRecovery = "recovery"
+
+// ChangedPathEventReconcile asks a provider to classify only the supplied
+// archived source hints. It prevents a reconciliation lane from also advancing
+// ordinary changed-member discovery and exceeding the caller's shared budget.
+const ChangedPathEventReconcile = "reconcile"
 
 // FindSourceRequest contains lookup inputs and persisted source hints for
 // provider-owned source resolution. RawSessionID and FullSessionID identify the

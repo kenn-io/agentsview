@@ -246,13 +246,17 @@ func TestOmnigentStoredHintPageRetriesFailureAndDeactivatesAfterCompletion(t *te
 	require.Equal(t, []string{path}, first)
 	engine.finishOmnigentStoredHintPage(root, false)
 
-	retry, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	retry, claimed, err := engine.nextOmnigentStoredHintPage(
+		root, false, omnigentStoredHintBatchSize,
+	)
 	require.NoError(t, err)
 	require.True(t, claimed)
 	assert.Equal(t, first, retry)
 	engine.finishOmnigentStoredHintPage(root, true)
 
-	remaining, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	remaining, claimed, err := engine.nextOmnigentStoredHintPage(
+		root, false, omnigentStoredHintBatchSize,
+	)
 	require.NoError(t, err)
 	assert.False(t, claimed)
 	assert.Empty(t, remaining)
@@ -300,13 +304,17 @@ func TestOmnigentStoredHintActivationDuringFinalPageRestartsSweep(t *testing.T) 
 	assert.Empty(t, concurrent)
 	engine.finishOmnigentStoredHintPage(root, true)
 
-	restarted, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	restarted, claimed, err := engine.nextOmnigentStoredHintPage(
+		root, false, omnigentStoredHintBatchSize,
+	)
 	require.NoError(t, err)
 	require.True(t, claimed)
 	assert.Equal(t, first, restarted)
 	engine.finishOmnigentStoredHintPage(root, true)
 
-	remaining, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	remaining, claimed, err := engine.nextOmnigentStoredHintPage(
+		root, false, omnigentStoredHintBatchSize,
+	)
 	require.NoError(t, err)
 	assert.False(t, claimed)
 	assert.Empty(t, remaining)

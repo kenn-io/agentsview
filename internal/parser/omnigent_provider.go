@@ -16,28 +16,22 @@ import (
 )
 
 const (
-	omnigentChangedBatchSize   = 32
-	omnigentProbeBatchSize     = 32
-	omnigentWorkspaceBatchSize = 32
+	omnigentChangedBatchSize     = 32
+	omnigentFastChangedBatchSize = 8
+	omnigentProbeBatchSize       = omnigentChangedBatchSize
 )
 
 type omnigentTrackedContainer struct {
-	schema             omnigentSchema
-	metas              map[string]omnigentMeta
-	initializing       bool
-	recovering         bool
-	recoveryBoundary   bool
-	initialScanRowID   int64
-	checkedAt          int64
-	maxRowID           int64
-	probeKeys          []string
-	probeCursor        int
-	probeRemaining     int
-	compositeMTimeNS   int64
-	workspaceIDs       []int64
-	workspaceCursor    int
-	workspaceCheckedAt map[int64]int64
-	workspaceCounts    map[int64]int
+	schema           omnigentSchema
+	initializing     bool
+	recovering       bool
+	recoveryBoundary bool
+	initialScanRowID int64
+	checkedAt        int64
+	compositeMTimeNS int64
+	probeRowID       int64
+	probeActive      bool
+	probeRepeat      bool
 }
 
 type omnigentChangeTracker struct {
@@ -53,10 +47,10 @@ func newOmnigentChangeTracker() *omnigentChangeTracker {
 	}
 }
 
-// omnigent stores every conversation in one shared SQLite database (chat.db).
-// It is a multi-session container provider: initial discovery surfaces the
-// database as a single source, then scheduled discovery emits bounded changed
-// member batches addressed by "<db>#<conversationID>" virtual paths.
+// Omnigent stores every conversation in one shared SQLite database (chat.db).
+// The provider emits bounded member batches addressed by
+// "<db>#<conversationID>" virtual paths. A complete database of at most one
+// batch may use one whole-container source for authoritative reconciliation.
 func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 	tracker := newOmnigentChangeTracker()
 	return NewMultiSessionProviderFactory(
@@ -159,49 +153,20 @@ func (t *omnigentChangeTracker) discoverSources(
 			continue
 		}
 		t.mu.Lock()
-		_, initialized := t.containers[container]
 		_, recoveryPending := t.recoveryPending[container]
 		t.mu.Unlock()
 		if recoveryPending {
-			continue
-		}
-		if !initialized {
-			t.seedContainer(container)
-		}
-		if !initialized {
-			matches = append(matches, whole)
 			continue
 		}
 		changed, err := t.changedMembers(context.Background(), root, ChangedPathRequest{
 			Path: container, EventKind: "poll",
 		})
 		if err != nil {
-			// Fall back to the authoritative container source so operational
-			// failures are surfaced by fingerprinting/parsing instead of turning
-			// a failed discovery probe into a clean empty sync.
-			matches = append(matches, whole)
 			continue
 		}
 		matches = append(matches, changed...)
 	}
 	return matches
-}
-
-func (t *omnigentChangeTracker) seedContainer(container string) {
-	conn, err := openOmnigentDB(container)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	schema, err := detectOmnigentSchema(conn)
-	if err != nil {
-		return
-	}
-	metas, err := listOmnigentConversationMetas(conn, schema)
-	if err != nil {
-		return
-	}
-	t.replace(container, schema, metas)
 }
 
 func omnigentWatchRoots(roots []string) []WatchRoot {
@@ -275,7 +240,7 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 	if src.MemberID == "" {
-		if compositeMtime, err := sqliteDBCompositeMtime(src.Container); err == nil {
+		if compositeMtime, err := omnigentDBCompositeMtime(src.Container); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
 		fingerprint.Hash, err = hashJSONLSourceFile(src.Container)
@@ -349,33 +314,6 @@ func loadOmnigentConversationMeta(
 	return meta, true, nil
 }
 
-func loadOmnigentConversationMetaByRowID(
-	conn *sql.DB, schema omnigentSchema, rowID int64,
-) (omnigentMeta, bool, error) {
-	query := omnigentConversationMetaByRowIDQuery(schema)
-	var meta omnigentMeta
-	err := conn.QueryRow(query, rowID).Scan(
-		&meta.rowID, &meta.workspaceID, &meta.rawID, &meta.updatedAt,
-	)
-	if err == sql.ErrNoRows {
-		return omnigentMeta{}, false, nil
-	}
-	if err != nil {
-		return omnigentMeta{}, false,
-			fmt.Errorf("loading omnigent conversation row occupant: %w", err)
-	}
-	return meta, true, nil
-}
-
-func omnigentConversationMetaByRowIDQuery(schema omnigentSchema) string {
-	if schema.splitMetadata {
-		return `SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0)
-			FROM conversations c WHERE c.rowid = ?`
-	}
-	return `SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0)
-		FROM conversations c WHERE c.rowid = ?`
-}
-
 func (t *omnigentChangeTracker) changedMembers(
 	ctx context.Context, root string, req ChangedPathRequest,
 ) ([]multiSessionMatch, error) {
@@ -422,11 +360,14 @@ func (t *omnigentChangeTracker) changedMembers(
 	if err != nil {
 		return nil, err
 	}
-	tombstones, err := omnigentMissingStoredMatches(
-		ctx, conn, root, match.Container, schema, req.StoredSourcePaths,
+	storedMatches, err := omnigentStoredSourceMatches(
+		ctx, root, match.Container, schema, req.StoredSourcePaths,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if req.EventKind == ChangedPathEventReconcile {
+		return storedMatches, nil
 	}
 
 	t.mu.Lock()
@@ -440,161 +381,125 @@ func (t *omnigentChangeTracker) changedMembers(
 			)
 		}
 		t.mu.Unlock()
-		// Member identities and joins change across schema generations. Reparse
-		// the whole container so every new identity is emitted and legacy IDs are
-		// retired even when the migrated rows reuse rowids and old timestamps.
-		return []multiSessionMatch{match}, nil
+		return t.initializeColdContainer(
+			ctx, root, match, req.StoredSourcePaths,
+		)
 	}
 	defer t.mu.Unlock()
 	if tracked.initializing {
+		capacity := max(omnigentChangedBatchSize-len(storedMatches), 0)
+		if capacity == 0 {
+			return storedMatches, nil
+		}
 		page, err := listOmnigentConversationMetasAfterRowID(
 			ctx, conn, schema, tracked.initialScanRowID,
-			omnigentChangedBatchSize+1,
+			capacity+1,
 		)
 		if err != nil {
 			return nil, err
 		}
 		batch := page
-		if len(batch) > omnigentChangedBatchSize {
-			batch = batch[:omnigentChangedBatchSize]
+		if len(batch) > capacity {
+			batch = batch[:capacity]
 		}
 		if len(batch) > 0 {
 			tracked.initialScanRowID = batch[len(batch)-1].rowID
-			addOmnigentTrackedMetas(&tracked, batch)
 		}
-		more := len(page) > omnigentChangedBatchSize
+		more := len(page) > capacity
 		tracked.initializing = more
 		if tracked.recovering {
 			tracked.recovering = more
-			tracked.recoveryBoundary = !more && len(batch) == omnigentChangedBatchSize
+			tracked.recoveryBoundary = !more && len(batch) == capacity
 		}
 		t.containers[match.Container] = tracked
-		return appendOmnigentMatches(
-			omnigentMatches(match.Container, schema, batch), tombstones,
-		), nil
+		out := appendOmnigentMatches(
+			omnigentMatches(match.Container, schema, batch), storedMatches,
+		)
+		if !more && len(req.StoredSourcePaths) == 0 {
+			if len(out) == 0 {
+				match.ReconcileStoredHints = true
+				match.ReconcileOnly = true
+				return []multiSessionMatch{match}, nil
+			}
+			for i := range out {
+				out[i].ReconcileStoredHints = true
+			}
+		}
+		return out, nil
 	}
-	compositeMTimeNS, err := sqliteDBCompositeMtime(match.Container)
+	compositeMTimeNS, err := omnigentDBCompositeMtime(match.Container)
 	if err != nil {
 		return nil, err
 	}
-	if compositeMTimeNS != tracked.compositeMTimeNS {
+	changedEvent := req.EventKind != "" && req.EventKind != "poll"
+	containerChanged := compositeMTimeNS != tracked.compositeMTimeNS || changedEvent
+	if containerChanged {
 		tracked.compositeMTimeNS = compositeMTimeNS
-		tracked.probeRemaining = len(tracked.probeKeys)
+		if tracked.probeActive {
+			tracked.probeRepeat = true
+		} else {
+			tracked.probeActive = true
+			tracked.probeRowID = 0
+		}
 	}
-
 	checkedAt := time.Now().Unix()
-	// Omnigent's store advances updated_at on supported item appends and title
-	// changes. Use the last successful wall-clock observation as the cursor,
-	// rather than the greatest source timestamp: a future-dated row must not
-	// suppress every normally dated conversation. The one-second overlap covers
-	// multiple writes within the column's seconds precision.
-	var changed []omnigentMeta
-	workspaceBatch := omnigentWorkspaceBatch(tracked, schema)
-	if schema.splitMetadata {
-		for _, workspaceID := range workspaceBatch {
-			cutoff := max(tracked.workspaceCheckedAt[workspaceID]-1, 0)
-			workspaceMetas, err := listOmnigentConversationMetasSince(
-				ctx, conn, schema, []int64{workspaceID}, cutoff, checkedAt+1,
-				omnigentChangedBatchSize-len(changed),
-			)
-			if err != nil {
-				return nil, err
-			}
-			changed = append(changed, workspaceMetas...)
-			if len(changed) >= omnigentChangedBatchSize {
-				break
-			}
-		}
-	} else {
-		cutoff := max(tracked.checkedAt-1, 0)
-		changed, err = listOmnigentConversationMetasSince(
-			ctx, conn, schema, nil, cutoff, checkedAt+1,
-			omnigentChangedBatchSize,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
-	newRows, err := listOmnigentConversationMetasAfterRowID(
-		ctx, conn, schema, tracked.maxRowID, omnigentChangedBatchSize,
+	fastChanged, err := listOmnigentConversationMetasSince(
+		ctx, conn, schema, nil, max(tracked.checkedAt-1, 0), checkedAt+1,
+		omnigentFastChangedBatchSize,
 	)
 	if err != nil {
 		return nil, err
 	}
-	selected := make(map[string]omnigentMeta, len(changed)+len(newRows))
-	selectChanged := func(meta omnigentMeta) {
-		key := meta.member().key(schema)
-		previous, exists := tracked.metas[meta.member().key(schema)]
-		if !exists || previous.fingerprint() != meta.fingerprint() {
-			selected[key] = meta
-		}
+	if len(fastChanged) < omnigentFastChangedBatchSize {
+		tracked.checkedAt = checkedAt
 	}
-	for _, meta := range changed {
-		selectChanged(meta)
-	}
-	for _, meta := range newRows {
-		selectChanged(meta)
-	}
-
-	// A bounded rotating probe catches direct/imported transcript edits that
-	// bypass every conversation metadata invariant. A physical container change
-	// starts one complete probe cycle, spread across scheduled passes, so work per
-	// pass stays constant while every tracked member is eventually revisited.
-	probeCount := min(
-		omnigentProbeBatchSize,
-		len(tracked.probeKeys),
-		tracked.probeRemaining,
+	baseMatches := appendOmnigentMatches(
+		omnigentMatches(match.Container, schema, fastChanged), storedMatches,
 	)
-	for i := range probeCount {
-		key := tracked.probeKeys[(tracked.probeCursor+i)%len(tracked.probeKeys)]
-		previous, stillTracked := tracked.metas[key]
-		if !stillTracked {
-			continue
-		}
-		meta, exists, err := loadOmnigentConversationMeta(
-			conn, schema, previous.member(),
+	if len(baseMatches) > omnigentChangedBatchSize {
+		baseMatches = baseMatches[:omnigentChangedBatchSize]
+	}
+	capacity := max(omnigentChangedBatchSize-len(baseMatches), 0)
+	var metas []omnigentMeta
+	if tracked.probeActive && capacity > 0 {
+		page, err := listOmnigentConversationMetasAfterRowID(
+			ctx, conn, schema, tracked.probeRowID, capacity+1,
 		)
 		if err != nil {
 			return nil, err
 		}
-		if !exists {
-			selected[key] = previous
-			// SQLite may reuse a deleted rowid for a replacement whose old
-			// timestamp falls behind every change cursor. A point lookup finds
-			// that occupant without materializing the container membership.
-			replacement, replacementExists, err :=
-				loadOmnigentConversationMetaByRowID(conn, schema, previous.rowID)
-			if err != nil {
-				return nil, err
-			}
-			if replacementExists {
-				replacementKey := replacement.member().key(schema)
-				if replacementKey != key {
-					selected[replacementKey] = replacement
-				}
-			}
-			continue
+		metas = page
+		if len(metas) > capacity {
+			metas = metas[:capacity]
 		}
-		selected[key] = meta
+		if len(metas) > 0 {
+			tracked.probeRowID = metas[len(metas)-1].rowID
+		}
+		if len(page) <= capacity {
+			if tracked.probeRepeat {
+				tracked.probeRowID = 0
+				tracked.probeRepeat = false
+			} else {
+				tracked.probeActive = false
+				tracked.probeRowID = 0
+			}
+		}
 	}
-	tracked.probeRemaining -= probeCount
-	metas := make([]omnigentMeta, 0, len(selected))
-	for _, meta := range selected {
-		metas = append(metas, meta)
-	}
-	slices.SortFunc(metas, func(a, b omnigentMeta) int {
-		return strings.Compare(a.member().key(schema), b.member().key(schema))
-	})
-	selectedWorkspaces := make(map[int64]struct{}, len(metas))
-	for _, meta := range metas {
-		selectedWorkspaces[meta.workspaceID] = struct{}{}
-	}
-	advanceOmnigentClassification(&tracked, checkedAt, probeCount,
-		workspaceBatch, selectedWorkspaces, len(metas) == 0)
 	t.containers[match.Container] = tracked
-	return appendOmnigentMatches(
-		omnigentMatches(match.Container, schema, metas), tombstones,
-	), nil
+	out := appendOmnigentMatches(
+		omnigentMatches(match.Container, schema, metas), baseMatches,
+	)
+	if containerChanged && len(req.StoredSourcePaths) == 0 {
+		if len(out) == 0 {
+			match.ReconcileStoredHints = true
+			match.ReconcileOnly = true
+			return []multiSessionMatch{match}, nil
+		}
+		for i := range out {
+			out[i].ReconcileStoredHints = true
+		}
+	}
+	return out, nil
 }
 
 // initializeColdContainer establishes a bounded tracker foothold without
@@ -619,32 +524,38 @@ func (t *omnigentChangeTracker) initializeColdContainer(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	page, err := listOmnigentConversationMetasAfterRowID(
-		ctx, conn, schema, 0, omnigentChangedBatchSize+1,
+	storedMatches, err := omnigentStoredSourceMatches(
+		ctx, root, match.Container, schema, storedSourcePaths,
 	)
 	if err != nil {
 		return nil, err
 	}
-	if len(page) <= omnigentChangedBatchSize {
+	capacity := max(omnigentChangedBatchSize-len(storedMatches), 0)
+	page, err := listOmnigentConversationMetasAfterRowID(
+		ctx, conn, schema, 0, capacity+1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(storedMatches) == 0 && len(page) <= omnigentChangedBatchSize {
 		t.replace(match.Container, schema, page)
 		return []multiSessionMatch{match}, nil
 	}
-	batch := page[:omnigentChangedBatchSize]
+	batch := page
+	if len(batch) > capacity {
+		batch = batch[:capacity]
+	}
 	t.replace(match.Container, schema, batch)
 	t.mu.Lock()
 	tracked := t.containers[match.Container]
-	tracked.initializing = true
-	tracked.initialScanRowID = batch[len(batch)-1].rowID
+	tracked.initializing = len(page) > capacity || len(storedMatches) > 0
+	if len(batch) > 0 {
+		tracked.initialScanRowID = batch[len(batch)-1].rowID
+	}
 	t.containers[match.Container] = tracked
 	t.mu.Unlock()
-	tombstones, err := omnigentMissingStoredMatches(
-		ctx, conn, root, match.Container, schema, storedSourcePaths,
-	)
-	if err != nil {
-		return nil, err
-	}
 	return appendOmnigentMatches(
-		omnigentMatches(match.Container, schema, batch), tombstones,
+		omnigentMatches(match.Container, schema, batch), storedMatches,
 	), nil
 }
 
@@ -664,27 +575,28 @@ func (t *omnigentChangeTracker) initializeRecoveryContainer(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	storedMatches, err := omnigentStoredSourceMatches(
+		ctx, root, match.Container, schema, storedSourcePaths,
+	)
+	if err != nil {
+		return nil, err
+	}
+	capacity := max(omnigentChangedBatchSize-len(storedMatches), 0)
 	page, err := listOmnigentConversationMetasAfterRowID(
-		ctx, conn, schema, 0, omnigentChangedBatchSize+1,
+		ctx, conn, schema, 0, capacity+1,
 	)
 	if err != nil {
 		return nil, err
 	}
 	batch := page
-	if len(batch) > omnigentChangedBatchSize {
-		batch = batch[:omnigentChangedBatchSize]
-	}
-	tombstones, err := omnigentMissingStoredMatches(
-		ctx, conn, root, match.Container, schema, storedSourcePaths,
-	)
-	if err != nil {
-		return nil, err
+	if len(batch) > capacity {
+		batch = batch[:capacity]
 	}
 	tracked := newOmnigentTrackedContainer(match.Container, schema, batch)
-	more := len(page) > omnigentChangedBatchSize
+	more := len(page) > capacity || len(storedMatches) > 0
 	tracked.initializing = more
 	tracked.recovering = more
-	tracked.recoveryBoundary = !more && len(batch) == omnigentChangedBatchSize
+	tracked.recoveryBoundary = !more && len(batch) == capacity
 	if len(batch) > 0 {
 		tracked.initialScanRowID = batch[len(batch)-1].rowID
 	}
@@ -693,7 +605,7 @@ func (t *omnigentChangeTracker) initializeRecoveryContainer(
 	delete(t.recoveryPending, match.Container)
 	t.mu.Unlock()
 	return appendOmnigentMatches(
-		omnigentMatches(match.Container, schema, batch), tombstones,
+		omnigentMatches(match.Container, schema, batch), storedMatches,
 	), nil
 }
 
@@ -717,6 +629,28 @@ func listOmnigentConversationMetasSince(
 		 GROUP BY c.id
 		 ORDER BY c.updated_at, c.rowid`
 	if !schema.splitMetadata {
+		return queryOmnigentConversationMetas(
+			ctx, conn, query, updatedAfter, updatedThrough, limit,
+		)
+	}
+	if len(workspaceIDs) == 0 {
+		query = `
+			WITH selected AS (
+				SELECT rowid, workspace_id, id,
+				       COALESCE(updated_at, 0) AS updated_at
+				  FROM conversations
+				 WHERE updated_at >= ?
+				   AND updated_at <= ?
+				 ORDER BY updated_at, rowid
+				 LIMIT ?
+			)
+			SELECT c.rowid, c.workspace_id, c.id, c.updated_at,
+			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+			  FROM selected c
+			  LEFT JOIN conversation_items ci
+			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+			 GROUP BY c.workspace_id, c.id
+			 ORDER BY c.updated_at, c.rowid`
 		return queryOmnigentConversationMetas(
 			ctx, conn, query, updatedAfter, updatedThrough, limit,
 		)
@@ -774,17 +708,6 @@ func queryOmnigentConversationMetas(
 		metas = append(metas, meta)
 	}
 	return metas, rows.Err()
-}
-
-func omnigentWorkspaceBatch(
-	tracked omnigentTrackedContainer, schema omnigentSchema,
-) []int64 {
-	if !schema.splitMetadata || len(tracked.workspaceIDs) == 0 {
-		return nil
-	}
-	start := min(tracked.workspaceCursor, len(tracked.workspaceIDs)-1)
-	end := min(start+omnigentWorkspaceBatchSize, len(tracked.workspaceIDs))
-	return tracked.workspaceIDs[start:end]
 }
 
 func listOmnigentConversationMetasAfterRowID(
@@ -857,14 +780,14 @@ func appendOmnigentMatches(
 	return out
 }
 
-func omnigentMissingStoredMatches(
-	ctx context.Context, conn *sql.DB, root, container string, schema omnigentSchema,
+func omnigentStoredSourceMatches(
+	ctx context.Context, root, container string, schema omnigentSchema,
 	storedSourcePaths []string,
 ) ([]multiSessionMatch, error) {
 	if len(storedSourcePaths) == 0 {
 		return nil, nil
 	}
-	var missing []multiSessionMatch
+	var matches []multiSessionMatch
 	for _, storedPath := range storedSourcePaths {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -873,41 +796,12 @@ func omnigentMissingStoredMatches(
 		if !ok || match.MemberID == "" || !samePath(match.Container, container) {
 			continue
 		}
-		member, err := omnigentMemberForSchema(schema, match.MemberID)
-		if err != nil {
+		if _, err := omnigentMemberForSchema(schema, match.MemberID); err != nil {
 			continue
 		}
-		exists, err := omnigentConversationExistsInDB(ctx, conn, schema, member)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			missing = append(missing, match)
-		}
+		matches = append(matches, match)
 	}
-	return missing, nil
-}
-
-func omnigentConversationExistsInDB(
-	ctx context.Context, conn *sql.DB, schema omnigentSchema,
-	member omnigentMemberID,
-) (bool, error) {
-	query := `SELECT 1 FROM conversations WHERE id = ? LIMIT 1`
-	args := []any{member.rawID}
-	if schema.splitMetadata {
-		query = `SELECT 1 FROM conversations
-			WHERE workspace_id = ? AND id = ? LIMIT 1`
-		args = []any{member.workspaceID, member.rawID}
-	}
-	var one int
-	err := conn.QueryRowContext(ctx, query, args...).Scan(&one)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("checking omnigent conversation presence: %w", err)
-	}
-	return true, nil
+	return matches, nil
 }
 
 func (t *omnigentChangeTracker) parseContainer(
@@ -919,28 +813,6 @@ func (t *omnigentChangeTracker) parseContainer(
 	}
 	t.replace(src.Container, schema, metas)
 	return results, nil
-}
-
-func advanceOmnigentClassification(
-	tracked *omnigentTrackedContainer, checkedAt int64, probeCount int,
-	workspaceBatch []int64, selectedWorkspaces map[int64]struct{}, noChanges bool,
-) {
-	if len(tracked.probeKeys) > 0 {
-		tracked.probeCursor = (tracked.probeCursor + probeCount) % len(tracked.probeKeys)
-	}
-	if tracked.schema.splitMetadata {
-		for _, workspaceID := range workspaceBatch {
-			if _, selected := selectedWorkspaces[workspaceID]; !selected {
-				tracked.workspaceCheckedAt[workspaceID] = checkedAt
-			}
-		}
-		if len(tracked.workspaceIDs) > 0 {
-			tracked.workspaceCursor =
-				(tracked.workspaceCursor + len(workspaceBatch)) % len(tracked.workspaceIDs)
-		}
-	} else if noChanges {
-		tracked.checkedAt = checkedAt
-	}
 }
 
 func (t *omnigentChangeTracker) parseMember(
@@ -1002,124 +874,51 @@ func (t *omnigentChangeTracker) replace(
 func newOmnigentTrackedContainer(
 	container string, schema omnigentSchema, metas []omnigentMeta,
 ) omnigentTrackedContainer {
-	compositeMTimeNS, _ := sqliteDBCompositeMtime(container)
+	compositeMTimeNS, _ := omnigentDBCompositeMtime(container)
 	tracked := omnigentTrackedContainer{
-		schema: schema, metas: make(map[string]omnigentMeta, len(metas)),
-		checkedAt:          time.Now().Unix(),
-		compositeMTimeNS:   compositeMTimeNS,
-		workspaceCheckedAt: make(map[int64]int64),
-		workspaceCounts:    make(map[int64]int),
+		schema: schema, compositeMTimeNS: compositeMTimeNS,
+		checkedAt: time.Now().Unix(),
 	}
-	addOmnigentTrackedMetas(&tracked, metas)
+	for _, meta := range metas {
+		if meta.rowID > tracked.initialScanRowID {
+			tracked.initialScanRowID = meta.rowID
+		}
+	}
 	return tracked
 }
 
-func addOmnigentTrackedMetas(
-	tracked *omnigentTrackedContainer, metas []omnigentMeta,
-) {
-	for _, meta := range metas {
-		key := meta.member().key(tracked.schema)
-		if _, exists := tracked.metas[key]; !exists {
-			tracked.probeKeys = append(tracked.probeKeys, key)
-			if tracked.schema.splitMetadata {
-				if tracked.workspaceCounts[meta.workspaceID] == 0 {
-					tracked.workspaceIDs = append(
-						tracked.workspaceIDs, meta.workspaceID,
-					)
-					tracked.workspaceCheckedAt[meta.workspaceID] = tracked.checkedAt
-				}
-				tracked.workspaceCounts[meta.workspaceID]++
-			}
+// omnigentDBCompositeMtime tracks content-bearing SQLite files only. Opening a
+// read connection can update the shared-memory file, so including -shm would
+// turn the provider's own probes into apparent source changes and keep recovery
+// sweeps running forever.
+func omnigentDBCompositeMtime(dbPath string) (int64, error) {
+	var maxMtime int64
+	for _, suffix := range []string{"", "-wal"} {
+		info, err := os.Stat(dbPath + suffix)
+		if err != nil {
+			continue
 		}
-		tracked.metas[key] = meta
-		if meta.rowID > tracked.maxRowID {
-			tracked.maxRowID = meta.rowID
-		}
+		maxMtime = max(maxMtime, info.ModTime().UnixNano())
 	}
-	slices.Sort(tracked.probeKeys)
-	slices.Sort(tracked.workspaceIDs)
+	if maxMtime == 0 {
+		return 0, &os.PathError{Op: "stat", Path: dbPath, Err: os.ErrNotExist}
+	}
+	return maxMtime, nil
 }
 
 func (t *omnigentChangeTracker) observe(
 	container string, schema omnigentSchema, member omnigentMemberID,
 	meta omnigentMeta, exists bool, observedAt int64,
 ) {
+	_ = member
+	_ = meta
+	_ = exists
+	_ = observedAt
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	tracked, ok := t.containers[container]
 	if !ok || tracked.schema != schema {
-		tracked = omnigentTrackedContainer{
-			schema: schema, metas: make(map[string]omnigentMeta),
-			workspaceCheckedAt: make(map[int64]int64),
-			workspaceCounts:    make(map[int64]int),
-		}
-	}
-	if schema.splitMetadata {
-		tracked.workspaceCheckedAt[member.workspaceID] = observedAt
-	} else {
-		tracked.checkedAt = observedAt
-	}
-	key := member.key(schema)
-	_, wasPresent := tracked.metas[key]
-	if exists {
-		tracked.metas[key] = meta
-		if !wasPresent {
-			tracked.probeKeys = append(tracked.probeKeys, key)
-			slices.Sort(tracked.probeKeys)
-			if schema.splitMetadata {
-				if tracked.workspaceCounts[meta.workspaceID] == 0 {
-					tracked.workspaceIDs = append(tracked.workspaceIDs, meta.workspaceID)
-					slices.Sort(tracked.workspaceIDs)
-				}
-				tracked.workspaceCounts[meta.workspaceID]++
-			}
-		}
-		if meta.rowID > tracked.maxRowID {
-			tracked.maxRowID = meta.rowID
-		}
-	} else {
-		previous := tracked.metas[key]
-		delete(tracked.metas, key)
-		if wasPresent && schema.splitMetadata {
-			workspaceID := previous.workspaceID
-			tracked.workspaceCounts[workspaceID]--
-			if tracked.workspaceCounts[workspaceID] == 0 {
-				delete(tracked.workspaceCounts, workspaceID)
-				delete(tracked.workspaceCheckedAt, workspaceID)
-				tracked.workspaceIDs = slices.DeleteFunc(
-					tracked.workspaceIDs,
-					func(candidate int64) bool { return candidate == workspaceID },
-				)
-				if len(tracked.workspaceIDs) == 0 {
-					tracked.workspaceCursor = 0
-				} else {
-					tracked.workspaceCursor %= len(tracked.workspaceIDs)
-				}
-			}
-		}
-		if probeIndex := slices.Index(tracked.probeKeys, key); probeIndex >= 0 {
-			tracked.probeKeys = slices.Delete(
-				tracked.probeKeys, probeIndex, probeIndex+1,
-			)
-			if probeIndex < tracked.probeCursor {
-				tracked.probeCursor--
-			}
-			if len(tracked.probeKeys) == 0 {
-				tracked.probeCursor = 0
-				tracked.probeRemaining = 0
-			} else {
-				tracked.probeCursor %= len(tracked.probeKeys)
-				tracked.probeRemaining = min(
-					tracked.probeRemaining, len(tracked.probeKeys),
-				)
-			}
-		}
-		tracked.maxRowID = 0
-		for _, current := range tracked.metas {
-			if current.rowID > tracked.maxRowID {
-				tracked.maxRowID = current.rowID
-			}
-		}
+		tracked = newOmnigentTrackedContainer(container, schema, nil)
 	}
 	t.containers[container] = tracked
 }

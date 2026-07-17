@@ -573,6 +573,8 @@ func parseOmnigentConversationFromDB(
 	}
 	if omnigentIsSubAgent(conv.kindRaw) {
 		sess.RelationshipType = RelSubagent
+	} else if sess.ParentSessionID != "" {
+		sess.RelationshipType = RelContinuation
 	}
 
 	usageEvents := omnigentUsageEvents(
