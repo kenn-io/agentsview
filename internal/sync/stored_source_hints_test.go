@@ -204,6 +204,41 @@ func TestOmnigentStoredHintActivationSurvivesInitialQueryFailure(t *testing.T) {
 	assert.False(t, cursor.inFlight)
 }
 
+func TestOmnigentStoredHintActivationDuringFinalPageRestartsSweep(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	path := filepath.Join(root, "chat.db#member")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "omnigent:member", Agent: string(parser.AgentOmnigent),
+		Project: "fixture", Machine: "local", FilePath: strPtr(path),
+	}))
+	engine := &Engine{db: database}
+
+	first, claimed, err := engine.changedPathStoredSourcePaths(parser.AgentOmnigent, root)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, []string{path}, first)
+
+	concurrent, claimed, err := engine.changedPathStoredSourcePaths(
+		parser.AgentOmnigent, root,
+	)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	assert.Empty(t, concurrent)
+	engine.finishOmnigentStoredHintPage(root, true)
+
+	restarted, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	assert.Equal(t, first, restarted)
+	engine.finishOmnigentStoredHintPage(root, true)
+
+	remaining, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	assert.Empty(t, remaining)
+}
+
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {
 	measure := func(t *testing.T, hintCount int) float64 {
 		t.Helper()

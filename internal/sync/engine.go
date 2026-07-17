@@ -853,6 +853,7 @@ type omnigentHintCursor struct {
 	active         bool
 	inFlight       bool
 	completeOnDone bool
+	reactivate     bool
 }
 
 func (e *Engine) changedPathStoredSourcePaths(
@@ -876,7 +877,12 @@ func (e *Engine) nextOmnigentStoredHintPage(
 	}
 	cursor := e.omnigentHintCursors[key]
 	if activate {
-		cursor.active = true
+		if cursor.active {
+			cursor.reactivate = true
+		} else {
+			cursor.active = true
+			cursor.after = ""
+		}
 		e.omnigentHintCursors[key] = cursor
 	}
 	if !cursor.active || cursor.inFlight {
@@ -890,7 +896,11 @@ func (e *Engine) nextOmnigentStoredHintPage(
 		return nil, false, err
 	}
 	if len(paths) == 0 {
-		cursor = omnigentHintCursor{}
+		if cursor.reactivate {
+			cursor = omnigentHintCursor{active: true}
+		} else {
+			cursor = omnigentHintCursor{}
+		}
 		e.omnigentHintCursors[key] = cursor
 		return nil, false, nil
 	}
@@ -917,8 +927,14 @@ func (e *Engine) finishOmnigentStoredHintPage(
 	if success {
 		cursor.after = cursor.nextAfter
 		if cursor.completeOnDone {
-			cursor.active = false
-			cursor.after = ""
+			if cursor.reactivate {
+				cursor.active = true
+				cursor.after = ""
+				cursor.reactivate = false
+			} else {
+				cursor.active = false
+				cursor.after = ""
+			}
 		}
 	}
 	cursor.inFlight = false
