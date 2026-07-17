@@ -249,6 +249,37 @@ func (s *Store) GetAllMessages(
 	return msgs, nil
 }
 
+func (s *Store) GetResumeModelCounts(
+	ctx context.Context, sessionID string,
+) ([]db.ModelCount, error) {
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT model, COUNT(*)
+		FROM messages
+		WHERE session_id = $1
+			AND role = 'assistant'
+			AND model != ''
+			AND model != '<synthetic>'
+		GROUP BY model`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying postgres resume model counts: %w", err)
+	}
+	defer rows.Close()
+	var counts []db.ModelCount
+	for rows.Next() {
+		var count db.ModelCount
+		if err := rows.Scan(&count.Model, &count.Count); err != nil {
+			return nil, fmt.Errorf("scanning postgres resume model count: %w", err)
+		}
+		counts = append(counts, count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating postgres resume model counts: %w", err)
+	}
+	return counts, nil
+}
+
 // SearchSession performs ILIKE substring search within a single
 // session's messages, returning matching ordinals.
 func (s *Store) SearchSession(

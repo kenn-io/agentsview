@@ -32,6 +32,10 @@
       name: "ko",
       label: m.settings_language_korean(),
     },
+    {
+      name: "fr",
+      label: m.settings_language_french(),
+    },
   ]);
 
   function handleLocaleSelect(value: string) {

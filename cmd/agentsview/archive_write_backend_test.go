@@ -95,6 +95,51 @@ func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T)
 		})
 }
 
+func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	backend.ensurePricing = func(_ context.Context, database *db.DB) error {
+		require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+			ModelPattern:  "new-model",
+			InputPerMTok:  2,
+			OutputPerMTok: 8,
+		}}))
+		return nil
+	}
+
+	_, err := backend.PGPush(
+		context.Background(),
+		pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
+		PGPushConfig{}, nil, nil,
+	)
+
+	require.Error(t, err)
+	rate, err := backend.database.GetModelPricing("new-model")
+	require.NoError(t, err)
+	require.NotNil(t, rate)
+	assert.Equal(t, 8.0, rate.OutputPerMTok)
+}
+
+func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	ensureCalls := 0
+	backend.ensurePricing = func(_ context.Context, database *db.DB) error {
+		require.Same(t, backend.database, database)
+		ensureCalls++
+		return nil
+	}
+	target := &fakeTarget{}
+	pusher := backend.newPGPusher(
+		func(context.Context) error { return nil },
+		func() (pgTarget, error) { return target, nil },
+	)
+
+	require.NoError(t, pusher.push(
+		context.Background(), reasonChange, false,
+	))
+	assert.Equal(t, 1, ensureCalls)
+	assert.Equal(t, 1, target.pushes)
+}
+
 func TestLocalArchiveWriteBackendDuckDBPushStopsAfterCanceledLocalSync(t *testing.T) {
 	testLocalArchivePushStopsAfterCanceledSync(t,
 		func(backend *localArchiveWriteBackend, ctx context.Context) error {

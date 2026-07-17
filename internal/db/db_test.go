@@ -930,6 +930,10 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
+func TestCurrentDataVersionAntigravityParentLinks(t *testing.T) {
+	assert.Equal(t, 67, CurrentDataVersion(),
+		"Antigravity parent-link parsing requires a data version bump")
+}
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
@@ -4375,6 +4379,8 @@ func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 
 	insertSession(t, srcDB, "named", "proj", func(s *Session) {
 		s.SessionName = Ptr("Agent Generated Name")
+		s.AgentLabel = "Claude Triage"
+		s.Entrypoint = "sdk-cli"
 	})
 	insertMessages(t, srcDB, userMsg("named", 0, "hello"))
 
@@ -4466,6 +4472,14 @@ func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 		assert.True(t, m.HasContextTokens, "HasContextTokens should be true")
 		assert.True(t, m.HasOutputTokens, "HasOutputTokens should be true")
 		assert.NotEmpty(t, m.TokenUsage, "TokenUsage should be preserved")
+	})
+
+	t.Run("session identity metadata", func(t *testing.T) {
+		s, err := dstDB.GetSession(ctx, "named")
+		requireNoError(t, err, "GetSession named")
+		require.NotNil(t, s, "orphaned session named not found")
+		assert.Equal(t, "Claude Triage", s.AgentLabel, "AgentLabel")
+		assert.Equal(t, "sdk-cli", s.Entrypoint, "Entrypoint")
 	})
 
 	t.Run("session name", func(t *testing.T) {
@@ -5799,6 +5813,8 @@ func TestGetSessionForIncremental(t *testing.T) {
 		Project:              "my-project",
 		Machine:              "test",
 		Agent:                "codex",
+		AgentLabel:           "triage",
+		Entrypoint:           "sdk-cli",
 		Cwd:                  "/tmp/sessions/project",
 		FirstMessage:         new("hello world"),
 		StartedAt:            new("2024-01-15T10:00:00Z"),
@@ -5824,6 +5840,8 @@ func TestGetSessionForIncremental(t *testing.T) {
 		assert.Equal(t, "my-project", info.Project, "Project")
 		assert.Equal(t, "test", info.Machine, "Machine")
 		assert.Equal(t, "/tmp/sessions/project", info.Cwd, "Cwd")
+		assert.Equal(t, "triage", info.AgentLabel, "AgentLabel")
+		assert.Equal(t, "sdk-cli", info.Entrypoint, "Entrypoint")
 		assert.Equal(t, int64(4096), info.FileSize, "FileSize")
 		assert.Equal(t, 0, reflectedIntField(info, "NextOrdinal"), "NextOrdinal")
 		assert.Equal(t, "", reflectedStringField(info, "LastEntryUUID"), "LastEntryUUID")

@@ -98,6 +98,16 @@
           "cacheReadTokens": 0,
           "cost": 0.0042
         }
+      ],
+      "machineBreakdowns": [
+        {
+          "machineName": "golden-host",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0042
+        }
       ]
     },
     {
@@ -134,6 +144,16 @@
       "agentBreakdowns": [
         {
           "agent": "codex",
+          "inputTokens": 800,
+          "outputTokens": 160,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.00288
+        }
+      ],
+      "machineBreakdowns": [
+        {
+          "machineName": "golden-host",
           "inputTokens": 800,
           "outputTokens": 160,
           "cacheCreationTokens": 0,
@@ -207,6 +227,16 @@
           "cacheCreationTokens": 80,
           "cacheReadTokens": 400,
           "cost": 0.00476
+        }
+      ],
+      "machineBreakdowns": [
+        {
+          "machineName": "golden-host",
+          "inputTokens": 1500,
+          "outputTokens": 300,
+          "cacheCreationTokens": 80,
+          "cacheReadTokens": 400,
+          "cost": 0.01726
         }
       ]
     }

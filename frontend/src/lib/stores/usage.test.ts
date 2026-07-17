@@ -982,6 +982,26 @@ describe("UsageStore session filter params", () => {
     expect(signals[0]?.aborted).toBe(true);
   });
 
+  it("aborts visible panel requests on teardown", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const { usage } = await loadStore();
+
+    void usage.fetchSummary();
+    await Promise.resolve();
+    usage.cancelInFlightReads();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it("reuses summary params for top sessions during full refresh", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

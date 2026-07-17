@@ -94,6 +94,8 @@ func claudeParseWithExclusions(
 		cwd             string
 		gitBranch       string
 		displayName     string
+		agentLabel      string
+		entrypoint      string
 		foundParentSID  bool
 		lineIndex       int
 		malformedLines  int
@@ -123,6 +125,16 @@ func claudeParseWithExclusions(
 		lastLineFailed = false
 
 		entryType := gjson.Get(line, "type").Str
+		if agentLabel == "" {
+			if value := gjson.Get(line, "agentSetting").Str; strings.TrimSpace(value) != "" {
+				agentLabel = value
+			}
+		}
+		if entrypoint == "" {
+			if value := gjson.Get(line, "entrypoint").Str; strings.TrimSpace(value) != "" {
+				entrypoint = value
+			}
+		}
 
 		// Extract source version from first line that has it.
 		if sourceVersion == "" {
@@ -282,6 +294,8 @@ func claudeParseWithExclusions(
 		cwd:             cwd,
 		gitBranch:       gitBranch,
 		displayName:     displayName,
+		agentLabel:      agentLabel,
+		entrypoint:      entrypoint,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -353,6 +367,9 @@ func claudeParseWithExclusions(
 // clean for sessions that ended without an orphan tool_use.
 func lastAssistantStopReason(messages []ParsedMessage) string {
 	for _, v := range slices.Backward(messages) {
+		if v.IsSystem {
+			continue
+		}
 		if v.Role == RoleAssistant {
 			return v.StopReason
 		}
@@ -390,11 +407,22 @@ type ClaudeSubagentLink struct {
 	HasResult         bool
 }
 
+// claudeStoredIdentity carries the session identity values already
+// persisted for the session being incrementally parsed. Identity is
+// first-non-empty-wins across the file, so an appended identity field can
+// only change the stored session when the corresponding stored value is
+// still empty.
+type claudeStoredIdentity struct {
+	agentLabel string
+	entrypoint string
+}
+
 func claudeParseSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
 	lastEntryUUID string,
+	stored claudeStoredIdentity,
 ) ([]ParsedMessage, []ClaudeSubagentLink, time.Time, int64, error) {
 	var (
 		entries        []dagEntry
@@ -405,8 +433,9 @@ func claudeParseSessionFrom(
 		// non-message events (progress, queue-operation) so
 		// callers can update ended_at even when no new
 		// messages are found.
-		latestTS  time.Time
-		sawRename bool
+		latestTS               time.Time
+		sawRename              bool
+		sawSessionIdentityEdit bool
 	)
 
 	consumed, err := readJSONLFrom(
@@ -418,12 +447,18 @@ func claudeParseSessionFrom(
 				}
 			}
 			entryType := gjson.Get(line, "type").Str
+			if claudeSessionIdentityUpdate(line, stored) {
+				sawSessionIdentityEdit = true
+			}
 			if entryType == "system" {
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {
 					sawRename = true
 				}
+				return
+			}
+			if entryType == "agent-setting" {
 				return
 			}
 			if entryType == "attachment" {
@@ -492,6 +527,9 @@ func claudeParseSessionFrom(
 	if sawRename {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
+	if sawSessionIdentityEdit {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
 
 	// Queue/progress events can repair subagent linkage on an already-stored
 	// tool call. If the mapped tool_use_id is not introduced in this append,
@@ -526,7 +564,7 @@ func claudeParseSessionFrom(
 	annotateSubagentSessions(msgs, subagentMap)
 	if len(queuedCommands) > 0 {
 		msgs = mergeQueuedCommands(
-			msgs, queuedCommands, startOrdinal,
+			msgs, queuedCommands, startOrdinal, queuedCommandMessage,
 		)
 		for _, qc := range queuedCommands {
 			if qc.timestamp.After(endedAt) {
@@ -541,6 +579,21 @@ func claudeParseSessionFrom(
 		endedAt = latestTS
 	}
 	return msgs, links, endedAt, consumed, nil
+}
+
+// claudeSessionIdentityUpdate reports whether an appended line carries an
+// identity value that could change the stored session. Identity is
+// first-non-empty-wins, so a field whose stored value is already set can
+// never be changed by an append; gating on the stored values keeps routine
+// appends incremental even though real CLI transcripts carry a top-level
+// entrypoint on most message lines.
+func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool {
+	if stored.agentLabel == "" &&
+		strings.TrimSpace(gjson.Get(line, "agentSetting").Str) != "" {
+		return true
+	}
+	return stored.entrypoint == "" &&
+		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != ""
 }
 
 // needsClaudeFullParse returns true when appended entries contain
@@ -735,9 +788,9 @@ func extractMessagesFrom(
 		// looks like a command envelope but can't be
 		// normalized, skip it to avoid raw XML in transcripts.
 		if e.entryType == "user" {
-			if cmdText, ok := extractCommandText(text); ok {
-				text = cmdText
-			} else if isCommandEnvelope(text) {
+			var skip bool
+			text, skip = preprocessClaudeUserText(text)
+			if skip {
 				continue
 			}
 		}
@@ -762,6 +815,7 @@ func extractMessagesFrom(
 					ContentLength:    len(text),
 					SourceType:       "system",
 					SourceSubtype:    subtype,
+					ToolResults:      trs,
 					SourceUUID:       e.uuid,
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
@@ -814,6 +868,8 @@ type claudeSessionMeta struct {
 	cwd             string
 	gitBranch       string
 	displayName     string
+	agentLabel      string
+	entrypoint      string
 	malformedLines  int
 	isTruncated     bool
 }
@@ -825,6 +881,8 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.Cwd = m.cwd
 	sess.GitBranch = m.gitBranch
 	sess.SessionName = m.displayName
+	sess.AgentLabel = m.agentLabel
+	sess.Entrypoint = m.entrypoint
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -1106,7 +1164,9 @@ func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
 		return claudeQueuedCommand{}, false
 	}
 	prompt := gjson.Get(line, "attachment.prompt").Str
-	if strings.TrimSpace(prompt) == "" {
+	var skip bool
+	prompt, skip = preprocessClaudeUserText(prompt)
+	if skip || strings.TrimSpace(prompt) == "" {
 		return claudeQueuedCommand{}, false
 	}
 	return claudeQueuedCommand{
@@ -1123,7 +1183,7 @@ func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
 func applyQueuedCommands(
 	r ParseResult, queued []claudeQueuedCommand,
 ) ParseResult {
-	merged := mergeQueuedCommands(r.Messages, queued, 0)
+	merged := mergeQueuedCommands(r.Messages, queued, 0, queuedCommandMessage)
 	firstMsg, userCount := firstMessageAndUserCount(merged)
 	r.Session.FirstMessage = firstMsg
 	r.Session.UserMessageCount = userCount
@@ -1152,12 +1212,13 @@ func mergeQueuedCommands(
 	messages []ParsedMessage,
 	queued []claudeQueuedCommand,
 	startOrdinal int,
+	buildMessage func(claudeQueuedCommand) ParsedMessage,
 ) []ParsedMessage {
 	out := make([]ParsedMessage, 0, len(messages)+len(queued))
 	i, j := 0, 0
 	for i < len(messages) && j < len(queued) {
 		if queuedBefore(queued[j], messages[i]) {
-			out = append(out, queuedCommandMessage(queued[j]))
+			out = append(out, buildMessage(queued[j]))
 			j++
 		} else {
 			out = append(out, messages[i])
@@ -1168,7 +1229,7 @@ func mergeQueuedCommands(
 		out = append(out, messages[i])
 	}
 	for ; j < len(queued); j++ {
-		out = append(out, queuedCommandMessage(queued[j]))
+		out = append(out, buildMessage(queued[j]))
 	}
 	for k := range out {
 		out[k].Ordinal = startOrdinal + k
@@ -1193,12 +1254,22 @@ func queuedBefore(
 }
 
 // queuedCommandMessage builds a ParsedMessage from a collected
-// queued_command attachment. Role stays user (the user typed
-// this) and IsSystem is false so it counts as a real user turn;
-// SourceSubtype lets the UI distinguish it from inline prompts.
+// queued_command attachment.
 func queuedCommandMessage(
 	q claudeQueuedCommand,
 ) ParsedMessage {
+	q.prompt = stripLeadingClaudeSystemReminderContent(q.prompt)
+	if subtype := classifyClaudeSystemMessage(q.prompt); subtype != "" {
+		return ParsedMessage{
+			Role:          RoleUser,
+			Content:       q.prompt,
+			Timestamp:     q.timestamp,
+			IsSystem:      true,
+			ContentLength: len(q.prompt),
+			SourceType:    "system",
+			SourceSubtype: subtype,
+		}
+	}
 	return ParsedMessage{
 		Role:          RoleUser,
 		Content:       q.prompt,
@@ -1684,9 +1755,9 @@ func extractMessages(entries []dagEntry) (
 		// looks like a command envelope but can't be
 		// normalized, skip it to avoid raw XML in transcripts.
 		if e.entryType == "user" {
-			if cmdText, ok := extractCommandText(text); ok {
-				text = cmdText
-			} else if isCommandEnvelope(text) {
+			var skip bool
+			text, skip = preprocessClaudeUserText(text)
+			if skip {
 				continue
 			}
 		}
@@ -1711,6 +1782,7 @@ func extractMessages(entries []dagEntry) (
 					ContentLength:    len(text),
 					SourceType:       "system",
 					SourceSubtype:    subtype,
+					ToolResults:      trs,
 					SourceUUID:       e.uuid,
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
@@ -1984,6 +2056,27 @@ func extractCommandText(content string) (string, bool) {
 	return name, true
 }
 
+func preprocessClaudeUserText(content string) (string, bool) {
+	trimmed := trimClaudeSystemMessagePrefix(content)
+	remainder, stripped := stripLeadingClaudeSystemReminderBlocks(trimmed)
+	if stripped && remainder != "" {
+		trimmed = remainder
+	}
+	if cmdText, ok := extractCommandText(trimmed); ok {
+		return cmdText, false
+	}
+	if isCommandEnvelope(trimmed) {
+		return "", true
+	}
+	if stripped && remainder == "" {
+		return content, false
+	}
+	if !stripped {
+		return content, false
+	}
+	return trimmed, false
+}
+
 // isCommandEnvelope returns true if the content is a pure
 // command XML envelope (starts with a command tag and contains
 // nothing but command tags and whitespace). Used as a fallback
@@ -2123,9 +2216,7 @@ func extractCompactSummary(line string) string {
 // local command output) are treated as regular noise and return "";
 // only the caveat variant is a semantic "resume" marker.
 func classifyClaudeSystemMessage(content string) string {
-	trimmed := strings.TrimLeftFunc(content, func(r rune) bool {
-		return r == '\uFEFF' || unicode.IsSpace(r)
-	})
+	trimmed := trimClaudeSystemMessagePrefix(content)
 	switch {
 	case strings.HasPrefix(trimmed, "This session is being continued"):
 		return "continuation"
@@ -2137,27 +2228,56 @@ func classifyClaudeSystemMessage(content string) string {
 		return "task_notification"
 	case strings.HasPrefix(trimmed, "Stop hook feedback:"):
 		return "stop_hook"
+	case strings.HasPrefix(trimmed, "<system-reminder>"):
+		remainder, stripped := stripLeadingClaudeSystemReminderBlocks(trimmed)
+		if !stripped {
+			return ""
+		}
+		if remainder != "" {
+			return ""
+		}
+		return "system_reminder"
 	}
 	return ""
+}
+
+func stripLeadingClaudeSystemReminderContent(content string) string {
+	trimmed := trimClaudeSystemMessagePrefix(content)
+	remainder, stripped := stripLeadingClaudeSystemReminderBlocks(trimmed)
+	if stripped && remainder != "" {
+		return remainder
+	}
+	return content
+}
+
+func stripLeadingClaudeSystemReminderBlocks(content string) (string, bool) {
+	rest := trimClaudeSystemMessagePrefix(content)
+	stripped := false
+	for strings.HasPrefix(rest, "<system-reminder>") {
+		closeIdx := strings.Index(rest, "</system-reminder>")
+		if closeIdx < 0 {
+			return "", false
+		}
+		rest = trimClaudeSystemMessagePrefix(
+			rest[closeIdx+len("</system-reminder>"):],
+		)
+		stripped = true
+	}
+	return rest, stripped
+}
+
+func trimClaudeSystemMessagePrefix(content string) string {
+	return strings.TrimLeftFunc(content, func(r rune) bool {
+		return r == '\uFEFF' || unicode.IsSpace(r)
+	})
 }
 
 // isClaudeSystemMessage returns true if the content matches
 // a known system-injected user message pattern.
 func isClaudeSystemMessage(content string) bool {
-	trimmed := strings.TrimLeftFunc(content, func(r rune) bool {
-		return r == '\uFEFF' || unicode.IsSpace(r)
-	})
-	prefixes := [...]string{
-		"This session is being continued",
-		"[Request interrupted",
-		"<task-notification>",
-		"<local-command-",
-		"Stop hook feedback:",
+	trimmed := trimClaudeSystemMessagePrefix(content)
+	if classifyClaudeSystemMessage(trimmed) != "" {
+		return true
 	}
-	for _, p := range prefixes {
-		if strings.HasPrefix(trimmed, p) {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(trimmed, "<local-command-")
 }

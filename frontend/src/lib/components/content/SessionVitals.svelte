@@ -1,8 +1,10 @@
 <!-- ABOUTME: Session Vital Signs panel — replaces ActivityMinimap on the right column. -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { fetchSessionTiming } from "../../api/timing.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
@@ -19,6 +21,7 @@
   import CallGroup from "./CallGroup.svelte";
   import SubagentCalls from "./SubagentCalls.svelte";
   import { XIcon } from "../../icons.js";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   interface Props {
     sessionId: string;
@@ -45,11 +48,48 @@
   let expandedSubagentIds = $state(new Set<string>());
   let subagentTimings = $state(new Map<string, SessionTiming>());
   let pendingSubagentIds = $state(new Set<string>());
+  const subagentTimingReads = new Map<string, LatestRead>();
+  let subagentReadSessionId: string | null = null;
+
+  function clearPendingSubagent(sid: string) {
+    const next = new Set(pendingSubagentIds);
+    next.delete(sid);
+    pendingSubagentIds = next;
+  }
+
+  function cancelSubagentRead(sid: string) {
+    subagentTimingReads.get(sid)?.cancel();
+    subagentTimingReads.delete(sid);
+    clearPendingSubagent(sid);
+  }
+
+  function cancelAllSubagentReads() {
+    for (const read of subagentTimingReads.values()) read.cancel();
+    subagentTimingReads.clear();
+  }
+
+  $effect(() => {
+    if (subagentReadSessionId === null) {
+      subagentReadSessionId = sessionId;
+      return;
+    }
+    if (sessionId === subagentReadSessionId) return;
+    cancelAllSubagentReads();
+    subagentReadSessionId = sessionId;
+    expandedSubagentIds = new Set();
+    subagentTimings = new Map();
+    pendingSubagentIds = new Set();
+  });
+
+  onDestroy(cancelAllSubagentReads);
 
   async function toggleSubagent(call: CallTiming) {
     if (!call.subagent_session_id) return;
     const sid = call.subagent_session_id;
-    if (pendingSubagentIds.has(sid)) return;
+    if (pendingSubagentIds.has(sid)) {
+      cancelSubagentRead(sid);
+      return;
+    }
     if (expandedSubagentIds.has(sid)) {
       const next = new Set(expandedSubagentIds);
       next.delete(sid);
@@ -57,22 +97,36 @@
       return;
     }
     if (!subagentTimings.has(sid)) {
+      const ownerSessionId = sessionId;
+      const read = new LatestRead();
+      subagentTimingReads.set(sid, read);
+      const signal = read.begin();
       const nextPending = new Set(pendingSubagentIds);
       nextPending.add(sid);
       pendingSubagentIds = nextPending;
       try {
-        const t = await fetchSessionTiming(sid);
-        if (!t) return;
+        const t = await fetchSessionTiming(sid, signal);
+        if (
+          !t ||
+          ownerSessionId !== sessionId ||
+          subagentTimingReads.get(sid) !== read ||
+          !read.isCurrent(signal)
+        ) return;
         const m = new Map(subagentTimings);
         m.set(sid, t);
         subagentTimings = m;
       } catch (err) {
+        if (signal.aborted || isAbortError(err)) return;
         console.error("failed to load sub-agent timing", err);
         return;
       } finally {
-        const cleanup = new Set(pendingSubagentIds);
-        cleanup.delete(sid);
-        pendingSubagentIds = cleanup;
+        if (
+          subagentTimingReads.get(sid) === read &&
+          read.finish(signal)
+        ) {
+          subagentTimingReads.delete(sid);
+          clearPendingSubagent(sid);
+        }
       }
     }
     const next = new Set(expandedSubagentIds);

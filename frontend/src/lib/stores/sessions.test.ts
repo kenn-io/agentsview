@@ -62,6 +62,10 @@ vi.mock("../api/client.js", () => ({
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(
+    (error: unknown) =>
+      error instanceof DOMException && error.name === "AbortError",
+  ),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -99,6 +103,22 @@ function mockSidebarPage(
   });
 }
 
+function rejectGeneratedRequestOnAbort(
+  request: () => Promise<unknown>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const result = request();
+  if (!signal) return result;
+  return new Promise((resolve, reject) => {
+    signal.addEventListener(
+      "abort",
+      () => reject(new DOMException("aborted", "AbortError")),
+      { once: true },
+    );
+    void result.then(resolve, reject);
+  });
+}
+
 type SkinnySessionRow = {
   id: string;
   parent_session_id?: string | null;
@@ -106,6 +126,8 @@ type SkinnySessionRow = {
   project: string;
   machine: string;
   agent: string;
+  agent_label?: string | null;
+  entrypoint?: string | null;
   display_name?: string | null;
   started_at: string | null;
   ended_at: string | null;
@@ -124,6 +146,8 @@ function makeSkinnyRow(
     project: "proj",
     machine: "local",
     agent: "claude",
+    agent_label: null,
+    entrypoint: null,
     display_name: null,
     started_at: null,
     ended_at: null,
@@ -197,6 +221,9 @@ describe("SessionsStore", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(callGenerated).mockImplementation(
+      (request: () => Promise<unknown>) => request(),
+    );
     storageData.clear();
     mockSidebarPage();
     mockSidebarIndex();
@@ -509,6 +536,41 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe(
         "hydrated active detail",
       );
+    });
+
+    it("refreshes hydrated agent identity fields from the sidebar index", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "active",
+          agent_label: "old-label",
+          entrypoint: "old-entrypoint",
+        }),
+      ]);
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "active",
+          agent_label: "old-label",
+          entrypoint: "old-entrypoint",
+          first_message: "hydrated active detail",
+        }),
+      );
+
+      await sessions.load();
+      await sessions.hydrateVisibleSessions(["active"]);
+
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "active",
+          agent_label: "triage",
+          entrypoint: "sdk-cli",
+        }),
+      ]);
+      await sessions.load();
+
+      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.sessions[0]!.first_message).toBe("hydrated active detail");
+      expect(sessions.sessions[0]!.agent_label).toBe("triage");
+      expect(sessions.sessions[0]!.entrypoint).toBe("sdk-cli");
     });
 
     it("clears stale display names from hydrated rows when the index has none", async () => {
@@ -2269,6 +2331,50 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe(
         "fetched during navigation",
       );
+    });
+  });
+
+  describe("route cancellation", () => {
+    it("aborts pagination and treats cancellation as normal completion", async () => {
+      const signals: AbortSignal[] = [];
+      vi.mocked(callGenerated).mockImplementation(
+        (request: () => Promise<unknown>, signal?: AbortSignal) => {
+          if (signal) signals.push(signal);
+          return rejectGeneratedRequestOnAbort(request, signal);
+        },
+      );
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValue(
+        new Promise(() => {}),
+      );
+      sessions.nextCursor = "next";
+
+      const load = sessions.loadMore();
+      await Promise.resolve();
+      sessions.cancelRouteReads();
+
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.aborted).toBe(true);
+      await expect(load).resolves.toBeUndefined();
+    });
+
+    it("keeps a replacement signal-detail request registered", async () => {
+      vi.mocked(callGenerated).mockImplementation(
+        rejectGeneratedRequestOnAbort,
+      );
+      vi.mocked(api.getSession).mockReturnValue(
+        new Promise(() => {}),
+      );
+
+      const obsolete = sessions.fetchSignalDetail("detail");
+      await Promise.resolve();
+      sessions.cancelRouteReads();
+      void sessions.fetchSignalDetail("detail");
+      await obsolete;
+
+      void sessions.fetchSignalDetail("detail");
+      await Promise.resolve();
+
+      expect(api.getSession).toHaveBeenCalledTimes(2);
     });
   });
 });

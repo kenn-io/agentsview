@@ -127,6 +127,11 @@ type Message struct {
 	IsCompactBoundary bool            `json:"is_compact_boundary,omitempty"`
 }
 
+type ModelCount struct {
+	Model string
+	Count int
+}
+
 // TokenPresence reports whether context/output token fields were
 // present in stored message metadata. It preserves explicit flags,
 // falls back to non-zero numeric values for legacy rows, and inspects
@@ -361,6 +366,37 @@ func (db *DB) GetAllMessages(
 		return nil, err
 	}
 	return msgs, nil
+}
+
+func (db *DB) GetResumeModelCounts(
+	ctx context.Context, sessionID string,
+) ([]ModelCount, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT model, COUNT(*)
+		FROM messages
+		WHERE session_id = ?
+			AND role = 'assistant'
+			AND model != ''
+			AND model != '<synthetic>'
+		GROUP BY model`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying resume model counts: %w", err)
+	}
+	defer rows.Close()
+	var counts []ModelCount
+	for rows.Next() {
+		var count ModelCount
+		if err := rows.Scan(&count.Model, &count.Count); err != nil {
+			return nil, fmt.Errorf("scanning resume model count: %w", err)
+		}
+		counts = append(counts, count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating resume model counts: %w", err)
+	}
+	return counts, nil
 }
 
 // EmbeddableUnit is one embedding document: a single embeddable user

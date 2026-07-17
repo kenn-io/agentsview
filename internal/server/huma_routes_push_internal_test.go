@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/postgres"
 )
@@ -214,6 +216,39 @@ func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
 	assert.Contains(t, err.Error(),
 		"projects and exclude_projects are mutually exclusive")
+}
+
+func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
+	s := testServer(t, 30*time.Second)
+	database := s.db.(*db.DB)
+	s.ensurePricing = func(_ context.Context, got *db.DB) error {
+		require.Same(t, database, got)
+		require.NoError(t, got.UpsertModelPricing([]db.ModelPricing{{
+			ModelPattern:  "new-model",
+			InputPerMTok:  2,
+			OutputPerMTok: 8,
+		}}))
+		return nil
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/push/pg",
+		strings.NewReader(`{"full":false,"pg":{"url":"postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable","schema":"agentsview","machine_name":"test","allow_insecure":false}}`),
+	)
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"body: %s", w.Body.String())
+	rate, err := database.GetModelPricing("new-model")
+	require.NoError(t, err)
+	require.NotNil(t, rate)
+	assert.Equal(t, 8.0, rate.OutputPerMTok)
 }
 
 func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {

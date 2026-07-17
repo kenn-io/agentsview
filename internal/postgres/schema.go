@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     owner_marker       TEXT NOT NULL DEFAULT '',
     project            TEXT NOT NULL,
     agent              TEXT NOT NULL,
+    agent_label        TEXT NOT NULL DEFAULT '',
+    entrypoint         TEXT NOT NULL DEFAULT '',
     first_message      TEXT,
     display_name       TEXT,
     source_display_name TEXT,
@@ -762,6 +764,16 @@ func EnsureSchema(
 			"sessions", "session_name",
 			`session_name TEXT`,
 			"adding sessions.session_name",
+		},
+		{
+			"sessions", "agent_label",
+			`agent_label TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.agent_label",
+		},
+		{
+			"sessions", "entrypoint",
+			`entrypoint TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.entrypoint",
 		},
 		{
 			"source_project_identity_observations", "source_archive_id",

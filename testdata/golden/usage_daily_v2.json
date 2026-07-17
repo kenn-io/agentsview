@@ -79,7 +79,8 @@
         }
       ],
       "projectBreakdowns": [],
-      "agentBreakdowns": []
+      "agentBreakdowns": [],
+      "machineBreakdowns": []
     },
     {
       "date": "2026-07-02",
@@ -102,7 +103,8 @@
         }
       ],
       "projectBreakdowns": [],
-      "agentBreakdowns": []
+      "agentBreakdowns": [],
+      "machineBreakdowns": []
     },
     {
       "date": "2026-07-03",
@@ -134,7 +136,8 @@
         }
       ],
       "projectBreakdowns": [],
-      "agentBreakdowns": []
+      "agentBreakdowns": [],
+      "machineBreakdowns": []
     }
   ],
   "totals": {

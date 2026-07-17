@@ -127,6 +127,8 @@ const (
 	// column is deliberately not compared: it is rewritten from the
 	// mutable worktree_project_mappings table, so its parser-owned input
 	// (cwd) is compared instead.
+	FieldAgentLabel           = "agent_label"
+	FieldEntrypoint           = "entrypoint"
 	FieldCwd                  = "cwd"
 	FieldGitBranch            = "git_branch"
 	FieldParentSessionID      = "parent_session_id"

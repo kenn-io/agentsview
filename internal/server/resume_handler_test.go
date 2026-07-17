@@ -1,9 +1,11 @@
 package server_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,13 +13,37 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
 )
+
+type failingResumeModelCountsStore struct {
+	readOnlyTestStore
+}
+
+func (failingResumeModelCountsStore) GetResumeModelCounts(
+	context.Context, string,
+) ([]db.ModelCount, error) {
+	return nil, errors.New("boom")
+}
+
+type resumeCountsOnlyStore struct {
+	readOnlyTestStore
+}
+
+func (resumeCountsOnlyStore) GetAllMessages(
+	context.Context, string,
+) ([]db.Message, error) {
+	return nil, errors.New("unexpected GetAllMessages call")
+}
 
 func canonicalTestPath(path string) string {
 	if path == "" {
@@ -150,6 +176,112 @@ func TestResumeSession(t *testing.T) {
 		s.Agent = "claude"
 	})
 
+	t.Run("claude_recorded_model", func(t *testing.T) {
+		te.seedSession(t, "claude-model", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "claude-model", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "claude sonnet"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/claude-model/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Contains(t, resp.Command, "claude --resume claude-model --model 'claude sonnet'")
+	})
+
+	t.Run("claude_recorded_model_shell_quoted", func(t *testing.T) {
+		te.seedSession(t, "claude-model-quoted", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "claude-model-quoted", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "x'$(command)"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/claude-model-quoted/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Contains(
+			t,
+			resp.Command,
+			`claude --resume claude-model-quoted --model 'x'"'"'$(command)'`,
+		)
+	})
+
+	t.Run("codex_recorded_model", func(t *testing.T) {
+		te.seedSession(t, "codex-model", projectDir, 3, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "codex-model", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "o3-mini"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/codex-model/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "codex resume codex-model -m o3-mini", resp.Command)
+	})
+
+	t.Run("codex_recorded_model_shell_quoted", func(t *testing.T) {
+		te.seedSession(t, "codex-model-quoted", projectDir, 3, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "codex-model-quoted", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "x'$(command)"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/codex-model-quoted/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Contains(
+			t,
+			resp.Command,
+			`codex resume codex-model-quoted -m 'x'"'"'$(command)'`,
+		)
+	})
+
+	t.Run("mixed_model", func(t *testing.T) {
+		te.seedSession(t, "mixed-model", projectDir, 5, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "mixed-model", 5, func(i int, m *db.Message) {
+			switch i {
+			case 1:
+				m.Model = "mixed-model-tie-z"
+			case 3:
+				m.Model = "mixed-model-tie-a"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/mixed-model/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Contains(t, resp.Command, "claude --resume mixed-model --model mixed-model-tie-a")
+	})
+
+	t.Run("no_recorded_model", func(t *testing.T) {
+		w := te.post(t, "/api/v1/sessions/sess-1/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Contains(t, resp.Command, "claude --resume sess-1")
+		assert.NotContains(t, resp.Command, "--model")
+	})
+
 	t.Run("command only", func(t *testing.T) {
 		w := te.post(t,
 			"/api/v1/sessions/sess-1/resume",
@@ -211,6 +343,31 @@ func TestResumeSession(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
 		assert.Equal(t, "copilot --resume=abc123", resp.Command)
+	})
+
+	t.Run("copilot ignores model-bearing messages", func(t *testing.T) {
+		projectDir := t.TempDir()
+		te.seedSession(t, "copilot:model-bearing", projectDir, 3, func(s *db.Session) {
+			s.Agent = "copilot"
+		})
+		te.seedMessages(t, "copilot:model-bearing", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Role = "assistant"
+				m.Model = "model-bearing-non-target"
+			}
+		})
+		w := te.post(t,
+			"/api/v1/sessions/copilot:model-bearing/resume",
+			`{"command_only":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
+		assert.Equal(t, "copilot --resume=model-bearing", resp.Command)
 	})
 
 	t.Run("kiro current-store command only", func(t *testing.T) {
@@ -521,6 +678,157 @@ func TestResumeSession(t *testing.T) {
 		t.Cleanup(func() { _ = os.Remove(promptPath) })
 	})
 
+	t.Run("whole session remote launch rejects before local launch", func(t *testing.T) {
+		dir := tempDirWithRetryCleanup(t)
+		dbPath := filepath.Join(dir, "test.db")
+		database := dbtest.OpenTestDBAt(t, dbPath)
+		store := failingResumeModelCountsStore{
+			readOnlyTestStore{Store: database},
+		}
+		cfg := config.Config{
+			Host:         "127.0.0.1",
+			Port:         0,
+			DataDir:      dir,
+			DBPath:       dbPath,
+			WriteTimeout: 30 * time.Second,
+		}
+		srv := server.New(cfg, store, nil)
+		te := &testEnv{
+			srv:         srv,
+			handler:     wrapTestHandler(cfg, srv.Handler()),
+			db:          database,
+			engine:      nil,
+			broadcaster: nil,
+			dataDir:     dir,
+		}
+		te.seedSession(t, "sess-remote-launch", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-remote-launch/resume",
+			`{}`,
+		)
+		assertStatus(t, w, http.StatusNotImplemented)
+	})
+
+	t.Run("whole session command only works in read only mode", func(t *testing.T) {
+		te := setupPGMode(t)
+		te.seedSession(t, "sess-remote-command", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-remote-command", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "claude sonnet"
+			}
+		})
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-remote-command/resume",
+			`{"command_only":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+			Cwd      string `json:"cwd"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched)
+		assert.Contains(
+			t,
+			resp.Command,
+			"claude --resume sess-remote-command --model 'claude sonnet'",
+		)
+		assertSamePath(t, "cwd", resp.Cwd, projectDir)
+	})
+
+	t.Run("whole session command only uses compact model counts", func(t *testing.T) {
+		dir := tempDirWithRetryCleanup(t)
+		dbPath := filepath.Join(dir, "test.db")
+		database := dbtest.OpenTestDBAt(t, dbPath)
+		store := resumeCountsOnlyStore{
+			readOnlyTestStore{Store: database},
+		}
+		cfg := config.Config{
+			Host:         "127.0.0.1",
+			Port:         0,
+			DataDir:      dir,
+			DBPath:       dbPath,
+			WriteTimeout: 30 * time.Second,
+		}
+		srv := server.New(cfg, store, nil)
+		te := &testEnv{
+			srv:         srv,
+			handler:     wrapTestHandler(cfg, srv.Handler()),
+			db:          database,
+			engine:      nil,
+			broadcaster: nil,
+			dataDir:     dir,
+		}
+
+		te.seedSession(t, "sess-remote-compact", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-remote-compact", 3, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "claude sonnet"
+			}
+		})
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-remote-compact/resume",
+			`{"command_only":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched)
+		assert.Contains(
+			t,
+			resp.Command,
+			"claude --resume sess-remote-compact --model 'claude sonnet'",
+		)
+	})
+
+	t.Run("whole session command only reports model lookup failure", func(t *testing.T) {
+		dir := tempDirWithRetryCleanup(t)
+		dbPath := filepath.Join(dir, "test.db")
+		database := dbtest.OpenTestDBAt(t, dbPath)
+		store := failingResumeModelCountsStore{
+			readOnlyTestStore{Store: database},
+		}
+		cfg := config.Config{
+			Host:         "127.0.0.1",
+			Port:         0,
+			DataDir:      dir,
+			DBPath:       dbPath,
+			WriteTimeout: 30 * time.Second,
+		}
+		srv := server.New(cfg, store, nil)
+		te := &testEnv{
+			srv:         srv,
+			handler:     wrapTestHandler(cfg, srv.Handler()),
+			db:          database,
+			engine:      nil,
+			broadcaster: nil,
+			dataDir:     dir,
+		}
+
+		te.seedSession(t, "sess-remote-error", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-remote-error/resume",
+			`{"command_only":true}`,
+		)
+		assertStatus(t, w, http.StatusInternalServerError)
+	})
+
 	t.Run("deleted session rejected", func(t *testing.T) {
 		te.seedSession(t, "del-1", "/tmp", 3, func(s *db.Session) {
 			s.Agent = "claude"
@@ -531,6 +839,114 @@ func TestResumeSession(t *testing.T) {
 			`{"command_only":true}`,
 		)
 		assertStatus(t, w, http.StatusNotFound)
+	})
+}
+
+type resumeTestResponse struct {
+	Command string `json:"command"`
+}
+
+func TestPrimaryResumeModel(t *testing.T) {
+	te := setup(t)
+	t.Run("alphabetical tie", func(t *testing.T) {
+		te.seedSession(t, "model-selection", t.TempDir(), 5, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "model-selection", 5, func(i int, m *db.Message) {
+			if i == 1 {
+				m.Model = "mixed-model-tie-z"
+			}
+			if i == 3 {
+				m.Model = "mixed-model-tie-a"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/model-selection/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "codex resume model-selection -m mixed-model-tie-a", resp.Command)
+	})
+
+	t.Run("higher count ignores user-only models", func(t *testing.T) {
+		te.seedSession(t, "model-selection-count", t.TempDir(), 5, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "model-selection-count", 5, func(i int, m *db.Message) {
+			switch i {
+			case 0:
+				m.Role = "user"
+				m.Model = "user-only-model"
+			case 1, 3:
+				m.Model = "later-model"
+			case 4:
+				m.Model = "earlier-model"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/model-selection-count/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "codex resume model-selection-count -m later-model", resp.Command)
+	})
+
+	t.Run("UTF-16 tie parity", func(t *testing.T) {
+		te.seedSession(t, "model-selection-utf16", t.TempDir(), 5, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "model-selection-utf16", 5, func(i int, m *db.Message) {
+			switch i {
+			case 1:
+				m.Model = "\uE000"
+			case 3:
+				m.Model = "\U00010000"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/model-selection-utf16/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "codex resume model-selection-utf16 -m '𐀀'", resp.Command)
+	})
+
+	t.Run("synthetic-only histories omit model pin", func(t *testing.T) {
+		te.seedSession(t, "model-selection-synthetic", t.TempDir(), 5, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "model-selection-synthetic", 5, func(i int, m *db.Message) {
+			if i == 1 || i == 3 {
+				m.Model = "<synthetic>"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/model-selection-synthetic/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "codex resume model-selection-synthetic", resp.Command)
+	})
+
+	t.Run("synthetic models lose to real models", func(t *testing.T) {
+		te.seedSession(t, "model-selection-real", t.TempDir(), 5, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		te.seedMessages(t, "model-selection-real", 5, func(i int, m *db.Message) {
+			switch i {
+			case 1, 3:
+				m.Model = "<synthetic>"
+			case 2:
+				m.Role = "assistant"
+				m.Model = "real-model"
+			}
+		})
+		w := te.post(t, "/api/v1/sessions/model-selection-real/resume",
+			`{"command_only":true}`)
+		assertStatus(t, w, http.StatusOK)
+		var resp resumeTestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "codex resume model-selection-real -m real-model", resp.Command)
 	})
 }
 

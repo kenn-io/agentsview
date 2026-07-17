@@ -132,7 +132,11 @@ func newDaemonCommandWithDeps(deps daemonCommandDeps) *cobra.Command {
 			Use: "start", Short: "Start the background server",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return runDaemonStart(cmd.OutOrStdout(), deps)
+				ctx, stop := signal.NotifyContext(
+					cmd.Context(), os.Interrupt, syscall.SIGTERM,
+				)
+				defer stop()
+				return runDaemonStart(ctx, cmd.OutOrStdout(), deps)
 			},
 		},
 		&cobra.Command{
@@ -186,7 +190,7 @@ func writableRuntimeFallbackForCommand(cfg config.Config, deps daemonCommandDeps
 	return rt
 }
 
-func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
+func runDaemonStart(ctx context.Context, w io.Writer, deps daemonCommandDeps) error {
 	dataDir, err := prepareDaemonMutation(deps)
 	if err != nil {
 		return fmt.Errorf("daemon start: %w", err)
@@ -214,11 +218,20 @@ func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
+	progress := &daemonLaunchProgressWriter{w: w}
 	result, err := deps.startBackground(
 		cfg, []string{"serve"}, serveReplacementOptions{},
-		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+		backgroundLaunchPolicy{
+			ConfigOnly: true, Operation: "daemon start",
+			Context: ctx, Attached: true,
+			OnLaunch: progress.launch, OnProgress: progress.progress,
+		},
 	)
 	if err != nil {
+		if result.Started &&
+			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return daemonWaitCanceledError("daemon start", result)
+		}
 		return backgroundResultError(err, result)
 	}
 	if result.Started && result.Runtime == nil {
@@ -230,6 +243,9 @@ func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 		}
 		return errors.New("daemon start: startup did not publish a writable runtime; inspect serve.log before retrying")
 	}
+	// The attached launch callback already printed the log path alongside
+	// the child identity; keep the completion output to the result line.
+	result.LogPath = ""
 	writeDaemonStartResult(w, result, false)
 	return nil
 }
@@ -440,9 +456,9 @@ func daemonSlowStartupError(
 	)
 }
 
-const daemonRestartProgressHeartbeat = 5 * time.Second
+const daemonLaunchProgressHeartbeat = 5 * time.Second
 
-type daemonRestartProgressWriter struct {
+type daemonLaunchProgressWriter struct {
 	w                  io.Writer
 	phase              string
 	detail             string
@@ -450,21 +466,21 @@ type daemonRestartProgressWriter struct {
 	printedAnyProgress bool
 }
 
-func (p *daemonRestartProgressWriter) launch(pid int, logPath string) {
+func (p *daemonLaunchProgressWriter) launch(pid int, logPath string) {
 	fmt.Fprintf(p.w, "Starting agentsview (pid %d)...\n", pid)
 	if logPath != "" {
 		fmt.Fprintf(p.w, "  log: %s\n", logPath)
 	}
 }
 
-func (p *daemonRestartProgressWriter) progress(
+func (p *daemonLaunchProgressWriter) progress(
 	st *startupState, elapsed time.Duration,
 ) {
 	if st == nil || st.Phase == "" {
 		return
 	}
 	changed := !p.printedAnyProgress || st.Phase != p.phase || st.Detail != p.detail
-	if !changed && elapsed-p.lastPrintedAt < daemonRestartProgressHeartbeat {
+	if !changed && elapsed-p.lastPrintedAt < daemonLaunchProgressHeartbeat {
 		return
 	}
 	line := st.Phase
@@ -692,7 +708,7 @@ func runDaemonRestartWithPolicy(
 		ConfigOnly: true, Operation: "daemon restart",
 	}
 	if attached {
-		progress := &daemonRestartProgressWriter{w: w}
+		progress := &daemonLaunchProgressWriter{w: w}
 		policy.Context = ctx
 		policy.Attached = true
 		policy.OnLaunch = progress.launch
@@ -705,7 +721,7 @@ func runDaemonRestartWithPolicy(
 	if err != nil {
 		if attached && result.Started &&
 			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			return daemonRestartCanceledError(result)
+			return daemonWaitCanceledError("daemon restart", result)
 		}
 		return backgroundResultError(err, result)
 	}
@@ -737,14 +753,14 @@ func runDaemonRestartWithPolicy(
 	return nil
 }
 
-func daemonRestartCanceledError(result backgroundLaunchResult) error {
+func daemonWaitCanceledError(operation string, result backgroundLaunchResult) error {
 	details := []string{fmt.Sprintf("pid %d", result.childPID)}
 	if result.LogPath != "" {
 		details = append(details, "log "+result.LogPath)
 	}
 	return fmt.Errorf(
-		"daemon restart: wait canceled (%s); the child continues running; run `agentsview daemon status` to inspect it",
-		strings.Join(details, ", "),
+		"%s: wait canceled (%s); the child continues running; run `agentsview daemon status` to inspect it",
+		operation, strings.Join(details, ", "),
 	)
 }
 

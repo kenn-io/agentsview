@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -1522,6 +1523,74 @@ func TestDailyUsageEntryBreakdownSlicesMarshalAsEmptyArrays(t *testing.T) {
 	assert.Equal(t, []any{}, got["modelBreakdowns"])
 	assert.Equal(t, []any{}, got["projectBreakdowns"])
 	assert.Equal(t, []any{}, got["agentBreakdowns"])
+	assert.Equal(t, []any{}, got["machineBreakdowns"])
+}
+
+func TestGetDailyUsageMachineBreakdowns(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "model-a",
+		InputPerMTok:  1,
+		OutputPerMTok: 5,
+	}}))
+
+	type machineUsage struct {
+		name         string
+		inputTokens  int
+		outputTokens int
+	}
+	fixtures := []machineUsage{
+		{name: "host-a", inputTokens: 2000, outputTokens: 200},
+		{name: "host-b", inputTokens: 1000, outputTokens: 100},
+	}
+	for i, fixture := range fixtures {
+		sessionID := fmt.Sprintf("machine-breakdown-%d", i)
+		insertSession(t, d, sessionID, "project-a", func(s *Session) {
+			s.Machine = fixture.name
+			s.Agent = "claude"
+			s.StartedAt = Ptr("2026-07-15T10:00:00Z")
+		})
+		insertMessages(t, d, Message{
+			SessionID: sessionID,
+			Ordinal:   0,
+			Role:      "assistant",
+			Timestamp: "2026-07-15T10:30:00Z",
+			Model:     "model-a",
+			TokenUsage: json.RawMessage(fmt.Sprintf(
+				`{"input_tokens":%d,"output_tokens":%d}`,
+				fixture.inputTokens, fixture.outputTokens,
+			)),
+		})
+	}
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:       "2026-07-15",
+		To:         "2026-07-15",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	day := result.Daily[0]
+	require.Len(t, day.MachineBreakdowns, 2)
+	assert.Equal(t, "host-a", day.MachineBreakdowns[0].MachineName)
+	assert.Equal(t, 2000, day.MachineBreakdowns[0].InputTokens)
+	assert.Equal(t, 200, day.MachineBreakdowns[0].OutputTokens)
+	assert.InDelta(t, 0.003, day.MachineBreakdowns[0].Cost, 1e-9)
+	assert.Equal(t, "host-b", day.MachineBreakdowns[1].MachineName)
+	assert.Equal(t, 1000, day.MachineBreakdowns[1].InputTokens)
+	assert.Equal(t, 100, day.MachineBreakdowns[1].OutputTokens)
+	assert.InDelta(t, 0.0015, day.MachineBreakdowns[1].Cost, 1e-9)
+	assert.InDelta(t, day.TotalCost,
+		day.MachineBreakdowns[0].Cost+day.MachineBreakdowns[1].Cost, 1e-9)
+
+	fastResult, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-07-15", To: "2026-07-15", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Len(t, fastResult.Daily, 1)
+	assert.Empty(t, fastResult.Daily[0].MachineBreakdowns)
 }
 
 func TestGetDailyUsageAgentBreakdowns(t *testing.T) {

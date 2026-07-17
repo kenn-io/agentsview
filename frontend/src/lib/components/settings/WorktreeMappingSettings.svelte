@@ -7,7 +7,9 @@
     type DbWorktreeProjectMapping,
     type WorktreeMappingRequest,
   } from "../../api/generated/index";
-  import { callGenerated } from "../../api/runtime.js";
+  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { LatestRead } from "../../utils/latest-read.js";
+  import { onDestroy } from "svelte";
 
   interface WorktreeMappingsResponse {
     machine: string;
@@ -35,9 +37,12 @@
   let layout = $state(explicitLayout);
   let project = $state("");
   let enabled = $state(true);
+  const mappingsRead = new LatestRead();
+  let disposed = false;
 
   $effect(() => {
     if (readOnly) {
+      mappingsRead.cancel();
       loading = false;
       return;
     }
@@ -45,21 +50,31 @@
   });
 
   async function loadMappings() {
+    if (disposed) return;
+    const signal = mappingsRead.begin();
     loading = true;
     error = "";
     try {
       const res =
         await callGenerated(() =>
           SettingsService.getApiV1SettingsWorktreeMappings(),
+          signal,
         ) as unknown as WorktreeMappingsResponse;
+      if (!mappingsRead.isCurrent(signal)) return;
       machine = res.machine;
       mappings = res.mappings;
     } catch (err) {
+      if (isAbortError(err) || !mappingsRead.isCurrent(signal)) return;
       error = err instanceof Error ? err.message : m.worktree_failed_load();
     } finally {
-      loading = false;
+      if (mappingsRead.finish(signal)) loading = false;
     }
   }
+
+  onDestroy(() => {
+    disposed = true;
+    mappingsRead.cancel();
+  });
 
   function resetForm() {
     editingId = null;

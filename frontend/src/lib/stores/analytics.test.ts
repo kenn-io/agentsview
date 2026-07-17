@@ -996,6 +996,24 @@ describe("executeFetch concurrency and error handling", () => {
     expect(signals[0]).toBeDefined();
     expect(signals[0]?.aborted).toBe(true);
   });
+
+  it("aborts visible panel requests on teardown", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    vi.mocked(callGenerated).mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary)
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    void analytics.fetchSummary();
+    await Promise.resolve();
+    analytics.cancelInFlightReads();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
 });
 
 describe("AnalyticsStore rolling default date range", () => {

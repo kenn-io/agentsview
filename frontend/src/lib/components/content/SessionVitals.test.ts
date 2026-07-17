@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import { mount, tick, unmount } from "svelte";
+import { cleanup, render } from "@testing-library/svelte";
 import type { SessionTiming } from "../../api/types/timing.js";
 
 const mocks = vi.hoisted(() => {
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     fetchSessionTiming: vi.fn().mockResolvedValue(timing),
+    timing,
   };
 });
 
@@ -43,6 +45,7 @@ describe("SessionVitals", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
+    mocks.fetchSessionTiming.mockReset().mockResolvedValue(mocks.timing);
     sessionTiming.reset();
     ui.vitalsOpen = true;
   });
@@ -54,6 +57,7 @@ describe("SessionVitals", () => {
     }
     sessionTiming.reset();
     ui.vitalsOpen = false;
+    cleanup();
     document.body.innerHTML = "";
   });
 
@@ -77,4 +81,131 @@ describe("SessionVitals", () => {
 
     expect(ui.vitalsOpen).toBe(false);
   });
+
+  it("aborts a pending sub-agent timing read when collapsed", async () => {
+    const signals: AbortSignal[] = [];
+    mocks.fetchSessionTiming.mockImplementation(
+      (sessionId: string, signal?: AbortSignal) => {
+        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1" },
+    });
+    await tick();
+    await Promise.resolve();
+    await tick();
+    sessionTiming.applyEvent(parentTimingWithSubagent());
+    await tick();
+
+    const toggle = document.querySelector<HTMLButtonElement>(
+      `button[aria-label="${m.call_row_toggle_subagent_calls()}"]`,
+    );
+    expect(toggle).not.toBeNull();
+    toggle!.click();
+    await tick();
+    expect(signals).toHaveLength(1);
+
+    toggle!.click();
+    await tick();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("aborts a pending sub-agent timing read when unmounted", async () => {
+    const signals: AbortSignal[] = [];
+    mocks.fetchSessionTiming.mockImplementation(
+      (sessionId: string, signal?: AbortSignal) => {
+        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1" },
+    });
+    await tick();
+    await Promise.resolve();
+    await tick();
+    sessionTiming.applyEvent(parentTimingWithSubagent());
+    await tick();
+
+    document
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${m.call_row_toggle_subagent_calls()}"]`,
+      )!
+      .click();
+    await tick();
+    expect(signals).toHaveLength(1);
+
+    unmount(component);
+    component = undefined;
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("aborts a pending sub-agent timing read when the parent changes", async () => {
+    const signals: AbortSignal[] = [];
+    mocks.fetchSessionTiming.mockImplementation(
+      (sessionId: string, signal?: AbortSignal) => {
+        if (sessionId.startsWith("sess-")) {
+          return Promise.resolve(mocks.timing);
+        }
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
+    const view = render(SessionVitals, { sessionId: "sess-1" });
+    await tick();
+    await Promise.resolve();
+    await tick();
+    sessionTiming.applyEvent(parentTimingWithSubagent());
+    await tick();
+
+    document
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${m.call_row_toggle_subagent_calls()}"]`,
+      )!
+      .click();
+    await tick();
+    expect(signals).toHaveLength(1);
+
+    await view.rerender({ sessionId: "sess-2" });
+    await tick();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
 });
+
+function parentTimingWithSubagent(): SessionTiming {
+  return {
+    ...mocks.timing,
+    tool_duration_ms: 400,
+    tool_call_count: 1,
+    subagent_count: 1,
+    turns: [
+      {
+        message_id: 1,
+        ordinal: 1,
+        started_at: "2026-07-14T12:00:00Z",
+        duration_ms: 400,
+        primary_category: "task",
+        calls: [
+          {
+            tool_use_id: "call-1",
+            tool_name: "Task",
+            category: "task",
+            subagent_session_id: "child-1",
+            duration_ms: 400,
+            is_parallel: false,
+            input_preview: "delegate",
+          },
+        ],
+      },
+    ],
+  };
+}

@@ -546,6 +546,17 @@ class AnalyticsStore {
     }
   }
 
+  cancelInFlightReads(): void {
+    this.fetchAllVersion++;
+    for (const panel of Object.keys(this.abortControllers) as Panel[]) {
+      this.versions[panel]++;
+      this.abortControllers[panel]?.abort();
+      delete this.abortControllers[panel];
+      this.querying[panel] = false;
+      this.loading[panel] = false;
+    }
+  }
+
   private markRefreshComplete(): void {
     this.lastUpdatedAt = Date.now();
     this.hasNewData = false;

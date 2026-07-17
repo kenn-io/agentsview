@@ -1626,6 +1626,8 @@ func sessionPushFingerprint(
 		ownerMarker,
 		dependencyFingerprint,
 		sess.Agent,
+		sess.AgentLabel,
+		sess.Entrypoint,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
 		stringValue(sess.SessionName),
@@ -1843,6 +1845,7 @@ func (s *Sync) pushSession(
 			missing_verification_count, duplicate_prompt_count,
 			no_code_context_count, runaway_tool_loop_count,
 			transcript_fidelity, transcript_revision,
+			agent_label, entrypoint,
 			updated_at
 			)
 			SELECT
@@ -1860,6 +1863,7 @@ func (s *Sync) pushSession(
 			$44, $45, $46, $47,
 			$48, $49,
 				$50, $51, $52, $53, $54, $55, $56, $57, $58, $59,
+				$60, $61,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -1869,6 +1873,8 @@ func (s *Sync) pushSession(
 			owner_marker = EXCLUDED.owner_marker,
 			project = EXCLUDED.project,
 			agent = EXCLUDED.agent,
+			agent_label = EXCLUDED.agent_label,
+			entrypoint = EXCLUDED.entrypoint,
 			first_message = EXCLUDED.first_message,
 			display_name = CASE
 				WHEN sessions.display_name IS DISTINCT FROM
@@ -1938,7 +1944,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($60::jsonb)
+					SELECT jsonb_array_elements_text($62::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1951,6 +1957,8 @@ func (s *Sync) pushSession(
 			OR sessions.owner_marker IS DISTINCT FROM EXCLUDED.owner_marker
 			OR sessions.project IS DISTINCT FROM EXCLUDED.project
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
+			OR sessions.agent_label IS DISTINCT FROM EXCLUDED.agent_label
+			OR sessions.entrypoint IS DISTINCT FROM EXCLUDED.entrypoint
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
 			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
@@ -2043,6 +2051,8 @@ func (s *Sync) pushSession(
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sanitizePG(sess.TranscriptFidelity),
 		transcriptRevisionValue(sess.TranscriptRevision),
+		sanitizePG(sess.AgentLabel),
+		sanitizePG(sess.Entrypoint),
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {

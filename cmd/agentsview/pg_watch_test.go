@@ -191,6 +191,7 @@ type fakeTarget struct {
 	ensureErr  error
 	pushErr    error
 	pushResult postgres.PushResult
+	onPush     func()
 	pushes     int
 	closed     int
 }
@@ -200,6 +201,9 @@ func (f *fakeTarget) Push(
 	context.Context, bool, func(postgres.PushProgress),
 ) (postgres.PushResult, error) {
 	f.pushes++
+	if f.onPush != nil {
+		f.onPush()
+	}
 	return f.pushResult, f.pushErr
 }
 func (f *fakeTarget) Close() error { f.closed++; return nil }
@@ -214,7 +218,8 @@ type pusherRecorder struct {
 func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
 	rec := &pusherRecorder{}
 	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
+		localSync:     func(context.Context) error { return nil },
+		ensurePricing: func(context.Context) error { return nil },
 		connect: func() (pgTarget, error) {
 			tgt := targets[rec.connects]
 			rec.connects++
@@ -222,6 +227,74 @@ func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
 		},
 	}
 	return p, rec
+}
+
+func TestPGPusherEnsuresPricingAfterLocalSyncBeforeConnect(t *testing.T) {
+	var events []string
+	target := &fakeTarget{
+		onPush: func() { events = append(events, "push") },
+	}
+	pusher := &pgPusher{
+		localSync: func(context.Context) error {
+			events = append(events, "local sync")
+			return nil
+		},
+		ensurePricing: func(context.Context) error {
+			events = append(events, "pricing ensure")
+			return nil
+		},
+		connect: func() (pgTarget, error) {
+			events = append(events, "connect")
+			return target, nil
+		},
+	}
+
+	require.NoError(t, pusher.push(
+		context.Background(), reasonChange, false,
+	))
+	assert.Equal(t, []string{
+		"local sync", "pricing ensure", "connect", "push",
+	}, events)
+}
+
+func TestPGPusherPricingFailureWarnsAndContinues(t *testing.T) {
+	wantErr := errors.New("catalog unavailable")
+	target := &fakeTarget{}
+	logs := captureLogOutput(t)
+	pusher := &pgPusher{
+		localSync:     func(context.Context) error { return nil },
+		ensurePricing: func(context.Context) error { return wantErr },
+		connect:       func() (pgTarget, error) { return target, nil },
+	}
+
+	require.NoError(t, pusher.push(
+		context.Background(), reasonChange, false,
+	))
+	assert.Equal(t, 1, target.pushes)
+	assert.Contains(t, logs.String(), "pricing refresh failed")
+	assert.Contains(t, logs.String(), wantErr.Error())
+}
+
+func TestPGPusherCanceledPricingStopsBeforeConnect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	connectCalled := false
+	pusher := &pgPusher{
+		localSync: func(context.Context) error { return nil },
+		ensurePricing: func(got context.Context) error {
+			require.Equal(t, ctx, got)
+			cancel()
+			return got.Err()
+		},
+		connect: func() (pgTarget, error) {
+			connectCalled = true
+			return &fakeTarget{}, nil
+		},
+	}
+
+	err := pusher.push(ctx, reasonChange, false)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.False(t, connectCalled)
 }
 
 // requireReconnectAfterTargetError verifies that a push failure on first closes

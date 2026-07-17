@@ -248,6 +248,7 @@
     document.addEventListener("click", onGroupByDocClick);
     document.addEventListener("keydown", onGroupByKey);
     return () => {
+      trends.cancelInFlightReads();
       document.removeEventListener("click", onGroupByDocClick);
       document.removeEventListener("keydown", onGroupByKey);
     };

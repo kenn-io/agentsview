@@ -554,7 +554,17 @@ to X" still works.
         }
       ],
       "projectBreakdowns": [],
-      "agentBreakdowns": []
+      "agentBreakdowns": [],
+      "machineBreakdowns": [
+        {
+          "machineName": "build-host",
+          "inputTokens": 33410,
+          "outputTokens": 142805,
+          "cacheCreationTokens": 301223,
+          "cacheReadTokens": 2984511,
+          "cost": 9.6052
+        }
+      ]
     }
   ],
   "totals": {
@@ -569,9 +579,10 @@ to X" still works.
 
 `modelsUsed` is sorted by cost within each day, so the most expensive model
 appears first. Daily entries always emit `modelBreakdowns`, `projectBreakdowns`,
-and `agentBreakdowns` as arrays; empty breakdowns are `[]`, not omitted.
-`modelBreakdowns` always includes a row per model, regardless of whether
-`--breakdown` was passed; the flag only controls terminal table output.
+`agentBreakdowns`, and `machineBreakdowns` as arrays; empty breakdowns are `[]`,
+not omitted. `modelBreakdowns` always includes a row per model. The other three
+arrays are populated when `--breakdown` is passed; the flag also controls
+per-model terminal table output.
 
 ### JSON Contract
 

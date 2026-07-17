@@ -8,6 +8,7 @@ export type DbDailyUsageEntry = {
   cacheReadTokens: number;
   date: string;
   inputTokens: number;
+  machineBreakdowns: any[] | null;
   modelBreakdowns: any[] | null;
   modelsUsed: any[] | null;
   outputTokens: number;

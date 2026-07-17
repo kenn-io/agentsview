@@ -394,6 +394,8 @@ func TestSanitizeSession(t *testing.T) {
 	s := db.Session{
 		Project:      "proj\x1bx",
 		Machine:      "host",
+		AgentLabel:   "tri\x07age",
+		Entrypoint:   "sdk\x00cli",
 		Cwd:          "/home/u/dev",
 		FirstMessage: &first,
 		SessionName:  &name,
@@ -404,6 +406,8 @@ func TestSanitizeSession(t *testing.T) {
 
 	assert.Equal(t, "projx", s.Project)
 	assert.Equal(t, "host", s.Machine)
+	assert.Equal(t, "triage", s.AgentLabel)
+	assert.Equal(t, "sdkcli", s.Entrypoint)
 	require.NotNil(t, s.FirstMessage)
 	assert.Equal(t, "hithere", *s.FirstMessage)
 	require.NotNil(t, s.SessionName)
@@ -412,7 +416,8 @@ func TestSanitizeSession(t *testing.T) {
 	require.NotNil(t, s.EndedAt)
 	assert.Equal(t, good, *s.EndedAt)
 
-	assert.Equal(t, 2, stats.ControlCharsStripped) // project + first message
+	// project + agent label + entrypoint + first message
+	assert.Equal(t, 4, stats.ControlCharsStripped)
 	assert.Equal(t, 1, stats.TimestampsBlanked)
 }
 

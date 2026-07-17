@@ -379,6 +379,7 @@
   });
 
   onDestroy(() => {
+    usage.cancelInFlightReads();
     unsubEvents?.();
   });
 </script>

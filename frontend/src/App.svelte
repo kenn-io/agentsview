@@ -124,8 +124,18 @@
   // Only track activeSessionId — untrack the rest to prevent
   // reactive loops from messages.loading / messages.messages.
   $effect(() => {
+    const route = router.route;
     const id = sessions.activeSessionId;
     untrack(() => {
+      if (route !== "sessions") {
+        sessions.cancelRouteReads();
+        messages.cancelInFlight();
+        sessionActivity.cancelInFlight();
+        sessionTiming.cancelInFlight();
+        pins.cancelSessionPinsRead();
+        sync.unwatchSession();
+        return;
+      }
       // Preserve selection when a pending scroll is queued
       // for this specific session (e.g. search result
       // navigation sets session + ordinal before this effect
@@ -391,7 +401,10 @@
     const msgParam = router.params["msg"] ?? null;
     untrack(() => {
       if (sid) {
-        if (sid !== sessions.activeSessionId) {
+        if (
+          sid !== sessions.activeSessionId ||
+          sessions.activeSession === undefined
+        ) {
           sessions.navigateToSession(sid);
         }
         if (msgParam) {

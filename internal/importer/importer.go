@@ -204,7 +204,6 @@ func upsertConversation(
 		ID:               s.ID,
 		Project:          s.Project,
 		Machine:          s.Machine,
-		Agent:            string(s.Agent),
 		FirstMessage:     strPtr(s.FirstMessage),
 		SessionName:      db.ParsedSessionName(s),
 		StartedAt:        timeStr(s.StartedAt),
@@ -212,6 +211,7 @@ func upsertConversation(
 		MessageCount:     s.MessageCount,
 		UserMessageCount: s.UserMessageCount,
 	}
+	db.ApplyParsedSessionIdentity(&sess, s)
 
 	if err := store.UpsertSession(sess); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
@@ -357,7 +357,6 @@ func ImportChatGPT(
 				ID:               s.ID,
 				Project:          s.Project,
 				Machine:          s.Machine,
-				Agent:            string(s.Agent),
 				FirstMessage:     strPtr(s.FirstMessage),
 				SessionName:      db.ParsedSessionName(s),
 				StartedAt:        timeStr(s.StartedAt),
@@ -365,6 +364,7 @@ func ImportChatGPT(
 				MessageCount:     s.MessageCount,
 				UserMessageCount: s.UserMessageCount,
 			}
+			db.ApplyParsedSessionIdentity(&sess, s)
 
 			if err := store.UpsertSession(sess); err != nil {
 				if errors.Is(err, db.ErrSessionExcluded) {

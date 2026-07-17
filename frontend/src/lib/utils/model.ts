@@ -8,7 +8,7 @@ import type { Message } from "../api/types.js";
 export function computeMainModel(messages: Message[]): string {
   const counts = new Map<string, number>();
   for (const m of messages) {
-    if (m.role === "assistant" && m.model) {
+    if (m.role === "assistant" && m.model && m.model !== "<synthetic>") {
       counts.set(m.model, (counts.get(m.model) ?? 0) + 1);
     }
   }

@@ -4,6 +4,7 @@ import {
   agentColor,
   agentForeground,
   agentLabel,
+  entrypointBadge,
 } from "./agents.js";
 
 describe("KNOWN_AGENTS", () => {
@@ -153,7 +154,25 @@ describe("agentForeground", () => {
   });
 });
 
+describe("entrypointBadge", () => {
+	it("shows non-default entrypoints and hides the default cli value", () => {
+		expect(entrypointBadge("sdk-cli")).toBe("sdk-cli");
+		expect(entrypointBadge(" sdk-cli ")).toBe("sdk-cli");
+		expect(entrypointBadge("cli")).toBeNull();
+		expect(entrypointBadge(" cli ")).toBeNull();
+		expect(entrypointBadge("")).toBeNull();
+		expect(entrypointBadge("   ")).toBeNull();
+		expect(entrypointBadge(null)).toBeNull();
+		expect(entrypointBadge(undefined)).toBeNull();
+	});
+});
+
 describe("agentLabel", () => {
+	it("uses a non-empty raw session override and ignores whitespace-only values", () => {
+		expect(agentLabel("claude", "triage")).toBe("triage");
+		expect(agentLabel("claude", " triage ")).toBe(" triage ");
+		expect(agentLabel("claude", "   ")).toBe("Claude");
+	});
   it("returns explicit labels for hyphenated agents", () => {
     expect(agentLabel("vscode-copilot")).toBe(
       "VS Code Copilot",

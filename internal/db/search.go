@@ -31,6 +31,11 @@ var SystemMsgPrefixes = []string{
 }
 
 const (
+	systemReminderOpenTag  = "<system-reminder>"
+	systemReminderCloseTag = "</system-reminder>"
+)
+
+const (
 	legacyGoalContextPrefix        = "<goal_context>"
 	codexInternalContextTagPrefix  = "<codex_internal_context"
 	goalContextSourceAttr          = `source="goal"`
@@ -100,6 +105,7 @@ func systemPrefixSQL(
 			"substr(%s, 1, %d) = '%s'", trimmed, len(p), p,
 		))
 	}
+	parts = append(parts, systemReminderTerminalSQL(trimmed, dialect))
 	parts = append(parts, goalContextPrefixSQL(trimmed, dialect))
 	guard := ""
 	if dialect == systemPrefixSQLite {
@@ -150,6 +156,46 @@ func systemPrefixSQLTrimmed(contentCol string) string {
 		"\u0085\u00A0\u1680" +
 		"\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A" +
 		"\u2028\u2029\u202F\u205F\u3000\uFEFF')"
+}
+
+func systemReminderTerminalSQL(
+	trimmed string, dialect systemPrefixSQLDialect,
+) string {
+	closePos := sqlPosition(dialect, systemReminderCloseTag, "rest")
+	next := systemPrefixSQLTrimmed(fmt.Sprintf(
+		"substr(rest, (%s) + %d)", closePos, len(systemReminderCloseTag),
+	))
+	terminal := fmt.Sprintf(
+		"(substr(rest, 1, %d) <> '%s' OR %s = 0)",
+		len(systemReminderOpenTag), systemReminderOpenTag, closePos,
+	)
+	classification := terminalRemainderSQL("rest", dialect)
+	seedReminder := fmt.Sprintf(
+		"substr(%s, 1, %d) = '%s'",
+		trimmed, len(systemReminderOpenTag), systemReminderOpenTag,
+	)
+	return fmt.Sprintf(`(%s AND EXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
+SELECT %s
+UNION ALL
+SELECT %s FROM reminder_remainder
+WHERE substr(rest, 1, %d) = '%s' AND %s > 0
+)
+SELECT 1 FROM reminder_remainder
+WHERE %s AND (rest = '' OR %s)
+LIMIT 1))`, seedReminder, trimmed, next,
+		len(systemReminderOpenTag), systemReminderOpenTag, closePos,
+		terminal, classification)
+}
+
+func terminalRemainderSQL(content string, dialect systemPrefixSQLDialect) string {
+	parts := make([]string, 0, len(SystemMsgPrefixes)+1)
+	for _, p := range SystemMsgPrefixes {
+		parts = append(parts, fmt.Sprintf(
+			"substr(%s, 1, %d) = '%s'", content, len(p), p,
+		))
+	}
+	parts = append(parts, goalContextPrefixSQL(content, dialect))
+	return strings.Join(parts, " OR ")
 }
 
 func goalContextPrefixSQL(trimmed string, dialect systemPrefixSQLDialect) string {
@@ -217,16 +263,40 @@ func IsSystemPrefixed(content, role string) bool {
 	if role != "user" {
 		return false
 	}
-	if IsGoalContextPrefixed(content, role) {
+	trimmed := strings.TrimLeft(content, systemPrefixTrimCutset)
+	remainder, stripped := stripLeadingSystemReminderBlocks(trimmed)
+	if stripped {
+		if remainder == "" {
+			return true
+		}
+		trimmed = remainder
+	}
+	if IsGoalContextPrefixed(trimmed, role) {
 		return true
 	}
-	trimmed := strings.TrimLeft(content, systemPrefixTrimCutset)
 	for _, p := range SystemMsgPrefixes {
 		if strings.HasPrefix(trimmed, p) {
 			return true
 		}
 	}
 	return false
+}
+
+func stripLeadingSystemReminderBlocks(content string) (string, bool) {
+	rest := strings.TrimLeft(content, systemPrefixTrimCutset)
+	stripped := false
+	for strings.HasPrefix(rest, systemReminderOpenTag) {
+		closeIdx := strings.Index(rest, systemReminderCloseTag)
+		if closeIdx < 0 {
+			return "", false
+		}
+		rest = strings.TrimLeft(
+			rest[closeIdx+len(systemReminderCloseTag):],
+			systemPrefixTrimCutset,
+		)
+		stripped = true
+	}
+	return rest, stripped
 }
 
 // SearchResult holds a session-level match with the best-ranked snippet.

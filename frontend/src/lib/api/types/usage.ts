@@ -38,6 +38,15 @@ export interface AgentBreakdown {
   cost: number;
 }
 
+export interface MachineBreakdown {
+  machineName: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cost: number;
+}
+
 export interface DailyUsageEntry {
   date: string;
   inputTokens: number;
@@ -49,6 +58,7 @@ export interface DailyUsageEntry {
   modelBreakdowns?: ModelBreakdown[];
   projectBreakdowns?: ProjectBreakdown[];
   agentBreakdowns?: AgentBreakdown[];
+  machineBreakdowns?: MachineBreakdown[];
 }
 
 export interface ProjectTotal {

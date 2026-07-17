@@ -299,7 +299,16 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (62: Local session machine identity now uses the operating-system hostname
 // instead of the ambiguous literal "local". Re-parsing updates existing
 // source-backed rows while the resync archive copy preserves orphaned history.)
-const dataVersion = 63
+// (65: Claude leading system-reminder blocks are stripped from mixed
+// user prompts before persistence, while reminder-only content still
+// promotes to system_reminder. Existing rows need re-parsing so reminder
+// metadata stops hiding real prompts and inflating reminder-only storage.)
+// (66: Claude session identity metadata. Re-parsing populates the new
+// agent_label and entrypoint session columns from top-level agentSetting
+// and entrypoint fields on existing Claude rows.)
+// (67: Antigravity CLI reader metadata. Re-parsing populates parent_session_id
+// and relationship_type from agyReader.parentCascadeId in trajectory sidecars.)
+const dataVersion = 67
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -797,30 +806,24 @@ func configureReaderPool(reader *sql.DB) {
 // It configures WAL mode and returns a DB with separate
 // writer and reader connections.
 //
-// If an existing database has an outdated schema (missing
-// columns), it is deleted and recreated from scratch.
-// If the schema is current but the data version is stale,
-// the database is preserved and file mtimes are reset to
-// trigger a re-sync on the next cycle.
+// If an existing database has an outdated schema (missing required
+// legacy columns), those columns are added before schema indexes
+// are initialized. The database is then marked for a non-destructive
+// re-sync so the new fields are populated without losing archived data.
+// If the schema is current but the data version is stale, the database
+// is also preserved and marked for a re-sync on the next cycle.
 func Open(path string) (*DB, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
-	schemaStale, dataStale, err := probeDatabase(path)
+	schemaRepairNeeded, dataStale, err := probeDatabase(path)
 	if err != nil {
 		return nil, fmt.Errorf("checking database: %w", err)
 	}
-	if schemaStale {
-		if err := dropDatabase(path); err != nil {
-			return nil, fmt.Errorf(
-				"rebuilding database: %w", err,
-			)
-		}
-	}
 
-	d, err := openAndInit(path)
+	d, err := openAndInit(path, schemaRepairNeeded)
 	if err != nil {
 		return nil, err
 	}
@@ -846,10 +849,10 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("queueing project identity backfill: %w", err)
 	}
 
-	if dataStale && !schemaStale {
+	if dataStale || schemaRepairNeeded {
 		d.dataStale.Store(true)
 		log.Printf(
-			"data version outdated; full resync required",
+			"database upgrade requires full resync",
 		)
 	} else {
 		// Only stamp user_version when data is current.
@@ -1473,15 +1476,13 @@ func CheckDataVersion(path string) error {
 	return err
 }
 
-// probeDatabase checks an existing database for schema and
-// data staleness. Returns (schemaStale, dataStale, err).
-// schemaStale means required columns are missing and the DB
-// must be dropped and recreated. dataStale means the schema
-// is fine but user_version < dataVersion, requiring a
-// non-destructive re-sync.
+// probeDatabase checks an existing database for schema and data staleness.
+// It returns (schemaRepairNeeded, dataStale, err). A writable Open repairs
+// missing legacy columns before initializing schema indexes, then requires a
+// non-destructive resync. dataStale means user_version < dataVersion.
 func probeDatabase(
 	path string,
-) (schemaStale, dataStale bool, err error) {
+) (schemaRepairNeeded, dataStale bool, err error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return false, false, nil
@@ -1503,7 +1504,7 @@ func probeDatabase(
 
 func probeDatabaseConn(
 	conn *sql.DB,
-) (schemaStale, dataStale bool, err error) {
+) (schemaRepairNeeded, dataStale bool, err error) {
 	version, err := readUserVersion(conn)
 	if err != nil {
 		return false, false, err
@@ -1515,7 +1516,7 @@ func probeDatabaseConn(
 		}
 	}
 
-	schema, err := needsSchemaRebuild(conn)
+	schema, err := needsSchemaRepair(conn)
 	if err != nil {
 		return false, false, err
 	}
@@ -1526,32 +1527,21 @@ func probeDatabaseConn(
 	return false, version < dataVersion, nil
 }
 
-// needsSchemaRebuild probes for required columns that may be
-// missing in databases created by older releases. If any are
-// absent, the DB must be dropped and recreated.
-func needsSchemaRebuild(conn *sql.DB) (bool, error) {
-	probes := []struct {
-		table  string
-		column string
-	}{
-		{"sessions", "parent_session_id"},
-		{"insights", "date_from"},
-		{"tool_calls", "tool_use_id"},
-		{"sessions", "user_message_count"},
-		{"sessions", "relationship_type"},
-		{"tool_calls", "subagent_session_id"},
-	}
-	for _, p := range probes {
+// needsSchemaRepair probes for required legacy columns that may be missing in
+// databases created by older releases. Open adds them before initializing
+// schema indexes, then triggers a non-destructive full resync.
+func needsSchemaRepair(conn *sql.DB) (bool, error) {
+	for _, migration := range legacySchemaColumnMigrations() {
 		var count int
 		err := conn.QueryRow(fmt.Sprintf(
 			"SELECT count(*) FROM pragma_table_info('%s')"+
 				" WHERE name = '%s'",
-			p.table, p.column,
+			migration.table, migration.column,
 		)).Scan(&count)
 		if err != nil {
 			return false, fmt.Errorf(
 				"probing schema (%s.%s): %w",
-				p.table, p.column, err,
+				migration.table, migration.column, err,
 			)
 		}
 		if count == 0 {
@@ -1578,6 +1568,45 @@ type schemaColumnMigration struct {
 	table  string
 	column string
 	ddl    string
+}
+
+// legacySchemaColumnMigrations repairs the complete historical table shapes
+// that must exist before db.init executes schema.sql.
+func legacySchemaColumnMigrations() []schemaColumnMigration {
+	return []schemaColumnMigration{
+		{
+			"sessions", "parent_session_id",
+			"ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
+		},
+		{
+			"tool_calls", "tool_use_id",
+			"ALTER TABLE tool_calls ADD COLUMN tool_use_id TEXT",
+		},
+		{
+			"tool_calls", "input_json",
+			"ALTER TABLE tool_calls ADD COLUMN input_json TEXT",
+		},
+		{
+			"tool_calls", "skill_name",
+			"ALTER TABLE tool_calls ADD COLUMN skill_name TEXT",
+		},
+		{
+			"tool_calls", "result_content_length",
+			"ALTER TABLE tool_calls ADD COLUMN result_content_length INTEGER",
+		},
+		{
+			"sessions", "user_message_count",
+			"ALTER TABLE sessions ADD COLUMN user_message_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "relationship_type",
+			"ALTER TABLE sessions ADD COLUMN relationship_type TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"tool_calls", "subagent_session_id",
+			"ALTER TABLE tool_calls ADD COLUMN subagent_session_id TEXT",
+		},
+	}
 }
 
 func schemaColumnMigrations() []schemaColumnMigration {
@@ -1799,6 +1828,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN source_version TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"sessions", "agent_label",
+			"ALTER TABLE sessions ADD COLUMN agent_label TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "entrypoint",
+			"ALTER TABLE sessions ADD COLUMN entrypoint TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"sessions", "transcript_fidelity",
 			"ALTER TABLE sessions ADD COLUMN transcript_fidelity TEXT NOT NULL DEFAULT ''",
 		},
@@ -1956,8 +1993,20 @@ func applyColumnMigrations(
 	exec func(string, ...any) (sql.Result, error),
 ) error {
 	for _, m := range migrations {
+		var tableCount int
+		err := queryRow(
+			`SELECT count(*) FROM sqlite_master
+			 WHERE type = 'table' AND name = ?`, m.table,
+		).Scan(&tableCount)
+		if err != nil {
+			return fmt.Errorf("checking table %s: %w", m.table, err)
+		}
+		if tableCount == 0 {
+			continue
+		}
+
 		var count int
-		err := queryRow(fmt.Sprintf(
+		err = queryRow(fmt.Sprintf(
 			"SELECT count(*) FROM pragma_table_info('%s')"+
 				" WHERE name = '%s'",
 			m.table, m.column,
@@ -1980,6 +2029,42 @@ func applyColumnMigrations(
 				m.table, m.column,
 			)
 		}
+	}
+	return nil
+}
+
+// repairLegacySchemaBeforeInit adds legacy columns before schema initialization.
+// The stale data marker is committed in the same transaction so a restart
+// cannot skip the required full resync.
+func repairLegacySchemaBeforeInit(w *writerHandle) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("starting schema repair transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := applyColumnMigrations(
+		legacySchemaColumnMigrations(),
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		tx.Exec,
+	); err != nil {
+		return err
+	}
+	var version int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("reading repaired archive version: %w", err)
+	}
+	if version >= dataVersion {
+		if _, err := tx.Exec(
+			fmt.Sprintf("PRAGMA user_version = %d", dataVersion-1),
+		); err != nil {
+			return fmt.Errorf("marking repaired archive stale: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing schema repair: %w", err)
 	}
 	return nil
 }
@@ -2818,19 +2903,7 @@ func (db *DB) Vacuum() error {
 	return err
 }
 
-func dropDatabase(path string) error {
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(path + suffix); err != nil &&
-			!os.IsNotExist(err) {
-			return fmt.Errorf(
-				"removing %s: %w", path+suffix, err,
-			)
-		}
-	}
-	return nil
-}
-
-func openAndInit(path string) (*DB, error) {
+func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 	writer, err := sql.Open("sqlite3", makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening writer: %w", err)
@@ -2859,6 +2932,17 @@ func openAndInit(path string) (*DB, error) {
 		return nil, fmt.Errorf(
 			"generating cursor secret: %w", err,
 		)
+	}
+	if schemaRepairNeeded {
+		db.mu.Lock()
+		err = repairLegacySchemaBeforeInit(db.getWriter())
+		db.mu.Unlock()
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf(
+				"repairing legacy schema before initialization: %w", err,
+			)
+		}
 	}
 
 	if err := db.init(); err != nil {

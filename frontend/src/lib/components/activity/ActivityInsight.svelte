@@ -2,7 +2,11 @@
   import { EmptyState, Spinner, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { InsightsService } from "../../api/generated/index";
-  import { configureGeneratedClient } from "../../api/runtime.js";
+  import {
+    callGenerated,
+    configureGeneratedClient,
+    isAbortError,
+  } from "../../api/runtime.js";
   import {
     generateInsight,
     type GenerateInsightHandle,
@@ -14,6 +18,7 @@
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
+  import { LatestRead } from "../../utils/latest-read.js";
 
   let {
     dateFrom,
@@ -35,6 +40,7 @@
   let genVersion = 0;
   // The in-flight generation, so we can abort it on range change/unmount.
   let handle: GenerateInsightHandle | null = null;
+  const insightListRead = new LatestRead();
 
   /**
    * Open the standalone Insights page prefilled for this panel's range.
@@ -88,19 +94,23 @@
     const from = dateFrom;
     const to = dateTo;
     const v = ++fetchVersion;
+    const signal = insightListRead.begin();
     abortGeneration();
     error = null;
     generating = false;
     loading = true;
 
     configureGeneratedClient();
-    InsightsService.getApiV1Insights({
-      type: "daily_activity",
-      dateFrom: from,
-      dateTo: to,
-    })
+    callGenerated(
+      () => InsightsService.getApiV1Insights({
+        type: "daily_activity",
+        dateFrom: from,
+        dateTo: to,
+      }),
+      signal,
+    )
       .then((res) => {
-        if (v !== fetchVersion) return;
+        if (v !== fetchVersion || !insightListRead.isCurrent(signal)) return;
         // The list endpoint treats date_from/date_to as range BOUNDS, so a
         // multi-day range also returns narrower insights nested inside it
         // (e.g. a single day) and project-scoped ones. This panel shows the
@@ -112,13 +122,18 @@
         insight = list[0] ?? null;
         loading = false;
       })
-      .catch(() => {
+      .catch((e) => {
+        if (isAbortError(e) || !insightListRead.isCurrent(signal)) return;
         if (v !== fetchVersion) return;
         insight = null;
         loading = false;
-      });
+      })
+      .finally(() => insightListRead.finish(signal));
 
-    return abortGeneration;
+    return () => {
+      insightListRead.cancel();
+      abortGeneration();
+    };
   });
 
   // The agent choice is shared with the standalone Insights page via the

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1700,6 +1701,85 @@ func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T)
 			assert.Equal(t, "history fallback", msgs[0].Content)
 			assert.Equal(t, 1, sess.MessageCount)
 			assert.Equal(t, "history fallback", sess.FirstMessage)
+		})
+	}
+}
+
+func TestAntigravityCLIReadsAgyReaderParentLink(t *testing.T) {
+	const (
+		childID  = "12121212-3434-5656-7878-909090909090"
+		parentID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	)
+	tests := []struct {
+		name             string
+		ext              string
+		parentCascadeID  string
+		wantParent       string
+		wantRelationship RelationshipType
+	}{
+		{
+			name:             "legacy pb with parent metadata",
+			ext:              ".pb",
+			parentCascadeID:  strings.ToUpper(parentID),
+			wantParent:       antigravityCLIIDPrefix + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name:             "modern db with lagging sidecar metadata",
+			ext:              ".db",
+			parentCascadeID:  parentID,
+			wantParent:       antigravityCLIIDPrefix + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name:             "old sidecar without reader metadata",
+			ext:              ".pb",
+			wantRelationship: RelNone,
+		},
+		{
+			name:             "invalid parent metadata is ignored",
+			ext:              ".pb",
+			parentCascadeID:  "../../not-a-cascade",
+			wantRelationship: RelNone,
+		},
+		{
+			name:             "self parent metadata is ignored",
+			ext:              ".pb",
+			parentCascadeID:  childID,
+			wantRelationship: RelNone,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			sourcePath := filepath.Join(root, "conversations", childID+tc.ext)
+			if tc.ext == ".db" {
+				createAntigravityTestDB(t, sourcePath) // two raw DB steps
+			} else {
+				mustWrite(t, sourcePath, []byte("pb-stub"))
+			}
+			reader := ""
+			if tc.parentCascadeID != "" {
+				reader = `,"agyReader":{"parentCascadeId":` +
+					strconv.Quote(tc.parentCascadeID) + `}`
+			}
+			// One displayable sidecar step deliberately lags the two-step DB
+			// fixture. Parent metadata is independent of transcript-source
+			// selection and must still be ingested.
+			sidecar := `{"trajectoryId":"traj","cascadeId":"` + childID + `"` + reader + `,"steps":[{` +
+				`"type":"CORTEX_STEP_TYPE_USER_INPUT",` +
+				`"metadata":{"createdAt":"2026-07-15T00:00:00Z"},` +
+				`"userInput":{"userResponse":"child prompt"}}]}`
+			mustWrite(t, strings.TrimSuffix(sourcePath, tc.ext)+".trajectory.json", []byte(sidecar))
+
+			sess, _, err := parseAntigravityCLITestSession(
+				t, sourcePath, "", "test-machine",
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantParent, sess.ParentSessionID)
+			assert.Equal(t, tc.wantRelationship, sess.RelationshipType)
 		})
 	}
 }

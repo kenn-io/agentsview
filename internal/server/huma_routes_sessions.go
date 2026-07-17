@@ -1208,12 +1208,19 @@ func (s *Server) humaResumeSession(
 	}
 	prefix := string(session.Agent) + ":"
 	rawID := strings.TrimPrefix(in.ID, prefix)
-	var cmd string
-	if strings.Contains(tmpl, "%s") {
-		cmd = fmt.Sprintf(tmpl, shellQuote(rawID))
-	} else {
-		cmd = tmpl
+	if s.db.ReadOnly() && !req.CommandOnly {
+		return nil, apiError(http.StatusNotImplemented,
+			"session launch not available in remote mode")
 	}
+	model := ""
+	if resumeAgentNeedsModel(string(session.Agent)) {
+		counts, err := s.db.GetResumeModelCounts(ctx, session.ID)
+		if err != nil {
+			return nil, internalError("resume: model lookup failed", err)
+		}
+		model = primaryResumeModel(counts)
+	}
+	cmd := resumeCommand(string(session.Agent), tmpl, rawID, model)
 	if string(session.Agent) == "claude" {
 		if req.SkipPermissions {
 			cmd += " --dangerously-skip-permissions"
@@ -1239,10 +1246,6 @@ func (s *Server) humaResumeSession(
 				Cwd:      launchDir,
 			},
 		}, nil
-	}
-	if s.db.ReadOnly() {
-		return nil, apiError(http.StatusNotImplemented,
-			"session launch not available in remote mode")
 	}
 	if req.OpenerID != "" {
 		return s.humaResumeWithOpener(session, rawID, cmd, responseCmd, launchDir, req.OpenerID)

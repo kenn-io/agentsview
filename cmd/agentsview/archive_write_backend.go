@@ -16,6 +16,7 @@ import (
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -389,8 +390,29 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 }
 
 type localArchiveWriteBackend struct {
-	appCfg   config.Config
-	database *db.DB
+	appCfg        config.Config
+	database      *db.DB
+	ensurePricing func(context.Context, *db.DB) error
+}
+
+func (b *localArchiveWriteBackend) ensureCurrentPricing(
+	ctx context.Context,
+) error {
+	if b.ensurePricing != nil {
+		return b.ensurePricing(ctx, b.database)
+	}
+	return pricingrefresh.EnsureCurrent(ctx, b.database)
+}
+
+func (b *localArchiveWriteBackend) newPGPusher(
+	localSync func(context.Context) error,
+	connect func() (pgTarget, error),
+) *pgPusher {
+	return &pgPusher{
+		localSync:     localSync,
+		ensurePricing: b.ensureCurrentPricing,
+		connect:       connect,
+	}
 }
 
 func (b *localArchiveWriteBackend) PGPush(
@@ -401,6 +423,15 @@ func (b *localArchiveWriteBackend) PGPush(
 	excludeProjects []string,
 ) (postgres.PushResult, error) {
 	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
+	if err := ctx.Err(); err != nil {
+		return postgres.PushResult{}, err
+	}
+	if err := b.ensureCurrentPricing(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return postgres.PushResult{}, ctxErr
+		}
+		log.Printf("warning: pricing refresh failed: %v", err)
+	}
 	if err := ctx.Err(); err != nil {
 		return postgres.PushResult{}, err
 	}
@@ -654,8 +685,8 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	vectorSource := pgVectorPushSource(b.appCfg, target, cfg)
 	defer closeVectorPushSource(vectorSource)
 
-	pusher := &pgPusher{
-		localSync: func(c context.Context) error {
+	pusher := b.newPGPusher(
+		func(c context.Context) error {
 			engine.SyncAll(c, nil)
 			// The push scans SQLite rows right after this returns;
 			// flush deferred signal recomputes so pushed sessions
@@ -663,7 +694,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			engine.FlushSignals()
 			return nil
 		},
-		connect: func() (pgTarget, error) {
+		func() (pgTarget, error) {
 			applyClassifierConfig(b.appCfg)
 			s, cErr := postgres.New(
 				target.PG.URL, target.PG.Schema, b.database,
@@ -675,7 +706,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			}
 			return s, nil
 		},
-	}
+	)
 	defer pusher.reset()
 
 	fmt.Printf(

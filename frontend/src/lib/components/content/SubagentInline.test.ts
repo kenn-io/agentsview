@@ -10,15 +10,20 @@ const {
   getMessages,
   getSession,
   childSessions,
+  callGenerated,
 } = vi.hoisted(() => ({
   getMessages: vi.fn(),
   getSession: vi.fn(),
   childSessions: new Map<string, Session>(),
+  callGenerated: vi.fn(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  ),
 }));
 
 vi.mock("../../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  callGenerated,
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../../api/generated/index", () => ({
@@ -74,10 +79,41 @@ afterEach(() => {
   childSessions.clear();
   getMessages.mockReset();
   getSession.mockReset();
+  callGenerated.mockReset();
+  callGenerated.mockImplementation(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  );
   document.body.innerHTML = "";
 });
 
 describe("SubagentInline", () => {
+  it("aborts the nested read when collapsed", async () => {
+    const signals: AbortSignal[] = [];
+    callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    getMessages.mockImplementationOnce(() => new Promise(() => {}));
+    getSession.mockImplementationOnce(() => new Promise(() => {}));
+    const component = mount(SubagentInline, {
+      target: document.body,
+      props: { sessionId: "subagent-session-id" },
+    });
+    await tick();
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".subagent-toggle",
+    )!;
+
+    toggle.click();
+    await tick();
+    toggle.click();
+    await tick();
+
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    unmount(component);
+  });
+
   it("renders subagent controls in Simplified Chinese", async () => {
     setLocale("zh-CN");
     childSessions.set(

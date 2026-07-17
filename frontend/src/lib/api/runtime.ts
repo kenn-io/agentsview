@@ -195,10 +195,11 @@ export function withAbort<T>(
   if (!signal || !isCancelable(promise)) return promise;
   if (signal.aborted) {
     promise.cancel();
-  } else {
-    signal.addEventListener("abort", () => promise.cancel(), {
-      once: true,
-    });
+    return promise;
   }
-  return promise;
+  const cancel = () => promise.cancel();
+  signal.addEventListener("abort", cancel, { once: true });
+  return promise.finally(() => {
+    signal.removeEventListener("abort", cancel);
+  });
 }

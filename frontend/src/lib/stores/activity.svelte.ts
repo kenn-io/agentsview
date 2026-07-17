@@ -1,10 +1,15 @@
 import type { AgentInfo, ProjectInfo } from "../api/types.js";
 import type { Report } from "../api/types/activity.js";
 import { ActivityService, MetadataService } from "../api/generated/index";
-import { configureGeneratedClient } from "../api/runtime.js";
+import {
+  callGenerated,
+  configureGeneratedClient,
+  isAbortError,
+} from "../api/runtime.js";
 import { sync } from "./sync.svelte.js";
 import { router } from "./router.svelte.js";
 import { localDateStr, rollingRange } from "../utils/dates.js";
+import { LatestRead } from "../utils/latest-read.js";
 
 export { localDateStr };
 
@@ -79,6 +84,8 @@ class ActivityStore {
   machines: string[] = $state([]);
 
   private loadVersion = 0;
+  private reportRead = new LatestRead();
+  private filterOptionsRead = new LatestRead();
   #filterOptionsLoaded = false;
   #filterOptionsPromise: Promise<void> | null = null;
   #filterOptionsVersion = 0;
@@ -116,6 +123,7 @@ class ActivityStore {
 
   async load({ background = false }: { background?: boolean } = {}) {
     const v = ++this.loadVersion;
+    const signal = this.reportRead.begin();
     if (this.materializeRollingWindow()) {
       this.writeUrl();
     }
@@ -123,6 +131,7 @@ class ActivityStore {
     // input or a partial deep link) the backend rejects the request, so hold
     // the current view until both are set instead of flashing an error.
     if (this.preset === "custom" && (!this.from || !this.to)) {
+      this.reportRead.finish(signal);
       this.loading = false;
       return;
     }
@@ -145,35 +154,40 @@ class ActivityStore {
         this.preset === "custom" && this.to
           ? customToInstant(this.to)
           : undefined;
-      const res = await ActivityService.getApiV1ActivityReport({
-        preset: this.preset,
-        date: this.date,
-        from: fromParam,
-        to: toParam,
-        timezone: this.timezone,
-        // The store keeps bucket as a free-form override string (populated by
-        // the Task 4 control); the generated client narrows it to the server's
-        // accepted set. An out-of-set value is rejected server-side.
-        bucket: (this.bucket || undefined) as
-          | "5m"
-          | "15m"
-          | "1h"
-          | "1d"
-          | "1w"
-          | undefined,
-        project: this.project || undefined,
-        agent: this.agent || undefined,
-        machine: this.machine || undefined,
-        automation: this.automation,
-      });
-      if (v !== this.loadVersion) return;
+      const res = await callGenerated(
+        () => ActivityService.getApiV1ActivityReport({
+          preset: this.preset,
+          date: this.date,
+          from: fromParam,
+          to: toParam,
+          timezone: this.timezone,
+          // The store keeps bucket as a free-form override string (populated by
+          // the Task 4 control); the generated client narrows it to the server's
+          // accepted set. An out-of-set value is rejected server-side.
+          bucket: (this.bucket || undefined) as
+            | "5m"
+            | "15m"
+            | "1h"
+            | "1d"
+            | "1w"
+            | undefined,
+          project: this.project || undefined,
+          agent: this.agent || undefined,
+          machine: this.machine || undefined,
+          automation: this.automation,
+        }),
+        signal,
+      );
+      if (v !== this.loadVersion || !this.reportRead.isCurrent(signal)) return;
       this.report = res as unknown as Report;
       this.lastUpdatedAt = Date.now();
       this.hasNewData = false;
-      this.loading = false;
     } catch (e) {
-      if (v !== this.loadVersion) return;
-      this.loading = false;
+      if (
+        isAbortError(e) ||
+        v !== this.loadVersion ||
+        !this.reportRead.isCurrent(signal)
+      ) return;
       // A failed background refresh keeps the last good report on screen so a
       // transient blip never blanks the report-first dashboard; the growing
       // "Updated Xm ago" label signals the staleness. With no report yet (a
@@ -185,7 +199,17 @@ class ActivityStore {
       this.report = null;
       this.error =
         e instanceof Error ? e.message : "Failed to load activity report";
+    } finally {
+      if (this.reportRead.finish(signal)) this.loading = false;
     }
+  }
+
+  cancelInFlightReads(): void {
+    this.loadVersion++;
+    this.reportRead.cancel();
+    this.filterOptionsRead.cancel();
+    this.#filterOptionsPromise = null;
+    this.loading = false;
   }
 
   /**
@@ -201,40 +225,60 @@ class ActivityStore {
     if (this.#filterOptionsLoaded) return;
     if (this.#filterOptionsPromise) return this.#filterOptionsPromise;
     const ver = this.#filterOptionsVersion;
+    const signal = this.filterOptionsRead.begin();
     const opts = { includeOneShot: true, includeAutomated: true };
     this.#filterOptionsPromise = (async () => {
       configureGeneratedClient();
       let ok = true;
       try {
-        const res = (await MetadataService.getApiV1Projects(
-          opts,
+        const res = (await callGenerated(
+          () => MetadataService.getApiV1Projects(opts),
+          signal,
         )) as unknown as { projects: ProjectInfo[] };
-        if (ver === this.#filterOptionsVersion) this.projects = res.projects;
-      } catch {
+        if (
+          ver === this.#filterOptionsVersion &&
+          this.filterOptionsRead.isCurrent(signal)
+        ) this.projects = res.projects;
+      } catch (e) {
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
         ok = false; // keep the current list; retry on the next call
       }
       try {
-        const res = (await MetadataService.getApiV1Agents(
-          opts,
+        const res = (await callGenerated(
+          () => MetadataService.getApiV1Agents(opts),
+          signal,
         )) as unknown as { agents: AgentInfo[] };
-        if (ver === this.#filterOptionsVersion) this.agents = res.agents;
-      } catch {
+        if (
+          ver === this.#filterOptionsVersion &&
+          this.filterOptionsRead.isCurrent(signal)
+        ) this.agents = res.agents;
+      } catch (e) {
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
         ok = false;
       }
       try {
-        const res = (await MetadataService.getApiV1Machines(
-          opts,
+        const res = (await callGenerated(
+          () => MetadataService.getApiV1Machines(opts),
+          signal,
         )) as unknown as { machines: string[] };
-        if (ver === this.#filterOptionsVersion) this.machines = res.machines;
-      } catch {
+        if (
+          ver === this.#filterOptionsVersion &&
+          this.filterOptionsRead.isCurrent(signal)
+        ) this.machines = res.machines;
+      } catch (e) {
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
         ok = false;
       }
-      if (ver === this.#filterOptionsVersion) {
+      if (
+        ver === this.#filterOptionsVersion &&
+        this.filterOptionsRead.isCurrent(signal)
+      ) {
         // Cache only a fully successful load so a transient failure is
         // retried rather than frozen as a permanent empty list.
         this.#filterOptionsLoaded = ok;
         this.#filterOptionsPromise = null;
       }
+      this.filterOptionsRead.finish(signal);
     })();
     return this.#filterOptionsPromise;
   }

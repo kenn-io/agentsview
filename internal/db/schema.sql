@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     project     TEXT NOT NULL,
     machine     TEXT NOT NULL DEFAULT 'local',
     agent       TEXT NOT NULL DEFAULT 'claude',
+    agent_label TEXT NOT NULL DEFAULT '',
+    entrypoint  TEXT NOT NULL DEFAULT '',
     first_message TEXT,
     display_name TEXT,
     session_name TEXT,

@@ -367,6 +367,31 @@ localStorage.removeItem("agentsview-server-url")
 location.reload()
 ```
 
+### Slow Aggregates Behind A Proxy
+
+API responses have a write deadline; a request that exceeds it returns `503`
+with a `{"error":"request timed out"}` body, and affected dashboard panels show
+"request timed out". The default is 30 seconds, which is comfortable for local
+archives but can be tight for large shared datasets — heatmap, activity, and
+usage summaries scan the full message history.
+
+Raise the deadline with `--write-timeout` (a Go duration). The flag is available
+on both the local SQLite server and the PostgreSQL read server:
+
+```bash
+# Local SQLite server
+agentsview serve --write-timeout 120s
+
+# PostgreSQL-backed read server (the multi-tenant / large-dataset case)
+agentsview pg serve --write-timeout 120s
+```
+
+Set it to `0` to disable the deadline entirely. If aggregates are slow enough to
+need a large timeout, that usually points at a database-side cost worth
+investigating first — for a multi-tenant read role, confirm any row-level
+security policy is set-based (`session_id IN (SELECT ...)`) rather than a
+per-row function call, which the query planner cannot hoist into a single join.
+
 ## Managed Caddy Mode
 
 AgentsView can manage a [Caddy](https://caddyserver.com) reverse proxy for
@@ -438,6 +463,7 @@ Changes that affect bind or auth behavior may require a server restart.
 | `--require-auth`    | `false`     | Require a bearer token for API requests             |
 | `--public-url`      |             | Public URL for hostname or proxy access             |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated) |
+| `--write-timeout`   | `30s`       | API response write deadline; `0` disables it        |
 | `--proxy`           |             | Managed proxy mode (`caddy`)                        |
 | `--caddy-bin`       | `caddy`     | Caddy binary path                                   |
 | `--proxy-bind-host` | `127.0.0.1` | Interface for managed proxy                         |

@@ -321,6 +321,37 @@ func TestCompareSessionFields(t *testing.T) {
 			}},
 		},
 		{
+			name: "agent_label drift is informational for incremental agents",
+			stored: func(s *db.Session) {
+				s.AgentLabel = "triage"
+			},
+			prepared: func(s *db.Session) {
+				s.AgentLabel = "review"
+			},
+			want: []want{{
+				field:         FieldAgentLabel,
+				stored:        "triage",
+				parsed:        "review",
+				informational: true,
+			}},
+		},
+		{
+			name: "entrypoint drift is a real diff for full-replace agents",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.Entrypoint = "cli"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.Entrypoint = "sdk-cli"
+			},
+			want: []want{{
+				field:  FieldEntrypoint,
+				stored: "cli",
+				parsed: "sdk-cli",
+			}},
+		},
+		{
 			name: "relationship_type drift is a real diff",
 			stored: func(s *db.Session) {
 				s.Agent = "gemini"

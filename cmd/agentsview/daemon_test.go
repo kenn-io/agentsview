@@ -174,12 +174,76 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, []string{"serve"}, gotArgs)
 	assert.True(t, gotPolicy.ConfigOnly)
 	assert.Equal(t, "daemon start", gotPolicy.Operation)
-	assert.False(t, gotPolicy.Attached)
-	assert.Nil(t, gotPolicy.Context)
-	assert.Nil(t, gotPolicy.OnLaunch)
-	assert.Nil(t, gotPolicy.OnProgress)
+	assert.True(t, gotPolicy.Attached)
+	assert.NotNil(t, gotPolicy.Context)
+	assert.NotNil(t, gotPolicy.OnLaunch)
+	assert.NotNil(t, gotPolicy.OnProgress)
 	assert.Contains(t, out.String(), "already running")
 	assert.Contains(t, out.String(), "pid 41")
+}
+
+func TestDaemonStartStreamsProgressUntilReady(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.startBackground = func(
+		_ config.Config, _ []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		assert.True(t, policy.Attached)
+		require.NotNil(t, policy.Context)
+		require.NotNil(t, policy.OnLaunch)
+		require.NotNil(t, policy.OnProgress)
+
+		policy.OnLaunch(92, "/data/serve.log")
+		policy.OnProgress(&startupState{Phase: "opening database"}, 2*time.Second)
+		policy.OnProgress(&startupState{
+			Phase: "initial sync", Detail: "claude: 120/450 sessions (27%)",
+		}, 6*time.Second)
+		policy.OnProgress(&startupState{Phase: "starting HTTP server"}, 18*time.Second)
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 92},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true, childPID: 92, LogPath: "/data/serve.log",
+		}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.Equal(t, "Starting agentsview (pid 92)...\n"+
+		"  log: /data/serve.log\n"+
+		"  opening database (2s)\n"+
+		"  initial sync: claude: 120/450 sessions (27%) (6s)\n"+
+		"  starting HTTP server (18s)\n"+
+		"agentsview running at http://127.0.0.1:8080 (pid 92)\n", out.String())
+}
+
+func TestDaemonStartCancellationLeavesChildRunning(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	deps.startBackground = func(
+		_ config.Config, _ []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		policy.OnLaunch(93, "/data/serve.log")
+		cancel()
+		return backgroundLaunchResult{
+			Started: true, childPID: 93, LogPath: "/data/serve.log",
+		}, context.Canceled
+	}
+
+	cmd := newDaemonCommandWithDeps(*deps)
+	cmd.SetContext(ctx)
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"start"})
+	err := cmd.Execute()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "pid 93")
+	assert.ErrorContains(t, err, "/data/serve.log")
+	assert.ErrorContains(t, err, "child continues running")
+	assert.ErrorContains(t, err, "agentsview daemon status")
+	assert.Contains(t, out.String(), "Starting agentsview (pid 93)...")
 }
 
 func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
@@ -775,7 +839,7 @@ func TestDaemonRestartStreamsProgressUntilReady(t *testing.T) {
 
 func TestDaemonRestartProgressHeartbeatUsesUnroundedElapsed(t *testing.T) {
 	var out bytes.Buffer
-	progress := daemonRestartProgressWriter{w: &out}
+	progress := daemonLaunchProgressWriter{w: &out}
 	startedAt := time.Unix(100, 0)
 	state := &startupState{StartedAt: startedAt, Phase: "initial sync"}
 

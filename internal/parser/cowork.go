@@ -352,6 +352,8 @@ func applyCoworkIdentity(
 	for i := range results {
 		sess := &results[i].Session
 		sess.Agent = AgentCowork
+		sess.AgentLabel = ""
+		sess.Entrypoint = ""
 		sess.ID = coworkIDPrefix + sess.ID
 		if sess.ParentSessionID != "" {
 			sess.ParentSessionID = coworkIDPrefix + sess.ParentSessionID

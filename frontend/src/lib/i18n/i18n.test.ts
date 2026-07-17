@@ -15,6 +15,7 @@ import en from "../../../messages/en.json";
 import zhCN from "../../../messages/zh-CN.json";
 import zhTW from "../../../messages/zh-TW.json";
 import ko from "../../../messages/ko.json";
+import fr from "../../../messages/fr.json";
 
 describe("i18n locale selection", () => {
   beforeEach(() => {
@@ -32,10 +33,14 @@ describe("i18n locale selection", () => {
     expect(normalizeLocale("zh-Hant-HK")).toBe("zh-TW");
     expect(normalizeLocale("ko")).toBe("ko");
     expect(normalizeLocale("ko-KR")).toBe("ko");
+    expect(normalizeLocale("fr")).toBe("fr");
+    expect(normalizeLocale("fr-FR")).toBe("fr");
+    expect(normalizeLocale("fr-CA")).toBe("fr");
+    expect(normalizeLocale("fr-CH")).toBe("fr");
   });
 
   it("falls back to English for unsupported locales", () => {
-    expect(normalizeLocale("fr-FR")).toBe(DEFAULT_LOCALE);
+    expect(normalizeLocale("de-DE")).toBe(DEFAULT_LOCALE);
     expect(normalizeLocale("")).toBe(DEFAULT_LOCALE);
   });
 
@@ -69,21 +74,22 @@ describe("i18n locale selection", () => {
 
   it("falls back to English when browser languages are unsupported", () => {
     vi.stubGlobal("navigator", {
-      languages: ["fr-FR"],
-      language: "fr-FR",
+      languages: ["de-DE"],
+      language: "de-DE",
     });
 
     expect(chooseInitialLocale()).toBe("en");
   });
 
   it("keeps the supported locale list explicit", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko", "fr"]);
   });
 
-  it("keeps Simplified Chinese, Traditional Chinese, and Korean locale keys aligned with English", () => {
+  it("keeps every translated locale's keys aligned with English", () => {
     expect(Object.keys(zhCN).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(zhTW).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(ko).sort()).toEqual(Object.keys(en).sort());
+    expect(Object.keys(fr).sort()).toEqual(Object.keys(en).sort());
   });
 
   it("points auth recovery at pre-auth token sources", () => {
@@ -125,6 +131,13 @@ describe("i18n locale selection", () => {
       count: 12,
       countLabel: "12",
     })).toBe("세션 12개");
+
+    runtime.setLocale("fr", { reload: false });
+    expect(m.nav_sessions()).toBe("Sessions");
+    expect(m.status_bar_sessions({
+      count: 12,
+      countLabel: "12",
+    })).toBe("12 sessions");
   });
 
   it("selects cardinal plural variants per locale", () => {
@@ -173,6 +186,15 @@ describe("i18n locale selection", () => {
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("도구 호출 1회");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("도구 호출 3회");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("메시지 1개");
+
+    // French has one/other like English, but CLDR puts 0 in `one`, so zero
+    // takes the singular form where English would say "0 tool calls".
+    runtime.setLocale("fr", { reload: false });
+    expect(m.tool_call_group_call_count({ count: 0 })).toBe("0 appel d'outil");
+    expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 appel d'outil");
+    expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 appels d'outil");
+    expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 message");
+    expect(m.subagent_inline_message_count({ count: 5 })).toBe("5 messages");
   });
 
   it("formats dates with the active Paraglide locale", () => {

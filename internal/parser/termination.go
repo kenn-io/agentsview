@@ -63,7 +63,14 @@ func Classify(
 	// message follows the last assistant turn, the agent is no
 	// longer parked — the user has already replied, so the UI
 	// should not show a "waiting for you" indicator.
-	lastIsAssistant := messages[len(messages)-1].Role == RoleAssistant
+	lastIsAssistant := false
+	for _, m := range slices.Backward(messages) {
+		if m.IsSystem {
+			continue
+		}
+		lastIsAssistant = m.Role == RoleAssistant
+		break
+	}
 	if lastIsAssistant && isAwaitingUserStopReason(stopReason) {
 		return TerminationAwaitingUser
 	}
@@ -92,6 +99,9 @@ func isAwaitingUserStopReason(stopReason string) bool {
 func hasOrphanedToolCall(messages []ParsedMessage) bool {
 	lastAssistantIdx := -1
 	for i, v := range slices.Backward(messages) {
+		if v.IsSystem {
+			continue
+		}
 		if v.Role == RoleAssistant {
 			lastAssistantIdx = i
 			break

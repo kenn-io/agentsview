@@ -5773,19 +5773,20 @@ func (e *Engine) tryProviderIncrementalAppend(
 	}
 
 	parseFn := func(
-		_ string, sessionID string, offset int64,
-		startOrdinal int, lastEntryUUID string,
+		_ string, inc *db.IncrementalInfo,
 	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
 		outcome, status, perr := provider.ParseIncremental(
 			ctx,
 			parser.IncrementalRequest{
-				Source:        source,
-				Fingerprint:   fingerprint,
-				SessionID:     sessionID,
-				Offset:        offset,
-				StartOrdinal:  startOrdinal,
-				Machine:       e.machine,
-				LastEntryUUID: lastEntryUUID,
+				Source:           source,
+				Fingerprint:      fingerprint,
+				SessionID:        inc.ID,
+				Offset:           inc.FileSize,
+				StartOrdinal:     inc.NextOrdinal,
+				Machine:          e.machine,
+				LastEntryUUID:    inc.LastEntryUUID,
+				StoredAgentLabel: inc.AgentLabel,
+				StoredEntrypoint: inc.Entrypoint,
 			},
 		)
 		if perr != nil {
@@ -5826,8 +5827,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 // authoritative termination status, and any error. The consumed count covers
 // only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
-	path string, sessionID string, offset int64,
-	startOrdinal int, lastEntryUUID string,
+	path string, inc *db.IncrementalInfo,
 ) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
@@ -5952,7 +5952,7 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	newMsgs, links, endedAt, consumed, terminationStatus, err := parseFn(
-		file.Path, inc.ID, inc.FileSize, inc.NextOrdinal, inc.LastEntryUUID,
+		file.Path, inc,
 	)
 	if err != nil {
 		if parser.IsIncrementalFullParseFallback(err) {
@@ -8763,7 +8763,6 @@ func toDBSession(pw pendingWrite) db.Session {
 		ID:                   pw.sess.ID,
 		Project:              pw.sess.Project,
 		Machine:              pw.sess.Machine,
-		Agent:                string(pw.sess.Agent),
 		MessageCount:         pw.sess.MessageCount,
 		UserMessageCount:     pw.sess.UserMessageCount,
 		ParentSessionID:      strPtr(pw.sess.ParentSessionID),
@@ -8794,6 +8793,7 @@ func toDBSession(pw pendingWrite) db.Session {
 		FileDevice:    int64Ptr(pw.sess.File.Device),
 		FileHash:      strPtr(pw.sess.File.Hash),
 	}
+	db.ApplyParsedSessionIdentity(&s, pw.sess)
 	if pw.sess.FirstMessage != "" {
 		s.FirstMessage = &pw.sess.FirstMessage
 	}

@@ -86,9 +86,9 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
 		) VALUES
-			('usage-breakdown-001', 'test-machine', 'proj-a', 'claude',
+			('usage-breakdown-001', 'host-a', 'proj-a', 'claude',
 			 '2026-03-12T10:00:00Z'::timestamptz, 1, 1),
-			('usage-breakdown-002', 'test-machine', 'proj-b', 'codex',
+			('usage-breakdown-002', 'host-b', 'proj-b', 'codex',
 			 '2026-03-12T11:00:00Z'::timestamptz, 1, 1)`)
 	require.NoError(t, err, "insert sessions")
 	_, err = store.DB().ExecContext(ctx, `
@@ -120,6 +120,11 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	assert.Len(t, day.ProjectBreakdowns, 2)
 	assert.Len(t, day.AgentBreakdowns, 2)
 	assert.Len(t, day.ModelBreakdowns, 2)
+	require.Len(t, day.MachineBreakdowns, 2)
+	assert.Equal(t, "host-a", day.MachineBreakdowns[0].MachineName)
+	assert.Equal(t, "host-b", day.MachineBreakdowns[1].MachineName)
+	assert.InDelta(t, day.TotalCost,
+		day.MachineBreakdowns[0].Cost+day.MachineBreakdowns[1].Cost, 1e-9)
 	assert.Greater(t, day.TotalCost, 0.0)
 
 	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{

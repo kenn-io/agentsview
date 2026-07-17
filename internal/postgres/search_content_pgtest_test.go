@@ -334,6 +334,52 @@ func TestPGSearchContentExcludeSystem(t *testing.T) {
 		"ExcludeSystem=true should suppress system messages")
 }
 
+// TestPGSearchContentExcludeSystemReminderFalseFlag executes the PostgreSQL
+// system-prefix predicate against rows whose is_system flag is false. The
+// reminder-only row is excluded, while a reminder followed by user content is
+// retained, across every message search path that uses this predicate.
+func TestPGSearchContentExcludeSystemReminderFalseFlag(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-sys-reminder", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-sys-reminder", 0, "user",
+		"PGREMINDER ordinary user content", "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "cs-sys-reminder", 1, "user",
+		"<system-reminder>PGREMINDER internal</system-reminder>",
+		"2026-05-01T10:00:01Z", false)
+	insertCSMessage(t, store, "cs-sys-reminder", 2, "user",
+		"<system-reminder>PGREMINDER context</system-reminder>\n\nPGREMINDER prompt",
+		"2026-05-01T10:00:02Z", false)
+
+	ctx := context.Background()
+	for _, mode := range []string{"substring", "fts", "regex"} {
+		t.Run(mode, func(t *testing.T) {
+			f := db.ContentSearchFilter{
+				Pattern: "PGREMINDER", Mode: mode,
+				Sources: []string{"messages"}, Limit: 50,
+			}
+			all, err := store.SearchContent(ctx, f)
+			require.NoError(t, err, "SearchContent %s", mode)
+			assert.ElementsMatch(t, []int{0, 1, 2}, messageOrdinals(all),
+				"without ExcludeSystem")
+
+			f.ExcludeSystem = true
+			filtered, err := store.SearchContent(ctx, f)
+			require.NoError(t, err, "SearchContent %s ExcludeSystem", mode)
+			assert.ElementsMatch(t, []int{0, 2}, messageOrdinals(filtered),
+				"reminder-only false-flag row must be excluded")
+		})
+	}
+}
+
+func messageOrdinals(page db.ContentSearchPage) []int {
+	ordinals := make([]int, len(page.Matches))
+	for i, match := range page.Matches {
+		ordinals[i] = match.Ordinal
+	}
+	return ordinals
+}
+
 // TestPGSearchContentProjectFilter verifies the Project session filter.
 func TestPGSearchContentProjectFilter(t *testing.T) {
 	store := setupContentSearch(t)

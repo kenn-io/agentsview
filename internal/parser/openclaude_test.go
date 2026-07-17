@@ -152,6 +152,105 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 	assert.Contains(t, result.Messages[2].Content, "Compact summary")
 }
 
+func TestOpenClaudeTerminationUsesSystemToolResults(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "tool-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+
+	path := filepath.Join(projectDir, "session-tools.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{
+			"type": "user", "timestamp": tsEarly, "uuid": "u1",
+			"message": map[string]any{"role": "user", "content": "read file"},
+		}),
+		buildMetadataLine(map[string]any{
+			"type": "assistant", "timestamp": tsEarlyS1, "uuid": "a1",
+			"message": map[string]any{
+				"role": "assistant", "stop_reason": "tool_use",
+				"content": []map[string]any{{
+					"type": "tool_use", "id": "toolu_sys", "name": "Read", "input": map[string]any{},
+				}},
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type": "system", "subtype": "tool_result", "timestamp": tsEarlyS5, "uuid": "s1",
+			"message": map[string]any{
+				"role": "system",
+				"content": []map[string]any{{
+					"type": "tool_result", "tool_use_id": "toolu_sys", "content": "file contents",
+				}},
+			},
+		}),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+
+	assert.Equal(t, TerminationClean, result.Session.TerminationStatus)
+	require.Len(t, result.Messages, 3)
+	assert.True(t, result.Messages[2].IsSystem)
+	require.Len(t, result.Messages[2].ToolResults, 1)
+	assert.Equal(t, "toolu_sys", result.Messages[2].ToolResults[0].ToolUseID)
+}
+
+func TestOpenClaudeTerminationCompactBoundaryDoesNotResolveToolCall(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "compact-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+
+	path := filepath.Join(projectDir, "session-compact.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{
+			"type": "user", "timestamp": tsEarly, "uuid": "u1",
+			"message": map[string]any{"role": "user", "content": "read file"},
+		}),
+		buildMetadataLine(map[string]any{
+			"type": "assistant", "timestamp": tsEarlyS1, "uuid": "a1",
+			"message": map[string]any{
+				"role": "assistant", "stop_reason": "tool_use",
+				"content": []map[string]any{{
+					"type": "tool_use", "id": "toolu_boundary", "name": "Read", "input": map[string]any{},
+				}},
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type": "system", "subtype": "compact_boundary", "timestamp": tsEarlyS5, "uuid": "s1",
+			"message": map[string]any{
+				"content": []map[string]any{{
+					"type": "text", "text": "Compacted earlier turns",
+				}},
+			},
+		}),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+
+	assert.Equal(t, TerminationToolCallPending, result.Session.TerminationStatus)
+	require.Len(t, result.Messages, 3)
+	assert.True(t, result.Messages[2].IsSystem)
+	assert.True(t, result.Messages[2].IsCompactBoundary)
+	assert.Equal(t, RoleAssistant, result.Messages[2].Role)
+}
+
 func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "queue-project")
@@ -178,6 +277,15 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 					{"type": "text", "text": "/resume next step"},
 					{"type": "text", "text": "with context"},
 				},
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "attachment",
+			"timestamp": "2024-01-01T10:00:01.250Z",
+			"attachment": map[string]any{
+				"type":        "queued_command",
+				"commandMode": "prompt",
+				"prompt":      "<system-reminder>remember this</system-reminder>\n\nactual prompt",
 			},
 		}),
 		buildMetadataLine(map[string]any{
@@ -240,11 +348,14 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 
 	result := outcome.Results[0].Result
-	require.Len(t, result.Messages, 3)
+	require.Len(t, result.Messages, 4)
 	assert.Equal(t, "/resume next step\nwith context", result.Messages[1].Content)
 	assert.Equal(t, "queued_command", result.Messages[1].SourceSubtype)
 	assert.Equal(t, RoleUser, result.Messages[1].Role)
-	assert.Equal(t, 2, result.Session.UserMessageCount)
+	assert.Equal(t, "<system-reminder>remember this</system-reminder>\n\nactual prompt", result.Messages[2].Content)
+	assert.Equal(t, "queued_command", result.Messages[2].SourceSubtype)
+	assert.False(t, result.Messages[2].IsSystem)
+	assert.Equal(t, 3, result.Session.UserMessageCount)
 	assert.Equal(t, "first prompt", result.Session.FirstMessage)
 }
 

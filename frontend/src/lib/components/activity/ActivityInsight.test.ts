@@ -23,7 +23,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../api/generated/index", () => ({
   InsightsService: { getApiV1Insights: mocks.getInsights },
 }));
-vi.mock("../../api/runtime.js", () => ({ configureGeneratedClient: vi.fn() }));
+vi.mock("../../api/runtime.js", () => ({
+  configureGeneratedClient: vi.fn(),
+  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(() => false),
+}));
 vi.mock("../../api/client.js", () => ({
   generateInsight: mocks.generateInsight,
 }));

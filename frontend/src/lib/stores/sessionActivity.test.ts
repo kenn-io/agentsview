@@ -7,9 +7,16 @@ import { SessionsService } from "../api/generated/index";
 import type { SessionActivityBucket } from "../api/types/session-activity.js";
 import type { SessionActivityResponse } from "../api/types/session-activity.js";
 
+const apiRuntimeMocks = vi.hoisted(() => ({
+  callGenerated: vi.fn(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  ),
+}));
+
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  callGenerated: apiRuntimeMocks.callGenerated,
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -68,6 +75,48 @@ describe("SessionActivityStore", () => {
   beforeEach(() => {
     sessionActivity.clear();
     vi.resetAllMocks();
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+    );
+  });
+
+  it("aborts session activity when another session replaces it", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    sessionsService.getApiV1SessionsIdActivity
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(makeResponse(2));
+
+    void sessionActivity.load("s1");
+    await Promise.resolve();
+    await sessionActivity.load("s2");
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("aborts session activity without clearing cached buckets", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((request, signal) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    sessionsService.getApiV1SessionsIdActivity.mockResolvedValueOnce(
+      makeResponse(2),
+    );
+    await sessionActivity.load("s1");
+    sessionsService.getApiV1SessionsIdActivity.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void sessionActivity.reload("s1");
+    await Promise.resolve();
+    sessionActivity.cancelInFlight();
+
+    expect(signals.at(-1)?.aborted).toBe(true);
+    expect(sessionActivity.buckets).toHaveLength(2);
   });
 
   it("ignores stale response after session switch", async () => {

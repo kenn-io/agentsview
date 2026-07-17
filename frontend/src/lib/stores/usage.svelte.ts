@@ -940,6 +940,21 @@ class UsageStore {
     return false;
   }
 
+  cancelInFlightReads(): void {
+    this.fetchAllVersion++;
+    this.versions.summary++;
+    this.versions.pairwise++;
+    this.versions.topSessions++;
+    for (const panel of Object.keys(this.abortControllers) as UsagePanel[]) {
+      this.abortControllers[panel]?.abort();
+      delete this.abortControllers[panel];
+      this.querying[panel] = false;
+    }
+    this.loading.summary = false;
+    this.loading.pairwise = false;
+    this.loading.topSessions = false;
+  }
+
   private markRefreshComplete(): void {
     this.lastUpdatedAt = Date.now();
     this.hasNewData = false;

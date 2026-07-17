@@ -6,6 +6,7 @@ import {
 import {
   callGenerated,
   configureGeneratedClient,
+  isAbortError,
 } from "../api/runtime.js";
 import type {
   Session,
@@ -18,6 +19,7 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
+import { LatestRead } from "../utils/latest-read.js";
 
 type SidebarIndexParams = Parameters<
   typeof SessionsService.getApiV1SessionsSidebarIndex
@@ -45,6 +47,8 @@ export interface SessionGroupInput {
   project: string;
   machine: string;
   agent: string;
+  agent_label?: string | null;
+  entrypoint?: string | null;
   first_message?: string | null;
   display_name?: string | null;
   started_at: string | null;
@@ -279,6 +283,10 @@ class SessionsStore {
   private sidebarLoadPromise: Promise<void> | null = null;
   private sidebarLoadSignature: string | null = null;
   private sidebarAbort: AbortController | null = null;
+  private routeAbort: AbortController | null = null;
+  private navigateRead = new LatestRead();
+  private refreshRead = new LatestRead();
+  private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
   private unsubEvents: (() => void) | null = null;
@@ -486,6 +494,7 @@ class SessionsStore {
       new Map<string, Promise<void>>();
     this.sidebarHydrationInflightByVersion.set(version, inflight);
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
+    const signal = this.routeSignal();
 
     await Promise.all(uniqueIds.map((id) => {
       if (cache.has(id)) return;
@@ -493,11 +502,13 @@ class SessionsStore {
       if (existing) return existing;
 
       const promise = this.runSidebarHydration(async () => {
+        if (signal.aborted) return;
         try {
           configureGeneratedClient();
-          const hydrated = await SessionsService.getApiV1SessionsId({
-            id,
-          }) as unknown as Session;
+          const hydrated = await callGenerated(
+            () => SessionsService.getApiV1SessionsId({ id }),
+            signal,
+          ) as unknown as Session;
           if (
             version !== this.sidebarIndexVersion ||
             epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
@@ -562,14 +573,18 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
+    const signal = this.routeSignal();
     this.loading = true;
     try {
       configureGeneratedClient();
-      const index = await SessionsService.getApiV1SessionsSidebarIndex({
-        ...this.apiParams,
-        cursor: this.nextCursor,
-        limit: SESSION_PAGE_SIZE,
-      }) as unknown as SidebarSessionIndexResponse;
+      const index = await callGenerated(
+        () => SessionsService.getApiV1SessionsSidebarIndex({
+          ...this.apiParams,
+          cursor: this.nextCursor!,
+          limit: SESSION_PAGE_SIZE,
+        }),
+        signal,
+      ) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
       this.sessions.push(
         ...index.sessions.map((row) =>
@@ -580,6 +595,9 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+    } catch (error) {
+      if (signal.aborted || isAbortError(error)) return;
+      throw error;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -688,6 +706,9 @@ class SessionsStore {
 
   private setActiveSession(id: string | null) {
     if (id === this.activeSessionId) return;
+    this.navigateRead.cancel();
+    this.refreshRead.cancel();
+    this.childSessionsRead.cancel();
     this.activeSessionId = id;
     this.refreshVersion++;
     this.childSessionsVersion++;
@@ -709,12 +730,14 @@ class SessionsStore {
       await this.hydrateSelectedIndexOnlySession(id);
       return;
     }
+    const signal = this.navigateRead.begin();
     try {
       configureGeneratedClient();
-      const session = await SessionsService.getApiV1SessionsId({
-        id,
-      }) as unknown as Session;
-      if (this.activeSessionId === id) {
+      const session = await callGenerated(
+        () => SessionsService.getApiV1SessionsId({ id }),
+        signal,
+      ) as unknown as Session;
+      if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
         const idx = this.sessions.findIndex((s) => s.id === id);
         if (idx >= 0) {
           this.mergeHydratedSession(session);
@@ -724,6 +747,8 @@ class SessionsStore {
       }
     } catch {
       // Session not found — selection stands without metadata
+    } finally {
+      this.navigateRead.finish(signal);
     }
   }
 
@@ -742,14 +767,17 @@ class SessionsStore {
     const id = this.activeSessionId;
     if (!id) return;
     const version = ++this.refreshVersion;
+    const signal = this.refreshRead.begin();
     try {
       configureGeneratedClient();
-      const session = await SessionsService.getApiV1SessionsId({
-        id,
-      }) as unknown as Session;
+      const session = await callGenerated(
+        () => SessionsService.getApiV1SessionsId({ id }),
+        signal,
+      ) as unknown as Session;
       if (
         this.refreshVersion !== version ||
-        this.activeSessionId !== id
+        this.activeSessionId !== id ||
+        !this.refreshRead.isCurrent(signal)
       ) {
         return;
       }
@@ -759,19 +787,24 @@ class SessionsStore {
       }
     } catch {
       // Session may have been deleted
+    } finally {
+      this.refreshRead.finish(signal);
     }
   }
 
   async loadChildSessions(parentId: string) {
     const version = ++this.childSessionsVersion;
+    const signal = this.childSessionsRead.begin();
     try {
       configureGeneratedClient();
-      const children = await SessionsService.getApiV1SessionsIdChildren({
-        id: parentId,
-      }) as unknown as Session[];
+      const children = await callGenerated(
+        () => SessionsService.getApiV1SessionsIdChildren({ id: parentId }),
+        signal,
+      ) as unknown as Session[];
       if (
         this.childSessionsVersion !== version ||
-        this.activeSessionId !== parentId
+        this.activeSessionId !== parentId ||
+        !this.childSessionsRead.isCurrent(signal)
       ) {
         return;
       }
@@ -788,6 +821,8 @@ class SessionsStore {
         return;
       }
       this.childSessions = new Map();
+    } finally {
+      this.childSessionsRead.finish(signal);
     }
   }
 
@@ -804,16 +839,27 @@ class SessionsStore {
     if (inflight) return inflight;
     const promise = this.doFetchSignalDetail(id);
     this.signalDetailInflight.set(id, promise);
-    await promise;
+    try {
+      await promise;
+    } finally {
+      if (this.signalDetailInflight.get(id) === promise) {
+        this.signalDetailInflight.delete(id);
+      }
+      this.signalDetailLoading =
+        this.signalDetailInflight.size > 0;
+    }
   }
 
   private async doFetchSignalDetail(id: string) {
+    const signal = this.routeSignal();
     this.signalDetailLoading = true;
     try {
       configureGeneratedClient();
-      const session = await SessionsService.getApiV1SessionsId({
-        id,
-      }) as unknown as Session;
+      const session = await callGenerated(
+        () => SessionsService.getApiV1SessionsId({ id }),
+        signal,
+      ) as unknown as Session;
+      if (signal.aborted) return;
       this.signalDetailCache.set(id, {
         basis: session.health_score_basis ?? null,
         penalties: session.health_penalties ?? null,
@@ -821,10 +867,6 @@ class SessionsStore {
       this.mergeDetailIntoList(id);
     } catch {
       // Signal detail is non-critical
-    } finally {
-      this.signalDetailInflight.delete(id);
-      this.signalDetailLoading =
-        this.signalDetailInflight.size > 0;
     }
   }
 
@@ -1275,6 +1317,38 @@ class SessionsStore {
     }, LIVE_REFRESH_DEBOUNCE_MS);
   }
 
+  private routeSignal(): AbortSignal {
+    if (!this.routeAbort || this.routeAbort.signal.aborted) {
+      this.routeAbort = new AbortController();
+    }
+    return this.routeAbort.signal;
+  }
+
+  cancelRouteReads(): void {
+    this.sidebarAbort?.abort();
+    this.sidebarAbort = null;
+    this.sidebarLoadPromise = null;
+    this.sidebarLoadSignature = null;
+    this.routeAbort?.abort();
+    this.routeAbort = null;
+    this.navigateRead.cancel();
+    this.refreshRead.cancel();
+    this.childSessionsRead.cancel();
+    this.loadVersion++;
+    this.refreshVersion++;
+    this.childSessionsVersion++;
+    this.loading = false;
+    this.signalDetailInflight.clear();
+    this.signalDetailLoading = false;
+    for (const version of this.sidebarHydrationEpochByVersion.keys()) {
+      this.sidebarHydrationEpochByVersion.set(
+        version,
+        (this.sidebarHydrationEpochByVersion.get(version) ?? 0) + 1,
+      );
+    }
+    for (const resume of this.sidebarHydrationQueue.splice(0)) resume();
+  }
+
   dispose() {
     if (this.unsubEvents) {
       this.unsubEvents();
@@ -1288,11 +1362,7 @@ class SessionsStore {
       clearInterval(this.safetyNetTimer);
       this.safetyNetTimer = null;
     }
-    this.sidebarAbort?.abort();
-    this.sidebarAbort = null;
-    this.sidebarLoadPromise = null;
-    this.sidebarLoadSignature = null;
-    this.loadVersion++;
+    this.cancelRouteReads();
     this.liveRefreshStarted = false;
   }
 }
@@ -1310,6 +1380,8 @@ function sidebarIndexRowToSession(
     project: row.project,
     machine: row.machine,
     agent: row.agent,
+    agent_label: row.agent_label ?? undefined,
+    entrypoint: row.entrypoint ?? undefined,
     first_message: null,
     display_name: row.display_name ?? null,
     started_at: row.started_at,
@@ -1336,6 +1408,8 @@ function sidebarIndexRowToSession(
     project: skinny.project,
     machine: skinny.machine,
     agent: skinny.agent,
+    agent_label: skinny.agent_label,
+    entrypoint: skinny.entrypoint,
     display_name: skinny.display_name,
     started_at: skinny.started_at,
     ended_at: skinny.ended_at,

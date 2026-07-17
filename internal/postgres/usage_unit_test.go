@@ -336,6 +336,26 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.Equal(t, "2024-07-01T13:59:59Z", pb.args[1])
 }
 
+func TestPGDailyUsageDetailedQuerySelectsMachine(t *testing.T) {
+	detailedParams := &paramBuilder{}
+	detailed := strings.ToLower(pgDailyUsageRowQuery(
+		detailedParams,
+		db.UsageFilter{
+			From: "2026-07-15", To: "2026-07-15", Breakdowns: true,
+		},
+		false,
+	))
+	assert.Contains(t, detailed, "u.machine")
+
+	fastParams := &paramBuilder{}
+	fast := strings.ToLower(pgDailyUsageRowQuery(
+		fastParams,
+		db.UsageFilter{From: "2026-07-15", To: "2026-07-15"},
+		false,
+	))
+	assert.NotContains(t, fast, "u.machine")
+}
+
 func TestPGBoundedDailyUsageRowsCTEProjectsReasoningTokens(t *testing.T) {
 	pb := &paramBuilder{}
 	f := db.UsageFilter{

@@ -3465,6 +3465,7 @@ type duckUsageAggregateRow struct {
 	sessionID     string
 	project       string
 	agent         string
+	machine       string
 	model         string
 	displayName   string
 	startedAt     string
@@ -3606,8 +3607,16 @@ func (s *Store) dailyUsageAggregateRows(
 	ctx context.Context, f db.UsageFilter,
 ) ([]duckUsageAggregateRow, error) {
 	cte, args := duckDailyUsageCTE(f)
+	machineSelect := "'' AS machine"
+	machineGroup := ""
+	machineOrder := ""
+	if f.Breakdowns {
+		machineSelect = "machine"
+		machineGroup = ", machine"
+		machineOrder = ", machine ASC"
+	}
 	query := cte + `
-		SELECT local_date, project, agent, model,
+		SELECT local_date, project, agent, ` + machineSelect + `, model,
 			SUM(input_tokens_norm) AS input_tokens,
 			SUM(output_tokens_norm) AS output_tokens,
 			SUM(cache_create_norm) AS cache_creation_tokens,
@@ -3624,8 +3633,8 @@ func (s *Store) dailyUsageAggregateRows(
 				COALESCE(SUM(cost_usd), 0) AS explicit_cost,
 				COUNT(cost_usd) AS reported_cost_rows
 		FROM usage_localized
-		GROUP BY local_date, project, agent, model
-		ORDER BY local_date ASC, project ASC, agent ASC, model ASC`
+		GROUP BY local_date, project, agent` + machineGroup + `, model
+		ORDER BY local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -3635,7 +3644,7 @@ func (s *Store) dailyUsageAggregateRows(
 	for rows.Next() {
 		var r duckUsageAggregateRow
 		if err := rows.Scan(
-			&r.date, &r.project, &r.agent, &r.model,
+			&r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheRd,
@@ -3664,13 +3673,17 @@ func (s *Store) GetDailyUsage(
 		date    string
 		project string
 		agent   string
+		machine string
 		model   string
 	}
 	accum := map[usageAccumKey]*duckUsageBucket{}
 	projectLabels := map[string]bool{}
 	totalSavings := 0.0
 	for _, r := range rows {
-		key := usageAccumKey{date: r.date, project: r.project, agent: r.agent, model: r.model}
+		key := usageAccumKey{
+			date: r.date, project: r.project, agent: r.agent,
+			machine: r.machine, model: r.model,
+		}
 		if r.project != "" {
 			projectLabels[r.project] = true
 		}
@@ -3700,6 +3713,7 @@ func (s *Store) GetDailyUsage(
 		models   map[string]duckUsageBucket
 		projects map[string]duckUsageBucket
 		agents   map[string]duckUsageBucket
+		machines map[string]duckUsageBucket
 	}
 	days := map[string]*dayMaps{}
 	for key, b := range accum {
@@ -3709,6 +3723,7 @@ func (s *Store) GetDailyUsage(
 				models:   map[string]duckUsageBucket{},
 				projects: map[string]duckUsageBucket{},
 				agents:   map[string]duckUsageBucket{},
+				machines: map[string]duckUsageBucket{},
 			}
 			days[key.date] = day
 		}
@@ -3716,6 +3731,7 @@ func (s *Store) GetDailyUsage(
 		if f.Breakdowns {
 			addUsageBucket(day.projects, key.project, *b)
 			addUsageBucket(day.agents, key.agent, *b)
+			addUsageBucket(day.machines, key.machine, *b)
 		}
 	}
 
@@ -3766,6 +3782,20 @@ func (s *Store) GetDailyUsage(
 					CacheReadTokens:     b.cacheRd,
 					Cost:                roundCost(b.cost),
 				})
+			}
+			for _, machine := range sortedUsageBucketKeys(day.machines) {
+				b := day.machines[machine]
+				entry.MachineBreakdowns = append(
+					entry.MachineBreakdowns,
+					db.MachineBreakdown{
+						MachineName:         machine,
+						InputTokens:         b.inputTok,
+						OutputTokens:        b.outputTok,
+						CacheCreationTokens: b.cacheCr,
+						CacheReadTokens:     b.cacheRd,
+						Cost:                roundCost(b.cost),
+					},
+				)
 			}
 		}
 		entry.TotalCost = roundCost(entry.TotalCost)

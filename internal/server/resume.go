@@ -51,6 +51,65 @@ var resumeAgents = map[string]string{
 	"kiro":     "kiro-cli chat --resume-id %s",
 }
 
+const syntheticModel = "<synthetic>"
+
+func resumeCommand(agent, tmpl, rawID, model string) string {
+	cmd := fmt.Sprintf(tmpl, shellQuote(rawID))
+	if !resumeAgentNeedsModel(agent) {
+		return cmd
+	}
+	if model == "" {
+		return cmd
+	}
+	switch agent {
+	case "claude":
+		cmd += " --model " + shellQuote(model)
+	case "codex":
+		cmd += " -m " + shellQuote(model)
+	}
+	return cmd
+}
+
+func resumeAgentNeedsModel(agent string) bool {
+	return agent == "claude" || agent == "codex"
+}
+
+func primaryResumeModel(counts []db.ModelCount) string {
+	best := ""
+	bestN := 0
+	for _, count := range counts {
+		if !resumeModelEligible(count.Model) {
+			continue
+		}
+		model, n := count.Model, count.Count
+		if best == "" || n > bestN ||
+			(n == bestN && utf16LexLess(model, best)) {
+			best = model
+			bestN = n
+		}
+	}
+	return best
+}
+
+func resumeModelEligible(model string) bool {
+	return model != "" && model != syntheticModel
+}
+
+func utf16LexLess(a, b string) bool {
+	if b == "" {
+		return a != ""
+	}
+	aUnits := utf16.Encode([]rune(a))
+	bUnits := utf16.Encode([]rune(b))
+	for i := 0; i < len(aUnits) && i < len(bUnits); i++ {
+		if aUnits[i] == bUnits[i] {
+			continue
+		}
+		return aUnits[i] < bUnits[i]
+	}
+	return len(aUnits) < len(bUnits)
+}
+
 // terminalCandidates lists terminal emulators to try on Linux, in
 // preference order. Each entry is {binary, args-before-command...}.
 // The resume command is appended after the last arg.

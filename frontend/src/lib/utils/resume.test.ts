@@ -41,6 +41,30 @@ describe("buildResumeCommand", () => {
     ).toBe("codex resume sess-1");
   });
 
+  it("pins Claude and Codex models with shell quoting", () => {
+    expect(
+      buildResumeCommand("claude", "run-1", { model: "claude sonnet" }),
+    ).toBe("claude --resume run-1 --model 'claude sonnet'");
+    expect(
+      buildResumeCommand("codex", "codex:run-1", { model: "o3-mini" }),
+    ).toBe("codex resume run-1 -m o3-mini");
+    expect(
+      buildResumeCommand("claude", "run-1", { model: "x'$(command)" }),
+    ).toBe("claude --resume run-1 --model 'x'\"'\"'$(command)'");
+    expect(
+      buildResumeCommand("codex", "codex:run-1", { model: "x'$(command)" }),
+    ).toBe("codex resume run-1 -m 'x'\"'\"'$(command)'");
+  });
+
+  it("leaves unsupported and no-model commands unchanged", () => {
+    expect(
+      buildResumeCommand("gemini", "run-1", { model: "model-bearing-non-target" }),
+    ).toBe("gemini --resume run-1");
+    expect(buildResumeCommand("claude", "run-1", { model: "" })).toBe(
+      "claude --resume run-1",
+    );
+  });
+
   it("generates gemini resume command", () => {
     expect(
       buildResumeCommand("gemini", "gemini:sess-2"),

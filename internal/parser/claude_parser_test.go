@@ -46,8 +46,11 @@ func callParseClaudeSessionFromWithLinks(
 		reflect.ValueOf(offset),
 		reflect.ValueOf(startOrdinal),
 	}
-	if fn.Type().NumIn() == 4 {
+	if fn.Type().NumIn() >= 4 {
 		args = append(args, reflect.ValueOf(lastEntryUUID))
+	}
+	if fn.Type().NumIn() >= 5 {
+		args = append(args, reflect.ValueOf(claudeStoredIdentity{}))
 	}
 	out := fn.Call(args)
 
@@ -98,6 +101,29 @@ func TestParseClaudeSession_UsageProbe(t *testing.T) {
 		content := testjsonl.ClaudeUserJSON(usageCmd, tsEarly)
 		assert.Empty(t, parse(t, content),
 			"a session whose only user turn is /usage must be skipped")
+	})
+
+	t.Run("skips a reminder-prefixed /usage-only session", func(t *testing.T) {
+		content := testjsonl.ClaudeUserJSON(
+			"<system-reminder>probe</system-reminder>\n"+usageCmd,
+			tsEarly,
+		)
+		assert.Empty(t, parse(t, content),
+			"reminders must be stripped before /usage detection")
+	})
+
+	t.Run("normalizes a reminder-prefixed command", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<system-reminder>context</system-reminder>\n"+
+					"<command-name>/clear</command-name>",
+				tsEarly,
+			),
+			testjsonl.ClaudeAssistantJSON("ready", tsEarlyS1),
+		)
+		_, msgs := runClaudeParserTest(t, "reminder-command.jsonl", content)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "/clear", msgs[0].Content)
 	})
 
 	t.Run("skips a queued /usage-only session", func(t *testing.T) {
@@ -425,6 +451,62 @@ func TestParseClaudeSession_QueuedCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("adjacent_system_prefix_stays_user", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("first request", tsZero),
+			testjsonl.ClaudeQueuedCommandJSON(
+				"<task-notification-status>ready", tsZeroS1,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS2),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 3)
+		assert.Equal(t, 2, sess.UserMessageCount)
+		assert.False(t, msgs[1].IsSystem)
+		assert.Equal(t, "queued_command", msgs[1].SourceSubtype)
+	})
+
+	t.Run("leading_system_reminder_keeps_real_queued_prompt", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("first request", tsZero),
+			testjsonl.ClaudeQueuedCommandJSON(
+				"<system-reminder>remember this</system-reminder>\n\nactual queued prompt",
+				tsZeroS1,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS2),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 3)
+		assert.Equal(t, 2, sess.UserMessageCount)
+		assert.False(t, msgs[1].IsSystem)
+		assert.Equal(t, "queued_command", msgs[1].SourceSubtype)
+		assert.Equal(t, "actual queued prompt", msgs[1].Content)
+	})
+
+	t.Run("normalizes_reminder_prefixed_command", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("first request", tsZero),
+			testjsonl.ClaudeQueuedCommandJSON(
+				"<system-reminder>remember this</system-reminder>\n"+
+					"<command-name>/clear</command-name>",
+				tsZeroS1,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS2),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 3)
+		assert.Equal(t, 2, sess.UserMessageCount)
+		assert.Equal(t, "/clear", msgs[1].Content)
+		assert.Equal(t, "queued_command", msgs[1].SourceSubtype)
+		assert.False(t, msgs[1].IsSystem)
+	})
+
 	t.Run("becomes first message when session opens with one", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeQueuedCommandJSON(
@@ -495,6 +577,90 @@ func TestParseClaudeSession_QueuedCommand(t *testing.T) {
 		assert.Equal(t, "queued_command", msgs[2].SourceSubtype)
 		assert.Equal(t, 2, sess.UserMessageCount)
 	})
+}
+
+func TestParseClaudeSession_QueuedSystemMessagesDoNotCount(t *testing.T) {
+	content := loadFixture(t, "claude/queued_system_messages.jsonl")
+	sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Your final response is captured verbatim into ...", sess.FirstMessage)
+	var systems []ParsedMessage
+	for _, msg := range msgs {
+		if msg.IsSystem {
+			systems = append(systems, msg)
+		}
+	}
+	require.Len(t, systems, 2)
+	assert.Equal(t, "task_notification", systems[0].SourceSubtype)
+	assert.Equal(t, "task_notification", systems[1].SourceSubtype)
+}
+
+func TestParseClaudeSession_LeadingSystemReminderKeepsRealPrompt(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<system-reminder>remember this</system-reminder>\n\nreal prompt",
+			tsZero,
+		),
+		testjsonl.ClaudeAssistantJSON("ok", tsZeroS1),
+	)
+	sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "real prompt", sess.FirstMessage)
+	assert.False(t, msgs[0].IsSystem)
+	assert.Equal(t, "real prompt", msgs[0].Content)
+}
+
+func TestParseClaudeSession_MalformedSystemReminderStaysUser(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<system-reminder>literal tag at the start", tsZero,
+		),
+		testjsonl.ClaudeAssistantJSON("ok", tsZeroS1),
+	)
+	sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "<system-reminder>literal tag at the start", sess.FirstMessage)
+	assert.False(t, msgs[0].IsSystem)
+	assert.Equal(t, "<system-reminder>literal tag at the start", msgs[0].Content)
+}
+
+func TestParseClaudeSession_SystemReminderPromotionPreservesToolResults(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("real prompt", tsZero),
+		testjsonl.ClaudeAssistantJSON("ok", tsZeroS1),
+		`{"type":"user","timestamp":"`+tsZeroS2+`","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"text","text":"<system-reminder>remember this</system-reminder>"},{"type":"tool_result","tool_use_id":"toolu_r","content":"tool output","is_error":false}]}}`,
+	)
+	_, msgs := runClaudeParserTest(t, "test.jsonl", content)
+	require.Len(t, msgs, 3)
+	assert.True(t, msgs[2].IsSystem)
+	assert.Equal(t, "system_reminder", msgs[2].SourceSubtype)
+	require.Len(t, msgs[2].ToolResults, 1)
+	assert.Equal(t, "toolu_r", msgs[2].ToolResults[0].ToolUseID)
+	assert.Equal(t, "tool output",
+		DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+}
+
+func TestParseClaudeSession_QueuedSystemMessageKinds(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("real prompt", tsZero),
+		testjsonl.ClaudeQueuedCommandJSON("<task-notification>done</task-notification>", tsZeroS1),
+		testjsonl.ClaudeQueuedCommandJSON("Stop hook feedback: blocked", tsZeroS2),
+		testjsonl.ClaudeQueuedCommandJSON("<system-reminder>remember</system-reminder>", "2024-01-01T00:00:03Z"),
+		testjsonl.ClaudeQueuedCommandJSON("ordinary queued prompt", "2024-01-01T00:00:04Z"),
+	)
+	sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+	assert.Equal(t, 2, sess.UserMessageCount)
+	require.Len(t, msgs, 5)
+	assert.Equal(t, []string{"task_notification", "stop_hook", "system_reminder", "queued_command"}, []string{
+		msgs[1].SourceSubtype, msgs[2].SourceSubtype, msgs[3].SourceSubtype, msgs[4].SourceSubtype,
+	})
+	for i := 1; i < 4; i++ {
+		assert.True(t, msgs[i].IsSystem)
+		assert.Equal(t, "system", msgs[i].SourceType)
+	}
+	assert.False(t, msgs[4].IsSystem)
 }
 
 func TestParseClaudeSession_ParentSessionID(t *testing.T) {
@@ -657,6 +823,94 @@ func TestParseClaudeSessionFrom_QueueOperationPreservesSubagentMapping(
 		"agent-child123",
 		newMsgs[0].ToolCalls[0].SubagentSessionID,
 	)
+}
+
+func TestParseClaudeSessionFrom_QueuedSystemMessage(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+		testjsonl.ClaudeAssistantJSON("hi", tsEarlyS1),
+	)
+	path := createTestFile(t, "inc-queued-system.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeQueuedCommandJSON(
+			"<system-reminder>remember</system-reminder>", tsEarlyS5,
+		),
+		testjsonl.ClaudeAssistantJSON("done", tsLate),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, info.Size(), 2, "")
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 2)
+	assert.True(t, newMsgs[0].IsSystem)
+	assert.Equal(t, "system", newMsgs[0].SourceType)
+	assert.Equal(t, "system_reminder", newMsgs[0].SourceSubtype)
+}
+
+func TestParseClaudeSessionFrom_ReminderPrefixedCommand(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+		testjsonl.ClaudeAssistantJSON("hi", tsEarlyS1),
+	)
+	path := createTestFile(t, "inc-reminder-command.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<system-reminder>context</system-reminder>\n"+
+				"<command-name>/clear</command-name>",
+			tsEarlyS5,
+		),
+		testjsonl.ClaudeAssistantJSON("done", tsLate),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, info.Size(), 2, "")
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 2)
+	assert.Equal(t, "/clear", newMsgs[0].Content)
+}
+
+func TestParseClaudeSessionFrom_SystemReminderToolResultsFallBack(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+		testjsonl.ClaudeAssistantJSON("hi", tsEarlyS1),
+	)
+	path := createTestFile(t, "inc-reminder-tool-result.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := `{"type":"user","timestamp":"` + tsEarlyS5 +
+		`","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"text","text":"<system-reminder>remember this</system-reminder>"},{"type":"tool_result","tool_use_id":"toolu_r","content":"tool output","is_error":false}]}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = callParseClaudeSessionFrom(path, info.Size(), 2, "")
+	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
+	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
 func TestParseClaudeSessionFrom_SkipsNonMessages(
@@ -1209,6 +1463,19 @@ func TestParseClaudeSession_TerminationStatus(t *testing.T) {
 		content := loadFixture(t, "claude/valid_session.jsonl")
 		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
 		assert.Equal(t, TerminationClean, sess.TerminationStatus)
+	})
+
+	t.Run("awaiting_user ignores trailing compact boundary", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hello", tsZero),
+			`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"`+tsZeroS1+`","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+			`{"type":"user","isCompactSummary":true,"uuid":"compact-uuid","parentUuid":"a1","timestamp":"`+tsZeroS2+`","message":{"role":"user","content":[{"type":"text","text":"Summary of conversation so far..."}]}}`,
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, TerminationAwaitingUser, sess.TerminationStatus)
+		require.Len(t, msgs, 3)
+		assert.True(t, msgs[2].IsSystem)
+		assert.True(t, msgs[2].IsCompactBoundary)
 	})
 
 	t.Run("tool_call_pending", func(t *testing.T) {
@@ -1799,6 +2066,10 @@ func TestClassifyClaudeSystemMessage(t *testing.T) {
 		{"interrupted", "[Request interrupted by user]", "interrupted"},
 		{"task notification", "<task-notification>done</task-notification>", "task_notification"},
 		{"stop hook", "Stop hook feedback: ...", "stop_hook"},
+		{"system_reminder", "<system-reminder>remember this</system-reminder>", "system_reminder"},
+		{"system_reminder plus prompt", "<system-reminder>remember this</system-reminder>\n\nreal prompt", ""},
+		{"malformed system_reminder", "<system-reminder>literal tag at the start", ""},
+		{"task-notification-status", "<task-notification-status>ready", ""},
 		{"bom prefix", "\uFEFF  This session is being continued", "continuation"},
 		{"non-caveat local-command", "<local-command-stdout>foo</local-command-stdout>", ""},
 		{"regular text", "what do you think?", ""},

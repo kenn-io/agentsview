@@ -8,6 +8,12 @@ const api = vi.hoisted(() => ({
   getMachines: vi.fn(),
 }));
 
+const apiRuntimeMocks = vi.hoisted(() => ({
+  callGenerated: vi.fn(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  ),
+}));
+
 vi.mock("../api/generated/index", () => ({
   ActivityService: { getApiV1ActivityReport: api.getActivityReport },
   MetadataService: {
@@ -16,7 +22,11 @@ vi.mock("../api/generated/index", () => ({
     getApiV1Machines: api.getMachines,
   },
 }));
-vi.mock("../api/runtime.js", () => ({ configureGeneratedClient: vi.fn() }));
+vi.mock("../api/runtime.js", () => ({
+  configureGeneratedClient: vi.fn(),
+  callGenerated: apiRuntimeMocks.callGenerated,
+  isAbortError: vi.fn(() => false),
+}));
 vi.mock("./sync.svelte.js", () => ({ sync: { onSyncComplete: vi.fn() } }));
 vi.mock("./router.svelte.js", () => ({
   router: { params: {}, replaceParams: vi.fn(), route: "activity" },
@@ -74,6 +84,10 @@ beforeEach(() => {
   api.getProjects.mockReset();
   api.getAgents.mockReset();
   api.getMachines.mockReset();
+  apiRuntimeMocks.callGenerated.mockReset();
+  apiRuntimeMocks.callGenerated.mockImplementation(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  );
   api.getProjects.mockResolvedValue({ projects: [] });
   api.getAgents.mockResolvedValue({ agents: [] });
   api.getMachines.mockResolvedValue({ machines: [] });
@@ -107,6 +121,44 @@ afterEach(() => {
 });
 
 describe("load", () => {
+  it("aborts the obsolete report when a replacement starts", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((
+      request: () => Promise<unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    api.getActivityReport
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(makeReport());
+
+    void activity.load();
+    await Promise.resolve();
+    await activity.load();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("aborts the visible report on teardown", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((
+      request: () => Promise<unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    api.getActivityReport.mockImplementationOnce(() => new Promise(() => {}));
+
+    void activity.load();
+    await Promise.resolve();
+    activity.cancelInFlightReads();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it("sends preset/date/timezone and stores the report", async () => {
     api.getActivityReport.mockResolvedValue(makeReport());
     await activity.load();

@@ -1241,6 +1241,7 @@ func (s *Sync) upsertSession(
 	query := `
 		INSERT INTO sessions (
 			id, project, machine, agent,
+			agent_label, entrypoint,
 			first_message, display_name, session_name, started_at, ended_at,
 			message_count, user_message_count,
 			file_path, file_size, file_mtime, file_inode, file_device,
@@ -1262,7 +1263,7 @@ func (s *Sync) upsertSession(
 			parser_malformed_lines, is_truncated, deleted_at, created_at,
 			termination_status, secret_leak_count, secrets_rules_version
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?
@@ -1272,6 +1273,8 @@ func (s *Sync) upsertSession(
 			project = excluded.project,
 			machine = excluded.machine,
 			agent = excluded.agent,
+			agent_label = excluded.agent_label,
+			entrypoint = excluded.entrypoint,
 			first_message = excluded.first_message,
 			display_name = excluded.display_name,
 			session_name = excluded.session_name,
@@ -1341,6 +1344,7 @@ func (s *Sync) upsertSession(
 func sessionInsertArgs(sess db.Session, machine string) []any {
 	return []any{
 		sess.ID, sess.Project, machine, sess.Agent,
+		sess.AgentLabel, sess.Entrypoint,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
 		nilString(sess.SessionName),
 		nilTime(sess.StartedAt), nilTime(sess.EndedAt),

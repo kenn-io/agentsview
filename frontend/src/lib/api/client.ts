@@ -10,6 +10,7 @@ import {
   authHeaders,
   getAuthToken,
   getBase,
+  isRemoteConnection,
   responseErrorMessage,
 } from "./runtime.js";
 
@@ -330,6 +331,9 @@ export function getMarkdownExportUrl(
   );
   if (depth !== undefined) {
     url.searchParams.set("depth", String(depth));
+  }
+  if (isRemoteConnection()) {
+    return url.toString();
   }
   return `${url.pathname}${url.search}`;
 }

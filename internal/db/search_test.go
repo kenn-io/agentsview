@@ -20,6 +20,12 @@ func TestIsSystemPrefixed(t *testing.T) {
 		{"plain user message", "fix the build", "user", false},
 		{"continued-session prefix", SystemMsgPrefixes[0] + " from a prior run", "user", true},
 		{"task-notification prefix", "<task-notification>done</task-notification>", "user", true},
+		{"system-reminder only", "<system-reminder>remember</system-reminder>", "user", true},
+		{"consecutive reminders only", "<system-reminder>a</system-reminder><system-reminder>b</system-reminder>", "user", true},
+		{"reminder then task notification", "<system-reminder>remember</system-reminder><task-notification>done</task-notification>", "user", true},
+		{"reminder then goal context", "<system-reminder>remember</system-reminder><goal_context>state</goal_context>", "user", true},
+		{"system-reminder plus prompt", "<system-reminder>remember</system-reminder>\n\nreal prompt", "user", false},
+		{"malformed reminder stays user content", "<system-reminder>remember", "user", false},
 		{"leading whitespace then prefix", "\n\t  <command-name>/foo", "user", true},
 		{"bom then prefix", "\uFEFF<command-message>x", "user", true},
 		{"legacy goal context prefix", "\n\t<goal_context>state</goal_context>", "user", true},
@@ -37,6 +43,7 @@ func TestIsSystemPrefixed(t *testing.T) {
 			assert.Equal(t, tc.want, IsSystemPrefixed(tc.content, tc.role))
 		})
 	}
+	assert.NotContains(t, SystemMsgPrefixes, "<task-notification-status>")
 }
 
 func TestIsGoalContextPrefixed(t *testing.T) {
@@ -68,6 +75,11 @@ func TestIsGoalContextPrefixed(t *testing.T) {
 }
 
 func TestSystemPrefixSQL(t *testing.T) {
+	postgresSQL := PostgresSystemPrefixSQL("content", "role")
+	assert.Contains(t, postgresSQL, "POSITION('</system-reminder>' IN")
+	assert.Contains(t, postgresSQL, "WITH RECURSIVE reminder_remainder")
+	assert.NotContains(t, postgresSQL, "instr(")
+
 	d := testDB(t)
 	rows, err := d.getReader().QueryContext(context.Background(), `
 		WITH candidates(label, role, content) AS (
@@ -83,7 +95,16 @@ source="goal">state'),
 				('self-closing-goal', 'user', '<codex_internal_context source="goal"/>state'),
 				('non-goal-internal', 'user', '<codex_internal_context source="other">state'),
 				('data-source', 'user', '<codex_internal_context data-source="goal">state'),
-				('missing-close', 'user', '<codex_internal_context source="goal" state')
+				('missing-close', 'user', '<codex_internal_context source="goal" state'),
+				('reminder-only', 'user', '<system-reminder>remember</system-reminder>'),
+				('reminder-plus-prompt', 'user', '<system-reminder>remember</system-reminder>
+
+real prompt'),
+				('reminder-reminder-only', 'user', '<system-reminder>a</system-reminder><system-reminder>b</system-reminder>'),
+				('reminder-task', 'user', '<system-reminder>remember</system-reminder><task-notification>done</task-notification>'),
+				('reminder-goal', 'user', '<system-reminder>remember</system-reminder><goal_context>state</goal_context>'),
+				('reminder-ordinary', 'user', '<system-reminder>remember</system-reminder>real prompt'),
+				('reminder-malformed', 'user', '<system-reminder>remember')
 		)
 		SELECT label FROM candidates
 		WHERE `+SystemPrefixSQL("content", "role")+`
@@ -104,6 +125,9 @@ source="goal">state'),
 		"missing-close",
 		"non-goal-internal",
 		"normal",
+		"reminder-malformed",
+		"reminder-ordinary",
+		"reminder-plus-prompt",
 	}, got)
 }
 
@@ -192,6 +216,29 @@ func TestSearch(t *testing.T) {
 	insertMessages(t, d, userMsg("s-prefixonly", 0,
 		"This session is being continued from a previous conversation"))
 
+	// Session s-reminderonly: only system-reminder prefix content (is_system=false).
+	// Search fallback must exclude it the same way as other prefix-only sessions.
+	insertSession(t, d, "s-reminderonly", "proj-prefixonly",
+		func(s *Session) {
+			s.Agent = "claude"
+			s.SessionName = new("reminderonlydnterm unique display")
+			s.StartedAt = new("2024-01-07T10:00:00Z")
+			s.EndedAt = new("2024-01-07T11:00:00Z")
+		},
+	)
+	insertMessages(t, d, userMsg("s-reminderonly", 0,
+		"<system-reminder>remember this</system-reminder>"))
+
+	insertSession(t, d, "s-reminderprompt", "proj-prefixonly",
+		func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = new("2024-01-08T10:00:00Z")
+			s.EndedAt = new("2024-01-08T11:00:00Z")
+		},
+	)
+	insertMessages(t, d, userMsg("s-reminderprompt", 0,
+		"<system-reminder>remember this</system-reminder>\n\nreminderpromptterm real prompt"))
+
 	t.Run("deduplication: two messages in same session → one result", func(t *testing.T) {
 		page, err := d.Search(context.Background(), SearchFilter{
 			Query: "alpha", Limit: 10,
@@ -269,6 +316,23 @@ func TestSearch(t *testing.T) {
 		})
 		require.NoError(t, err, "Search")
 		assert.Empty(t, page.Results, "prefix-only session")
+	})
+
+	t.Run("name branch excludes system-reminder-only sessions", func(t *testing.T) {
+		page, err := d.Search(context.Background(), SearchFilter{
+			Query: "reminderonlydnterm", Limit: 10,
+		})
+		require.NoError(t, err, "Search")
+		assert.Empty(t, page.Results, "system-reminder-only session")
+	})
+
+	t.Run("content branch keeps reminder-prefixed real prompts", func(t *testing.T) {
+		page, err := d.Search(context.Background(), SearchFilter{
+			Query: "reminderpromptterm", Limit: 10,
+		})
+		require.NoError(t, err, "Search")
+		require.Len(t, page.Results, 1)
+		assert.Equal(t, "s-reminderprompt", page.Results[0].SessionID)
 	})
 
 	t.Run("invalid sort value defaults to relevance (SQL injection guard)", func(t *testing.T) {

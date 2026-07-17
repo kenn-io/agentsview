@@ -13,6 +13,10 @@ import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
+import {
+  AnalyticsService,
+  CancelablePromise,
+} from "../../api/generated/index.js";
 // @ts-ignore
 import InsightsPage from "./InsightsPage.svelte";
 import source from "./InsightsPage.svelte?raw";
@@ -145,6 +149,7 @@ const state = vi.hoisted(() => {
       select: vi.fn(),
       selectTask: vi.fn(),
       cancelAll: vi.fn(),
+      cancelInFlightReads: vi.fn(),
       cancelTask: vi.fn(),
       dismissTask: vi.fn(),
       deleteItem: mocks.deleteItem,
@@ -370,6 +375,30 @@ describe("InsightsPage date yoke integration", () => {
     });
     expect(router.params.window_days).toBeUndefined();
     expect(yokedDates.range).toBeNull();
+  });
+
+  it("aborts its pending signals transport when unmounted", async () => {
+    const cancelTransport = vi.fn();
+    vi.spyOn(
+      AnalyticsService,
+      "getApiV1AnalyticsSignals",
+    ).mockImplementation(
+      () =>
+        new CancelablePromise((_resolve, _reject, onCancel) => {
+          onCancel(cancelTransport);
+        }),
+    );
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+    expect(
+      AnalyticsService.getApiV1AnalyticsSignals,
+    ).toHaveBeenCalled();
+
+    unmount(component);
+    component = undefined;
+
+    expect(cancelTransport).toHaveBeenCalledOnce();
   });
 
   it("does not turn a bare Insights reload into explicit date intent", async () => {
