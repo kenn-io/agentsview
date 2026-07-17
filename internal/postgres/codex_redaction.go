@@ -21,10 +21,11 @@ const (
 	// codexPayloadWriteGuardsInstalledPG).
 	codexEncryptedPayloadDataVersion   = db.CodexRedactionDataVersion
 	codexVectorRepairCompletedMetadata = "codex_encrypted_payload_vectors_v1"
-	codexSessionWriteGuardTrigger      = "agentsview_codex_payload_session_guard_v5"
+	codexSessionWriteGuardTrigger      = "agentsview_codex_payload_session_guard_v6"
 	codexMessageWriteGuardTrigger      = "agentsview_codex_payload_message_guard_v5"
 	codexToolWriteGuardTrigger         = "agentsview_codex_payload_tool_guard_v4"
 	codexVectorWriteGuardTrigger       = "agentsview_codex_payload_vector_guard_v4"
+	previousCodexSessionWriteGuardV5   = "agentsview_codex_payload_session_guard_v5"
 	previousCodexSessionWriteGuardV4   = "agentsview_codex_payload_session_guard_v4"
 	previousCodexMessageWriteGuardV4   = "agentsview_codex_payload_message_guard_v4"
 	previousCodexToolWriteGuardV3      = "agentsview_codex_payload_tool_guard_v3"
@@ -854,14 +855,26 @@ func codexPayloadGuardDDL(
 	sessionUpdate := "UPDATE OF agent, data_version, relationship_type, first_message"
 	messageUpdate := "UPDATE OF session_id, ordinal, content, role, has_tool_use"
 	toolUpdate := "UPDATE OF session_id, message_ordinal, input_json, tool_name"
+	sessionUnchangedGuard := ""
 	if crdb {
 		sessionUpdate, messageUpdate, toolUpdate = "UPDATE", "UPDATE", "UPDATE"
+		// CockroachDB cannot narrow a trigger to an UPDATE column list, so
+		// curation-only writes such as trash and restore still invoke this
+		// function. Leave an existing withheld payload gated for reads, but do
+		// not reject a write that did not touch any session payload evidence.
+		sessionUnchangedGuard = `
+    IF TG_OP = 'UPDATE'
+       AND (NEW).agent IS NOT DISTINCT FROM (OLD).agent
+       AND (NEW).data_version IS NOT DISTINCT FROM (OLD).data_version
+       AND (NEW).first_message IS NOT DISTINCT FROM (OLD).first_message THEN
+        RETURN NEW;
+    END IF;`
 	}
 	stmts := []codexGuardStatement{
 		{"creating PG Codex session write guard", fmt.Sprintf(`
 CREATE OR REPLACE FUNCTION agentsview_guard_codex_payload_session()
 RETURNS trigger LANGUAGE plpgsql AS $function$
-BEGIN
+BEGIN%s
     IF (NEW).agent = 'codex'
        AND (NEW).data_version < %d
        AND current_setting('%s', true) IS DISTINCT FROM '%d'
@@ -871,9 +884,11 @@ BEGIN
     END IF;
     RETURN NEW;
 END
-$function$`, codexEncryptedPayloadDataVersion, codexPayloadRepairSetting,
+$function$`, sessionUnchangedGuard, codexEncryptedPayloadDataVersion,
+			codexPayloadRepairSetting,
 			codexEncryptedPayloadDataVersion)},
 		{"installing PG Codex session write guard", fmt.Sprintf(`
+DROP TRIGGER IF EXISTS %s ON sessions;
 DROP TRIGGER IF EXISTS %s ON sessions;
 DROP TRIGGER IF EXISTS %s ON sessions;
 DROP TRIGGER IF EXISTS %s ON sessions;
@@ -885,6 +900,7 @@ FOR EACH ROW EXECUTE FUNCTION agentsview_guard_codex_payload_session()`,
 			legacyCodexSessionWriteGuard, previousCodexSessionWriteGuardV2,
 			previousCodexSessionWriteGuardV3,
 			previousCodexSessionWriteGuardV4,
+			previousCodexSessionWriteGuardV5,
 			codexSessionWriteGuardTrigger, codexSessionWriteGuardTrigger,
 			sessionUpdate)},
 		{"creating PG Codex message write guard", fmt.Sprintf(`

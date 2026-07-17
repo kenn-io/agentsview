@@ -155,6 +155,51 @@ DELETE FROM messages WHERE session_id = 'legacy' AND ordinal = 2`)
 		"persistent readers may serve a certified guarded CockroachDB schema")
 }
 
+func TestCRDBCurationUpdatesUncertifiedSession(t *testing.T) {
+	const schema = "agentsview_crdb_codex_curation_test"
+	pg := openCRDBSchema(t, schema)
+	ctx := context.Background()
+	require.NoError(t, EnsureSchema(ctx, pg, schema),
+		"EnsureSchema on CockroachDB")
+
+	require.NoError(t, withCodexRepairTxPG(ctx, pg, true, func(tx *sql.Tx) error {
+		if err := markCodexPayloadRepairPG(ctx, tx); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO sessions (
+    id, machine, project, agent, relationship_type, data_version, first_message
+) VALUES ('legacy-curation', 'test-machine', 'project', 'codex', 'subagent', 64, $1)`,
+			crdbCodexFernet)
+		return err
+	}), "seed an intentionally uncertified session")
+
+	store := &Store{pg: pg}
+	require.NoError(t, store.SoftDeleteSession("legacy-curation"),
+		"trash without rewriting guarded payload columns")
+	var deletedAt sql.NullTime
+	require.NoError(t, pg.QueryRowContext(ctx, `
+SELECT deleted_at FROM sessions WHERE id = 'legacy-curation'`,
+	).Scan(&deletedAt), "read trashed state")
+	assert.True(t, deletedAt.Valid, "the legacy session must be trashed")
+
+	restored, err := store.RestoreSession("legacy-curation")
+	require.NoError(t, err,
+		"restore without rewriting guarded payload columns")
+	assert.EqualValues(t, 1, restored)
+	require.NoError(t, pg.QueryRowContext(ctx, `
+SELECT deleted_at FROM sessions WHERE id = 'legacy-curation'`,
+	).Scan(&deletedAt), "read restored state")
+	assert.False(t, deletedAt.Valid, "the legacy session must be restored")
+
+	_, err = pg.ExecContext(ctx, `
+UPDATE sessions SET first_message = first_message || ' changed'
+ WHERE id = 'legacy-curation'`)
+	require.Error(t, err,
+		"changing guarded payload evidence must still be rejected")
+	assert.Contains(t, err.Error(), "23514")
+}
+
 func TestCRDBEnsureSchemaRepairsLegacyCiphertext(t *testing.T) {
 	const schema = "agentsview_crdb_codex_repair_test"
 	pg := openCRDBSchema(t, schema)
