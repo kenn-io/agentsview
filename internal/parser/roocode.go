@@ -345,6 +345,11 @@ func parseRooCodeMessages(
 	// (delegated child) tool call awaiting a subtask_result. -1 means
 	// none pending.
 	pendingNewTaskMsgIdx := -1
+	// pendingToolMsgIdx tracks the index of the most recent tool call
+	// that has no specialized deferred-result channel, so tool-specific
+	// errors (diff_error, rooignore_error) can be paired with it. -1
+	// means none pending.
+	pendingToolMsgIdx := -1
 	for _, rawMsg := range rawMessages {
 		var msg rooCodeMessage
 		if err := json.Unmarshal(rawMsg, &msg); err != nil {
@@ -467,6 +472,9 @@ func parseRooCodeMessages(
 						},
 					)
 				}
+				if pendingToolMsgIdx == pendingCmdMsgIdx {
+					pendingToolMsgIdx = -1
+				}
 				pendingCmdMsgIdx = -1
 				paired = true
 			}
@@ -506,6 +514,9 @@ func parseRooCodeMessages(
 							Timestamp: ts,
 						},
 					)
+				}
+				if pendingToolMsgIdx == pendingMcpMsgIdx {
+					pendingToolMsgIdx = -1
 				}
 				pendingMcpMsgIdx = -1
 				paired = true
@@ -548,6 +559,9 @@ func parseRooCodeMessages(
 						},
 					)
 				}
+				if pendingToolMsgIdx == pendingNewTaskMsgIdx {
+					pendingToolMsgIdx = -1
+				}
 				pendingNewTaskMsgIdx = -1
 				paired = true
 			}
@@ -583,42 +597,55 @@ func parseRooCodeMessages(
 			// Track tool calls that produce deferred results
 			// (command_output, mcp_server_response) so we can pair
 			// results back when they arrive.
+			msgIdx := len(parsedMessages) - 1
 			switch toolCalls[0].ToolName {
 			case "execute_command":
-				pendingCmdMsgIdx = len(parsedMessages) - 1
+				pendingCmdMsgIdx = msgIdx
 			case "newTask":
 				// Track delegated child task for pairing with
 				// the subtask_result that reports its completion.
-				pendingNewTaskMsgIdx = len(parsedMessages) - 1
+				pendingNewTaskMsgIdx = msgIdx
 			default:
 				// Track any MCP tool call (Category="MCP") for
 				// pairing with mcp_server_response.
 				if toolCalls[0].Category == "MCP" {
-					pendingMcpMsgIdx = len(parsedMessages) - 1
+					pendingMcpMsgIdx = msgIdx
 				}
 			}
+			// Track every tool call generally so tool-specific
+			// errors (diff_error, rooignore_error) can pair with the
+			// most recent unresolved call even when it has no
+			// specialized deferred-result channel.
+			pendingToolMsgIdx = msgIdx
 			ordinal++
 		} else if content != "" {
+			errTargets := rooErrorTargets{
+				cmd:     &pendingCmdMsgIdx,
+				mcp:     &pendingMcpMsgIdx,
+				general: &pendingToolMsgIdx,
+			}
+
 			// Tool error events (mistake_limit_reached, api_req_failed)
-			// indicate the agent hit a failure limit. Link to the
-			// preceding tool call (execute_command or MCP) as errored.
-			// Skip standalone emission when pairing succeeds.
+			// indicate the agent hit a failure limit. Link to the most
+			// recent unresolved tool call as errored. Skip standalone
+			// emission when pairing succeeds.
 			if rooCodeIsToolErrorEvent(msg.Say, msg.Ask) {
 				if rooPairErrorToPendingTool(
-					parsedMessages, &pendingCmdMsgIdx, &pendingMcpMsgIdx, content,
+					parsedMessages, errTargets, content, ts,
 				) {
 					continue
 				}
 			}
 
 			// Error say types (error, diff_error, rooignore_error)
-			// indicate a tool failure. Pair them with the preceding
-			// unpaired execute_command tool call so the signals
-			// system counts them as failures. Skip standalone emission
-			// when pairing succeeds.
+			// indicate a tool failure — e.g. diff_error after
+			// appliedDiff or rooignore_error after a file tool. Pair
+			// them with the most recent unresolved tool call so the
+			// signals system counts them as failures. Skip standalone
+			// emission when pairing succeeds.
 			if rooCodeIsErrorSay(msg.Say) {
 				if rooPairErrorToPendingTool(
-					parsedMessages, &pendingCmdMsgIdx, &pendingMcpMsgIdx, content,
+					parsedMessages, errTargets, content, ts,
 				) {
 					continue
 				}
@@ -919,45 +946,65 @@ func rooCodeIsToolErrorEvent(say, ask string) bool {
 	return false
 }
 
-// rooPairErrorToPendingTool links an error event to the preceding
-// pending tool call (execute_command first, then MCP) as an errored
-// ResultEvent. Clears the pending index after pairing.
-// Returns true if pairing succeeded.
+// rooErrorTargets bundles the pending-tool trackers an error event can
+// attach to. Every tracker holds an index into parsedMessages of a tool
+// call awaiting a result, or -1 when none is pending. general covers any
+// tool call that has no specialized deferred-result channel (e.g.
+// appliedDiff, readFile) so tool-specific errors like diff_error and
+// rooignore_error still find a target.
+type rooErrorTargets struct {
+	cmd     *int
+	mcp     *int
+	general *int
+}
+
+// rooPairErrorToPendingTool links an error event to the most recent
+// unresolved tool call as an errored ResultEvent, preserving the error
+// timestamp. It prefers the specialized command and MCP trackers, then
+// falls back to the general tracker. All trackers pointing at the paired
+// message are cleared so the error is not double-counted. Returns true
+// if pairing succeeded.
 func rooPairErrorToPendingTool(
 	parsedMessages []ParsedMessage,
-	pendingCmdMsgIdx, pendingMcpMsgIdx *int,
+	targets rooErrorTargets,
 	content string,
+	ts time.Time,
 ) bool {
-	if *pendingCmdMsgIdx >= 0 && *pendingCmdMsgIdx < len(parsedMessages) {
-		target := &parsedMessages[*pendingCmdMsgIdx]
-		for ci := range target.ToolCalls {
-			tc := &target.ToolCalls[ci]
-			tc.ResultEvents = append(
-				tc.ResultEvents,
-				ParsedToolResultEvent{
-					Status:  "errored",
-					Content: content,
-				},
-			)
-		}
-		*pendingCmdMsgIdx = -1
-		return true
-	} else if *pendingMcpMsgIdx >= 0 && *pendingMcpMsgIdx < len(parsedMessages) {
-		target := &parsedMessages[*pendingMcpMsgIdx]
-		for ci := range target.ToolCalls {
-			tc := &target.ToolCalls[ci]
-			tc.ResultEvents = append(
-				tc.ResultEvents,
-				ParsedToolResultEvent{
-					Status:  "errored",
-					Content: content,
-				},
-			)
-		}
-		*pendingMcpMsgIdx = -1
-		return true
+	idx := -1
+	switch {
+	case *targets.cmd >= 0 && *targets.cmd < len(parsedMessages):
+		idx = *targets.cmd
+	case *targets.mcp >= 0 && *targets.mcp < len(parsedMessages):
+		idx = *targets.mcp
+	case *targets.general >= 0 && *targets.general < len(parsedMessages):
+		idx = *targets.general
 	}
-	return false
+	if idx < 0 {
+		return false
+	}
+	target := &parsedMessages[idx]
+	for ci := range target.ToolCalls {
+		tc := &target.ToolCalls[ci]
+		tc.ResultEvents = append(
+			tc.ResultEvents,
+			ParsedToolResultEvent{
+				Status:    "errored",
+				Content:   content,
+				Timestamp: ts,
+			},
+		)
+	}
+	// Clear every tracker referencing the paired message.
+	if *targets.cmd == idx {
+		*targets.cmd = -1
+	}
+	if *targets.mcp == idx {
+		*targets.mcp = -1
+	}
+	if *targets.general == idx {
+		*targets.general = -1
+	}
+	return true
 }
 
 // rooResultBearingReadTools maps (lowercased) tool names whose

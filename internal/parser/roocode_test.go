@@ -2626,6 +2626,129 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 	assert.Equal(t, RoleAssistant, msgs[5].Role)
 }
 
+func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
+	tests := []struct {
+		name         string
+		toolPayload  string
+		toolName     string
+		errSay       string
+		errText      string
+		errTimestamp int64
+	}{
+		{
+			name:         "diff_error after appliedDiff",
+			toolPayload:  `{"tool":"appliedDiff","path":"src/main.go","diff":"..."}`,
+			toolName:     "appliedDiff",
+			errSay:       "diff_error",
+			errText:      "Search and replace resulted in identical content",
+			errTimestamp: 1688836870000,
+		},
+		{
+			name:         "rooignore_error after readFile",
+			toolPayload:  `{"tool":"readFile","path":"secret.env"}`,
+			toolName:     "readFile",
+			errSay:       "rooignore_error",
+			errText:      "File is in .rooignore and cannot be accessed",
+			errTimestamp: 1688836870000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			taskDir := filepath.Join(tmpDir, "tasks", "test-toolerr")
+			require.NoError(t, os.MkdirAll(taskDir, 0755))
+
+			historyItem := rooCodeHistoryItem{
+				ID:        "test-toolerr",
+				Number:    1,
+				Timestamp: 1688836851000,
+				Task:      tt.name,
+				Workspace: "/Users/test/project",
+				Status:    "completed",
+			}
+			historyJSON, err := json.Marshal(historyItem)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(taskDir, "history_item.json"),
+				historyJSON, 0644,
+			))
+
+			messages := []rooCodeMessage{
+				{
+					Timestamp: 1688836851000,
+					Type:      "say",
+					Say:       "text",
+					Text:      "Do the edit",
+				},
+				{
+					Timestamp: 1688836860000,
+					Type:      "ask",
+					Ask:       "tool",
+					Text:      tt.toolPayload,
+				},
+				{
+					Timestamp: tt.errTimestamp,
+					Type:      "say",
+					Say:       tt.errSay,
+					Text:      tt.errText,
+				},
+			}
+			messagesJSON, err := json.Marshal(messages)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(taskDir, "ui_messages.json"),
+				messagesJSON, 0644,
+			))
+
+			sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+			require.NoError(t, err)
+
+			// The tool-specific error must be paired onto the preceding
+			// tool call as an errored result, not emitted standalone.
+			var tc *ParsedToolCall
+			for mi := range msgs {
+				for ci := range msgs[mi].ToolCalls {
+					if msgs[mi].ToolCalls[ci].ToolName == tt.toolName {
+						tc = &msgs[mi].ToolCalls[ci]
+					}
+				}
+			}
+			require.NotNil(t, tc, "tool call %q should exist", tt.toolName)
+
+			var errored *ParsedToolResultEvent
+			for i := range tc.ResultEvents {
+				if tc.ResultEvents[i].Status == "errored" {
+					errored = &tc.ResultEvents[i]
+				}
+			}
+			require.NotNil(t, errored,
+				"%s must pair as an errored result on %s",
+				tt.errSay, tt.toolName)
+			assert.Equal(t, tt.errText, errored.Content)
+			// The error timestamp must be preserved on the event.
+			assert.Equal(t, time.UnixMilli(tt.errTimestamp).UTC(),
+				errored.Timestamp.UTC(),
+				"error result must preserve the error timestamp")
+
+			// The error must not also appear as a standalone system
+			// message.
+			for _, m := range msgs {
+				if m.IsSystem {
+					assert.NotEqual(t, tt.errText, m.Content,
+						"paired error must not be emitted standalone")
+				}
+			}
+
+			// A resolved (errored) tool call must not be reported as a
+			// pending tool call.
+			assert.NotEqual(t, TerminationToolCallPending,
+				sess.TerminationStatus,
+				"errored tool call must not be tool_call_pending")
+		})
+	}
+}
+
 func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-feedback")
