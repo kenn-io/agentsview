@@ -178,20 +178,21 @@ The vector index moves through kit's generation lifecycle: **building → active
 retired**. A generation's fingerprint is derived from `model` + `dimension` +
 the params map
 `{max_input_chars, doc_unit_scheme: "run_v1", chunk_overlap_chars}`
-(`vectorGeneration` in `cmd/agentsview/embeddings.go`), plus `input_suffix` and
-`request_dimensions` when configured — an unset value is omitted from the map
-rather than included as `""`/`false`, so configs written before those keys
-existed keep their fingerprints. `chunk_overlap_chars` is computed by
-`vector.ChunkOverlap` — `max_input_chars * 15 / 100` — the same function `Open`
-uses for kit's `SplitOptions`, so the split behavior and its fingerprint can
-never drift apart. Changing any input — the model, the dimension, whether
-reduced output dimensions are requested, the chunking cap, the input suffix, the
-overlap formula, or the document-unit scheme — produces a different fingerprint
-and cuts a new generation. Which `[vector.embeddings.servers.<name>]` entry
-encoded a document is deliberately *not* a fingerprint input: every server
-serves the same globally-configured model, so their vectors are interchangeable
-and a build may switch servers (`embeddings build --using <name>`) without
-invalidating the generation.
+(`vectorGeneration` in `cmd/agentsview/embeddings.go`), plus `query_prefix`,
+`document_prefix`, `input_suffix`, and `request_dimensions` when configured —
+an unset value is omitted from the map rather than included as `""`/`false`, so
+configs written before those keys existed keep their fingerprints.
+`chunk_overlap_chars` is computed by `vector.ChunkOverlap` —
+`max_input_chars * 15 / 100` — the same function `Open` uses for kit's
+`SplitOptions`, so the split behavior and its fingerprint can never drift
+apart. Changing any input — the model, the dimension, whether reduced output
+dimensions are requested, the chunking cap, either role prefix, the input
+suffix, the overlap formula, or the document-unit scheme — produces a
+different fingerprint and cuts a new generation. Which
+`[vector.embeddings.servers.<name>]` entry encoded a document is deliberately
+*not* a fingerprint input: every server serves the same globally-configured
+model, so their vectors are interchangeable and a build may switch servers
+(`embeddings build --using <name>`) without invalidating the generation.
 
 - `embeddings build` (incremental): mirror refresh, then fill whatever the
   active generation is missing.
@@ -210,6 +211,12 @@ invalidating the generation.
 Unit content is chunked by kit's `Split` with `MaxRunes = max_input_chars`
 (default 8192) and `Overlap = ChunkOverlap(max_input_chars)` — 15% of the cap:
 1228 runes at the default, 375 at a 2500 cap.
+
+The configured `document_prefix` and shared `input_suffix` are applied to each
+chunk only after splitting. Search queries use `query_prefix` plus the same
+suffix. Affix lengths therefore do not reduce the splitter's `MaxRunes`; an
+operator targeting a strict model context limit must leave enough headroom in
+`max_input_chars`.
 
 A hit on a run document is **anchored** to one member message: the member whose
 rune span contains the matched chunk's center rune,

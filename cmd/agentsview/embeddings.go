@@ -252,6 +252,16 @@ func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	if c.InputSuffix != "" {
 		params["input_suffix"] = c.InputSuffix
 	}
+	// Role-aware prefixes join only when set so the empty defaults preserve
+	// every generation fingerprint created before these keys existed. The
+	// query and document recipe is fingerprinted as one unit: changing either
+	// requires a new generation before semantic search resumes.
+	if c.QueryPrefix != "" {
+		params["query_prefix"] = c.QueryPrefix
+	}
+	if c.DocumentPrefix != "" {
+		params["document_prefix"] = c.DocumentPrefix
+	}
 	// request_dimensions likewise joins only when enabled. Reduced vectors
 	// are renormalized prefixes, not byte-identical to a native embedding of
 	// the same length, so flipping the flag must cut a new generation even
@@ -268,8 +278,10 @@ func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 
 // newVectorEncoder builds the OpenAI-compatible embeddings encoder for one
 // named server ("" means the default), combining the global model identity
-// with that server's transport settings.
-func newVectorEncoder(c config.VectorEmbeddingsConfig, serverName string) (kitvec.EncodeFunc, error) {
+// and caller-selected role prefix with that server's transport settings.
+func newVectorEncoder(
+	c config.VectorEmbeddingsConfig, serverName, inputPrefix string,
+) (kitvec.EncodeFunc, error) {
 	name, server, err := c.Server(serverName)
 	if err != nil {
 		return nil, err
@@ -287,19 +299,37 @@ func newVectorEncoder(c config.VectorEmbeddingsConfig, serverName string) (kitve
 		RequestDimensions: c.RequestDimensions,
 		Timeout:           timeout,
 		MaxRetries:        server.MaxRetries,
+		InputPrefix:       inputPrefix,
 		InputSuffix:       c.InputSuffix,
 	}), nil
 }
 
-// vectorEncoderSet builds one encoder per configured embeddings server, so
-// a Manager can run any build against the server the request names.
-func vectorEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSet, error) {
+// newVectorQueryEncoder builds the default or named server encoder used only
+// for search queries.
+func newVectorQueryEncoder(
+	c config.VectorEmbeddingsConfig, serverName string,
+) (kitvec.EncodeFunc, error) {
+	return newVectorEncoder(c, serverName, c.QueryPrefix)
+}
+
+// newVectorDocumentEncoder builds the default or named server encoder used
+// only for document builds and repairs.
+func newVectorDocumentEncoder(
+	c config.VectorEmbeddingsConfig, serverName string,
+) (kitvec.EncodeFunc, error) {
+	return newVectorEncoder(c, serverName, c.DocumentPrefix)
+}
+
+// vectorDocumentEncoderSet builds one document encoder per configured
+// embeddings server, so a Manager can run any build against the server the
+// request names without sharing the query recipe.
+func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSet, error) {
 	set := vector.EncoderSet{
 		Default: c.ResolvedDefaultServer(),
 		ByName:  make(map[string]vector.ManagedEncoder, len(c.Servers)),
 	}
 	for name, server := range c.Servers {
-		enc, err := newVectorEncoder(c, name)
+		enc, err := newVectorDocumentEncoder(c, name)
 		if err != nil {
 			return vector.EncoderSet{}, err
 		}
@@ -427,7 +457,7 @@ func runEmbeddingsBuildDirect(
 	}
 	defer ix.Close()
 
-	encoders, err := vectorEncoderSet(cfg.Vector.Embeddings)
+	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -114,10 +115,9 @@ func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
 // TestVectorGenerationParams asserts vectorGeneration's Params map carries
 // exactly the three run_v1 fingerprint keys the plan requires, with
 // chunk_overlap_chars derived from vector.ChunkOverlap so a future change to
-// that formula cannot silently drift from the fingerprint. An empty
-// input_suffix must be absent from the map (not present as ""), so configs
-// written before the key existed keep their fingerprints; a non-empty suffix
-// joins the fingerprint and cuts a new generation.
+// that formula cannot silently drift from the fingerprint. Empty affixes must
+// be absent from the map (not present as ""), so configs written before these
+// keys existed keep their fingerprints; non-empty affixes cut a new generation.
 func TestVectorGenerationParams(t *testing.T) {
 	c := config.VectorEmbeddingsConfig{
 		Model:         "test-model",
@@ -134,6 +134,7 @@ func TestVectorGenerationParams(t *testing.T) {
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
 	}, gen.Params)
+	baselineFingerprint := gen.Fingerprint()
 
 	c.InputSuffix = "<|endoftext|>"
 	gen = vectorGeneration(c)
@@ -143,6 +144,35 @@ func TestVectorGenerationParams(t *testing.T) {
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
 		"input_suffix":        "<|endoftext|>",
 	}, gen.Params)
+	assert.NotEqual(t, baselineFingerprint, gen.Fingerprint(),
+		"adding an input suffix cuts a new generation")
+
+	suffixFingerprint := gen.Fingerprint()
+	c.QueryPrefix = "task: search result | query: "
+	gen = vectorGeneration(c)
+	assert.Equal(t, map[string]string{
+		"max_input_chars":     "4000",
+		"doc_unit_scheme":     "run_v1",
+		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":        "<|endoftext|>",
+		"query_prefix":        "task: search result | query: ",
+	}, gen.Params)
+	assert.NotEqual(t, suffixFingerprint, gen.Fingerprint(),
+		"adding a query prefix cuts a new generation")
+
+	queryFingerprint := gen.Fingerprint()
+	c.DocumentPrefix = "title: none | text: "
+	gen = vectorGeneration(c)
+	assert.Equal(t, map[string]string{
+		"max_input_chars":     "4000",
+		"doc_unit_scheme":     "run_v1",
+		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":        "<|endoftext|>",
+		"query_prefix":        "task: search result | query: ",
+		"document_prefix":     "title: none | text: ",
+	}, gen.Params)
+	assert.NotEqual(t, queryFingerprint, gen.Fingerprint(),
+		"adding a document prefix cuts a new generation")
 
 	// request_dimensions follows the same only-when-set rule, and enabling it
 	// must change the fingerprint even at an unchanged dimension value, so
@@ -156,6 +186,8 @@ func TestVectorGenerationParams(t *testing.T) {
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
 		"input_suffix":        "<|endoftext|>",
+		"query_prefix":        "task: search result | query: ",
+		"document_prefix":     "title: none | text: ",
 		"request_dimensions":  "true",
 	}, gen.Params)
 	assert.NotEqual(t, nativeFingerprint, gen.Fingerprint(),
@@ -341,6 +373,72 @@ func TestEmbeddingsBuildDirectEndToEnd(t *testing.T) {
 
 	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0")
 	assert.Contains(t, out.String(), "Generation activated.")
+}
+
+// TestRoleAwarePrefixesReachBuildAndSearch exercises the user-visible role
+// split through a real direct build, vectors.db, and SQLite semantic search.
+// The embeddings server observes document-prefixed build inputs and a
+// query-prefixed search input, with the shared suffix applied last.
+func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
+	dataDir := t.TempDir()
+	seedEmbeddableArchive(t, dataDir)
+
+	var mu sync.Mutex
+	var captured []string
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		mu.Lock()
+		captured = append(captured, req.Input...)
+		mu.Unlock()
+
+		data := make([]map[string]any, len(req.Input))
+		for i := range req.Input {
+			data[i] = map[string]any{
+				"index": i, "embedding": []float32{1, 2, 3},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	}))
+	defer stub.Close()
+
+	cfg := vectorTestConfig(dataDir)
+	server := cfg.Vector.Embeddings.Servers["local"]
+	server.Endpoint = stub.URL + "/v1"
+	cfg.Vector.Embeddings.Servers["local"] = server
+	cfg.Vector.Embeddings.QueryPrefix = "query: "
+	cfg.Vector.Embeddings.DocumentPrefix = "document: "
+	cfg.Vector.Embeddings.InputSuffix = "<eos>"
+
+	var buildOut bytes.Buffer
+	require.NoError(t, runEmbeddingsBuildDirect(
+		context.Background(), &buildOut, cfg, vector.BuildRequest{}))
+
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	closeVector := installDirectVectorSearcher(cfg, database)
+	require.NotNil(t, closeVector)
+	t.Cleanup(func() { require.NoError(t, closeVector()) })
+
+	result, err := database.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern:        "find greeting",
+		Mode:           "semantic",
+		Limit:          5,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Matches,
+		"semantic search should return the indexed session")
+
+	mu.Lock()
+	got := append([]string(nil), captured...)
+	mu.Unlock()
+	require.Len(t, got, 3, "two indexed units and one search query should be encoded")
+	assert.Contains(t, got, "document: hello there<eos>")
+	assert.Contains(t, got, "document: hi back\n\nand a follow-up thought<eos>")
+	assert.Contains(t, got, "query: find greeting<eos>")
 }
 
 func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {

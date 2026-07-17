@@ -35,6 +35,8 @@ include_automated = false         # default; automated sessions (e.g. roborev) a
 model = "nomic-embed-text"
 dimension = 768                   # every returned vector must have this length
 max_input_chars = 8192            # per-chunk rune cap (default 8192)
+query_prefix = "search_query: "    # prepended only to search queries
+document_prefix = "search_document: " # prepended only to indexed document chunks
 # request_dimensions = true      # ask for Matryoshka-reduced vectors of exactly `dimension` (see below)
 # input_suffix = "<|endoftext|>"  # appended to every embedded text; default empty (see below)
 default_server = "local"          # server used for query encoding and unnamed builds
@@ -60,11 +62,11 @@ parse. Restart the daemon (or run a CLI command) after editing the file.
 ### Named embeddings servers
 
 Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`,
-`input_suffix` — is global: every server in the `servers` table must serve that
-same model, so vectors produced by any of them are interchangeable and land in
-the same generation. What varies per server is transport and capacity:
-`endpoint`, `api_key_env`, `timeout`, `max_retries`, `batch_size`, and
-`concurrency`.
+`query_prefix`, `document_prefix`, and `input_suffix` — is global: every server
+in the `servers` table must serve that same model and input recipe, so vectors
+produced by any of them are interchangeable and land in the same generation.
+What varies per server is transport and capacity: `endpoint`, `api_key_env`,
+`timeout`, `max_retries`, `batch_size`, and `concurrency`.
 
 This split exists so you can encode search queries against a fast local server
 while offloading bulk index builds to a bigger remote machine:
@@ -106,6 +108,44 @@ endpoint has spare parallel capacity, or set it to 1 to send one request at a
 time. Responses are requested in the compact base64 encoding automatically (with
 a transparent fallback for servers that reject or ignore `encoding_format`),
 which cuts response transfer roughly 4x on slow links.
+
+### Role-aware task prefixes
+
+Some embedding models are trained with different input instructions for search
+queries and indexed documents. `query_prefix` is prepended only when AgentsView
+embeds a search query; `document_prefix` is prepended to every document chunk
+during manual, scheduled, and repair builds. Both default to empty, preserving
+the input bytes and generation fingerprints produced by older configurations.
+
+EmbeddingGemma's ordinary retrieval recipe without document titles is:
+
+```toml
+[vector.embeddings]
+model = "embeddinggemma"
+dimension = 768
+query_prefix = "task: search result | query: "
+document_prefix = "title: none | text: "
+```
+
+Nomic uses `search_query: ` and `search_document: `, as shown in the initial
+configuration example. E5 models commonly use `query: ` and `passage: `.
+Models such as Qwen3-Embedding that recommend an instruction only for queries
+can leave `document_prefix` unset.
+
+Prefixes are applied after document content is chunked, so
+`max_input_chars` limits the original chunk rather than the final affixed
+request. If the embedding endpoint has a strict context limit, leave enough
+headroom for the configured prefix and suffix. When an endpoint explicitly
+rejects an input for exceeding its token or context limit, AgentsView logs the
+rejection and skip-stamps that document for the generation so one oversized
+input cannot block the rest of the archive. Lower `max_input_chars` and rebuild
+to include it.
+
+Both prefixes are part of the generation fingerprint. Adding, removing, or
+changing either one creates a new generation and re-embeds the archive on the
+next build. This intentionally treats the query/document recipe as one
+reproducible embedding configuration, even though changing only
+`query_prefix` would not alter stored document vectors.
 
 `input_suffix` is appended verbatim to every text sent to the endpoint —
 documents at build time and queries at search time — for models that expect a
@@ -371,7 +411,7 @@ modes deliberately rebuild or reconcile broader index state.
 runs, see [What gets embedded](#what-gets-embedded-units-not-messages)) into
 `vectors.db`, then fills whatever the active generation is missing.
 `--full-rebuild` re-embeds every document: if the target fingerprint (derived
-from `model`, `dimension`, `max_input_chars`, `input_suffix` when set, the
+from `model`, `dimension`, `max_input_chars`, configured input affixes, the
 document-unit scheme, and the derived chunk overlap) differs from the active
 generation, it cuts a new **generation**; if the fingerprint is unchanged, it
 instead resets and refills the active generation in place rather than cutting a

@@ -400,7 +400,7 @@ func setupVectorServing(
 		return vectorServing{}, fmt.Errorf("opening vectors.db: %w", err)
 	}
 
-	encoders, err := vectorEncoderSet(cfg.Vector.Embeddings)
+	encoders, err := vectorDocumentEncoderSet(cfg.Vector.Embeddings)
 	if err != nil {
 		ix.Close()
 		_ = lock.Close()
@@ -408,7 +408,12 @@ func setupVectorServing(
 	}
 	// Search-time query encoding always uses the default server; builds may
 	// pick any named entry via BuildRequest.Using.
-	queryEnc := encoders.ByName[encoders.Default].Encode
+	queryEnc, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
+	if err != nil {
+		ix.Close()
+		_ = lock.Close()
+		return vectorServing{}, err
+	}
 
 	backstop, err := time.ParseDuration(cfg.Vector.Embed.BackstopInterval)
 	if err != nil {
@@ -482,7 +487,7 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 		return nil
 	}
 	// Query encoding uses the default server.
-	enc, err := newVectorEncoder(cfg.Vector.Embeddings, "")
+	enc, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
 	if err != nil {
 		ix.Close()
 		log.Printf(

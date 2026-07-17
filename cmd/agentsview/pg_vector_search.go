@@ -104,7 +104,7 @@ func wirePGVectorSearch(
 		return nil
 	}
 
-	enc, err := newVectorEncoder(appCfg.Vector.Embeddings, "")
+	enc, err := newVectorQueryEncoder(appCfg.Vector.Embeddings, "")
 	if err != nil {
 		return fmt.Errorf("building query encoder: %w", err)
 	}

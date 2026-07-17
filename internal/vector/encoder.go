@@ -44,6 +44,10 @@ type EncoderConfig struct {
 	// MaxRetries is the maximum total attempts on 429/5xx/network errors
 	// (4xx fails fast); values <= 0 mean one attempt.
 	MaxRetries int
+	// InputPrefix is prepended verbatim to every input text before it is
+	// sent. Callers use distinct encoder instances when query and document
+	// inputs require different task instructions. Empty means no prefix.
+	InputPrefix string
 	// InputSuffix is appended verbatim to every input text before it is
 	// sent, for models that expect a terminator the serving layer does not
 	// add (e.g. "<|endoftext|>" for Qwen3-Embedding under llama.cpp).
@@ -271,14 +275,14 @@ func NewEncoder(cfg EncoderConfig) kitvec.EncodeFunc {
 }
 
 // marshalRequest builds the request body, applying the configured input
-// suffix and, unless the encoder has downgraded to float mode, asking for
+// affixes and, unless the encoder has downgraded to float mode, asking for
 // base64 embeddings.
 func (ec *encoderClient) marshalRequest(texts []string) ([]byte, error) {
 	inputs := texts
-	if ec.cfg.InputSuffix != "" {
+	if ec.cfg.InputPrefix != "" || ec.cfg.InputSuffix != "" {
 		inputs = make([]string, len(texts))
 		for i, t := range texts {
-			inputs[i] = t + ec.cfg.InputSuffix
+			inputs[i] = ec.cfg.InputPrefix + t + ec.cfg.InputSuffix
 		}
 	}
 	body := embeddingsRequestBody{Model: ec.cfg.Model, Input: inputs}

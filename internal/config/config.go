@@ -133,11 +133,11 @@ type VectorConfig struct {
 // every server must share — and the named servers that can encode it.
 //
 // Model identity (model, dimension, request_dimensions, max_input_chars,
-// input_suffix) is deliberately global rather than per-server: it joins the
-// generation fingerprint, and query vectors are only comparable to stored
-// document vectors from the same space. Servers differ only in transport and
-// capacity, so a build run on any server produces vectors every other
-// server's queries can search.
+// query_prefix, document_prefix, input_suffix) is deliberately global rather
+// than per-server: it joins the generation fingerprint, and query vectors are
+// only comparable to stored document vectors from the same space. Servers
+// differ only in transport and capacity, so a build run on any server produces
+// vectors every other server's queries can search.
 type VectorEmbeddingsConfig struct {
 	Model     string `toml:"model" json:"model"`
 	Dimension int    `toml:"dimension" json:"dimension"`
@@ -153,6 +153,13 @@ type VectorEmbeddingsConfig struct {
 	// MaxInputChars caps the rune length of each chunk sent for
 	// embedding. Default 8192.
 	MaxInputChars int `toml:"max_input_chars" json:"max_input_chars"`
+	// QueryPrefix is prepended verbatim to search queries before embedding.
+	// It allows instruction-tuned models to distinguish queries from indexed
+	// documents. Changing it cuts a new vector generation. Default empty.
+	QueryPrefix string `toml:"query_prefix" json:"query_prefix,omitempty"`
+	// DocumentPrefix is prepended verbatim to every document chunk before
+	// embedding. Changing it cuts a new vector generation. Default empty.
+	DocumentPrefix string `toml:"document_prefix" json:"document_prefix,omitempty"`
 	// InputSuffix is appended verbatim to every text sent for embedding
 	// (documents and queries alike). Some models expect a terminator the
 	// serving layer does not add — e.g. Qwen3-Embedding under llama.cpp
@@ -1142,7 +1149,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("vector", "embeddings", "max_input_chars") {
 		c.Vector.Embeddings.MaxInputChars = file.Vector.Embeddings.MaxInputChars
 	}
-	if file.Vector.Embeddings.InputSuffix != "" {
+	if meta.IsDefined("vector", "embeddings", "query_prefix") {
+		c.Vector.Embeddings.QueryPrefix = file.Vector.Embeddings.QueryPrefix
+	}
+	if meta.IsDefined("vector", "embeddings", "document_prefix") {
+		c.Vector.Embeddings.DocumentPrefix = file.Vector.Embeddings.DocumentPrefix
+	}
+	if meta.IsDefined("vector", "embeddings", "input_suffix") {
 		c.Vector.Embeddings.InputSuffix = file.Vector.Embeddings.InputSuffix
 	}
 	if file.Vector.Embeddings.DefaultServer != "" {

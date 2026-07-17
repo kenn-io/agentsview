@@ -303,9 +303,31 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
 		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
 		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
+		assert.Empty(t, cfg.Vector.Embeddings.QueryPrefix, "unset query_prefix defaults to empty")
+		assert.Empty(t, cfg.Vector.Embeddings.DocumentPrefix,
+			"unset document_prefix defaults to empty")
 		assert.Empty(t, cfg.Vector.Embeddings.InputSuffix, "unset input_suffix defaults to empty")
 		assert.False(t, cfg.Vector.Embeddings.RequestDimensions,
 			"unset request_dimensions keeps the false default")
+	})
+
+	t.Run("role prefixes load verbatim", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"model":           "embeddinggemma",
+					"dimension":       768,
+					"query_prefix":    "task: search result | query: ",
+					"document_prefix": "title: none | text: ",
+					"servers":         minimalServers(),
+				},
+			},
+		})
+		assert.Equal(t, "task: search result | query: ",
+			cfg.Vector.Embeddings.QueryPrefix)
+		assert.Equal(t, "title: none | text: ",
+			cfg.Vector.Embeddings.DocumentPrefix)
 	})
 
 	t.Run("request_dimensions true is loaded", func(t *testing.T) {

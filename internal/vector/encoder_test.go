@@ -293,10 +293,10 @@ func TestEncoderFallsBackToFloatsWhenBase64Rejected(t *testing.T) {
 	assert.Equal(t, int32(2), floatRequests.Load())
 }
 
-// TestEncoderInputSuffixAppended asserts a configured InputSuffix is appended
-// to every input in the request body, while the returned vectors still map
-// back to the original (unsuffixed) texts by index.
-func TestEncoderInputSuffixAppended(t *testing.T) {
+// TestEncoderInputAffixesApplied asserts configured affixes surround every
+// input in the request body without mutating the caller's text slice, while
+// returned vectors still map back to the original texts by index.
+func TestEncoderInputAffixesApplied(t *testing.T) {
 	var gotReq embeddingsRequest
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -318,13 +318,20 @@ func TestEncoderInputSuffixAppended(t *testing.T) {
 		Dimension:   3,
 		Timeout:     5 * time.Second,
 		MaxRetries:  1,
+		InputPrefix: "title: none | text: ",
 		InputSuffix: "<|endoftext|>",
 	})
 
-	out, err := enc(context.Background(), []string{"hello", "world"})
+	texts := []string{"hello", "world"}
+	out, err := enc(context.Background(), texts)
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"hello<|endoftext|>", "world<|endoftext|>"}, gotReq.Input)
+	assert.Equal(t, []string{
+		"title: none | text: hello<|endoftext|>",
+		"title: none | text: world<|endoftext|>",
+	}, gotReq.Input)
+	assert.Equal(t, []string{"hello", "world"}, texts,
+		"applying affixes must not mutate caller input")
 	require.Len(t, out, 2)
 	assert.Equal(t, []float32{1, 2, 3}, out[0])
 	assert.Equal(t, []float32{4, 5, 6}, out[1])

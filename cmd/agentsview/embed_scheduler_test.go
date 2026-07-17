@@ -499,7 +499,7 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 	require.NoError(t, err, "read-only Open must succeed against a mismatched vectors.db")
 	defer ix.Close()
 
-	enc, err := newVectorEncoder(cfg.Vector.Embeddings, "")
+	enc, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
 	require.NoError(t, err)
 	adapter := newSearcherAdapter(ix, enc, vectorGeneration(cfg.Vector.Embeddings))
 
