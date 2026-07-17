@@ -3037,9 +3037,10 @@ func (e *Engine) discoverOmnigentRetrySources(
 	currentSources map[string]struct{},
 ) ([]parser.SourceRef, int) {
 	e.omnigentRetryMu.Lock()
-	pending := make([]omnigentRetrySource, 0, omnigentRetryBatchSize)
+	pageSize := min(omnigentRetryBatchSize, len(e.omnigentRetrySources))
+	pending := make([]omnigentRetrySource, 0, pageSize)
 	entry := e.omnigentRetryHead
-	for entry != nil && len(pending) < omnigentRetryBatchSize {
+	for entry != nil && len(pending) < pageSize {
 		next := entry.next
 		pending = append(pending, entry.omnigentRetrySource)
 		e.moveOmnigentRetryToTailLocked(entry)
@@ -7195,26 +7196,29 @@ func (e *Engine) markOmnigentSessionRetry(pw pendingWrite) {
 
 func (e *Engine) storeOmnigentRetry(retry omnigentRetrySource) {
 	e.omnigentRetryMu.Lock()
-	defer e.omnigentRetryMu.Unlock()
 	if e.omnigentRetrySources == nil {
 		e.omnigentRetrySources = make(map[string]*omnigentRetryEntry)
 	}
 	if e.omnigentRetryContainers == nil {
 		e.omnigentRetryContainers = make(map[string]map[string]struct{})
 	}
-	e.storeOmnigentRetryLocked(retry)
+	activateRoot := e.storeOmnigentRetryLocked(retry)
+	e.omnigentRetryMu.Unlock()
+	if activateRoot != "" {
+		e.activateOmnigentStoredHintSweep(activateRoot)
+	}
 }
 
-func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) {
+func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) string {
 	key := retry.key()
 	if _, exists := e.omnigentRetrySources[key]; exists {
-		return
+		return ""
 	}
 	container, member := omnigentRetryContainer(retry.filePath)
 	containerKey := omnigentRetrySource{filePath: container}.key()
 	if member {
 		if _, recoveringContainer := e.omnigentRetrySources[containerKey]; recoveringContainer {
-			return
+			return ""
 		}
 	} else if container != "" {
 		e.collapseOmnigentRetryContainerLocked(container)
@@ -7235,9 +7239,27 @@ func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) {
 		bucket[key] = struct{}{}
 		if member && len(bucket) >= omnigentRetryBatchSize {
 			e.collapseOmnigentRetryContainerLocked(container)
-			e.storeOmnigentRetryLocked(omnigentRetrySource{filePath: container})
+			return filepath.Dir(container)
 		}
 	}
+	return ""
+}
+
+func (e *Engine) activateOmnigentStoredHintSweep(watchRoot string) {
+	key := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(watchRoot)
+	e.omnigentHintMu.Lock()
+	defer e.omnigentHintMu.Unlock()
+	if e.omnigentHintCursors == nil {
+		e.omnigentHintCursors = make(map[string]omnigentHintCursor)
+	}
+	cursor := e.omnigentHintCursors[key]
+	if cursor.active {
+		cursor.reactivate = true
+	} else {
+		cursor.active = true
+		cursor.after = ""
+	}
+	e.omnigentHintCursors[key] = cursor
 }
 
 func omnigentRetryContainer(path string) (string, bool) {
