@@ -865,6 +865,54 @@ func TestParseHermesSkillViewSetsSkillName(t *testing.T) {
 	})
 }
 
+func TestParseHermesSkillViewInputEncodings(t *testing.T) {
+	testCases := []struct {
+		name     string
+		toolCall string
+	}{
+		{
+			name:     "nested string arguments",
+			toolCall: `{"id":"skill-1","function":{"name":"skill_view","arguments":"{\"name\":\"debugging\"}"}}`,
+		},
+		{
+			name:     "nested object arguments",
+			toolCall: `{"id":"skill-1","function":{"name":"skill_view","arguments":{"name":"debugging"}}}`,
+		},
+		{
+			name:     "top-level string arguments",
+			toolCall: `{"id":"skill-1","name":"skill_view","arguments":"{\"name\":\"debugging\"}"}`,
+		},
+		{
+			name:     "top-level object arguments",
+			toolCall: `{"id":"skill-1","name":"skill_view","arguments":{"name":"debugging"}}`,
+		},
+		{
+			name:     "top-level string input",
+			toolCall: `{"id":"skill-1","name":"skill_view","input":"{\"name\":\"debugging\"}"}`,
+		},
+		{
+			name:     "top-level object input",
+			toolCall: `{"id":"skill-1","name":"skill_view","input":{"name":"debugging"}}`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			content := strings.Join([]string{
+				`{"role":"session_meta","timestamp":"2026-04-03T15:00:00.000000"}`,
+				`{"role":"user","content":"Debug this","timestamp":"2026-04-03T15:00:01.000000"}`,
+				`{"role":"assistant","content":"","tool_calls":[` + testCase.toolCall + `],"timestamp":"2026-04-03T15:00:02.000000"}`,
+			}, "\n")
+
+			_, msgs := runHermesJSONLTest(t, "", content)
+			require.Len(t, msgs, 2)
+			require.Len(t, msgs[1].ToolCalls, 1)
+			assert.JSONEq(t, `{"name":"debugging"}`, msgs[1].ToolCalls[0].InputJSON)
+			assert.Equal(t, "debugging", msgs[1].ToolCalls[0].SkillName)
+		})
+	}
+}
+
 func TestParseHermesSession_JSONL_MultipleToolCalls(t *testing.T) {
 	content := strings.Join([]string{
 		`{"role":"session_meta","timestamp":"2026-04-03T15:00:00.000000"}`,

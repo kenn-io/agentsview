@@ -55,6 +55,25 @@ type hermesStateMessage struct {
 	codexMessageItems   string
 }
 
+func hermesToolInputJSON(tc gjson.Result) string {
+	for _, path := range []string{"function.arguments", "arguments", "input"} {
+		input := tc.Get(path)
+		if !input.Exists() {
+			continue
+		}
+		if input.Type == gjson.String {
+			if input.Str == "" {
+				continue
+			}
+			return input.Str
+		}
+		if input.Raw != "" {
+			return input.Raw
+		}
+	}
+	return ""
+}
+
 func parseHermesToolCall(tc gjson.Result) (ParsedToolCall, bool) {
 	name := tc.Get("function.name").Str
 	if name == "" {
@@ -64,7 +83,7 @@ func parseHermesToolCall(tc gjson.Result) (ParsedToolCall, bool) {
 		return ParsedToolCall{}, false
 	}
 
-	inputJSON := tc.Get("function.arguments").Str
+	inputJSON := hermesToolInputJSON(tc)
 	toolCall := ParsedToolCall{
 		ToolUseID: tc.Get("id").Str,
 		ToolName:  name,
