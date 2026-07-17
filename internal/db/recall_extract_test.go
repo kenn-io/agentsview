@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -305,4 +306,82 @@ func TestCopyRecallEntriesFromToleratesSourceWithoutExtractTables(t *testing.T) 
 	dst := testDB(t)
 	require.NoError(t, dst.CopyRecallEntriesFrom(srcPath),
 		"archives from releases without extraction tables must still resync")
+}
+
+func TestMarkExtractProgressFailedRejectsDoneRow(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 2)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
+
+	err = d.MarkExtractProgressFailed(ctx, "sess-1", "fp-a", "digest-1", "late worker")
+	require.ErrorIs(t, err, ErrStaleExtractProgress,
+		"a completed row must not be demoted to failed")
+
+	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, progress.State)
+	assert.Equal(t, 2, progress.UnitCursor)
+	assert.Empty(t, progress.LastError)
+}
+
+func TestExtractMutationsWaitForDBMutex(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 2)
+	require.NoError(t, err)
+
+	// Every mutation below is valid regardless of the order the map yields
+	// them in: the progress row exists with digest-1 and never reaches done.
+	mutations := map[string]func() error{
+		"EnsureExtractGeneration": func() error {
+			_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+				Fingerprint: "fp-b", Model: "m", Segmenter: "turns-v1",
+			})
+			return err
+		},
+		"ActivateExtractGeneration": func() error {
+			return d.ActivateExtractGeneration(ctx, "fp-a")
+		},
+		"RetireExtractGeneration": func() error {
+			return d.RetireExtractGeneration(ctx, "fp-a", true)
+		},
+		"UpsertExtractProgress": func() error {
+			_, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 2)
+			return err
+		},
+		"AdvanceExtractCursor": func() error {
+			return d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 1)
+		},
+		"MarkExtractProgressFailed": func() error {
+			return d.MarkExtractProgressFailed(ctx, "sess-1", "fp-a", "digest-1", "x")
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			d.mu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- mutate() }()
+			select {
+			case <-done:
+				d.mu.Unlock()
+				t.Fatal("mutation completed while db.mu was held; " +
+					"CloseConnections relies on db.mu to quiesce writes")
+			case <-time.After(100 * time.Millisecond):
+			}
+			d.mu.Unlock()
+			require.NoError(t, <-done)
+		})
+	}
 }

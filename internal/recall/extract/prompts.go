@@ -64,6 +64,7 @@ func basePrompts() map[PromptRole]string {
 // without the client knowing about any particular server.
 type RequestShape struct {
 	Temperature float64        `json:"temperature"`
+	MaxTokens   int            `json:"max_tokens"`
 	ExtraBody   map[string]any `json:"extra_body,omitempty"`
 }
 
@@ -89,6 +90,7 @@ var builtinProfiles = []Profile{
 		MatchPrefixes: []string{"qwen"},
 		Request: RequestShape{
 			Temperature: 0,
+			MaxTokens:   defaultMaxTokens,
 			ExtraBody: map[string]any{
 				"chat_template_kwargs": map[string]any{
 					"enable_thinking": false,
@@ -98,9 +100,14 @@ var builtinProfiles = []Profile{
 	},
 	{
 		Name:    "base",
-		Request: RequestShape{Temperature: 0},
+		Request: RequestShape{Temperature: 0, MaxTokens: defaultMaxTokens},
 	},
 }
+
+// defaultMaxTokens is the built-in profiles' output budget: generous enough
+// for a dense window's worth of entries without letting a runaway response
+// occupy the server indefinitely. Configuration can override it per model.
+const defaultMaxTokens = 4096
 
 // ResolveProfile picks the profile for a model. An explicit name wins and
 // must exist; otherwise the model name selects a profile by prefix, falling
@@ -170,8 +177,10 @@ func LoadPromptOverrides(dir string) (map[PromptRole]string, error) {
 }
 
 // Fingerprint digests everything that changes extraction output: the model,
-// the segmentation strategy and its parameters, the resolved prompts, and
-// the request shape. Two configurations with the same fingerprint produce
+// the segmentation strategy and its parameters, the resolved prompts, the
+// request shape (including the output token budget), and the extraction
+// protocol version covering the response schema and recovery behavior baked
+// into this binary. Two configurations with the same fingerprint produce
 // interchangeable corpora; any difference is a new generation.
 func Fingerprint(
 	model string,
@@ -185,12 +194,14 @@ func Fingerprint(
 		promptDigests[string(role)] = hex.EncodeToString(sum[:])
 	}
 	identity := struct {
+		Protocol      int               `json:"protocol"`
 		Model         string            `json:"model"`
 		Segmenter     string            `json:"segmenter"`
 		Params        map[string]any    `json:"params"`
 		PromptDigests map[string]string `json:"prompt_digests"`
 		Request       RequestShape      `json:"request"`
 	}{
+		Protocol:      extractionProtocolVersion,
 		Model:         model,
 		Segmenter:     segmenter.Name(),
 		Params:        segmenter.Params(),

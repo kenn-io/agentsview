@@ -32,6 +32,10 @@ func TestResolveProfileFallsBackToBase(t *testing.T) {
 	if profile.Name != "base" {
 		t.Fatalf("profile = %q, want base", profile.Name)
 	}
+	if profile.Request.MaxTokens <= 0 {
+		t.Fatalf("base profile MaxTokens = %d, must be a working default",
+			profile.Request.MaxTokens)
+	}
 }
 
 func TestResolveProfileExplicitWinsAndUnknownErrors(t *testing.T) {
@@ -112,6 +116,12 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 	)
 	if changedPrompt == a {
 		t.Fatal("prompt change must change the fingerprint")
+	}
+	changedTokens, _ := Fingerprint(
+		"model-x", seg, prompts, RequestShape{Temperature: 0, MaxTokens: 512},
+	)
+	if changedTokens == a {
+		t.Fatal("max_tokens change must change the fingerprint")
 	}
 }
 

@@ -66,6 +66,8 @@ func (db *DB) EnsureExtractGeneration(
 	if err := db.requireWritable(); err != nil {
 		return zero, err
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -137,6 +139,8 @@ func (db *DB) ActivateExtractGeneration(
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -182,6 +186,8 @@ func (db *DB) RetireExtractGeneration(
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -247,6 +253,8 @@ func (db *DB) UpsertExtractProgress(
 	if err := db.requireWritable(); err != nil {
 		return zero, err
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -303,6 +311,8 @@ func (db *DB) AdvanceExtractCursor(
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -357,6 +367,8 @@ func (db *DB) AdvanceExtractCursor(
 
 // MarkExtractProgressFailed records a failure without losing the resume
 // point: the cursor stays where it was so a retry continues, not restarts.
+// A row that already reached done is left untouched: the failure comes from
+// a worker that raced completion, not from the completed extraction.
 func (db *DB) MarkExtractProgressFailed(
 	ctx context.Context,
 	sessionID, fingerprint, expectedDigest, lastError string,
@@ -364,6 +376,8 @@ func (db *DB) MarkExtractProgressFailed(
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -372,9 +386,10 @@ func (db *DB) MarkExtractProgressFailed(
 		SET state = ?, last_error = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE session_id = ? AND generation_fingerprint = ?
-		  AND content_digest = ?`,
+		  AND content_digest = ?
+		  AND state != ?`,
 		ExtractProgressFailed, lastError, sessionID, fingerprint,
-		expectedDigest,
+		expectedDigest, ExtractProgressDone,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -389,13 +404,29 @@ func (db *DB) MarkExtractProgressFailed(
 			sessionID, err,
 		)
 	}
-	if affected == 0 {
+	if affected > 0 {
+		return nil
+	}
+	progress, ok, err := db.ExtractProgress(ctx, sessionID, fingerprint)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return fmt.Errorf(
-			"failing session %s past digest change: %w",
-			sessionID, ErrStaleExtractProgress,
+			"no extract progress row for session %s under generation %s",
+			sessionID, fingerprint,
 		)
 	}
-	return nil
+	if progress.State == ExtractProgressDone {
+		return fmt.Errorf(
+			"session %s is already done under generation %s: %w",
+			sessionID, fingerprint, ErrStaleExtractProgress,
+		)
+	}
+	return fmt.Errorf(
+		"failing session %s past digest change: %w",
+		sessionID, ErrStaleExtractProgress,
+	)
 }
 
 // ExtractProgress reads the progress row for one session and generation.
