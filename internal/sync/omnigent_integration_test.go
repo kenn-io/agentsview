@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -190,6 +191,82 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NotNil(t, replacement)
 		})
 	}
+}
+
+func TestSyncPathsOmnigentSameTimestampAppendUsesMemberHash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	beforeInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('conv_0000_1', 'conv_0000', 1, 'message', ?, 'appended')`,
+		`{"role":"assistant","content":[{"type":"output_text","text":"appended"}]}`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	afterInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, beforeInfo.Size(), afterInfo.Size(),
+		"fixture must preserve the container size to exercise hash freshness")
+
+	engine.SyncPaths([]string{dbPath})
+	assert.Equal(t, 1, engine.LastSyncStats().Synced)
+	updated, err := archive.GetSessionFull(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, 2, updated.MessageCount)
+}
+
+func TestSyncOmnigentPeriodicFullSyncDetectsInPlaceItemEdit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE conversation_items
+		SET data = ?, search_text = 'edited'
+		WHERE id = 'conv_0000_0'`,
+		`{"role":"user","content":[{"type":"input_text","text":"edited"}]}`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	engine = sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+	messages, err := archive.GetAllMessages(
+		context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "edited", messages[0].Content)
 }
 
 func TestSyncPathsOmnigentSchemaChangeRetiresLegacyArchiveID(t *testing.T) {

@@ -780,7 +780,7 @@ func omnigentParseMember(
 		return nil, err
 	}
 	return parseOmnigentConversationFromDB(
-		conn, schema, src.Container, member, req.Machine, dbInfo, nil,
+		conn, schema, src.Container, member, req.Machine, dbInfo,
 	)
 }
 
@@ -813,7 +813,7 @@ func omnigentParseContainerData(
 	for i := range metas {
 		result, err := parseOmnigentConversationFromDB(
 			conn, schema, src.Container, metas[i].member(),
-			req.Machine, dbInfo, &metas[i],
+			req.Machine, dbInfo,
 		)
 		if err != nil {
 			return nil, omnigentSchema{}, nil, err

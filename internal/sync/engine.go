@@ -5035,7 +5035,8 @@ func providerProcessCacheKeyWithHash(
 
 func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
+	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentOmnigent,
+		parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
 		return false
@@ -5047,7 +5048,8 @@ func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 // older hash siblings so hot append-only files retain only one content version.
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
+	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentOmnigent,
+		parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
 		return false

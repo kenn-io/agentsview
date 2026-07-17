@@ -3,9 +3,11 @@
 package parser
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"os"
 	"path/filepath"
@@ -268,8 +270,9 @@ func omnigentConversationExists(dbPath, memberKey string) bool {
 
 // omnigentMeta is a lightweight per-conversation descriptor used for
 // incremental sync: FileMtime tracks updated_at and Fingerprint is a cheap
-// content digest (updated_at + item count + max position) that changes exactly
-// when a conversation gains or edits items.
+// classification digest (updated_at + item count + max position) that catches
+// supported Omnigent writes without reading every item. Full parses compute a
+// separate semantic fingerprint over metadata and raw item content.
 type omnigentMeta struct {
 	rowID       int64
 	workspaceID int64
@@ -457,7 +460,7 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 	var results []ParseResult
 	for _, meta := range metas {
 		res, err := parseOmnigentConversationFromDB(
-			conn, schema, dbPath, meta.member(), machine, dbInfo, &meta)
+			conn, schema, dbPath, meta.member(), machine, dbInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -470,12 +473,11 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 }
 
 // parseOmnigentConversationFromDB parses one conversation using an already-open
-// connection. When meta is nil the fingerprint is recomputed from the loaded
-// items so the stored hash matches listOmnigentConversationMetas.
+// connection. The stored fingerprint covers conversation metadata and raw item
+// content; the cheaper omnigentMeta fingerprint is used only for classification.
 func parseOmnigentConversationFromDB(
 	conn *sql.DB, schema omnigentSchema,
 	dbPath string, member omnigentMemberID, machine string, dbInfo os.FileInfo,
-	meta *omnigentMeta,
 ) (*ParseResult, error) {
 	conv, err := loadOmnigentConversation(conn, schema, member)
 	if err == sql.ErrNoRows {
@@ -485,25 +487,15 @@ func parseOmnigentConversationFromDB(
 		return nil, err
 	}
 
-	messages, maxPos, err := loadOmnigentMessages(conn, schema, member)
+	messages, itemFingerprint, err := loadOmnigentMessages(conn, schema, member)
 	if err != nil {
 		return nil, err
 	}
 
-	fingerprint := ""
-	if meta != nil {
-		fingerprint = meta.fingerprint()
-	} else {
-		fingerprint = omnigentMeta{
-			workspaceID: member.workspaceID,
-			rawID:       member.rawID,
-			updatedAt:   conv.updatedAt,
-			itemCount:   len(messages),
-			maxPosition: maxPos,
-		}.fingerprint()
-	}
-
 	workspace, gitBranch := omnigentResolveWorkspace(conn, schema, conv)
+	fingerprint := omnigentSemanticFingerprint(
+		conv, workspace, gitBranch, itemFingerprint,
+	)
 
 	var firstUser string
 	userCount := 0
@@ -554,6 +546,38 @@ func parseOmnigentConversationFromDB(
 		Messages:    messages,
 		UsageEvents: usageEvents,
 	}, nil
+}
+
+func omnigentSemanticFingerprint(
+	conv omnigentConversationRow, workspace, gitBranch, itemFingerprint string,
+) string {
+	h := sha256.New()
+	for _, value := range []string{
+		strconv.FormatInt(conv.workspaceID, 10),
+		conv.id,
+		conv.rootID,
+		strconv.FormatInt(conv.createdAt, 10),
+		strconv.FormatInt(conv.updatedAt, 10),
+		conv.title,
+		conv.kindRaw,
+		conv.modelOverride,
+		conv.parentID,
+		conv.subAgentName,
+		conv.workspace,
+		conv.gitBranch,
+		string(conv.sessionUsage),
+		workspace,
+		gitBranch,
+		itemFingerprint,
+	} {
+		omnigentWriteFingerprintField(h, value)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func omnigentWriteFingerprintField(h hash.Hash, value string) {
+	_, _ = fmt.Fprintf(h, "%d:", len(value))
+	_, _ = h.Write([]byte(value))
 }
 
 // omnigentResolveWorkspace inherits cwd/branch from the root conversation when
@@ -637,11 +661,12 @@ type omnigentSlashCommandData struct {
 }
 
 // loadOmnigentMessages decodes a conversation's items into messages in position
-// order, folding function_call_output onto its originating call. It returns the
-// messages and the maximum position seen (for fingerprinting).
+// order, folding function_call_output onto its originating call. The returned
+// fingerprint covers the raw fields so in-place edits to decoded or fallback
+// content remain visible during periodic full sync.
 func loadOmnigentMessages(
 	conn *sql.DB, schema omnigentSchema, member omnigentMemberID,
-) ([]ParsedMessage, int, error) {
+) ([]ParsedMessage, string, error) {
 	query := `
 		SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
 		  FROM conversation_items
@@ -658,14 +683,14 @@ func loadOmnigentMessages(
 	}
 	rows, err := conn.Query(query, args...)
 	if err != nil {
-		return nil, -1, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"listing omnigent items for %s: %w", member.key(schema), err)
 	}
 	defer rows.Close()
 
 	var messages []ParsedMessage
 	callMsgIndex := map[string]int{}
-	maxPos := -1
+	h := sha256.New()
 	for rows.Next() {
 		var (
 			position   int
@@ -674,16 +699,21 @@ func loadOmnigentMessages(
 			searchText string
 		)
 		if err := rows.Scan(&position, &rawType, &data, &searchText); err != nil {
-			return nil, -1, fmt.Errorf("scanning omnigent item: %w", err)
+			return nil, "", fmt.Errorf("scanning omnigent item: %w", err)
 		}
-		if position > maxPos {
-			maxPos = position
+		for _, value := range []string{
+			strconv.Itoa(position), rawType, data, searchText,
+		} {
+			omnigentWriteFingerprintField(h, value)
 		}
 		typeName := omnigentItemTypeName(schema, rawType)
 		decodeOmnigentItem(
 			position, typeName, data, searchText, &messages, callMsgIndex)
 	}
-	return messages, maxPos, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	return messages, fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // decodeOmnigentItem appends the ParsedMessage(s) for one item, or folds a tool
