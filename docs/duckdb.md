@@ -106,6 +106,17 @@ Safety defaults:
   behind TLS, a VPN, or an SSH tunnel before exposing it beyond
   the local machine.
 
+Legacy Codex payload gating: DuckDB has no triggers, so the
+write-time guards that PostgreSQL and CockroachDB use to reject
+legacy Codex ciphertext cannot exist on a Quack server, and an
+outdated AgentsView build can still push stale Codex rows to it.
+Instead, every read a Quack-backed `duckdb serve` sends to the
+remote carries the compatibility check inside the same statement,
+so the check and the read always see one snapshot. If a legacy
+push is visible, the read fails closed until a current build runs
+against the base mirror and repairs it. Keep every machine that
+pushes to a shared mirror on a current AgentsView build.
+
 ## Configuration
 
 DuckDB settings live in a `[duckdb]` section of `~/.agentsview/config.toml`:

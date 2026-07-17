@@ -381,6 +381,19 @@ func (s *Sync) Push(
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].ID < sessions[j].ID
 	})
+	var withheld []db.Session
+	sessions, withheld, err = s.prepareCodexSessionsForPush(ctx, sessions)
+	if err != nil {
+		return result, err
+	}
+	curationUpdates, absentWithheld, err :=
+		s.pushWithheldCodexCuration(ctx, withheld)
+	if err != nil {
+		return result, err
+	}
+	for _, id := range absentWithheld {
+		delete(priorFingerprints, id)
+	}
 
 	pushed := make([]db.Session, 0, len(sessions))
 	for start := 0; start < len(sessions); start += duckSessionPushBatchSize {
@@ -425,7 +438,7 @@ func (s *Sync) Push(
 			result.Errors,
 		)
 	}
-	if len(pushed) > 0 || len(staleIDs) > 0 {
+	if len(pushed) > 0 || len(curationUpdates) > 0 || len(staleIDs) > 0 {
 		if err := s.checkpointAfterMutatingPush(ctx); err != nil {
 			return result, err
 		}
@@ -439,8 +452,11 @@ func (s *Sync) Push(
 		}
 	}
 	advanceWatermark := result.Errors == 0
+	stateApplied := make([]db.Session, 0, len(pushed)+len(curationUpdates))
+	stateApplied = append(stateApplied, pushed...)
+	stateApplied = append(stateApplied, curationUpdates...)
 	if err := s.finalizeState(
-		lastPush, cutoff, pushed, priorFingerprints,
+		lastPush, cutoff, stateApplied, priorFingerprints,
 		sessionFingerprints, advanceWatermark,
 	); err != nil {
 		return result, err
@@ -1134,7 +1150,7 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.CompactionCount, sess.MidTaskCompactionCount,
 		sess.ContextPressureMax, sess.HealthScore,
 		nilString(sess.HealthGrade), sess.HasToolCalls,
-		sess.HasContextData, sess.DataVersion,
+		sess.HasContextData, db.ExpectedSharedStorageDataVersion(sess),
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
 		nilString(sess.TranscriptRevision),

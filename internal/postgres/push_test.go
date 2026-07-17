@@ -153,10 +153,20 @@ func (c *pushAliasRoutingConn) QueryContext(
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
 	switch {
+	case strings.Contains(normalized, "select version()"):
+		return &pushAliasRoutingRows{
+			columns: []string{"version"},
+			values:  [][]driver.Value{{"PostgreSQL 16.4 (push routing fake)"}},
+		}, nil
 	case strings.Contains(normalized, "select coalesce(max(data_version), 0) from sessions"):
 		return &pushAliasRoutingRows{
 			columns: []string{"coalesce"},
 			values:  [][]driver.Value{{0}},
+		}, nil
+	case strings.Contains(normalized, "from pg_trigger"):
+		return &pushAliasRoutingRows{
+			columns: []string{"count"},
+			values:  [][]driver.Value{{4}},
 		}, nil
 	case strings.Contains(normalized, "from information_schema.tables"):
 		return &pushAliasRoutingRows{
@@ -457,6 +467,104 @@ func TestPushUsesTargetScopedAliasBackfillStateAcrossFilters(t *testing.T) {
 	unscopedLastPush, err := local.GetSyncState("last_push_at:work")
 	require.NoError(t, err)
 	assert.Empty(t, unscopedLastPush)
+}
+
+func TestPrepareSessionsForPushWithholdsUnverifiedCodexSessions(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	ctx := context.Background()
+	local := testDB(t)
+	pg := newPushAliasRoutingDB(t)
+	preview := fernet
+	bad := db.Session{
+		ID:               "legacy-codex-ciphertext",
+		Machine:          "push-machine",
+		Agent:            "codex",
+		FirstMessage:     &preview,
+		CreatedAt:        "2026-07-14T12:00:00Z",
+		RelationshipType: "subagent",
+		DataVersion:      64,
+	}
+	// An unlinked child: no subagent relationship metadata, but its user
+	// turn is a bare encrypted delivery. Verification must withhold it even
+	// though the scoped scrub's filters never examined it.
+	unlinkedChild := db.Session{
+		ID:          "legacy-codex-unlinked-child",
+		Machine:     "push-machine",
+		Agent:       "codex",
+		CreatedAt:   "2026-07-14T12:00:03Z",
+		DataVersion: 64,
+	}
+	legacyClean := db.Session{
+		ID:          "legacy-codex-clean",
+		Machine:     "push-machine",
+		Agent:       "codex",
+		CreatedAt:   "2026-07-14T12:00:02Z",
+		DataVersion: 64,
+	}
+	good := db.Session{
+		ID:          "unrelated-clean-session",
+		Machine:     "push-machine",
+		Agent:       "claude",
+		CreatedAt:   "2026-07-14T12:00:01Z",
+		DataVersion: db.CurrentDataVersion(),
+	}
+	require.NoError(t, local.UpsertSession(bad), "store bad session")
+	require.NoError(t, local.UpsertSession(unlinkedChild), "store unlinked child")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: unlinkedChild.ID,
+		Ordinal:   0,
+		Role:      "user",
+		Content:   fernet,
+	}}), "store unlinked child delivery")
+	require.NoError(t, local.UpsertSession(legacyClean), "store legacy session")
+	require.NoError(t, local.UpsertSession(good), "store good session")
+	for _, sess := range []db.Session{bad, unlinkedChild, legacyClean, good} {
+		require.NoError(t, local.SetSessionDataVersion(sess.ID, sess.DataVersion),
+			"stamp parser version for %s", sess.ID)
+	}
+	storedSession := func(id string) db.Session {
+		sess, err := local.GetSession(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		return *sess
+	}
+	bad = storedSession(bad.ID)
+	unlinkedChild = storedSession(unlinkedChild.ID)
+	legacyClean = storedSession(legacyClean.ID)
+	good = storedSession(good.ID)
+
+	syncer := &Sync{pg: pg, local: local, machine: "push-machine"}
+	prepared, failed, withheld := syncer.prepareSessionsForPush(
+		ctx, []db.Session{bad, unlinkedChild, legacyClean, good},
+	)
+	assert.Empty(t, failed,
+		"unverified sessions are withheld, not counted as errors")
+	require.Len(t, withheld, 2,
+		"unsafe sessions must be withheld and reported")
+	assert.Equal(t, bad.ID, withheld[0].ID)
+	assert.Equal(t, unlinkedChild.ID, withheld[1].ID)
+	require.Len(t, prepared, 2)
+	assert.Equal(t, legacyClean.ID, prepared[0].ID)
+	assert.Equal(t, db.CodexRedactionDataVersion, prepared[0].DataVersion,
+		"a verified legacy Codex session publishes the watermark")
+	assert.Equal(t, 64, local.GetSessionDataVersion(legacyClean.ID),
+		"payload certification must not advance the parser version")
+	unverified, err := local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, unverified, legacyClean.ID,
+		"successful certification must persist for later vector-only pushes")
+	assert.Equal(t, good.ID, prepared[1].ID)
+
+	var pushed []db.Session
+	goodResult, err := syncer.pushBatch(
+		ctx, prepared, true, "marker", nil, nil, &pushed,
+	)
+	require.NoError(t, err)
+	assert.True(t, goodResult.ok, "prepared sessions must still push")
+	assert.Equal(t, 2, goodResult.sessions)
+	require.Len(t, pushed, 2)
+	assert.Equal(t, legacyClean.ID, pushed[0].ID)
+	assert.Equal(t, good.ID, pushed[1].ID)
 }
 
 func TestSessionAliasBackfillStateFallsBackToEffectiveScope(t *testing.T) {
@@ -1124,6 +1232,21 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			modify: func(s db.Session) db.Session {
 				s.QualitySignalVersion = db.CurrentQualitySignalVersion
 				s.UnstructuredStart = true
+				return s
+			},
+		},
+		{
+			name: "Codex certification revision change",
+			modify: func(s db.Session) db.Session {
+				s.CodexPayloadCertifiedRevision = "3"
+				return s
+			},
+		},
+		{
+			name: "Codex certification version change",
+			modify: func(s db.Session) db.Session {
+				s.CodexPayloadCertificationVersion =
+					db.CodexRedactionDataVersion
 				return s
 			},
 		},

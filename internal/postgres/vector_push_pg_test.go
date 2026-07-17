@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,6 +247,241 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	assert.Equal(t, 1, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_generation_machines
 		 WHERE generation_id = $1 AND machine = $2`, genID, "test-machine"))
+}
+
+func TestVectorPushDefersUnverifiedCodexSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_unverified_codex_test")
+	ctx := context.Background()
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
+	seedVectorSession(t, localDB, "A")
+	// An unlinked legacy Codex child whose user turn is a bare encrypted
+	// delivery: the session phase withholds it, and its vector documents
+	// embed the same ciphertext, so the vector phase must defer them too —
+	// on this push and on every later one, after the watermark has advanced
+	// past the session rows.
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:               "codex-unverified",
+		Project:          "proj",
+		Machine:          "test-machine",
+		Agent:            "codex",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}), "UpsertSession codex-unverified")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     "codex-unverified",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       fernet,
+		ContentLength: len(fernet),
+	}}), "InsertMessages codex-unverified")
+	require.NoError(t,
+		localDB.SetSessionDataVersion("codex-unverified", 64))
+
+	sync.vectorSource = &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-cx", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha", "codex-unverified": "hc"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "clean", "h1", []float32{1, 0, 0, 0})},
+			"codex-unverified": {vdoc(
+				"codex-unverified", "codex-unverified#0", 0,
+				fernet, "h2", []float32{0, 1, 0, 0},
+			)},
+		},
+	}
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+	assert.Zero(t, res.Errors,
+		"a withheld session must not count as a push error")
+	assert.Equal(t, 1, res.Vectors.SessionsPushed)
+	assert.GreaterOrEqual(t, res.Vectors.SessionsDeferred, 1,
+		"unverified codex vectors are deferred")
+	assert.Zero(t, countRows(t, pg,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, "codex-unverified"),
+		"the withheld session must not reach PG")
+	assert.Zero(t, countRows(t, pg,
+		`SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`,
+		"codex-unverified"),
+		"ciphertext vector documents must not reach PG")
+
+	// The next push no longer lists the session rows (the watermark
+	// advanced), so only the durable local-version gate protects the
+	// vector phase.
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors)
+	assert.Zero(t, countRows(t, pg,
+		`SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`,
+		"codex-unverified"),
+		"deferral must survive watermark advancement")
+}
+
+func TestVectorPushKeepsCertifiedLegacyCodexEligibleAcrossLaterPushes(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_certified_codex_test")
+	ctx := context.Background()
+	const (
+		sessionID = "codex-certified"
+		literal   = "literal gAAAAA-not-an-encrypted-token"
+		fernet    = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	)
+	preview := literal
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:               sessionID,
+		Project:          "proj",
+		Machine:          "test-machine",
+		Agent:            "codex",
+		FirstMessage:     &preview,
+		RelationshipType: "subagent",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}), "UpsertSession certified Codex")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessionID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       literal,
+		ContentLength: len(literal),
+	}}), "InsertMessages certified Codex")
+	require.NoError(t, localDB.SetSessionDataVersion(sessionID, 64))
+
+	fake := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-certified", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{sessionID: "legacy-hash"},
+		docs: map[string][]VectorPushDoc{
+			sessionID: {vdoc(
+				sessionID, sessionID+"#0", 0,
+				"first vector", "first-doc-hash", []float32{1, 0, 0, 0},
+			)},
+		},
+	}
+	sync.vectorSource = fake
+
+	first, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "certifying Push")
+	assert.Zero(t, first.Errors)
+	assert.Equal(t, 1, first.Vectors.SessionsPushed,
+		"the same push must see the durable certification")
+	assert.Equal(t, 64, localDB.GetSessionDataVersion(sessionID),
+		"certification must not claim unrelated parser migrations ran")
+	unverified, err := localDB.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, unverified, sessionID,
+		"the certified transcript revision must be vector-eligible")
+
+	// The certification stamp is newer than the first push's cutoff. Let one
+	// incremental run consume it so the following vector change is exercised
+	// after session selection stops reconsidering the legacy row.
+	settled, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "settling certification stamp")
+	assert.Zero(t, settled.Errors)
+	assert.Equal(t, 1, settled.SessionsPushed,
+		"the mirror must receive the durable certification fields")
+
+	fake.hashes[sessionID] = "later-hash"
+	fake.docs[sessionID] = []VectorPushDoc{vdoc(
+		sessionID, sessionID+"#0", 0,
+		"later vector", "later-doc-hash", []float32{0, 1, 0, 0},
+	)}
+	later, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "later vector-only Push")
+	assert.Zero(t, later.Errors)
+	assert.Zero(t, later.SessionsPushed,
+		"the session row should be outside the later incremental window")
+	assert.Equal(t, 1, later.Vectors.SessionsPushed,
+		"durable certification must keep later vector changes eligible")
+	var content string
+	require.NoError(t, pg.QueryRow(
+		`SELECT content FROM vector_documents WHERE doc_key = $1`,
+		sessionID+"#0",
+	).Scan(&content))
+	assert.Equal(t, "later vector", content)
+
+	// Certification is bound to the exact transcript revision. A later
+	// content change invalidates it even though the parser version is still 64,
+	// so a vector-only delta cannot publish the new unsafe content.
+	require.NoError(t, localDB.ReplaceSessionMessages(sessionID, []db.Message{{
+		SessionID:     sessionID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       fernet,
+		ContentLength: len(fernet),
+	}}))
+	unverified, err = localDB.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, unverified, sessionID)
+	fake.hashes[sessionID] = "unsafe-hash"
+	fake.docs[sessionID] = []VectorPushDoc{vdoc(
+		sessionID, sessionID+"#0", 0,
+		fernet, "unsafe-doc-hash", []float32{0, 0, 1, 0},
+	)}
+	unsafe, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "vector Push after transcript invalidation")
+	assert.Zero(t, unsafe.Errors)
+	assert.GreaterOrEqual(t, unsafe.Vectors.SessionsDeferred, 1)
+	require.NoError(t, pg.QueryRow(
+		`SELECT content FROM vector_documents WHERE doc_key = $1`,
+		sessionID+"#0",
+	).Scan(&content))
+	assert.Equal(t, "later vector", content,
+		"the previously mirrored safe vector must not be replaced")
+}
+
+func TestVectorPushWaitsForCodexVectorRepair(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_repair_lock_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "push session before vector phase")
+	sync.vectorSource = &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-lock", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "fresh", "h1", []float32{1, 0, 0, 0})},
+		},
+	}
+
+	repairTx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "begin simulated repair")
+	defer func() { _ = repairTx.Rollback() }()
+	require.NoError(t, lockCodexVectorRepairExclusivePG(ctx, repairTx, false),
+		"hold exclusive repair lock")
+	done := make(chan error, 1)
+	go func() {
+		_, pushErr := sync.pushVectors(ctx, false, nil, nil)
+		done <- pushErr
+	}()
+	select {
+	case pushErr := <-done:
+		require.Failf(t, "vector push completed during repair",
+			"push returned before the repair committed: %v", pushErr)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	require.NoError(t, repairTx.Commit(), "commit simulated repair")
+	select {
+	case pushErr := <-done:
+		require.NoError(t, pushErr, "vector push after repair")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "vector push did not resume after repair")
+	}
+	assert.Equal(t, 1,
+		countRows(t, pg, `SELECT COUNT(*) FROM vector_documents WHERE doc_key = 'A#0'`),
+		"vector push must commit after the exclusive repair finishes")
 }
 
 func TestVectorPushDeltaNoop(t *testing.T) {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -109,6 +111,39 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 		"wiring must target the store the service serves reads from")
 	assert.True(t, gotCfg.Vector.Enabled,
 		"wiring must see the caller's vector config")
+}
+
+func TestNewPGReadServiceRejectsIncompatibleDataBeforeVectorWiring(t *testing.T) {
+	fakeStore := dbtest.OpenTestDBAt(t, filepath.Join(t.TempDir(), "pg.db"))
+	stub := stubPGReadStore(t, fakeStore)
+
+	wantErr := errors.New("encrypted payload repair required")
+	origCheck := checkPGReadCompatFn
+	checkPGReadCompatFn = func(_ context.Context, got db.Store) error {
+		assert.Same(t, db.Store(fakeStore), got)
+		return wantErr
+	}
+	t.Cleanup(func() { checkPGReadCompatFn = origCheck })
+
+	wireCalls := 0
+	origWire := wirePGReadVectorSearchFn
+	wirePGReadVectorSearchFn = func(config.Config, db.Store) {
+		wireCalls++
+	}
+	t.Cleanup(func() { wirePGReadVectorSearchFn = origWire })
+
+	svc, cleanup, err := newPGReadService(config.Config{}, config.PGConfig{
+		URL:    "postgres://example.test/agentsview",
+		Schema: "agentsview",
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	assert.Nil(t, svc)
+	assert.Nil(t, cleanup)
+	assert.True(t, stub.CleanupCalled,
+		"an incompatible direct PG store must be closed")
+	assert.Zero(t, wireCalls,
+		"vector search must not be enabled before compatibility passes")
 }
 
 // TestWirePGReadVectorSearchIgnoresNonPGStore covers the CLI wiring guard for

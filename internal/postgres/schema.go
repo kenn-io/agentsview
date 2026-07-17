@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     duplicate_prompt_count    INT NOT NULL DEFAULT 0,
     no_code_context_count     INT NOT NULL DEFAULT 0,
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
+	codex_payload_certified_revision TEXT NOT NULL DEFAULT '',
+	codex_payload_certification_version INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
     transcript_revision       TEXT NOT NULL DEFAULT '0',
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -676,6 +678,16 @@ func EnsureSchema(
 			"adding sessions.data_version",
 		},
 		{
+			"sessions", "codex_payload_certified_revision",
+			`codex_payload_certified_revision TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.codex_payload_certified_revision",
+		},
+		{
+			"sessions", "codex_payload_certification_version",
+			`codex_payload_certification_version INT NOT NULL DEFAULT 0`,
+			"adding sessions.codex_payload_certification_version",
+		},
+		{
 			"sessions", "cwd",
 			`cwd TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.cwd",
@@ -917,6 +929,9 @@ func EnsureSchema(
 	if _, err := ensureVectorBaseSchemaPG(ctx, db); err != nil {
 		log.Printf("pg schema: vector schema setup failed: %v", err)
 	}
+	if err := ensureCodexEncryptedPayloadCompatibilityPG(ctx, db); err != nil {
+		return err
+	}
 	step = time.Now()
 	runRepair, err := shouldRunTokenCoverageRepair(
 		ctx, db, tokenCoverageColumnsAdded,
@@ -1086,8 +1101,9 @@ func backfillIsAutomatedPG(
 
 // runSchemaDataRepairsPG runs the non-DDL correctness repairs that
 // EnsureSchema performs: it recomputes is_automated, backfills
-// source-curation baselines, scrubs stored project remotes, and repairs
-// token-coverage flags. These issue only row-level writes, so the
+// source-curation baselines, scrubs stored project remotes and Codex encrypted
+// payloads, invalidates affected vector rows, and repairs token-coverage
+// flags. These issue only row-level writes, so the
 // compatible-schema fast path can run them without the index and
 // column DDL that can block concurrent pg serve reads (issue #887).
 func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
@@ -1098,6 +1114,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := scrubProjectIdentityGitRemoteCredentialsPG(ctx, db); err != nil {
+		return err
+	}
+	if err := ensureCodexEncryptedPayloadCompatibilityPG(ctx, db); err != nil {
 		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)

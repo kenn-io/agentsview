@@ -82,6 +82,261 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		projectIdentityRemoteScrubMetadataKey,
 	).Scan(&remoteScrubbed))
 	assert.Equal(t, "1", remoteScrubbed)
+	var codexPayloadsRepaired string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		codexEncryptedPayloadRepairMetadataKey,
+	).Scan(&codexPayloadsRepaired))
+	assert.Equal(t, "1", codexPayloadsRepaired)
+}
+
+func TestEnsureSchemaRepairsOldCodexPayloads(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	ctx := context.Background()
+	database := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, database), "initial EnsureSchema")
+
+	_, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, first_message, relationship_type,
+			data_version, transcript_revision, quality_signal_version,
+			health_score, health_grade,
+			short_prompt_count, unstructured_start,
+			missing_success_criteria_count, missing_verification_count,
+			duplicate_prompt_count, no_code_context_count,
+			runaway_tool_loop_count, secret_leak_count, secrets_rules_version
+		) VALUES (
+			'codex-old', 'project', 'machine', 'codex', ?, 'subagent',
+			64, '7', 2, 17, 'D', 3, TRUE, 4, 5, 6, 7, 8, 1, 'stale-rules'
+		)`, fernet)
+	require.NoError(t, err, "insert stale DuckDB Codex session")
+	toolContent := "[Task: spawn_agent]\n" + fernet
+	// The collab row is authoritative even when an older writer left the
+	// cached message flag false.
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, has_tool_use, content_length
+		) VALUES
+			(1, 'codex-old', 0, 'assistant', ?, FALSE, ?),
+			(2, 'codex-old', 1, 'user', ?, FALSE, ?)`,
+		toolContent, len(toolContent), fernet, len(fernet))
+	require.NoError(t, err, "insert stale DuckDB Codex messages")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, call_index, input_json
+		) VALUES (1, 'codex-old', 'spawn_agent', 'Task', 0, ?)`,
+		`{"task_name":"worker","message":"`+fernet+`"}`)
+	require.NoError(t, err, "insert stale DuckDB Codex tool call without an id")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO secret_findings (
+			id, session_id, rule_name, confidence, location_kind,
+			message_ordinal, match_start, match_end, match_index,
+			redacted_match, rules_version
+		) VALUES (
+			1, 'codex-old', 'test-secret', 'definite', 'message',
+			1, 0, 8, 0, '[redacted]', 'stale-rules'
+		)`)
+	require.NoError(t, err, "insert stale DuckDB Codex secret finding")
+
+	err = CheckSchemaCompat(ctx, database)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"a post-marker legacy push must fail the read compatibility gate")
+
+	require.NoError(t, EnsureSchema(ctx, database), "repair EnsureSchema")
+	require.NoError(t, CheckSchemaCompat(ctx, database),
+		"repaired DuckDB mirror must pass compatibility")
+
+	var gotToolContent, gotInbound, gotInput, gotPreview string
+	var gotToolLength, gotInboundLength int
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT content, content_length FROM messages
+		 WHERE session_id = 'codex-old' AND ordinal = 0`,
+	).Scan(&gotToolContent, &gotToolLength))
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT content, content_length FROM messages
+		 WHERE session_id = 'codex-old' AND ordinal = 1`,
+	).Scan(&gotInbound, &gotInboundLength))
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT input_json FROM tool_calls
+		 WHERE session_id = 'codex-old' AND message_id = 1 AND call_index = 0`,
+	).Scan(&gotInput))
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT first_message FROM sessions WHERE id = 'codex-old'`,
+	).Scan(&gotPreview))
+	assert.Equal(t, "[Task: spawn_agent]\n[encrypted]", gotToolContent)
+	assert.Equal(t, len(gotToolContent), gotToolLength)
+	assert.Equal(t, "[encrypted]", gotInbound)
+	assert.Equal(t, len(gotInbound), gotInboundLength)
+	assert.Equal(t,
+		`{"task_name":"worker","message":"[encrypted]"}`, gotInput)
+	assert.Equal(t, "[encrypted]", gotPreview)
+
+	var qualityVersion, shortPrompts, missingSuccess, missingVerification int
+	var duplicatePrompts, noCodeContext, runawayLoops, secretLeakCount int
+	var unstructuredStart bool
+	var healthScore sql.NullInt64
+	var healthGrade sql.NullString
+	var rulesVersion, transcriptRevision string
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT quality_signal_version, health_score, health_grade,
+		       short_prompt_count, unstructured_start,
+		       missing_success_criteria_count, missing_verification_count,
+		       duplicate_prompt_count, no_code_context_count,
+		       runaway_tool_loop_count, secret_leak_count,
+		       secrets_rules_version, transcript_revision
+		  FROM sessions WHERE id = 'codex-old'`,
+	).Scan(
+		&qualityVersion, &healthScore, &healthGrade,
+		&shortPrompts, &unstructuredStart,
+		&missingSuccess, &missingVerification, &duplicatePrompts,
+		&noCodeContext, &runawayLoops, &secretLeakCount,
+		&rulesVersion, &transcriptRevision,
+	))
+	assert.Equal(t, []int{0, 0, 0, 0, 0, 0, 0, 0}, []int{
+		qualityVersion, shortPrompts, missingSuccess, missingVerification,
+		duplicatePrompts, noCodeContext, runawayLoops, secretLeakCount,
+	})
+	assert.False(t, unstructuredStart)
+	assert.False(t, healthScore.Valid)
+	assert.False(t, healthGrade.Valid)
+	assert.Empty(t, rulesVersion)
+	var dataVersion int
+	require.NoError(t, database.QueryRowContext(ctx,
+		`SELECT data_version FROM sessions WHERE id = 'codex-old'`,
+	).Scan(&dataVersion))
+	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+	assert.Equal(t, "8", transcriptRevision,
+		"the repaired DuckDB transcript must advance exactly once")
+	var findingCount int
+	require.NoError(t, database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM secret_findings WHERE session_id = 'codex-old'`,
+	).Scan(&findingCount))
+	assert.Zero(t, findingCount)
+}
+
+func TestEnsureSchemaRepairsLegacyCodexEncryptedHeader(t *testing.T) {
+	const (
+		fernet            = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+		legacyDataVersion = 67
+	)
+	ctx := context.Background()
+	database := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, database), "initial EnsureSchema")
+	content := "[Task: " + fernet + "]\nRun the task"
+	_, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, relationship_type, data_version
+		) VALUES ('encrypted-header', 'project', 'machine', 'codex', '', ?)`,
+		legacyDataVersion)
+	require.NoError(t, err, "seed legacy session")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, has_tool_use, content_length
+		) VALUES (104, 'encrypted-header', 0, 'assistant', ?, TRUE, ?)`,
+		content, len(content))
+	require.NoError(t, err, "seed encrypted collaboration header")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, call_index, input_json
+		) VALUES (
+			104, 'encrypted-header', 'spawn_agent', 'Task', 0,
+			'{"task_name":"[encrypted]","message":"Run the task"}'
+		)`)
+	require.NoError(t, err, "seed current redacted tool input")
+
+	err = CheckSchemaCompat(ctx, database)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"legacy header ciphertext must fail closed before repair")
+	require.NoError(t, EnsureSchema(ctx, database), "repair legacy header")
+	require.NoError(t, CheckSchemaCompat(ctx, database),
+		"repaired header must pass DuckDB compatibility")
+
+	var gotContent string
+	var gotLength, gotVersion int
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT m.content, m.content_length, s.data_version
+		  FROM messages m
+		  JOIN sessions s ON s.id = m.session_id
+		 WHERE s.id = 'encrypted-header' AND m.ordinal = 0`,
+	).Scan(&gotContent, &gotLength, &gotVersion))
+	want := "[Task: [encrypted]]\nRun the task"
+	assert.Equal(t, want, gotContent)
+	assert.Equal(t, len(want), gotLength)
+	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion)
+}
+
+func TestEnsureSchemaWithholdsWatermarkFromUncertifiedLegacyCodexPayloads(
+	t *testing.T,
+) {
+	const (
+		fernet            = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+		legacyDataVersion = 67
+	)
+	ctx := context.Background()
+	database := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, database), "initial EnsureSchema")
+	_, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, relationship_type, data_version
+		) VALUES
+			('unlinked-child', 'project', 'machine', 'codex', '', ?),
+			('lost-tool-call', 'project', 'machine', 'codex', '', ?),
+			('stale-missing-tool-call', 'project', 'machine', 'codex', '', ?)`,
+		legacyDataVersion, legacyDataVersion, legacyDataVersion)
+	require.NoError(t, err, "seed falsely certified legacy sessions")
+	formatted := "[Task: spawn_agent]\n" + fernet
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, has_tool_use, content_length
+		) VALUES
+			(101, 'unlinked-child', 0, 'user', ?, FALSE, ?),
+			(102, 'lost-tool-call', 0, 'assistant', ?, TRUE, ?),
+			(103, 'stale-missing-tool-call', 0, 'assistant', ?, FALSE, ?)`,
+		fernet, len(fernet), formatted, len(formatted),
+		formatted, len(formatted))
+	require.NoError(t, err, "seed metadata-independent ciphertext shapes")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, call_index, input_json
+		) VALUES (102, 'lost-tool-call', 'Bash', 'Bash', 0, '{}')`)
+	require.NoError(t, err,
+		"leave a non-collab tool row beside the lost collaboration call")
+
+	err = CheckSchemaCompat(ctx, database)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"legacy rows must fail closed until the stricter recertification runs")
+	require.NoError(t, EnsureSchema(ctx, database), "recheck legacy sessions")
+	err = CheckSchemaCompat(ctx, database)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"uncertified rows must keep DuckDB reads gated after the repair pass")
+
+	rows, err := database.QueryContext(ctx, `
+		SELECT s.id, s.data_version, m.content
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		 WHERE s.id IN (
+			'unlinked-child', 'lost-tool-call', 'stale-missing-tool-call'
+		 )
+		 ORDER BY s.id`)
+	require.NoError(t, err, "query recertified sessions")
+	defer rows.Close()
+	type repairedRow struct {
+		id      string
+		version int
+		content string
+	}
+	var got []repairedRow
+	for rows.Next() {
+		var row repairedRow
+		require.NoError(t, rows.Scan(&row.id, &row.version, &row.content))
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []repairedRow{
+		{id: "lost-tool-call", version: legacyDataVersion, content: formatted},
+		{id: "stale-missing-tool-call", version: legacyDataVersion, content: formatted},
+		{id: "unlinked-child", version: legacyDataVersion, content: fernet},
+	}, got)
 }
 
 func TestUsageEventsDedupIndexAllowsRepeatedKeys(t *testing.T) {
@@ -109,10 +364,22 @@ func TestEnsureSchemaIsIdempotent(t *testing.T) {
 	db := openTestDuckDB(t)
 
 	require.NoError(t, EnsureSchema(ctx, db), "first EnsureSchema")
+	_, err := db.ExecContext(ctx, `
+		UPDATE sync_metadata SET value = 'already-recorded' WHERE key = ?`,
+		codexEncryptedPayloadRepairMetadataKey,
+	)
+	require.NoError(t, err, "mark Codex repair with observable existing value")
 	require.NoError(t, EnsureSchema(ctx, db), "second EnsureSchema")
 
 	assert.True(t, columnExists(t, db, "sessions", "secret_leak_count"))
 	assert.True(t, columnExists(t, db, "messages", "thinking_text"))
+	var repairMarker string
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT value FROM sync_metadata WHERE key = ?`,
+		codexEncryptedPayloadRepairMetadataKey,
+	).Scan(&repairMarker))
+	assert.Equal(t, "already-recorded", repairMarker,
+		"clean startup must not rewrite an existing Codex repair marker")
 }
 
 func TestEnsureSchemaAddsMissingColumnsNonDestructively(t *testing.T) {

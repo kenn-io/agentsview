@@ -208,6 +208,33 @@ func CodexAgentMessageJSON(
 	return mustMarshal(m)
 }
 
+// CodexMixedAgentMessageJSON returns a current Codex inter-agent message with
+// both a plaintext and an encrypted delivery block.
+func CodexMixedAgentMessageJSON(
+	author, recipient, plaintext, ciphertext, timestamp string,
+) string {
+	m := map[string]any{
+		"type":      "response_item",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"type":      "agent_message",
+			"author":    author,
+			"recipient": recipient,
+			"content": []map[string]any{
+				{
+					"type":              "encrypted_content",
+					"encrypted_content": plaintext,
+				},
+				{
+					"type":              "encrypted_content",
+					"encrypted_content": ciphertext,
+				},
+			},
+		},
+	}
+	return mustMarshal(m)
+}
+
 // CodexSubagentActivityJSON returns a current Codex sub-agent lifecycle event.
 func CodexSubagentActivityJSON(
 	kind, eventID, agentThreadID, agentPath, timestamp string,

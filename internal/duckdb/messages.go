@@ -267,7 +267,7 @@ func (s *Store) GetResumeModelCounts(
 	return counts, nil
 }
 
-func scanMessages(rows *sql.Rows) ([]db.Message, error) {
+func scanMessages(rows duckStoreRows) ([]db.Message, error) {
 	var msgs []db.Message
 	for rows.Next() {
 		var m db.Message

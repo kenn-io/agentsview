@@ -36,7 +36,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config test-postgres test-postgres-ci test-cockroach test-cockroach-ci test-s3 postgres-up postgres-down cockroach-up cockroach-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -328,7 +328,7 @@ bench-gate-config:
 
 # Start test PostgreSQL container
 postgres-up:
-	docker compose -f docker-compose.test.yml up -d --wait
+	docker compose -f docker-compose.test.yml up -d --wait postgres
 
 # Stop test PostgreSQL container
 postgres-down:
@@ -344,6 +344,25 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 # PostgreSQL integration tests for CI (postgres already running as service)
 test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1
+
+# Start test CockroachDB container
+cockroach-up:
+	docker compose -f docker-compose.test.yml up -d --wait cockroach
+
+# Stop test CockroachDB container
+cockroach-down:
+	docker compose -f docker-compose.test.yml down cockroach
+
+# Run CockroachDB integration tests (starts cockroach automatically). A fresh
+# single-node cluster settles its initial schema-change jobs during the first
+# EnsureSchema, so allow a generous timeout.
+test-cockroach: pricing-snapshot ensure-embed-dir cockroach-up
+	TEST_CRDB_URL="postgres://root@localhost:26258/defaultdb?sslmode=disable" \
+		CGO_ENABLED=1 go test -tags "fts5,crdbtest" -v -timeout 20m ./internal/postgres/... -count=1
+
+# CockroachDB integration tests for CI (cockroach already running)
+test-cockroach-ci: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,crdbtest" -v -timeout 20m ./internal/postgres/... -count=1
 
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker
@@ -546,9 +565,12 @@ help:
 	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
 	@echo "  bench-gate     - Run the hot-path benchmarks CI gates PRs on"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
+	@echo "  test-cockroach - Run CockroachDB integration tests"
 	@echo "  test-s3        - Run S3 discovery integration tests (Docker)"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
+	@echo "  cockroach-up   - Start test CockroachDB container"
+	@echo "  cockroach-down - Stop test CockroachDB container"
 	@echo "  test-ssh       - Run SSH integration tests"
 	@echo "  ssh-up         - Start test SSH container"
 	@echo "  ssh-down       - Stop test SSH container"

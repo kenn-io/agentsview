@@ -33,6 +33,22 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 69: the Codex parser now redacts encrypted multi-agent
+// payloads from formatted collaboration-tool content, argument-derived
+// headers, and stored tool_calls.input_json. It records a placeholder user
+// turn for encrypted inbound agent messages and certifies every legacy payload
+// surface without trusting relationship or tool-call metadata. Existing Codex
+// rows need re-parsing so stored ciphertext is redacted and encrypted child
+// sessions gain their placeholder first message. Version 64 briefly existed
+// with ingest redaction but without the copy-time scrub of preserved orphaned
+// rows. Versions 65-66 were unrelated Claude reparse bumps, version 67 added
+// Antigravity parent links, and version 68 added Hermes skill metadata; the
+// CodexRedactionDataVersion watermark sits above them so those archives are
+// repaired instead of being treated as already clean.
+// PostgreSQL schema repair uses the same per-session watermark, while
+// vectors.db has an independent mirror-schema version because its stored
+// content and embeddings must be discarded and rebuilt after the reparse.
+//
 // Bumped to 63: the Codex parser now persists current subagent lineage,
 // links spawn events, restores plaintext agent messages, suppresses opaque
 // encrypted payloads, and derives titles for encrypted child sessions.
@@ -310,7 +326,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // and relationship_type from agyReader.parentCascadeId in trajectory sidecars.)
 // (68: Hermes skill_view metadata. Re-parsing populates tool_calls.skill_name
 // for existing Hermes sessions so historical skill usage appears in analytics.)
-const dataVersion = 68
+// (69: Codex encrypted collab payload redaction. Fernet ciphertext from
+// Codex multi-agent tool calls is redacted from persisted message content,
+// collaboration headers, tool_calls.input_json, and first_message previews.
+// Existing Codex rows need re-parsing so stored ciphertext is scrubbed, and
+// the resync's copy-time pass repairs orphaned rows with no source file.)
+const dataVersion = 69
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1808,6 +1829,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "data_version",
 			"ALTER TABLE sessions ADD COLUMN data_version INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "codex_payload_certified_revision",
+			"ALTER TABLE sessions ADD COLUMN codex_payload_certified_revision TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "codex_payload_certification_version",
+			"ALTER TABLE sessions ADD COLUMN codex_payload_certification_version INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"sessions", "mid_task_compaction_count",

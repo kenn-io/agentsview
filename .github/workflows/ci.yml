@@ -280,6 +280,24 @@ jobs:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
+      # Service containers cannot override the image command, so CockroachDB
+      # starts via docker run instead.
+      - name: Start CockroachDB test container
+        run: |
+          bash scripts/retry.sh 3 10 docker pull cockroachdb/cockroach:v26.2.3
+          docker run -d --name cockroach-test -p 26258:26257 \
+            --tmpfs /cockroach/cockroach-data \
+            cockroachdb/cockroach:v26.2.3 start-single-node --insecure
+          for i in $(seq 1 30); do
+            docker exec cockroach-test cockroach sql --insecure -e 'SELECT 1' >/dev/null 2>&1 && break || sleep 1
+          done
+
+      - name: Run CockroachDB integration tests
+        run: make test-cockroach-ci
+        env:
+          CGO_ENABLED: "1"
+          TEST_CRDB_URL: postgres://root@localhost:26258/defaultdb?sslmode=disable
+
       - name: Build SSH test container
         run: bash scripts/retry.sh 3 10 docker build -t agentsview-sshd -f testdata/ssh/Dockerfile .
 

@@ -44,6 +44,8 @@ type schemaProbeState struct {
 	existingTables      map[string]bool
 	existingIndexes     map[string]bool
 	syncMetadataKeys    map[string]bool
+	codexGuardCount     int
+	legacyCodexVersion  bool
 	maxDataVersion      int
 	maxDataVersionErr   error
 	queryErrors         []schemaProbeQueryError
@@ -71,6 +73,7 @@ func newSchemaProbeDB(
 	state := &schemaProbeState{
 		currentSchema:       "agentsview",
 		existingColumnNames: existing,
+		codexGuardCount:     4,
 	}
 	name := t.Name()
 
@@ -152,6 +155,16 @@ func (c *schemaProbeConn) QueryContext(
 		}
 	}
 	switch {
+	case strings.Contains(normalized, "select version()"):
+		return &schemaProbeRows{
+			columns: []string{"version"},
+			values:  [][]driver.Value{{"PostgreSQL 16.4 (schema probe fake)"}},
+		}, nil
+	case strings.Contains(normalized, "from pg_trigger"):
+		return &schemaProbeRows{
+			columns: []string{"count"},
+			values:  [][]driver.Value{{int64(c.state.codexGuardCount)}},
+		}, nil
 	case strings.Contains(normalized, "information_schema.tables"):
 		name := ""
 		if len(args) > 0 {
@@ -245,6 +258,13 @@ func (c *schemaProbeConn) QueryContext(
 		return &schemaProbeRows{
 			columns: []string{"exists"},
 			values:  [][]driver.Value{{done}},
+		}, nil
+	case strings.Contains(normalized, "select exists") &&
+		strings.Contains(normalized, "from sessions") &&
+		strings.Contains(normalized, "data_version <"):
+		return &schemaProbeRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{c.state.legacyCodexVersion}},
 		}, nil
 	case strings.Contains(normalized, "select exists"):
 		return &schemaProbeRows{

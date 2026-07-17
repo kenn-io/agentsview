@@ -412,7 +412,7 @@ func boundsAround(userOrdinals []int, ordinal int) UnitBounds {
 // ScanUserBoundaryRows consumes one batched boundary statement's (idx,
 // ordinal) rows into out, validating each session index against the chunk —
 // the shared scan half of every backend's ResolveUserBoundaries fetch.
-func ScanUserBoundaryRows(rows *sql.Rows, out [][]int) error {
+func ScanUserBoundaryRows(rows RowScanner, out [][]int) error {
 	for rows.Next() {
 		var idx, ordinal int
 		if err := rows.Scan(&idx, &ordinal); err != nil {
@@ -471,7 +471,7 @@ func ResolveRunExtents(
 // in range, no NULL extent side (a NULL means no same-sidechain member
 // exists at the anchor, i.e. the probe was not built for a rule-2 anchor),
 // and exactly one row per probe.
-func ScanRunExtentRows(rows *sql.Rows, probes []ExtentProbe, out [][2]int) error {
+func ScanRunExtentRows(rows RowScanner, probes []ExtentProbe, out [][2]int) error {
 	seen := 0
 	for rows.Next() {
 		var idx int

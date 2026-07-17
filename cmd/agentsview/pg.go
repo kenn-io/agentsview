@@ -539,6 +539,12 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
+	if err := postgres.CheckCodexEncryptedPayloadPersistentReadCompat(
+		ctx, store.DB(),
+	); err != nil {
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
+	}
 	if err := wirePGVectorSearch(ctx, appCfg, store, "pg serve"); err != nil {
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)

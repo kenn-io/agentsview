@@ -133,13 +133,22 @@ ORDER BY fp.last_edited_at DESC NULLS LAST, fp.last_session_id DESC,
 	return ScanRecentEdits(rows, p)
 }
 
+// RowScanner is the row-iteration surface shared scan helpers consume, so
+// backends can pass wrapped row types (such as DuckDB's guard-mapped Quack
+// rows) as well as *sql.Rows. Callers keep ownership of Close.
+type RowScanner interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
 // ScanRecentEdits groups the flat (file × edit) result rows into files,
 // preserving row order, and applies has_more and per-file truncation. Shared
 // by all three backends. Rows must be selected in this exact order: project,
 // file_path, edit_count, last_edited_at, last_session_id, session_id, ordinal,
 // tool_use_id, call_index, tool_name, category, timestamp.
 func ScanRecentEdits(
-	rows *sql.Rows, p RecentEditsParams,
+	rows RowScanner, p RecentEditsParams,
 ) (RecentEditsResult, error) {
 	p = NormalizeRecentEditsParams(p)
 	type fileKey struct{ project, filePath string }

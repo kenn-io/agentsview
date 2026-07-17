@@ -177,6 +177,11 @@ type Sync struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	// crdb memoizes serverIsCockroachDBPG for the push paths. Vector pushes
+	// run sequentially on one Sync, so plain fields suffice.
+	crdb        bool
+	crdbChecked bool
+
 	schemaMu   sync.Mutex
 	schemaDone bool
 }
@@ -372,6 +377,20 @@ func (s *Sync) isFiltered() bool {
 // DB returns the underlying PostgreSQL connection pool.
 func (s *Sync) DB() *sql.DB { return s.pg }
 
+// serverIsCockroachDB memoizes the backend flavor for the push paths. Errors
+// are not cached so a transient failure retries on the next call.
+func (s *Sync) serverIsCockroachDB(ctx context.Context) (bool, error) {
+	if s.crdbChecked {
+		return s.crdb, nil
+	}
+	crdb, err := serverIsCockroachDBPG(ctx, s.pg)
+	if err != nil {
+		return false, err
+	}
+	s.crdb, s.crdbChecked = crdb, true
+	return crdb, nil
+}
+
 // Close closes the PostgreSQL connection pool.
 // Callers must ensure no Push operations are in-flight
 // before calling Close; otherwise those operations will fail
@@ -405,9 +424,6 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// reads (issue #887). Still run the row-level data repairs
 		// so is_automated and token-coverage flags stay correct on
 		// existing rows.
-		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
-			return err
-		}
 		// pushSchemaCurrent predates the vector tables, so a schema
 		// created before this feature is "current" yet lacks them; a
 		// plain post-upgrade pg push would never create them. Run the
@@ -416,6 +432,9 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// leaves semantic search unavailable but must not fail the push.
 		if _, err := ensureVectorBaseSchemaPG(ctx, s.pg); err != nil {
 			log.Printf("pg schema: vector schema setup failed: %v", err)
+		}
+		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
+			return err
 		}
 		s.schemaDone = true
 		return nil

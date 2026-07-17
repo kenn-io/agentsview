@@ -2597,6 +2597,129 @@ func TestSyncEngineCodex(t *testing.T) {
 	})
 }
 
+// dataVersion 68 upgrade path: archives written by pre-redaction builds
+// hold ciphertext in message content and tool_calls.input_json and lack
+// the encrypted child's placeholder turn. ResyncAll rebuilds
+// source-backed rows with the current parser; this proves stale rows
+// are rewritten during the upgrade resync rather than preserved.
+func TestResyncAllRewritesStaleCodexEncryptedRows(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const (
+		parentID = "01900000-0000-7000-8000-00000000000a"
+		childID  = "01900000-0000-7000-8000-00000000000b"
+		fernet   = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	)
+	parentSID := "codex:" + parentID
+	childSID := "codex:" + childID
+
+	parentContent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp/project", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "delegate the task", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"spawn_agent", "call_spawn",
+			map[string]any{"task_name": "multiply", "message": fernet},
+			tsEarlyS5,
+		),
+	)
+	childContent := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			childID, parentID, "/tmp/project", "user",
+			"2024-01-01T10:01:00Z",
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			fernet, "2024-01-01T10:01:02Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "done", "2024-01-01T10:01:05Z",
+		),
+	)
+	env.writeCodexSession(
+		t, filepath.Join("2024", "01", "15"),
+		"rollout-20240115-enc-parent.jsonl", parentContent,
+	)
+	env.writeCodexSession(
+		t, filepath.Join("2024", "01", "15"),
+		"rollout-20240115-enc-child.jsonl", childContent,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	// Regress the stored rows to the shape a pre-redaction build left
+	// behind: raw ciphertext in the parent's transcript and tool input,
+	// and a child with no user turn and no preview.
+	require.NoError(t, env.db.ReplaceSessionMessages(parentSID,
+		[]db.Message{{
+			SessionID:  parentSID,
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    "[Task: spawn_agent]\n" + fernet,
+			HasToolUse: true,
+			Timestamp:  tsEarlyS5,
+			ToolCalls: []db.ToolCall{{
+				SessionID: parentSID,
+				ToolUseID: "call_spawn",
+				ToolName:  "spawn_agent",
+				Category:  "Task",
+				InputJSON: `{"task_name":"multiply","message":"` +
+					fernet + `"}`,
+			}},
+		}}), "seed stale parent rows")
+	require.NoError(t, env.db.ReplaceSessionMessages(childSID,
+		[]db.Message{{
+			SessionID: childSID,
+			Ordinal:   0,
+			Role:      "assistant",
+			Content:   "done",
+			Timestamp: "2024-01-01T10:01:05Z",
+		}}), "seed stale child rows")
+	ctx := context.Background()
+	staleChild, err := env.db.GetSession(ctx, childSID)
+	require.NoError(t, err, "load child session")
+	require.NotNil(t, staleChild, "child session must exist")
+	staleChild.FirstMessage = nil
+	require.NoError(t, env.db.UpsertSession(*staleChild),
+		"seed stale child session row")
+
+	stats := env.engine.ResyncAll(ctx, nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
+	require.Equal(t, 2, stats.Synced, "ResyncAll synced: %+v", stats)
+
+	var gotInput string
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT input_json FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		parentSID, "call_spawn",
+	).Scan(&gotInput), "query rebuilt tool input")
+	assert.Equal(t,
+		`{"message":"[encrypted]","task_name":"multiply"}`, gotInput)
+
+	var gotContent string
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT content FROM messages
+		WHERE session_id = ? AND has_tool_use = 1`,
+		parentSID,
+	).Scan(&gotContent), "query rebuilt parent tool message")
+	assert.Contains(t, gotContent, "[Task: multiply]")
+	assert.NotContains(t, gotContent, "gAAAAA")
+
+	const placeholder = "[Encrypted agent message from /root: content unavailable]"
+	assertSessionState(t, env.db, childSID, func(sess *db.Session) {
+		require.NotNil(t, sess.FirstMessage,
+			"encrypted child must regain a preview")
+		assert.Equal(t, placeholder, *sess.FirstMessage)
+	})
+
+	var gotChildTurn string
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT content FROM messages
+		WHERE session_id = ? AND role = 'user' AND ordinal = 0`,
+		childSID,
+	).Scan(&gotChildTurn), "query rebuilt child user turn")
+	assert.Equal(t, placeholder, gotChildTurn)
+}
+
 func TestSyncEngineCodexSubagentLineage(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	const (

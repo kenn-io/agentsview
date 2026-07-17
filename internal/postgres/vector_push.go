@@ -727,11 +727,18 @@ type vectorSessionOutcome struct {
 func (s *Sync) pushVectorSession(
 	ctx context.Context, scope vectorPushScope, sessionID, aggHash string,
 ) (vectorSessionOutcome, error) {
+	crdb, err := s.serverIsCockroachDB(ctx)
+	if err != nil {
+		return vectorSessionOutcome{}, err
+	}
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf("begin vector push tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := lockCodexVectorMutationSharedPG(ctx, tx, crdb); err != nil {
+		return vectorSessionOutcome{}, err
+	}
 
 	// FOR UPDATE locks the sessions row for the life of this tx so a concurrent
 	// pusher cannot take ownership between this probe and the vector writes
@@ -949,10 +956,18 @@ func (s *Sync) evictVectorSessions(
 		return nil
 	}
 	table := vectorChunkTable(scope.gen.id)
+	crdb, err := s.serverIsCockroachDB(ctx)
+	if err != nil {
+		return err
+	}
 	for _, sessionID := range sessionIDs {
 		tx, err := s.pg.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin vector evict tx: %w", err)
+		}
+		if err := lockCodexVectorMutationSharedPG(ctx, tx, crdb); err != nil {
+			_ = tx.Rollback()
+			return err
 		}
 		var ownerMarker, machine sql.NullString
 		err = tx.QueryRowContext(ctx,

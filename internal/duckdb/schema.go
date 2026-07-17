@@ -138,6 +138,8 @@ var mirrorTables = []tableSpec{
 			no_code_context_count INTEGER NOT NULL DEFAULT 0,
 			runaway_tool_loop_count INTEGER NOT NULL DEFAULT 0,
 			data_version INTEGER NOT NULL DEFAULT 0,
+			codex_payload_certified_revision TEXT NOT NULL DEFAULT '',
+			codex_payload_certification_version INTEGER NOT NULL DEFAULT 0,
 			cwd TEXT NOT NULL DEFAULT '',
 			git_branch TEXT NOT NULL DEFAULT '',
 			source_session_id TEXT NOT NULL DEFAULT '',
@@ -205,6 +207,8 @@ var mirrorTables = []tableSpec{
 			{"no_code_context_count", "no_code_context_count INTEGER NOT NULL DEFAULT 0"},
 			{"runaway_tool_loop_count", "runaway_tool_loop_count INTEGER NOT NULL DEFAULT 0"},
 			{"data_version", "data_version INTEGER NOT NULL DEFAULT 0"},
+			{"codex_payload_certified_revision", "codex_payload_certified_revision TEXT NOT NULL DEFAULT ''"},
+			{"codex_payload_certification_version", "codex_payload_certification_version INTEGER NOT NULL DEFAULT 0"},
 			{"cwd", "cwd TEXT NOT NULL DEFAULT ''"},
 			{"git_branch", "git_branch TEXT NOT NULL DEFAULT ''"},
 			{"source_session_id", "source_session_id TEXT NOT NULL DEFAULT ''"},
@@ -225,6 +229,7 @@ var mirrorTables = []tableSpec{
 			"CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)",
 			"CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at)",
 			"CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent)",
+			"CREATE INDEX IF NOT EXISTS idx_sessions_agent_data_version ON sessions(agent, data_version)",
 			"CREATE INDEX IF NOT EXISTS idx_sessions_termination_status ON sessions(termination_status)",
 		},
 	},
@@ -737,6 +742,9 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := repairCodexEncryptedPayloadsDuckDB(ctx, db); err != nil {
+		return err
+	}
 
 	for _, table := range mirrorTables {
 		for _, stmt := range table.indexes {
@@ -1120,14 +1128,22 @@ func CheckSchemaCompat(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	return schemaRepairError(pendingRepairs, localSchema)
+	if err := schemaRepairError(pendingRepairs, localSchema); err != nil {
+		return err
+	}
+	return checkCodexEncryptedPayloadCompatDuckDB(ctx, db)
 }
 
 func CheckSchemaCompatViaQuack(ctx context.Context, db *sql.DB) error {
 	if err := checkSchemaShapeCompat(ctx, db, remoteSchema); err != nil {
 		return err
 	}
-	return checkSchemaRepairsViaQuack(ctx, db)
+	if err := checkSchemaRepairsViaQuack(ctx, db); err != nil {
+		return err
+	}
+	return checkCodexEncryptedPayloadCompatDuckDB(
+		ctx, quackCodexDuckDBQueryer{db: db},
+	)
 }
 
 // schemaLocation says whether a compat failure is against the local mirror
@@ -1291,6 +1307,7 @@ func pendingSchemaRepairsQuery() string {
 		"(" + duckLiteral(defaultRepairMetadataKey) + ")",
 		"(" + duckLiteral(usageDedupIndexMetadataKey) + ")",
 		"(" + duckLiteral(projectIdentityRemoteScrubMetadataKey) + ")",
+		"(" + duckLiteral(codexEncryptedPayloadRepairMetadataKey) + ")",
 	}
 	defaultValues := make([]string, len(quackIncompatibleTimestampDefaults))
 	for i, spec := range quackIncompatibleTimestampDefaults {

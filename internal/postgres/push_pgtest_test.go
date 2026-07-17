@@ -16,6 +16,243 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
+func TestPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
+	const schema = "agentsview_push_codex_legacy_literal_test"
+	const literal = "literal gAAAAA-not-an-encrypted-token"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	firstMessage := literal
+	modifiedAt := "2026-07-14T00:00:00.000Z"
+	sess := db.Session{
+		ID: "pg-codex-legacy-literal", Project: "alpha", Machine: "laptop",
+		Agent: "codex", FirstMessage: &firstMessage,
+		RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1,
+		DataVersion: 64, LocalModifiedAt: &modifiedAt,
+		CreatedAt: modifiedAt,
+	}
+	require.NoError(t, local.UpsertSession(sess))
+	require.NoError(t, local.SetSessionDataVersion(sess.ID, sess.DataVersion))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: sess.ID, Ordinal: 0, Role: "user", Content: literal,
+		ContentLength: len(literal), Timestamp: modifiedAt,
+	}}))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+
+	var dataVersion, certificationVersion int
+	var preview, content, certifiedRevision string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT s.data_version, s.codex_payload_certified_revision,
+		       s.codex_payload_certification_version,
+		       s.first_message, m.content
+		FROM sessions s
+		JOIN messages m ON m.session_id = s.id
+		WHERE s.id = $1 AND m.ordinal = 0`, sess.ID,
+	).Scan(
+		&dataVersion, &certifiedRevision, &certificationVersion,
+		&preview, &content,
+	))
+	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+	assert.Equal(t, codexEncryptedPayloadDataVersion, certificationVersion)
+	stored, err := local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.TranscriptRevision)
+	assert.Equal(t, *stored.TranscriptRevision, certifiedRevision)
+	assert.Equal(t, literal, preview)
+	assert.Equal(t, literal, content)
+	mirrored, err := scanPGSession(syncer.pg.QueryRowContext(ctx,
+		"SELECT "+pgSessionCols+" FROM sessions WHERE id = $1", sess.ID,
+	))
+	require.NoError(t, err)
+	assert.Equal(t, certifiedRevision,
+		mirrored.CodexPayloadCertifiedRevision)
+	assert.Equal(t, certificationVersion,
+		mirrored.CodexPayloadCertificationVersion)
+	assert.Equal(t, sess.DataVersion, local.GetSessionDataVersion(sess.ID),
+		"payload certification must not advance the parser version")
+	unverified, err := local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, unverified, sess.ID,
+		"push-time certification must persist for this transcript revision")
+	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
+}
+
+func TestPushPropagatesDeletionForPreviouslyMirroredUnverifiedCodexSession(
+	t *testing.T,
+) {
+	const (
+		schema  = "agentsview_push_codex_withheld_delete_test"
+		literal = "literal gAAAAA-not-an-encrypted-token"
+		fernet  = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	)
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	preview := literal
+	sess := db.Session{
+		ID: "pg-codex-withheld-delete", Project: "alpha", Machine: "laptop",
+		Agent: "codex", FirstMessage: &preview,
+		RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1,
+		DataVersion: 64, LocalModifiedAt: nil,
+		CreatedAt: "2026-07-14T00:00:00.000Z",
+	}
+	require.NoError(t, local.UpsertSession(sess))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: sess.ID, Ordinal: 0, Role: "user", Content: literal,
+		ContentLength: len(literal), Timestamp: sess.CreatedAt,
+	}}))
+	require.NoError(t, local.SetSessionDataVersion(sess.ID, 64))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push safe legacy source")
+	require.Zero(t, first.Errors)
+	firstWatermark, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstWatermark)
+	time.Sleep(2 * time.Millisecond)
+
+	// Reproduce a newly recognized legacy payload after a safe copy already
+	// exists in the mirror, then move the local source row to the trash.
+	sess.DataVersion = 64
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{{
+			SessionID: sess.ID, Ordinal: 0, Role: "user", Content: fernet,
+			ContentLength: len(fernet), Timestamp: sess.CreatedAt,
+		}},
+		DataVersion:     64,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "reproduce unverified local payload")
+	require.NoError(t, local.SoftDeleteSession(sess.ID), "trash local session")
+
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push deletion-only update")
+	assert.Zero(t, second.Errors)
+	secondWatermark, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.NotEqual(t, firstWatermark, secondWatermark,
+		"the watermark may advance after the deletion marker lands")
+
+	var deletedAt, sourceDeletedAt sql.NullTime
+	var gotContent string
+	var gotVersion int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT s.deleted_at, s.source_deleted_at, s.data_version, m.content
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		 WHERE s.id = $1 AND m.ordinal = 0`, sess.ID,
+	).Scan(&deletedAt, &sourceDeletedAt, &gotVersion, &gotContent))
+	assert.True(t, deletedAt.Valid, "the mirrored session must be hidden")
+	assert.True(t, sourceDeletedAt.Valid,
+		"the source deletion baseline must be recorded")
+	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion,
+		"the deletion-only path must not downgrade the safe mirror row")
+	assert.Equal(t, literal, gotContent,
+		"the deletion-only path must not copy unverified content")
+	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
+
+	// Restoring the unsafe local source must clear only the mirrored curation
+	// marker. The safe transcript and its certified version remain untouched.
+	time.Sleep(2 * time.Millisecond)
+	restoredRows, err := local.RestoreSession(sess.ID)
+	require.NoError(t, err, "restore local source")
+	require.EqualValues(t, 1, restoredRows, "restore one local source row")
+	third, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push restoration-only update")
+	assert.Zero(t, third.Errors)
+	thirdWatermark, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.NotEqual(t, secondWatermark, thirdWatermark,
+		"the watermark may advance after the restoration marker lands")
+	var restored, sourceRestored bool
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT s.deleted_at IS NULL, s.source_deleted_at IS NULL,
+		       s.data_version, m.content
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		 WHERE s.id = $1 AND m.ordinal = 0`, sess.ID,
+	).Scan(&restored, &sourceRestored, &gotVersion, &gotContent))
+	assert.True(t, restored, "the mirrored session must be restored")
+	assert.True(t, sourceRestored,
+		"the source restoration baseline must be recorded")
+	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion,
+		"the restoration-only path must not downgrade the safe mirror row")
+	assert.Equal(t, literal, gotContent,
+		"the restoration-only path must not copy unverified content")
+	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
+
+	// A PG-side restore differs from the last source baseline. A later source
+	// deletion must advance that baseline without discarding the user override.
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, local.SoftDeleteSession(sess.ID),
+		"trash local source a second time")
+	fourth, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push second deletion-only update")
+	assert.Zero(t, fourth.Errors)
+	var secondSourceDeletedAt sql.NullTime
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT source_deleted_at FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&secondSourceDeletedAt))
+	require.True(t, secondSourceDeletedAt.Valid)
+
+	_, err = syncer.pg.ExecContext(ctx,
+		`UPDATE sessions SET deleted_at = NULL WHERE id = $1`, sess.ID)
+	require.NoError(t, err, "restore the mirrored session in PG")
+	restoredRows, err = local.RestoreSession(sess.ID)
+	require.NoError(t, err, "restore local source")
+	require.EqualValues(t, 1, restoredRows, "restore one local source row")
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, local.SoftDeleteSession(sess.ID),
+		"trash local source a third time")
+
+	fifth, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push after PG-side restore")
+	assert.Zero(t, fifth.Errors)
+	var thirdSourceDeletedAt sql.NullTime
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT deleted_at IS NULL, source_deleted_at
+		  FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&restored, &thirdSourceDeletedAt))
+	assert.True(t, restored,
+		"the deletion-only path must preserve a PG-side restore")
+	require.True(t, thirdSourceDeletedAt.Valid)
+	assert.True(t, thirdSourceDeletedAt.Time.After(secondSourceDeletedAt.Time),
+		"the source deletion baseline must still advance")
+	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
+
+	sixth, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push after preserved PG-side restore")
+	assert.Zero(t, sixth.Errors)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT deleted_at IS NULL FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&restored))
+	assert.True(t, restored,
+		"the PG-side restore must survive subsequent incremental pushes")
+}
+
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {

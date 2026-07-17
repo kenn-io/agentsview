@@ -387,6 +387,16 @@ the analytics and usage queries to perform well on CockroachDB
 aggregation, batched pricing writes) without changing any
 report semantics on PostgreSQL or SQLite.
 
+The Codex encrypted-payload write guards install as row-level
+triggers on CockroachDB v24.3 and later, matching the PostgreSQL
+behavior: writes that would land legacy Codex ciphertext are
+rejected. Older CockroachDB versions cannot run triggers; there
+the migration still redacts stored rows but records a scan-based
+guard mode, and `pg serve` verifies at startup that no legacy
+ciphertext or stale vectors exist, failing closed until a current
+build repairs them. On such deployments keep every machine that
+pushes to the shared database on a current AgentsView build.
+
 !!! warning
     Query-parameter tokens can leak through server logs, browser
     history, and Referer headers. Prefer the `Authorization`

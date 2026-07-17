@@ -51,18 +51,70 @@ func (s *Store) DB() *sql.DB { return s.duck }
 
 func (s *Store) Close() error { return s.duck.Close() }
 
+// duckStoreRows is the row surface Store reads consume. Gated Quack reads
+// return a wrapper that maps remote guard failures to the repair sentinel on
+// every error path; local reads return *sql.Rows unchanged.
+type duckStoreRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close() error
+}
+
 func (s *Store) queryContext(
 	ctx context.Context, query string, args ...any,
-) (*sql.Rows, error) {
-	return queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
+) (duckStoreRows, error) {
+	return queryDuckDBContextGated(
+		ctx, s.duck, s.connectionKind, s.quack, query, args...,
+	)
 }
 
 func (s *Store) queryRowContext(
 	ctx context.Context, query string, args ...any,
 ) interface{ Scan(...any) error } {
-	return queryDuckDBRowContext(
+	if s.connectionKind != duckDBQuackClientConnection {
+		return s.duck.QueryRowContext(ctx, query, args...)
+	}
+	rows, err := queryDuckDBContextGated(
 		ctx, s.duck, s.connectionKind, s.quack, query, args...,
 	)
+	return duckSingleRow{rows: rows, err: err}
+}
+
+// queryDuckDBContextGated ships Store reads over Quack with the legacy Codex
+// payload guard embedded in the same remote statement, so the compatibility
+// check and the read share one remote snapshot. Non-Store readers that
+// tolerate legacy mirrors (status counts) use queryDuckDBContext instead.
+func queryDuckDBContextGated(
+	ctx context.Context,
+	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
+	quack *quackClient,
+	query string,
+	args ...any,
+) (duckStoreRows, error) {
+	if connectionKind != duckDBQuackClientConnection {
+		return duck.QueryContext(ctx, query, args...)
+	}
+	sqlText, err := duckSQLWithArgs(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	gated := codexGuardedQuackReadSQL(sqlText)
+	var rows *sql.Rows
+	if quack != nil {
+		rows, err = quack.queryRemote(ctx, gated, true)
+	} else {
+		rows, err = duck.QueryContext(
+			ctx,
+			"SELECT * FROM "+quackAttachmentName+".query(?)",
+			gated,
+		)
+	}
+	if err != nil {
+		return nil, mapCodexDuckDBGuardError(err)
+	}
+	return codexGuardMappedRows{Rows: rows}, nil
 }
 
 func queryDuckDBContext(
@@ -106,7 +158,7 @@ func queryDuckDBRowContext(
 }
 
 type duckSingleRow struct {
-	rows *sql.Rows
+	rows duckStoreRows
 	err  error
 }
 
@@ -206,6 +258,7 @@ const duckSessionCols = `id, project, machine, agent,
 	missing_success_criteria_count, missing_verification_count,
 	duplicate_prompt_count, no_code_context_count, runaway_tool_loop_count,
 	data_version,
+	codex_payload_certified_revision, codex_payload_certification_version,
 	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
@@ -239,6 +292,8 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 		&s.MissingVerificationCount, &s.DuplicatePromptCount,
 		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 		&s.DataVersion,
+		&s.CodexPayloadCertifiedRevision,
+		&s.CodexPayloadCertificationVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion, &s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
@@ -261,7 +316,7 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	return s, nil
 }
 
-func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
+func scanSessionRows(rows duckStoreRows) ([]db.Session, error) {
 	sessions := []db.Session{}
 	for rows.Next() {
 		s, err := scanSession(rows)
@@ -706,7 +761,7 @@ func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomate
 }
 
 func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
-	rows, err := s.duck.QueryContext(ctx,
+	rows, err := s.queryContext(ctx,
 		`SELECT DISTINCT project, git_branch FROM sessions WHERE `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
 			` ORDER BY project, git_branch`,
@@ -1385,7 +1440,7 @@ func (s *Store) scanContentMatches(
 	return scanDuckContentRows(rows, makeSnippet)
 }
 
-func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+func scanDuckContentRows(rows duckStoreRows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
 	for rows.Next() {
@@ -1402,7 +1457,7 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 	return out, rows.Err()
 }
 
-func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error) {
+func scanDuckContentCandidateRows(rows duckStoreRows) ([]duckContentCandidate, error) {
 	defer rows.Close()
 	var out []duckContentCandidate
 	for rows.Next() {

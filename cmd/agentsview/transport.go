@@ -92,6 +92,14 @@ var openPGReadStore = func(
 	return store, func() { _ = store.Close() }, nil
 }
 
+var checkPGReadCompatFn = func(ctx context.Context, store db.Store) error {
+	pgStore, ok := store.(*postgres.Store)
+	if !ok {
+		return nil
+	}
+	return postgres.CheckCodexEncryptedPayloadCompat(ctx, pgStore.DB())
+}
+
 // detectTransport picks the transport mode:
 //  1. If a kit runtime record points to a live daemon, use HTTP.
 //  2. If a daemon start lock exists, wait up to waitTimeout for the
@@ -503,6 +511,12 @@ func newPGReadService(
 			cleanup()
 		}
 		return nil, nil, fmt.Errorf("opening pg store: %w", err)
+	}
+	if err := checkPGReadCompatFn(context.Background(), store); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, nil, fmt.Errorf("checking pg compatibility: %w", err)
 	}
 	if len(cfg.CustomModelPricing) > 0 {
 		if priced, ok := store.(customPricingStore); ok {

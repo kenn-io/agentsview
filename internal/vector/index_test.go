@@ -404,6 +404,52 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	assert.Equal(t, "2024-01-01T00:00:00Z", watermark)
 }
 
+// A v4 mirror can hold embeddings and mirrored content produced before
+// collaboration header fields joined the Codex encrypted-payload repair.
+// Opening it on the write path must discard the historical document,
+// generation, and refresh watermark so the next build scans the whole archive
+// and re-embeds current content.
+func TestMirrorSchemaVersion4CollaborationHeaderRedactionResetsWritePath(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	src := &fakeUnitSource{rows: []fakeUnit{{
+		unit: userDoc(
+			"codex:child", "collaboration-call", 0,
+			"[Task: "+fernet+"]\nRun the task",
+		),
+		endedAt: "2026-07-13T00:00:00Z",
+	}}}
+	_, err = ix.Build(
+		ctx, src, fakeBuildEncoder(), fakeGeneration("stale-model"), BuildOptions{},
+	)
+	require.NoError(t, err)
+	_, err = ix.db.ExecContext(ctx,
+		`UPDATE vector_meta SET value = '4' WHERE key = ?`, mirrorSchemaVersionKey)
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
+
+	current, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	defer current.Close()
+
+	var docs int
+	require.NoError(t, current.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM vector_messages`).Scan(&docs))
+	assert.Zero(t, docs, "v4 collaboration-header content must be invalidated")
+	generations, err := current.Generations(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, generations, "v4 embeddings must be invalidated")
+	watermark, err := current.refreshWatermark(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, watermark, "the replacement mirror must force a full scan")
+}
+
 // TestMirrorSchemaVersionMismatchResetsWritePath covers the full write-path
 // reset: a v1-shaped mirror plus stray kit tables (including a fake
 // generations table and an abandoned per-generation table) must be dropped

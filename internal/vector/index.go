@@ -102,7 +102,10 @@ func (s IndexSpec) repairQueueTable() string { return s.VectorsPrefix + "_repair
 // History: "2" added the ordinal_end/subordinate/offsets columns but still
 // held one row per message; "3" switched document identity to run-grouped
 // units (one row per user message or per run of contiguous assistant
-// messages) with no DDL change.
+// messages) with no DDL change; "4" invalidated mirrors built before Codex
+// encrypted multi-agent payloads were removed from historical message content;
+// "5" invalidates mirrors built before argument-derived collaboration headers
+// were included in that redaction.
 func MessageIndexSpec() IndexSpec {
 	return IndexSpec{
 		Name:                "messages",
@@ -110,7 +113,7 @@ func MessageIndexSpec() IndexSpec {
 		MetaTable:           "vector_meta",
 		VectorsPrefix:       "message_vectors",
 		MirrorDDL:           messageMirrorDDL,
-		MirrorSchemaVersion: "3",
+		MirrorSchemaVersion: "5",
 	}
 }
 

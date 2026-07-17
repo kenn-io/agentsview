@@ -208,7 +208,7 @@ func upsertProjectIdentityObservation(
 			  AND (git_remote != '' OR remote_resolution = ?)
 			  AND (? = '' OR git_remote != ?)`,
 			obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
-			export.ProjectResolutionAmbiguous,
+			string(export.ProjectResolutionAmbiguous),
 			excludeRemote, excludeRemote,
 		).Scan(&exists); err != nil {
 			return fmt.Errorf(
@@ -224,7 +224,7 @@ func upsertProjectIdentityObservation(
 		  AND machine = ? AND root_path = ?
 		  AND git_remote = '' AND remote_resolution != ?`,
 		obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
-		export.ProjectResolutionAmbiguous,
+		string(export.ProjectResolutionAmbiguous),
 	); err != nil {
 		return fmt.Errorf(
 			"removing stale duckdb project identity root fallback: %w", err,

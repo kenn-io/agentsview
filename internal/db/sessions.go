@@ -54,6 +54,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	missing_verification_count, duplicate_prompt_count,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
+	codex_payload_certified_revision, codex_payload_certification_version,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
@@ -85,6 +86,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	missing_verification_count, duplicate_prompt_count,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
+	codex_payload_certified_revision, codex_payload_certification_version,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
@@ -116,6 +118,7 @@ const sessionFullCols = `id, project, machine, agent,
 	missing_verification_count, duplicate_prompt_count,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
+	codex_payload_certified_revision, codex_payload_certification_version,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
@@ -166,6 +169,8 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.MissingVerificationCount, &s.DuplicatePromptCount,
 		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 		&s.DataVersion,
+		&s.CodexPayloadCertifiedRevision,
+		&s.CodexPayloadCertificationVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity,
@@ -322,13 +327,17 @@ type Session struct {
 	NoCodeContextCount          int             `json:"-"`
 	RunawayToolLoopCount        int             `json:"-"`
 	DataVersion                 int             `json:"-"`
-	Cwd                         string          `json:"cwd,omitempty"`
-	GitBranch                   string          `json:"git_branch,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitempty"`
-	IsTruncated                 bool            `json:"is_truncated,omitempty"`
+	// Codex payload certification is separate from parser DataVersion and is
+	// mirrored so every backend carries the same shared-storage safety proof.
+	CodexPayloadCertifiedRevision    string `json:"-"`
+	CodexPayloadCertificationVersion int    `json:"-"`
+	Cwd                              string `json:"cwd,omitempty"`
+	GitBranch                        string `json:"git_branch,omitempty"`
+	SourceSessionID                  string `json:"source_session_id,omitempty"`
+	SourceVersion                    string `json:"source_version,omitempty"`
+	TranscriptFidelity               string `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines             int    `json:"parser_malformed_lines,omitempty"`
+	IsTruncated                      bool   `json:"is_truncated,omitempty"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	TerminationStatus *string `json:"termination_status,omitempty"`
@@ -1102,6 +1111,8 @@ func (db *DB) GetSessionFull(
 		&s.MissingVerificationCount, &s.DuplicatePromptCount,
 		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 		&s.DataVersion,
+		&s.CodexPayloadCertifiedRevision,
+		&s.CodexPayloadCertificationVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity,
@@ -1297,6 +1308,18 @@ const upsertSessionSQL = insertSessionSQL + `
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
+			codex_payload_certified_revision = CASE
+				WHEN sessions.agent = excluded.agent
+				 AND sessions.first_message IS excluded.first_message
+				THEN sessions.codex_payload_certified_revision
+				ELSE ''
+			END,
+			codex_payload_certification_version = CASE
+				WHEN sessions.agent = excluded.agent
+				 AND sessions.first_message IS excluded.first_message
+				THEN sessions.codex_payload_certification_version
+				ELSE 0
+			END,
 			agent = excluded.agent,
 			agent_label = excluded.agent_label,
 			entrypoint = excluded.entrypoint,
@@ -2840,6 +2863,8 @@ func (db *DB) FindPruneCandidates(
 			&s.MissingVerificationCount, &s.DuplicatePromptCount,
 			&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 			&s.DataVersion,
+			&s.CodexPayloadCertifiedRevision,
+			&s.CodexPayloadCertificationVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.TranscriptFidelity,
@@ -3231,6 +3256,8 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.MissingVerificationCount, &s.DuplicatePromptCount,
 			&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 			&s.DataVersion,
+			&s.CodexPayloadCertifiedRevision,
+			&s.CodexPayloadCertificationVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.TranscriptFidelity,

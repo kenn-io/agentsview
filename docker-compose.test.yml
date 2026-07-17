@@ -20,6 +20,19 @@ services:
     tmpfs:
       - /var/lib/postgresql/data  # Use tmpfs for faster tests, no persistence needed
 
+  cockroach:
+    image: cockroachdb/cockroach:v26.2.3
+    command: start-single-node --insecure
+    ports:
+      - "26258:26257"  # Non-standard port to avoid conflict with local cockroach
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "-e", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    tmpfs:
+      - /cockroach/cockroach-data  # Use tmpfs for faster tests, no persistence needed
+
   sshd:
     build:
       context: .

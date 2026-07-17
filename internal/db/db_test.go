@@ -931,9 +931,20 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionHermesSkillName(t *testing.T) {
-	assert.Equal(t, 68, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 68,
 		"Hermes skill-name parsing requires a data version bump")
 }
+
+func TestCurrentDataVersionCodexCollabHeaderRedaction(t *testing.T) {
+	assert.Equal(t, 69, CurrentDataVersion(),
+		"Codex collaboration header redaction requires a data version bump")
+}
+
+func TestCodexRedactionWatermarkWithinDataVersion(t *testing.T) {
+	assert.LessOrEqual(t, CodexRedactionDataVersion, CurrentDataVersion(),
+		"a redaction watermark above the current data version would gate every read")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")

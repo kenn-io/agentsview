@@ -2,7 +2,6 @@ package duckdb
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -50,7 +49,7 @@ func (s *Store) UnpinMessage(sessionID string, messageID int64) error {
 func (s *Store) ListPinnedMessages(
 	ctx context.Context, sessionID string, project string,
 ) ([]db.PinnedMessage, error) {
-	var rows *sql.Rows
+	var rows duckStoreRows
 	var err error
 	if sessionID != "" {
 		rows, err = s.queryContext(ctx, `

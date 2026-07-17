@@ -53,6 +53,235 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	assert.Equal(t, "alpha first", firstMessage)
 }
 
+func TestSyncPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const literal = "literal gAAAAA-not-an-encrypted-token"
+	sess := syncSession(
+		"duck-codex-legacy-literal", "alpha", literal,
+		"2026-07-14T00:00:00.000Z", 1,
+	)
+	sess.Agent = "codex"
+	sess.RelationshipType = "subagent"
+	sess.DataVersion = 64
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{syncMessage(
+			sess.ID, 0, "user", literal, "2026-07-14T00:00:00.000Z",
+		)},
+		DataVersion:     64,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	var dataVersion, certificationVersion int
+	var preview, content, certifiedRevision string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT s.data_version, s.codex_payload_certified_revision,
+		       s.codex_payload_certification_version,
+		       s.first_message, m.content
+		FROM sessions s
+		JOIN messages m ON m.session_id = s.id
+		WHERE s.id = ? AND m.ordinal = 0`, sess.ID,
+	).Scan(
+		&dataVersion, &certifiedRevision, &certificationVersion,
+		&preview, &content,
+	))
+	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+	assert.Equal(t, codexEncryptedPayloadDataVersion, certificationVersion)
+	stored, err := local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.TranscriptRevision)
+	assert.Equal(t, *stored.TranscriptRevision, certifiedRevision)
+	assert.Equal(t, literal, preview)
+	assert.Equal(t, literal, content)
+	mirrored, err := scanSession(syncer.DB().QueryRowContext(ctx,
+		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ?", sess.ID,
+	))
+	require.NoError(t, err)
+	assert.Equal(t, certifiedRevision,
+		mirrored.CodexPayloadCertifiedRevision)
+	assert.Equal(t, certificationVersion,
+		mirrored.CodexPayloadCertificationVersion)
+	assert.Equal(t, sess.DataVersion, local.GetSessionDataVersion(sess.ID),
+		"payload certification must not advance the parser version")
+	unverified, err := local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, unverified, sess.ID,
+		"push-time certification must persist for this transcript revision")
+	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
+}
+
+func TestSyncPushWithholdsUnverifiedLegacyCodexSessions(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	// An unlinked child: no subagent relationship metadata, but its user
+	// turn is a bare encrypted delivery the scoped scrub never examined.
+	unverified := syncSession(
+		"duck-codex-unlinked-child", "alpha", "child preview",
+		"2026-07-14T00:00:00.000Z", 1,
+	)
+	unverified.Agent = "codex"
+	unverified.DataVersion = 64
+	clean := syncSession(
+		"duck-codex-clean", "alpha", "clean preview",
+		"2026-07-14T00:00:01.000Z", 1,
+	)
+	clean.Agent = "codex"
+	clean.DataVersion = 64
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: unverified,
+			Messages: []db.Message{syncMessage(
+				unverified.ID, 0, "user", fernet,
+				"2026-07-14T00:00:00.000Z",
+			)},
+			DataVersion:     64,
+			ReplaceMessages: true,
+		},
+		{
+			Session: clean,
+			Messages: []db.Message{syncMessage(
+				clean.ID, 0, "user", "clean content",
+				"2026-07-14T00:00:01.000Z",
+			)},
+			DataVersion:     64,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors,
+		"an unverified session is withheld, not counted as a push error")
+	assert.Equal(t, 1, result.SessionsPushed)
+
+	var count int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = ?`, unverified.ID,
+	).Scan(&count))
+	assert.Zero(t, count, "the unverified session must not reach the mirror")
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = ?`, clean.ID,
+	).Scan(&count))
+	assert.Equal(t, 1, count, "verified sessions still push")
+	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
+}
+
+func TestSyncPushPropagatesDeletionForPreviouslyMirroredUnverifiedCodexSession(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const (
+		literal = "literal gAAAAA-not-an-encrypted-token"
+		fernet  = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	)
+	sess := syncSession(
+		"duck-codex-withheld-delete", "alpha", literal,
+		"2026-07-14T00:00:00.000Z", 1,
+	)
+	sess.Agent = "codex"
+	sess.RelationshipType = "subagent"
+	sess.DataVersion = 64
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{syncMessage(
+			sess.ID, 0, "user", literal, sess.CreatedAt,
+		)},
+		DataVersion:     64,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push safe legacy source")
+	require.Zero(t, first.Errors)
+	firstWatermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstWatermark)
+	time.Sleep(2 * time.Millisecond)
+
+	// Reproduce a newly recognized legacy payload after the mirror already
+	// holds a safe certified copy, then trash the local source row.
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{syncMessage(
+			sess.ID, 0, "user", fernet, sess.CreatedAt,
+		)},
+		DataVersion:     64,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "reproduce unverified local payload")
+	require.NoError(t, local.SoftDeleteSession(sess.ID), "trash local session")
+
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push deletion-only update")
+	assert.Zero(t, second.Errors)
+	secondWatermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstWatermark, secondWatermark,
+		"the watermark may advance after the deletion marker lands")
+
+	var deleted bool
+	var gotContent string
+	var gotVersion int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT s.deleted_at IS NOT NULL, s.data_version, m.content
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		 WHERE s.id = ? AND m.ordinal = 0`, sess.ID,
+	).Scan(&deleted, &gotVersion, &gotContent))
+	assert.True(t, deleted, "the mirrored session must be hidden")
+	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion,
+		"the deletion-only path must not downgrade the safe mirror row")
+	assert.Equal(t, literal, gotContent,
+		"the deletion-only path must not copy unverified content")
+	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
+
+	time.Sleep(2 * time.Millisecond)
+	restoredRows, err := local.RestoreSession(sess.ID)
+	require.NoError(t, err, "restore local source")
+	require.EqualValues(t, 1, restoredRows, "restore one local source row")
+	third, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push restoration-only update")
+	assert.Zero(t, third.Errors)
+	thirdWatermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.NotEqual(t, secondWatermark, thirdWatermark,
+		"the watermark may advance after the restoration marker lands")
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT s.deleted_at IS NOT NULL, s.data_version, m.content
+		   FROM sessions s
+		   JOIN messages m ON m.session_id = s.id
+		  WHERE s.id = ? AND m.ordinal = 0`, sess.ID,
+	).Scan(&deleted, &gotVersion, &gotContent))
+	assert.False(t, deleted, "the mirrored session must be restored")
+	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion,
+		"the restoration-only path must not downgrade the safe mirror row")
+	assert.Equal(t, literal, gotContent,
+		"the restoration-only path must not copy unverified content")
+	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
+
+	fourth, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err, "push after restoration watermark")
+	assert.Zero(t, fourth.Errors)
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT deleted_at IS NOT NULL FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&deleted))
+	assert.False(t, deleted,
+		"the restoration must survive subsequent incremental pushes")
+}
+
 func TestSyncPushContinuesAfterSessionError(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

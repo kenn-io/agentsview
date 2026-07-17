@@ -146,6 +146,9 @@ func TestQuackStoreReattachesAfterServerRestart(t *testing.T) {
 	const token = "agentsview-duckdbtest-token-0009"
 
 	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	// Store reads embed the Codex compatibility guard, which references the
+	// sessions table, so the fixture needs the agentsview schema.
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
 	_, err := server.ExecContext(ctx,
 		`CREATE TABLE stale_connection_test (
 			id TEXT PRIMARY KEY,
@@ -196,6 +199,9 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 	const token = "agentsview-duckdbtest-token-0011"
 
 	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	// Store reads embed the Codex compatibility guard, which references the
+	// sessions table, so the fixture needs the agentsview schema.
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
 	_, err := server.ExecContext(ctx,
 		`CREATE TABLE failed_reattach_test (
 			id TEXT PRIMARY KEY,
@@ -270,6 +276,94 @@ func TestQuackClientSyncEnsureSchemaSkipsRemoteIndexes(t *testing.T) {
 		"check schema compatibility through Quack",
 	)
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
+}
+
+func TestQuackSchemaCompatRejectsStaleCodexPayloads(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-codex.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-codex"
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+	_, err := server.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, relationship_type, data_version
+		) VALUES ('codex-old', 'project', 'machine', 'codex', 'subagent', 64)`)
+	require.NoError(t, err, "insert stale remote Codex session")
+	_, err = server.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, content_length
+		) VALUES (1, 'codex-old', 0, 'user', ?, ?)`, fernet, len(fernet))
+	require.NoError(t, err, "insert stale remote Codex message")
+
+	client, err := NewQuackStore(uri, token, false)
+	require.NoError(t, err, "open Quack store")
+	t.Cleanup(func() { require.NoError(t, client.Close(), "close Quack store") })
+
+	err = CheckSchemaCompatViaQuack(ctx, client.DB())
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"remote reads must fail closed until the base mirror is repaired")
+}
+
+func TestQuackStoreRejectsLegacyCodexPushAfterStartup(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-codex-late.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-codex-late"
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+	_, err := server.ExecContext(ctx, fmt.Sprintf(`
+		INSERT INTO sessions (
+			id, project, machine, agent, relationship_type, data_version
+		) VALUES ('codex-current', 'project', 'machine', 'codex', 'subagent', %d)`,
+		codexEncryptedPayloadDataVersion))
+	require.NoError(t, err, "insert current remote Codex session")
+
+	client, err := NewQuackStore(uri, token, false)
+	require.NoError(t, err, "open Quack store")
+	t.Cleanup(func() { require.NoError(t, client.Close(), "close Quack store") })
+	require.NoError(t, CheckSchemaCompatViaQuack(ctx, client.DB()),
+		"current remote mirror must pass startup compatibility")
+	_, err = client.GetSession(ctx, "codex-current")
+	require.NoError(t, err, "current remote session must be readable")
+	_, err = client.GetBranches(ctx, false, false)
+	require.NoError(t, err, "branches must be readable over Quack")
+	_, err = client.GetUsageMatchingSessionCount(ctx, db.UsageFilter{})
+	require.NoError(t, err,
+		"unbounded usage session count must be readable over Quack")
+	_, err = client.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From: "2020-01-01", To: "2030-01-01",
+	})
+	require.NoError(t, err,
+		"bounded usage session count must be readable over Quack")
+
+	_, err = server.ExecContext(ctx, `
+		UPDATE sessions SET data_version = 64 WHERE id = 'codex-current'`)
+	require.NoError(t, err, "simulate a late legacy session push")
+	_, err = server.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, content_length
+		) VALUES (1, 'codex-current', 0, 'user', ?, ?)`, fernet, len(fernet))
+	require.NoError(t, err, "simulate a late legacy message push")
+
+	_, err = client.GetSession(ctx, "codex-current")
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"a long-running Quack reader must fail closed after a legacy push")
+	_, err = client.GetBranches(ctx, false, false)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"branch reads must fail closed after a legacy push")
+	_, err = client.GetUsageMatchingSessionCount(ctx, db.UsageFilter{})
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"unbounded usage session counts must fail closed after a legacy push")
+	_, err = client.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From: "2020-01-01", To: "2030-01-01",
+	})
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"bounded usage session counts must fail closed after a legacy push")
 }
 
 func TestQuackClientSyncEnsureSchemaRequiresPreparedServerMetadata(t *testing.T) {

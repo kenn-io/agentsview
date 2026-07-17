@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
+	"log"
 	"slices"
 	"sort"
 	"strconv"
@@ -417,6 +419,106 @@ func (s *Sync) replaceStarredSessions(
 	return nil
 }
 
+// prepareCodexSessionsForPush verifies legacy Codex sessions before they enter
+// the DuckDB write batches. Withheld sessions are not push errors: the
+// condition persists until the transcript is repaired or reparsed, and
+// counting it as an error would pin the push watermark and skip curation
+// refresh on every future push. Successful certification is persisted locally
+// so the vector gate can recognize the same clean transcript revision.
+// Transient read failures stay in the batch so the regular push error path
+// retries them.
+func (s *Sync) prepareCodexSessionsForPush(
+	ctx context.Context, sessions []db.Session,
+) (kept, withheld []db.Session, err error) {
+	kept = sessions[:0]
+	for _, sess := range sessions {
+		if sess.Agent == "codex" &&
+			sess.DataVersion < db.ExpectedSharedStorageDataVersion(sess) {
+			msgs, err := s.local.GetAllMessages(ctx, sess.ID)
+			if err == nil {
+				var prepared db.Session
+				prepared, err = db.PrepareSessionForSharedStorage(sess, msgs)
+				if errors.Is(err, db.ErrCodexSessionUnverified) {
+					log.Printf(
+						"duckdbsync: withholding session from push: %v", err,
+					)
+					withheld = append(withheld, sess)
+					continue
+				}
+				if err == nil {
+					if sess.TranscriptRevision == nil {
+						return nil, nil, fmt.Errorf(
+							"certifying Codex session %s: missing transcript revision",
+							sess.ID,
+						)
+					}
+					if err := s.local.SetCodexSharedStorageCertification(
+						sess.ID, *sess.TranscriptRevision, sess.FirstMessage,
+					); err != nil {
+						return nil, nil, fmt.Errorf(
+							"persisting Codex payload certification %s: %w",
+							sess.ID, err,
+						)
+					}
+					sess = prepared
+				}
+			}
+		}
+		kept = append(kept, sess)
+	}
+	return kept, withheld, nil
+}
+
+// pushWithheldCodexCuration propagates only deletion or restoration state for
+// unverified sessions that already exist in this mirror. It never inserts a
+// missing row or copies transcript content. Missing rows are returned so their
+// obsolete fingerprints can be dropped; rows belonging to another machine
+// remain the responsibility of that machine's pusher.
+func (s *Sync) pushWithheldCodexCuration(
+	ctx context.Context, sessions []db.Session,
+) (applied []db.Session, absent []string, err error) {
+	if len(sessions) == 0 {
+		return nil, nil, nil
+	}
+	err = s.withDuckTx(ctx, "apply withheld Codex curation", func(tx *sql.Tx) error {
+		for _, sess := range sessions {
+			var machine string
+			err := tx.QueryRowContext(ctx,
+				`SELECT machine FROM sessions WHERE id = ?`, sess.ID,
+			).Scan(&machine)
+			if errors.Is(err, sql.ErrNoRows) {
+				absent = append(absent, sess.ID)
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf(
+					"checking curation-only DuckDB session %s: %w",
+					sess.ID, err,
+				)
+			}
+			if machine != s.machine {
+				continue
+			}
+			if err := s.execMutation(ctx, tx, `
+				UPDATE sessions SET deleted_at = ?
+				 WHERE id = ? AND machine = ?`,
+				sess.DeletedAt, sess.ID, s.machine,
+			); err != nil {
+				return fmt.Errorf(
+					"writing curation-only DuckDB session %s: %w",
+					sess.ID, err,
+				)
+			}
+			applied = append(applied, sess)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return applied, absent, nil
+}
+
 func (s *Sync) pushSession(
 	ctx context.Context,
 	exec duckMutationExecutor,
@@ -424,12 +526,16 @@ func (s *Sync) pushSession(
 	sess db.Session,
 	full bool,
 ) (int, error) {
-	if err := s.upsertSession(ctx, exec, sess); err != nil {
-		return 0, err
-	}
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
+	}
+	sess, err = db.PrepareSessionForSharedStorage(sess, msgs)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.upsertSession(ctx, exec, sess); err != nil {
+		return 0, err
 	}
 
 	if !full {
@@ -1282,6 +1388,8 @@ func (s *Sync) upsertSession(
 			missing_success_criteria_count, missing_verification_count,
 			duplicate_prompt_count, no_code_context_count,
 			runaway_tool_loop_count, data_version,
+			codex_payload_certified_revision,
+			codex_payload_certification_version,
 			cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 			parser_malformed_lines, is_truncated, deleted_at, created_at,
 			termination_status, secret_leak_count, secrets_rules_version
@@ -1289,7 +1397,7 @@ func (s *Sync) upsertSession(
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`
 	query += `
 		ON CONFLICT(id) DO UPDATE SET
@@ -1345,6 +1453,10 @@ func (s *Sync) upsertSession(
 			no_code_context_count = excluded.no_code_context_count,
 			runaway_tool_loop_count = excluded.runaway_tool_loop_count,
 			data_version = excluded.data_version,
+			codex_payload_certified_revision =
+				excluded.codex_payload_certified_revision,
+			codex_payload_certification_version =
+				excluded.codex_payload_certification_version,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
@@ -1393,6 +1505,8 @@ func sessionInsertArgs(sess db.Session, machine string) []any {
 		sess.MissingVerificationCount, sess.DuplicatePromptCount,
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sess.DataVersion,
+		sess.CodexPayloadCertifiedRevision,
+		sess.CodexPayloadCertificationVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
 		sess.IsTruncated, nilTime(sess.DeletedAt),

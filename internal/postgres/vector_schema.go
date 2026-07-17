@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS vector_documents (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_documents_session_ordinal
     ON vector_documents (session_id, ordinal);
+-- The Codex stale-vector scan (staleCodexVectorSessionIDsPG) runs on every
+-- schema ensure and read-side compat check, because a compatibility-marked
+-- writer can push a stale ciphertext vector even after the one-time sweep.
+-- Its leading-wildcard LIKE cannot use a btree lookup, so give it a partial
+-- index that keeps the steady-state probe proportional to the (normally
+-- empty) suspicious set instead of the whole vector corpus.
+CREATE INDEX IF NOT EXISTS idx_vector_documents_codex_ciphertext
+    ON vector_documents (session_id) WHERE content LIKE '%gAAAAA%';
 CREATE TABLE IF NOT EXISTS vector_push_state (
     generation_id BIGINT NOT NULL,
     session_id    TEXT NOT NULL,

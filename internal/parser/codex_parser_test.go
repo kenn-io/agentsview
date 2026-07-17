@@ -247,6 +247,7 @@ func TestParseCodexSession_InboundAgentMessagesAreUserTurns(t *testing.T) {
 
 func TestParseCodexSession_EncryptedAgentMessageUsesTaskName(t *testing.T) {
 	const encrypted = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	const placeholder = "[Encrypted agent message from /root: content unavailable]"
 	content := testjsonl.JoinJSONL(
 		testjsonl.CodexSubagentSessionMetaJSON(
 			"child", "parent", "/tmp/project", "user", tsEarly,
@@ -263,11 +264,155 @@ func TestParseCodexSession_EncryptedAgentMessageUsesTaskName(t *testing.T) {
 	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 
 	require.NotNil(t, sess)
-	assert.Empty(t, sess.FirstMessage)
+	assert.Equal(t, placeholder, sess.FirstMessage)
 	assert.Equal(t, "worker", sess.SessionName)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, placeholder, msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "I completed the encrypted task.", msgs[1].Content)
+}
+
+func TestParseCodexSession_EncryptedAgentMessageWithoutAuthor(t *testing.T) {
+	const encrypted = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"", "/root/worker", "Task received from parent.",
+			encrypted, tsEarlyS1,
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
 	require.Len(t, msgs, 1)
-	assert.Equal(t, RoleAssistant, msgs[0].Role)
-	assert.Equal(t, "I completed the encrypted task.", msgs[0].Content)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t,
+		"[Encrypted agent message: content unavailable]", msgs[0].Content)
+	assert.NotContains(t, msgs[0].Content, "gAAAAA")
+}
+
+// Replay detection digests the ciphertext, not the placeholder: distinct
+// encrypted tasks share identical placeholder text, so a placeholder-based
+// digest would misclassify a genuinely new task after turn_aborted as a
+// replay, while a verbatim re-emission must still be dropped.
+func TestParseCodexSession_EncryptedAgentMessageReplayDetection(t *testing.T) {
+	const encryptedA = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	const encryptedB = "gAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=="
+	aborted := `{"timestamp":"2024-01-01T10:00:03Z","type":"event_msg","payload":{"type":"turn_aborted"}}`
+
+	t.Run("distinct encrypted follow-up after abort is kept", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSubagentSessionMetaJSON(
+				"child", "parent", "/tmp/project", "user", tsEarly,
+			),
+			testjsonl.CodexAgentMessageJSON(
+				"/root", "/root/worker", "Task received from parent.",
+				encryptedA, tsEarlyS1,
+			),
+			aborted,
+			testjsonl.CodexAgentMessageJSON(
+				"/root", "/root/worker", "Follow-up received from parent.",
+				encryptedB, "2024-01-01T10:00:04Z",
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, RoleUser, msgs[0].Role)
+		assert.Equal(t, RoleUser, msgs[1].Role)
+		// Both must be placeholders: if the second token failed Fernet
+		// validation it would surface as plaintext and this test could
+		// pass without exercising replay detection at all.
+		assert.Equal(t,
+			"[Encrypted agent message from /root: content unavailable]",
+			msgs[0].Content)
+		assert.Equal(t, msgs[0].Content, msgs[1].Content)
+		assert.Equal(t, 2, sess.UserMessageCount,
+			"a distinct encrypted task after turn_aborted is a real turn")
+	})
+
+	t.Run("verbatim encrypted re-emission after abort is dropped", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSubagentSessionMetaJSON(
+				"child", "parent", "/tmp/project", "user", tsEarly,
+			),
+			testjsonl.CodexAgentMessageJSON(
+				"/root", "/root/worker", "Task received from parent.",
+				encryptedA, tsEarlyS1,
+			),
+			aborted,
+			testjsonl.CodexAgentMessageJSON(
+				"/root", "/root/worker", "Task received from parent.",
+				encryptedA, "2024-01-01T10:00:04Z",
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, 1, sess.UserMessageCount,
+			"a re-emitted encrypted task after turn_aborted must not double-count")
+	})
+
+	t.Run("mixed follow-up with distinct ciphertext is kept", func(t *testing.T) {
+		const plaintext = "Visible task delivery."
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSubagentSessionMetaJSON(
+				"child", "parent", "/tmp/project", "user", tsEarly,
+			),
+			testjsonl.CodexMixedAgentMessageJSON(
+				"/root", "/root/worker", plaintext, encryptedA, tsEarlyS1,
+			),
+			aborted,
+			testjsonl.CodexMixedAgentMessageJSON(
+				"/root", "/root/worker", plaintext, encryptedB,
+				"2024-01-01T10:00:04Z",
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, plaintext, msgs[0].Content)
+		assert.Equal(t, plaintext, msgs[1].Content)
+		assert.NotContains(t, msgs[0].Content, "gAAAAA")
+		assert.NotContains(t, msgs[1].Content, "gAAAAA")
+		assert.Equal(t, 2, sess.UserMessageCount,
+			"distinct encrypted delivery metadata identifies a real turn")
+	})
+
+	t.Run("verbatim mixed re-emission after abort is dropped", func(t *testing.T) {
+		const plaintext = "Visible task delivery."
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSubagentSessionMetaJSON(
+				"child", "parent", "/tmp/project", "user", tsEarly,
+			),
+			testjsonl.CodexMixedAgentMessageJSON(
+				"/root", "/root/worker", plaintext, encryptedA, tsEarlyS1,
+			),
+			aborted,
+			testjsonl.CodexMixedAgentMessageJSON(
+				"/root", "/root/worker", plaintext, encryptedA,
+				"2024-01-01T10:00:04Z",
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, plaintext, msgs[0].Content)
+		assert.Equal(t, 1, sess.UserMessageCount,
+			"a verbatim mixed delivery must not double-count")
+	})
 }
 
 func TestParseCodexSession_FernetPrefixPlaintextRemainsVisible(t *testing.T) {
@@ -290,6 +435,217 @@ func TestParseCodexSession_FernetPrefixPlaintextRemainsVisible(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Equal(t, prompt, msgs[0].Content)
+}
+
+func TestParseCodexSession_EncryptedCollabToolArgsStayOutOfTranscript(t *testing.T) {
+	const encrypted = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
+	t.Run("spawn_agent encrypted message renders placeholder", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("collab-spawn", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"task_name":  "multiply",
+				"fork_turns": "all",
+				"message":    encrypted,
+			}, tsEarlyS5),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Contains(t, msgs[1].Content, "[Task: multiply]")
+		assert.Contains(t, msgs[1].Content,
+			"[Encrypted message: content unavailable]")
+		assert.NotContains(t, msgs[1].Content, "gAAAAA")
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON,
+			`"message":"[encrypted]"`)
+		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON,
+			`"task_name":"multiply"`)
+		assert.NotContains(t, msgs[1].ToolCalls[0].InputJSON, "gAAAAA")
+	})
+
+	t.Run("spawn_agent plaintext message stays visible", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("collab-spawn-plain", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"task_name": "multiply",
+				"message":   "Compute 17*23 and reply with the product.",
+			}, tsEarlyS5),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Contains(t, msgs[1].Content, "[Task: multiply]")
+		assert.Contains(t, msgs[1].Content,
+			"Compute 17*23 and reply with the product.")
+	})
+
+	t.Run("collaboration top-level summary is redacted", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("collab-summary", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "delegate", tsEarlyS1),
+			testjsonl.CodexFunctionCallJSON(
+				"spawn_agent", "route "+encrypted+" now", tsEarlyS5,
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Equal(t,
+			"[Task: route [encrypted] now]",
+			msgs[1].Content,
+		)
+		assert.NotContains(t, msgs[1].Content, "gAAAAA")
+	})
+
+	for _, tc := range []struct {
+		name     string
+		toolName string
+		args     map[string]any
+		want     string
+	}{
+		{
+			name:     "spawn_agent task_name header is redacted",
+			toolName: "spawn_agent",
+			args: map[string]any{
+				"task_name": encrypted,
+				"message":   "Run the task",
+			},
+			want: "[Task: [encrypted]]\nRun the task",
+		},
+		{
+			name:     "spawn_agent agent_type header is redacted",
+			toolName: "spawn_agent",
+			args: map[string]any{
+				"agent_type": encrypted,
+				"message":    "Run the task",
+			},
+			want: "[Task: [encrypted]]\nRun the task",
+		},
+		{
+			name:     "spawn_agent subagent_type header is redacted",
+			toolName: "spawn_agent",
+			args: map[string]any{
+				"subagent_type": encrypted,
+				"message":       "Run the task",
+			},
+			want: "[Task: [encrypted]]\nRun the task",
+		},
+		{
+			name:     "generic collaboration description header is redacted",
+			toolName: "send_message",
+			args: map[string]any{
+				"description": encrypted,
+				"message":     "Run the task",
+			},
+			want: "[Task: [encrypted]]\n" +
+				`{"description":"[encrypted]","message":"Run the task"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(
+					"collab-header", "/tmp", "user", tsEarly,
+				),
+				testjsonl.CodexMsgJSON("user", "delegate", tsEarlyS1),
+				testjsonl.CodexFunctionCallArgsJSON(
+					tc.toolName, tc.args, tsEarlyS5,
+				),
+			)
+
+			sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+			require.NotNil(t, sess)
+			require.Len(t, msgs, 2)
+			assert.Equal(t, tc.want, msgs[1].Content)
+			assert.NotContains(t, msgs[1].Content, "gAAAAA")
+			require.Len(t, msgs[1].ToolCalls, 1)
+			assert.NotContains(t, msgs[1].ToolCalls[0].InputJSON, "gAAAAA")
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{
+			name:    "spawn_agent embedded encrypted token is redacted",
+			message: "forward this: " + encrypted + " now",
+			want:    "forward this: [encrypted] now",
+		},
+		{
+			name:    "spawn_agent multiple encrypted tokens are redacted",
+			message: encrypted + " " + encrypted,
+			want:    "[encrypted] [encrypted]",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON("collab-spawn-mixed", "/tmp", "user", tsEarly),
+				testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+				testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+					"task_name": "multiply",
+					"message":   tc.message,
+				}, tsEarlyS5),
+			)
+
+			sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+			require.NotNil(t, sess)
+			require.Len(t, msgs, 2)
+			assert.Contains(t, msgs[1].Content, tc.want)
+			assert.NotContains(t, msgs[1].Content, "gAAAAA")
+			require.Len(t, msgs[1].ToolCalls, 1)
+			assert.NotContains(t, msgs[1].ToolCalls[0].InputJSON, "gAAAAA")
+		})
+	}
+
+	t.Run("send_message encrypted arg is redacted from preview", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("collab-send", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "message the child", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("send_message", "call_send", map[string]any{
+				"task_name": "/root/multiply",
+				"message":   encrypted,
+			}, tsEarlyS5),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Contains(t, msgs[1].Content, `"task_name":"/root/multiply"`)
+		assert.Contains(t, msgs[1].Content, `"message":"[encrypted]"`)
+		assert.NotContains(t, msgs[1].Content, "gAAAAA")
+	})
+
+	t.Run("non-collab tool keeps a legitimate token", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("shell-token", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "decrypt this token", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("shell", "call_sh", map[string]any{
+				"command": "decrypt " + encrypted,
+			}, tsEarlyS5),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Contains(t, msgs[1].Content, "$ decrypt "+encrypted,
+			"a token in a shell command is content, not a collab payload")
+		require.Len(t, msgs[1].ToolCalls, 1)
+		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON, encrypted)
+	})
 }
 
 func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
@@ -3075,5 +3431,118 @@ func TestParseCodexSession_TurnAbortedNotCountedAsUser(t *testing.T) {
 	for _, m := range msgs {
 		assert.NotContains(t, m.Content, "<turn_aborted>",
 			"<turn_aborted> synthetic must be filtered from message list")
+	}
+}
+
+// CodexCollabToolsSQL renders the same list that backs IsCodexCollabTool;
+// storage-side redaction scopes are generated from it, so the rendered names
+// must round-trip through the predicate.
+func TestCodexCollabToolsSQLMatchesPredicate(t *testing.T) {
+	sqlList := CodexCollabToolsSQL()
+	require.True(t, strings.HasPrefix(sqlList, "("), "IN-list must be parenthesized: %s", sqlList)
+	require.True(t, strings.HasSuffix(sqlList, ")"), "IN-list must be parenthesized: %s", sqlList)
+	inner := strings.TrimSuffix(strings.TrimPrefix(sqlList, "("), ")")
+	names := strings.Split(inner, ", ")
+	require.NotEmpty(t, names, "IN-list must not be empty")
+	for _, quoted := range names {
+		require.True(t,
+			strings.HasPrefix(quoted, "'") && strings.HasSuffix(quoted, "'"),
+			"IN-list entries must be quoted: %s", quoted)
+		name := strings.Trim(quoted, "'")
+		assert.True(t, IsCodexCollabTool(name),
+			"SQL scope lists %q but the predicate rejects it", name)
+	}
+	assert.False(t, IsCodexCollabTool("shell"),
+		"a non-collab tool must stay outside the redaction scope")
+	assert.False(t, IsCodexCollabTool(""))
+}
+
+func TestCodexStoredToolContentIsProvablyNonCollab(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "bash block",
+			content: "[Bash: decrypt]\n$ decrypt " + fernet,
+			want:    true,
+		},
+		{
+			name:    "collaboration task block",
+			content: "[Task: spawn_agent]\n" + fernet,
+		},
+		{
+			name: "mixed bash and collaboration blocks",
+			content: "[Bash: inspect]\n$ echo ok\n" +
+				"[Task: spawn_agent]\n" + fernet,
+		},
+		{
+			name:    "named collaboration tool block",
+			content: "[Tool: followup_task]\n" + fernet,
+		},
+		{
+			name:    "named non-collaboration tool block",
+			content: "[Tool: fetch_widget]\n" + fernet,
+			want:    true,
+		},
+		{
+			name:    "no encrypted token",
+			content: "[Bash: list]\n$ ls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				CodexStoredToolContentIsProvablyNonCollab(tt.content))
+		})
+	}
+}
+
+func TestCodexStoredToolContentNeedsCollabRedaction(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "collaboration task block",
+			content: "[Task: spawn_agent]\n" + fernet,
+			want:    true,
+		},
+		{
+			name:    "named collaboration tool block",
+			content: "[Tool: followup_task]\n" + fernet,
+			want:    true,
+		},
+		{
+			name:    "non-collaboration block",
+			content: "[Bash: decrypt]\n$ decrypt " + fernet,
+		},
+		{
+			name:    "bare assistant token has no formatted scope",
+			content: fernet,
+		},
+		{
+			name: "mixed blocks find lost collaboration metadata",
+			content: "[Bash: inspect]\n$ echo ok\n" +
+				"[Task: spawn_agent]\n" + fernet,
+			want: true,
+		},
+		{
+			name:    "future ambiguous tool header fails closed",
+			content: "[FutureTool: delegate]\n" + fernet,
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				CodexStoredToolContentNeedsCollabRedaction(tt.content))
+		})
 	}
 }

@@ -464,10 +464,43 @@ func (s *Sync) Push(
 	}
 
 	var pushed []db.Session
-	// Sessions whose individual retry also failed: their PG sessions/messages
-	// rows are stale or absent, so the vector phase must not push their newer
-	// local vectors ahead of them.
+	// Sessions whose individual retry also failed, plus sessions withheld by
+	// Codex payload verification: their PG sessions/messages rows are stale
+	// or absent, so the vector phase must not push their newer local vectors
+	// ahead of them. Withheld sessions do not count as errors — the condition
+	// is permanent until a local repair, so erroring would pin the watermark.
 	var failedSessions map[string]struct{}
+	sessions, prepFailed, prepWithheld := s.prepareSessionsForPush(ctx, sessions)
+	for _, id := range prepFailed {
+		result.Errors++
+		if failedSessions == nil {
+			failedSessions = make(map[string]struct{})
+		}
+		failedSessions[id] = struct{}{}
+	}
+	for _, sess := range prepWithheld {
+		if failedSessions == nil {
+			failedSessions = make(map[string]struct{})
+		}
+		failedSessions[sess.ID] = struct{}{}
+		applied, absent, err := s.pushWithheldCodexCuration(
+			ctx, sess, markerID, legacyMarkerMachines,
+		)
+		if err != nil {
+			log.Printf(
+				"pgsync: applying withheld Codex curation %s: %v",
+				sess.ID, err,
+			)
+			result.Errors++
+			continue
+		}
+		if applied {
+			pushed = append(pushed, sess)
+		}
+		if absent {
+			delete(priorFingerprints, sess.ID)
+		}
+	}
 	const batchSize = 50
 	for i := 0; i < len(sessions); i += batchSize {
 		end := min(i+batchSize, len(sessions))
@@ -590,6 +623,11 @@ func (s *Sync) Push(
 // the zero-valued VectorPushResult would print "Vectors: 0 session(s) pushed".
 // failedSessions names sessions whose session-phase push failed; their vectors
 // are deferred so pgvector data never runs ahead of the sessions/messages rows.
+// Codex sessions still below the redaction watermark are deferred the same
+// way, and directly from local state rather than from this push's prep
+// results: their vector documents embed the withheld message content, and an
+// advanced watermark means later pushes no longer list the session rows at
+// all — the per-push failure set alone would let those vectors through.
 // full bypasses the unchanged-hash skip so a --full push also repairs vector
 // rows whose push state wrongly reports them current. onProgress, when
 // non-nil, receives Phase "vectors" reports as the delta scan advances.
@@ -599,6 +637,22 @@ func (s *Sync) runVectorPushPhase(
 ) (VectorPushResult, error) {
 	if s.vectorSource == nil {
 		return VectorPushResult{Skipped: true}, nil
+	}
+	unverified, err := s.local.UnverifiedCodexSessionIDs(ctx)
+	if err != nil {
+		return VectorPushResult{}, fmt.Errorf("vector push: %w", err)
+	}
+	if len(unverified) > 0 {
+		merged := make(
+			map[string]struct{}, len(failedSessions)+len(unverified),
+		)
+		for id := range failedSessions {
+			merged[id] = struct{}{}
+		}
+		for _, id := range unverified {
+			merged[id] = struct{}{}
+		}
+		failedSessions = merged
 	}
 	res, err := s.pushVectors(ctx, full, failedSessions, onProgress)
 	if err != nil {
@@ -1023,6 +1077,154 @@ func (s *Sync) pushBatch(
 		ctx, batch, full, markerID, legacyMarkerMachines,
 		sessionUsageFingerprints, pushed, false,
 	)
+}
+
+// prepareSessionsForPush verifies legacy Codex sessions once per push run.
+// Preparation loads the session's full transcript, so running it inside the
+// batch attempts would repeat identical reads on every preload retry and
+// per-session fallback. Sessions the verification cannot certify are
+// withheld: the condition persists until the transcript is repaired or
+// reparsed, so counting it as an error would pin the push watermark and
+// skip identity publication on every future push. Transient read failures
+// are returned separately so the caller counts them as errors and the pinned
+// watermark retries them. Successful certification is persisted locally so
+// the vector phase, including later vector-only pushes after the session
+// watermark advances, can distinguish verified legacy rows from withheld
+// ones. Both failure lists must be kept out of the vector phase so newer local
+// vectors never run ahead of (or publish content withheld from) the session
+// rows.
+func (s *Sync) prepareSessionsForPush(
+	ctx context.Context, sessions []db.Session,
+) (prepared []db.Session, failed []string, withheld []db.Session) {
+	prepared = make([]db.Session, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess.Agent == "codex" &&
+			sess.DataVersion < db.ExpectedSharedStorageDataVersion(sess) {
+			messages, err := s.local.GetAllMessages(ctx, sess.ID)
+			if err != nil {
+				log.Printf(
+					"pgsync: reading legacy Codex session %s: %v",
+					sess.ID, err,
+				)
+				failed = append(failed, sess.ID)
+				continue
+			}
+			sess, err = db.PrepareSessionForSharedStorage(sess, messages)
+			if errors.Is(err, db.ErrCodexSessionUnverified) {
+				log.Printf("pgsync: withholding session from push: %v", err)
+				withheld = append(withheld, sess)
+				continue
+			}
+			if err != nil {
+				log.Printf("pgsync: session %s: %v", sess.ID, err)
+				failed = append(failed, sess.ID)
+				continue
+			}
+			if sess.TranscriptRevision == nil {
+				log.Printf(
+					"pgsync: certifying Codex session %s: missing transcript revision",
+					sess.ID,
+				)
+				failed = append(failed, sess.ID)
+				continue
+			}
+			if err := s.local.SetCodexSharedStorageCertification(
+				sess.ID, *sess.TranscriptRevision, sess.FirstMessage,
+			); err != nil {
+				log.Printf(
+					"pgsync: persisting Codex payload certification %s: %v",
+					sess.ID, err,
+				)
+				failed = append(failed, sess.ID)
+				continue
+			}
+		}
+		prepared = append(prepared, sess)
+	}
+	return prepared, failed, withheld
+}
+
+// pushWithheldCodexCuration propagates only the source deletion or restoration
+// state for an unverified Codex session that already exists in the shared
+// store. It never inserts a missing row or copies local transcript content.
+// Returning absent lets the caller discard an obsolete push fingerprint;
+// ownership conflicts remain the responsibility of the owning pusher, like
+// ordinary session updates.
+func (s *Sync) pushWithheldCodexCuration(
+	ctx context.Context,
+	sess db.Session,
+	markerID string,
+	legacyMarkerMachines []string,
+) (applied, absent bool, err error) {
+	var deletedAt *time.Time
+	if sess.DeletedAt != nil {
+		parsed, ok := ParseSQLiteTimestamp(*sess.DeletedAt)
+		if !ok {
+			return false, false, fmt.Errorf(
+				"parsing source deletion timestamp %q", *sess.DeletedAt,
+			)
+		}
+		deletedAt = &parsed
+	}
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return false, false, fmt.Errorf("beginning curation-only push: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingMachine, existingOwnerMarker sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT machine, owner_marker
+		  FROM sessions
+		 WHERE id = $1
+		 FOR UPDATE`, sess.ID,
+	).Scan(&existingMachine, &existingOwnerMarker)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return false, false, fmt.Errorf(
+				"committing missing curation-only push: %w", err,
+			)
+		}
+		return false, true, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf(
+			"checking curation-only session ownership: %w", err,
+		)
+	}
+	if !sameSessionOwner(
+		existingOwnerMarker.String,
+		existingMachine.String,
+		markerID,
+		pushedSessionMachine(sess, s.machine),
+		legacyMarkerMachines,
+	) {
+		log.Printf(
+			"pgsync: session %s: skipping deletion-only update — "+
+				"already owned by machine %q",
+			sess.ID, existingMachine.String,
+		)
+		return false, false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		   SET deleted_at = CASE
+		           WHEN deleted_at IS DISTINCT FROM source_deleted_at
+		               THEN deleted_at
+		           ELSE $2
+		       END,
+		       source_deleted_at = $2,
+		       updated_at = NOW()
+		 WHERE id = $1`, sess.ID, deletedAt,
+	); err != nil {
+		return false, false, fmt.Errorf(
+			"writing curation-only session update: %w", err,
+		)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, false, fmt.Errorf("committing curation-only push: %w", err)
+	}
+	return true, false, nil
 }
 
 func (s *Sync) pushBatchAttempt(
@@ -1670,7 +1872,9 @@ func sessionPushFingerprint(
 		fmt.Sprintf("%d", sess.DuplicatePromptCount),
 		fmt.Sprintf("%d", sess.NoCodeContextCount),
 		fmt.Sprintf("%d", sess.RunawayToolLoopCount),
-		fmt.Sprintf("%d", sess.DataVersion),
+		fmt.Sprintf("%d", db.ExpectedSharedStorageDataVersion(sess)),
+		sess.CodexPayloadCertifiedRevision,
+		fmt.Sprintf("%d", sess.CodexPayloadCertificationVersion),
 		sess.Cwd,
 		sess.GitBranch,
 		sess.SourceSessionID,
@@ -1825,6 +2029,8 @@ func (s *Sync) pushSession(
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
 			is_automated, data_version,
+			codex_payload_certified_revision,
+			codex_payload_certification_version,
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated, termination_status,
@@ -1853,17 +2059,18 @@ func (s *Sync) pushSession(
 				$9, $10, $11, $12, $13, $14,
 				$15, $16, $17, $18,
 			$19, $20, $21, $22,
-			$23, $24, $25, $26, $27, $28, $29,
-			$30, $31,
-			$32, $33, $34, $35,
-			$36, $37, $38, $39,
-			$40,
-			$41, $42,
-			$43,
-			$44, $45, $46, $47,
-			$48, $49,
-				$50, $51, $52, $53, $54, $55, $56, $57, $58, $59,
-				$60, $61,
+			$23, $24,
+			$25, $26, $27, $28, $29, $30, $31,
+			$32, $33,
+			$34, $35, $36, $37,
+			$38, $39, $40, $41,
+			$42,
+			$43, $44,
+			$45,
+			$46, $47, $48, $49,
+			$50, $51,
+			$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
+			$62, $63,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -1900,6 +2107,10 @@ func (s *Sync) pushSession(
 			has_peak_context_tokens = EXCLUDED.has_peak_context_tokens,
 			is_automated = EXCLUDED.is_automated,
 			data_version = EXCLUDED.data_version,
+			codex_payload_certified_revision =
+				EXCLUDED.codex_payload_certified_revision,
+			codex_payload_certification_version =
+				EXCLUDED.codex_payload_certification_version,
 			cwd = EXCLUDED.cwd,
 			git_branch = EXCLUDED.git_branch,
 			source_session_id = EXCLUDED.source_session_id,
@@ -1944,7 +2155,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-					SELECT jsonb_array_elements_text($62::jsonb)
+					SELECT jsonb_array_elements_text($64::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1974,6 +2185,10 @@ func (s *Sync) pushSession(
 			OR sessions.has_peak_context_tokens IS DISTINCT FROM EXCLUDED.has_peak_context_tokens
 			OR sessions.is_automated IS DISTINCT FROM EXCLUDED.is_automated
 			OR sessions.data_version IS DISTINCT FROM EXCLUDED.data_version
+			OR sessions.codex_payload_certified_revision IS DISTINCT FROM
+				EXCLUDED.codex_payload_certified_revision
+			OR sessions.codex_payload_certification_version IS DISTINCT FROM
+				EXCLUDED.codex_payload_certification_version
 			OR sessions.cwd IS DISTINCT FROM EXCLUDED.cwd
 			OR sessions.git_branch IS DISTINCT FROM EXCLUDED.git_branch
 			OR sessions.source_session_id IS DISTINCT FROM EXCLUDED.source_session_id
@@ -2027,6 +2242,8 @@ func (s *Sync) pushSession(
 		sess.TotalOutputTokens, sess.PeakContextTokens,
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens,
 		isAutomated, sess.DataVersion,
+		sess.CodexPayloadCertifiedRevision,
+		sess.CodexPayloadCertificationVersion,
 		sanitizePG(sess.Cwd), sanitizePG(sess.GitBranch),
 		sanitizePG(sess.SourceSessionID),
 		sanitizePG(sess.SourceVersion),

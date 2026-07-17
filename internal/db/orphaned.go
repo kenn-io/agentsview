@@ -8,6 +8,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type sqlContextExecer interface {
@@ -761,6 +763,8 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"context_pressure_max", "health_score",
 		"health_grade", "has_tool_calls",
 		"has_context_data", "data_version",
+		"codex_payload_certified_revision",
+		"codex_payload_certification_version",
 		"quality_signal_version", "short_prompt_count",
 		"unstructured_start",
 		"missing_success_criteria_count",
@@ -1107,9 +1111,26 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 // Bump the relevant constant to the then-current dataVersion if
 // SanitizeUTF8 ever gains rules that must apply to already-stored
 // rows.
+// CodexRedactionDataVersion is the watermark for encrypted Codex
+// multi-agent payloads: dataVersion 69 redacts Fernet tokens from formatted
+// message content, collaboration headers, and tool_calls.input_json at ingest.
+// It runs this copy-time pass over preserved orphaned/trashed rows during the
+// same resync, then certifies every parser-owned surface without trusting
+// relationship, cached tool-use, or tool-call metadata. Version 64 briefly
+// shipped ingest redaction without the copy scrub, versions 65-66 are unrelated
+// Claude reparse bumps, version 67 added Antigravity parent links, and version
+// 68 added Hermes skill metadata without this copy repair. The watermark sits
+// above them so older sources are repaired instead of skipped.
+//
+// Exported as the single source for the PostgreSQL and DuckDB mirror
+// guards; their package constants alias this one so the watermark cannot
+// drift between backends.
+const CodexRedactionDataVersion = 69
+
 const (
 	sanitizedSourceDataVersion      = 58
 	sanitizedInputSourceDataVersion = 59
+	redactedCodexSourceDataVersion  = CodexRedactionDataVersion
 )
 
 // copiedSourceDataVersion reads the attached old_db's data version.
@@ -1135,6 +1156,16 @@ func sanitizeCopiedSessionContent(
 	// Each pass runs only when the source predates the version at
 	// which ingest started sanitizing that field, so a v58 source
 	// upgrading to v59 pays only the single-column input pass.
+	if sourceVersion < redactedCodexSourceDataVersion {
+		if err := redactCopiedCodexEncryptedContent(
+			ctx, tx, tempIDsTable,
+		); err != nil {
+			return err
+		}
+		if err := certifyCopiedCodexSessions(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+	}
 	if sourceVersion < sanitizedInputSourceDataVersion {
 		if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
 			return err
@@ -1153,9 +1184,477 @@ func sanitizeCopiedSessionContent(
 }
 
 type copiedTextUpdate struct {
-	id      int64
-	content string
-	length  int
+	id        int64
+	sessionID string
+	content   string
+	length    int
+}
+
+// certifyCopiedCodexSessions records a content-bound payload certification for
+// copied Codex sessions, but only for what this resync can vouch for. Sessions
+// with no Fernet-looking content are certified outright. Sessions that still
+// carry one are certified only when every applicable redactor treats the
+// remaining content as a fixpoint. Deliberately preserved literals qualify,
+// while surfaces the scoped scrub never examined (a lost collab tool_calls
+// row, a child never linked to its parent) do not. Parser data_version remains the
+// copied source value because this repair does not replay unrelated historical
+// parser changes.
+func certifyCopiedCodexSessions(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE main.sessions
+		SET codex_payload_certified_revision = transcript_revision,
+		    codex_payload_certification_version = ?
+		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND agent = 'codex'
+		  AND data_version < ?
+		  AND COALESCE(first_message, '') NOT LIKE '%gAAAAA%'
+		  AND NOT EXISTS (
+			SELECT 1 FROM main.messages m
+			WHERE m.session_id = main.sessions.id
+			  AND m.content LIKE '%gAAAAA%'
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM main.tool_calls tc
+			WHERE tc.session_id = main.sessions.id
+			  AND tc.input_json LIKE '%gAAAAA%'
+		  )`,
+		redactedCodexSourceDataVersion, redactedCodexSourceDataVersion,
+	); err != nil {
+		return fmt.Errorf("certifying copied Codex payloads: %w", err)
+	}
+	certified, err := certifiedCopiedCodexSessionIDs(ctx, tx, tempIDsTable)
+	if err != nil {
+		return err
+	}
+	for _, sessionID := range certified {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET codex_payload_certified_revision = transcript_revision,
+			    codex_payload_certification_version = ?
+			WHERE id = ? AND data_version < ?`,
+			redactedCodexSourceDataVersion, sessionID,
+			redactedCodexSourceDataVersion,
+		); err != nil {
+			return fmt.Errorf(
+				"certifying preserved Codex session %s: %w", sessionID, err,
+			)
+		}
+	}
+	return nil
+}
+
+// certifiedCopiedCodexSessionIDs inspects copied Codex sessions that still
+// contain Fernet-looking content and returns the ones every redactor leaves
+// unchanged. The checks intentionally ignore the scrub's scope filters:
+// content that any redactor would rewrite is a payload nothing examined, so
+// the session must not be certified even though the scoped passes skipped it.
+func certifiedCopiedCodexSessionIDs(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) ([]string, error) {
+	suspicious := make(map[string]bool)
+	rows, err := tx.QueryContext(ctx, `
+		SELECT s.id, COALESCE(s.first_message, '')
+		FROM main.sessions s
+		WHERE s.id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND s.agent = 'codex'
+		  AND s.data_version < ?
+		  AND (s.first_message LIKE '%gAAAAA%'
+		    OR EXISTS (
+			SELECT 1 FROM main.messages m
+			WHERE m.session_id = s.id AND m.content LIKE '%gAAAAA%'
+		    )
+		    OR EXISTS (
+			SELECT 1 FROM main.tool_calls tc
+			WHERE tc.session_id = s.id
+			  AND tc.input_json LIKE '%gAAAAA%'
+		    ))`,
+		redactedCodexSourceDataVersion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying copied codex token sessions: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id, preview string
+		if err := rows.Scan(&id, &preview); err != nil {
+			return nil, fmt.Errorf("scanning copied codex token session: %w", err)
+		}
+		ids = append(ids, id)
+		suspicious[id] = codexPreviewUnverified(preview)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating copied codex token sessions: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	// Each surface is judged by the redactor that owns it via
+	// codexMessageUnverified, without the scrub's scope filters. Collab
+	// tool inputs are already a fixpoint of their scrub, and a token in a
+	// non-collab tool's input is content by the same policy the scrub
+	// applies.
+	msgRows, err := tx.QueryContext(ctx, `
+			SELECT m.session_id, m.content, m.role, m.has_tool_use,
+			       EXISTS (
+			           SELECT 1 FROM main.tool_calls tc
+			            WHERE tc.session_id = m.session_id
+			              AND tc.message_id = m.id
+			              AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
+			       )
+			FROM main.messages m
+		WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND m.content LIKE '%gAAAAA%'`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying copied codex token messages: %w", err)
+	}
+	defer msgRows.Close()
+	for msgRows.Next() {
+		var sessionID, content, role string
+		var hasToolUse, hasCollabTool bool
+		if err := msgRows.Scan(
+			&sessionID, &content, &role, &hasToolUse,
+			&hasCollabTool,
+		); err != nil {
+			return nil, fmt.Errorf("scanning copied codex token message: %w", err)
+		}
+		flagged, tracked := suspicious[sessionID]
+		if !tracked || flagged {
+			continue
+		}
+		suspicious[sessionID] = codexMessageUnverified(
+			role, hasToolUse, hasCollabTool, content,
+		)
+	}
+	if err := msgRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating copied codex token messages: %w", err)
+	}
+	var certified []string
+	for _, id := range ids {
+		if !suspicious[id] {
+			certified = append(certified, id)
+		}
+	}
+	return certified, nil
+}
+
+// redactCopiedCodexEncryptedContent scrubs server-side-encrypted Codex
+// multi-agent payloads from copied rows whose source predates ingest
+// redaction (dataVersion 64). These rows have no source file to re-parse,
+// so the stored ciphertext would otherwise survive every future resync.
+// The LIKE prefilter keeps the pass proportional to affected rows.
+func redactCopiedCodexEncryptedContent(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		// Encrypted collab payloads only ever reached transcript text
+		// through formatted collab tool calls, so the scrub is limited to
+		// those rows; a user-authored message or another tool's
+		// arguments quoting a Fernet token must survive.
+		`SELECT m.id, m.session_id, m.content, m.content_length
+		 FROM main.messages m
+		 JOIN main.sessions s ON s.id = m.session_id
+		 WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND s.agent = 'codex'
+		   AND m.content LIKE '%gAAAAA%'
+		   AND EXISTS (
+			SELECT 1 FROM main.tool_calls tc
+			WHERE tc.message_id = m.id
+			  AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
+		   )`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied codex messages: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedTextUpdate
+	for rows.Next() {
+		var row copiedTextUpdate
+		var storedLength int
+		if err := rows.Scan(
+			&row.id, &row.sessionID, &row.content, &storedLength,
+		); err != nil {
+			return fmt.Errorf("scanning copied codex message: %w", err)
+		}
+		redacted := parser.RedactCodexStoredToolContent(row.content)
+		if redacted == row.content {
+			continue
+		}
+		// Signed delta: "[encrypted]" can be longer than a minimal
+		// clipped tail, so the length must grow as well as shrink to
+		// keep content_length consistent with the stored bytes.
+		row.length = max(storedLength+len(redacted)-len(row.content), 0)
+		row.content = redacted
+		updates = append(updates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied codex messages: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.messages
+			 SET content = ?, content_length = ?
+			 WHERE id = ?`,
+			row.content, row.length, row.id,
+		); err != nil {
+			return fmt.Errorf(
+				"updating copied codex message %d: %w", row.id, err,
+			)
+		}
+	}
+	affectedSessionIDs := make(map[string]struct{})
+	for _, row := range updates {
+		affectedSessionIDs[row.sessionID] = struct{}{}
+	}
+	if err := redactCopiedCodexToolCallInputs(
+		ctx, tx, tempIDsTable, affectedSessionIDs,
+	); err != nil {
+		return err
+	}
+	if err := redactCopiedCodexSubagentMessages(
+		ctx, tx, tempIDsTable, affectedSessionIDs,
+	); err != nil {
+		return err
+	}
+	if err := redactCopiedCodexFirstMessages(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+	return invalidateCopiedCodexDerivedData(ctx, tx, affectedSessionIDs)
+}
+
+// redactCopiedCodexSubagentMessages repairs encrypted inbound agent turns
+// written before dataVersion 63. Unlike root user messages, user-role content
+// in a Codex subagent is an inter-agent delivery, so this scope can safely
+// remove a complete Fernet payload without rewriting a user's quoted token.
+func redactCopiedCodexSubagentMessages(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+	affectedSessionIDs map[string]struct{},
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT m.id, m.session_id, m.content, m.content_length
+		 FROM main.messages m
+		 JOIN main.sessions s ON s.id = m.session_id
+		 WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND s.agent = 'codex'
+		   AND s.relationship_type = 'subagent'
+		   AND m.role = 'user'
+		   AND m.content LIKE '%gAAAAA%'`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied codex subagent messages: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedTextUpdate
+	for rows.Next() {
+		var row copiedTextUpdate
+		var storedLength int
+		if err := rows.Scan(
+			&row.id, &row.sessionID, &row.content, &storedLength,
+		); err != nil {
+			return fmt.Errorf("scanning copied codex subagent message: %w", err)
+		}
+		redacted := parser.RedactCodexStoredSubagentMessage(row.content)
+		if redacted == row.content {
+			continue
+		}
+		row.length = max(storedLength+len(redacted)-len(row.content), 0)
+		row.content = redacted
+		updates = append(updates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied codex subagent messages: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.messages SET content = ?, content_length = ? WHERE id = ?`,
+			row.content, row.length, row.id,
+		); err != nil {
+			return fmt.Errorf(
+				"updating copied codex subagent message %d: %w", row.id, err,
+			)
+		}
+		affectedSessionIDs[row.sessionID] = struct{}{}
+	}
+	return nil
+}
+
+// redactCopiedCodexFirstMessages scrubs ciphertext from copied
+// first_message previews. Genuinely empty previews are left alone: an
+// orphan row gives no way to tell an encrypted-then-dropped prompt from
+// a session that simply had no user message, so synthesizing a
+// placeholder here would fabricate history.
+func redactCopiedCodexFirstMessages(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		// Only subagent children can have ciphertext previews: their
+		// first message is the parent's inter-agent task delivery. A
+		// root session's preview is the user's own typed prompt, so a
+		// quoted Fernet token there is content, not an artifact.
+		`SELECT id, first_message
+		 FROM main.sessions
+		 WHERE id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND agent = 'codex'
+		   AND relationship_type = 'subagent'
+		   AND first_message LIKE '%gAAAAA%'`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied codex previews: %w", err)
+	}
+	defer rows.Close()
+
+	type previewUpdate struct {
+		id      string
+		content string
+	}
+	var updates []previewUpdate
+	for rows.Next() {
+		var id string
+		var preview sql.NullString
+		if err := rows.Scan(&id, &preview); err != nil {
+			return fmt.Errorf("scanning copied codex preview: %w", err)
+		}
+		if !preview.Valid {
+			continue
+		}
+		redacted := parser.RedactCodexStoredSubagentPreview(preview.String)
+		if redacted == preview.String {
+			continue
+		}
+		updates = append(updates, previewUpdate{id: id, content: redacted})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied codex previews: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.sessions
+			 SET first_message = ?
+			 WHERE id = ?`,
+			row.content, row.id,
+		); err != nil {
+			return fmt.Errorf(
+				"updating copied codex preview %s: %w", row.id, err,
+			)
+		}
+	}
+	return nil
+}
+
+func redactCopiedCodexToolCallInputs(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+	affectedSessionIDs map[string]struct{},
+) error {
+	rows, err := tx.QueryContext(ctx,
+		// Collab tool-name scope only: a legitimate Fernet token in
+		// another tool's arguments is content, not an encrypted collab
+		// payload.
+		`SELECT tc.id, tc.session_id, tc.input_json
+		 FROM main.tool_calls tc
+		 JOIN main.sessions s ON s.id = tc.session_id
+		 WHERE tc.session_id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND s.agent = 'codex'
+		   AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
+		   AND tc.input_json LIKE '%gAAAAA%'`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied codex tool inputs: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedNullableTextUpdate
+	for rows.Next() {
+		var row copiedNullableTextUpdate
+		var content sql.NullString
+		if err := rows.Scan(&row.id, &row.sessionID, &content); err != nil {
+			return fmt.Errorf("scanning copied codex tool input: %w", err)
+		}
+		if !content.Valid {
+			continue
+		}
+		redacted := parser.RedactCodexEncryptedTokens(content.String)
+		if redacted == content.String {
+			continue
+		}
+		row.content = redacted
+		updates = append(updates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied codex tool inputs: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.tool_calls
+			 SET input_json = ?
+			 WHERE id = ?`,
+			row.content, row.id,
+		); err != nil {
+			return fmt.Errorf(
+				"updating copied codex tool input %d: %w", row.id, err,
+			)
+		}
+		affectedSessionIDs[row.sessionID] = struct{}{}
+	}
+	return nil
+}
+
+func invalidateCopiedCodexDerivedData(
+	ctx context.Context,
+	tx *sql.Tx,
+	affectedSessionIDs map[string]struct{},
+) error {
+	for sessionID := range affectedSessionIDs {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM main.secret_findings WHERE session_id = ?`,
+			sessionID,
+		); err != nil {
+			return fmt.Errorf(
+				"deleting copied Codex secret findings for %s: %w",
+				sessionID, err,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET quality_signal_version = 0,
+			    health_score = NULL,
+			    health_grade = NULL,
+			    short_prompt_count = 0,
+			    unstructured_start = 0,
+			    missing_success_criteria_count = 0,
+			    missing_verification_count = 0,
+			    duplicate_prompt_count = 0,
+			    no_code_context_count = 0,
+			    runaway_tool_loop_count = 0,
+			    secret_leak_count = 0,
+			    secrets_rules_version = ''
+			WHERE id = ?`, sessionID); err != nil {
+			return fmt.Errorf(
+				"invalidating copied Codex derived data for %s: %w",
+				sessionID, err,
+			)
+		}
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sanitizeCopiedMessageContent(
@@ -1207,9 +1706,10 @@ func sanitizeCopiedMessageContent(
 }
 
 type copiedNullableTextUpdate struct {
-	id      int64
-	content any
-	length  any
+	id        int64
+	sessionID string
+	content   any
+	length    any
 }
 
 func sanitizeCopiedToolCallInputs(

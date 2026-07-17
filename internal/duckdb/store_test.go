@@ -81,6 +81,14 @@ func (sessionVersionProbeConn) QueryContext(
 	if !strings.Contains(sqlText, "FROM sessions WHERE id") {
 		return nil, fmt.Errorf("unexpected remote query: %s", sqlText)
 	}
+	if !strings.Contains(sqlText, fmt.Sprintf(
+		"data_version < %d", codexEncryptedPayloadDataVersion,
+	)) {
+		return nil, fmt.Errorf(
+			"session version read shipped without the in-statement codex guard: %s",
+			sqlText,
+		)
+	}
 	return &sessionVersionProbeRows{
 		columns: []string{
 			"message_count", "file_mtime", "file_hash", "updated_at",

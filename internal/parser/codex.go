@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
@@ -57,22 +58,26 @@ type codexSessionIndexEntry struct {
 // JSONL session file line by line.
 type codexSessionBuilder struct {
 	codexCursorState
-	messages             []ParsedMessage
-	firstMessage         string
-	startedAt            time.Time
-	endedAt              time.Time
-	sessionID            string
-	parentSessionID      string
-	relationshipType     RelationshipType
-	project              string
-	ordinal              int
-	callNames            map[string]string
-	callRefs             map[string]codexToolCallRef
-	agentSpawnCalls      map[string]string
-	agentWaitCalls       map[string]string
-	pendingAgentEvents   map[string][]codexPendingEvent
-	orphanNotificationIx map[string]int
-	unattachedTokenUsage bool
+	messages     []ParsedMessage
+	firstMessage string
+	// firstMessagePlaceholder marks a firstMessage that stands in for an
+	// encrypted inter-agent task, so title derivation can still prefer
+	// the agent path over the placeholder text.
+	firstMessagePlaceholder bool
+	startedAt               time.Time
+	endedAt                 time.Time
+	sessionID               string
+	parentSessionID         string
+	relationshipType        RelationshipType
+	project                 string
+	ordinal                 int
+	callNames               map[string]string
+	callRefs                map[string]codexToolCallRef
+	agentSpawnCalls         map[string]string
+	agentWaitCalls          map[string]string
+	pendingAgentEvents      map[string][]codexPendingEvent
+	orphanNotificationIx    map[string]int
+	unattachedTokenUsage    bool
 }
 
 // codexForkGate drops the replayed parent history at the top of a
@@ -347,15 +352,16 @@ func (b *codexSessionBuilder) handleResponseItem(
 func (b *codexSessionBuilder) handleAgentMessage(
 	payload gjson.Result, ts time.Time,
 ) {
-	content := extractCodexInboundAgentMessage(payload, b.agentPath)
-	if strings.TrimSpace(content) == "" {
+	msg := extractCodexInboundAgentMessage(payload, b.agentPath)
+	if strings.TrimSpace(msg.content) == "" {
 		return
 	}
-	first, replay := b.observeUserPrompt(content)
+	first, replay := b.observeUserPrompt(msg.dedup)
 	if first {
 		b.firstMessage = truncate(
-			strings.ReplaceAll(content, "\n", " "), 300,
+			strings.ReplaceAll(msg.content, "\n", " "), 300,
 		)
+		b.firstMessagePlaceholder = msg.placeholder
 	}
 	if replay {
 		return
@@ -363,9 +369,9 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:       b.ordinal,
 		Role:          RoleUser,
-		Content:       content,
+		Content:       msg.content,
 		Timestamp:     ts,
-		ContentLength: len(content),
+		ContentLength: len(msg.content),
 		Model:         b.model,
 	})
 	b.ordinal++
@@ -491,7 +497,15 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 
 	content := formatCodexFunctionCall(name, payload)
+	// Redact before storing: InputJSON feeds the transcript UI, markdown
+	// export, and resume rendering, which would otherwise re-expose
+	// encrypted collab payloads that the formatted content filters out.
+	// Scoped to collab tools so a legitimate Fernet token in another
+	// tool's arguments is preserved.
 	inputJSON := extractCodexInputJSON(payload)
+	if IsCodexCollabTool(name) {
+		inputJSON = RedactCodexEncryptedTokens(inputJSON)
+	}
 	skillName := inferCodexSkillNameWithBase(name, inputJSON, b.cwd)
 	waitAgentIDs := []string(nil)
 	if isCodexWaitAgentCall(name) && callID != "" {
@@ -814,13 +828,21 @@ func formatCodexFunctionCall(
 		return formatCodexSpawnAgentCall(summary, args, rawArgs)
 	}
 
+	argPreview := codexArgPreview
+	if IsCodexCollabTool(name) {
+		argPreview = codexCollabArgPreview
+	}
+
 	category := NormalizeToolCategory(name)
 	if category == "Other" {
 		header := formatToolHeader("Tool", name)
 		if summary != "" {
+			if IsCodexCollabTool(name) {
+				summary = RedactCodexEncryptedTokens(summary)
+			}
 			return header + "\n" + summary
 		}
-		if preview := codexArgPreview(args, rawArgs); preview != "" {
+		if preview := argPreview(args, rawArgs); preview != "" {
 			return header + "\n" + preview
 		}
 		return header
@@ -829,7 +851,10 @@ func formatCodexFunctionCall(
 	detail := firstNonEmpty(summary,
 		codexCategoryDetail(category, args))
 	header := formatToolHeader(category, detail)
-	if preview := codexArgPreview(args, rawArgs); preview != "" {
+	if IsCodexCollabTool(name) {
+		header = formatCodexCollabToolHeader(category, detail)
+	}
+	if preview := argPreview(args, rawArgs); preview != "" {
 		return header + "\n" + preview
 	}
 	return header
@@ -1002,21 +1027,25 @@ func formatCodexSpawnAgentCall(
 		summary = firstNonEmpty(
 			codexArgValue(args, "agent_type"),
 			codexArgValue(args, "subagent_type"),
+			codexArgValue(args, "task_name"),
 			"spawn_agent",
 		)
 	}
-
-	header := formatToolHeader("Task", summary)
+	header := formatCodexCollabToolHeader("Task", summary)
 	prompt := firstNonEmpty(
 		codexArgValue(args, "description"),
 		codexArgValue(args, "message"),
 		codexArgValue(args, "prompt"),
 	)
 	if prompt != "" {
+		if isCodexEncryptedToolContent(prompt) {
+			return header + "\n[Encrypted message: content unavailable]"
+		}
+		prompt = RedactCodexEncryptedTokens(prompt)
 		firstLine, _, _ := strings.Cut(prompt, "\n")
 		return header + "\n" + truncate(firstLine, 220)
 	}
-	if preview := codexArgPreview(args, rawArgs); preview != "" {
+	if preview := codexCollabArgPreview(args, rawArgs); preview != "" {
 		return header + "\n" + preview
 	}
 	return header
@@ -1146,14 +1175,328 @@ func codexArgPreview(
 	return ""
 }
 
+// codexCollabArgPreview is codexArgPreview for collab tools: encrypted
+// payloads are redacted before the preview is truncated, since a
+// clipped token would no longer validate and would leak a ciphertext
+// prefix.
+func codexCollabArgPreview(
+	args gjson.Result, rawArgs string,
+) string {
+	if rawArgs == "" && args.Exists() {
+		rawArgs = args.Raw
+	}
+	return codexArgPreview(
+		gjson.Result{}, RedactCodexEncryptedTokens(rawArgs),
+	)
+}
+
+// codexCollabTools is the canonical list of Codex multi-agent
+// collaboration tools whose message arguments the Responses backend
+// encrypts (openai/codex#26210). IsCodexCollabTool and every SQL IN-list
+// that scopes redaction or repair derive from this slice
+// (CodexCollabToolsSQL); do not restate the names elsewhere.
+var codexCollabTools = []string{"spawn_agent", "send_message", "followup_task"}
+
+// IsCodexCollabTool reports whether name is one of the Codex multi-agent
+// collaboration tools whose message arguments the Responses backend
+// encrypts (openai/codex#26210). Redaction is scoped to these tools so a
+// legitimate Fernet token in any other tool's arguments is preserved.
+// Exported for the resync copy path, which applies the same scope.
+func IsCodexCollabTool(name string) bool {
+	return slices.Contains(codexCollabTools, name)
+}
+
+// CodexCollabToolsSQL renders the collab tool list as a SQL IN-list, e.g.
+// ('spawn_agent', 'send_message', 'followup_task'), so storage-side
+// redaction scopes stay generated from the same source as
+// IsCodexCollabTool. The names are compile-time literals with no quoting
+// hazards.
+func CodexCollabToolsSQL() string {
+	quoted := make([]string, len(codexCollabTools))
+	for i, name := range codexCollabTools {
+		quoted[i] = "'" + name + "'"
+	}
+	return "(" + strings.Join(quoted, ", ") + ")"
+}
+
+// CodexCollabToolHeaderLikePatterns returns SQL LIKE patterns for formatted
+// headers that any canonical collaboration tool can produce. Storage write
+// guards use these patterns when legacy message metadata is incomplete. The
+// returned slice is derived from codexCollabTools so newly categorized tools
+// cannot silently fall outside the guard.
+func CodexCollabToolHeaderLikePatterns() []string {
+	seen := make(map[string]struct{})
+	var patterns []string
+	for _, name := range codexCollabTools {
+		category := NormalizeToolCategory(name)
+		candidates := []string{
+			"[" + category + "]",
+			"[" + category + ": %]",
+		}
+		if category == "Other" {
+			candidates = []string{"[Tool: " + sanitizeToolLabel(name) + "]"}
+		}
+		for _, pattern := range candidates {
+			if _, ok := seen[pattern]; ok {
+				continue
+			}
+			seen[pattern] = struct{}{}
+			patterns = append(patterns, pattern)
+		}
+	}
+	return patterns
+}
+
+// codexFernetTokenPattern over-matches candidates; each hit is verified
+// with isCodexEncryptedToolContent before redaction so Fernet-looking
+// plaintext survives.
+var codexFernetTokenPattern = regexp.MustCompile(
+	`gAAAAA[A-Za-z0-9_-]{60,}={0,2}`,
+)
+
+// codexClippedFernetTailPattern matches a Fernet-looking token cut off by
+// the legacy preview truncation paths. Those paths appended an ellipsis, which
+// is required here as evidence that the token-like plaintext was truncated.
+// A clipped token no longer passes full Fernet validation, so migration code
+// must recognize the parser artifact by its anchored tail shape instead.
+var codexClippedFernetTailPattern = regexp.MustCompile(
+	`gAAAAA[A-Za-z0-9_-]{40,}={0,2}\.\.\.$`,
+)
+
+// codexShortFernetTailPattern handles a token whose clip point fell within
+// 40 characters of its start. The shape is too short to identify on its own,
+// so callers apply it only at the exact legacy truncated-preview length.
+var codexShortFernetTailPattern = regexp.MustCompile(
+	`gAAAAA[A-Za-z0-9_-]*={0,2}\.\.\.$`,
+)
+
+const (
+	// truncate(s, 300) retained 300 runes and appended "..." for session
+	// first_message previews.
+	codexStoredFirstMessageTruncatedRunes = 303
+	// codexArgPreview retained 220 runes and appended "..." on the final
+	// formatted tool-preview line.
+	codexStoredToolPreviewTruncatedRunes = 223
+)
+
+// RedactCodexEncryptedTokens replaces server-side-encrypted multi-agent
+// payloads (opaque Fernet tokens) embedded in a string, such as tool
+// argument previews and stored input JSON. Redaction must run before any
+// truncation: a truncated token no longer validates and would leak a
+// ciphertext prefix. Exported for the resync copy path, which scrubs
+// orphaned Codex rows preserved from archives written before ingest
+// redacted these payloads.
+func RedactCodexEncryptedTokens(s string) string {
+	if !strings.Contains(s, "gAAAAA") {
+		return s
+	}
+	return codexFernetTokenPattern.ReplaceAllStringFunc(
+		s, func(token string) string {
+			if !isCodexEncryptedToolContent(token) {
+				return token
+			}
+			return "[encrypted]"
+		},
+	)
+}
+
+// RedactCodexStoredSubagentMessage scrubs an older parser's inbound encrypted
+// agent turn only when the stored message consists entirely of validated
+// Fernet tokens and whitespace. Current ingestion classifies encrypted_content
+// blocks one at a time and preserves literal text, so a token quoted inside a
+// sentence must not cause that sentence to be rewritten during migration.
+func RedactCodexStoredSubagentMessage(content string) string {
+	if !strings.Contains(content, "gAAAAA") {
+		return content
+	}
+	found := false
+	remainder := codexFernetTokenPattern.ReplaceAllStringFunc(
+		content, func(token string) string {
+			if !isCodexEncryptedToolContent(token) {
+				return token
+			}
+			found = true
+			return ""
+		},
+	)
+	if !found || strings.TrimSpace(remainder) != "" {
+		return content
+	}
+	return RedactCodexEncryptedTokens(content)
+}
+
+// RedactCodexStoredToolContent scrubs encrypted collab payloads from formatted
+// Codex tool-call content written by older parsers. In addition to complete
+// Fernet values it recognizes tokens clipped by the old 220-rune argument
+// preview. Callers must scope this helper to formatted Codex collab tool rows;
+// its clipped-tail fallback is intentionally not safe for arbitrary user text.
+func RedactCodexStoredToolContent(content string) string {
+	redacted := RedactCodexEncryptedTokens(content)
+	redacted = codexClippedFernetTailPattern.ReplaceAllString(
+		redacted, "[encrypted]",
+	)
+	lastLine := content[strings.LastIndexByte(content, '\n')+1:]
+	if utf8.RuneCountInString(lastLine) == codexStoredToolPreviewTruncatedRunes {
+		redacted = codexShortFernetTailPattern.ReplaceAllString(
+			redacted, "[encrypted]",
+		)
+	}
+	return redacted
+}
+
+// CodexStoredToolContentIsProvablyNonCollab reports whether every encrypted
+// token in stored formatted tool content belongs to a tool block whose header
+// cannot be produced by a Codex collaboration tool. Legacy certification uses
+// this when tool-call rows may be incomplete: a surviving Bash row is not
+// enough to vouch for a separate, lost [Task: ...] collaboration block.
+func CodexStoredToolContentIsProvablyNonCollab(content string) bool {
+	foundEncrypted := false
+	insideNonCollabBlock := false
+	for line := range strings.SplitSeq(content, "\n") {
+		if label, detail, ok := codexStoredToolHeader(line); ok {
+			insideNonCollabBlock = codexToolHeaderIsProvablyNonCollab(
+				label, detail,
+			)
+		}
+		if RedactCodexStoredToolContent(line) == line {
+			continue
+		}
+		foundEncrypted = true
+		if !insideNonCollabBlock {
+			return false
+		}
+	}
+	return foundEncrypted
+}
+
+// CodexStoredToolContentNeedsCollabRedaction reports whether formatted stored
+// content contains an encrypted token in a block whose header could have been
+// produced by a collaboration tool. Unlike
+// CodexStoredToolContentIsProvablyNonCollab, a bare token with no formatted
+// tool header is not enough: this predicate exists to recover collaboration
+// scope when both has_tool_use and the tool_calls row are missing.
+func CodexStoredToolContentNeedsCollabRedaction(content string) bool {
+	insideFormattedBlock := false
+	insideNonCollabBlock := false
+	for line := range strings.SplitSeq(content, "\n") {
+		if label, detail, ok := codexStoredToolHeader(line); ok {
+			insideFormattedBlock = true
+			insideNonCollabBlock = codexToolHeaderIsProvablyNonCollab(
+				label, detail,
+			)
+		}
+		if RedactCodexStoredToolContent(line) != line &&
+			insideFormattedBlock && !insideNonCollabBlock {
+			return true
+		}
+	}
+	return false
+}
+
+func codexStoredToolHeader(line string) (label, detail string, ok bool) {
+	if len(line) < 2 || line[0] != '[' || line[len(line)-1] != ']' {
+		return "", "", false
+	}
+	inner := line[1 : len(line)-1]
+	label, detail, hasDetail := strings.Cut(inner, ": ")
+	if !hasDetail {
+		detail = ""
+	}
+	if label == "" {
+		return "", "", false
+	}
+	return label, detail, true
+}
+
+func codexToolHeaderIsProvablyNonCollab(label, detail string) bool {
+	switch label {
+	case "Read", "Edit", "Write", "Bash", "Grep", "Glob", "Task":
+	case "Tool":
+		if detail == "" {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, name := range codexCollabTools {
+		category := NormalizeToolCategory(name)
+		if category == "Other" {
+			if label == "Tool" && detail == sanitizeToolLabel(name) {
+				return false
+			}
+			continue
+		}
+		// A categorized tool's detail is a summary rather than its name, so
+		// matching the label alone is enough to make the block ambiguous.
+		if label == category {
+			return false
+		}
+	}
+	return true
+}
+
+// RedactCodexStoredSubagentPreview scrubs encrypted task deliveries from a
+// copied Codex subagent first_message. Callers must scope it to subagent
+// sessions: a root preview is user-authored and may legitimately quote a
+// Fernet token.
+func RedactCodexStoredSubagentPreview(preview string) string {
+	if !strings.Contains(preview, "gAAAAA") {
+		return preview
+	}
+	candidate := RedactCodexEncryptedTokens(preview)
+	if strings.HasSuffix(preview, "...") {
+		candidate = codexClippedFernetTailPattern.ReplaceAllString(
+			candidate, "[encrypted]",
+		)
+	}
+	if utf8.RuneCountInString(preview) == codexStoredFirstMessageTruncatedRunes {
+		candidate = codexShortFernetTailPattern.ReplaceAllString(
+			candidate, "[encrypted]",
+		)
+	}
+	withoutPlaceholders := strings.ReplaceAll(candidate, "[encrypted]", "")
+	if candidate != preview && strings.TrimSpace(withoutPlaceholders) == "" {
+		return candidate
+	}
+
+	// Preserve complete tokens embedded in literal preview text, while still
+	// retaining the old clipped-tail repair for parser-truncated previews.
+	redacted := preview
+	if strings.HasSuffix(preview, "...") {
+		redacted = codexClippedFernetTailPattern.ReplaceAllString(
+			redacted, "[encrypted]",
+		)
+	}
+	if redacted == preview &&
+		utf8.RuneCountInString(preview) == codexStoredFirstMessageTruncatedRunes {
+		redacted = codexShortFernetTailPattern.ReplaceAllString(
+			redacted, "[encrypted]",
+		)
+	}
+	return redacted
+}
+
 func formatToolHeader(
 	label, detail string,
 ) string {
-	label = sanitizeToolLabel(label)
+	return formatSanitizedToolHeader(
+		sanitizeToolLabel(label), sanitizeToolLabel(detail),
+	)
+}
+
+func formatCodexCollabToolHeader(
+	label, detail string,
+) string {
+	return formatSanitizedToolHeader(
+		sanitizeToolLabel(label),
+		RedactCodexEncryptedTokens(sanitizeToolLabel(detail)),
+	)
+}
+
+func formatSanitizedToolHeader(label, detail string) string {
 	if label == "" {
 		label = "Tool"
 	}
-	detail = sanitizeToolLabel(detail)
 	if detail != "" {
 		return fmt.Sprintf("[%s: %s]", label, detail)
 	}
@@ -1330,26 +1673,80 @@ func extractCodexContent(payload gjson.Result) string {
 	return strings.Join(extractCodexTextBlocks(payload), "\n")
 }
 
+// codexInboundAgentMessage is an inter-agent message addressed to this
+// session's agent. content is the transcript text (a placeholder when the
+// payload is encrypted); dedup is the replay-digest input. It includes every
+// plaintext and ciphertext delivery block so distinct tasks cannot shadow
+// each other in post-abort replay detection, while a verbatim re-emission
+// still matches. Ciphertext is never included in content.
+type codexInboundAgentMessage struct {
+	content     string
+	dedup       string
+	placeholder bool
+}
+
+func codexInboundAgentMessageDedup(texts, ciphertexts []string) string {
+	var dedup strings.Builder
+	writeValues := func(values []string) {
+		dedup.WriteString(strconv.Itoa(len(values)))
+		dedup.WriteByte(';')
+		for _, value := range values {
+			dedup.WriteString(strconv.Itoa(len(value)))
+			dedup.WriteByte(':')
+			dedup.WriteString(value)
+		}
+	}
+	writeValues(texts)
+	writeValues(ciphertexts)
+	return dedup.String()
+}
+
 func extractCodexInboundAgentMessage(
 	payload gjson.Result, agentPath string,
-) string {
+) codexInboundAgentMessage {
 	if agentPath == "" ||
 		strings.TrimSpace(payload.Get("recipient").Str) != agentPath {
-		return ""
+		return codexInboundAgentMessage{}
 	}
-	var texts []string
+	var texts, ciphertexts []string
 	payload.Get("content").ForEach(
 		func(_, block gjson.Result) bool {
 			if block.Get("type").Str == "encrypted_content" {
 				text := block.Get("encrypted_content").Str
-				if text != "" && !isCodexEncryptedToolContent(text) {
-					texts = append(texts, text)
+				if text == "" {
+					return true
 				}
+				if isCodexEncryptedToolContent(text) {
+					ciphertexts = append(ciphertexts, text)
+					return true
+				}
+				texts = append(texts, text)
 			}
 			return true
 		},
 	)
-	return strings.Join(texts, "\n")
+	if len(texts) == 0 && len(ciphertexts) > 0 {
+		// Multi-agent v2 task payloads are encrypted server-side; the
+		// plaintext never exists on this machine, so the turn records
+		// the delivery instead of vanishing from the transcript.
+		content := "[Encrypted agent message: content unavailable]"
+		if author := strings.TrimSpace(payload.Get("author").Str); author != "" {
+			content = fmt.Sprintf(
+				"[Encrypted agent message from %s: content unavailable]",
+				author,
+			)
+		}
+		return codexInboundAgentMessage{
+			content:     content,
+			dedup:       codexInboundAgentMessageDedup(texts, ciphertexts),
+			placeholder: true,
+		}
+	}
+	content := strings.Join(texts, "\n")
+	return codexInboundAgentMessage{
+		content: content,
+		dedup:   codexInboundAgentMessageDedup(texts, ciphertexts),
+	}
 }
 
 // isCodexEncryptedToolContent recognizes the URL-safe base64 envelope used
@@ -1531,7 +1928,8 @@ func (p *codexProvider) parseSessionSnapshot(
 	}
 
 	sessionName := LookupCodexThreadName(path, b.sessionID)
-	if sessionName == "" && b.firstMessage == "" &&
+	if sessionName == "" &&
+		(b.firstMessage == "" || b.firstMessagePlaceholder) &&
 		b.relationshipType == RelSubagent {
 		sessionName = codexAgentPathLeaf(b.agentPath)
 	}
@@ -1859,9 +2257,9 @@ func observeCodexIncrementalUserMessage(
 	payload gjson.Result,
 ) {
 	if payload.Get("type").Str == "agent_message" {
-		content := extractCodexInboundAgentMessage(payload, s.agentPath)
-		if strings.TrimSpace(content) != "" {
-			s.observeUserPrompt(content)
+		msg := extractCodexInboundAgentMessage(payload, s.agentPath)
+		if strings.TrimSpace(msg.content) != "" {
+			s.observeUserPrompt(msg.dedup)
 		}
 		return
 	}

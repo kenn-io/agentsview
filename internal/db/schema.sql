@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     no_code_context_count INTEGER NOT NULL DEFAULT 0,
     runaway_tool_loop_count INTEGER NOT NULL DEFAULT 0,
     data_version INTEGER NOT NULL DEFAULT 0,
+    -- Local-only proof that the message/tool-call content at this exact
+    -- transcript revision passed Codex shared-storage payload verification.
+    -- Kept separate from data_version, which exclusively tracks successful
+    -- parser rewrites.
+    codex_payload_certified_revision TEXT NOT NULL DEFAULT '',
+    codex_payload_certification_version INTEGER NOT NULL DEFAULT 0,
     cwd TEXT NOT NULL DEFAULT '',
     git_branch TEXT NOT NULL DEFAULT '',
     source_session_id TEXT NOT NULL DEFAULT '',
