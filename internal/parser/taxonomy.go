@@ -219,20 +219,22 @@ func NormalizeToolCategory(rawName string) string {
 		return "Task"
 
 	// RooCode / Cline tools
-	case "readfile":
+	case "readFile":
 		return "Read"
-	case "writetofile":
+	case "writeToFile":
 		return "Write"
-	case "insertcontent":
+	case "insertContent":
 		return "Write"
-	case "searchandreplace":
+	case "searchAndReplace":
 		return "Edit"
-	case "applieddiff":
+	case "appliedDiff":
 		return "Edit"
-	case "listfiles":
+	case "listFiles":
 		return "Read"
-	case "searchfiles":
+	case "searchFiles":
 		return "Grep"
+	case "newTask":
+		return "Task"
 	case "search":
 		return "Tool"
 

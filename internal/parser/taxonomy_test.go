@@ -102,6 +102,18 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"todo_read", "Tool"},
 		{"parallel", "Task"},
 
+		// RooCode tools
+		{"readFile", "Read"},
+		{"writeToFile", "Write"},
+		{"insertContent", "Write"},
+		{"searchAndReplace", "Edit"},
+		{"appliedDiff", "Edit"},
+		{"listFiles", "Read"},
+		{"searchFiles", "Grep"},
+		{"newTask", "Task"},
+		{"skill", "Tool"},
+		{"search", "Tool"},
+
 		// Unknown
 		{"view_image", "Other"},
 		{"update_plan", "Other"},
