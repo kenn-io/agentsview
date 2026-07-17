@@ -1150,8 +1150,8 @@ func TestStoreGetSessionUsage_CopilotAICreditsComputed(t *testing.T) {
 	assert.Equal(t, 10.0, u.AICredits, "AICredits")
 }
 
-func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_copilot_reported_credits_test")
+func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_copilot_reported_cost_test")
 
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
@@ -1166,29 +1166,32 @@ func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, ai_credits, occurred_at, dedup_key
+			cost_usd, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
-			 0.10, NULL, '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
+			 NULL, '', '', '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
-			 0.10, 2.75, '2026-03-13T10:02:00Z'::timestamptz, 'segment-2')`)
+			 0.0275, 'exact', 'copilot-reported',
+			 '2026-03-13T10:02:00Z'::timestamptz, 'segment-2')`)
 	require.NoError(t, err)
 
-	usage, err := store.GetSessionUsage(ctx, "copilot:reported", false)
+	usage, err := store.GetSessionUsage(ctx, "copilot:reported", true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	assert.Equal(t, 0.20, usage.CostUSD)
-	assert.Equal(t, 2.75, usage.AICredits)
-	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
+	assert.InDelta(t, 0.0275, usage.CostUSD, 1e-12)
+	assert.InDelta(t, 2.75, usage.AICredits, 1e-12)
+	require.Len(t, usage.Breakdown, 2)
+	assert.NotEqual(t, usage.CostUSD, usage.Breakdown[1].CostUSD)
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-03-12", To: "2026-03-13", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.Equal(t, 2.75, daily.Totals.CopilotAICredits)
-	assert.Equal(t, db.AICreditsSourceReported,
-		daily.Totals.CopilotAICreditsSource)
+	assert.Zero(t, daily.Daily[0].TotalCost)
+	assert.InDelta(t, 0.0275, daily.Daily[1].TotalCost, 1e-12)
+	assert.InDelta(t, 0.0275, daily.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 2.75, daily.Totals.CopilotAICredits, 1e-12)
 }
 
 func TestStoreGetSessionUsage_CopilotNoAICreditsUnpriced(t *testing.T) {

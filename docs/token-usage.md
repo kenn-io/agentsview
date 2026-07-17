@@ -397,30 +397,33 @@ it.
 ### Copilot AI Credits
 
 Copilot CLI `session.shutdown` events can report an authoritative
-`totalNanoAiu`. This value is nanocredits, so AgentsView divides it by `1e9`.
-The total belongs to the session rather than any individual `modelMetrics`
-entry. It is cumulative across shutdowns, including shutdowns emitted after a
-resume or compaction, so AgentsView preserves only the last shutdown's value on
-one stable carrier row. An authoritative final zero also replaces earlier
-values and estimates.
+`totalNanoAiu`. AgentsView converts that cumulative billing amount exactly:
+credits are `totalNanoAiu / 1e9`, and USD cost is `totalNanoAiu / 1e11`.
+The session-level USD value is stored through the normal reported-cost fields,
+on one stable usage-event row. Later shutdowns supersede earlier totals,
+including an authoritative final zero.
 
-When a Copilot session has reported credits, that total replaces the estimate
-derived from token cost. Historical sessions and Copilot-family agents without
-`totalNanoAiu` retain the existing fallback of cost divided by `$0.01`. Mixed
-windows sum reported sessions and estimated sessions without counting both for
-the same session. Credit selection is resolved across all selected days for
-each session, so a reported total on the shutdown day suppresses estimates from
-earlier selected days of that session.
+When the selected data contains this reported session cost, AgentsView
+suppresses every catalog-priced estimate for that session. This prevents
+double counting across models, days, and resumed segments. Historical Copilot
+sessions without `totalNanoAiu`, other Copilot-family agents, and other
+AI-credit-denominated agents retain catalog pricing. The displayed credit
+total remains the generic cost conversion (`cost / $0.01`), so aggregate USD
+cost and displayed Copilot credits always agree.
 
-The reported value is cumulative and cannot be allocated accurately to
-individual days. A window containing the final shutdown therefore receives the
-full session credit total; a window that selects only earlier rows uses the
-cost-based estimate. Model-filtered reports also continue to use estimates
-because the session-level total cannot be allocated accurately across models.
+The cumulative cost is attributed to the final shutdown day. Consequently, a
+date window containing that shutdown receives the full session cost, while a
+window containing only earlier rows can show estimates because the later
+authoritative record is outside the selected data. This limitation is
+unavoidable without allocating a cumulative session total across time.
+
+Model-filtered reports and per-model breakdown costs remain token-price
+estimates because the session-level cost cannot be allocated accurately among
+models. Their sum can therefore differ from the authoritative session or
+aggregate total.
 
 The Usage dashboard shows credits as an optional summary card, and
-`agentsview session usage` prints an `AI Credits` line. API responses expose
-`reported`, `estimated`, or `mixed` as the corresponding credit source.
+`agentsview session usage` prints an `AI Credits` line.
 
 ### Claude Streaming & Codex Token Events
 

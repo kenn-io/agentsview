@@ -9000,7 +9000,6 @@ func toDBUsageEvents(
 			CacheReadInputTokens:     ev.CacheReadInputTokens,
 			ReasoningTokens:          ev.ReasoningTokens,
 			CostUSD:                  ev.CostUSD,
-			AICredits:                ev.AICredits,
 			CostStatus:               ev.CostStatus,
 			CostSource:               ev.CostSource,
 			OccurredAt:               ev.OccurredAt,

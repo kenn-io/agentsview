@@ -168,7 +168,7 @@ func (c *usageProbeConn) QueryContext(
 				"cache_read_input_tokens",
 				"reasoning_tokens",
 				"cost_usd",
-				"ai_credits",
+				"cost_source",
 				"claude_message_id",
 				"claude_request_id",
 				"source_uuid",
@@ -201,7 +201,7 @@ func usageProbeUsageRow(
 		int64(0),
 		int64(0),
 		nil,
-		nil,
+		"",
 		"msg-dup",
 		"req-dup",
 		"",
@@ -313,7 +313,7 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
-	assert.NotContains(t, normalized, "cost_source")
+	assert.Contains(t, normalized, "u.cost_source")
 	assert.Contains(t, normalized, "u.reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
@@ -456,7 +456,7 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
-	assert.NotContains(t, normalized, "cost_source")
+	assert.Contains(t, normalized, "u.cost_source")
 	assert.Contains(t, normalized, "u.reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")

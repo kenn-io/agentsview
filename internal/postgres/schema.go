@@ -137,7 +137,6 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cache_read_input_tokens INT NOT NULL DEFAULT 0,
     reasoning_tokens INT NOT NULL DEFAULT 0,
     cost_usd DOUBLE PRECISION,
-    ai_credits DOUBLE PRECISION,
     cost_status TEXT NOT NULL DEFAULT '',
     cost_source TEXT NOT NULL DEFAULT '',
     occurred_at TIMESTAMPTZ,
@@ -535,11 +534,6 @@ func EnsureSchema(
 			"messages", "claude_request_id",
 			`claude_request_id TEXT NOT NULL DEFAULT ''`,
 			"adding messages.claude_request_id",
-		},
-		{
-			"usage_events", "ai_credits",
-			`ai_credits DOUBLE PRECISION`,
-			"adding usage_events.ai_credits",
 		},
 		{
 			"tool_calls", "call_index",
@@ -1979,7 +1973,7 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT id, ai_credits FROM usage_events LIMIT 0`)
+		`SELECT id FROM usage_events LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"usage_events table missing required columns: %w",

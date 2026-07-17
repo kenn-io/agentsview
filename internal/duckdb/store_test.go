@@ -2617,15 +2617,15 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.InDelta(t, wantCost, entry.CostUSD, 0.000001)
 }
 
-func TestCopilotReportedAICreditsSurviveDuckDBPush(t *testing.T) {
+func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "claude-opus-4-6", InputPerMTok: 10, OutputPerMTok: 15,
 	}}))
-	reportedCredits := 3.5
+	reportedCost := 0.035
 	sess := syncSession(
-		"copilot:duck-reported", "alpha", "reported credits",
+		"copilot:duck-reported", "alpha", "reported cost",
 		"2026-01-18T00:00:00.000Z", 0)
 	sess.Agent = "copilot"
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
@@ -2640,7 +2640,8 @@ func TestCopilotReportedAICreditsSurviveDuckDBPush(t *testing.T) {
 			{
 				Source: "shutdown", Model: "claude-opus-4-6",
 				InputTokens: 1000, OutputTokens: 500,
-				AICredits:  &reportedCredits,
+				CostUSD: &reportedCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
 				OccurredAt: "2026-01-19T00:01:00.000Z",
 				DedupKey:   "shutdown-2",
 			},
@@ -2654,21 +2655,23 @@ func TestCopilotReportedAICreditsSurviveDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
-	usage, err := store.GetSessionUsage(ctx, sess.ID, false)
+	usage, err := store.GetSessionUsage(ctx, sess.ID, true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
+	assert.InDelta(t, reportedCost, usage.CostUSD, 1e-12)
 	assert.InDelta(t, 3.5, usage.AICredits, 1e-12)
-	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
-	assert.InDelta(t, 0.035, usage.CostUSD, 1e-12)
+	require.Len(t, usage.Breakdown, 2)
+	assert.InDelta(t, 0.0175, usage.Breakdown[1].CostUSD, 1e-12)
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-01-18", To: "2026-01-19", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
+	assert.Zero(t, daily.Daily[0].TotalCost)
+	assert.InDelta(t, reportedCost, daily.Daily[1].TotalCost, 1e-12)
+	assert.InDelta(t, reportedCost, daily.Totals.TotalCost, 1e-12)
 	assert.InDelta(t, 3.5, daily.Totals.CopilotAICredits, 1e-12)
-	assert.Equal(t, db.AICreditsSourceReported,
-		daily.Totals.CopilotAICreditsSource)
 }
 
 func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {

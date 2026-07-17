@@ -934,6 +934,38 @@ func TestCurrentDataVersionCopilotReportedCost(t *testing.T) {
 	assert.Equal(t, 69, CurrentDataVersion(),
 		"Copilot reported-cost parsing requires a data version bump")
 }
+
+func TestOpenMarksOnlyCopilotSessionsForReportedCostReparse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentsview.db")
+	d := testDBAtPath(t, path, "seed")
+	insertSession(t, d, "copilot:repair", "proj", func(s *Session) {
+		s.Agent = "copilot"
+		s.DataVersion = CurrentDataVersion()
+	})
+	insertSession(t, d, "claude-repair-control", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.DataVersion = CurrentDataVersion()
+	})
+	require.NoError(t, d.SetSessionDataVersion(
+		"copilot:repair", CurrentDataVersion()))
+	require.NoError(t, d.SetSessionDataVersion(
+		"claude-repair-control", CurrentDataVersion()))
+	_, err := d.getWriter().Exec(
+		"DELETE FROM archive_metadata WHERE key = ?",
+		copilotReportedCostRepairKey,
+	)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err, "reopen database")
+	defer reopened.Close()
+	assert.Equal(t, CurrentDataVersion()-1,
+		reopened.GetSessionDataVersion("copilot:repair"))
+	assert.Equal(t, CurrentDataVersion(),
+		reopened.GetSessionDataVersion("claude-repair-control"))
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
