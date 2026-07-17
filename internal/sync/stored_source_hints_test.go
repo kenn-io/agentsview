@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	gosync "sync"
 	"testing"
 
@@ -127,8 +128,17 @@ func TestOmnigentStoredHintCursorSerializesConcurrentPages(t *testing.T) {
 	var wg gosync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			paths, err := engine.changedPathStoredSourcePaths(parser.AgentOmnigent, root)
-			results <- pageResult{paths: paths, err: err}
+			for {
+				paths, claimed, err := engine.changedPathStoredSourcePaths(
+					parser.AgentOmnigent, root,
+				)
+				if err != nil || claimed {
+					engine.finishOmnigentStoredHintPage(root, err == nil)
+					results <- pageResult{paths: paths, err: err}
+					return
+				}
+				runtime.Gosched()
+			}
 		})
 	}
 	wg.Wait()
@@ -145,6 +155,53 @@ func TestOmnigentStoredHintCursorSerializesConcurrentPages(t *testing.T) {
 		}
 	}
 	assert.Len(t, seen, 2*omnigentStoredHintBatchSize)
+}
+
+func TestOmnigentStoredHintPageRetriesFailureAndDeactivatesAfterCompletion(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	path := filepath.Join(root, "chat.db#member")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "omnigent:member", Agent: string(parser.AgentOmnigent),
+		Project: "fixture", Machine: "local", FilePath: strPtr(path),
+	}))
+	engine := &Engine{db: database}
+
+	first, claimed, err := engine.changedPathStoredSourcePaths(parser.AgentOmnigent, root)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, []string{path}, first)
+	engine.finishOmnigentStoredHintPage(root, false)
+
+	retry, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	assert.Equal(t, first, retry)
+	engine.finishOmnigentStoredHintPage(root, true)
+
+	remaining, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	assert.Empty(t, remaining)
+}
+
+func TestOmnigentStoredHintActivationSurvivesInitialQueryFailure(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	engine := &Engine{db: database}
+	require.NoError(t, database.Close())
+
+	paths, claimed, err := engine.changedPathStoredSourcePaths(parser.AgentOmnigent, root)
+	require.Error(t, err)
+	assert.False(t, claimed)
+	assert.Empty(t, paths)
+
+	key := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(root)
+	engine.omnigentHintMu.Lock()
+	cursor := engine.omnigentHintCursors[key]
+	engine.omnigentHintMu.Unlock()
+	assert.True(t, cursor.active)
+	assert.False(t, cursor.inFlight)
 }
 
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {

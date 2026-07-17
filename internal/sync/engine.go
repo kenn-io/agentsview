@@ -768,9 +768,10 @@ func (e *Engine) classifyProviderChangedPath(
 		}
 		for _, watchRoot := range watchRoots {
 			var storedSourcePaths []string
+			var omnigentHintClaimed bool
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				var err error
-				storedSourcePaths, err = e.changedPathStoredSourcePaths(
+				storedSourcePaths, omnigentHintClaimed, err = e.changedPathStoredSourcePaths(
 					def.Type, watchRoot,
 				)
 				if err != nil {
@@ -789,6 +790,9 @@ func (e *Engine) classifyProviderChangedPath(
 					StoredSourcePaths: storedSourcePaths,
 				},
 			)
+			if omnigentHintClaimed {
+				e.finishOmnigentStoredHintPage(watchRoot, err == nil)
+			}
 			if err != nil {
 				if !errors.Is(err, parser.ErrUnsupportedProviderFeature) {
 					log.Printf(
@@ -844,18 +848,21 @@ func (e *Engine) classifyProviderChangedPath(
 const omnigentStoredHintBatchSize = 32
 
 type omnigentHintCursor struct {
-	after  string
-	active bool
+	after          string
+	nextAfter      string
+	active         bool
+	inFlight       bool
+	completeOnDone bool
 }
 
 func (e *Engine) changedPathStoredSourcePaths(
 	agent parser.AgentType, watchRoot string,
-) ([]string, error) {
+) ([]string, bool, error) {
 	if agent != parser.AgentOmnigent {
-		return e.db.ListStoredSourcePathHints(string(agent), []string{watchRoot})
+		paths, err := e.db.ListStoredSourcePathHints(string(agent), []string{watchRoot})
+		return paths, false, err
 	}
-	paths, _, err := e.nextOmnigentStoredHintPage(watchRoot, true)
-	return paths, err
+	return e.nextOmnigentStoredHintPage(watchRoot, true)
 }
 
 func (e *Engine) nextOmnigentStoredHintPage(
@@ -870,8 +877,9 @@ func (e *Engine) nextOmnigentStoredHintPage(
 	cursor := e.omnigentHintCursors[key]
 	if activate {
 		cursor.active = true
+		e.omnigentHintCursors[key] = cursor
 	}
-	if !cursor.active {
+	if !cursor.active || cursor.inFlight {
 		return nil, false, nil
 	}
 	paths, err := e.db.ListStoredSourcePathHintPage(
@@ -879,19 +887,44 @@ func (e *Engine) nextOmnigentStoredHintPage(
 		omnigentStoredHintBatchSize,
 	)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
-	cursor.after = ""
-	// Once a filesystem event activates reconciliation, periodic passes keep
-	// rotating through the bounded archive pages. This makes progress without
-	// requiring more watcher events and retries a page on a later cycle if its
-	// classification or write failed after the cursor advanced.
-	cursor.active = true
+	if len(paths) == 0 {
+		cursor = omnigentHintCursor{}
+		e.omnigentHintCursors[key] = cursor
+		return nil, false, nil
+	}
+	cursor.inFlight = true
+	cursor.nextAfter = ""
+	cursor.completeOnDone = len(paths) < omnigentStoredHintBatchSize
 	if len(paths) == omnigentStoredHintBatchSize {
-		cursor.after = paths[len(paths)-1]
+		cursor.nextAfter = paths[len(paths)-1]
 	}
 	e.omnigentHintCursors[key] = cursor
-	return paths, cursor.active, nil
+	return paths, true, nil
+}
+
+func (e *Engine) finishOmnigentStoredHintPage(
+	watchRoot string, success bool,
+) {
+	key := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(watchRoot)
+	e.omnigentHintMu.Lock()
+	defer e.omnigentHintMu.Unlock()
+	cursor := e.omnigentHintCursors[key]
+	if !cursor.inFlight {
+		return
+	}
+	if success {
+		cursor.after = cursor.nextAfter
+		if cursor.completeOnDone {
+			cursor.active = false
+			cursor.after = ""
+		}
+	}
+	cursor.inFlight = false
+	cursor.nextAfter = ""
+	cursor.completeOnDone = false
+	e.omnigentHintCursors[key] = cursor
 }
 
 func providerChangedPathWatchRoots(
@@ -3016,7 +3049,7 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 	var sources []parser.SourceRef
 	var failures int
 	for _, watchRoot := range plan.Roots {
-		hints, _, err := e.nextOmnigentStoredHintPage(watchRoot.Path, false)
+		hints, claimed, err := e.nextOmnigentStoredHintPage(watchRoot.Path, false)
 		if err != nil {
 			log.Printf("%s provider reconciliation hints: %v", parser.AgentOmnigent, err)
 			failures++
@@ -3025,6 +3058,7 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 		if len(hints) == 0 {
 			continue
 		}
+		classified := false
 		for _, include := range watchRoot.IncludeGlobs {
 			if include == "" || strings.ContainsAny(include, `*?[\`) {
 				continue
@@ -3050,6 +3084,7 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 				failures++
 				continue
 			}
+			classified = true
 			for _, source := range matches {
 				path := filepath.Clean(providerDiscoveredPath(source))
 				if path == "." {
@@ -3061,6 +3096,9 @@ func (e *Engine) discoverOmnigentReconciliationSources(
 				currentSources[path] = struct{}{}
 				sources = append(sources, source)
 			}
+		}
+		if claimed {
+			e.finishOmnigentStoredHintPage(watchRoot.Path, classified)
 		}
 	}
 	return sources, failures
