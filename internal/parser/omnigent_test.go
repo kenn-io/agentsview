@@ -66,6 +66,7 @@ CREATE TABLE conversations (
 	sub_agent_name VARCHAR(128), workspace VARCHAR(2048),
 	git_branch VARCHAR(255), session_usage TEXT
 );
+CREATE INDEX ix_conversations_updated_at ON conversations(updated_at, id);
 CREATE TABLE conversation_items (
 	id VARCHAR(64) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
 	position INTEGER NOT NULL, type VARCHAR(32) NOT NULL,
@@ -81,6 +82,8 @@ CREATE TABLE conversations (
 	parent_conversation_id VARCHAR(64), root_conversation_id VARCHAR(64),
 	next_position INTEGER, PRIMARY KEY (workspace_id, id)
 );
+CREATE INDEX ix_conversations_updated_at
+	ON conversations(workspace_id, updated_at, id);
 CREATE TABLE omnigent_conversation_metadata (
 	workspace_id BIGINT NOT NULL DEFAULT 0, id VARCHAR(64),
 	kind SMALLINT, sub_agent_name VARCHAR(128),
@@ -472,7 +475,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 
 			writer, err := sql.Open("sqlite3", path)
 			require.NoError(t, err)
-			const changedAt = int64(1_800_000_000)
+			changedAt := time.Now().Unix()
 			_, err = writer.Exec(
 				`UPDATE conversations SET updated_at = ? WHERE id = 'conv_000'`,
 				changedAt)
@@ -503,6 +506,35 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 	}
 }
 
+func TestOmnigentChangedPathDetectsAppendWithoutTimestampAdvance(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 5)
+	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	_, err = provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+
+	writer, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('conv_000_i1', 'conv_000', 1, 'message',
+			'{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
+			'changed')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{Path: path, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, VirtualSourcePath(path, "conv_000"), changed[0].DisplayPath)
+}
+
 func writeOmnigentCardinalityDB(t *testing.T, count int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), omnigentDBName)
@@ -514,6 +546,9 @@ func writeOmnigentCardinalityDB(t *testing.T, count int) string {
 	for i := range count {
 		id := fmt.Sprintf("conv_%03d", i)
 		updatedAt := int64(1_700_000_000 + i)
+		if i == count-1 {
+			updatedAt = 4_000_000_000
+		}
 		_, err = database.Exec(`INSERT INTO conversations
 			(id, created_at, updated_at, title, kind, root_conversation_id)
 			VALUES (?, ?, ?, ?, 'default', ?)`, id, updatedAt-1, updatedAt, id, id)

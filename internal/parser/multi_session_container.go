@@ -91,6 +91,9 @@ type multiSessionConfig struct {
 	// unsupportedSource identifies typed parse errors that mean the physical
 	// source is valid but its schema is intentionally unsupported.
 	unsupportedSource func(error) bool
+	// excludedSessionIDs reconciles legacy persisted identities replaced by the
+	// current parse result set.
+	excludedSessionIDs func(src multiSessionSource, results []ParseResult) []string
 }
 
 type MultiSessionOption func(*multiSessionConfig)
@@ -186,6 +189,12 @@ func WithContainerHashStamping() MultiSessionOption {
 
 func WithUnsupportedSourceError(fn func(error) bool) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.unsupportedSource = fn }
+}
+
+func WithExcludedSessionIDs(
+	fn func(src multiSessionSource, results []ParseResult) []string,
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.excludedSessionIDs = fn }
 }
 
 func NewMultiSessionContainerSourceSet(
@@ -469,8 +478,9 @@ func (s multiSessionContainerSourceSet) parse(
 				Result:      *result,
 				DataVersion: DataVersionCurrent,
 			}},
-			ResultSetComplete: true,
-			ForceReplace:      true,
+			ExcludedSessionIDs: s.excludedSessionIDs(src, []ParseResult{*result}),
+			ResultSetComplete:  true,
+			ForceReplace:       true,
 		}, nil
 	}
 
@@ -495,10 +505,20 @@ func (s multiSessionContainerSourceSet) parse(
 		})
 	}
 	return ParseOutcome{
-		Results:           out,
-		ResultSetComplete: true,
-		ForceReplace:      true,
+		Results:            out,
+		ExcludedSessionIDs: s.excludedSessionIDs(src, results),
+		ResultSetComplete:  true,
+		ForceReplace:       true,
 	}, nil
+}
+
+func (s multiSessionContainerSourceSet) excludedSessionIDs(
+	src multiSessionSource, results []ParseResult,
+) []string {
+	if s.cfg.excludedSessionIDs == nil {
+		return nil
+	}
+	return s.cfg.excludedSessionIDs(src, results)
 }
 
 func unsupportedMultiSessionOutcome() ParseOutcome {

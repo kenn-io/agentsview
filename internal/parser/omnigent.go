@@ -271,6 +271,7 @@ func omnigentConversationExists(dbPath, memberKey string) bool {
 // content digest (updated_at + item count + max position) that changes exactly
 // when a conversation gains or edits items.
 type omnigentMeta struct {
+	rowID       int64
 	workspaceID int64
 	rawID       string
 	updatedAt   int64
@@ -295,14 +296,14 @@ func listOmnigentConversationMetas(
 	conn *sql.DB, schema omnigentSchema,
 ) ([]omnigentMeta, error) {
 	query := `
-		SELECT 0, c.id, COALESCE(c.updated_at, 0),
+		SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0),
 		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
 		  FROM conversations c
 		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
 		 GROUP BY c.id`
 	if schema.splitMetadata {
 		query = `
-			SELECT c.workspace_id, c.id, COALESCE(c.updated_at, 0),
+			SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0),
 			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
 			  FROM conversations c
 			  LEFT JOIN conversation_items ci
@@ -319,7 +320,8 @@ func listOmnigentConversationMetas(
 	for rows.Next() {
 		var m omnigentMeta
 		if err := rows.Scan(
-			&m.workspaceID, &m.rawID, &m.updatedAt, &m.itemCount, &m.maxPosition,
+			&m.rowID, &m.workspaceID, &m.rawID, &m.updatedAt,
+			&m.itemCount, &m.maxPosition,
 		); err != nil {
 			return nil, fmt.Errorf("scanning omnigent meta: %w", err)
 		}

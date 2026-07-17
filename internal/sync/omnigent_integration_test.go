@@ -26,10 +26,34 @@ CREATE TABLE conversations (
 	sub_agent_name VARCHAR(128), workspace VARCHAR(2048),
 	git_branch VARCHAR(255), session_usage TEXT
 );
+CREATE INDEX ix_conversations_updated_at ON conversations(updated_at, id);
 CREATE TABLE conversation_items (
 	id VARCHAR(64) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
 	position INTEGER NOT NULL, type VARCHAR(32) NOT NULL,
 	data TEXT NOT NULL, search_text TEXT NOT NULL
+);`
+
+const omnigentSplitSyncDDL = `
+CREATE TABLE conversations (
+	workspace_id BIGINT NOT NULL DEFAULT 0, id VARCHAR(64),
+	created_at INTEGER, updated_at INTEGER, title TEXT,
+	parent_conversation_id VARCHAR(64), root_conversation_id VARCHAR(64),
+	next_position INTEGER, PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX ix_conversations_updated_at
+	ON conversations(workspace_id, updated_at, id);
+CREATE TABLE omnigent_conversation_metadata (
+	workspace_id BIGINT NOT NULL DEFAULT 0, id VARCHAR(64),
+	kind SMALLINT, sub_agent_name VARCHAR(128), session_usage TEXT,
+	workspace VARCHAR(2048), git_branch VARCHAR(255),
+	PRIMARY KEY (workspace_id, id)
+);
+CREATE TABLE conversation_items (
+	workspace_id BIGINT NOT NULL DEFAULT 0,
+	conversation_id VARCHAR(64) NOT NULL, id VARCHAR(64) NOT NULL,
+	position INTEGER NOT NULL, type SMALLINT NOT NULL,
+	data TEXT NOT NULL, search_text TEXT NOT NULL,
+	PRIMARY KEY (workspace_id, conversation_id, id)
 );`
 
 func writeOmnigentSyncDB(t *testing.T, root string, count int) string {
@@ -128,19 +152,89 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 
 			writer, err = sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
-			_, err = writer.Exec(
+			tx, err := writer.Begin()
+			require.NoError(t, err)
+			_, err = tx.Exec(
 				`DELETE FROM conversation_items WHERE conversation_id = 'conv_0001'`)
 			require.NoError(t, err)
-			_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_0001'`)
+			_, err = tx.Exec(`DELETE FROM conversations WHERE id = 'conv_0001'`)
 			require.NoError(t, err)
+			_, err = tx.Exec(`INSERT INTO conversations
+				(id, created_at, updated_at, title, kind, root_conversation_id)
+				VALUES ('replacement', 1, 1800000001, 'replacement',
+					'default', 'replacement')`)
+			require.NoError(t, err)
+			_, err = tx.Exec(`INSERT INTO conversation_items
+				(id, conversation_id, position, type, data, search_text)
+				VALUES ('replacement_0', 'replacement', 0, 'message', ?, 'replacement')`,
+				`{"role":"user","content":[{"type":"input_text","text":"replacement"}]}`)
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
 			require.NoError(t, writer.Close())
 
 			engine.SyncPaths([]string{dbPath})
 			deleted, err := archive.GetSession(context.Background(), "omnigent:conv_0001")
 			require.NoError(t, err)
 			assert.Nil(t, deleted, "deleted conversation should retire its member session")
+			replacement, err := archive.GetSession(
+				context.Background(), "omnigent:replacement")
+			require.NoError(t, err)
+			require.NotNil(t, replacement)
 		})
 	}
+}
+
+func TestSyncOmnigentWorkspaceIdentityRetiresLegacyArchiveID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+	legacy, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, legacy)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DROP TABLE conversation_items`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DROP TABLE conversations`)
+	require.NoError(t, err)
+	for _, statement := range splitSQLStatements(omnigentSplitSyncDDL) {
+		_, err = writer.Exec(statement)
+		require.NoError(t, err)
+	}
+	_, err = writer.Exec(`INSERT INTO conversations
+		(workspace_id, id, created_at, updated_at, title, root_conversation_id)
+		VALUES (7, 'conv_0000', 1, 2, 'migrated', 'conv_0000')`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO omnigent_conversation_metadata
+		(workspace_id, id, kind, workspace)
+		VALUES (7, 'conv_0000', 1, '/work/project')`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(workspace_id, conversation_id, id, position, type, data, search_text)
+		VALUES (7, 'conv_0000', 'item', 0, 1, ?, 'migrated')`,
+		`{"role":"user","content":[{"type":"input_text","text":"migrated"}]}`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	engine.SyncAll(context.Background(), nil)
+	legacy, err = archive.GetSession(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+	qualified, err := archive.GetSession(context.Background(), "omnigent:7:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, qualified)
+	assert.Equal(t, "migrated", *qualified.DisplayName)
 }
 
 func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
