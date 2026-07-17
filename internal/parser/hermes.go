@@ -55,6 +55,28 @@ type hermesStateMessage struct {
 	codexMessageItems   string
 }
 
+func parseHermesToolCall(tc gjson.Result) (ParsedToolCall, bool) {
+	name := tc.Get("function.name").Str
+	if name == "" {
+		name = tc.Get("name").Str
+	}
+	if name == "" {
+		return ParsedToolCall{}, false
+	}
+
+	inputJSON := tc.Get("function.arguments").Str
+	toolCall := ParsedToolCall{
+		ToolUseID: tc.Get("id").Str,
+		ToolName:  name,
+		Category:  NormalizeToolCategory(name),
+		InputJSON: inputJSON,
+	}
+	if name == "skill_view" {
+		toolCall.SkillName = gjson.Get(inputJSON, "name").Str
+	}
+	return toolCall, true
+}
+
 // parseArchive parses a Hermes root directory. If a state.db is present, it
 // uses that database for session metadata and usage while selecting the richest
 // available message stream. Without state.db it falls back to the
@@ -227,14 +249,8 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 			tcArray := gjson.Get(line, "tool_calls")
 			if tcArray.IsArray() {
 				tcArray.ForEach(func(_, tc gjson.Result) bool {
-					name := tc.Get("function.name").Str
-					if name != "" {
-						toolCalls = append(toolCalls, ParsedToolCall{
-							ToolUseID: tc.Get("id").Str,
-							ToolName:  name,
-							Category:  NormalizeToolCategory(name),
-							InputJSON: tc.Get("function.arguments").Str,
-						})
+					if toolCall, ok := parseHermesToolCall(tc); ok {
+						toolCalls = append(toolCalls, toolCall)
 					}
 					return true
 				})
@@ -427,14 +443,8 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 			tcArray := msg.Get("tool_calls")
 			if tcArray.IsArray() {
 				tcArray.ForEach(func(_, tc gjson.Result) bool {
-					name := tc.Get("function.name").Str
-					if name != "" {
-						toolCalls = append(toolCalls, ParsedToolCall{
-							ToolUseID: tc.Get("id").Str,
-							ToolName:  name,
-							Category:  NormalizeToolCategory(name),
-							InputJSON: tc.Get("function.arguments").Str,
-						})
+					if toolCall, ok := parseHermesToolCall(tc); ok {
+						toolCalls = append(toolCalls, toolCall)
 					}
 					return true
 				})
@@ -1095,17 +1105,8 @@ func convertHermesStateMessages(
 			if gjson.Valid(hm.toolCalls) {
 				gjson.Parse(hm.toolCalls).ForEach(
 					func(_, tc gjson.Result) bool {
-						name := tc.Get("function.name").Str
-						if name == "" {
-							name = tc.Get("name").Str
-						}
-						if name != "" {
-							toolCalls = append(toolCalls, ParsedToolCall{
-								ToolUseID: tc.Get("id").Str,
-								ToolName:  name,
-								Category:  NormalizeToolCategory(name),
-								InputJSON: tc.Get("function.arguments").Str,
-							})
+						if toolCall, ok := parseHermesToolCall(tc); ok {
+							toolCalls = append(toolCalls, toolCall)
 						}
 						return true
 					},
