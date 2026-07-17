@@ -154,28 +154,50 @@ func openOmnigentDB(dbPath string) (*sql.DB, error) {
 // ErrOmnigentUnsupportedSchema when the database is not a recognizable omnigent
 // store or when session metadata is not co-located in this file.
 func detectOmnigentSchema(conn *sql.DB) (omnigentSchema, error) {
-	if !omnigentTableExists(conn, "alembic_version") ||
-		!omnigentTableExists(conn, "conversations") ||
-		!omnigentTableExists(conn, "conversation_items") {
-		return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
-			Reason: "missing core omnigent tables",
+	for _, table := range []string{
+		"alembic_version", "conversations", "conversation_items",
+	} {
+		exists, err := omnigentTableExists(conn, table)
+		if err != nil {
+			return omnigentSchema{}, fmt.Errorf(
+				"inspect omnigent table %s: %w", table, err)
+		}
+		if !exists {
+			return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
+				Reason: "missing core omnigent tables",
+			}
 		}
 	}
 
 	var s omnigentSchema
-	s.intEnums = omnigentColumnIsInteger(conn, "conversation_items", "type")
+	var err error
+	s.intEnums, err = omnigentColumnIsInteger(conn, "conversation_items", "type")
+	if err != nil {
+		return omnigentSchema{}, err
+	}
+	kindColumn, err := omnigentColumnExists(conn, "conversations", "kind")
+	if err != nil {
+		return omnigentSchema{}, err
+	}
+	metadataTable, err := omnigentTableExists(conn, "omnigent_conversation_metadata")
+	if err != nil {
+		return omnigentSchema{}, err
+	}
 
 	switch {
-	case omnigentColumnExists(conn, "conversations", "kind"):
+	case kindColumn:
 		// Older single-table shape: metadata columns live on conversations.
 		s.splitMetadata = false
-		s.hasSessionUsage = omnigentColumnExists(conn, "conversations", "session_usage")
-	case omnigentTableExists(conn, "omnigent_conversation_metadata"):
+		s.hasSessionUsage, err = omnigentColumnExists(
+			conn, "conversations", "session_usage")
+	case metadataTable:
 		// Split shape: metadata is co-located in this file.
 		s.splitMetadata = true
-		s.hasAgentConfig = omnigentTableExists(conn, "agent_configuration")
-		s.hasSessionUsage = omnigentColumnExists(
-			conn, "omnigent_conversation_metadata", "session_usage")
+		s.hasAgentConfig, err = omnigentTableExists(conn, "agent_configuration")
+		if err == nil {
+			s.hasSessionUsage, err = omnigentColumnExists(
+				conn, "omnigent_conversation_metadata", "session_usage")
+		}
 	default:
 		// Split shape but metadata not in this database (multi-physical-DB
 		// deployment). We cannot recover kind/workspace/usage, so skip.
@@ -183,39 +205,52 @@ func detectOmnigentSchema(conn *sql.DB) (omnigentSchema, error) {
 			Reason: "session metadata table not present in this database",
 		}
 	}
+	if err != nil {
+		return omnigentSchema{}, fmt.Errorf("inspect omnigent schema: %w", err)
+	}
 	return s, nil
 }
 
-func omnigentTableExists(conn *sql.DB, table string) bool {
+func omnigentTableExists(conn *sql.DB, table string) (bool, error) {
 	var name string
 	err := conn.QueryRow(
 		`SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
 		table,
 	).Scan(&name)
-	return err == nil
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func omnigentColumnExists(conn *sql.DB, table, column string) bool {
-	_, ok := omnigentColumnType(conn, table, column)
-	return ok
+func omnigentColumnExists(conn *sql.DB, table, column string) (bool, error) {
+	_, ok, err := omnigentColumnType(conn, table, column)
+	return ok, err
 }
 
 // omnigentColumnIsInteger reports whether a column's declared type is an
 // integer affinity (INTEGER, SMALLINT, ...). Absent columns report false.
-func omnigentColumnIsInteger(conn *sql.DB, table, column string) bool {
-	declType, ok := omnigentColumnType(conn, table, column)
-	if !ok {
-		return false
+func omnigentColumnIsInteger(
+	conn *sql.DB, table, column string,
+) (bool, error) {
+	declType, ok, err := omnigentColumnType(conn, table, column)
+	if err != nil || !ok {
+		return false, err
 	}
-	return strings.Contains(strings.ToUpper(declType), "INT")
+	return strings.Contains(strings.ToUpper(declType), "INT"), nil
 }
 
-func omnigentColumnType(conn *sql.DB, table, column string) (string, bool) {
+func omnigentColumnType(
+	conn *sql.DB, table, column string,
+) (string, bool, error) {
 	// PRAGMA table_info is not parameterizable; the table name is an internal
 	// literal (never user input), so interpolation is safe here.
 	rows, err := conn.Query(fmt.Sprintf("PRAGMA table_info(%q)", table))
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -230,13 +265,16 @@ func omnigentColumnType(conn *sql.DB, table, column string) (string, bool) {
 		if err := rows.Scan(
 			&cid, &name, &declType, &notNull, &dfltValue, &primaryKey,
 		); err != nil {
-			return "", false
+			return "", false, err
 		}
 		if name == column {
-			return declType, true
+			return declType, true, nil
 		}
 	}
-	return "", false
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+	return "", false, nil
 }
 
 // omnigentConversationExists reports whether a conversation ID is present.
@@ -769,7 +807,7 @@ func decodeOmnigentItem(
 		result := ParsedToolResult{
 			ToolUseID:     fo.CallID,
 			ContentLength: len(fo.Output),
-			ContentRaw:    fo.Output,
+			ContentRaw:    strconv.Quote(fo.Output),
 		}
 		if idx, ok := callMsgIndex[fo.CallID]; ok {
 			msg := &(*messages)[idx]

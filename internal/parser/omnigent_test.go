@@ -5,6 +5,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ var omnigentSeedItems = []omnigentSeedItem{
 	{"conv_root", omnigentTypeMessage, "message_assistant.json", "on it", 1},
 	{"conv_root", omnigentTypeFuncCall, "function_call.json", "sys_os_shell", 2},
 	{"conv_root", omnigentTypeFuncOutput, "function_call_output.json",
-		"/Users/alice/code/proj", 3},
+		"/work/proj", 3},
 	{"conv_root", omnigentTypeReasoning, "reasoning.json", "weighing options", 4},
 	{"conv_root", omnigentTypeError, "error.json", "inner executor error", 5},
 	{"conv_root", omnigentTypeCompaction, "compaction.json",
@@ -167,7 +168,7 @@ func writeOmnigentOldGenDB(t *testing.T) string {
 		 workspace, git_branch, session_usage)
 		VALUES
 		('conv_root', 1783716327, 1783718231, 'top task', 'default',
-		 'claude-opus-4-8', '', 'conv_root', '', '/Users/alice/code/proj', 'main', ?),
+		 'claude-opus-4-8', '', 'conv_root', '', '/work/proj', 'main', ?),
 		('conv_kid', 1783716400, 1783716701, 'claude_code:scout', 'sub_agent',
 		 '', 'conv_root', 'conv_root', 'claude_code', '', '', '')`,
 		omnigentTestUsage)
@@ -198,7 +199,7 @@ func writeOmnigentSplitGenDB(t *testing.T) string {
 	_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
 		(id, kind, sub_agent_name, workspace, git_branch, session_usage)
 		VALUES
-		('conv_root', 1, '', '/Users/alice/code/proj', 'main', ?),
+		('conv_root', 1, '', '/work/proj', 'main', ?),
 		('conv_kid', 2, 'claude_code', '', '', '')`, omnigentTestUsage)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO agent_configuration
@@ -225,7 +226,7 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 	assert.Equal(t, omnigentAgent, root.Session.Agent)
 	assert.Equal(t, "top task", root.Session.SessionName)
 	assert.Equal(t, "proj", root.Session.Project)
-	assert.Equal(t, "/Users/alice/code/proj", root.Session.Cwd)
+	assert.Equal(t, "/work/proj", root.Session.Cwd)
 	assert.Equal(t, "main", root.Session.GitBranch)
 	assert.Equal(t, "do the thing", root.Session.FirstMessage)
 	assert.Equal(t, 1, root.Session.UserMessageCount)
@@ -246,7 +247,11 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 	assert.Equal(t, "toolu_1", call.ToolCalls[0].ToolUseID)
 	require.Len(t, call.ToolResults, 1, "output folded onto the call message")
 	assert.Equal(t, "toolu_1", call.ToolResults[0].ToolUseID)
-	assert.Equal(t, "/Users/alice/code/proj", call.ToolResults[0].ContentRaw)
+	expectedToolOutput := omnigentSeedItems[3].search
+	assert.Equal(t, fmt.Sprintf("%q", expectedToolOutput),
+		call.ToolResults[0].ContentRaw)
+	assert.Equal(t, expectedToolOutput,
+		DecodeContent(call.ToolResults[0].ContentRaw))
 
 	reasoning := root.Messages[3]
 	assert.True(t, reasoning.HasThinking)
@@ -274,7 +279,7 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 	assert.Equal(t, RelSubagent, kid.Session.RelationshipType)
 	assert.Equal(t, rootID, kid.Session.ParentSessionID)
 	// cwd/branch inherited from the root conversation.
-	assert.Equal(t, "/Users/alice/code/proj", kid.Session.Cwd)
+	assert.Equal(t, "/work/proj", kid.Session.Cwd)
 	assert.Equal(t, "main", kid.Session.GitBranch)
 }
 
@@ -288,6 +293,23 @@ func TestParseOmnigentDB_SplitGen(t *testing.T) {
 	results, err := ParseOmnigentDB(writeOmnigentSplitGenDB(t), "testhost")
 	require.NoError(t, err)
 	assertOmnigentParse(t, results, "0:")
+}
+
+func TestDecodeOmnigentFunctionOutputPreservesJSONString(t *testing.T) {
+	const output = `{"ok":true}`
+	messages := []ParsedMessage{{Role: RoleAssistant}}
+	decodeOmnigentItem(
+		1, omnigentTypeFuncOutput,
+		`{"call_id":"call-json","output":"{\"ok\":true}"}`,
+		"", &messages, map[string]int{"call-json": 0},
+	)
+
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolResults, 1)
+	result := messages[0].ToolResults[0]
+	assert.Equal(t, `"{\"ok\":true}"`, result.ContentRaw)
+	assert.Equal(t, output, DecodeContent(result.ContentRaw))
+	assert.Equal(t, len(output), result.ContentLength)
 }
 
 // TestParseOmnigentDB_CrossGenEquivalence asserts the two generations produce
@@ -385,6 +407,19 @@ func TestParseOmnigentDB_UnsupportedSchema(t *testing.T) {
 	require.Error(t, err)
 	var unsupported ErrOmnigentUnsupportedSchema
 	require.ErrorAs(t, err, &unsupported)
+}
+
+func TestDetectOmnigentSchemaPropagatesDatabaseErrors(t *testing.T) {
+	path := writeOmnigentOldGenDB(t)
+	conn, err := openOmnigentDB(path)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	_, err = detectOmnigentSchema(conn)
+	require.Error(t, err)
+	var unsupported ErrOmnigentUnsupportedSchema
+	assert.False(t, errors.As(err, &unsupported),
+		"operational database errors must remain retryable")
 }
 
 func TestOmnigentProviderUnsupportedSchemaIsNonDestructive(t *testing.T) {
@@ -581,6 +616,42 @@ func TestOmnigentSplitWorkspaceClassificationIsBatched(t *testing.T) {
 	}
 	require.Len(t, changed, 1)
 	assert.Equal(t, "99:conv", changed[0].MemberID)
+}
+
+func TestOmnigentMemberParseDoesNotObserveNewerMetadata(t *testing.T) {
+	path := writeOmnigentOldGenDB(t)
+	conn, err := openOmnigentDB(path)
+	require.NoError(t, err)
+	schema, err := detectOmnigentSchema(conn)
+	require.NoError(t, err)
+	metas, err := listOmnigentConversationMetas(conn, schema)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	tracker := newOmnigentChangeTracker()
+	tracker.replace(path, schema, metas)
+	src := multiSessionSource{Container: path, MemberID: "conv_root"}
+	_, err = tracker.parseMemberWith(src, ParseRequest{},
+		func(multiSessionSource, ParseRequest) (*ParseResult, error) {
+			writer, openErr := sql.Open("sqlite3", path)
+			if openErr != nil {
+				return nil, openErr
+			}
+			defer writer.Close()
+			_, updateErr := writer.Exec(
+				`UPDATE conversations SET updated_at = updated_at + 60
+				  WHERE id = 'conv_root'`)
+			return &ParseResult{}, updateErr
+		})
+	require.NoError(t, err)
+
+	changed, err := tracker.changedMembers(filepath.Dir(path), ChangedPathRequest{
+		Path: path, EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1,
+		"a commit concurrent with parsing must remain visible to the next event")
+	assert.Equal(t, "conv_root", changed[0].MemberID)
 }
 
 func writeOmnigentCardinalityDB(t *testing.T, count int) string {

@@ -619,26 +619,45 @@ func advanceOmnigentClassification(
 func (t *omnigentChangeTracker) parseMember(
 	src multiSessionSource, req ParseRequest,
 ) (*ParseResult, error) {
-	result, err := omnigentParseMember(src, req)
+	return t.parseMemberWith(src, req, omnigentParseMember)
+}
+
+func (t *omnigentChangeTracker) parseMemberWith(
+	src multiSessionSource, req ParseRequest,
+	parse func(multiSessionSource, ParseRequest) (*ParseResult, error),
+) (*ParseResult, error) {
+	// Capture the classification metadata before reading the transcript. If a
+	// commit lands between these operations, observing the older metadata causes
+	// one safe extra parse on the next event; observing newer metadata for an
+	// older transcript would suppress that event and leave the archive stale.
+	var (
+		schema     omnigentSchema
+		member     omnigentMemberID
+		meta       omnigentMeta
+		exists     bool
+		track      bool
+		observedAt int64
+	)
+	observedAt = time.Now().Unix()
+	conn, openErr := openOmnigentDB(src.Container)
+	if openErr == nil {
+		schema, openErr = detectOmnigentSchema(conn)
+		if openErr == nil {
+			member, openErr = omnigentMemberForSchema(schema, src.MemberID)
+		}
+		if openErr == nil {
+			meta, exists, openErr = loadOmnigentConversationMeta(conn, schema, member)
+		}
+		track = openErr == nil
+		_ = conn.Close()
+	}
+
+	result, err := parse(src, req)
 	if err != nil {
 		return nil, err
 	}
-	conn, openErr := openOmnigentDB(src.Container)
-	if openErr != nil {
-		return result, nil
-	}
-	defer conn.Close()
-	schema, schemaErr := detectOmnigentSchema(conn)
-	if schemaErr != nil {
-		return result, nil
-	}
-	member, memberErr := omnigentMemberForSchema(schema, src.MemberID)
-	if memberErr != nil {
-		return result, nil
-	}
-	meta, exists, metaErr := loadOmnigentConversationMeta(conn, schema, member)
-	if metaErr == nil {
-		t.observe(src.Container, schema, member, meta, exists)
+	if track {
+		t.observe(src.Container, schema, member, meta, exists, observedAt)
 	}
 	return result, nil
 }
@@ -676,7 +695,7 @@ func (t *omnigentChangeTracker) replace(
 
 func (t *omnigentChangeTracker) observe(
 	container string, schema omnigentSchema, member omnigentMemberID,
-	meta omnigentMeta, exists bool,
+	meta omnigentMeta, exists bool, observedAt int64,
 ) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -688,7 +707,6 @@ func (t *omnigentChangeTracker) observe(
 			workspaceCounts:    make(map[int64]int),
 		}
 	}
-	observedAt := time.Now().Unix()
 	if schema.splitMetadata {
 		tracked.workspaceCheckedAt[member.workspaceID] = observedAt
 	} else {

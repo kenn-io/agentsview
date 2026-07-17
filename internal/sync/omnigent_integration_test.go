@@ -316,6 +316,40 @@ func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 		archive.GetSessionDataVersion("omnigent:conv_0000"))
 }
 
+func TestSyncOmnigentPersistsJSONStringToolResult(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text) VALUES
+		('call', 'conv_0000', 1, 'function_call',
+		 '{"call_id":"call-json","name":"inspect","arguments":"{}"}', ''),
+		('result', 'conv_0000', 2, 'function_call_output',
+		 '{"call_id":"call-json","output":"{\"ok\":true}"}', '')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	messages := fetchMessages(t, archive, "omnigent:conv_0000")
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, `{"ok":true}`, messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(`{"ok":true}`),
+		messages[1].ToolCalls[0].ResultContentLength)
+}
+
 func TestSyncPathsOmnigentSameTimestampAppendUsesMemberHash(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
