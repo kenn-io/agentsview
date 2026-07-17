@@ -354,6 +354,15 @@ func (e *Engine) machineForFile(file parser.DiscoveredFile) string {
 	return e.machineForPath(file.Agent, file.Path)
 }
 
+func (e *Engine) machineForProviderSource(
+	agent parser.AgentType, source parser.SourceRef, fallbackPath string,
+) string {
+	if source.ConfiguredRoot != "" {
+		return e.machineForPath(agent, source.ConfiguredRoot)
+	}
+	return e.machineForPath(agent, fallbackPath)
+}
+
 func pathWithinRoot(path, root string) bool {
 	root = filepath.Clean(root)
 	rel, err := filepath.Rel(root, path)
@@ -861,7 +870,9 @@ func (e *Engine) classifyProviderChangedPath(
 					ProviderProcess: mode == parser.ProviderMigrationProviderAuthoritative,
 				}
 				if !isS3SourcePath(sourcePath) {
-					discovered.Machine = e.machineForPath(agent, sourcePath)
+					discovered.Machine = e.machineForProviderSource(
+						agent, source, sourcePath,
+					)
 				}
 				// A watcher event names a concrete change even when the
 				// session's stat signature cannot see it (a same-size,
@@ -2880,7 +2891,9 @@ func (e *Engine) discoverProviderSources(
 				ProviderProcess: true,
 			}
 			if !isS3SourcePath(sourcePath) {
-				discovered.Machine = e.machineForPath(agent, sourcePath)
+				discovered.Machine = e.machineForProviderSource(
+					agent, source, sourcePath,
+				)
 			}
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
@@ -3243,7 +3256,7 @@ func (e *Engine) discoveredFileMachineChanged(
 		lookupPath = e.pathRewriter(lookupPath)
 	}
 	hasSessions, matches := e.db.SessionMachinesByFilePathMatch(
-		lookupPath, e.machineForFile(file),
+		string(file.Agent), lookupPath, e.machineForFile(file),
 	)
 	return hasSessions && !matches
 }
@@ -5108,7 +5121,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 		lookupPath = e.pathRewriter(lookupPath)
 	}
 	hasSessions, matches := e.db.SessionMachinesByFilePathMatch(
-		lookupPath, e.machineForFile(file),
+		string(agent), lookupPath, e.machineForFile(file),
 	)
 	if hasSessions && !matches {
 		return false

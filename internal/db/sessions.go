@@ -2091,20 +2091,24 @@ func (db *DB) GetFileInfoByPathForMachine(
 	return s.Int64, m.Int64, true
 }
 
-// SessionMachinesByFilePathMatch reports whether a source path has active
-// sessions and whether all of them carry the requested machine attribution.
+const sessionMachinesByFilePathSQL = `
+	SELECT COUNT(*),
+		COALESCE(SUM(
+			CASE WHEN COALESCE(machine, '') <> ? THEN 1 ELSE 0 END
+		), 0)
+	FROM sessions
+	WHERE agent = ? AND file_path = ? AND deleted_at IS NULL`
+
+// SessionMachinesByFilePathMatch reports whether an agent source path has
+// active sessions and whether all of them carry the requested machine
+// attribution.
 func (db *DB) SessionMachinesByFilePathMatch(
-	path, machine string,
+	agent, path, machine string,
 ) (hasSessions, matches bool) {
 	var count, mismatches int
-	err := db.getReader().QueryRow(`
-		SELECT COUNT(*),
-			COALESCE(SUM(
-				CASE WHEN COALESCE(machine, '') <> ? THEN 1 ELSE 0 END
-			), 0)
-		FROM sessions
-		WHERE file_path = ? AND deleted_at IS NULL`,
-		machine, path,
+	err := db.getReader().QueryRow(
+		sessionMachinesByFilePathSQL,
+		machine, agent, path,
 	).Scan(&count, &mismatches)
 	if err != nil || count == 0 {
 		return false, false
