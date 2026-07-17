@@ -39,6 +39,7 @@ type codexDuckDBToolInputRepair struct {
 	sessionID string
 	toolName  string
 	content   string
+	inputNull bool
 }
 
 type codexDuckDBPreviewRepair struct {
@@ -104,7 +105,7 @@ func collectCodexDuckDBRepairs(
 
 	rows, err := q.QueryContext(ctx, `
 SELECT tc.message_id, tc.call_index, tc.session_id, tc.tool_name,
-       COALESCE(tc.input_json, '')
+	   COALESCE(tc.input_json, ''), tc.input_json IS NULL
   FROM tool_calls tc
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
@@ -117,7 +118,7 @@ SELECT tc.message_id, tc.call_index, tc.session_id, tc.tool_name,
 		var storedToolName, storedContent string
 		if err := rows.Scan(
 			&row.messageID, &row.callIndex, &row.sessionID,
-			&storedToolName, &storedContent,
+			&storedToolName, &storedContent, &row.inputNull,
 		); err != nil {
 			rows.Close()
 			return repairs, fmt.Errorf("scanning DuckDB Codex tool input: %w", err)
@@ -391,10 +392,14 @@ UPDATE messages SET role = ?, content = ?, content_length = ?
 		}
 	}
 	for _, row := range repairs.toolInputs {
+		input := any(row.content)
+		if row.inputNull {
+			input = nil
+		}
 		if _, err := tx.ExecContext(ctx, `
 UPDATE tool_calls SET tool_name = ?, input_json = ?
  WHERE session_id = ? AND message_id = ? AND call_index = ?`,
-			row.toolName, row.content, row.sessionID, row.messageID, row.callIndex,
+			row.toolName, input, row.sessionID, row.messageID, row.callIndex,
 		); err != nil {
 			return fmt.Errorf(
 				"updating DuckDB Codex tool input %s/%d/%d: %w",

@@ -381,7 +381,7 @@ INSERT INTO messages (
 	_, err = pg.ExecContext(ctx, `
 INSERT INTO tool_calls (
     session_id, tool_name, category, message_ordinal, input_json
-) VALUES ('null-input', 'spawn_agent', 'Task', 0, NULL)`)
+) VALUES ('null-input', $1, 'Task', 0, NULL)`, splitToolName)
 	require.NoError(t, err, "seed nullable legacy tool input")
 
 	err = CheckCodexEncryptedPayloadCompat(ctx, pg)
@@ -413,14 +413,16 @@ SELECT s.first_message, m.role, m.content, m.content_length,
 	assert.Equal(t, `{"message":"[encrypted]"}`, gotInput)
 	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
 	var nullInputVersion int
+	var normalizedNullInputToolName string
 	var inputRemainsNull bool
 	require.NoError(t, pg.QueryRowContext(ctx, `
-SELECT s.data_version, tc.input_json IS NULL
+SELECT s.data_version, tc.tool_name, tc.input_json IS NULL
   FROM sessions s
   JOIN tool_calls tc ON tc.session_id = s.id
  WHERE s.id = 'null-input'`,
-	).Scan(&nullInputVersion, &inputRemainsNull))
+	).Scan(&nullInputVersion, &normalizedNullInputToolName, &inputRemainsNull))
 	assert.Equal(t, codexEncryptedPayloadDataVersion, nullInputVersion)
+	assert.Equal(t, "spawn_agent", normalizedNullInputToolName)
 	assert.True(t, inputRemainsNull, "normalization must preserve an absent tool input")
 }
 

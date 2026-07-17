@@ -78,6 +78,7 @@ type codexPGToolInputRepair struct {
 	sessionID string
 	toolName  string
 	content   string
+	inputNull bool
 }
 
 type codexPGPreviewRepair struct {
@@ -151,7 +152,7 @@ func collectCodexPGRepairs(
 
 	rows, err := q.QueryContext(ctx, `
 SELECT tc.id, tc.session_id, tc.message_ordinal, tc.tool_name,
-       COALESCE(tc.input_json, '')
+	   COALESCE(tc.input_json, ''), tc.input_json IS NULL
   FROM tool_calls tc
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
@@ -166,6 +167,7 @@ SELECT tc.id, tc.session_id, tc.message_ordinal, tc.tool_name,
 		var storedToolName, storedContent string
 		if err := rows.Scan(
 			&row.id, &row.sessionID, &ordinal, &storedToolName, &storedContent,
+			&row.inputNull,
 		); err != nil {
 			rows.Close()
 			return repairs, fmt.Errorf("scanning PG Codex tool input: %w", err)
@@ -545,9 +547,13 @@ UPDATE messages SET role = $1, content = $2, content_length = $3
 		}
 	}
 	for _, row := range repairs.toolInputs {
+		input := any(row.content)
+		if row.inputNull {
+			input = nil
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE tool_calls SET tool_name = $1, input_json = $2 WHERE id = $3`,
-			row.toolName, row.content, row.id,
+			row.toolName, input, row.id,
 		); err != nil {
 			return fmt.Errorf("updating PG Codex tool input %d: %w", row.id, err)
 		}
