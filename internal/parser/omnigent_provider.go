@@ -136,13 +136,17 @@ func (t *omnigentChangeTracker) discoverSources(
 	matches := make([]multiSessionMatch, 0, len(containers))
 	for _, container := range containers {
 		whole := multiSessionMatch{Path: container, Container: container}
+		if forceFull {
+			matches = append(matches, whole)
+			continue
+		}
 		t.mu.Lock()
 		_, initialized := t.containers[container]
 		t.mu.Unlock()
 		if !initialized {
 			t.seedContainer(container)
 		}
-		if forceFull || !initialized {
+		if !initialized {
 			matches = append(matches, whole)
 			continue
 		}
@@ -326,27 +330,10 @@ func loadOmnigentConversationMeta(
 func loadOmnigentConversationMetaByRowID(
 	conn *sql.DB, schema omnigentSchema, rowID int64,
 ) (omnigentMeta, bool, error) {
-	query := `
-		SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0),
-		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-		  FROM conversations c
-		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
-		 WHERE c.rowid = ?
-		 GROUP BY c.id`
-	if schema.splitMetadata {
-		query = `
-			SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0),
-			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-			  FROM conversations c
-			  LEFT JOIN conversation_items ci
-			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-			 WHERE c.rowid = ?
-			 GROUP BY c.workspace_id, c.id`
-	}
+	query := omnigentConversationMetaByRowIDQuery(schema)
 	var meta omnigentMeta
 	err := conn.QueryRow(query, rowID).Scan(
 		&meta.rowID, &meta.workspaceID, &meta.rawID, &meta.updatedAt,
-		&meta.itemCount, &meta.maxPosition,
 	)
 	if err == sql.ErrNoRows {
 		return omnigentMeta{}, false, nil
@@ -356,6 +343,15 @@ func loadOmnigentConversationMetaByRowID(
 			fmt.Errorf("loading omnigent conversation row occupant: %w", err)
 	}
 	return meta, true, nil
+}
+
+func omnigentConversationMetaByRowIDQuery(schema omnigentSchema) string {
+	if schema.splitMetadata {
+		return `SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0)
+			FROM conversations c WHERE c.rowid = ?`
+	}
+	return `SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0)
+		FROM conversations c WHERE c.rowid = ?`
 }
 
 func (t *omnigentChangeTracker) changedMembers(
@@ -807,9 +803,23 @@ func (t *omnigentChangeTracker) observe(
 				}
 			}
 		}
-		tracked.probeKeys = slices.DeleteFunc(
-			tracked.probeKeys, func(candidate string) bool { return candidate == key },
-		)
+		if probeIndex := slices.Index(tracked.probeKeys, key); probeIndex >= 0 {
+			tracked.probeKeys = slices.Delete(
+				tracked.probeKeys, probeIndex, probeIndex+1,
+			)
+			if probeIndex < tracked.probeCursor {
+				tracked.probeCursor--
+			}
+			if len(tracked.probeKeys) == 0 {
+				tracked.probeCursor = 0
+				tracked.probeRemaining = 0
+			} else {
+				tracked.probeCursor %= len(tracked.probeKeys)
+				tracked.probeRemaining = min(
+					tracked.probeRemaining, len(tracked.probeKeys),
+				)
+			}
+		}
 		tracked.maxRowID = 0
 		for _, current := range tracked.metas {
 			if current.rowID > tracked.maxRowID {

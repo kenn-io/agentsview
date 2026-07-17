@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	gosync "sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -136,6 +137,7 @@ type Engine struct {
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
 	omnigentRetryMu         gosync.Mutex
 	omnigentRetrySources    map[string]omnigentRetrySource
+	resyncOmnigentAdvanced  atomic.Bool
 	projectIdentityMu       gosync.Mutex
 	projectIdentityCache    map[string]projectIdentityCacheEntry
 	projectIdentityWritten  map[string]struct{}
@@ -1273,9 +1275,9 @@ func (e *Engine) resyncAllWithOptionsLocked(
 ) (stats SyncStats, retErr error) {
 	ops = ops.withDefaults()
 	resyncAccepted := false
-	omnigentTrackerMayHaveAdvanced := false
+	e.resyncOmnigentAdvanced.Store(false)
 	defer func() {
-		if omnigentTrackerMayHaveAdvanced && !resyncAccepted {
+		if e.resyncOmnigentAdvanced.Load() && !resyncAccepted {
 			e.queueOmnigentContainerRetries()
 		}
 	}()
@@ -1486,7 +1488,6 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		"Discovering sessions",
 		"",
 	)
-	omnigentTrackerMayHaveAdvanced = true
 	stats = e.syncAllLocked(
 		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false,
 	)
@@ -4782,6 +4783,13 @@ func (e *Engine) processProviderFile(
 			noCacheSkip:        !cleanCache,
 			forceReplace:       outcome.ForceReplace,
 		}, true
+	}
+	if file.Agent == parser.AgentOmnigent {
+		path := providerDiscoveredPath(source)
+		_, _, virtual := parser.ParseVirtualSourcePath(path)
+		if !virtual {
+			e.resyncOmnigentAdvanced.Store(true)
+		}
 	}
 
 	parsedResults := parseOutcomeResults(outcome.Results)

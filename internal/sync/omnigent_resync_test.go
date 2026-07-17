@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,44 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+type cancelAfterOmnigentParseFactory struct {
+	delegate parser.ProviderFactory
+	cancel   context.CancelFunc
+	once     *stdsync.Once
+}
+
+func (f cancelAfterOmnigentParseFactory) Definition() parser.AgentDef {
+	return f.delegate.Definition()
+}
+
+func (f cancelAfterOmnigentParseFactory) Capabilities() parser.Capabilities {
+	return f.delegate.Capabilities()
+}
+
+func (f cancelAfterOmnigentParseFactory) NewProvider(
+	cfg parser.ProviderConfig,
+) parser.Provider {
+	return &cancelAfterOmnigentParseProvider{
+		Provider: f.delegate.NewProvider(cfg), cancel: f.cancel, once: f.once,
+	}
+}
+
+type cancelAfterOmnigentParseProvider struct {
+	parser.Provider
+	cancel context.CancelFunc
+	once   *stdsync.Once
+}
+
+func (p *cancelAfterOmnigentParseProvider) Parse(
+	ctx context.Context, req parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	outcome, err := p.Provider.Parse(ctx, req)
+	if err == nil {
+		p.once.Do(p.cancel)
+	}
+	return outcome, err
+}
 
 func writeOmnigentResyncSource(t *testing.T, root string) string {
 	t.Helper()
@@ -140,4 +179,65 @@ func TestResyncPreparationFailureDoesNotQueueOmnigentContainer(t *testing.T) {
 	engine.omnigentRetryMu.Unlock()
 	assert.Zero(t, retryCount,
 		"preparation failure cannot have advanced the provider tracker")
+}
+
+func TestCanceledResyncBeforeOmnigentParseDoesNotQueueContainer(t *testing.T) {
+	root := t.TempDir()
+	writeOmnigentResyncSource(t, root)
+	archive := openTestDB(t)
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	engine.syncMu.Lock()
+	stats, err := engine.resyncAllWithOptionsLocked(
+		ctx, nil, RebuildOptions{}, rebuildOperations{},
+	)
+	engine.syncMu.Unlock()
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, stats.Aborted)
+	engine.omnigentRetryMu.Lock()
+	retryCount := len(engine.omnigentRetrySources)
+	engine.omnigentRetryMu.Unlock()
+	assert.Zero(t, retryCount,
+		"cancellation before container parse must not force a later full parse")
+}
+
+func TestCanceledResyncAfterOmnigentParseQueuesContainer(t *testing.T) {
+	root := t.TempDir()
+	writeOmnigentResyncSource(t, root)
+	archive := openTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	delegate, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
+	require.True(t, ok)
+	factory := cancelAfterOmnigentParseFactory{
+		delegate: delegate, cancel: cancel, once: &stdsync.Once{},
+	}
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	t.Cleanup(engine.Close)
+
+	engine.syncMu.Lock()
+	stats, err := engine.resyncAllWithOptionsLocked(
+		ctx, nil, RebuildOptions{}, rebuildOperations{},
+	)
+	engine.syncMu.Unlock()
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, stats.Aborted)
+	engine.omnigentRetryMu.Lock()
+	retryCount := len(engine.omnigentRetrySources)
+	engine.omnigentRetryMu.Unlock()
+	assert.Equal(t, 1, retryCount,
+		"discarding a parsed container must queue it for the live archive")
 }
