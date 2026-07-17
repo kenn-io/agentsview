@@ -34,15 +34,13 @@ type omnigentTrackedContainer struct {
 }
 
 type omnigentChangeTracker struct {
-	mu                sync.Mutex
-	containers        map[string]omnigentTrackedContainer
-	pendingExclusions map[string][]string
+	mu         sync.Mutex
+	containers map[string]omnigentTrackedContainer
 }
 
 func newOmnigentChangeTracker() *omnigentChangeTracker {
 	return &omnigentChangeTracker{
-		containers:        make(map[string]omnigentTrackedContainer),
-		pendingExclusions: make(map[string][]string),
+		containers: make(map[string]omnigentTrackedContainer),
 	}
 }
 
@@ -69,7 +67,7 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithMemberParse(tracker.parseMember),
 				WithMemberPresence(omnigentMemberPresent),
 				WithUnsupportedSourceError(omnigentSchemaUnsupported),
-				WithExcludedSessionIDs(tracker.excludedSessionIDs),
+				WithExcludedSessionIDs(omnigentLegacySessionIDs),
 			)
 		},
 	)
@@ -97,24 +95,6 @@ func omnigentLegacySessionIDs(
 	}
 	slices.Sort(ids)
 	return ids
-}
-
-func (t *omnigentChangeTracker) excludedSessionIDs(
-	src multiSessionSource, results []ParseResult,
-) []string {
-	ids := omnigentLegacySessionIDs(src, results)
-	if src.MemberID != "" {
-		return ids
-	}
-	t.mu.Lock()
-	ids = append(ids, t.pendingExclusions[src.Container]...)
-	delete(t.pendingExclusions, src.Container)
-	t.mu.Unlock()
-	if len(ids) < 2 {
-		return ids
-	}
-	slices.Sort(ids)
-	return slices.Compact(ids)
 }
 
 func omnigentProviderCapabilities() Capabilities {
@@ -689,24 +669,6 @@ func (t *omnigentChangeTracker) replace(
 	}
 	slices.Sort(tracked.workspaceIDs)
 	t.mu.Lock()
-	previous, hadPrevious := t.containers[container]
-	if hadPrevious {
-		currentIDs := make(map[string]struct{}, len(tracked.metas))
-		for key := range tracked.metas {
-			currentIDs[omnigentIDPrefix+key] = struct{}{}
-		}
-		var excluded []string
-		for key := range previous.metas {
-			id := omnigentIDPrefix + key
-			if _, present := currentIDs[id]; !present {
-				excluded = append(excluded, id)
-			}
-		}
-		slices.Sort(excluded)
-		t.pendingExclusions[container] = excluded
-	} else {
-		delete(t.pendingExclusions, container)
-	}
 	t.containers[container] = tracked
 	t.mu.Unlock()
 }

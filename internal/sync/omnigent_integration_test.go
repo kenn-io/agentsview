@@ -272,6 +272,12 @@ func TestSyncOmnigentPeriodicFullSyncReconcilesDeletedConversation(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
+	engine = sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
 	engine.SyncAll(context.Background(), nil)
 	deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0064")
 	require.NoError(t, err)

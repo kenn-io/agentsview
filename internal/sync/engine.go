@@ -4658,9 +4658,18 @@ func (e *Engine) processProviderFile(
 
 	parsedResults := parseOutcomeResults(outcome.Results)
 	parsedCount := len(parsedResults)
+	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
+	if outcome.ForceReplace && outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
+		provider.Capabilities().Source.MultiSessionSource == parser.CapabilitySupported {
+		excludedSessionIDs = append(excludedSessionIDs,
+			e.providerSourceMissingSessionIDsForCompleteResult(
+				file.Agent, source, parsedResults,
+			)...,
+		)
+	}
 	res := processResult{
 		results:               e.dropUnchangedSharedSQLiteResults(file, parsedResults),
-		excludedSessionIDs:    append([]string(nil), outcome.ExcludedSessionIDs...),
+		excludedSessionIDs:    excludedSessionIDs,
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
@@ -4813,6 +4822,29 @@ func (e *Engine) providerSourceSessionIDsForForceReplace(
 		}
 	}
 	return ids
+}
+
+func (e *Engine) providerSourceMissingSessionIDsForCompleteResult(
+	agent parser.AgentType,
+	source parser.SourceRef,
+	results []parser.ParseResult,
+) []string {
+	emitted := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		if id != "" {
+			emitted[id] = struct{}{}
+		}
+	}
+	stored := e.providerSourceSessionIDsForForceReplace(agent, source)
+	missing := make([]string, 0, len(stored))
+	for _, id := range stored {
+		if _, present := emitted[id]; present {
+			continue
+		}
+		missing = append(missing, id)
+	}
+	return missing
 }
 
 // applyProviderFilePathPolicies reproduces the DB-aware, file-path-scoped
