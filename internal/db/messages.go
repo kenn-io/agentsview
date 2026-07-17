@@ -1535,12 +1535,23 @@ func restorePinsTx(
 	for _, sp := range pins {
 		if sp.sourceUUID != "" {
 			res, err := tx.Exec(`
-				INSERT OR IGNORE INTO pinned_messages
+				INSERT INTO pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
 				SELECT ?, m.id, m.ordinal, ?, ?
 				FROM messages m
-				WHERE m.session_id = ? AND m.source_uuid = ?`,
-				sessionID, sp.note, sp.createdAt, sessionID, sp.sourceUUID,
+				WHERE m.session_id = ? AND m.source_uuid = ?
+				  AND (
+					SELECT count(*)
+					FROM messages candidate
+					WHERE candidate.session_id = ?
+					  AND candidate.source_uuid = ?
+				  ) = 1
+				ON CONFLICT(session_id, message_id) DO UPDATE SET
+					ordinal = excluded.ordinal,
+					note = excluded.note,
+					created_at = excluded.created_at`,
+				sessionID, sp.note, sp.createdAt,
+				sessionID, sp.sourceUUID, sessionID, sp.sourceUUID,
 			)
 			if err != nil {
 				return fmt.Errorf(
@@ -1552,11 +1563,15 @@ func restorePinsTx(
 			}
 		}
 		if _, err := tx.Exec(`
-			INSERT OR IGNORE INTO pinned_messages
+			INSERT INTO pinned_messages
 				(session_id, message_id, ordinal, note, created_at)
 			SELECT ?, m.id, m.ordinal, ?, ?
 			FROM messages m
-			WHERE m.session_id = ? AND m.ordinal = ?`,
+			WHERE m.session_id = ? AND m.ordinal = ?
+			ON CONFLICT(session_id, message_id) DO UPDATE SET
+				ordinal = excluded.ordinal,
+				note = excluded.note,
+				created_at = excluded.created_at`,
 			sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
 		); err != nil {
 			return fmt.Errorf("restoring pin ord=%d: %w", sp.ordinal, err)

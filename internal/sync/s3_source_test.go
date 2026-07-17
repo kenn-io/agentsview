@@ -1048,6 +1048,27 @@ func TestS3MachineLabelTransitionsReattributeStoredSession(t *testing.T) {
 	}
 
 	pathDerivedID := writeAs("pathbox")
+	pathDerivedMessages, err := database.GetAllMessages(
+		context.Background(), pathDerivedID,
+	)
+	require.NoError(t, err)
+	require.Len(t, pathDerivedMessages, 2)
+	pinNote := "keep this message"
+	_, err = database.PinMessage(
+		pathDerivedID, pathDerivedMessages[0].ID, &pinNote,
+	)
+	require.NoError(t, err)
+	_, err = database.InsertRecallEntry(db.RecallEntry{
+		ID: "transition-recall", Type: "fact", Scope: "project",
+		Title: "Transition recall", Body: "Preserve this entry",
+		SourceSessionID: pathDerivedID,
+		Evidence: []db.RecallEvidence{{
+			SessionID:           pathDerivedID,
+			MessageStartOrdinal: 0,
+			MessageEndOrdinal:   1,
+		}},
+	})
+	require.NoError(t, err)
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID:              "referencing-child",
 		Project:         "test-proj",
@@ -1105,6 +1126,21 @@ func TestS3MachineLabelTransitionsReattributeStoredSession(t *testing.T) {
 			events, err := database.GetUsageEvents(context.Background(), currentID)
 			require.NoError(t, err)
 			assert.Len(t, events, 1)
+			pins, err := database.ListPinnedMessages(
+				context.Background(), currentID, "",
+			)
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			require.NotNil(t, pins[0].Note)
+			assert.Equal(t, pinNote, *pins[0].Note)
+			recall, err := database.GetRecallEntry(
+				context.Background(), "transition-recall",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, recall)
+			assert.Equal(t, currentID, recall.SourceSessionID)
+			require.Len(t, recall.Evidence, 1)
+			assert.Equal(t, currentID, recall.Evidence[0].SessionID)
 
 			child, err := database.GetSessionFull(
 				context.Background(), "referencing-child",

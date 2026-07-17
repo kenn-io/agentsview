@@ -13,6 +13,7 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping perf test in -short mode")
 	}
+
 	t.Parallel()
 	d := openLargeSessionFixtureDB(t, true)
 	requireFTS(t, d)
@@ -36,6 +37,241 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 	require.NoError(t, err, "neighbor pins count")
 	assert.Equal(t, crossSessionNeighborCount, neighborPins,
 		"neighbor pins count")
+}
+
+func TestSupersedeSessionIdentitiesPreservesDependentData(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	const (
+		oldID     = "old-machine~session"
+		currentID = "new-machine~session"
+	)
+	for _, sess := range []Session{
+		{ID: oldID, Project: "project", Machine: "old-machine", Agent: "claude"},
+		{ID: currentID, Project: "project", Machine: "new-machine", Agent: "claude"},
+		{ID: "child", Project: "project", Machine: "viewer", Agent: "claude",
+			ParentSessionID: Ptr(oldID), SourceSessionID: oldID},
+		{ID: "parent", Project: "project", Machine: "viewer", Agent: "claude"},
+	} {
+		require.NoError(t, d.UpsertSession(sess))
+	}
+	require.NoError(t, d.InsertMessages([]Message{
+		{SessionID: oldID, Ordinal: 0, Role: "user", Content: "stable",
+			SourceUUID: "stable-source"},
+		{SessionID: oldID, Ordinal: 1, Role: "assistant", Content: "legacy"},
+		{SessionID: currentID, Ordinal: 1, Role: "assistant", Content: "legacy"},
+		{SessionID: currentID, Ordinal: 2, Role: "user", Content: "stable",
+			SourceUUID: "stable-source"},
+		{SessionID: "parent", Ordinal: 0, Role: "assistant", Content: "spawn",
+			ToolCalls: []ToolCall{{
+				ToolName: "Agent", Category: "agent", ToolUseID: "spawn",
+				SubagentSessionID: oldID,
+				ResultEvents: []ToolResultEvent{{
+					ToolUseID: "spawn", SubagentSessionID: oldID,
+					Source: "progress", Status: "completed",
+				}},
+			}}},
+	}))
+	oldMessages, err := d.GetAllMessages(ctx, oldID)
+	require.NoError(t, err)
+	require.Len(t, oldMessages, 2)
+	firstNote, secondNote := "stable note", "legacy note"
+	_, err = d.PinMessage(oldID, oldMessages[0].ID, &firstNote)
+	require.NoError(t, err)
+	_, err = d.PinMessage(oldID, oldMessages[1].ID, &secondNote)
+	require.NoError(t, err)
+	starred, err := d.StarSession(oldID)
+	require.NoError(t, err)
+	require.True(t, starred)
+
+	require.NoError(t, d.ReplaceSessionUsageEvents(oldID, []UsageEvent{
+		{Source: "session", Model: "model", InputTokens: 10,
+			OutputTokens: 2, DedupKey: "same"},
+		{Source: "session", Model: "legacy", InputTokens: 5,
+			OutputTokens: 1},
+	}))
+	require.NoError(t, d.ReplaceSessionUsageEvents(currentID, []UsageEvent{{
+		Source: "session", Model: "model", InputTokens: 10,
+		OutputTokens: 2, DedupKey: "same",
+	}}))
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID: "recall", Type: "fact", Scope: "project", Title: "title", Body: "body",
+		SourceSessionID: oldID,
+		Evidence: []RecallEvidence{{
+			SessionID: oldID, MessageStartOrdinal: 0, MessageEndOrdinal: 1,
+			MessageStartSourceUUID: "stable-source",
+		}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.ReplaceSessionSecretFindings(oldID, []SecretFinding{{
+		RuleName: "rule", Confidence: "high", LocationKind: "message",
+		MessageOrdinal: 0, MatchStart: 0, MatchEnd: 6,
+		RedactedMatch: "******", RulesVersion: "v1",
+	}}, 1, "v1"))
+	require.NoError(t, d.ReplaceSessionSecretFindings(currentID, []SecretFinding{{
+		RuleName: "rule", Confidence: "high", LocationKind: "message",
+		MessageOrdinal: 0, MatchStart: 0, MatchEnd: 6,
+		RedactedMatch: "******", RulesVersion: "v1",
+	}}, 1, "v1"))
+	_, err = d.getWriter().Exec(`
+		UPDATE session_project_identity_snapshots
+		SET git_remote = 'https://example.invalid/repo.git',
+			remote_resolution = 'resolved', key = 'repository:repo'
+		WHERE session_id = ?`, oldID)
+	require.NoError(t, err)
+
+	require.NoError(t, d.SupersedeSessionIdentities(currentID, []string{oldID}))
+
+	old, err := d.GetSessionFull(ctx, oldID)
+	require.NoError(t, err)
+	assert.Nil(t, old)
+	pins, err := d.ListPinnedMessages(ctx, currentID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 2)
+	pinsByOrdinal := map[int]PinnedMessage{}
+	for _, pin := range pins {
+		pinsByOrdinal[pin.Ordinal] = pin
+	}
+	require.NotNil(t, pinsByOrdinal[2].Note)
+	assert.Equal(t, firstNote, *pinsByOrdinal[2].Note)
+	require.NotNil(t, pinsByOrdinal[1].Note)
+	assert.Equal(t, secondNote, *pinsByOrdinal[1].Note)
+
+	stars, err := d.ListStarredSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, stars, currentID)
+	assert.NotContains(t, stars, oldID)
+	usage, err := d.GetUsageEvents(ctx, currentID)
+	require.NoError(t, err)
+	require.Len(t, usage, 2)
+
+	recall, err := d.GetRecallEntry(ctx, "recall")
+	require.NoError(t, err)
+	require.NotNil(t, recall)
+	assert.Equal(t, currentID, recall.SourceSessionID)
+	require.Len(t, recall.Evidence, 1)
+	assert.Equal(t, currentID, recall.Evidence[0].SessionID)
+
+	findings, err := d.SessionSecretFindings(ctx, currentID)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, currentID, findings[0].SessionID)
+
+	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	snapshotByID := make(map[string]string, len(snapshots))
+	for _, snapshot := range snapshots {
+		snapshotByID[snapshot.SessionID] = snapshot.GitRemote
+		if snapshot.SessionID == currentID {
+			assert.Equal(t, "new-machine", snapshot.Machine)
+		}
+	}
+	assert.Equal(t, "https://example.invalid/repo.git", snapshotByID[currentID])
+	assert.NotContains(t, snapshotByID, oldID)
+
+	child, err := d.GetSessionFull(ctx, "child")
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, currentID, *child.ParentSessionID)
+	assert.Equal(t, currentID, child.SourceSessionID)
+	parentMessages, err := d.GetAllMessages(ctx, "parent")
+	require.NoError(t, err)
+	require.Len(t, parentMessages, 1)
+	require.Len(t, parentMessages[0].ToolCalls, 1)
+	assert.Equal(t, currentID, parentMessages[0].ToolCalls[0].SubagentSessionID)
+	require.Len(t, parentMessages[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(
+		t, currentID,
+		parentMessages[0].ToolCalls[0].ResultEvents[0].SubagentSessionID,
+	)
+}
+
+func TestSupersedeSessionIdentitiesRollsBackOnError(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	const (
+		oldID     = "old-machine~rollback"
+		currentID = "new-machine~rollback"
+	)
+	for _, id := range []string{oldID, currentID} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "machine", Agent: "claude",
+		}))
+		require.NoError(t, d.InsertMessages([]Message{{
+			SessionID: id, Ordinal: 0, Role: "user", Content: "message",
+			SourceUUID: "stable-source",
+		}}))
+	}
+	oldMessages, err := d.GetAllMessages(ctx, oldID)
+	require.NoError(t, err)
+	require.Len(t, oldMessages, 1)
+	_, err = d.PinMessage(oldID, oldMessages[0].ID, nil)
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID: "rollback-recall", Type: "fact", Scope: "project",
+		Title: "title", Body: "body", SourceSessionID: oldID,
+	})
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
+		CREATE TRIGGER reject_recall_identity_update
+		BEFORE UPDATE OF source_session_id ON recall_entries
+		BEGIN
+			SELECT RAISE(ABORT, 'forced rollback');
+		END`)
+	require.NoError(t, err)
+
+	err = d.SupersedeSessionIdentities(currentID, []string{oldID})
+	require.ErrorContains(t, err, "forced rollback")
+
+	old, getErr := d.GetSessionFull(ctx, oldID)
+	require.NoError(t, getErr)
+	assert.NotNil(t, old)
+	oldPins, getErr := d.ListPinnedMessages(ctx, oldID, "")
+	require.NoError(t, getErr)
+	assert.Len(t, oldPins, 1)
+	currentPins, getErr := d.ListPinnedMessages(ctx, currentID, "")
+	require.NoError(t, getErr)
+	assert.Empty(t, currentPins)
+	recall, getErr := d.GetRecallEntry(ctx, "rollback-recall")
+	require.NoError(t, getErr)
+	require.NotNil(t, recall)
+	assert.Equal(t, oldID, recall.SourceSessionID)
+}
+
+func TestSupersedeSessionIdentitiesCoversForeignKeyTables(t *testing.T) {
+	d := testDB(t)
+	rows, err := d.getReader().Query(`
+		SELECT schema_table.name, foreign_key."from"
+		FROM sqlite_schema AS schema_table
+		JOIN pragma_foreign_key_list(schema_table.name) AS foreign_key
+		WHERE schema_table.type = 'table'
+		  AND foreign_key."table" IN ('sessions', 'messages')
+		ORDER BY schema_table.name, foreign_key."from"`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var table, column string
+		require.NoError(t, rows.Scan(&table, &column))
+		got = append(got, table+"."+column)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{
+		"messages.session_id",
+		"pinned_messages.message_id",
+		"pinned_messages.session_id",
+		"recall_entries.source_session_id",
+		"recall_evidence.session_id",
+		"secret_findings.session_id",
+		"session_project_identity_snapshots.session_id",
+		"starred_sessions.session_id",
+		"tool_calls.message_id",
+		"tool_calls.session_id",
+		"tool_result_events.session_id",
+		"usage_events.session_id",
+	}, got)
 }
 
 func TestFindSessionIDsByPartial(t *testing.T) {

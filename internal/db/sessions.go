@@ -2218,9 +2218,8 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	return ids, nil
 }
 
-// SupersedeSessionIdentities removes stale active identities after a replacement
-// session for the same source has been written. References to the stale IDs are
-// retargeted first so parent/subagent relationships remain connected.
+// SupersedeSessionIdentities merges stale identities into a replacement session
+// for the same source. The complete merge and old-row deletion are atomic.
 func (db *DB) SupersedeSessionIdentities(
 	currentID string, supersededIDs []string,
 ) error {
@@ -2235,6 +2234,7 @@ func (db *DB) SupersedeSessionIdentities(
 		return fmt.Errorf("beginning session identity supersession: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	var currentExists int
 	if err := tx.QueryRow(
@@ -2247,57 +2247,235 @@ func (db *DB) SupersedeSessionIdentities(
 		if oldID == "" || oldID == currentID {
 			continue
 		}
-		if _, err := tx.Exec(`
+		if err := supersedeSessionIdentityTx(tx, currentID, oldID); err != nil {
+			return err
+		}
+	}
+	if err := reconcileRecallEvidenceForSessionTx(
+		context.Background(), tx, currentID, &pendingRecallRevocations,
+	); err != nil {
+		return fmt.Errorf("reconciling recall evidence for %s: %w", currentID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	pendingRecallRevocations.flush()
+	return nil
+}
+
+func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
+	pins, err := savePinsTx(tx, oldID)
+	if err != nil {
+		return fmt.Errorf("preserving pins from %s: %w", oldID, err)
+	}
+	if err := restorePinsTx(tx, currentID, pins); err != nil {
+		return fmt.Errorf("reattaching pins from %s: %w", oldID, err)
+	}
+
+	if _, err := tx.Exec(`
 			UPDATE sessions
 			SET display_name = COALESCE(
 				display_name,
 				(SELECT display_name FROM sessions WHERE id = ?)
 			)
 			WHERE id = ?`, oldID, currentID); err != nil {
-			return fmt.Errorf("preserving session name from %s: %w", oldID, err)
-		}
-		if _, err := tx.Exec(`
-			INSERT OR IGNORE INTO starred_sessions (session_id, created_at)
+		return fmt.Errorf("preserving session name from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(`
+			INSERT INTO starred_sessions (session_id, created_at)
 			SELECT ?, created_at
 			FROM starred_sessions
-			WHERE session_id = ?`, currentID, oldID); err != nil {
-			return fmt.Errorf("preserving session star from %s: %w", oldID, err)
-		}
-		for _, update := range []struct {
-			query string
-			name  string
-		}{
-			{
-				"UPDATE sessions SET parent_session_id = ? WHERE parent_session_id = ?",
-				"parent session references",
-			},
-			{
-				"UPDATE sessions SET source_session_id = ? WHERE source_session_id = ?",
-				"source session references",
-			},
-			{
-				"UPDATE tool_calls SET subagent_session_id = ? WHERE subagent_session_id = ?",
-				"tool-call subagent references",
-			},
-			{
-				"UPDATE tool_result_events SET subagent_session_id = ? WHERE subagent_session_id = ?",
-				"tool-result subagent references",
-			},
-		} {
-			if _, err := tx.Exec(update.query, currentID, oldID); err != nil {
-				return fmt.Errorf(
-					"retargeting %s from %s: %w", update.name, oldID, err,
-				)
-			}
-		}
-		if err := deleteSessionMessagesTx(tx, oldID); err != nil {
-			return fmt.Errorf("deleting superseded session %s messages: %w", oldID, err)
-		}
-		if _, err := tx.Exec("DELETE FROM sessions WHERE id = ?", oldID); err != nil {
-			return fmt.Errorf("deleting superseded session %s: %w", oldID, err)
+			WHERE session_id = ?
+			ON CONFLICT(session_id) DO UPDATE SET
+				created_at = MIN(created_at, excluded.created_at)`,
+		currentID, oldID,
+	); err != nil {
+		return fmt.Errorf("preserving session star from %s: %w", oldID, err)
+	}
+
+	if err := mergeUsageEventsForSessionIdentityTx(tx, currentID, oldID); err != nil {
+		return err
+	}
+	if err := mergeSecretFindingsForSessionIdentityTx(tx, currentID, oldID); err != nil {
+		return err
+	}
+	if err := mergeProjectSnapshotForSessionIdentityTx(tx, currentID, oldID); err != nil {
+		return err
+	}
+
+	for _, update := range []struct {
+		query string
+		name  string
+	}{
+		{
+			"UPDATE recall_entries SET source_session_id = ? WHERE source_session_id = ?",
+			"recall entries",
+		},
+		{
+			"UPDATE recall_evidence SET session_id = ? WHERE session_id = ?",
+			"recall evidence",
+		},
+		{
+			"UPDATE sessions SET parent_session_id = ? WHERE parent_session_id = ?",
+			"parent session references",
+		},
+		{
+			"UPDATE sessions SET source_session_id = ? WHERE source_session_id = ?",
+			"source session references",
+		},
+		{
+			"UPDATE tool_calls SET subagent_session_id = ? WHERE subagent_session_id = ?",
+			"tool-call subagent references",
+		},
+		{
+			"UPDATE tool_result_events SET subagent_session_id = ? WHERE subagent_session_id = ?",
+			"tool-result subagent references",
+		},
+		{
+			"UPDATE project_identity_observations SET session_id = ? WHERE session_id = ?",
+			"project identity observations",
+		},
+	} {
+		if _, err := tx.Exec(update.query, currentID, oldID); err != nil {
+			return fmt.Errorf(
+				"retargeting %s from %s: %w", update.name, oldID, err,
+			)
 		}
 	}
-	return tx.Commit()
+	if err := deleteSessionMessagesTx(tx, oldID); err != nil {
+		return fmt.Errorf("deleting superseded session %s messages: %w", oldID, err)
+	}
+	if _, err := tx.Exec("DELETE FROM sessions WHERE id = ?", oldID); err != nil {
+		return fmt.Errorf("deleting superseded session %s: %w", oldID, err)
+	}
+	return nil
+}
+
+func mergeUsageEventsForSessionIdentityTx(
+	tx *sql.Tx, currentID, oldID string,
+) error {
+	if _, err := tx.Exec(`
+		DELETE FROM usage_events
+		WHERE session_id = ?
+		  AND EXISTS (
+			SELECT 1
+			FROM usage_events current
+			WHERE current.session_id = ?
+			  AND (
+				(usage_events.dedup_key <> ''
+				 AND current.source = usage_events.source
+				 AND current.dedup_key = usage_events.dedup_key)
+				OR
+				(usage_events.dedup_key = ''
+				 AND current.dedup_key = ''
+				 AND current.message_ordinal IS usage_events.message_ordinal
+				 AND current.source = usage_events.source
+				 AND current.model = usage_events.model
+				 AND current.input_tokens = usage_events.input_tokens
+				 AND current.output_tokens = usage_events.output_tokens
+				 AND current.cache_creation_input_tokens =
+					usage_events.cache_creation_input_tokens
+				 AND current.cache_read_input_tokens =
+					usage_events.cache_read_input_tokens
+				 AND current.reasoning_tokens = usage_events.reasoning_tokens
+				 AND current.cost_usd IS usage_events.cost_usd
+				 AND current.cost_status = usage_events.cost_status
+				 AND current.cost_source = usage_events.cost_source
+				 AND current.occurred_at IS usage_events.occurred_at)
+			  )
+		  )`, oldID, currentID); err != nil {
+		return fmt.Errorf("deduplicating usage events from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(
+		"UPDATE usage_events SET session_id = ? WHERE session_id = ?",
+		currentID, oldID,
+	); err != nil {
+		return fmt.Errorf("retargeting usage events from %s: %w", oldID, err)
+	}
+	return nil
+}
+
+func mergeSecretFindingsForSessionIdentityTx(
+	tx *sql.Tx, currentID, oldID string,
+) error {
+	if _, err := tx.Exec(`
+		INSERT INTO secret_findings (
+			session_id, rule_name, confidence, location_kind,
+			message_ordinal, call_index, event_index, match_start, match_end,
+			match_index, redacted_match, rules_version, created_at
+		)
+		SELECT
+			?, old.rule_name, old.confidence, old.location_kind,
+			old.message_ordinal, old.call_index, old.event_index,
+			old.match_start, old.match_end, old.match_index,
+			old.redacted_match, old.rules_version, old.created_at
+		FROM secret_findings old
+		WHERE old.session_id = ?
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM secret_findings current
+			WHERE current.session_id = ?
+			  AND current.rule_name = old.rule_name
+			  AND current.location_kind = old.location_kind
+			  AND current.message_ordinal = old.message_ordinal
+			  AND current.call_index IS old.call_index
+			  AND current.event_index IS old.event_index
+			  AND current.match_start = old.match_start
+			  AND current.match_end = old.match_end
+			  AND current.match_index = old.match_index
+		  )`, currentID, oldID, currentID); err != nil {
+		return fmt.Errorf("preserving secret findings from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET secret_leak_count = (
+				SELECT count(*) FROM secret_findings WHERE session_id = ?
+			),
+			secrets_rules_version = COALESCE(
+				NULLIF(secrets_rules_version, ''),
+				(SELECT secrets_rules_version FROM sessions WHERE id = ?)
+			)
+		WHERE id = ?`, currentID, oldID, currentID); err != nil {
+		return fmt.Errorf("updating preserved secret summary from %s: %w", oldID, err)
+	}
+	return nil
+}
+
+func mergeProjectSnapshotForSessionIdentityTx(
+	tx *sql.Tx, currentID, oldID string,
+) error {
+	if _, err := tx.Exec(`
+		UPDATE session_project_identity_snapshots AS current
+		SET project = old.project,
+			machine = (SELECT machine FROM sessions WHERE id = ?),
+			root_path = old.root_path,
+			git_remote = old.git_remote,
+			git_remote_name = old.git_remote_name,
+			repository_path = old.repository_path,
+			worktree_name = old.worktree_name,
+			worktree_root_path = old.worktree_root_path,
+			worktree_relationship = old.worktree_relationship,
+			checkout_state = old.checkout_state,
+			git_branch = old.git_branch,
+			remote_resolution = old.remote_resolution,
+			remote_candidate_count = old.remote_candidate_count,
+			observed_at = old.observed_at,
+			normalized_remote = old.normalized_remote,
+			key_source = old.key_source,
+			key = old.key
+		FROM session_project_identity_snapshots AS old
+		WHERE current.session_id = ?
+		  AND old.session_id = ?
+		  AND current.remote_resolution = 'unknown'
+		  AND (
+			old.remote_resolution <> 'unknown'
+			OR current.key = ''
+		  )`,
+		currentID, currentID, oldID,
+	); err != nil {
+		return fmt.Errorf("preserving project snapshot from %s: %w", oldID, err)
+	}
+	return nil
 }
 
 const storedSourcePathHintRootBatchSize = 100
