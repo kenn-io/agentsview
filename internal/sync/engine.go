@@ -4011,6 +4011,7 @@ func (e *Engine) collectAndBatch(
 				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			stats.RecordSkip()
+			e.clearOmnigentSourceRetry(r.agent, r.path)
 			e.noteSQLiteContainerResult(r.path, true)
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
@@ -4035,6 +4036,7 @@ func (e *Engine) collectAndBatch(
 			); err != nil {
 				log.Printf("delete parser-excluded sessions: %v", err)
 				stats.RecordFailed()
+				e.markOmnigentSourceRetry(r.agent, r.path)
 				e.noteSQLiteContainerResult(r.path, false)
 				continue
 			}
@@ -4043,6 +4045,7 @@ func (e *Engine) collectAndBatch(
 				excludedSessionIDs...,
 			)
 		}
+		e.clearOmnigentSourceRetry(r.agent, r.path)
 		if len(r.results) == 0 && r.incremental == nil {
 			if len(r.excludedSessionIDs) > 0 {
 				stats.filesOK++
@@ -4080,6 +4083,7 @@ func (e *Engine) collectAndBatch(
 			r.path, vetoed == 0 && len(r.retrySessionIDs) == 0,
 		)
 		if vetoed > 0 && len(allowed) == 0 {
+			e.clearOmnigentSourceRetry(r.agent, r.path)
 			stats.cwdFilteredFiles++
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
@@ -6892,18 +6896,23 @@ type omnigentRetrySource struct {
 	filePath  string
 }
 
+func (r omnigentRetrySource) key() string {
+	if r.sessionID != "" {
+		return "session\x00" + r.sessionID
+	}
+	return "source\x00" + filepath.Clean(r.filePath)
+}
+
 func (e *Engine) markOmnigentSourceRetry(agent parser.AgentType, path string) {
 	if agent != parser.AgentOmnigent {
 		return
 	}
 	_, memberID, virtual := parser.ParseVirtualSourcePath(path)
-	if !virtual || memberID == "" {
-		return
+	retry := omnigentRetrySource{filePath: path}
+	if virtual && memberID != "" {
+		retry.sessionID = string(parser.AgentOmnigent) + ":" + memberID
 	}
-	e.storeOmnigentRetry(omnigentRetrySource{
-		sessionID: string(parser.AgentOmnigent) + ":" + memberID,
-		filePath:  path,
-	})
+	e.storeOmnigentRetry(retry)
 }
 
 func (e *Engine) markOmnigentSessionRetry(pw pendingWrite) {
@@ -6929,7 +6938,7 @@ func (e *Engine) storeOmnigentRetry(retry omnigentRetrySource) {
 	if e.omnigentRetrySources == nil {
 		e.omnigentRetrySources = make(map[string]omnigentRetrySource)
 	}
-	e.omnigentRetrySources[retry.sessionID] = retry
+	e.omnigentRetrySources[retry.key()] = retry
 }
 
 func (e *Engine) clearOmnigentSessionRetry(pw pendingWrite) {
@@ -6937,7 +6946,23 @@ func (e *Engine) clearOmnigentSessionRetry(pw pendingWrite) {
 		return
 	}
 	e.omnigentRetryMu.Lock()
-	delete(e.omnigentRetrySources, pw.sess.ID)
+	delete(e.omnigentRetrySources, omnigentRetrySource{
+		sessionID: pw.sess.ID,
+	}.key())
+	e.omnigentRetryMu.Unlock()
+}
+
+func (e *Engine) clearOmnigentSourceRetry(agent parser.AgentType, path string) {
+	if agent != parser.AgentOmnigent || path == "" {
+		return
+	}
+	_, memberID, virtual := parser.ParseVirtualSourcePath(path)
+	retry := omnigentRetrySource{filePath: path}
+	if virtual && memberID != "" {
+		retry.sessionID = string(parser.AgentOmnigent) + ":" + memberID
+	}
+	e.omnigentRetryMu.Lock()
+	delete(e.omnigentRetrySources, retry.key())
 	e.omnigentRetryMu.Unlock()
 }
 
@@ -7963,6 +7988,7 @@ func (e *Engine) writeBatchBulk(
 ) (writtenSessions, writtenMessages, failedSessions, cwdFiltered int) {
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
+	pendingByID := make(map[string]pendingWrite, len(batch))
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
 	for _, pw := range batch {
@@ -7995,6 +8021,7 @@ func (e *Engine) writeBatchBulk(
 			DataVersion:     dataVersionForWrite(pw),
 			ReplaceMessages: replaceMessages,
 		})
+		pendingByID[s.ID] = pw
 		if pw.sess.File.Path != "" {
 			sources[s.ID] = batchSourceFile{
 				path:        pw.sess.File.Path,
@@ -8015,7 +8042,22 @@ func (e *Engine) writeBatchBulk(
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))
 	if err != nil {
 		log.Printf("write session batch: %v", err)
+		for _, pw := range pendingByID {
+			e.markOmnigentSessionRetry(pw)
+		}
 		return 0, 0, len(writes), cwdFiltered
+	}
+	failedIDs := make(map[string]struct{}, len(result.FailedIDs))
+	for _, id := range result.FailedIDs {
+		failedIDs[id] = struct{}{}
+		if pw, ok := pendingByID[id]; ok {
+			e.markOmnigentSessionRetry(pw)
+		}
+	}
+	for id, pw := range pendingByID {
+		if _, failed := failedIDs[id]; !failed {
+			e.clearOmnigentSessionRetry(pw)
+		}
 	}
 	for _, id := range result.ExcludedIDs {
 		if source, ok := sources[id]; ok && source.path != "" {

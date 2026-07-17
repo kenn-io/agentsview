@@ -334,6 +334,37 @@ func TestSyncOmnigentFreshTrackerUsesWarmContainerCache(t *testing.T) {
 		"the next change should use bounded member discovery")
 }
 
+func TestSyncOmnigentInitialContainerFailureIsRetried(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 3)
+	archive := dbtest.OpenTestDB(t)
+	var failed atomic.Bool
+	factory := omnigentParseCountingFactory{
+		delegate: omnigentDefaultProviderFactory(t),
+		count:    &atomic.Int64{},
+		failPath: dbPath,
+		failOnce: &failed,
+	}
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	defer engine.Close()
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+
+	engine.SyncAll(context.Background(), nil)
+	session, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	assert.NotNil(t, session, "the failed physical source must remain retryable")
+}
+
 func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -448,6 +479,60 @@ func TestSyncOmnigentRetriesFailedDirectEditProbe(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "direct edit", messages[0].Content)
+}
+
+func TestSyncOmnigentRetriesAndClearsFailedTombstone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	var parseCount atomic.Int64
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{omnigentParseCountingFactory{
+			delegate: omnigentDefaultProviderFactory(t),
+			count:    &parseCount,
+		}},
+	})
+	defer engine.Close()
+	engine.SyncAll(context.Background(), nil)
+
+	raw, err := sql.Open("sqlite3", archive.Path())
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.Exec(`CREATE TRIGGER fail_omnigent_tombstone
+		BEFORE DELETE ON sessions
+		WHEN OLD.id = 'omnigent:conv_0000'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected tombstone failure');
+		END`)
+	require.NoError(t, err)
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversation_items
+		WHERE conversation_id = 'conv_0000'`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_0000'`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+
+	_, err = raw.Exec(`DROP TRIGGER fail_omnigent_tombstone`)
+	require.NoError(t, err)
+	engine.SyncAll(context.Background(), nil)
+	session, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	assert.Nil(t, session)
+
+	parseCount.Store(0)
+	engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, parseCount.Load(), "a successful tombstone must clear its retry")
 }
 
 func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {
