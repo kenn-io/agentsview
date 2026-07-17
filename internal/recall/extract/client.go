@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrContextOverflow reports a prompt the server rejected as too large for
@@ -137,7 +138,10 @@ func (c *Client) DistillWithRecovery(
 				"configuration must set it (got %d)", c.Request.MaxTokens,
 		)
 	}
-	compactAllowed := len(text) <= c.CompactFloorChars
+	// Rune count, not byte length: segmentation budgets count code points,
+	// so the floor must measure units the same way.
+	unitChars := utf8.RuneCountInString(text)
+	compactAllowed := unitChars <= c.CompactFloorChars
 	for _, compact := range []bool{false, true} {
 		var lastErr error
 		truncated := false
@@ -169,7 +173,7 @@ func (c *Client) DistillWithRecovery(
 		}
 	}
 	return nil, Usage{}, fmt.Errorf(
-		"unit of %d chars: %w", len(text), ErrPersistentTruncation,
+		"unit of %d chars: %w", unitChars, ErrPersistentTruncation,
 	)
 }
 
@@ -204,7 +208,8 @@ func (c *Client) distill(
 	}
 	request, err := http.NewRequestWithContext(
 		ctx, http.MethodPost,
-		c.BaseURL+"/chat/completions", bytes.NewReader(body),
+		strings.TrimRight(c.BaseURL, "/")+"/chat/completions",
+		bytes.NewReader(body),
 	)
 	if err != nil {
 		return nil, Usage{}, fmt.Errorf("building distill request: %w", err)
@@ -231,8 +236,8 @@ func (c *Client) distill(
 		// is recoverable by splitting the unit.
 		if isContextOverflowDetail(string(raw)) {
 			return nil, Usage{}, fmt.Errorf(
-				"%d-char unit: %w: %s", len(userText), ErrContextOverflow,
-				detail,
+				"%d-char unit: %w: %s",
+				utf8.RuneCountInString(userText), ErrContextOverflow, detail,
 			)
 		}
 		return nil, Usage{}, fmt.Errorf(
@@ -285,12 +290,25 @@ func (c *Client) distill(
 }
 
 // isContextOverflowDetail reports whether a 400 body identifies an
-// input-length error. Chat servers phrase it differently ("maximum context
-// length", "context_length_exceeded", "prompt is too long", "input length
-// exceeds"), but all name the context or the input being too long.
+// input-length error. The markers are specific phrasings chat servers use
+// for exceeded input, not lone words like "context" that also appear in
+// unrelated rejections. A phrasing this list misses fails the unit with the
+// server's message intact, which is recoverable by configuration; the
+// reverse mistake would send the caller splitting units in a useless loop.
 func isContextOverflowDetail(body string) bool {
 	lower := strings.ToLower(body)
-	for _, marker := range []string{"context", "too long", "input length"} {
+	markers := []string{
+		"context_length_exceeded",
+		"maximum context length",
+		"context length",
+		"context window",
+		"context size",
+		"prompt is too long",
+		"input is too long",
+		"input length",
+		"too many tokens",
+	}
+	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
 			return true
 		}

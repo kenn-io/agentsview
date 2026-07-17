@@ -25,6 +25,9 @@ func newScriptedServer(
 	var index atomic.Int64
 	return httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/chat/completions" {
+				t.Errorf("request path = %q, want /chat/completions", r.URL.Path)
+			}
 			var payload map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Errorf("decoding request: %v", err)
@@ -129,6 +132,68 @@ func TestClientDistillParsesEntriesAndSendsShape(t *testing.T) {
 	}
 	if _, ok := payload["response_format"]; !ok {
 		t.Fatal("constrained decoding must be requested")
+	}
+}
+
+func TestClientTrailingSlashBaseURL(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: "stop", content: entriesJSON(t, "one")},
+	}, &requests)
+	defer server.Close()
+
+	client := testClient(server.URL + "/")
+	entries, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+}
+
+func TestClientCompactFloorCountsRunesNotBytes(t *testing.T) {
+	// Segmentation budgets count code points, so the compact floor must
+	// too: 40 three-byte runes are 120 bytes but still one unsplittable
+	// 40-rune unit under the 64-rune floor, and must get the compact retry.
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: "length", content: ""},
+		{finishReason: "stop", content: entriesJSON(t, "compact")},
+	}, &requests)
+	defer server.Close()
+
+	text := strings.Repeat("日", 40)
+	entries, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", text, 3,
+	)
+	if err != nil {
+		t.Fatalf("DistillWithRecovery: %v", err)
+	}
+	if len(entries) != 1 || len(requests) != 2 {
+		t.Fatalf("entries=%d requests=%d, want compact retry to run",
+			len(entries), len(requests))
+	}
+}
+
+func TestClientBadRequestMentioningContextIsNotOverflow(t *testing.T) {
+	// "context" alone must not classify as overflow: 400s for unrelated
+	// problems can mention the word without describing an input-length
+	// error, and splitting the unit would loop uselessly.
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{
+			status: http.StatusBadRequest,
+			errorBody: `{"error":{"message":"unknown field ` +
+				`\"chat_template_kwargs\" in request context"}}`,
+		},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err == nil || errors.Is(err, ErrContextOverflow) {
+		t.Fatalf("err = %v, must be a permanent non-overflow error", err)
 	}
 }
 
