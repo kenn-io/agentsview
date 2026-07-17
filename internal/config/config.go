@@ -1765,6 +1765,10 @@ func (c *Config) resolveSessionSources() error {
 		}
 
 		seen := rootsByAgent[agent]
+		if seen == nil {
+			seen = make(map[string]rootState)
+			rootsByAgent[agent] = seen
+		}
 		state, duplicate := seen[dir]
 		if duplicate {
 			state.machine = machine
