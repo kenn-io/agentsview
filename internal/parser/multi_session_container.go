@@ -59,7 +59,9 @@ type multiSessionConfig struct {
 	// classifyChangedPath optionally resolves one filesystem event directly to
 	// the affected members. Providers use this when a shared container can
 	// identify a bounded changed batch without reparsing every member.
-	classifyChangedPath func(root string, req ChangedPathRequest) ([]multiSessionMatch, error)
+	classifyChangedPath func(
+		context.Context, string, ChangedPathRequest,
+	) ([]multiSessionMatch, error)
 	// findMember resolves a raw session ID to its member match under one root.
 	findMember func(root, rawID string) (multiSessionMatch, bool)
 	// storedPathFallback resolves a stored path that classifyPath could not
@@ -141,7 +143,9 @@ func WithChangedPathClassifier(
 }
 
 func WithChangedPathMembers(
-	fn func(root string, req ChangedPathRequest) ([]multiSessionMatch, error),
+	fn func(
+		context.Context, string, ChangedPathRequest,
+	) ([]multiSessionMatch, error),
 ) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.classifyChangedPath = fn }
 }
@@ -297,7 +301,7 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 	}
 	for _, root := range s.roots {
 		if s.cfg.classifyChangedPath != nil {
-			matches, err := s.cfg.classifyChangedPath(root, req)
+			matches, err := s.cfg.classifyChangedPath(ctx, root, req)
 			if err != nil {
 				return nil, err
 			}

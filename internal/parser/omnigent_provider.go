@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 )
 
 const (
+	omnigentChangedBatchSize   = 32
 	omnigentProbeBatchSize     = 32
 	omnigentWorkspaceBatchSize = 32
 )
@@ -160,7 +162,7 @@ func (t *omnigentChangeTracker) discoverSources(
 			matches = append(matches, whole)
 			continue
 		}
-		changed, err := t.changedMembers(root, ChangedPathRequest{
+		changed, err := t.changedMembers(context.Background(), root, ChangedPathRequest{
 			Path: container, EventKind: "poll",
 		})
 		if err != nil {
@@ -365,7 +367,7 @@ func omnigentConversationMetaByRowIDQuery(schema omnigentSchema) string {
 }
 
 func (t *omnigentChangeTracker) changedMembers(
-	root string, req ChangedPathRequest,
+	ctx context.Context, root string, req ChangedPathRequest,
 ) ([]multiSessionMatch, error) {
 	match, ok := omnigentClassifyPath(root, req.Path, true)
 	if !ok {
@@ -378,10 +380,7 @@ func (t *omnigentChangeTracker) changedMembers(
 	_, initialized := t.containers[match.Container]
 	t.mu.Unlock()
 	if !initialized {
-		// A cold tracker has no authoritative member set to diff against.
-		// Return the rowless container source so one complete parse both
-		// reconciles archived membership and initializes bounded discovery.
-		return []multiSessionMatch{match}, nil
+		return t.initializeColdContainer(ctx, match)
 	}
 	conn, err := openOmnigentDB(match.Container)
 	if err != nil {
@@ -423,24 +422,29 @@ func (t *omnigentChangeTracker) changedMembers(
 		for _, workspaceID := range workspaceBatch {
 			cutoff := max(tracked.workspaceCheckedAt[workspaceID]-1, 0)
 			workspaceMetas, err := listOmnigentConversationMetasSince(
-				conn, schema, []int64{workspaceID}, cutoff, checkedAt+1,
+				ctx, conn, schema, []int64{workspaceID}, cutoff, checkedAt+1,
+				omnigentChangedBatchSize-len(changed),
 			)
 			if err != nil {
 				return nil, err
 			}
 			changed = append(changed, workspaceMetas...)
+			if len(changed) >= omnigentChangedBatchSize {
+				break
+			}
 		}
 	} else {
 		cutoff := max(tracked.checkedAt-1, 0)
 		changed, err = listOmnigentConversationMetasSince(
-			conn, schema, nil, cutoff, checkedAt+1,
+			ctx, conn, schema, nil, cutoff, checkedAt+1,
+			omnigentChangedBatchSize,
 		)
 		if err != nil {
 			return nil, err
 		}
 	}
 	newRows, err := listOmnigentConversationMetasAfterRowID(
-		conn, schema, tracked.maxRowID,
+		ctx, conn, schema, tracked.maxRowID, omnigentChangedBatchSize,
 	)
 	if err != nil {
 		return nil, err
@@ -519,37 +523,90 @@ func (t *omnigentChangeTracker) changedMembers(
 	return omnigentMatches(match.Container, schema, metas), nil
 }
 
+// initializeColdContainer establishes a bounded tracker foothold without
+// fanning the physical database out through one archive-sized parse. Member
+// parses observe each successful row and advance maxRowID, so later events
+// continue from the next batch. An actually empty container remains a whole
+// source: parsing zero conversations is bounded, while its complete empty
+// outcome authoritatively removes rows that were archived before a restart.
+func (t *omnigentChangeTracker) initializeColdContainer(
+	ctx context.Context, match multiSessionMatch,
+) ([]multiSessionMatch, error) {
+	conn, err := openOmnigentDB(match.Container)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	schema, err := detectOmnigentSchema(conn)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	metas, err := listOmnigentConversationMetasAfterRowID(
+		ctx, conn, schema, 0, omnigentChangedBatchSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	t.replace(match.Container, schema, metas)
+	if len(metas) == 0 {
+		return []multiSessionMatch{match}, nil
+	}
+	return omnigentMatches(match.Container, schema, metas), nil
+}
+
 func listOmnigentConversationMetasSince(
-	conn *sql.DB, schema omnigentSchema, workspaceIDs []int64,
-	updatedAfter, updatedThrough int64,
+	ctx context.Context, conn *sql.DB, schema omnigentSchema,
+	workspaceIDs []int64, updatedAfter, updatedThrough int64, limit int,
 ) ([]omnigentMeta, error) {
 	query := `
-		SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0),
+		WITH selected AS (
+			SELECT rowid, id, COALESCE(updated_at, 0) AS updated_at
+			  FROM conversations
+			 WHERE updated_at >= ?
+			   AND updated_at <= ?
+			 ORDER BY updated_at, rowid
+			 LIMIT ?
+		)
+		SELECT c.rowid, 0, c.id, c.updated_at,
 		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-		  FROM conversations c
+		  FROM selected c
 		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
-		 WHERE c.updated_at >= ?
-		   AND c.updated_at <= ?
-		 GROUP BY c.id`
+		 GROUP BY c.id
+		 ORDER BY c.updated_at, c.rowid`
 	if !schema.splitMetadata {
 		return queryOmnigentConversationMetas(
-			conn, query, updatedAfter, updatedThrough,
+			ctx, conn, query, updatedAfter, updatedThrough, limit,
 		)
 	}
 	query = `
-			SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0),
+			WITH selected AS (
+				SELECT rowid, workspace_id, id,
+				       COALESCE(updated_at, 0) AS updated_at
+				  FROM conversations
+				 WHERE workspace_id = ?
+				   AND updated_at >= ?
+				   AND updated_at <= ?
+				 ORDER BY updated_at, rowid
+				 LIMIT ?
+			)
+			SELECT c.rowid, c.workspace_id, c.id, c.updated_at,
 			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-			  FROM conversations c
+			  FROM selected c
 			  LEFT JOIN conversation_items ci
 			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-			 WHERE c.workspace_id = ?
-			   AND c.updated_at >= ?
-			   AND c.updated_at <= ?
-			 GROUP BY c.workspace_id, c.id`
+			 GROUP BY c.workspace_id, c.id
+			 ORDER BY c.updated_at, c.rowid`
 	var metas []omnigentMeta
 	for _, workspaceID := range workspaceIDs {
+		remaining := limit - len(metas)
+		if remaining <= 0 {
+			break
+		}
 		workspaceMetas, err := queryOmnigentConversationMetas(
-			conn, query, workspaceID, updatedAfter, updatedThrough,
+			ctx, conn, query, workspaceID, updatedAfter, updatedThrough, remaining,
 		)
 		if err != nil {
 			return nil, err
@@ -560,9 +617,9 @@ func listOmnigentConversationMetasSince(
 }
 
 func queryOmnigentConversationMetas(
-	conn *sql.DB, query string, args ...any,
+	ctx context.Context, conn *sql.DB, query string, args ...any,
 ) ([]omnigentMeta, error) {
-	rows, err := conn.Query(query, args...)
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing changed omnigent conversations: %w", err)
 	}
@@ -591,26 +648,24 @@ func omnigentWorkspaceBatch(
 }
 
 func listOmnigentConversationMetasAfterRowID(
-	conn *sql.DB, schema omnigentSchema, rowID int64,
+	ctx context.Context, conn *sql.DB, schema omnigentSchema, rowID int64, limit int,
 ) ([]omnigentMeta, error) {
 	query := `
-		SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0),
-		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+		SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0), 0, -1
 		  FROM conversations c
-		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
 		 WHERE c.rowid > ?
-		 GROUP BY c.id`
+		 ORDER BY c.rowid
+		 LIMIT ?`
 	if schema.splitMetadata {
 		query = `
-			SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0),
-			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+			SELECT c.rowid, c.workspace_id, c.id,
+			       COALESCE(c.updated_at, 0), 0, -1
 			  FROM conversations c
-			  LEFT JOIN conversation_items ci
-			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
 			 WHERE c.rowid > ?
-			 GROUP BY c.workspace_id, c.id`
+			 ORDER BY c.rowid
+			 LIMIT ?`
 	}
-	rows, err := conn.Query(query, rowID)
+	rows, err := conn.QueryContext(ctx, query, rowID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing new omnigent conversations: %w", err)
 	}
