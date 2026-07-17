@@ -29,7 +29,7 @@ var omnigentSeedItems = []omnigentSeedItem{
 	{"conv_root", omnigentTypeMessage, "message_assistant.json", "on it", 1},
 	{"conv_root", omnigentTypeFuncCall, "function_call.json", "sys_os_shell", 2},
 	{"conv_root", omnigentTypeFuncOutput, "function_call_output.json",
-		"/Users/dr/code/proj", 3},
+		"/Users/alice/code/proj", 3},
 	{"conv_root", omnigentTypeReasoning, "reasoning.json", "weighing options", 4},
 	{"conv_root", omnigentTypeError, "error.json", "inner executor error", 5},
 	{"conv_root", omnigentTypeCompaction, "compaction.json",
@@ -162,7 +162,7 @@ func writeOmnigentOldGenDB(t *testing.T) string {
 		 workspace, git_branch, session_usage)
 		VALUES
 		('conv_root', 1783716327, 1783718231, 'top task', 'default',
-		 'claude-opus-4-8', '', 'conv_root', '', '/Users/dr/code/proj', 'main', ?),
+		 'claude-opus-4-8', '', 'conv_root', '', '/Users/alice/code/proj', 'main', ?),
 		('conv_kid', 1783716400, 1783716701, 'claude_code:scout', 'sub_agent',
 		 '', 'conv_root', 'conv_root', 'claude_code', '', '', '')`,
 		omnigentTestUsage)
@@ -193,7 +193,7 @@ func writeOmnigentSplitGenDB(t *testing.T) string {
 	_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
 		(id, kind, sub_agent_name, workspace, git_branch, session_usage)
 		VALUES
-		('conv_root', 1, '', '/Users/dr/code/proj', 'main', ?),
+		('conv_root', 1, '', '/Users/alice/code/proj', 'main', ?),
 		('conv_kid', 2, 'claude_code', '', '', '')`, omnigentTestUsage)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO agent_configuration
@@ -218,7 +218,7 @@ func assertOmnigentParse(t *testing.T, results []ParseResult) {
 	assert.Equal(t, omnigentAgent, root.Session.Agent)
 	assert.Equal(t, "top task", root.Session.SessionName)
 	assert.Equal(t, "proj", root.Session.Project)
-	assert.Equal(t, "/Users/dr/code/proj", root.Session.Cwd)
+	assert.Equal(t, "/Users/alice/code/proj", root.Session.Cwd)
 	assert.Equal(t, "main", root.Session.GitBranch)
 	assert.Equal(t, "do the thing", root.Session.FirstMessage)
 	assert.Equal(t, 1, root.Session.UserMessageCount)
@@ -239,7 +239,7 @@ func assertOmnigentParse(t *testing.T, results []ParseResult) {
 	assert.Equal(t, "toolu_1", call.ToolCalls[0].ToolUseID)
 	require.Len(t, call.ToolResults, 1, "output folded onto the call message")
 	assert.Equal(t, "toolu_1", call.ToolResults[0].ToolUseID)
-	assert.Equal(t, "/Users/dr/code/proj", call.ToolResults[0].ContentRaw)
+	assert.Equal(t, "/Users/alice/code/proj", call.ToolResults[0].ContentRaw)
 
 	reasoning := root.Messages[3]
 	assert.True(t, reasoning.HasThinking)
@@ -263,7 +263,7 @@ func assertOmnigentParse(t *testing.T, results []ParseResult) {
 	assert.Equal(t, RelSubagent, kid.Session.RelationshipType)
 	assert.Equal(t, "omnigent:conv_root", kid.Session.ParentSessionID)
 	// cwd/branch inherited from the root conversation.
-	assert.Equal(t, "/Users/dr/code/proj", kid.Session.Cwd)
+	assert.Equal(t, "/Users/alice/code/proj", kid.Session.Cwd)
 	assert.Equal(t, "main", kid.Session.GitBranch)
 }
 
