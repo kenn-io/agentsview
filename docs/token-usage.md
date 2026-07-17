@@ -150,8 +150,9 @@ at a glance.
 Eight baseline cards at the top summarize the selected window. The Total Cost
 card is featured with a larger value; the rest show total tokens, daily burn,
 peak day, cache hit rate, project and model counts, and active days. When
-Copilot-family sessions have priced usage, an additional **Copilot AI Credits**
-card shows the same spend converted at 100 credits per dollar.
+Copilot-family sessions have usage data, an additional **Copilot AI Credits**
+card shows reported credits when available, otherwise the existing cost-based
+estimate.
 
 ![Usage summary cards](/assets/generated/screenshots/usage-summary-cards.png)
 
@@ -395,12 +396,23 @@ it.
 
 ### Copilot AI Credits
 
-Usage reports compute **Copilot AI Credits** for Copilot-family agents
-(`copilot`, `vscode-copilot`, and `visualstudio-copilot`) when their usage rows
-have a complete cost estimate. The conversion is cost divided by `$0.01`,
-matching the unit AgentsView uses for Copilot credit reporting. The Usage
-dashboard shows this as an optional summary card, and `agentsview session usage`
-prints an `AI Credits` line for priced Copilot-family sessions.
+Copilot CLI `session.shutdown` events can report an authoritative
+`totalNanoAiu`. This value is nanocredits, so AgentsView divides it by `1e9`.
+The total belongs to the shutdown event rather than any individual
+`modelMetrics` entry; AgentsView stores it on one stable carrier row and counts
+it once. Multiple shutdown segments are summed.
+
+When a Copilot session has reported credits, that total replaces the estimate
+derived from token cost. Historical sessions and Copilot-family agents without
+`totalNanoAiu` retain the existing fallback of cost divided by `$0.01`. Mixed
+windows sum reported sessions and estimated sessions without counting both for
+the same session and day. Model-filtered reports continue to use estimates
+because an event-level credit total cannot be allocated accurately across
+multiple models.
+
+The Usage dashboard shows credits as an optional summary card, and
+`agentsview session usage` prints an `AI Credits` line. API responses expose
+`reported`, `estimated`, or `mixed` as the corresponding credit source.
 
 ### Claude Streaming & Codex Token Events
 

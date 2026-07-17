@@ -1150,6 +1150,38 @@ func TestStoreGetSessionUsage_CopilotAICreditsComputed(t *testing.T) {
 	assert.Equal(t, 10.0, u.AICredits, "AICredits")
 }
 
+func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_copilot_reported_credits_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'copilot:reported', 'test-machine', 'proj', 'copilot',
+			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cost_usd, ai_credits, occurred_at, dedup_key
+		) VALUES
+			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
+			 0.10, 1.25, '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
+			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
+			 0.10, 2.75, '2026-03-12T10:02:00Z'::timestamptz, 'segment-2')`)
+	require.NoError(t, err)
+
+	usage, err := store.GetSessionUsage(ctx, "copilot:reported", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 0.20, usage.CostUSD)
+	assert.Equal(t, 4.0, usage.AICredits)
+	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
+}
+
 func TestStoreGetSessionUsage_CopilotNoAICreditsUnpriced(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_copilot_unpriced_test")
 

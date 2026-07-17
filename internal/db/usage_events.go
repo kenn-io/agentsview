@@ -22,6 +22,7 @@ type UsageEvent struct {
 	CacheReadInputTokens     int
 	ReasoningTokens          int
 	CostUSD                  *float64
+	AICredits                *float64
 	CostStatus               string
 	CostSource               string
 	OccurredAt               string
@@ -42,6 +43,7 @@ func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 			cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
 			reasoning_tokens INTEGER NOT NULL DEFAULT 0,
 			cost_usd REAL,
+			ai_credits REAL,
 			cost_status TEXT NOT NULL DEFAULT '',
 			cost_source TEXT NOT NULL DEFAULT '',
 			occurred_at TEXT,
@@ -109,6 +111,10 @@ func replaceSessionUsageEventsTx(
 		if ev.CostUSD != nil {
 			cost = *ev.CostUSD
 		}
+		var aiCredits any
+		if ev.AICredits != nil {
+			aiCredits = *ev.AICredits
+		}
 		var occurredAt any
 		if ev.OccurredAt != "" {
 			occurredAt = ev.OccurredAt
@@ -118,13 +124,13 @@ func replaceSessionUsageEventsTx(
 				session_id, message_ordinal, source, model,
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
-				reasoning_tokens, cost_usd, cost_status, cost_source,
+				reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
 				occurred_at, dedup_key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			ev.SessionID, ordinal, ev.Source, ev.Model,
 			ev.InputTokens, ev.OutputTokens,
 			ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
-			ev.ReasoningTokens, cost, ev.CostStatus, ev.CostSource,
+			ev.ReasoningTokens, cost, aiCredits, ev.CostStatus, ev.CostSource,
 			occurredAt, ev.DedupKey,
 		); err != nil {
 			return fmt.Errorf("inserting usage event: %w", err)
@@ -190,7 +196,7 @@ func (db *DB) appendUsageEventFingerprints(
 		SELECT session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
 			occurred_at, dedup_key
 		FROM usage_events
 		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
@@ -210,13 +216,13 @@ func (db *DB) appendUsageEventFingerprints(
 		var inputTokens, outputTokens int
 		var cacheCreationInputTokens, cacheReadInputTokens int
 		var reasoningTokens int
-		var cost sql.NullFloat64
+		var cost, aiCredits sql.NullFloat64
 		var occurredAt, dedupKey sql.NullString
 		if err := rows.Scan(
 			&sessionID, &ordinal, &source, &model,
 			&inputTokens, &outputTokens,
 			&cacheCreationInputTokens, &cacheReadInputTokens,
-			&reasoningTokens, &cost, &costStatus, &costSource,
+			&reasoningTokens, &cost, &aiCredits, &costStatus, &costSource,
 			&occurredAt, &dedupKey,
 		); err != nil {
 			return err
@@ -239,7 +245,7 @@ func (db *DB) appendUsageEventFingerprints(
 		costSource = SanitizeUTF8(costSource)
 		dedupKey.String = SanitizeUTF8(dedupKey.String)
 		fmt.Fprintf(b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
+			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
 			len(source), source,
@@ -251,6 +257,8 @@ func (db *DB) appendUsageEventFingerprints(
 			reasoningTokens,
 			cost.Valid,
 			cost.Float64,
+			aiCredits.Valid,
+			aiCredits.Float64,
 			len(costStatus), costStatus,
 			len(costSource), costSource,
 			len(occurred), occurred,
@@ -282,7 +290,7 @@ func (db *DB) GetUsageEvents(
 		SELECT id, session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
 			occurred_at, dedup_key
 		FROM usage_events
 		WHERE session_id = ?
@@ -298,13 +306,13 @@ func (db *DB) GetUsageEvents(
 	for rows.Next() {
 		var ev UsageEvent
 		var ordinal sql.NullInt64
-		var cost sql.NullFloat64
+		var cost, aiCredits sql.NullFloat64
 		var occurred sql.NullString
 		if err := rows.Scan(
 			&ev.ID, &ev.SessionID, &ordinal, &ev.Source, &ev.Model,
 			&ev.InputTokens, &ev.OutputTokens,
 			&ev.CacheCreationInputTokens, &ev.CacheReadInputTokens,
-			&ev.ReasoningTokens, &cost, &ev.CostStatus,
+			&ev.ReasoningTokens, &cost, &aiCredits, &ev.CostStatus,
 			&ev.CostSource, &occurred, &ev.DedupKey,
 		); err != nil {
 			return nil, fmt.Errorf("scanning usage event: %w", err)
@@ -316,6 +324,10 @@ func (db *DB) GetUsageEvents(
 		if cost.Valid {
 			v := cost.Float64
 			ev.CostUSD = &v
+		}
+		if aiCredits.Valid {
+			v := aiCredits.Float64
+			ev.AICredits = &v
 		}
 		if occurred.Valid {
 			ev.OccurredAt = occurred.String

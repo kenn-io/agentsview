@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -245,6 +246,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 	data gjson.Result, ts time.Time,
 ) {
 	occurredAt := timeString(ts, b.startedAt)
+	var events []ParsedUsageEvent
 	data.Get("modelMetrics").ForEach(
 		func(modelKey, metrics gjson.Result) bool {
 			usage := metrics.Get("usage")
@@ -263,7 +265,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 				return true
 			}
 
-			b.usageEvents = append(b.usageEvents, ParsedUsageEvent{
+			events = append(events, ParsedUsageEvent{
 				Source:                   "shutdown",
 				Model:                    normalizeCopilotModel(modelKey.Str),
 				InputTokens:              freshInput,
@@ -276,6 +278,26 @@ func (b *copilotSessionBuilder) handleShutdown(
 			return true
 		},
 	)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Model < events[j].Model
+	})
+
+	totalNanoAiu := data.Get("totalNanoAiu")
+	if totalNanoAiu.Exists() {
+		if len(events) == 0 {
+			events = append(events, ParsedUsageEvent{
+				Source:     "shutdown",
+				Model:      "copilot",
+				OccurredAt: occurredAt,
+			})
+		}
+		credits := totalNanoAiu.Float() / 1e9
+		// totalNanoAiu is event-level, not per-model. Carry it on exactly
+		// one stable row so storage and sync remain row-oriented without
+		// multiplying the authoritative total by model count.
+		events[0].AICredits = &credits
+	}
+	b.usageEvents = append(b.usageEvents, events...)
 }
 
 func formatCopilotToolCalls(

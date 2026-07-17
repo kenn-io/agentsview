@@ -8,6 +8,7 @@ export interface UsageTotals {
   cacheReadTokens: number;
   totalCost: number;
   copilotAICredits?: number;
+  copilotAICreditsSource?: "reported" | "estimated" | "mixed";
 }
 
 export interface ModelBreakdown {

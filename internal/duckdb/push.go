@@ -1075,18 +1075,22 @@ func insertUsageEvent(
 	ctx context.Context, exec duckMutationExecutor, ev db.UsageEvent,
 ) error {
 	ordinal, cost, occurredAt := usageEventNullableValues(ev)
+	var aiCredits any
+	if ev.AICredits != nil {
+		aiCredits = *ev.AICredits
+	}
 	if _, err := exec.ExecContext(ctx, `
 		INSERT INTO usage_events (
 			id, session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
 			occurred_at, dedup_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ev.ID, ev.SessionID, ordinal, ev.Source, ev.Model,
 		ev.InputTokens, ev.OutputTokens,
 		ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
-		ev.ReasoningTokens, cost, ev.CostStatus,
+		ev.ReasoningTokens, cost, aiCredits, ev.CostStatus,
 		ev.CostSource, occurredAt, ev.DedupKey,
 	); err != nil {
 		return err

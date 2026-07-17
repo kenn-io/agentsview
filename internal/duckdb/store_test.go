@@ -2617,6 +2617,51 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.InDelta(t, wantCost, entry.CostUSD, 0.000001)
 }
 
+func TestCopilotReportedAICreditsSurviveDuckDBPush(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-opus-4-6", InputPerMTok: 10, OutputPerMTok: 15,
+	}}))
+	reportedCredits := 3.5
+	sess := syncSession(
+		"copilot:duck-reported", "alpha", "reported credits",
+		"2026-01-18T00:00:00.000Z", 0)
+	sess.Agent = "copilot"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{{
+			Source: "shutdown", Model: "claude-opus-4-6",
+			InputTokens: 1000, OutputTokens: 500,
+			AICredits:  &reportedCredits,
+			OccurredAt: "2026-01-18T00:01:00.000Z",
+			DedupKey:   "shutdown-1",
+		}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	usage, err := store.GetSessionUsage(ctx, sess.ID, false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.InDelta(t, 3.5, usage.AICredits, 1e-12)
+	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
+	assert.InDelta(t, 0.0175, usage.CostUSD, 1e-12)
+
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-18", To: "2026-01-18", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.InDelta(t, 3.5, daily.Totals.CopilotAICredits, 1e-12)
+	assert.Equal(t, db.AICreditsSourceReported,
+		daily.Totals.CopilotAICreditsSource)
+}
+
 func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

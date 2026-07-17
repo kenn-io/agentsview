@@ -231,6 +231,7 @@ SELECT
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	NULL::double precision AS cost_usd,
+	NULL::double precision AS ai_credits,
 	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
@@ -264,6 +265,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_usd,
+	ue.ai_credits,
 	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
@@ -309,6 +311,7 @@ SELECT
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	NULL::double precision AS cost_usd,
+	NULL::double precision AS ai_credits,
 	m.claude_message_id,
 	m.claude_request_id,
 	m.source_uuid,
@@ -335,6 +338,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_usd,
+	ue.ai_credits,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -363,6 +367,7 @@ SELECT
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	NULL::double precision AS cost_usd,
+	NULL::double precision AS ai_credits,
 	m.claude_message_id,
 	m.claude_request_id,
 	m.source_uuid,
@@ -388,6 +393,7 @@ SELECT
 			ue.cache_read_input_tokens,
 			ue.reasoning_tokens,
 			ue.cost_usd,
+			ue.ai_credits,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -446,6 +452,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.cache_read_input_tokens,
 		ue.reasoning_tokens,
 		ue.cost_usd,
+		ue.ai_credits,
 		ue.dedup_key
 	FROM usage_events ue
 	WHERE ` + eventTimestampWhere + `
@@ -494,6 +501,7 @@ type pgUsageScanRow struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	costUSD                  sql.NullFloat64
+	aiCredits                sql.NullFloat64
 	costStatus               string
 	costSource               string
 	claudeMessageID          string
@@ -523,6 +531,7 @@ type pgDailyUsageScanRow struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	costUSD                  sql.NullFloat64
+	aiCredits                sql.NullFloat64
 	claudeMessageID          string
 	claudeRequestID          string
 	sourceUUID               string
@@ -554,6 +563,7 @@ SELECT
 	u.cache_read_input_tokens,
 	u.reasoning_tokens,
 	u.cost_usd,
+	u.ai_credits,
 	u.cost_status,
 	u.cost_source,
 	u.claude_message_id,
@@ -599,11 +609,12 @@ SELECT
 	u.model,
 	u.token_usage,
 	u.input_tokens,
-		u.output_tokens,
-		u.cache_creation_input_tokens,
-		u.cache_read_input_tokens,
-		u.reasoning_tokens,
-		u.cost_usd,
+	u.output_tokens,
+	u.cache_creation_input_tokens,
+	u.cache_read_input_tokens,
+	u.reasoning_tokens,
+	u.cost_usd,
+	u.ai_credits,
 	u.claude_message_id,
 	u.claude_request_id,
 	u.source_uuid,
@@ -749,6 +760,7 @@ SELECT
 	cu.cache_read_tokens AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	cu.charged_cents / 100.0 AS cost_usd,
+	NULL::double precision AS ai_credits,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -836,6 +848,7 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
 		&r.costUSD,
+		&r.aiCredits,
 		&r.costStatus,
 		&r.costSource,
 		&r.claudeMessageID,
@@ -875,6 +888,7 @@ func scanPGDailyUsageRowWithMachine(
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
 		&r.costUSD,
+		&r.aiCredits,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
 		&r.sourceUUID,
@@ -1183,6 +1197,8 @@ func (s *Store) GetSessionUsage(
 	defer rows.Close()
 
 	var cost float64
+	var reportedCredits float64
+	hasReportedCredits := false
 	contributing := false
 	allPriced := true
 	modelsSet := make(map[string]struct{})
@@ -1209,6 +1225,10 @@ func (s *Store) GetSessionUsage(
 		}
 
 		c, priced, contributes := pgSessionRowCost(r, rateResolver)
+		if r.aiCredits.Valid {
+			reportedCredits += r.aiCredits.Float64
+			hasReportedCredits = true
+		}
 		if !contributes {
 			continue
 		}
@@ -1245,8 +1265,13 @@ func (s *Store) GetSessionUsage(
 	}
 	if out.HasCost {
 		out.CostUSD = cost
-		out.AICredits = db.AICreditsFromCost(sess.Agent, cost)
 	}
+	creditCost := 0.0
+	if out.HasCost {
+		creditCost = cost
+	}
+	out.AICredits, out.AICreditsSource = db.ResolveAICredits(
+		sess.Agent, creditCost, reportedCredits, hasReportedCredits)
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedStringSetKeys(unpricedSet)
 	}
@@ -1301,7 +1326,19 @@ func (s *Store) GetDailyUsage(
 		cacheRd   int
 		cost      float64
 	}
+	type creditKey struct {
+		date      string
+		sessionID string
+		agent     string
+	}
+	type creditBucket struct {
+		estimatedCost float64
+		reported      float64
+		hasReported   bool
+	}
 	accum := make(map[accumKey]*bucket)
+	creditAccum := make(map[creditKey]*creditBucket)
+	useReportedCredits := f.Model == "" && f.ExcludeModel == ""
 	seen := make(map[pgUsageDedupToken]struct{})
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
@@ -1365,6 +1402,18 @@ func (s *Store) GetDailyUsage(
 		b.cacheCr += cacheCrTok
 		b.cacheRd += cacheRdTok
 		b.cost += cost
+
+		ck := creditKey{date: date, sessionID: r.sessionID, agent: r.agent}
+		credit := creditAccum[ck]
+		if credit == nil {
+			credit = &creditBucket{}
+			creditAccum[ck] = credit
+		}
+		credit.estimatedCost += cost
+		if useReportedCredits && r.aiCredits.Valid {
+			credit.reported += r.aiCredits.Float64
+			credit.hasReported = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return db.DailyUsageResult{},
@@ -1475,12 +1524,12 @@ func (s *Store) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
-		var aiCredits float64
-		for key, b := range accum {
-			aiCredits += db.AICreditsFromCost(key.agent, b.cost)
-		}
-		if aiCredits > 0 {
-			totals.CopilotAICredits = aiCredits
+		for key, b := range creditAccum {
+			credits, source := db.ResolveAICredits(
+				key.agent, b.estimatedCost, b.reported, b.hasReported)
+			totals.CopilotAICredits += credits
+			totals.CopilotAICreditsSource = db.MergeAICreditsSource(
+				totals.CopilotAICreditsSource, source)
 		}
 
 		var sessionCounts db.UsageSessionCounts
@@ -1682,14 +1731,12 @@ func (s *Store) GetDailyUsage(
 	}
 	totals.CacheSavings = totalSavings
 
-	var aiCredits float64
-	for _, d := range daily {
-		for _, ab := range d.AgentBreakdowns {
-			aiCredits += db.AICreditsFromCost(ab.Agent, ab.Cost)
-		}
-	}
-	if aiCredits > 0 {
-		totals.CopilotAICredits = aiCredits
+	for key, b := range creditAccum {
+		credits, source := db.ResolveAICredits(
+			key.agent, b.estimatedCost, b.reported, b.hasReported)
+		totals.CopilotAICredits += credits
+		totals.CopilotAICreditsSource = db.MergeAICreditsSource(
+			totals.CopilotAICreditsSource, source)
 	}
 
 	var sessionCounts db.UsageSessionCounts

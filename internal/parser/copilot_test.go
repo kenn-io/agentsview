@@ -649,7 +649,7 @@ func parseCopilotFull(
 }
 
 func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
-	shutdownLine := `{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":931647,"outputTokens":7150,"cacheReadTokens":873267,"cacheWriteTokens":51438,"reasoningTokens":432}}}},"timestamp":"2025-01-15T10:01:00Z"}`
+	shutdownLine := `{"type":"session.shutdown","data":{"totalNanoAiu":1750000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":931647,"outputTokens":7150,"cacheReadTokens":873267,"cacheWriteTokens":51438,"reasoningTokens":432}}}},"timestamp":"2025-01-15T10:01:00Z"}`
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"shut-test","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
@@ -671,6 +671,8 @@ func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
 	assert.Equal(t, 873267, u.CacheReadInputTokens)
 	assert.Equal(t, 51438, u.CacheCreationInputTokens)
 	assert.Equal(t, 432, u.ReasoningTokens)
+	require.NotNil(t, u.AICredits)
+	assert.InDelta(t, 1.75, *u.AICredits, 1e-12)
 	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6:0", u.DedupKey)
 }
 
@@ -679,7 +681,7 @@ func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 		`{"type":"session.start","data":{"sessionId":"multi-model","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
 		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
-		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}},"claude-haiku-4.5":{"usage":{"inputTokens":200,"outputTokens":80,"cacheReadTokens":120,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":2500000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}},"claude-haiku-4.5":{"usage":{"inputTokens":200,"outputTokens":80,"cacheReadTokens":120,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
 	)
 
 	_, _, usage := parseCopilotFull(t, path, "m")
@@ -699,6 +701,17 @@ func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 	// fresh = 200 - 120 - 20 = 60
 	assert.Equal(t, 60, haiku.InputTokens)
 	assert.Equal(t, 80, haiku.OutputTokens)
+
+	reported := 0.0
+	carriers := 0
+	for _, u := range usage {
+		if u.AICredits != nil {
+			reported += *u.AICredits
+			carriers++
+		}
+	}
+	assert.Equal(t, 1, carriers, "event-level credits must have one carrier row")
+	assert.InDelta(t, 2.5, reported, 1e-12)
 }
 
 func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
@@ -708,10 +721,10 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 		`{"type":"session.start","data":{"sessionId":"multi-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
 		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
-		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
 		`{"type":"user.message","data":{"content":"Continue"},"timestamp":"2025-01-15T10:02:00Z"}`,
 		`{"type":"assistant.message","data":{"content":"Sure."},"timestamp":"2025-01-15T10:02:01Z"}`,
-		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":300,"outputTokens":80,"cacheReadTokens":250,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":2750000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":300,"outputTokens":80,"cacheReadTokens":250,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
 	)
 
 	_, _, usage := parseCopilotFull(t, path, "m")
@@ -727,6 +740,10 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 	// Second segment: fresh = 300 - 250 - 20 = 30
 	assert.Equal(t, 30, usage[1].InputTokens)
 	assert.Equal(t, 80, usage[1].OutputTokens)
+	require.NotNil(t, usage[0].AICredits)
+	require.NotNil(t, usage[1].AICredits)
+	assert.InDelta(t, 1.25, *usage[0].AICredits, 1e-12)
+	assert.InDelta(t, 2.75, *usage[1].AICredits, 1e-12)
 }
 
 func TestParseCopilotSession_ShutdownZeroUsage_Skipped(t *testing.T) {

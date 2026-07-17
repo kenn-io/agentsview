@@ -677,6 +677,8 @@ agentsview session usage <id> [--format json]
 | `has_token_data`      | `false` when the session has no per-message token usage              |
 | `cost_usd`            | Model-pricing estimate in USD; `0` when `has_cost` is `false`        |
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
+| `ai_credits`          | Copilot AI credits; omitted when zero                                |
+| `ai_credits_source`   | `reported` for Copilot shutdown totals or `estimated` for the cost-based fallback; omitted for other agents |
 | `models`              | Models that contributed to the cost estimate, sorted by model name      |
 | `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing |
 | `breakdown_count`     | Number of per-step usage rows in the session; always populated       |

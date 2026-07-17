@@ -33,6 +33,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 68: the Copilot CLI parser now persists authoritative AI-credit
+// totals from session.shutdown totalNanoAiu. Existing Copilot sessions need
+// re-parsing so usage reports can prefer reported credits over estimates.
+//
 // Bumped to 63: the Codex parser now persists current subagent lineage,
 // links spawn events, restores plaintext agent messages, suppresses opaque
 // encrypted payloads, and derives titles for encrypted child sessions.
@@ -310,7 +314,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // and relationship_type from agyReader.parentCascadeId in trajectory sidecars.)
 // (68: Hermes skill_view metadata. Re-parsing populates tool_calls.skill_name
 // for existing Hermes sessions so historical skill usage appears in analytics.)
-const dataVersion = 68
+// (69: Copilot shutdown events persist the authoritative AI-credit total as
+// reported cost. Re-parsing populates cost_usd and cost_source on existing
+// Copilot rows from session.shutdown totalNanoAiu values.)
+const dataVersion = 69
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1878,6 +1885,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"messages", "thinking_text",
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"usage_events", "ai_credits",
+			"ALTER TABLE usage_events ADD COLUMN ai_credits REAL",
 		},
 		{
 			"sessions", "termination_status",

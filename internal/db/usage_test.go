@@ -3722,6 +3722,75 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 	}
 }
 
+func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedOpusPricing(t, d)
+
+	for _, id := range []string{"copilot:reported", "copilot:fallback"} {
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.Agent = "copilot"
+			s.StartedAt = new("2026-05-20T10:00:00Z")
+		})
+	}
+	firstCredits := 1.25
+	secondCredits := 2.75
+	require.NoError(t, d.ReplaceSessionUsageEvents("copilot:reported", []UsageEvent{
+		{
+			Source: "shutdown", Model: "claude-opus-4-6",
+			InputTokens: 1000, OutputTokens: 500,
+			AICredits: &firstCredits, OccurredAt: "2026-05-20T10:10:00Z",
+			DedupKey: "segment-1",
+		},
+		{
+			Source: "shutdown", Model: "claude-opus-4-6",
+			InputTokens: 1000, OutputTokens: 500,
+			AICredits: &secondCredits, OccurredAt: "2026-05-20T10:20:00Z",
+			DedupKey: "segment-2",
+		},
+	}))
+	require.NoError(t, d.ReplaceSessionUsageEvents("copilot:fallback", []UsageEvent{
+		{
+			Source: "shutdown", Model: "claude-opus-4-6",
+			InputTokens: 1000, OutputTokens: 500,
+			OccurredAt: "2026-05-20T10:30:00Z", DedupKey: "fallback",
+		},
+	}))
+
+	reported, err := d.GetSessionUsage(ctx, "copilot:reported", false)
+	require.NoError(t, err)
+	require.NotNil(t, reported)
+	assert.InDelta(t, 4.0, reported.AICredits, 1e-12)
+	assert.Equal(t, AICreditsSourceReported, reported.AICreditsSource)
+	assert.InDelta(t, 0.035, reported.CostUSD, 1e-12,
+		"reported credits must not change token pricing")
+
+	fallback, err := d.GetSessionUsage(ctx, "copilot:fallback", false)
+	require.NoError(t, err)
+	require.NotNil(t, fallback)
+	assert.InDelta(t, 1.75, fallback.AICredits, 1e-12)
+	assert.Equal(t, AICreditsSourceEstimated, fallback.AICreditsSource)
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.InDelta(t, 5.75, daily.Totals.CopilotAICredits, 1e-12,
+		"reported session total plus fallback session estimate")
+	assert.Equal(t, AICreditsSourceMixed,
+		daily.Totals.CopilotAICreditsSource)
+
+	modelFiltered, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		Model: "claude-opus-4-6",
+	})
+	require.NoError(t, err)
+	assert.InDelta(t, 5.25, modelFiltered.Totals.CopilotAICredits, 1e-12,
+		"event-level reported credits cannot be allocated to a model")
+	assert.Equal(t, AICreditsSourceEstimated,
+		modelFiltered.Totals.CopilotAICreditsSource)
+}
+
 func TestAICreditsFromCost(t *testing.T) {
 	cases := []struct {
 		name  string
