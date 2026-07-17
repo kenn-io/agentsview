@@ -28,6 +28,7 @@ var ErrCodexEncryptedPayloadRepairRequired = errors.New(
 type codexDuckDBMessageRepair struct {
 	sessionID string
 	ordinal   int
+	role      string
 	content   string
 	length    int
 }
@@ -36,6 +37,7 @@ type codexDuckDBToolInputRepair struct {
 	messageID int64
 	callIndex int
 	sessionID string
+	toolName  string
 	content   string
 }
 
@@ -85,86 +87,49 @@ func (q quackCodexDuckDBQueryer) QueryContext(
 	)
 }
 
+// collectCodexDuckDBRepairs first applies the shared-storage UTF-8/control-byte
+// normalization to every legacy payload surface, then finds parser-owned
+// ciphertext written by older Codex parsers. Destructive token redaction stays
+// scoped to relationship and tool-call metadata; exhaustive certification
+// below withholds the watermark when that scoped repair cannot vouch for a row.
 func collectCodexDuckDBRepairs(
 	ctx context.Context, q codexDuckDBQueryer,
 ) (codexDuckDBRepairs, error) {
 	var repairs codexDuckDBRepairs
+	type messageKey struct {
+		sessionID string
+		messageID int64
+	}
+	collabMessages := make(map[messageKey]bool)
 
 	rows, err := q.QueryContext(ctx, `
-SELECT m.session_id, m.ordinal, m.content, m.content_length,
-       m.role, m.has_tool_use,
-       EXISTS (
-           SELECT 1 FROM tool_calls tc
-            WHERE tc.session_id = m.session_id
-              AND tc.message_id = m.id
-              AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-       )
-  FROM messages m
-  JOIN sessions s ON s.id = m.session_id
- WHERE s.agent = 'codex'
-   AND s.data_version < ?
-   AND m.content LIKE '%gAAAAA%'
-	AND ((s.relationship_type = 'subagent' AND m.role = 'user')
-	  OR EXISTS (
-	      SELECT 1 FROM tool_calls tc
-	       WHERE tc.session_id = m.session_id
-	         AND tc.message_id = m.id
-	         AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-	  ))`,
-		codexEncryptedPayloadDataVersion)
-	if err != nil {
-		return repairs, fmt.Errorf("querying DuckDB Codex messages: %w", err)
-	}
-	for rows.Next() {
-		var row codexDuckDBMessageRepair
-		var storedLength int
-		var role string
-		var hasToolUse, hasCollabTool bool
-		if err := rows.Scan(
-			&row.sessionID, &row.ordinal, &row.content, &storedLength,
-			&role, &hasToolUse, &hasCollabTool,
-		); err != nil {
-			rows.Close()
-			return repairs, fmt.Errorf("scanning DuckDB Codex message: %w", err)
-		}
-		redacted := db.NormalizeCodexSharedStorageMessage(
-			role, hasToolUse, hasCollabTool, row.content,
-		)
-		if redacted == row.content {
-			continue
-		}
-		row.length = max(storedLength+len(redacted)-len(row.content), 0)
-		row.content = redacted
-		repairs.messages = append(repairs.messages, row)
-	}
-	if err := closeCodexDuckDBRows(rows, "messages"); err != nil {
-		return repairs, err
-	}
-
-	rows, err = q.QueryContext(ctx, `
-SELECT tc.message_id, tc.call_index, tc.session_id, tc.input_json
+SELECT tc.message_id, tc.call_index, tc.session_id, tc.tool_name, tc.input_json
   FROM tool_calls tc
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
-   AND s.data_version < ?
-   AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-   AND tc.input_json LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+	AND s.data_version < ?`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return repairs, fmt.Errorf("querying DuckDB Codex tool inputs: %w", err)
 	}
 	for rows.Next() {
 		var row codexDuckDBToolInputRepair
+		var storedToolName, storedContent string
 		if err := rows.Scan(
-			&row.messageID, &row.callIndex, &row.sessionID, &row.content,
+			&row.messageID, &row.callIndex, &row.sessionID,
+			&storedToolName, &storedContent,
 		); err != nil {
 			rows.Close()
 			return repairs, fmt.Errorf("scanning DuckDB Codex tool input: %w", err)
 		}
-		redacted := parser.RedactCodexEncryptedTokens(row.content)
-		if redacted == row.content {
+		row.toolName = db.SanitizeUTF8(storedToolName)
+		row.content = db.SanitizeUTF8(storedContent)
+		if parser.IsCodexCollabTool(row.toolName) {
+			collabMessages[messageKey{row.sessionID, row.messageID}] = true
+			row.content = parser.RedactCodexEncryptedTokens(row.content)
+		}
+		if row.toolName == storedToolName && row.content == storedContent {
 			continue
 		}
-		row.content = redacted
 		repairs.toolInputs = append(repairs.toolInputs, row)
 	}
 	if err := closeCodexDuckDBRows(rows, "tool inputs"); err != nil {
@@ -172,26 +137,69 @@ SELECT tc.message_id, tc.call_index, tc.session_id, tc.input_json
 	}
 
 	rows, err = q.QueryContext(ctx, `
-SELECT id, first_message
+SELECT m.id, m.session_id, m.ordinal, m.content, m.content_length,
+	   m.role, m.has_tool_use, s.relationship_type
+  FROM messages m
+  JOIN sessions s ON s.id = m.session_id
+ WHERE s.agent = 'codex'
+	AND s.data_version < ?`, codexEncryptedPayloadDataVersion)
+	if err != nil {
+		return repairs, fmt.Errorf("querying DuckDB Codex messages: %w", err)
+	}
+	for rows.Next() {
+		var row codexDuckDBMessageRepair
+		var messageID int64
+		var storedRole, storedContent, relationshipType string
+		var storedLength int
+		var hasToolUse bool
+		if err := rows.Scan(
+			&messageID, &row.sessionID, &row.ordinal, &storedContent,
+			&storedLength, &storedRole, &hasToolUse, &relationshipType,
+		); err != nil {
+			rows.Close()
+			return repairs, fmt.Errorf("scanning DuckDB Codex message: %w", err)
+		}
+		row.role = db.SanitizeUTF8(storedRole)
+		row.content = db.SanitizeUTF8(storedContent)
+		hasCollabTool := collabMessages[messageKey{row.sessionID, messageID}]
+		if (db.SanitizeUTF8(relationshipType) == "subagent" && row.role == "user") ||
+			hasCollabTool {
+			row.content = db.NormalizeCodexSharedStorageMessage(
+				row.role, hasToolUse, hasCollabTool, row.content,
+			)
+		}
+		if row.role == storedRole && row.content == storedContent {
+			continue
+		}
+		row.length = max(storedLength+len(row.content)-len(storedContent), 0)
+		repairs.messages = append(repairs.messages, row)
+	}
+	if err := closeCodexDuckDBRows(rows, "messages"); err != nil {
+		return repairs, err
+	}
+
+	rows, err = q.QueryContext(ctx, `
+SELECT id, COALESCE(first_message, ''), relationship_type
   FROM sessions
  WHERE agent = 'codex'
-   AND data_version < ?
-	AND relationship_type = 'subagent'
-   AND first_message LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+	AND data_version < ?`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return repairs, fmt.Errorf("querying DuckDB Codex previews: %w", err)
 	}
 	for rows.Next() {
 		var row codexDuckDBPreviewRepair
-		if err := rows.Scan(&row.id, &row.content); err != nil {
+		var storedContent, relationshipType string
+		if err := rows.Scan(&row.id, &storedContent, &relationshipType); err != nil {
 			rows.Close()
 			return repairs, fmt.Errorf("scanning DuckDB Codex preview: %w", err)
 		}
-		redacted := db.NormalizeCodexSharedStoragePreview(row.content)
-		if redacted == row.content {
+		row.content = db.SanitizeUTF8(storedContent)
+		if db.SanitizeUTF8(relationshipType) == "subagent" {
+			row.content = db.NormalizeCodexSharedStoragePreview(row.content)
+		}
+		if row.content == storedContent {
 			continue
 		}
-		row.content = redacted
 		repairs.previews = append(repairs.previews, row)
 	}
 	if err := closeCodexDuckDBRows(rows, "previews"); err != nil {
@@ -212,33 +220,14 @@ func closeCodexDuckDBRows(rows *sql.Rows, label string) error {
 	return nil
 }
 
-// promoteVerifiedCodexSessionsDuckDB advances only legacy sessions whose
-// parser-owned payload surfaces are a fixpoint of the shared-storage
-// normalizers. The bulk update handles the common token-free case; the narrow
-// Go pass distinguishes preserved literals from payloads that still need
-// repair without trusting relationship or tool-call metadata.
+// promoteVerifiedCodexSessionsDuckDB advances only legacy sessions whose every
+// parser-owned payload surface is a fixpoint of the shared-storage normalizers.
+// Certification scans every remaining legacy row after normalization has been
+// persisted; raw SQL token searches are not sufficient because a removable
+// control byte can split a Fernet prefix.
 func promoteVerifiedCodexSessionsDuckDB(
 	ctx context.Context, tx *sql.Tx,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-UPDATE sessions
-   SET data_version = ?
- WHERE agent = 'codex'
-   AND data_version < ?
-   AND COALESCE(first_message, '') NOT LIKE '%gAAAAA%'
-   AND NOT EXISTS (
-       SELECT 1 FROM messages m
-        WHERE m.session_id = sessions.id AND m.content LIKE '%gAAAAA%'
-   )
-   AND NOT EXISTS (
-       SELECT 1 FROM tool_calls tc
-        WHERE tc.session_id = sessions.id
-          AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-          AND tc.input_json LIKE '%gAAAAA%'
-   )`, codexEncryptedPayloadDataVersion, codexEncryptedPayloadDataVersion); err != nil {
-		return fmt.Errorf("promoting token-free DuckDB Codex sessions: %w", err)
-	}
-
 	certified, err := certifiedLegacyCodexSessionIDsDuckDB(ctx, tx)
 	if err != nil {
 		return err
@@ -267,18 +256,7 @@ func certifiedLegacyCodexSessionIDsDuckDB(
 SELECT s.id, COALESCE(s.first_message, '')
   FROM sessions s
  WHERE s.agent = 'codex'
-   AND s.data_version < ?
-   AND (s.first_message LIKE '%gAAAAA%'
-     OR EXISTS (
-         SELECT 1 FROM messages m
-          WHERE m.session_id = s.id AND m.content LIKE '%gAAAAA%'
-     )
-     OR EXISTS (
-         SELECT 1 FROM tool_calls tc
-          WHERE tc.session_id = s.id
-            AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-            AND tc.input_json LIKE '%gAAAAA%'
-     ))`, codexEncryptedPayloadDataVersion)
+	AND s.data_version < ?`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return nil, fmt.Errorf("querying DuckDB Codex certification sessions: %w", err)
 	}
@@ -310,8 +288,7 @@ SELECT m.session_id, m.role, m.has_tool_use, m.content,
   FROM messages m
   JOIN sessions s ON s.id = m.session_id
  WHERE s.agent = 'codex'
-   AND s.data_version < ?
-   AND m.content LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+	AND s.data_version < ?`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return nil, fmt.Errorf("querying DuckDB Codex certification messages: %w", err)
 	}
@@ -342,8 +319,7 @@ SELECT tc.session_id, tc.input_json
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
    AND s.data_version < ?
-   AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-   AND tc.input_json LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+	AND tc.tool_name IN `+parser.CodexCollabToolsSQL(), codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return nil, fmt.Errorf("querying DuckDB Codex certification tool inputs: %w", err)
 	}
@@ -405,9 +381,9 @@ func repairCodexEncryptedPayloadsDuckDB(ctx context.Context, duck *sql.DB) error
 	}
 	for _, row := range repairs.messages {
 		if _, err := tx.ExecContext(ctx, `
-UPDATE messages SET content = ?, content_length = ?
+UPDATE messages SET role = ?, content = ?, content_length = ?
  WHERE session_id = ? AND ordinal = ?`,
-			row.content, row.length, row.sessionID, row.ordinal,
+			row.role, row.content, row.length, row.sessionID, row.ordinal,
 		); err != nil {
 			return fmt.Errorf("updating DuckDB Codex message %s/%d: %w",
 				row.sessionID, row.ordinal, err)
@@ -415,9 +391,9 @@ UPDATE messages SET content = ?, content_length = ?
 	}
 	for _, row := range repairs.toolInputs {
 		if _, err := tx.ExecContext(ctx, `
-UPDATE tool_calls SET input_json = ?
+UPDATE tool_calls SET tool_name = ?, input_json = ?
  WHERE session_id = ? AND message_id = ? AND call_index = ?`,
-			row.content, row.sessionID, row.messageID, row.callIndex,
+			row.toolName, row.content, row.sessionID, row.messageID, row.callIndex,
 		); err != nil {
 			return fmt.Errorf(
 				"updating DuckDB Codex tool input %s/%d/%d: %w",

@@ -322,6 +322,82 @@ SELECT m.content, m.content_length, s.data_version
 	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion)
 }
 
+func TestEnsureSchemaNormalizesLegacyCodexPayloadsBeforeCertification(
+	t *testing.T,
+) {
+	const (
+		schema            = "agentsview_codex_control_split_repair_test"
+		fernet            = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+		legacyDataVersion = 67
+	)
+	pgURL := testPGURL(t)
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "connect to PG")
+	defer pg.Close()
+	t.Cleanup(func() {
+		cleanup, cleanupErr := sql.Open("pgx", pgURL)
+		require.NoError(t, cleanupErr, "connect for schema cleanup")
+		defer cleanup.Close()
+		_, cleanupErr = cleanup.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		require.NoError(t, cleanupErr, "drop test schema")
+	})
+
+	ctx := context.Background()
+	_, err = pg.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+	require.NoError(t, err, "reset test schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "create current schema")
+	split := fernet[:3] + "\x01" + fernet[3:]
+	splitRole := "us\x01er"
+	splitToolName := "spa\x01wn_agent"
+	input := `{"message":"` + split + `"}`
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (
+    id, machine, project, agent, relationship_type, data_version, first_message
+) VALUES ('control-split', 'test-machine', 'project', 'codex', 'subagent', $1, $2)`,
+		legacyDataVersion, split)
+	require.NoError(t, err, "seed control-split legacy preview")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO messages (
+    session_id, ordinal, role, content, has_tool_use, content_length
+) VALUES ('control-split', 0, $1, $2, TRUE, $3)`,
+		splitRole, split, len(split))
+	require.NoError(t, err, "seed control-split legacy message")
+	_, err = pg.ExecContext(ctx, `
+INSERT INTO tool_calls (
+    session_id, tool_name, category, message_ordinal, input_json
+) VALUES ('control-split', $1, 'Task', 0, $2)`, splitToolName, input)
+	require.NoError(t, err, "seed control-split legacy tool input")
+
+	err = CheckCodexEncryptedPayloadCompat(ctx, pg)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"legacy control-split payloads must fail closed before repair")
+	require.NoError(t, EnsureSchema(ctx, pg, schema),
+		"normalize and repair control-split legacy payloads")
+	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, pg),
+		"normalized payloads may be certified only after repair")
+
+	var preview, role, content, toolName, gotInput string
+	var contentLength, dataVersion int
+	require.NoError(t, pg.QueryRowContext(ctx, `
+SELECT s.first_message, m.role, m.content, m.content_length,
+       tc.tool_name, tc.input_json, s.data_version
+  FROM sessions s
+  JOIN messages m ON m.session_id = s.id
+  JOIN tool_calls tc ON tc.session_id = s.id
+ WHERE s.id = 'control-split'`,
+	).Scan(
+		&preview, &role, &content, &contentLength,
+		&toolName, &gotInput, &dataVersion,
+	))
+	assert.Equal(t, "[encrypted]", preview)
+	assert.Equal(t, "user", role)
+	assert.Equal(t, "[encrypted]", content)
+	assert.Equal(t, len("[encrypted]"), contentLength)
+	assert.Equal(t, "spawn_agent", toolName)
+	assert.Equal(t, `{"message":"[encrypted]"}`, gotInput)
+	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+}
+
 func TestEnsureSchemaReplacesLegacyCodexGuardGeneration(t *testing.T) {
 	const schema = "agentsview_codex_legacy_guard_upgrade_test"
 	pgURL := testPGURL(t)

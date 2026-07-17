@@ -68,6 +68,7 @@ var ErrCodexEncryptedPayloadRepairRequired = errors.New(
 type codexPGMessageRepair struct {
 	sessionID string
 	ordinal   int
+	role      string
 	content   string
 	length    int
 }
@@ -75,6 +76,7 @@ type codexPGMessageRepair struct {
 type codexPGToolInputRepair struct {
 	id        int64
 	sessionID string
+	toolName  string
 	content   string
 }
 
@@ -130,94 +132,52 @@ type codexPGQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-// collectCodexPGRepairs finds parser-owned ciphertext surfaces written by
-// older Codex parsers. The destructive repair stays scoped to relationship
-// and tool-call metadata so legitimate root text and non-collab tool arguments
-// remain untouched. The separate post-repair certification deliberately
-// ignores missing metadata and withholds the watermark when the scoped repair
-// cannot vouch for a row.
+// collectCodexPGRepairs first applies the shared-storage UTF-8/control-byte
+// normalization to every legacy payload surface, then finds parser-owned
+// ciphertext written by older Codex parsers. Destructive token redaction stays
+// scoped to relationship and tool-call metadata so legitimate root text and
+// non-collab tool arguments remain untouched. The separate post-repair
+// certification deliberately ignores missing metadata and withholds the
+// watermark when the scoped repair cannot vouch for a row.
 func collectCodexPGRepairs(
 	ctx context.Context, q codexPGQueryer,
 ) (codexPGRepairs, error) {
 	var repairs codexPGRepairs
+	type messageKey struct {
+		sessionID string
+		ordinal   int
+	}
+	collabMessages := make(map[messageKey]bool)
 
 	rows, err := q.QueryContext(ctx, `
-SELECT m.session_id, m.ordinal, m.content, m.content_length,
-       m.role, m.has_tool_use,
-       EXISTS (
-           SELECT 1 FROM tool_calls tc
-            WHERE tc.session_id = m.session_id
-              AND tc.message_ordinal = m.ordinal
-              AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-       )
-  FROM messages m
-  JOIN sessions s ON s.id = m.session_id
- WHERE s.agent = 'codex'
-   AND s.data_version < $1
-   AND m.content LIKE '%gAAAAA%'
-	AND ((s.relationship_type = 'subagent' AND m.role = 'user')
-	  OR EXISTS (
-	      SELECT 1 FROM tool_calls tc
-	       WHERE tc.session_id = m.session_id
-	         AND tc.message_ordinal = m.ordinal
-	         AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-	  ))`,
-		codexEncryptedPayloadDataVersion)
-	if err != nil {
-		return repairs, fmt.Errorf("querying PG Codex messages: %w", err)
-	}
-	for rows.Next() {
-		var row codexPGMessageRepair
-		var storedLength int
-		var role string
-		var hasToolUse, hasCollabTool bool
-		if err := rows.Scan(
-			&row.sessionID, &row.ordinal, &row.content, &storedLength,
-			&role, &hasToolUse, &hasCollabTool,
-		); err != nil {
-			rows.Close()
-			return repairs, fmt.Errorf("scanning PG Codex message: %w", err)
-		}
-		redacted := db.NormalizeCodexSharedStorageMessage(
-			role, hasToolUse, hasCollabTool, row.content,
-		)
-		if redacted == row.content {
-			continue
-		}
-		row.length = max(storedLength+len(redacted)-len(row.content), 0)
-		row.content = redacted
-		repairs.messages = append(repairs.messages, row)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return repairs, fmt.Errorf("iterating PG Codex messages: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return repairs, fmt.Errorf("closing PG Codex messages: %w", err)
-	}
-
-	rows, err = q.QueryContext(ctx, `
-SELECT tc.id, tc.session_id, tc.input_json
+SELECT tc.id, tc.session_id, tc.message_ordinal, tc.tool_name, tc.input_json
   FROM tool_calls tc
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
    AND s.data_version < $1
-   AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-   AND tc.input_json LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+	`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return repairs, fmt.Errorf("querying PG Codex tool inputs: %w", err)
 	}
 	for rows.Next() {
 		var row codexPGToolInputRepair
-		if err := rows.Scan(&row.id, &row.sessionID, &row.content); err != nil {
+		var ordinal int
+		var storedToolName, storedContent string
+		if err := rows.Scan(
+			&row.id, &row.sessionID, &ordinal, &storedToolName, &storedContent,
+		); err != nil {
 			rows.Close()
 			return repairs, fmt.Errorf("scanning PG Codex tool input: %w", err)
 		}
-		redacted := parser.RedactCodexEncryptedTokens(row.content)
-		if redacted == row.content {
+		row.toolName = db.SanitizeUTF8(storedToolName)
+		row.content = db.SanitizeUTF8(storedContent)
+		if parser.IsCodexCollabTool(row.toolName) {
+			collabMessages[messageKey{row.sessionID, ordinal}] = true
+			row.content = parser.RedactCodexEncryptedTokens(row.content)
+		}
+		if row.toolName == storedToolName && row.content == storedContent {
 			continue
 		}
-		row.content = redacted
 		repairs.toolInputs = append(repairs.toolInputs, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -229,26 +189,73 @@ SELECT tc.id, tc.session_id, tc.input_json
 	}
 
 	rows, err = q.QueryContext(ctx, `
-SELECT id, first_message
+SELECT m.session_id, m.ordinal, m.content, m.content_length,
+	   m.role, m.has_tool_use, s.relationship_type
+  FROM messages m
+  JOIN sessions s ON s.id = m.session_id
+ WHERE s.agent = 'codex'
+   AND s.data_version < $1
+	`, codexEncryptedPayloadDataVersion)
+	if err != nil {
+		return repairs, fmt.Errorf("querying PG Codex messages: %w", err)
+	}
+	for rows.Next() {
+		var row codexPGMessageRepair
+		var storedRole, storedContent, relationshipType string
+		var storedLength int
+		var hasToolUse bool
+		if err := rows.Scan(
+			&row.sessionID, &row.ordinal, &storedContent, &storedLength,
+			&storedRole, &hasToolUse, &relationshipType,
+		); err != nil {
+			rows.Close()
+			return repairs, fmt.Errorf("scanning PG Codex message: %w", err)
+		}
+		row.role = db.SanitizeUTF8(storedRole)
+		row.content = db.SanitizeUTF8(storedContent)
+		hasCollabTool := collabMessages[messageKey{row.sessionID, row.ordinal}]
+		if (db.SanitizeUTF8(relationshipType) == "subagent" && row.role == "user") ||
+			hasCollabTool {
+			row.content = db.NormalizeCodexSharedStorageMessage(
+				row.role, hasToolUse, hasCollabTool, row.content,
+			)
+		}
+		if row.role == storedRole && row.content == storedContent {
+			continue
+		}
+		row.length = max(storedLength+len(row.content)-len(storedContent), 0)
+		repairs.messages = append(repairs.messages, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return repairs, fmt.Errorf("iterating PG Codex messages: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return repairs, fmt.Errorf("closing PG Codex messages: %w", err)
+	}
+
+	rows, err = q.QueryContext(ctx, `
+SELECT id, COALESCE(first_message, ''), relationship_type
   FROM sessions
  WHERE agent = 'codex'
-   AND data_version < $1
-	AND relationship_type = 'subagent'
-   AND first_message LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+	AND data_version < $1`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return repairs, fmt.Errorf("querying PG Codex previews: %w", err)
 	}
 	for rows.Next() {
 		var row codexPGPreviewRepair
-		if err := rows.Scan(&row.id, &row.content); err != nil {
+		var storedContent, relationshipType string
+		if err := rows.Scan(&row.id, &storedContent, &relationshipType); err != nil {
 			rows.Close()
 			return repairs, fmt.Errorf("scanning PG Codex preview: %w", err)
 		}
-		redacted := db.NormalizeCodexSharedStoragePreview(row.content)
-		if redacted == row.content {
+		row.content = db.SanitizeUTF8(storedContent)
+		if db.SanitizeUTF8(relationshipType) == "subagent" {
+			row.content = db.NormalizeCodexSharedStoragePreview(row.content)
+		}
+		if row.content == storedContent {
 			continue
 		}
-		row.content = redacted
 		repairs.previews = append(repairs.previews, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -276,33 +283,14 @@ SELECT EXISTS (
 	return legacy, nil
 }
 
-// promoteVerifiedCodexSessionsPG advances only legacy sessions whose
-// parser-owned payload surfaces are a fixpoint of the shared-storage
-// normalizers. The bulk update handles the common token-free case; the narrow
-// Go pass distinguishes preserved literals from payloads that still need
-// repair without trusting relationship or tool-call metadata.
+// promoteVerifiedCodexSessionsPG advances only legacy sessions whose every
+// parser-owned payload surface is a fixpoint of the shared-storage normalizers.
+// Certification scans every remaining legacy row after normalization has been
+// persisted; raw SQL token searches are not sufficient because a removable
+// control byte can split a Fernet prefix.
 func promoteVerifiedCodexSessionsPG(
 	ctx context.Context, tx *sql.Tx,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-UPDATE sessions AS s
-   SET data_version = $1
- WHERE s.agent = 'codex'
-   AND s.data_version < $1
-   AND COALESCE(s.first_message, '') NOT LIKE '%gAAAAA%'
-   AND NOT EXISTS (
-       SELECT 1 FROM messages m
-        WHERE m.session_id = s.id AND m.content LIKE '%gAAAAA%'
-   )
-   AND NOT EXISTS (
-       SELECT 1 FROM tool_calls tc
-        WHERE tc.session_id = s.id
-          AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-          AND tc.input_json LIKE '%gAAAAA%'
-   )`, codexEncryptedPayloadDataVersion); err != nil {
-		return fmt.Errorf("promoting token-free PG Codex sessions: %w", err)
-	}
-
 	certified, err := certifiedLegacyCodexSessionIDsPG(ctx, tx)
 	if err != nil {
 		return err
@@ -329,18 +317,7 @@ func certifiedLegacyCodexSessionIDsPG(
 SELECT s.id, COALESCE(s.first_message, '')
   FROM sessions s
  WHERE s.agent = 'codex'
-   AND s.data_version < $1
-   AND (s.first_message LIKE '%gAAAAA%'
-     OR EXISTS (
-         SELECT 1 FROM messages m
-          WHERE m.session_id = s.id AND m.content LIKE '%gAAAAA%'
-     )
-     OR EXISTS (
-         SELECT 1 FROM tool_calls tc
-          WHERE tc.session_id = s.id
-            AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-            AND tc.input_json LIKE '%gAAAAA%'
-     ))`, codexEncryptedPayloadDataVersion)
+   AND s.data_version < $1`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return nil, fmt.Errorf("querying PG Codex certification sessions: %w", err)
 	}
@@ -376,8 +353,7 @@ SELECT m.session_id, m.role, m.has_tool_use, m.content,
   FROM messages m
   JOIN sessions s ON s.id = m.session_id
  WHERE s.agent = 'codex'
-   AND s.data_version < $1
-   AND m.content LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+   AND s.data_version < $1`, codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return nil, fmt.Errorf("querying PG Codex certification messages: %w", err)
 	}
@@ -412,8 +388,7 @@ SELECT tc.session_id, tc.input_json
   JOIN sessions s ON s.id = tc.session_id
  WHERE s.agent = 'codex'
    AND s.data_version < $1
-   AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-   AND tc.input_json LIKE '%gAAAAA%'`, codexEncryptedPayloadDataVersion)
+   AND tc.tool_name IN `+parser.CodexCollabToolsSQL(), codexEncryptedPayloadDataVersion)
 	if err != nil {
 		return nil, fmt.Errorf("querying PG Codex certification tool inputs: %w", err)
 	}
@@ -560,9 +535,9 @@ func repairCodexEncryptedPayloadsPGTx(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, row := range repairs.messages {
 		if _, err := tx.ExecContext(ctx, `
-UPDATE messages SET content = $1, content_length = $2
- WHERE session_id = $3 AND ordinal = $4`,
-			row.content, row.length, row.sessionID, row.ordinal,
+UPDATE messages SET role = $1, content = $2, content_length = $3
+ WHERE session_id = $4 AND ordinal = $5`,
+			row.role, row.content, row.length, row.sessionID, row.ordinal,
 		); err != nil {
 			return fmt.Errorf("updating PG Codex message %s/%d: %w",
 				row.sessionID, row.ordinal, err)
@@ -570,8 +545,8 @@ UPDATE messages SET content = $1, content_length = $2
 	}
 	for _, row := range repairs.toolInputs {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE tool_calls SET input_json = $1 WHERE id = $2`,
-			row.content, row.id,
+			`UPDATE tool_calls SET tool_name = $1, input_json = $2 WHERE id = $3`,
+			row.toolName, row.content, row.id,
 		); err != nil {
 			return fmt.Errorf("updating PG Codex tool input %d: %w", row.id, err)
 		}

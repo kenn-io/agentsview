@@ -309,6 +309,71 @@ func TestEnsureSchemaRepairsLegacyCodexEncryptedHeader(t *testing.T) {
 	assert.Equal(t, codexEncryptedPayloadDataVersion, gotVersion)
 }
 
+func TestEnsureSchemaNormalizesLegacyCodexPayloadsBeforeCertification(
+	t *testing.T,
+) {
+	const (
+		fernet            = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+		legacyDataVersion = 67
+	)
+	ctx := context.Background()
+	database := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, database), "initial EnsureSchema")
+	split := fernet[:3] + "\x01" + fernet[3:]
+	splitRole := "us\x01er"
+	splitToolName := "spa\x01wn_agent"
+	input := `{"message":"` + split + `"}`
+
+	_, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, relationship_type,
+			data_version, first_message
+		) VALUES (
+			'control-split', 'project', 'machine', 'codex', 'subagent', ?, ?
+		)`, legacyDataVersion, split)
+	require.NoError(t, err, "seed control-split legacy preview")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO messages (
+			id, session_id, ordinal, role, content, has_tool_use, content_length
+		) VALUES (105, 'control-split', 0, ?, ?, TRUE, ?)`,
+		splitRole, split, len(split))
+	require.NoError(t, err, "seed control-split legacy message")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, call_index, input_json
+		) VALUES (105, 'control-split', ?, 'Task', 0, ?)`, splitToolName, input)
+	require.NoError(t, err, "seed control-split legacy tool input")
+
+	err = CheckSchemaCompat(ctx, database)
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+		"legacy control-split payloads must fail closed before repair")
+	require.NoError(t, EnsureSchema(ctx, database),
+		"normalize and repair control-split legacy payloads")
+	require.NoError(t, CheckSchemaCompat(ctx, database),
+		"normalized payloads may be certified only after repair")
+
+	var preview, role, content, toolName, gotInput string
+	var contentLength, dataVersion int
+	require.NoError(t, database.QueryRowContext(ctx, `
+		SELECT s.first_message, m.role, m.content, m.content_length,
+		       tc.tool_name, tc.input_json, s.data_version
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		  JOIN tool_calls tc ON tc.session_id = s.id
+		 WHERE s.id = 'control-split'`,
+	).Scan(
+		&preview, &role, &content, &contentLength,
+		&toolName, &gotInput, &dataVersion,
+	))
+	assert.Equal(t, "[encrypted]", preview)
+	assert.Equal(t, "user", role)
+	assert.Equal(t, "[encrypted]", content)
+	assert.Equal(t, len("[encrypted]"), contentLength)
+	assert.Equal(t, "spawn_agent", toolName)
+	assert.Equal(t, `{"message":"[encrypted]"}`, gotInput)
+	assert.Equal(t, codexEncryptedPayloadDataVersion, dataVersion)
+}
+
 func TestEnsureSchemaWithholdsWatermarkFromUncertifiedLegacyCodexPayloads(
 	t *testing.T,
 ) {
