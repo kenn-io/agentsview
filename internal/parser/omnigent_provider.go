@@ -23,7 +23,6 @@ type omnigentTrackedContainer struct {
 	schema             omnigentSchema
 	metas              map[string]omnigentMeta
 	checkedAt          int64
-	count              int
 	maxRowID           int64
 	probeKeys          []string
 	probeCursor        int
@@ -324,6 +323,41 @@ func loadOmnigentConversationMeta(
 	return meta, true, nil
 }
 
+func loadOmnigentConversationMetaByRowID(
+	conn *sql.DB, schema omnigentSchema, rowID int64,
+) (omnigentMeta, bool, error) {
+	query := `
+		SELECT c.rowid, 0, c.id, COALESCE(c.updated_at, 0),
+		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+		  FROM conversations c
+		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
+		 WHERE c.rowid = ?
+		 GROUP BY c.id`
+	if schema.splitMetadata {
+		query = `
+			SELECT c.rowid, c.workspace_id, c.id, COALESCE(c.updated_at, 0),
+			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+			  FROM conversations c
+			  LEFT JOIN conversation_items ci
+			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+			 WHERE c.rowid = ?
+			 GROUP BY c.workspace_id, c.id`
+	}
+	var meta omnigentMeta
+	err := conn.QueryRow(query, rowID).Scan(
+		&meta.rowID, &meta.workspaceID, &meta.rawID, &meta.updatedAt,
+		&meta.itemCount, &meta.maxPosition,
+	)
+	if err == sql.ErrNoRows {
+		return omnigentMeta{}, false, nil
+	}
+	if err != nil {
+		return omnigentMeta{}, false,
+			fmt.Errorf("loading omnigent conversation row occupant: %w", err)
+	}
+	return meta, true, nil
+}
+
 func (t *omnigentChangeTracker) changedMembers(
 	root string, req ChangedPathRequest,
 ) ([]multiSessionMatch, error) {
@@ -428,7 +462,6 @@ func (t *omnigentChangeTracker) changedMembers(
 		len(tracked.probeKeys),
 		tracked.probeRemaining,
 	)
-	probeMissing := false
 	for i := range probeCount {
 		key := tracked.probeKeys[(tracked.probeCursor+i)%len(tracked.probeKeys)]
 		previous, stillTracked := tracked.metas[key]
@@ -442,57 +475,26 @@ func (t *omnigentChangeTracker) changedMembers(
 			return nil, err
 		}
 		if !exists {
-			probeMissing = true
 			selected[key] = previous
+			// SQLite may reuse a deleted rowid for a replacement whose old
+			// timestamp falls behind every change cursor. A point lookup finds
+			// that occupant without materializing the container membership.
+			replacement, replacementExists, err :=
+				loadOmnigentConversationMetaByRowID(conn, schema, previous.rowID)
+			if err != nil {
+				return nil, err
+			}
+			if replacementExists {
+				replacementKey := replacement.member().key(schema)
+				if replacementKey != key {
+					selected[replacementKey] = replacement
+				}
+			}
 			continue
 		}
 		selected[key] = meta
 	}
 	tracked.probeRemaining -= probeCount
-
-	maxRowID, err := omnigentMaxConversationRowID(conn)
-	if err != nil {
-		return nil, err
-	}
-	newMemberCount := 0
-	for key := range selected {
-		if _, exists := tracked.metas[key]; !exists {
-			newMemberCount++
-		}
-	}
-	membershipLoss := probeMissing || maxRowID < tracked.maxRowID
-	if newMemberCount > 0 {
-		count, err := omnigentConversationCount(conn)
-		if err != nil {
-			return nil, err
-		}
-		membershipLoss = membershipLoss ||
-			newMemberCount > max(0, count-tracked.count)
-	}
-	if membershipLoss {
-		// A net-neutral delete+insert is the only membership transition whose
-		// deleted identity cannot be recovered from source timestamps or rowids.
-		// Reconcile membership only for that exceptional transition; ordinary
-		// transcript events remain bounded by the changed batch and probe size.
-		current, err := listOmnigentConversationMetas(conn, schema)
-		if err != nil {
-			return nil, err
-		}
-		present := make(map[string]struct{}, len(current))
-		for _, meta := range current {
-			key := meta.member().key(schema)
-			present[key] = struct{}{}
-			if _, exists := tracked.metas[key]; !exists {
-				selected[key] = meta
-			}
-		}
-		for key := range tracked.metas {
-			if _, exists := present[key]; exists {
-				continue
-			}
-			selected[key] = tracked.metas[key]
-		}
-	}
 	metas := make([]omnigentMeta, 0, len(selected))
 	for _, meta := range selected {
 		metas = append(metas, meta)
@@ -508,24 +510,6 @@ func (t *omnigentChangeTracker) changedMembers(
 		workspaceBatch, selectedWorkspaces, len(metas) == 0)
 	t.containers[match.Container] = tracked
 	return omnigentMatches(match.Container, schema, metas), nil
-}
-
-func omnigentMaxConversationRowID(conn *sql.DB) (int64, error) {
-	var maxRowID int64
-	if err := conn.QueryRow(
-		`SELECT COALESCE(MAX(rowid), 0) FROM conversations`,
-	).Scan(&maxRowID); err != nil {
-		return 0, fmt.Errorf("reading omnigent conversation cursor: %w", err)
-	}
-	return maxRowID, nil
-}
-
-func omnigentConversationCount(conn *sql.DB) (int, error) {
-	var count int
-	if err := conn.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("counting omnigent conversations: %w", err)
-	}
-	return count, nil
 }
 
 func listOmnigentConversationMetasSince(
@@ -739,7 +723,7 @@ func (t *omnigentChangeTracker) replace(
 	compositeMTimeNS, _ := sqliteDBCompositeMtime(container)
 	tracked := omnigentTrackedContainer{
 		schema: schema, metas: make(map[string]omnigentMeta, len(metas)),
-		checkedAt: time.Now().Unix(), count: len(metas),
+		checkedAt:          time.Now().Unix(),
 		compositeMTimeNS:   compositeMTimeNS,
 		workspaceCheckedAt: make(map[int64]int64),
 		workspaceCounts:    make(map[int64]int),
@@ -790,7 +774,6 @@ func (t *omnigentChangeTracker) observe(
 	if exists {
 		tracked.metas[key] = meta
 		if !wasPresent {
-			tracked.count++
 			tracked.probeKeys = append(tracked.probeKeys, key)
 			slices.Sort(tracked.probeKeys)
 			if schema.splitMetadata {
@@ -807,9 +790,6 @@ func (t *omnigentChangeTracker) observe(
 	} else {
 		previous := tracked.metas[key]
 		delete(tracked.metas, key)
-		if wasPresent && tracked.count > 0 {
-			tracked.count--
-		}
 		if wasPresent && schema.splitMetadata {
 			workspaceID := previous.workspaceID
 			tracked.workspaceCounts[workspaceID]--

@@ -1273,8 +1273,9 @@ func (e *Engine) resyncAllWithOptionsLocked(
 ) (stats SyncStats, retErr error) {
 	ops = ops.withDefaults()
 	resyncAccepted := false
+	omnigentTrackerMayHaveAdvanced := false
 	defer func() {
-		if !resyncAccepted {
+		if omnigentTrackerMayHaveAdvanced && !resyncAccepted {
 			e.queueOmnigentContainerRetries()
 		}
 	}()
@@ -1485,6 +1486,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		"Discovering sessions",
 		"",
 	)
+	omnigentTrackerMayHaveAdvanced = true
 	stats = e.syncAllLocked(
 		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false,
 	)
@@ -2949,19 +2951,23 @@ func (e *Engine) queueOmnigentContainerRetries() {
 		return
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:              roots,
-		Machine:            e.machine,
-		ForceFullDiscovery: true,
+		Roots:   roots,
+		Machine: e.machine,
 	})
-	sources, err := provider.Discover(context.Background())
+	plan, err := provider.WatchPlan(context.Background())
 	if err != nil {
-		log.Printf("%s provider abort recovery discovery: %v", parser.AgentOmnigent, err)
+		log.Printf("%s provider abort recovery watch plan: %v", parser.AgentOmnigent, err)
 		return
 	}
-	for _, source := range sources {
-		path := providerDiscoveredPath(source)
-		if path != "" {
-			e.markOmnigentSourceRetry(parser.AgentOmnigent, path)
+	for _, root := range plan.Roots {
+		for _, include := range root.IncludeGlobs {
+			if include == "" || strings.ContainsAny(include, `*?[\`) {
+				continue
+			}
+			path := filepath.Join(root.Path, include)
+			if parser.IsRegularFile(path) {
+				e.markOmnigentSourceRetry(parser.AgentOmnigent, path)
+			}
 		}
 	}
 }

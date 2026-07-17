@@ -629,6 +629,64 @@ func TestOmnigentProbeReconcilesReplacementWithReusedRowID(t *testing.T) {
 	assert.LessOrEqual(t, len(changed), omnigentProbeBatchSize+1)
 }
 
+func TestOmnigentReplacementClassificationWorkIsBounded(t *testing.T) {
+	allocations := make(map[int]float64)
+	for _, archiveSize := range []int{65, 1000} {
+		path := writeOmnigentCardinalityDB(t, archiveSize)
+		conn, err := openOmnigentDB(path)
+		require.NoError(t, err)
+		schema, err := detectOmnigentSchema(conn)
+		require.NoError(t, err)
+		metas, err := listOmnigentConversationMetas(conn, schema)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+
+		tracker := newOmnigentChangeTracker()
+		tracker.replace(path, schema, metas)
+		writer, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		_, err = writer.Exec(`DELETE FROM conversation_items
+			WHERE conversation_id = 'conv_000'`)
+		require.NoError(t, err)
+		_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_000'`)
+		require.NoError(t, err)
+		_, err = writer.Exec(`INSERT INTO conversations
+			(rowid, id, created_at, updated_at, title, kind, root_conversation_id)
+			VALUES (1, 'replacement', 1, 2, 'replacement', 'default', 'replacement')`)
+		require.NoError(t, err)
+		_, err = writer.Exec(`INSERT INTO conversation_items
+			(id, conversation_id, position, type, data, search_text)
+			VALUES ('replacement_i0', 'replacement', 0, 'message',
+				'{"role":"user","content":[{"type":"input_text","text":"replacement"}]}',
+				'replacement')`)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+
+		var changed []multiSessionMatch
+		var classifyErr error
+		allocations[archiveSize] = testing.AllocsPerRun(5, func() {
+			tracker.mu.Lock()
+			tracked := tracker.containers[path]
+			tracked.probeCursor = 0
+			tracked.probeRemaining = len(tracked.probeKeys)
+			tracker.containers[path] = tracked
+			tracker.mu.Unlock()
+			changed, classifyErr = tracker.changedMembers(
+				filepath.Dir(path), ChangedPathRequest{Path: path, EventKind: "write"},
+			)
+		})
+		require.NoError(t, classifyErr)
+		paths := make([]string, 0, len(changed))
+		for _, match := range changed {
+			paths = append(paths, match.Path)
+		}
+		assert.Contains(t, paths, VirtualSourcePath(path, "conv_000"))
+		assert.Contains(t, paths, VirtualSourcePath(path, "replacement"))
+	}
+	assert.LessOrEqual(t, allocations[1000], allocations[65]*1.25+20,
+		"replacement classification allocations must not grow with archive size")
+}
+
 func TestOmnigentSplitWorkspaceClassificationIsBatched(t *testing.T) {
 	path := writeOmnigentSplitWorkspaceCardinalityDB(t, 100)
 	conn, err := openOmnigentDB(path)

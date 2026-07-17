@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -15,13 +16,11 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestAbortedResyncQueuesOmnigentContainer(t *testing.T) {
-	root := t.TempDir()
+func writeOmnigentResyncSource(t *testing.T, root string) string {
+	t.Helper()
 	sourcePath := filepath.Join(root, "chat.db")
 	writer, err := sql.Open("sqlite3", sourcePath)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, writer.Close()) })
-
 	statements := []string{
 		`CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)`,
 		`CREATE TABLE conversations (
@@ -52,6 +51,16 @@ func TestAbortedResyncQueuesOmnigentContainer(t *testing.T) {
 		_, err = writer.Exec(statement)
 		require.NoError(t, err)
 	}
+	require.NoError(t, writer.Close())
+	return sourcePath
+}
+
+func TestAbortedResyncQueuesOmnigentContainer(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := writeOmnigentResyncSource(t, root)
+	writer, err := sql.Open("sqlite3", sourcePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
 
 	archive := openTestDB(t)
 	engine := NewEngine(archive, EngineConfig{
@@ -100,4 +109,35 @@ func TestAbortedResyncQueuesOmnigentContainer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, updated, 2,
 		"the next regular sync must retry work discarded with the resync")
+}
+
+func TestResyncPreparationFailureDoesNotQueueOmnigentContainer(t *testing.T) {
+	root := t.TempDir()
+	writeOmnigentResyncSource(t, root)
+	archive := openTestDB(t)
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	tempPath := archive.Path() + resyncTempSuffix
+	require.NoError(t, os.Mkdir(tempPath, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tempPath, "keep"), []byte("non-empty"), 0o600,
+	))
+	engine.syncMu.Lock()
+	stats, err := engine.resyncAllWithOptionsLocked(
+		context.Background(), nil, RebuildOptions{}, rebuildOperations{},
+	)
+	engine.syncMu.Unlock()
+	require.Error(t, err)
+	assert.True(t, stats.Aborted)
+	engine.omnigentRetryMu.Lock()
+	retryCount := len(engine.omnigentRetrySources)
+	engine.omnigentRetryMu.Unlock()
+	assert.Zero(t, retryCount,
+		"preparation failure cannot have advanced the provider tracker")
 }

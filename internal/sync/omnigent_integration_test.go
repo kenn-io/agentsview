@@ -57,6 +57,8 @@ type omnigentParseCountingProvider struct {
 	failOnce *atomic.Bool
 }
 
+const omnigentMemberBatchForTest = 32
+
 func (p *omnigentParseCountingProvider) Parse(
 	ctx context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
@@ -249,10 +251,18 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NoError(t, tx.Commit())
 			require.NoError(t, writer.Close())
 
-			engine.SyncPaths([]string{dbPath})
-			deleted, err := archive.GetSession(context.Background(), "omnigent:conv_0001")
-			require.NoError(t, err)
-			assert.Nil(t, deleted, "deleted conversation should retire its member session")
+			var deleted *db.Session
+			for range (archiveSize+omnigentMemberBatchForTest-1)/omnigentMemberBatchForTest + 1 {
+				engine.SyncPaths([]string{dbPath})
+				deleted, err = archive.GetSession(
+					context.Background(), "omnigent:conv_0001")
+				require.NoError(t, err)
+				if deleted == nil {
+					break
+				}
+			}
+			assert.Nil(t, deleted,
+				"bounded rotating probes should eventually retire a deleted conversation")
 			replacement, err := archive.GetSession(
 				context.Background(), "omnigent:replacement")
 			require.NoError(t, err)
@@ -369,7 +379,7 @@ func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	const boundedMemberBatch = int64(32)
+	const boundedMemberBatch = int64(omnigentMemberBatchForTest)
 	for _, archiveSize := range []int{200, 2000} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
