@@ -703,6 +703,21 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if oldDBHasTable(ctx, tx, "session_identity_aliases") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_identity_aliases (
+				alias_id, session_id, local_modified_at
+			)
+			SELECT a.alias_id, a.session_id, a.local_modified_at
+			FROM old_db.session_identity_aliases a
+			JOIN main.sessions s ON s.id = a.session_id
+			ON CONFLICT(alias_id) DO UPDATE SET
+				session_id = excluded.session_id,
+				local_modified_at = excluded.local_modified_at`); err != nil {
+			return fmt.Errorf("copying session identity aliases: %w", err)
+		}
+	}
+
 	return tx.Commit()
 }
 

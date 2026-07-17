@@ -453,6 +453,18 @@ CREATE TABLE IF NOT EXISTS excluded_sessions (
     id         TEXT PRIMARY KEY,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Durable aliases for session identities replaced by source reattribution.
+-- Unlike excluded_sessions, these do not represent a user deletion.
+CREATE TABLE IF NOT EXISTS session_identity_aliases (
+    alias_id          TEXT PRIMARY KEY,
+    session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    local_modified_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_session_identity_aliases_session
+    ON session_identity_aliases(session_id);
+
 -- Skipped files cache: persists skip decisions for files that
 -- produced no session (non-interactive, parse errors) so they
 -- survive process restarts without re-parsing.

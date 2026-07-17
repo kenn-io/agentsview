@@ -119,6 +119,10 @@ func TestSupersedeSessionIdentitiesPreservesDependentData(t *testing.T) {
 			remote_resolution = 'resolved', key = 'repository:repo'
 		WHERE session_id = ?`, oldID)
 	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
+		UPDATE sessions SET local_modified_at = '2000-01-01T00:00:00.000Z'
+		WHERE id IN (?, ?, ?, ?)`, oldID, currentID, "child", "parent")
+	require.NoError(t, err)
 
 	require.NoError(t, d.SupersedeSessionIdentities(currentID, []string{oldID}))
 
@@ -185,6 +189,23 @@ func TestSupersedeSessionIdentitiesPreservesDependentData(t *testing.T) {
 		t, currentID,
 		parentMessages[0].ToolCalls[0].ResultEvents[0].SubagentSessionID,
 	)
+
+	aliases, err := d.ListSessionIdentityAliases(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []SessionIdentityAlias{{
+		AliasID: oldID, SessionID: currentID,
+	}}, aliases)
+	assert.False(t, d.IsSessionExcluded(oldID))
+
+	modified, err := d.ListSessionsModifiedBetween(
+		ctx, "2020-01-01T00:00:00Z", "2100-01-01T00:00:00Z", nil, nil,
+	)
+	require.NoError(t, err)
+	modifiedIDs := make([]string, 0, len(modified))
+	for _, session := range modified {
+		modifiedIDs = append(modifiedIDs, session.ID)
+	}
+	assert.ElementsMatch(t, []string{currentID, "child", "parent"}, modifiedIDs)
 }
 
 func TestSupersedeSessionIdentitiesRollsBackOnError(t *testing.T) {
@@ -265,6 +286,7 @@ func TestSupersedeSessionIdentitiesCoversForeignKeyTables(t *testing.T) {
 		"recall_entries.source_session_id",
 		"recall_evidence.session_id",
 		"secret_findings.session_id",
+		"session_identity_aliases.session_id",
 		"session_project_identity_snapshots.session_id",
 		"starred_sessions.session_id",
 		"tool_calls.message_id",
@@ -272,6 +294,35 @@ func TestSupersedeSessionIdentitiesCoversForeignKeyTables(t *testing.T) {
 		"tool_result_events.session_id",
 		"usage_events.session_id",
 	}, got)
+}
+
+func TestCopySessionMetadataPreservesIdentityAliases(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := t.TempDir() + "/source.db"
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	for _, id := range []string{"old-machine~session", "new-machine~session"} {
+		require.NoError(t, source.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "machine", Agent: "claude",
+		}))
+	}
+	require.NoError(t, source.SupersedeSessionIdentities(
+		"new-machine~session", []string{"old-machine~session"},
+	))
+	require.NoError(t, source.Close())
+
+	destination := testDB(t)
+	require.NoError(t, destination.UpsertSession(Session{
+		ID: "new-machine~session", Project: "project",
+		Machine: "machine", Agent: "claude",
+	}))
+	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+
+	aliases, err := destination.ListSessionIdentityAliases(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []SessionIdentityAlias{{
+		AliasID: "old-machine~session", SessionID: "new-machine~session",
+	}}, aliases)
 }
 
 func TestFindSessionIDsByPartial(t *testing.T) {

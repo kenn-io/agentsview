@@ -2303,12 +2303,44 @@ func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
 		return err
 	}
 
+	if _, err := tx.Exec(`
+		UPDATE session_identity_aliases
+		SET session_id = ?,
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE session_id = ?`, currentID, oldID); err != nil {
+		return fmt.Errorf("retargeting identity aliases from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO session_identity_aliases (alias_id, session_id)
+		VALUES (?, ?)
+		ON CONFLICT(alias_id) DO UPDATE SET
+			session_id = excluded.session_id,
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+		oldID, currentID,
+	); err != nil {
+		return fmt.Errorf("recording identity alias from %s: %w", oldID, err)
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id IN (
+			SELECT session_id FROM tool_calls WHERE subagent_session_id = ?
+			UNION
+			SELECT session_id FROM tool_result_events WHERE subagent_session_id = ?
+		)`, oldID, oldID); err != nil {
+		return fmt.Errorf("marking tool relationship owners for %s: %w", oldID, err)
+	}
+
 	for _, update := range []struct {
 		query string
 		name  string
 	}{
 		{
-			"UPDATE recall_entries SET source_session_id = ? WHERE source_session_id = ?",
+			`UPDATE recall_entries
+			 SET source_session_id = ?,
+			     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE source_session_id = ?`,
 			"recall entries",
 		},
 		{
@@ -2316,11 +2348,17 @@ func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
 			"recall evidence",
 		},
 		{
-			"UPDATE sessions SET parent_session_id = ? WHERE parent_session_id = ?",
+			`UPDATE sessions
+			 SET parent_session_id = ?,
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE parent_session_id = ?`,
 			"parent session references",
 		},
 		{
-			"UPDATE sessions SET source_session_id = ? WHERE source_session_id = ?",
+			`UPDATE sessions
+			 SET source_session_id = ?,
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE source_session_id = ?`,
 			"source session references",
 		},
 		{
@@ -2342,6 +2380,12 @@ func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
 			)
 		}
 	}
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ?`, currentID); err != nil {
+		return fmt.Errorf("marking replacement session %s modified: %w", currentID, err)
+	}
 	if err := deleteSessionMessagesTx(tx, oldID); err != nil {
 		return fmt.Errorf("deleting superseded session %s messages: %w", oldID, err)
 	}
@@ -2349,6 +2393,62 @@ func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
 		return fmt.Errorf("deleting superseded session %s: %w", oldID, err)
 	}
 	return nil
+}
+
+// SessionIdentityAlias records a durable old-to-current session identity.
+type SessionIdentityAlias struct {
+	AliasID   string
+	SessionID string
+}
+
+// ListSessionIdentityAliases returns aliases whose current session is within
+// the requested push scope.
+func (db *DB) ListSessionIdentityAliases(
+	ctx context.Context, projects, excludeProjects []string,
+) ([]SessionIdentityAlias, error) {
+	query := `SELECT a.alias_id, a.session_id
+		FROM session_identity_aliases a
+		JOIN sessions s ON s.id = a.session_id`
+	var (
+		args  []any
+		where []string
+	)
+	if len(projects) > 0 {
+		where = append(where, "s.project IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(projects)), ",")+")")
+		for _, project := range projects {
+			args = append(args, project)
+		}
+	}
+	if len(excludeProjects) > 0 {
+		where = append(where, "s.project NOT IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(excludeProjects)), ",")+")")
+		for _, project := range excludeProjects {
+			args = append(args, project)
+		}
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY a.alias_id"
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing session identity aliases: %w", err)
+	}
+	defer rows.Close()
+	var aliases []SessionIdentityAlias
+	for rows.Next() {
+		var alias SessionIdentityAlias
+		if err := rows.Scan(&alias.AliasID, &alias.SessionID); err != nil {
+			return nil, fmt.Errorf("scanning session identity alias: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session identity aliases: %w", err)
+	}
+	return aliases, nil
 }
 
 func mergeUsageEventsForSessionIdentityTx(

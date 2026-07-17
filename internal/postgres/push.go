@@ -271,6 +271,12 @@ func (s *Sync) Push(
 		return result, err
 	}
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
+	identityAliases, err := s.local.ListSessionIdentityAliases(
+		ctx, s.projects, s.excludeProjects,
+	)
+	if err != nil {
+		return result, err
+	}
 
 	allSessions, err := s.local.ListSessionsModifiedBetween(
 		ctx, lastPush, cutoff, s.projects, s.excludeProjects,
@@ -412,6 +418,11 @@ func (s *Sync) Push(
 	})
 
 	if len(sessions) == 0 {
+		if err := applyPGSessionIdentityAliases(
+			ctx, s.pg, identityAliases,
+		); err != nil {
+			return result, err
+		}
 		if s.isFiltered() {
 			// Filtered pushes use filter-scoped sync state, so
 			// they can advance their own watermark without
@@ -520,6 +531,19 @@ func (s *Sync) Push(
 		}
 	}
 
+	if result.Errors == 0 {
+		if err := applyPGSessionIdentityAliases(
+			ctx, s.pg, identityAliases,
+		); err != nil {
+			return result, err
+		}
+	} else {
+		log.Printf(
+			"pgsync: skipping session identity alias publication after %d session push errors",
+			result.Errors,
+		)
+	}
+
 	if s.isFiltered() {
 		// Filtered pushes use filter-scoped sync state, so
 		// they can advance their own watermark without moving
@@ -581,6 +605,137 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func applyPGSessionIdentityAliases(
+	ctx context.Context, pg *sql.DB, aliases []db.SessionIdentityAlias,
+) error {
+	if len(aliases) == 0 {
+		return nil
+	}
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning session identity alias publication: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, alias := range aliases {
+		if alias.AliasID == "" || alias.SessionID == "" ||
+			alias.AliasID == alias.SessionID {
+			continue
+		}
+		var currentExists bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`,
+			alias.SessionID,
+		).Scan(&currentExists); err != nil {
+			return fmt.Errorf(
+				"checking replacement session %s: %w", alias.SessionID, err,
+			)
+		}
+		if !currentExists {
+			return fmt.Errorf(
+				"replacement session %s is missing from postgres",
+				alias.SessionID,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO starred_sessions (session_id, created_at)
+			SELECT $1, created_at
+			FROM starred_sessions
+			WHERE session_id = $2
+			ON CONFLICT (session_id) DO UPDATE SET
+				created_at = LEAST(
+					starred_sessions.created_at, EXCLUDED.created_at
+				)`, alias.SessionID, alias.AliasID); err != nil {
+			return fmt.Errorf("retargeting postgres session star %s: %w",
+				alias.AliasID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO pinned_messages (
+				session_id, message_id, ordinal, source_uuid, note, created_at
+			)
+			SELECT $1, target.ordinal, target.ordinal,
+				old.source_uuid, old.note, old.created_at
+			FROM pinned_messages old
+			JOIN LATERAL (
+				SELECT m.ordinal
+				FROM messages m
+				WHERE m.session_id = $1
+				  AND (
+					(old.source_uuid <> '' AND m.source_uuid = old.source_uuid)
+					OR (old.source_uuid = '' AND m.ordinal = old.ordinal)
+				  )
+				ORDER BY m.ordinal
+				LIMIT 1
+			) target ON TRUE
+			WHERE old.session_id = $2
+			ON CONFLICT (session_id, message_id) DO UPDATE SET
+				ordinal = EXCLUDED.ordinal,
+				source_uuid = EXCLUDED.source_uuid,
+				note = EXCLUDED.note,
+				created_at = LEAST(
+					pinned_messages.created_at, EXCLUDED.created_at
+				)`, alias.SessionID, alias.AliasID); err != nil {
+			return fmt.Errorf("retargeting postgres session pins %s: %w",
+				alias.AliasID, err)
+		}
+		for _, update := range []struct {
+			query string
+			name  string
+		}{
+			{
+				"UPDATE sessions SET parent_session_id = $1 WHERE parent_session_id = $2",
+				"parent session references",
+			},
+			{
+				"UPDATE sessions SET source_session_id = $1 WHERE source_session_id = $2",
+				"source session references",
+			},
+			{
+				"UPDATE tool_calls SET subagent_session_id = $1 WHERE subagent_session_id = $2",
+				"tool-call subagent references",
+			},
+			{
+				"UPDATE tool_result_events SET subagent_session_id = $1 WHERE subagent_session_id = $2",
+				"tool-result subagent references",
+			},
+		} {
+			if _, err := tx.ExecContext(
+				ctx, update.query, alias.SessionID, alias.AliasID,
+			); err != nil {
+				return fmt.Errorf("retargeting postgres %s from %s: %w",
+					update.name, alias.AliasID, err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM session_aliases
+			 WHERE alias_id = $1 OR session_id = $1`,
+			alias.AliasID,
+		); err != nil {
+			return fmt.Errorf("removing stale postgres aliases for %s: %w",
+				alias.AliasID, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM sessions WHERE id = $1`, alias.AliasID,
+		); err != nil {
+			return fmt.Errorf("deleting superseded postgres session %s: %w",
+				alias.AliasID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_aliases (session_id, alias_id)
+			VALUES ($1, $2)
+			ON CONFLICT (session_id, alias_id) DO NOTHING`,
+			alias.SessionID, alias.AliasID,
+		); err != nil {
+			return fmt.Errorf("publishing postgres session alias %s: %w",
+				alias.AliasID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing session identity aliases: %w", err)
+	}
+	return nil
 }
 
 // runVectorPushPhase runs the vector push phase and wraps its error. With no

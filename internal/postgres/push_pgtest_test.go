@@ -105,6 +105,131 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	assert.Zero(t, snapshotCount)
 }
 
+func TestIncrementalPushPublishesSessionIdentitySupersession(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_supersession_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	const (
+		oldID     = "old-machine~session"
+		currentID = "new-machine~session"
+	)
+	oldParentID := oldID
+	for _, session := range []db.Session{
+		{ID: oldID, Project: "app", Machine: "old-machine", Agent: "claude"},
+		{ID: "child", Project: "app", Machine: "laptop", Agent: "claude",
+			ParentSessionID: &oldParentID, SourceSessionID: oldID},
+		{ID: "parent", Project: "app", Machine: "laptop", Agent: "claude"},
+	} {
+		require.NoError(t, local.UpsertSession(session))
+	}
+	require.NoError(t, local.InsertMessages([]db.Message{
+		{SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+			SourceUUID: "stable"},
+		{SessionID: "parent", Ordinal: 0, Role: "assistant", Content: "spawn",
+			ToolCalls: []db.ToolCall{{
+				ToolName: "Agent", Category: "agent", ToolUseID: "spawn",
+				SubagentSessionID: oldID,
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "spawn", SubagentSessionID: oldID,
+					Source: "progress", Status: "completed",
+				}},
+			}}},
+	}))
+	oldMessages, err := local.GetAllMessages(ctx, oldID)
+	require.NoError(t, err)
+	require.Len(t, oldMessages, 1)
+	_, err = local.PinMessage(oldID, oldMessages[0].ID, nil)
+	require.NoError(t, err)
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx,
+		`INSERT INTO starred_sessions (session_id) VALUES ($1)`, oldID)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `
+		INSERT INTO pinned_messages (
+			session_id, message_id, ordinal, source_uuid, note
+		)
+		SELECT $1, ordinal, ordinal, source_uuid, 'shared note'
+		FROM messages
+		WHERE session_id = $1 AND ordinal = 0`, oldID)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: currentID, Project: "app", Machine: "new-machine", Agent: "claude",
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: currentID, Ordinal: 0, Role: "user", Content: "old",
+		SourceUUID: "stable",
+	}}))
+	require.NoError(t, local.SupersedeSessionIdentities(
+		currentID, []string{oldID},
+	))
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, result.SessionsPushed, 3)
+
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM excluded_sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_aliases
+		WHERE session_id = $1 AND alias_id = $2`,
+		currentID, oldID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sessions
+		WHERE id = 'child' AND parent_session_id = $1 AND source_session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tool_calls
+		WHERE session_id = 'parent' AND subagent_session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tool_result_events
+		WHERE session_id = 'parent' AND subagent_session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pinned_messages WHERE session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_aliases
+		WHERE session_id = $1 AND alias_id = $2`,
+		currentID, oldID).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
 func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	t *testing.T,
 ) {
