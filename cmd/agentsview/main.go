@@ -210,6 +210,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if !cfg.NoSync {
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
+			SourceMachines:          cfg.SourceMachines,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			Machine:                 cfg.LocalMachineName,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,

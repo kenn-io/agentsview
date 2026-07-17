@@ -311,6 +311,7 @@ func ensureFreshData(
 	if database.NeedsResync() {
 		engine := sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
+			SourceMachines:     appCfg.SourceMachines,
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 			Machine:            appCfg.LocalMachineName,
 		})
@@ -335,6 +336,7 @@ func ensureFreshData(
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:          appCfg.AgentDirs,
+		SourceMachines:     appCfg.SourceMachines,
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 		Machine:            appCfg.LocalMachineName,
 	})

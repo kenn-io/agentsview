@@ -59,6 +59,7 @@ type Emitter interface {
 // engine, replacing per-agent positional parameters.
 type EngineConfig struct {
 	AgentDirs               map[parser.AgentType][]string
+	SourceMachines          map[parser.AgentType]map[string]string
 	Machine                 string
 	BlockedResultCategories []string
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
@@ -102,6 +103,7 @@ type Engine struct {
 	db                      *db.DB
 	openCodeArchiveStore    db.Store
 	agentDirs               map[parser.AgentType][]string
+	sourceMachines          map[parser.AgentType]map[string]string
 	machine                 string
 	blockedResultCategories map[string]bool
 	cwdFilter               cwdPrefixFilter
@@ -267,6 +269,10 @@ func NewEngine(
 	for k, v := range cfg.AgentDirs {
 		dirs[k] = append([]string(nil), v...)
 	}
+	sourceMachines := make(map[parser.AgentType]map[string]string, len(cfg.SourceMachines))
+	for agent, roots := range cfg.SourceMachines {
+		sourceMachines[agent] = maps.Clone(roots)
+	}
 	providerFactories := parser.ProviderFactories()
 	if cfg.ProviderFactories != nil {
 		providerFactories = cfg.ProviderFactories
@@ -279,6 +285,7 @@ func NewEngine(
 	e := &Engine{
 		db:                      database,
 		agentDirs:               dirs,
+		sourceMachines:          sourceMachines,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
@@ -324,6 +331,36 @@ func NewEngine(
 		},
 	)
 	return e
+}
+
+func (e *Engine) machineForPath(agent parser.AgentType, path string) string {
+	path = filepath.Clean(path)
+	bestRoot := ""
+	machine := e.machine
+	for root, candidate := range e.sourceMachines[agent] {
+		if !pathWithinRoot(path, root) || len(root) <= len(bestRoot) {
+			continue
+		}
+		bestRoot = root
+		machine = candidate
+	}
+	return machine
+}
+
+func (e *Engine) machineForFile(file parser.DiscoveredFile) string {
+	if file.Machine != "" {
+		return file.Machine
+	}
+	return e.machineForPath(file.Agent, file.Path)
+}
+
+func pathWithinRoot(path, root string) bool {
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Close flushes any pending debounced signal recomputes and stops
@@ -693,6 +730,9 @@ func mergeChangedPathDiscoveredFile(
 	if current.Project == "" {
 		current.Project = next.Project
 	}
+	if current.Machine == "" {
+		current.Machine = next.Machine
+	}
 	if current.ProviderSource == nil && next.ProviderSource != nil {
 		current.ProviderSource = next.ProviderSource
 	}
@@ -819,6 +859,9 @@ func (e *Engine) classifyProviderChangedPath(
 					ForceParse:      providerChangedPathForceParse(agent, sourcePath, path, eventKind, mode),
 					ProviderSource:  &sourceCopy,
 					ProviderProcess: mode == parser.ProviderMigrationProviderAuthoritative,
+				}
+				if !isS3SourcePath(sourcePath) {
+					discovered.Machine = e.machineForPath(agent, sourcePath)
 				}
 				// A watcher event names a concrete change even when the
 				// session's stat signature cannot see it (a same-size,
@@ -2836,6 +2879,9 @@ func (e *Engine) discoverProviderSources(
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
 			}
+			if !isS3SourcePath(sourcePath) {
+				discovered.Machine = e.machineForPath(agent, sourcePath)
+			}
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
 			}
@@ -3048,6 +3094,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 			out = append(out, parser.DiscoveredFile{
 				Path:            dup,
 				Agent:           parser.AgentCodex,
+				Machine:         e.machineForPath(parser.AgentCodex, dup),
 				ProviderProcess: true,
 				ProviderSource:  e.codexPinnedProviderSource(dup),
 			})
@@ -3716,10 +3763,11 @@ func (e *Engine) syncProviderDBBacked(
 		if e.providerDBBackedSourceFresh(source, fingerprint) {
 			continue
 		}
+		machine := e.machineForPath(agent, providerDiscoveredPath(source))
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
-			Machine:     e.machine,
+			Machine:     machine,
 		})
 		if err != nil {
 			log.Printf("sync %s parse: %v", agent, err)
@@ -4402,9 +4450,10 @@ func (e *Engine) processProviderFile(
 			err: fmt.Errorf("provider not found for agent type: %s", file.Agent),
 		}, true
 	}
+	machine := e.machineForFile(file)
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots:        e.agentDirs[file.Agent],
-		Machine:      e.machine,
+		Machine:      machine,
 		PathRewriter: e.pathRewriter,
 	})
 
@@ -4609,7 +4658,7 @@ func (e *Engine) processProviderFile(
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
-		Machine:     e.machine,
+		Machine:     machine,
 		ForceParse:  e.forceParse || file.ForceParse,
 	})
 	if err != nil {
@@ -5783,7 +5832,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				SessionID:        inc.ID,
 				Offset:           inc.FileSize,
 				StartOrdinal:     inc.NextOrdinal,
-				Machine:          e.machine,
+				Machine:          e.machineForFile(file),
 				LastEntryUUID:    inc.LastEntryUUID,
 				StoredAgentLabel: inc.AgentLabel,
 				StoredEntrypoint: inc.Entrypoint,
@@ -6266,8 +6315,9 @@ func (e *Engine) classifyCodexIndexPath(
 		for _, root := range sessionRoots {
 			if src := e.codexSourceFileForUUID(root, uuid); src != "" {
 				candidates = append(candidates, parser.DiscoveredFile{
-					Path:  src,
-					Agent: parser.AgentCodex,
+					Path:    src,
+					Agent:   parser.AgentCodex,
+					Machine: e.machineForPath(parser.AgentCodex, src),
 				})
 			}
 		}
@@ -9076,9 +9126,10 @@ func (e *Engine) findProviderSourceFile(
 	// chat source. Confirm the requested fork is actually produced before
 	// treating the chat source as a hit, mirroring the legacy parse-verify.
 	if providerSessionIsFork(def, sessionID, rawSessionID) {
+		machine := e.machineForPath(def.Type, providerDiscoveredPath(source))
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:  source,
-			Machine: e.machine,
+			Machine: machine,
 		})
 		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
 			return ""
@@ -9135,9 +9186,10 @@ func (e *Engine) providerSessionSourceMtime(
 	// A fork session ID resolves to its base chat source. Confirm the
 	// requested fork exists before treating the chat mtime as authoritative.
 	if providerSessionIsFork(def, sessionID, rawSessionID) {
+		machine := e.machineForPath(def.Type, providerDiscoveredPath(source))
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:  source,
-			Machine: e.machine,
+			Machine: machine,
 		})
 		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
 			return 0
@@ -9463,6 +9515,9 @@ func (e *Engine) SyncSingleSessionContext(
 		ForceParse: true,
 	}
 	e.hydrateS3DiscoveredFile(ctx, sessionID, &file)
+	if file.Machine == "" && !isS3SourcePath(file.Path) {
+		file.Machine = e.machineForPath(file.Agent, file.Path)
+	}
 	if e.shouldCacheSkip(file) {
 		e.clearSkip(path)
 	}
