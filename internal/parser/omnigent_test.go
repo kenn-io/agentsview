@@ -5,6 +5,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -296,18 +297,18 @@ func TestParseOmnigentDB_SplitGen(t *testing.T) {
 }
 
 func TestDecodeOmnigentFunctionOutputPreservesJSONString(t *testing.T) {
-	const output = `{"ok":true}`
+	const output = "{\"ok\":true}\x00\x1b"
 	messages := []ParsedMessage{{Role: RoleAssistant}}
 	decodeOmnigentItem(
 		1, omnigentTypeFuncOutput,
-		`{"call_id":"call-json","output":"{\"ok\":true}"}`,
+		`{"call_id":"call-json","output":"{\"ok\":true}\u0000\u001b"}`,
 		"", &messages, map[string]int{"call-json": 0},
 	)
 
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].ToolResults, 1)
 	result := messages[0].ToolResults[0]
-	assert.Equal(t, `"{\"ok\":true}"`, result.ContentRaw)
+	assert.True(t, json.Valid([]byte(result.ContentRaw)))
 	assert.Equal(t, output, DecodeContent(result.ContentRaw))
 	assert.Equal(t, len(output), result.ContentLength)
 }

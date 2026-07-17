@@ -804,10 +804,14 @@ func decodeOmnigentItem(
 		if json.Unmarshal([]byte(data), &fo) != nil {
 			return
 		}
+		quoted, err := json.Marshal(fo.Output)
+		if err != nil {
+			return
+		}
 		result := ParsedToolResult{
 			ToolUseID:     fo.CallID,
 			ContentLength: len(fo.Output),
-			ContentRaw:    strconv.Quote(fo.Output),
+			ContentRaw:    string(quoted),
 		}
 		if idx, ok := callMsgIndex[fo.CallID]; ok {
 			msg := &(*messages)[idx]
