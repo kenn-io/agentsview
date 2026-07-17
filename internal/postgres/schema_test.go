@@ -640,21 +640,6 @@ func TestCheckSchemaCompatRequiresSourceArchives(t *testing.T) {
 		"source_archives table missing required columns")
 }
 
-func TestCheckSchemaCompatRequiresUsageEventAICredits(t *testing.T) {
-	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
-		contains: "select id, ai_credits from usage_events",
-		err: errors.New(
-			`ERROR: column "ai_credits" does not exist (SQLSTATE 42703)`),
-	}}
-
-	err := CheckSchemaCompat(context.Background(), pg)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(),
-		"usage_events table missing required columns")
-}
-
 func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
@@ -856,9 +841,6 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 		},
 		"tool_calls": {
 			"call_index", "file_path",
-		},
-		"usage_events": {
-			"ai_credits",
 		},
 	})
 

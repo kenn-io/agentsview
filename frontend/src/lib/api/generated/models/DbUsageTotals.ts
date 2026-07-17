@@ -7,8 +7,8 @@ export type DbUsageTotals = {
   cacheReadTokens: number;
   cacheSavings: number;
   copilotAICredits?: number;
-  copilotAICreditsSource?: string;
   inputTokens: number;
   outputTokens: number;
   totalCost: number;
 };
+

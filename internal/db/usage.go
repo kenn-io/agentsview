@@ -20,6 +20,10 @@ import (
 // is denominated in AI credits (the AICreditsDenominated capability).
 const aiCreditUSD = 0.01
 
+// CopilotReportedCostSource identifies the authoritative cumulative cost
+// reported by Copilot CLI shutdown records.
+const CopilotReportedCostSource = "copilot-reported"
+
 // AICreditsFromCost converts a USD cost into AI credits when the
 // agent's cost is denominated in AI credits, and returns 0 otherwise.
 // It is the single home of the credit conversion shared by the SQLite,
@@ -30,41 +34,6 @@ func AICreditsFromCost(agent string, costUSD float64) float64 {
 		return 0
 	}
 	return costUSD / aiCreditUSD
-}
-
-const (
-	AICreditsSourceReported  = "reported"
-	AICreditsSourceEstimated = "estimated"
-	AICreditsSourceMixed     = "mixed"
-)
-
-// ResolveAICredits prefers an authoritative reported total and otherwise
-// preserves the cost-based fallback for AI-credit-denominated agents.
-func ResolveAICredits(
-	agent string, costUSD, reported float64, hasReported bool,
-) (float64, string) {
-	if !parser.AgentNameUsesAICredits(agent) {
-		return 0, ""
-	}
-	if hasReported {
-		return reported, AICreditsSourceReported
-	}
-	credits := AICreditsFromCost(agent, costUSD)
-	if credits == 0 {
-		return 0, ""
-	}
-	return credits, AICreditsSourceEstimated
-}
-
-// MergeAICreditsSource combines source labels across aggregate buckets.
-func MergeAICreditsSource(current, next string) string {
-	if next == "" || current == next {
-		return current
-	}
-	if current == "" {
-		return next
-	}
-	return AICreditsSourceMixed
 }
 
 // NoTokenData reports whether a daily-usage total carries neither token
@@ -426,7 +395,6 @@ SELECT
 		ELSE 0
 	END AS reasoning_tokens,
 	NULL AS cost_usd,
-	NULL AS ai_credits,
 	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
@@ -461,7 +429,6 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_usd,
-	ue.ai_credits,
 	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
@@ -511,7 +478,7 @@ SELECT
 		ELSE 0
 	END AS reasoning_tokens,
 	NULL AS cost_usd,
-	NULL AS ai_credits,
+	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
 	m.source_uuid,
@@ -538,7 +505,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_usd,
-	ue.ai_credits,
+	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -570,7 +537,7 @@ SELECT
 		ELSE 0
 	END AS reasoning_tokens,
 	NULL AS cost_usd,
-	NULL AS ai_credits,
+	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
 	m.source_uuid,
@@ -596,7 +563,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_usd,
-	ue.ai_credits,
+	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -650,12 +617,12 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.occurred_at,
 		ue.model,
 		ue.input_tokens,
-		ue.output_tokens,
-		ue.cache_creation_input_tokens,
-		ue.cache_read_input_tokens,
-		ue.reasoning_tokens,
-		ue.cost_usd,
-		ue.ai_credits,
+			ue.output_tokens,
+			ue.cache_creation_input_tokens,
+			ue.cache_read_input_tokens,
+			ue.reasoning_tokens,
+			ue.cost_usd,
+			ue.cost_source,
 		ue.dedup_key
 	FROM usage_events ue
 	WHERE ` + eventTimestampWhere + `
@@ -704,7 +671,6 @@ type usageScanRow struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	costUSD                  sql.NullFloat64
-	aiCredits                sql.NullFloat64
 	costStatus               string
 	costSource               string
 	claudeMessageID          string
@@ -735,7 +701,7 @@ type dailyUsageScanRow struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	costUSD                  sql.NullFloat64
-	aiCredits                sql.NullFloat64
+	costSource               string
 	claudeMessageID          string
 	claudeRequestID          string
 	sourceUUID               string
@@ -767,7 +733,6 @@ SELECT
 	u.cache_read_input_tokens,
 	u.reasoning_tokens,
 	u.cost_usd,
-	u.ai_credits,
 	u.cost_status,
 	u.cost_source,
 	u.claude_message_id,
@@ -814,12 +779,12 @@ SELECT
 	u.model,
 	u.token_usage,
 	u.input_tokens,
-	u.output_tokens,
-	u.cache_creation_input_tokens,
-	u.cache_read_input_tokens,
-	u.reasoning_tokens,
-	u.cost_usd,
-	u.ai_credits,
+		u.output_tokens,
+		u.cache_creation_input_tokens,
+		u.cache_read_input_tokens,
+		u.reasoning_tokens,
+		u.cost_usd,
+		u.cost_source,
 	u.claude_message_id,
 	u.claude_request_id,
 	u.source_uuid,
@@ -998,7 +963,7 @@ SELECT
 	cu.cache_read_tokens AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	cu.charged_cents / 100.0 AS cost_usd,
-	NULL AS ai_credits,
+	'cursor-reported' AS cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -1089,7 +1054,6 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
 		&r.costUSD,
-		&r.aiCredits,
 		&r.costStatus,
 		&r.costSource,
 		&r.claudeMessageID,
@@ -1130,7 +1094,7 @@ func scanDailyUsageRowWithMachine(
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
 		&r.costUSD,
-		&r.aiCredits,
+		&r.costSource,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
 		&r.sourceUUID,
@@ -1492,7 +1456,7 @@ func dailyUsageAmounts(
 
 	lookup := pricing.Lookup(r.model)
 	rates := lookup.Rates
-	if r.costUSD.Valid {
+	if r.costUSD.Valid && r.costSource != CopilotReportedCostSource {
 		cost = r.costUSD.Float64
 		pricing.RecordReported(r.model, lookup)
 	} else {
@@ -1667,13 +1631,12 @@ type MachineBreakdown struct {
 
 // UsageTotals holds aggregate token and cost totals.
 type UsageTotals struct {
-	InputTokens            int     `json:"inputTokens"`
-	OutputTokens           int     `json:"outputTokens"`
-	CacheCreationTokens    int     `json:"cacheCreationTokens"`
-	CacheReadTokens        int     `json:"cacheReadTokens"`
-	TotalCost              float64 `json:"totalCost"`
-	CopilotAICredits       float64 `json:"copilotAICredits,omitempty"`
-	CopilotAICreditsSource string  `json:"copilotAICreditsSource,omitempty"`
+	InputTokens         int     `json:"inputTokens"`
+	OutputTokens        int     `json:"outputTokens"`
+	CacheCreationTokens int     `json:"cacheCreationTokens"`
+	CacheReadTokens     int     `json:"cacheReadTokens"`
+	TotalCost           float64 `json:"totalCost"`
+	CopilotAICredits    float64 `json:"copilotAICredits,omitempty"`
 	// CacheSavings is the net dollar delta vs an uncached run:
 	// cache reads save (input_rate - cache_read_rate) per token,
 	// cache creations cost (input_rate - cache_creation_rate)
@@ -1896,25 +1859,25 @@ func (db *DB) GetDailyUsage(
 		model   string
 	}
 	type bucket struct {
-		inputTok  int
-		outputTok int
-		cacheCr   int
-		cacheRd   int
-		cost      float64
+		inputTok      int
+		outputTok     int
+		cacheCr       int
+		cacheRd       int
+		cost          float64
+		aggregateCost float64
 	}
-	type creditKey struct {
-		sessionID string
-		agent     string
-	}
-	type creditBucket struct {
-		estimatedCost float64
-		reported      float64
-		hasReported   bool
+	type sessionCost struct {
+		agent         string
+		estimated     map[accumKey]float64
+		authoritative *struct {
+			key  accumKey
+			cost float64
+		}
 	}
 
 	accum := make(map[accumKey]*bucket)
-	creditAccum := make(map[creditKey]*creditBucket)
-	useReportedCredits := f.Model == "" && f.ExcludeModel == ""
+	sessionCosts := make(map[string]*sessionCost)
+	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
 
 	seen := make(map[usageDedupToken]struct{})
 	var seenSessions map[string]UsageSessionInfo
@@ -1989,21 +1952,52 @@ func (db *DB) GetDailyUsage(
 		b.cacheRd += cacheRdTok
 		b.cost += cost
 
-		creditKeyValue := creditKey{sessionID: r.sessionID, agent: r.agent}
-		credit := creditAccum[creditKeyValue]
-		if credit == nil {
-			credit = &creditBucket{}
-			creditAccum[creditKeyValue] = credit
+		sc := sessionCosts[r.sessionID]
+		if sc == nil {
+			sc = &sessionCost{
+				agent:     r.agent,
+				estimated: make(map[accumKey]float64),
+			}
+			sessionCosts[r.sessionID] = sc
 		}
-		credit.estimatedCost += cost
-		if useReportedCredits && r.aiCredits.Valid {
-			credit.reported += r.aiCredits.Float64
-			credit.hasReported = true
+		sc.estimated[key] += cost
+		if useAuthoritativeCost &&
+			r.costSource == CopilotReportedCostSource &&
+			r.costUSD.Valid {
+			sc.authoritative = &struct {
+				key  accumKey
+				cost float64
+			}{key: key, cost: r.costUSD.Float64}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return DailyUsageResult{},
 			fmt.Errorf("iterating daily usage rows: %w", err)
+	}
+
+	var copilotAICredits float64
+	for _, sc := range sessionCosts {
+		resolvedCost := 0.0
+		if sc.authoritative != nil {
+			b := accum[sc.authoritative.key]
+			if b == nil {
+				b = &bucket{}
+				accum[sc.authoritative.key] = b
+			}
+			b.aggregateCost += sc.authoritative.cost
+			resolvedCost = sc.authoritative.cost
+		} else {
+			for key, cost := range sc.estimated {
+				b := accum[key]
+				if b == nil {
+					b = &bucket{}
+					accum[key] = b
+				}
+				b.aggregateCost += cost
+				resolvedCost += cost
+			}
+		}
+		copilotAICredits += AICreditsFromCost(sc.agent, resolvedCost)
 	}
 
 	// Two paths: without breakdowns (CLI, fast) and with breakdowns
@@ -2018,11 +2012,12 @@ func (db *DB) GetDailyUsage(
 			model string
 		}
 		type modelAccum struct {
-			inputTok  int
-			outputTok int
-			cacheCr   int
-			cacheRd   int
-			cost      float64
+			inputTok      int
+			outputTok     int
+			cacheCr       int
+			cacheRd       int
+			cost          float64
+			aggregateCost float64
 		}
 		dm := make(map[dateModelKey]*modelAccum)
 		for key, b := range accum {
@@ -2037,6 +2032,7 @@ func (db *DB) GetDailyUsage(
 			ma.cacheCr += b.cacheCr
 			ma.cacheRd += b.cacheRd
 			ma.cost += b.cost
+			ma.aggregateCost += b.aggregateCost
 		}
 
 		type dayData struct {
@@ -2101,7 +2097,7 @@ func (db *DB) GetDailyUsage(
 				entry.OutputTokens += ma.outputTok
 				entry.CacheCreationTokens += ma.cacheCr
 				entry.CacheReadTokens += ma.cacheRd
-				entry.TotalCost += ma.cost
+				entry.TotalCost += ma.aggregateCost
 				mbd = append(mbd, ModelBreakdown{
 					ModelName:           m,
 					InputTokens:         ma.inputTok,
@@ -2126,14 +2122,8 @@ func (db *DB) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
-		for key, b := range creditAccum {
-			credits, source := ResolveAICredits(
-				key.agent, b.estimatedCost, b.reported, b.hasReported,
-			)
-			totals.CopilotAICredits += credits
-			totals.CopilotAICreditsSource = MergeAICreditsSource(
-				totals.CopilotAICreditsSource, source,
-			)
+		if copilotAICredits > 0 {
+			totals.CopilotAICredits = copilotAICredits
 		}
 		var sessionCounts UsageSessionCounts
 		if seenSessions != nil {
@@ -2188,6 +2178,7 @@ func (db *DB) GetDailyUsage(
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
 		cur.cost += b.cost
+		cur.aggregateCost += b.aggregateCost
 		dm.models[key.model] = cur
 
 		cur = dm.projects[key.project]
@@ -2195,7 +2186,7 @@ func (db *DB) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
+		cur.cost += b.aggregateCost
 		dm.projects[key.project] = cur
 
 		cur = dm.agents[key.agent]
@@ -2203,7 +2194,7 @@ func (db *DB) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
+		cur.cost += b.aggregateCost
 		dm.agents[key.agent] = cur
 
 		cur = dm.machines[key.machine]
@@ -2211,7 +2202,7 @@ func (db *DB) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
+		cur.cost += b.aggregateCost
 		dm.machines[key.machine] = cur
 	}
 
@@ -2259,7 +2250,7 @@ func (db *DB) GetDailyUsage(
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
-			entry.TotalCost += b.cost
+			entry.TotalCost += b.aggregateCost
 			mbd = append(mbd, ModelBreakdown{
 				ModelName:           m,
 				InputTokens:         b.inputTok,
@@ -2349,14 +2340,8 @@ func (db *DB) GetDailyUsage(
 
 	totals.CacheSavings = totalSavings
 
-	for key, b := range creditAccum {
-		credits, source := ResolveAICredits(
-			key.agent, b.estimatedCost, b.reported, b.hasReported,
-		)
-		totals.CopilotAICredits += credits
-		totals.CopilotAICreditsSource = MergeAICreditsSource(
-			totals.CopilotAICreditsSource, source,
-		)
+	if copilotAICredits > 0 {
+		totals.CopilotAICredits = copilotAICredits
 	}
 
 	var sessionCounts UsageSessionCounts
@@ -2434,8 +2419,9 @@ func (db *DB) GetTopSessionsByCost(
 	loc := f.location()
 
 	type sessAccum struct {
-		totalTokens int
-		cost        float64
+		totalTokens       int
+		cost              float64
+		authoritativeCost *float64
 	}
 
 	accum := make(map[string]*sessAccum)
@@ -2488,6 +2474,12 @@ func (db *DB) GetTopSessionsByCost(
 		sa.totalTokens += inputTok + outputTok +
 			cacheCrTok + cacheRdTok
 		sa.cost += cost
+		if f.Model == "" && f.ExcludeModel == "" &&
+			r.costSource == CopilotReportedCostSource &&
+			r.costUSD.Valid {
+			v := r.costUSD.Float64
+			sa.authoritativeCost = &v
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil,
@@ -2504,7 +2496,12 @@ func (db *DB) GetTopSessionsByCost(
 			SessionID:   id,
 			DisplayName: id,
 			TotalTokens: sa.totalTokens,
-			Cost:        sa.cost,
+			Cost: func() float64 {
+				if sa.authoritativeCost != nil {
+					return *sa.authoritativeCost
+				}
+				return sa.cost
+			}(),
 		})
 	}
 
@@ -2554,7 +2551,6 @@ type SessionUsage struct {
 	CostUSD           float64                      `json:"cost_usd"`
 	HasCost           bool                         `json:"has_cost"`
 	AICredits         float64                      `json:"ai_credits,omitempty"`
-	AICreditsSource   string                       `json:"ai_credits_source,omitempty"`
 	Models            []string                     `json:"models"`
 	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
 	BreakdownCount    int                          `json:"breakdown_count"`
@@ -2703,8 +2699,7 @@ func (db *DB) GetSessionUsage(
 	defer rows.Close()
 
 	var cost float64
-	var reportedCredits float64
-	hasReportedCredits := false
+	var authoritativeCost *float64
 	contributing := false
 	allPriced := true
 	modelsSet := make(map[string]struct{})
@@ -2729,11 +2724,14 @@ func (db *DB) GetSessionUsage(
 			seen[key] = struct{}{}
 		}
 
-		c, priced, contributes := sessionRowCost(r, rateResolver)
-		if r.aiCredits.Valid {
-			reportedCredits += r.aiCredits.Float64
-			hasReportedCredits = true
+		costRow := r
+		if r.costSource == CopilotReportedCostSource && r.costUSD.Valid {
+			v := r.costUSD.Float64
+			authoritativeCost = &v
+			costRow.costUSD = sql.NullFloat64{}
+			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
 		}
+		c, priced, contributes := sessionRowCost(costRow, rateResolver)
 		if !contributes {
 			continue
 		}
@@ -2763,19 +2761,17 @@ func (db *DB) GetSessionUsage(
 		PeakContextTokens: sess.PeakContextTokens,
 		HasTokenData:      sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
 		Models:            sortedSetKeys(modelsSet),
-		HasCost:           contributing && allPriced,
+		HasCost:           authoritativeCost != nil || (contributing && allPriced),
 		BreakdownCount:    breakdownCount,
 		Breakdown:         breakdown,
 	}
-	if out.HasCost {
+	if authoritativeCost != nil {
+		out.CostUSD = *authoritativeCost
+		out.AICredits = AICreditsFromCost(sess.Agent, out.CostUSD)
+	} else if out.HasCost {
 		out.CostUSD = cost
+		out.AICredits = AICreditsFromCost(sess.Agent, cost)
 	}
-	creditCost := 0.0
-	if out.HasCost {
-		creditCost = cost
-	}
-	out.AICredits, out.AICreditsSource = ResolveAICredits(
-		sess.Agent, creditCost, reportedCredits, hasReportedCredits)
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedSetKeys(unpricedSet)
 	}

@@ -5,7 +5,6 @@
 export type SessionUsageResponse = {
   agent: string;
   ai_credits?: number;
-  ai_credits_source?: string;
   breakdown: any[] | null;
   breakdown_count: number;
   cost_usd: number;
@@ -22,3 +21,4 @@ export type SessionUsageResponse = {
   total_output_tokens: number;
   unpriced_models: any[] | null;
 };
+

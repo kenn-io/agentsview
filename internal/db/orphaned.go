@@ -1082,7 +1082,7 @@ func copyUsageEventsForIDs(
 		"session_id", "message_ordinal", "source", "model",
 		"input_tokens", "output_tokens",
 		"cache_creation_input_tokens", "cache_read_input_tokens",
-		"reasoning_tokens", "cost_usd", "ai_credits",
+		"reasoning_tokens", "cost_usd",
 		"cost_status", "cost_source", "occurred_at", "dedup_key",
 	} {
 		if oldDBHasColumn(ctx, tx, "usage_events", col) {

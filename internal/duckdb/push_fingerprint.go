@@ -443,7 +443,7 @@ func duckStoredUsageEventFingerprint(
 		SELECT message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
+			reasoning_tokens, cost_usd, cost_status, cost_source,
 			occurred_at, dedup_key
 		FROM usage_events
 		WHERE session_id = ?
@@ -462,14 +462,14 @@ func duckStoredUsageEventFingerprint(
 		var inputTokens, outputTokens int
 		var cacheCreationInputTokens, cacheReadInputTokens int
 		var reasoningTokens int
-		var cost, aiCredits sql.NullFloat64
+		var cost sql.NullFloat64
 		var occurredAt any
 		var dedupKey sql.NullString
 		if err := rows.Scan(
 			&ordinal, &source, &model,
 			&inputTokens, &outputTokens,
 			&cacheCreationInputTokens, &cacheReadInputTokens,
-			&reasoningTokens, &cost, &aiCredits, &costStatus, &costSource,
+			&reasoningTokens, &cost, &costStatus, &costSource,
 			&occurredAt, &dedupKey,
 		); err != nil {
 			return "", err
@@ -482,7 +482,7 @@ func duckStoredUsageEventFingerprint(
 		dedupKey.String = db.SanitizeUTF8(dedupKey.String)
 		fmt.Fprintf(
 			&b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
+			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
 			len(source), source,
@@ -494,8 +494,6 @@ func duckStoredUsageEventFingerprint(
 			reasoningTokens,
 			cost.Valid,
 			cost.Float64,
-			aiCredits.Valid,
-			aiCredits.Float64,
 			len(costStatus), costStatus,
 			len(costSource), costSource,
 			len(occurred), occurred,

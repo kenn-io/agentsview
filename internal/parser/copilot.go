@@ -21,6 +21,7 @@ const (
 	copilotEventAssistantReason = "assistant.reasoning"
 	copilotEventModelChange     = "session.model_change"
 	copilotEventSessionShutdown = "session.shutdown"
+	copilotReportedCostSource   = "copilot-reported"
 )
 
 // copilotSessionBuilder accumulates state while scanning a
@@ -245,10 +246,14 @@ func (b *copilotSessionBuilder) handleAssistantReasoning() {
 func (b *copilotSessionBuilder) handleShutdown(
 	data gjson.Result, ts time.Time,
 ) {
-	// totalNanoAiu is a cumulative session total. A later shutdown supersedes
-	// any earlier value, including when the latest authoritative total is zero.
+	// totalNanoAiu is cumulative. Keep its authoritative cost on only the
+	// latest shutdown, including when that final value is zero.
 	for i := range b.usageEvents {
-		b.usageEvents[i].AICredits = nil
+		if b.usageEvents[i].CostSource == copilotReportedCostSource {
+			b.usageEvents[i].CostUSD = nil
+			b.usageEvents[i].CostStatus = ""
+			b.usageEvents[i].CostSource = ""
+		}
 	}
 
 	occurredAt := timeString(ts, b.startedAt)
@@ -297,10 +302,12 @@ func (b *copilotSessionBuilder) handleShutdown(
 				OccurredAt: occurredAt,
 			})
 		}
-		credits := totalNanoAiu.Float() / 1e9
+		costUSD := float64(totalNanoAiu.Int()) / 1e11
 		// Carry the session-wide total on exactly one stable row so storage
 		// and sync remain row-oriented without multiplying it by model count.
-		events[0].AICredits = &credits
+		events[0].CostUSD = &costUSD
+		events[0].CostStatus = "exact"
+		events[0].CostSource = copilotReportedCostSource
 	}
 	b.usageEvents = append(b.usageEvents, events...)
 }

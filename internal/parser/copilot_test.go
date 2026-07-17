@@ -671,8 +671,10 @@ func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
 	assert.Equal(t, 873267, u.CacheReadInputTokens)
 	assert.Equal(t, 51438, u.CacheCreationInputTokens)
 	assert.Equal(t, 432, u.ReasoningTokens)
-	require.NotNil(t, u.AICredits)
-	assert.InDelta(t, 1.75, *u.AICredits, 1e-12)
+	require.NotNil(t, u.CostUSD)
+	assert.InDelta(t, 0.0175, *u.CostUSD, 1e-12)
+	assert.Equal(t, "exact", u.CostStatus)
+	assert.Equal(t, copilotReportedCostSource, u.CostSource)
 	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6:0", u.DedupKey)
 }
 
@@ -705,13 +707,14 @@ func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 	reported := 0.0
 	carriers := 0
 	for _, u := range usage {
-		if u.AICredits != nil {
-			reported += *u.AICredits
+		if u.CostSource == copilotReportedCostSource {
+			require.NotNil(t, u.CostUSD)
+			reported += *u.CostUSD
 			carriers++
 		}
 	}
-	assert.Equal(t, 1, carriers, "session credits must have one carrier row")
-	assert.InDelta(t, 2.5, reported, 1e-12)
+	assert.Equal(t, 1, carriers, "session cost must have one carrier row")
+	assert.InDelta(t, 0.025, reported, 1e-12)
 }
 
 func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
@@ -740,10 +743,11 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 	// Second segment: fresh = 300 - 250 - 20 = 30
 	assert.Equal(t, 30, usage[1].InputTokens)
 	assert.Equal(t, 80, usage[1].OutputTokens)
-	assert.Nil(t, usage[0].AICredits,
+	assert.Nil(t, usage[0].CostUSD,
 		"earlier cumulative shutdown total must be superseded")
-	require.NotNil(t, usage[1].AICredits)
-	assert.InDelta(t, 2.75, *usage[1].AICredits, 1e-12)
+	require.NotNil(t, usage[1].CostUSD)
+	assert.InDelta(t, 0.0275, *usage[1].CostUSD, 1e-12)
+	assert.Equal(t, copilotReportedCostSource, usage[1].CostSource)
 }
 
 func TestParseCopilotSession_MultiShutdown_LastZeroIsAuthoritative(t *testing.T) {
@@ -757,9 +761,10 @@ func TestParseCopilotSession_MultiShutdown_LastZeroIsAuthoritative(t *testing.T)
 
 	_, _, usage := parseCopilotFull(t, path, "m")
 	require.Len(t, usage, 2)
-	assert.Nil(t, usage[0].AICredits)
-	require.NotNil(t, usage[1].AICredits)
-	assert.Zero(t, *usage[1].AICredits)
+	assert.Nil(t, usage[0].CostUSD)
+	require.NotNil(t, usage[1].CostUSD)
+	assert.Zero(t, *usage[1].CostUSD)
+	assert.Equal(t, copilotReportedCostSource, usage[1].CostSource)
 }
 
 func TestParseCopilotSession_ShutdownZeroUsage_Skipped(t *testing.T) {
