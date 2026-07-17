@@ -2259,7 +2259,11 @@ func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
 		},
 	}
 
-	assert.False(t, e.shouldSkipCodexFingerprint(path, parser.SourceFingerprint{
+	assert.False(t, e.shouldSkipCodexFingerprint(parser.DiscoveredFile{
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
+	}, parser.SourceFingerprint{
 		Size:    info.Size(),
 		MTimeNS: info.ModTime().UnixNano(),
 	}), "stale generated roborev CI projects must be reparsed")
@@ -2313,8 +2317,9 @@ func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
 	}
 
 	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
 	})
 	require.NoError(t, res.err)
 	require.False(t, res.skip,
@@ -2652,8 +2657,9 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 	}
 
 	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
+		Agent:   parser.AgentCodex,
+		Path:    path,
+		Machine: "host",
 	})
 	require.NoError(t, res.err)
 	require.True(t, res.skip)
@@ -3111,6 +3117,7 @@ func TestShouldSkipByPathWithRewriter(t *testing.T) {
 	got := e.shouldSkipByPath(
 		"/remote/codex/abc.jsonl",
 		fakeFileInfo{size: 2048, mtime: 1700000000000000000},
+		"host",
 	)
 	assert.True(t, got, "shouldSkipByPath should return true")
 
@@ -3119,6 +3126,7 @@ func TestShouldSkipByPathWithRewriter(t *testing.T) {
 	got2 := e2.shouldSkipByPath(
 		"/remote/codex/abc.jsonl",
 		fakeFileInfo{size: 2048, mtime: 1700000000000000000},
+		"host",
 	)
 	assert.False(t, got2, "shouldSkipByPath without rewriter should return false")
 }

@@ -3195,6 +3195,10 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
+		if e.discoveredFileMachineChanged(f) {
+			out = append(out, f)
+			continue
+		}
 		if f.Agent != parser.AgentCodex {
 			continue
 		}
@@ -3229,6 +3233,19 @@ func (e *Engine) filterFilesByMtime(
 		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
 	}
 	return out
+}
+
+func (e *Engine) discoveredFileMachineChanged(
+	file parser.DiscoveredFile,
+) bool {
+	lookupPath := file.Path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	hasSessions, matches := e.db.SessionMachinesByFilePathMatch(
+		lookupPath, e.machineForFile(file),
+	)
+	return hasSessions && !matches
 }
 
 // discoveredFileEffectiveMtime returns the freshness timestamp used to filter a
@@ -3760,10 +3777,10 @@ func (e *Engine) syncProviderDBBacked(
 			log.Printf("sync %s fingerprint: %v", agent, err)
 			continue
 		}
-		if e.providerDBBackedSourceFresh(source, fingerprint) {
+		machine := e.machineForPath(agent, providerDiscoveredPath(source))
+		if e.providerDBBackedSourceFresh(source, fingerprint, machine) {
 			continue
 		}
-		machine := e.machineForPath(agent, providerDiscoveredPath(source))
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
@@ -3791,6 +3808,7 @@ func (e *Engine) syncProviderDBBacked(
 func (e *Engine) providerDBBackedSourceFresh(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
+	machine string,
 ) bool {
 	if e.forceParse {
 		return false
@@ -3816,7 +3834,9 @@ func (e *Engine) providerDBBackedSourceFresh(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
-	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	_, storedMtime, ok := e.db.GetFileInfoByPathForMachine(
+		lookupPath, machine,
+	)
 	if !ok {
 		return false
 	}
@@ -4496,6 +4516,7 @@ func (e *Engine) processProviderFile(
 	if verifiedStateOK && verifiedFresh {
 		if e.verifiedProviderSourceFreshInDB(
 			source, verifiedCapture.signature.size, verifiedMtime,
+			e.machineForFile(file),
 		) {
 			return processResult{
 				skip:  true,
@@ -4646,7 +4667,7 @@ func (e *Engine) processProviderFile(
 	// reparses, matching the prior behavior. Claude and Cowork have their own
 	// earlier freshness checks; this is the generic fallback for the rest.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
-		e.providerSourceUnchangedInDB(source, fingerprint) {
+		e.providerSourceUnchangedInDB(file, source, fingerprint) {
 		return processResult{
 			skip:      true,
 			mtime:     fingerprint.MTimeNS,
@@ -4802,7 +4823,9 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 		if e.pathRewriter != nil {
 			lookupPath = e.pathRewriter(path)
 		}
-		_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+		_, storedMtime, ok := e.db.GetFileInfoByPathForMachine(
+			lookupPath, r.Session.Machine,
+		)
 		if !ok || storedMtime != r.Session.File.Mtime {
 			kept = append(kept, r)
 			continue
@@ -5080,12 +5103,18 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 	if agent == "" {
 		agent = source.Provider
 	}
-	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
-		return true
-	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
+	}
+	hasSessions, matches := e.db.SessionMachinesByFilePathMatch(
+		lookupPath, e.machineForFile(file),
+	)
+	if hasSessions && !matches {
+		return false
+	}
+	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
+		return true
 	}
 	if agent == parser.AgentClaude || agent == parser.AgentCodex {
 		storedIDs, err := e.db.ListSessionIDsByFilePath(
@@ -5131,7 +5160,9 @@ func (e *Engine) shouldSkipProviderSource(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPathForMachine(
+		lookupPath, e.machineForFile(file),
+	)
 	if !ok {
 		return false
 	}
@@ -5464,6 +5495,7 @@ func (e *Engine) shouldSkipFile(
 // stored row, an empty key, or a non-fingerprint identity (no size, e.g. a
 // tombstone) never matches and therefore reparses.
 func (e *Engine) providerSourceUnchangedInDB(
+	file parser.DiscoveredFile,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 ) bool {
@@ -5477,7 +5509,9 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPathForMachine(
+		lookupPath, e.machineForFile(file),
+	)
 	if !ok {
 		return false
 	}
@@ -5514,7 +5548,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(
 // stored in the database by file_path. Used for codex/gemini
 // files where the session ID requires parsing.
 func (e *Engine) shouldSkipByPath(
-	path string, info os.FileInfo,
+	path string, info os.FileInfo, machine string,
 ) bool {
 	if e.forceParse { // parse-diff: always re-parse
 		return false
@@ -5523,8 +5557,8 @@ func (e *Engine) shouldSkipByPath(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
-		lookupPath,
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPathForMachine(
+		lookupPath, machine,
 	)
 	if !ok {
 		return false
@@ -5632,6 +5666,7 @@ func (e *Engine) providerSingleSessionFresh(
 	}
 	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
 	return info.ModTime().UnixNano(), sess != nil &&
+		sess.Machine == e.machineForFile(file) &&
 		sess.Project != "" &&
 		!parser.NeedsProjectReparse(sess.Project), false, contentVerified
 }
@@ -5716,7 +5751,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			fSize:  info.Size(),
 			fMtime: mtime,
 		}
-		if e.shouldSkipByPath(path, effectiveInfo) {
+		if e.shouldSkipByPath(path, effectiveInfo, e.machineForFile(file)) {
 			return mtime, true
 		}
 	// Gemini is deliberately absent here. Its fingerprint is composite (the
@@ -5731,7 +5766,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 			fSize:  info.Size(),
 			fMtime: mtime,
 		}
-		if e.shouldSkipByPath(path, effectiveInfo) {
+		if e.shouldSkipByPath(path, effectiveInfo, e.machineForFile(file)) {
 			return mtime, true
 		}
 	}
@@ -5902,6 +5937,7 @@ func (e *Engine) tryIncrementalJSONL(
 	if !ok || inc.FileSize <= 0 {
 		return processResult{}, false
 	}
+	machine := e.machineForFile(file)
 
 	// A session archived before the cwd allow-list was configured
 	// must not keep growing through the append path, which bypasses
@@ -6052,7 +6088,7 @@ func (e *Engine) tryIncrementalJSONL(
 				incremental: &incrementalUpdate{
 					sessionID:            inc.ID,
 					project:              inc.Project,
-					machine:              inc.Machine,
+					machine:              machine,
 					cwd:                  inc.Cwd,
 					links:                links,
 					endedAt:              endedAt,
@@ -6141,7 +6177,7 @@ func (e *Engine) tryIncrementalJSONL(
 		incremental: &incrementalUpdate{
 			sessionID:            inc.ID,
 			project:              inc.Project,
-			machine:              inc.Machine,
+			machine:              machine,
 			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
 			links:                links,
@@ -6177,7 +6213,7 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 	if file.Agent != parser.AgentCodex {
 		return false
 	}
-	return e.shouldSkipCodexFingerprint(file.Path, fingerprint)
+	return e.shouldSkipCodexFingerprint(file, fingerprint)
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
@@ -6189,13 +6225,16 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 //     (the raw transcript mtime is still at or below the stored mtime) skips
 //     unless this session's stored title differs from the current index title.
 func (e *Engine) shouldSkipCodexFingerprint(
-	path string, fingerprint parser.SourceFingerprint,
+	file parser.DiscoveredFile, fingerprint parser.SourceFingerprint,
 ) bool {
+	path := file.Path
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPathForMachine(
+		lookupPath, e.machineForFile(file),
+	)
 	if !ok || storedSize != fingerprint.Size {
 		return false
 	}
@@ -8344,6 +8383,7 @@ func (e *Engine) writeIncremental(
 		db.IncrementalSessionUpdate{
 			EndedAt:                 endedAt,
 			TerminationStatus:       inc.terminationStatus,
+			Machine:                 strPtr(inc.machine),
 			MsgCount:                msgCount,
 			UserMsgCount:            userMsgCount,
 			FileSize:                inc.fileSize,

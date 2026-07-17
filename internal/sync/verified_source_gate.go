@@ -238,14 +238,15 @@ func (e *Engine) verifiedProviderSourceState(
 func (e *Engine) verifiedProviderSourceFreshInDB(
 	source parser.SourceRef,
 	wantSize, wantMtime int64,
+	machine string,
 ) bool {
 	path := providerDiscoveredPath(source)
 	if path == "" {
 		return false
 	}
-	project, dataVersion, storedSize, storedMtime, ok :=
-		e.db.GetSourceRepairStateByPath(path)
-	if !ok || parser.NeedsProjectReparse(project) {
+	project, dataVersion, storedSize, storedMtime, machineMatches, ok :=
+		e.db.GetSourceRepairStateByPath(path, machine)
+	if !ok || !machineMatches || parser.NeedsProjectReparse(project) {
 		return false
 	}
 	return storedSize == wantSize &&

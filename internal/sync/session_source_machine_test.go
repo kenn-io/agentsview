@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,6 +69,80 @@ func TestSyncPathsAttributesFilesystemSessionFromChangedRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
+}
+
+func TestSyncAllSinceReattributesUnchangedFilesystemSession(t *testing.T) {
+	root := t.TempDir()
+	writeSessionSourceClaudeFile(t, root, "reattributed-session.jsonl")
+	database := openTestDB(t)
+	newEngine := func(machine string) *Engine {
+		return NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {root},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentClaude: {root: machine},
+			},
+			Machine: "localbox",
+		})
+	}
+
+	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, first.Synced)
+	second := newEngine("newbox").SyncAllSince(
+		context.Background(), time.Now().Add(time.Hour), nil,
+	)
+	require.Equal(t, 1, second.Synced)
+
+	sess, err := database.GetSessionFull(
+		context.Background(), "reattributed-session",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "newbox", sess.Machine)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.False(t, sess.LastWriteIncremental)
+}
+
+func TestIncrementalAppendUsesCurrentSourceMachine(t *testing.T) {
+	root := t.TempDir()
+	path := writeSessionSourceClaudeFile(t, root, "incremental-machine.jsonl")
+	database := openTestDB(t)
+	newEngine := func(machine string) *Engine {
+		return NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentClaude: {root},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentClaude: {root: machine},
+			},
+			Machine: "localbox",
+		})
+	}
+
+	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, first.Synced)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"appended message", "2026-07-01T10:00:02Z",
+		),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	second := newEngine("newbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, second.Synced)
+
+	sess, err := database.GetSessionFull(
+		context.Background(), "incremental-machine",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "newbox", sess.Machine)
+	assert.Equal(t, 3, sess.MessageCount)
+	assert.True(t, sess.LastWriteIncremental)
 }
 
 func TestCopiedFilesystemSessionKeepsNativeIDDeduplication(t *testing.T) {

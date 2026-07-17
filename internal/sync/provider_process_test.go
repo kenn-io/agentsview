@@ -177,6 +177,34 @@ func TestProviderPeriodicSyncUsesSourceMachine(t *testing.T) {
 	assert.Equal(t, "archivebox", sess.Machine)
 }
 
+func TestProviderPeriodicSyncReattributesFreshDBBackedSource(t *testing.T) {
+	root := t.TempDir()
+	writeProcessProviderForgeDB(t, root)
+	database := openTestDB(t)
+	newEngine := func(machine string) *Engine {
+		return NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentForge: {root},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentForge: {root: machine},
+			},
+			Machine: "localbox",
+		})
+	}
+
+	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, first.Synced)
+	second := newEngine("newbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, second.Synced)
+
+	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "newbox", sess.Machine)
+	assert.Equal(t, 2, sess.MessageCount)
+}
+
 func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 
 	root := t.TempDir()

@@ -1805,6 +1805,7 @@ type IncrementalInfo struct {
 type IncrementalSessionUpdate struct {
 	EndedAt                 *string
 	TerminationStatus       *string
+	Machine                 *string
 	MsgCount                int
 	UserMsgCount            int
 	FileSize                int64
@@ -1953,6 +1954,7 @@ func updateSessionIncrementalTx(
 	result, err := tx.Exec(`
 		UPDATE sessions SET
 			ended_at = COALESCE(?, ended_at),
+			machine = COALESCE(?, machine),
 			message_count = ?,
 			user_message_count = ?,
 			file_size = ?,
@@ -1971,7 +1973,8 @@ func updateSessionIncrementalTx(
 			-- incremental-vs-full skew.
 			last_write_incremental = 1
 		WHERE id = ?`,
-		update.EndedAt, update.MsgCount, update.UserMsgCount,
+		update.EndedAt, update.Machine,
+		update.MsgCount, update.UserMsgCount,
 		update.FileSize, update.FileMtime,
 		update.FileHash,
 		update.NextOrdinal, lastEntryUUID,
@@ -2063,6 +2066,52 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// GetFileInfoByPathForMachine returns source metadata only when the path has
+// active sessions and all of them carry the requested machine attribution.
+func (db *DB) GetFileInfoByPathForMachine(
+	path, machine string,
+) (size int64, mtime int64, ok bool) {
+	var s, m sql.NullInt64
+	err := db.getReader().QueryRow(`
+		SELECT file_size, file_mtime
+		FROM sessions
+		WHERE file_path = ? AND deleted_at IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM sessions
+				WHERE file_path = ? AND deleted_at IS NULL
+					AND COALESCE(machine, '') <> ?
+			)
+		ORDER BY file_mtime DESC
+		LIMIT 1`,
+		path, path, machine,
+	).Scan(&s, &m)
+	if err != nil {
+		return 0, 0, false
+	}
+	return s.Int64, m.Int64, true
+}
+
+// SessionMachinesByFilePathMatch reports whether a source path has active
+// sessions and whether all of them carry the requested machine attribution.
+func (db *DB) SessionMachinesByFilePathMatch(
+	path, machine string,
+) (hasSessions, matches bool) {
+	var count, mismatches int
+	err := db.getReader().QueryRow(`
+		SELECT COUNT(*),
+			COALESCE(SUM(
+				CASE WHEN COALESCE(machine, '') <> ? THEN 1 ELSE 0 END
+			), 0)
+		FROM sessions
+		WHERE file_path = ? AND deleted_at IS NULL`,
+		machine, path,
+	).Scan(&count, &mismatches)
+	if err != nil || count == 0 {
+		return false, false
+	}
+	return true, mismatches == 0
+}
+
 // GetProjectByPath returns the stored project for the newest
 // non-deleted session matching file_path.
 func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
@@ -2080,16 +2129,17 @@ func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
 }
 
 // GetSourceRepairStateByPath returns the newest active session's project and
-// file metadata plus the minimum active parser data version for one source
-// path. It combines the lightweight self-healing checks used by hot sync paths
-// into one query.
+// file metadata plus the minimum active parser data version and machine
+// attribution state for one source path. It combines the lightweight
+// self-healing checks used by hot sync paths into one query.
 func (db *DB) GetSourceRepairStateByPath(
-	path string,
+	path, machine string,
 ) (
 	project string,
 	dataVersion int,
 	fileSize int64,
 	fileMtime int64,
+	machineMatches bool,
 	ok bool,
 ) {
 	err := db.getReader().QueryRow(`
@@ -2097,16 +2147,23 @@ func (db *DB) GetSourceRepairStateByPath(
 			SELECT MIN(data_version)
 			FROM sessions
 			WHERE file_path = ? AND deleted_at IS NULL
+		), NOT EXISTS (
+			SELECT 1
+			FROM sessions
+			WHERE file_path = ? AND deleted_at IS NULL
+				AND COALESCE(machine, '') <> ?
 		)
 		FROM sessions
 		WHERE file_path = ? AND deleted_at IS NULL
 		ORDER BY file_mtime DESC
-		LIMIT 1`, path, path,
-	).Scan(&project, &fileSize, &fileMtime, &dataVersion)
+		LIMIT 1`, path, path, machine, path,
+	).Scan(
+		&project, &fileSize, &fileMtime, &dataVersion, &machineMatches,
+	)
 	if err != nil {
-		return "", 0, 0, 0, false
+		return "", 0, 0, 0, false, false
 	}
-	return project, dataVersion, fileSize, fileMtime, true
+	return project, dataVersion, fileSize, fileMtime, machineMatches, true
 }
 
 // GetFileHashByPath returns the stored file_hash for the session
