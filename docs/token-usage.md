@@ -398,16 +398,18 @@ it.
 
 Copilot CLI `session.shutdown` events can report an authoritative
 `totalNanoAiu`. This value is nanocredits, so AgentsView divides it by `1e9`.
-The total belongs to the shutdown event rather than any individual
-`modelMetrics` entry; AgentsView stores it on one stable carrier row and counts
-it once. Multiple shutdown segments are summed.
+The total belongs to the session rather than any individual `modelMetrics`
+entry. It is cumulative across shutdowns, including shutdowns emitted after a
+resume or compaction, so AgentsView preserves only the last shutdown's value on
+one stable carrier row. An authoritative final zero also replaces earlier
+values and estimates.
 
 When a Copilot session has reported credits, that total replaces the estimate
 derived from token cost. Historical sessions and Copilot-family agents without
 `totalNanoAiu` retain the existing fallback of cost divided by `$0.01`. Mixed
 windows sum reported sessions and estimated sessions without counting both for
 the same session and day. Model-filtered reports continue to use estimates
-because an event-level credit total cannot be allocated accurately across
+because a session-level credit total cannot be allocated accurately across
 multiple models.
 
 The Usage dashboard shows credits as an optional summary card, and

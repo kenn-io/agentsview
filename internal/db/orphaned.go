@@ -24,10 +24,9 @@ func execWithoutCancel(
 	return execer.ExecContext(context.WithoutCancel(ctx), query, args...)
 }
 
-// CopyOrphanedDataFrom copies sessions (and their messages
-// and tool_calls) that exist in the source database but not
-// in this database. This preserves archived sessions whose
-// source files no longer exist on disk.
+// CopyOrphanedDataFrom copies sessions and their dependent transcript and
+// usage rows that exist in the source database but not in this database.
+// This preserves archived sessions whose source files no longer exist on disk.
 //
 // Orphaned sessions are identified by ID-diff: any session
 // present in the source but absent from the target after a
@@ -190,9 +189,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	t := time.Now()
 
 	// Reconcile revisions and copy orphans in one transaction. Partial
-	// orphan copies would leave dangling sessions without messages or
-	// tool_calls, while a revision update without the matching archive copy
-	// could make a failed resync look complete.
+	// orphan copies would leave sessions without their dependent transcript
+	// or usage rows, while a revision update without the matching archive
+	// copy could make a failed resync look complete.
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin orphan tx: %w", err)
@@ -960,6 +959,10 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying messages: %w", err)
 	}
 
+	if err := copyUsageEventsForIDs(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+
 	// Copy tool_calls. Map old message_id to new
 	// message_id via the (session_id, ordinal) natural key.
 	toolCallCols := []string{
@@ -1059,6 +1062,43 @@ func copySessionDataForIDs(
 
 	if err := copyPinnedMessagesForIDs(ctx, tx, tempIDsTable); err != nil {
 		return err
+	}
+	return nil
+}
+
+func copyUsageEventsForIDs(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	if !oldDBHasTable(ctx, tx, "usage_events") {
+		return nil
+	}
+
+	// Copy the intersection of known columns so archives created before later
+	// nullable usage fields were introduced remain safe to resync.
+	var cols []string
+	for _, col := range []string{
+		"session_id", "message_ordinal", "source", "model",
+		"input_tokens", "output_tokens",
+		"cache_creation_input_tokens", "cache_read_input_tokens",
+		"reasoning_tokens", "cost_usd", "ai_credits",
+		"cost_status", "cost_source", "occurred_at", "dedup_key",
+	} {
+		if oldDBHasColumn(ctx, tx, "usage_events", col) {
+			cols = append(cols, col)
+		}
+	}
+	if len(cols) == 0 {
+		return nil
+	}
+	columnList := strings.Join(cols, ", ")
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO usage_events ("+columnList+") "+
+			"SELECT "+columnList+" FROM old_db.usage_events "+
+			"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
+	); err != nil {
+		return fmt.Errorf("copying usage_events: %w", err)
 	}
 	return nil
 }

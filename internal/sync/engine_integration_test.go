@@ -7753,6 +7753,16 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 			},
 		},
 	), "UpdateSessionSignals orphan")
+	orphanCredits := 2.75
+	require.NoError(t, env.db.ReplaceSessionUsageEvents(
+		"active-orphan",
+		[]db.UsageEvent{{
+			Source: "shutdown", Model: "claude-sonnet-4-6",
+			InputTokens: 11, OutputTokens: 12,
+			AICredits: &orphanCredits, OccurredAt: tsZeroS5,
+			DedupKey: "orphan-usage",
+		}},
+	), "ReplaceSessionUsageEvents orphan")
 	require.NoError(t, os.Remove(orphanPath), "remove orphan source")
 
 	require.NoError(t, env.db.SoftDeleteSession("resync-trash"), "SoftDeleteSession")
@@ -7766,6 +7776,13 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 	stats := env.engine.ResyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
 	assertSessionMessageCount(t, env.db, "active-orphan", 2)
+	orphanUsage, err := env.db.GetUsageEvents(
+		context.Background(), "active-orphan")
+	require.NoError(t, err, "GetUsageEvents orphan")
+	require.Len(t, orphanUsage, 1)
+	assert.Equal(t, "orphan-usage", orphanUsage[0].DedupKey)
+	require.NotNil(t, orphanUsage[0].AICredits)
+	assert.Equal(t, orphanCredits, *orphanUsage[0].AICredits)
 	assertSessionState(t, env.db, "active-orphan", func(sess *db.Session) {
 		if sess.HealthScore == nil || *sess.HealthScore != 94 {
 			t.Fatalf("orphan health score = %v, want 94", sess.HealthScore)

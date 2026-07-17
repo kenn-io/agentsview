@@ -3733,19 +3733,18 @@ func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
 			s.StartedAt = new("2026-05-20T10:00:00Z")
 		})
 	}
-	firstCredits := 1.25
-	secondCredits := 2.75
+	lastCredits := 2.75
 	require.NoError(t, d.ReplaceSessionUsageEvents("copilot:reported", []UsageEvent{
 		{
 			Source: "shutdown", Model: "claude-opus-4-6",
 			InputTokens: 1000, OutputTokens: 500,
-			AICredits: &firstCredits, OccurredAt: "2026-05-20T10:10:00Z",
-			DedupKey: "segment-1",
+			OccurredAt: "2026-05-20T10:10:00Z",
+			DedupKey:   "segment-1",
 		},
 		{
 			Source: "shutdown", Model: "claude-opus-4-6",
 			InputTokens: 1000, OutputTokens: 500,
-			AICredits: &secondCredits, OccurredAt: "2026-05-20T10:20:00Z",
+			AICredits: &lastCredits, OccurredAt: "2026-05-20T10:20:00Z",
 			DedupKey: "segment-2",
 		},
 	}))
@@ -3760,7 +3759,7 @@ func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
 	reported, err := d.GetSessionUsage(ctx, "copilot:reported", false)
 	require.NoError(t, err)
 	require.NotNil(t, reported)
-	assert.InDelta(t, 4.0, reported.AICredits, 1e-12)
+	assert.InDelta(t, 2.75, reported.AICredits, 1e-12)
 	assert.Equal(t, AICreditsSourceReported, reported.AICreditsSource)
 	assert.InDelta(t, 0.035, reported.CostUSD, 1e-12,
 		"reported credits must not change token pricing")
@@ -3775,7 +3774,7 @@ func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
 		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
 	})
 	require.NoError(t, err)
-	assert.InDelta(t, 5.75, daily.Totals.CopilotAICredits, 1e-12,
+	assert.InDelta(t, 4.5, daily.Totals.CopilotAICredits, 1e-12,
 		"reported session total plus fallback session estimate")
 	assert.Equal(t, AICreditsSourceMixed,
 		daily.Totals.CopilotAICreditsSource)
@@ -3786,9 +3785,46 @@ func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.InDelta(t, 5.25, modelFiltered.Totals.CopilotAICredits, 1e-12,
-		"event-level reported credits cannot be allocated to a model")
+		"session-level reported credits cannot be allocated to a model")
 	assert.Equal(t, AICreditsSourceEstimated,
 		modelFiltered.Totals.CopilotAICreditsSource)
+}
+
+func TestCopilotReportedZeroAICreditsOverrideEstimatedFallback(t *testing.T) {
+	d := testDB(t)
+	seedOpusPricing(t, d)
+	insertSession(t, d, "copilot:reported-zero", "proj", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-05-21T10:00:00Z")
+	})
+	zeroCredits := 0.0
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"copilot:reported-zero",
+		[]UsageEvent{{
+			Source: "shutdown", Model: "claude-opus-4-6",
+			InputTokens: 1000, OutputTokens: 500,
+			AICredits: &zeroCredits, OccurredAt: "2026-05-21T10:10:00Z",
+			DedupKey: "final-segment",
+		}},
+	))
+
+	usage, err := d.GetSessionUsage(
+		context.Background(), "copilot:reported-zero", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Zero(t, usage.AICredits)
+	assert.Equal(t, AICreditsSourceReported, usage.AICreditsSource)
+	assert.InDelta(t, 0.0175, usage.CostUSD, 1e-12,
+		"authoritative zero must not change token pricing")
+
+	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-05-21", To: "2026-05-21", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Zero(t, daily.Totals.CopilotAICredits,
+		"authoritative zero must override the nonzero cost estimate")
+	assert.Equal(t, AICreditsSourceReported,
+		daily.Totals.CopilotAICreditsSource)
 }
 
 func TestAICreditsFromCost(t *testing.T) {

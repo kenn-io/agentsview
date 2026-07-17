@@ -245,6 +245,12 @@ func (b *copilotSessionBuilder) handleAssistantReasoning() {
 func (b *copilotSessionBuilder) handleShutdown(
 	data gjson.Result, ts time.Time,
 ) {
+	// totalNanoAiu is a cumulative session total. A later shutdown supersedes
+	// any earlier value, including when the latest authoritative total is zero.
+	for i := range b.usageEvents {
+		b.usageEvents[i].AICredits = nil
+	}
+
 	occurredAt := timeString(ts, b.startedAt)
 	var events []ParsedUsageEvent
 	data.Get("modelMetrics").ForEach(
@@ -292,9 +298,8 @@ func (b *copilotSessionBuilder) handleShutdown(
 			})
 		}
 		credits := totalNanoAiu.Float() / 1e9
-		// totalNanoAiu is event-level, not per-model. Carry it on exactly
-		// one stable row so storage and sync remain row-oriented without
-		// multiplying the authoritative total by model count.
+		// Carry the session-wide total on exactly one stable row so storage
+		// and sync remain row-oriented without multiplying it by model count.
 		events[0].AICredits = &credits
 	}
 	b.usageEvents = append(b.usageEvents, events...)
