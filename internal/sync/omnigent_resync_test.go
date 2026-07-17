@@ -210,7 +210,7 @@ func TestCanceledResyncBeforeOmnigentParseDoesNotQueueContainer(t *testing.T) {
 }
 
 func TestCanceledResyncAfterEmptyOmnigentParseQueuesHashPathContainer(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "root#hash")
+	root := filepath.Join(t.TempDir(), "chat.db#hash")
 	require.NoError(t, os.Mkdir(root, 0o755))
 	sourcePath := writeOmnigentResyncSource(t, root)
 	archive := openTestDB(t)
@@ -225,6 +225,18 @@ func TestCanceledResyncAfterEmptyOmnigentParseQueuesHashPathContainer(t *testing
 	})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	restartedFactory, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
+	require.True(t, ok)
+	restarted := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{restartedFactory},
+	})
+	assert.Zero(t, restarted.SyncAll(context.Background(), nil).Synced,
+		"a fresh engine must use the persisted whole-container cache")
+	restarted.Close()
 
 	writer, err := sql.Open("sqlite3", sourcePath)
 	require.NoError(t, err)

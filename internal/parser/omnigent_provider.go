@@ -949,7 +949,11 @@ func omnigentDBPathForEvent(root, path string) (string, bool) {
 }
 
 func parseOmnigentVirtualPath(path string) (string, string, bool) {
-	return ParseVirtualSourcePathForBase(path, omnigentDBName)
+	container, member, ok := ParseVirtualSourcePathForBase(path, omnigentDBName)
+	if !ok || strings.ContainsAny(member, `/\`) {
+		return "", "", false
+	}
+	return container, member, true
 }
 
 // ParseOmnigentVirtualSourcePath recognizes only virtual member paths whose
