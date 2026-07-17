@@ -1143,6 +1143,94 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		"scan-mode metadata on PostgreSQL must not weaken the fail-closed gate")
 }
 
+func TestCheckCodexCompatRejectsInactiveWriteGuard(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	tests := []struct {
+		name       string
+		alterState string
+	}{
+		{name: "disabled", alterState: "DISABLE"},
+		{name: "replica only", alterState: "ENABLE REPLICA"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := "agentsview_codex_inactive_guard_" +
+				strings.ReplaceAll(tt.name, " ", "_") + "_test"
+			pgURL := testPGURL(t)
+			pg, err := Open(pgURL, schema, true)
+			require.NoError(t, err, "connect to PG")
+			defer pg.Close()
+			t.Cleanup(func() {
+				cleanup, cleanupErr := sql.Open("pgx", pgURL)
+				require.NoError(t, cleanupErr, "connect for schema cleanup")
+				defer cleanup.Close()
+				_, cleanupErr = cleanup.Exec(
+					"DROP SCHEMA IF EXISTS " + schema + " CASCADE",
+				)
+				require.NoError(t, cleanupErr, "drop test schema")
+			})
+
+			ctx := context.Background()
+			_, err = pg.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+			require.NoError(t, err, "reset test schema")
+			require.NoError(t, EnsureSchema(ctx, pg, schema), "create current schema")
+			_, err = pg.ExecContext(ctx, fmt.Sprintf(
+				"ALTER TABLE messages %s TRIGGER %s",
+				tt.alterState, codexMessageWriteGuardTrigger,
+			))
+			require.NoError(t, err, "make message guard inactive for normal writes")
+
+			installed, err := codexPayloadWriteGuardsInstalledPG(ctx, pg)
+			require.NoError(t, err, "probe inactive guards")
+			assert.False(t, installed,
+				"an inactive trigger must not satisfy write-guard compatibility")
+			for name, check := range map[string]func(context.Context, *sql.DB) error{
+				"repair":     CheckCodexEncryptedPayloadCompat,
+				"bounded":    CheckCodexEncryptedPayloadBoundedReadCompat,
+				"persistent": CheckCodexEncryptedPayloadPersistentReadCompat,
+			} {
+				err = check(ctx, pg)
+				assert.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired,
+					"%s reads must fail closed", name)
+			}
+
+			_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (
+    id, machine, project, agent, relationship_type, data_version, first_message
+) VALUES ('inactive-guard', 'test-machine', 'project', 'codex', 'subagent', 64, 'safe')`)
+			require.NoError(t, err, "insert legacy session fixture")
+			_, err = pg.ExecContext(ctx, `
+INSERT INTO messages (session_id, ordinal, role, content, content_length)
+VALUES ('inactive-guard', 0, 'user', $1, $2)`, fernet, len(fernet))
+			require.NoError(t, err,
+				"the inactive trigger demonstrates why readers must reject the schema")
+
+			require.NoError(t, EnsureSchema(ctx, pg, schema),
+				"a writable migration must reinstall the inactive guard")
+			installed, err = codexPayloadWriteGuardsInstalledPG(ctx, pg)
+			require.NoError(t, err, "probe reinstalled guards")
+			assert.True(t, installed)
+			require.NoError(t, CheckCodexEncryptedPayloadPersistentReadCompat(ctx, pg),
+				"readers may resume after repair and guard reinstallation")
+			var content string
+			require.NoError(t, pg.QueryRowContext(ctx, `
+SELECT content FROM messages
+ WHERE session_id = 'inactive-guard' AND ordinal = 0`).Scan(&content))
+			assert.Equal(t, "[encrypted]", content)
+			_, err = pg.ExecContext(ctx, `
+INSERT INTO sessions (
+    id, machine, project, agent, relationship_type, data_version, first_message
+) VALUES ('inactive-guard-after', 'test-machine', 'project', 'codex', 'subagent', 64, 'safe')`)
+			require.NoError(t, err, "insert a new legacy session after guard repair")
+			_, err = pg.ExecContext(ctx, `
+INSERT INTO messages (session_id, ordinal, role, content, content_length)
+VALUES ('inactive-guard-after', 0, 'user', $1, $2)`, fernet, len(fernet))
+			require.Error(t, err,
+				"the reinstalled guard must reject later legacy ciphertext")
+		})
+	}
+}
+
 // A legacy row can mix a genuine Fernet token with content the redactors
 // deliberately preserve (a short lookalike, a complete token quoted in
 // literal preview text). The repaired row then still matches the write

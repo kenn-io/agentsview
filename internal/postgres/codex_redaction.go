@@ -1057,12 +1057,14 @@ func codexPayloadGuardModePG(
 	return mode, nil
 }
 
-// codexPayloadWriteGuardsInstalledPG checks trigger names only, so an
-// installed schema is never re-migrated. The persisted trigger bodies are
-// therefore frozen at first install: any change to the guard predicates —
-// the collab tool list, the watermark, or the guarded columns — must also
-// rename the codex*WriteGuardTrigger constants so existing schemas fall
-// through to a fresh install.
+// codexPayloadWriteGuardsInstalledPG checks trigger names and requires every
+// guard to fire for ordinary writes. Disabled and replica-only triggers do not
+// protect normal writer sessions, so they must fall through to reinstallation
+// or make read-only compatibility checks fail closed. The persisted trigger
+// bodies are otherwise frozen at first install: any change to the guard
+// predicates — the collab tool list, the watermark, or the guarded columns —
+// must also rename the codex*WriteGuardTrigger constants so existing schemas
+// fall through to a fresh install.
 func codexPayloadWriteGuardsInstalledPG(
 	ctx context.Context, q codexPGRowQueryer,
 ) (bool, error) {
@@ -1074,6 +1076,7 @@ SELECT COUNT(DISTINCT t.tgname)
   JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname = current_schema()
 	   AND NOT t.tgisinternal
+	   AND t.tgenabled IN ('O', 'A')
 	   AND ((c.relname = 'sessions' AND t.tgname = $1)
 	     OR (c.relname = 'messages' AND t.tgname = $2)
 	     OR (c.relname = 'tool_calls' AND t.tgname = $3)
