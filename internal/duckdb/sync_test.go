@@ -117,6 +117,51 @@ func TestSyncPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
 	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
 }
 
+func TestSyncPushWithholdsLegacyCodexPayloadExposedBySanitization(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	ctx := context.Background()
+	local := newLocalDB(t)
+	createdAt := "2026-07-17T00:00:00.000Z"
+	sess := syncSession(
+		"duck-codex-sanitized-payload", "alpha", "safe", createdAt, 1,
+	)
+	sess.Agent = "codex"
+	sess.RelationshipType = "subagent"
+	sess.DataVersion = 67
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{syncMessage(
+			sess.ID, 0, "user", "safe", createdAt,
+		)},
+		DataVersion:     67,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	hiddenPreview := fernet[:3] + "\x00" + fernet[3:]
+	hiddenMessage := fernet[:6] + "\xff" + fernet[6:]
+	raw, err := sql.Open("sqlite3", local.Path())
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `
+		UPDATE sessions SET first_message = ? WHERE id = ?;
+		UPDATE messages SET content = ?, content_length = ?
+		 WHERE session_id = ? AND ordinal = 0`,
+		hiddenPreview, sess.ID,
+		hiddenMessage, len(hiddenMessage), sess.ID,
+	)
+	require.NoError(t, err, "seed payloads hidden by normalization")
+	require.NoError(t, raw.Close())
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	assert.Zero(t, result.SessionsPushed)
+	assertDuckDBCount(t, syncer.DB(), "sessions", 0)
+	unverified, err := local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, unverified, sess.ID)
+}
+
 func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
 	t *testing.T,
 ) {

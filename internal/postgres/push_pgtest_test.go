@@ -90,6 +90,67 @@ func TestPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
 	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
 }
 
+func TestPushWithholdsLegacyCodexPayloadExposedBySanitization(t *testing.T) {
+	const (
+		schema = "agentsview_push_codex_sanitized_payload_test"
+		fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	)
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+
+	localPath := filepath.Join(t.TempDir(), "local.db")
+	local, err := db.Open(localPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	createdAt := "2026-07-17T00:00:00.000Z"
+	preview := "safe"
+	sess := db.Session{
+		ID: "pg-codex-sanitized-payload", Project: "alpha", Machine: "laptop",
+		Agent: "codex", FirstMessage: &preview, RelationshipType: "subagent",
+		MessageCount: 1, UserMessageCount: 1, DataVersion: 67,
+		CreatedAt: createdAt,
+	}
+	require.NoError(t, local.UpsertSession(sess))
+	require.NoError(t, local.SetSessionDataVersion(sess.ID, sess.DataVersion))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: sess.ID, Ordinal: 0, Role: "user", Content: "safe",
+		ContentLength: len("safe"), Timestamp: createdAt,
+	}}))
+
+	hiddenPreview := fernet[:3] + "\x00" + fernet[3:]
+	hiddenMessage := fernet[:6] + "\xff" + fernet[6:]
+	raw, err := sql.Open("sqlite3", localPath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `
+		UPDATE sessions SET first_message = ? WHERE id = ?;
+		UPDATE messages SET content = ?, content_length = ?
+		 WHERE session_id = ? AND ordinal = 0`,
+		hiddenPreview, sess.ID,
+		hiddenMessage, len(hiddenMessage), sess.ID,
+	)
+	require.NoError(t, err, "seed payloads hidden by normalization")
+	require.NoError(t, raw.Close())
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	assert.Zero(t, result.SessionsPushed)
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT count(*) FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&count))
+	assert.Zero(t, count, "normalization must not expose a certified token")
+	unverified, err := local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, unverified, sess.ID)
+}
+
 func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
 	t *testing.T,
 ) {

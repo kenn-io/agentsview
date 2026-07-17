@@ -550,6 +550,121 @@ func TestCopyOrphanedDataRedactsCodexEncryptedPayloads(t *testing.T) {
 	assert.Equal(t, fernet, gotOther)
 }
 
+func TestCopyOrphanedDataNormalizesBeforeCodexCertification(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	preview := "safe"
+	insertSession(t, srcDB, "normalized-codex", "proj", func(sess *Session) {
+		sess.Agent = "codex"
+		sess.RelationshipType = "subagent"
+		sess.FirstMessage = &preview
+	})
+	message := userMsg("normalized-codex", 0, "safe")
+	message.Role = "assistant"
+	message.HasToolUse = true
+	message.ToolCalls = []ToolCall{{
+		SessionID: "normalized-codex",
+		ToolName:  "spawn_agent",
+		Category:  "Task",
+		ToolUseID: "spawn-call",
+		InputJSON: `{"message":"safe"}`,
+	}}
+	insertMessages(t, srcDB, message)
+
+	controlSplitPreview := fernet[:3] + "\x00" + fernet[3:]
+	invalidSplitMessage := "[Task: spawn_agent]\n" +
+		fernet[:6] + "\xff" + fernet[6:]
+	controlSplitInput := `{"message":"` +
+		fernet[:8] + "\x01" + fernet[8:] + `"}`
+	_, err := srcDB.getWriter().ExecContext(ctx, `
+		UPDATE sessions SET first_message = ? WHERE id = ?;
+		UPDATE messages SET content = ?, content_length = ?
+		 WHERE session_id = ? AND ordinal = 0;
+		UPDATE tool_calls SET input_json = ? WHERE session_id = ?`,
+		controlSplitPreview, "normalized-codex",
+		invalidSplitMessage, len(invalidSplitMessage), "normalized-codex",
+		controlSplitInput, "normalized-codex",
+	)
+	require.NoError(t, err, "seed payloads hidden by normalization")
+	_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
+		"PRAGMA user_version = %d", sanitizedSourceDataVersion-1,
+	))
+	require.NoError(t, err, "mark source as pre-sanitization")
+	require.NoError(t, srcDB.Close(), "close source")
+
+	dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	defer dstDB.Close()
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "copy orphaned data")
+	require.Equal(t, 1, count)
+
+	var gotPreview, gotContent, gotInput string
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx, `
+		SELECT s.first_message, m.content, tc.input_json
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		  JOIN tool_calls tc ON tc.message_id = m.id
+		 WHERE s.id = ? AND m.ordinal = 0`,
+		"normalized-codex",
+	).Scan(&gotPreview, &gotContent, &gotInput))
+	assert.Equal(t, "[encrypted]", gotPreview)
+	assert.Equal(t, "[Task: spawn_agent]\n[encrypted]", gotContent)
+	assert.Equal(t, `{"message":"[encrypted]"}`, gotInput)
+	unverified, err := dstDB.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, unverified, "normalized-codex",
+		"only the normalized and redacted transcript may be certified")
+}
+
+func TestCopyOrphanedDataNormalizesEveryCertificationCandidate(t *testing.T) {
+	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "normalized-candidate", "proj", func(sess *Session) {
+		sess.Agent = "codex"
+	})
+	insertMessages(t, srcDB, userMsg("normalized-candidate", 0, "safe"))
+	require.NoError(t, srcDB.SetSessionDataVersion(
+		"normalized-candidate", redactedCodexSourceDataVersion-1,
+	))
+	hiddenMessage := fernet[:6] + "\xff" + fernet[6:]
+	_, err := srcDB.getWriter().ExecContext(ctx, `
+		UPDATE messages SET content = ?, content_length = ?
+		 WHERE session_id = ? AND ordinal = 0`,
+		hiddenMessage, len(hiddenMessage), "normalized-candidate",
+	)
+	require.NoError(t, err, "seed a payload behind the sanitation watermark")
+	_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
+		"PRAGMA user_version = %d", redactedCodexSourceDataVersion-1,
+	))
+	require.NoError(t, err, "mark source as already sanitized")
+	require.NoError(t, srcDB.Close(), "close source")
+
+	dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	defer dstDB.Close()
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "copy orphaned data")
+	require.Equal(t, 1, count)
+
+	var got string
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx, `
+		SELECT content FROM messages
+		 WHERE session_id = ? AND ordinal = 0`,
+		"normalized-candidate",
+	).Scan(&got))
+	assert.Equal(t, fernet, SanitizeUTF8(got),
+		"the shared-storage boundary would expose the hidden token")
+	unverified, err := dstDB.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, unverified, "normalized-candidate",
+		"every copied candidate must be checked after normalization")
+}
+
 func TestCopyPreservedDataRedactsLegacyCodexEncryptedHeader(t *testing.T) {
 	const (
 		fernet            = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="

@@ -53,18 +53,23 @@ func NormalizeCodexSharedStorageMessage(
 }
 
 // codexPreviewUnverified reports whether a stored session preview still
-// carries content the shared-storage normalizer would rewrite.
+// carries content the shared-storage normalizer would rewrite after applying
+// the same UTF-8/control normalization as the shared-storage write boundary.
 func codexPreviewUnverified(preview string) bool {
+	preview = SanitizeUTF8(preview)
 	return NormalizeCodexSharedStoragePreview(preview) != preview
 }
 
 // codexMessageUnverified reports whether a stored Codex message still carries
-// content the shared-storage normalizer would rewrite.
+// content the shared-storage normalizer would rewrite. Role and content are
+// normalized first because PostgreSQL publishes their SanitizeUTF8 forms.
 func codexMessageUnverified(
 	role string,
 	hasToolUse, hasCollabTool bool,
 	content string,
 ) bool {
+	role = SanitizeUTF8(role)
+	content = SanitizeUTF8(content)
 	return NormalizeCodexSharedStorageMessage(
 		role, hasToolUse, hasCollabTool, content,
 	) != content
@@ -105,7 +110,7 @@ func PrepareSessionForSharedStorage(
 	for _, message := range messages {
 		hasCollabTool := false
 		for _, toolCall := range message.ToolCalls {
-			if parser.IsCodexCollabTool(toolCall.ToolName) {
+			if parser.IsCodexCollabTool(SanitizeUTF8(toolCall.ToolName)) {
 				hasCollabTool = true
 				break
 			}
@@ -119,10 +124,11 @@ func PrepareSessionForSharedStorage(
 			)
 		}
 		for _, toolCall := range message.ToolCalls {
-			if !parser.IsCodexCollabTool(toolCall.ToolName) {
+			if !parser.IsCodexCollabTool(SanitizeUTF8(toolCall.ToolName)) {
 				continue
 			}
-			if parser.RedactCodexEncryptedTokens(toolCall.InputJSON) != toolCall.InputJSON {
+			normalizedInput := SanitizeUTF8(toolCall.InputJSON)
+			if parser.RedactCodexEncryptedTokens(normalizedInput) != normalizedInput {
 				return sess, fmt.Errorf(
 					"session %s tool call %s requires encrypted-payload repair: %w",
 					sess.ID, toolCall.ToolName, ErrCodexSessionUnverified,

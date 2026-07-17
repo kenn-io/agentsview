@@ -13,6 +13,9 @@ func TestPrepareSessionForSharedStorage(t *testing.T) {
 	literal := "literal gAAAAA-not-an-encrypted-token"
 	mixedPreview := "note " + fernet + " tail"
 	pureTokenPreview := fernet
+	controlSplitToken := fernet[:3] + "\x00" + fernet[3:]
+	invalidSplitToken := fernet[:6] + "\xff" + fernet[6:]
+	controlAdjacentToken := fernet + "\x01"
 	tests := []struct {
 		name     string
 		session  Session
@@ -166,6 +169,60 @@ func TestPrepareSessionForSharedStorage(t *testing.T) {
 				Content: "[Task: spawn_agent]\n" + fernet,
 				ToolCalls: []ToolCall{{
 					ToolName: "spawn_agent", InputJSON: `{}`,
+				}},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "control byte inside encrypted preview",
+			session: Session{
+				ID: "sanitized-preview", Agent: "codex", DataVersion: 67,
+				FirstMessage: &controlSplitToken,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid byte inside encrypted message",
+			session: Session{
+				ID: "sanitized-message", Agent: "codex", DataVersion: 67,
+			},
+			messages: []Message{{
+				Ordinal: 0, Role: "user", Content: invalidSplitToken,
+			}},
+			wantErr: true,
+		},
+		{
+			name: "control byte adjacent to encrypted tool input",
+			session: Session{
+				ID: "sanitized-tool-input", Agent: "codex", DataVersion: 67,
+			},
+			messages: []Message{{
+				Ordinal: 0, Role: "assistant", Content: "safe",
+				ToolCalls: []ToolCall{{
+					ToolName: "spawn_agent", InputJSON: controlAdjacentToken,
+				}},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "sanitized user role exposes encrypted delivery",
+			session: Session{
+				ID: "sanitized-role", Agent: "codex", DataVersion: 67,
+			},
+			messages: []Message{{
+				Ordinal: 0, Role: "us\x00er", Content: fernet,
+			}},
+			wantErr: true,
+		},
+		{
+			name: "sanitized collaboration tool name exposes encrypted input",
+			session: Session{
+				ID: "sanitized-tool-name", Agent: "codex", DataVersion: 67,
+			},
+			messages: []Message{{
+				Ordinal: 0, Role: "assistant", Content: "safe",
+				ToolCalls: []ToolCall{{
+					ToolName: "spawn_\x00agent", InputJSON: fernet,
 				}},
 			}},
 			wantErr: true,

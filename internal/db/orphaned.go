@@ -1095,8 +1095,8 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 }
 
 // sanitizedSourceDataVersion is the first data version at which write
-// paths into an archive sanitize message content, tool result content,
-// and tool result events: dataVersion 58 forced a full resync that
+// paths into an archive sanitize session previews, message content, tool
+// result content, and tool result events: dataVersion 58 forced a full resync that
 // re-ingested live sessions through SanitizeUTF8 and ran the copy-time
 // sanitize pass over preserved orphans, and later writers sanitize at
 // ingest. Copying from a source at or above this version skips those
@@ -1156,6 +1156,28 @@ func sanitizeCopiedSessionContent(
 	// Each pass runs only when the source predates the version at
 	// which ingest started sanitizing that field, so a v58 source
 	// upgrading to v59 pays only the single-column input pass.
+	if sourceVersion < sanitizedInputSourceDataVersion {
+		if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+	}
+	if sourceVersion < sanitizedSourceDataVersion {
+		if err := sanitizeCopiedSessionPreviews(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+		if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+		if err := sanitizeCopiedToolCallResults(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+		if err := sanitizeCopiedToolResultEvents(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+	}
+	// Sanitization can join token fragments that a raw-content redaction pass
+	// would miss. Repair and certify only after every applicable sanitation
+	// pass so the certification covers the exact normalized payload.
 	if sourceVersion < redactedCodexSourceDataVersion {
 		if err := redactCopiedCodexEncryptedContent(
 			ctx, tx, tempIDsTable,
@@ -1166,21 +1188,7 @@ func sanitizeCopiedSessionContent(
 			return err
 		}
 	}
-	if sourceVersion < sanitizedInputSourceDataVersion {
-		if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
-			return err
-		}
-	}
-	if sourceVersion >= sanitizedSourceDataVersion {
-		return nil
-	}
-	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
-		return err
-	}
-	if err := sanitizeCopiedToolCallResults(ctx, tx, tempIDsTable); err != nil {
-		return err
-	}
-	return sanitizeCopiedToolResultEvents(ctx, tx, tempIDsTable)
+	return nil
 }
 
 type copiedTextUpdate struct {
@@ -1204,28 +1212,6 @@ func certifyCopiedCodexSessions(
 	tx *sql.Tx,
 	tempIDsTable string,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE main.sessions
-		SET codex_payload_certified_revision = transcript_revision,
-		    codex_payload_certification_version = ?
-		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
-		  AND agent = 'codex'
-		  AND data_version < ?
-		  AND COALESCE(first_message, '') NOT LIKE '%gAAAAA%'
-		  AND NOT EXISTS (
-			SELECT 1 FROM main.messages m
-			WHERE m.session_id = main.sessions.id
-			  AND m.content LIKE '%gAAAAA%'
-		  )
-		  AND NOT EXISTS (
-			SELECT 1 FROM main.tool_calls tc
-			WHERE tc.session_id = main.sessions.id
-			  AND tc.input_json LIKE '%gAAAAA%'
-		  )`,
-		redactedCodexSourceDataVersion, redactedCodexSourceDataVersion,
-	); err != nil {
-		return fmt.Errorf("certifying copied Codex payloads: %w", err)
-	}
 	certified, err := certifiedCopiedCodexSessionIDs(ctx, tx, tempIDsTable)
 	if err != nil {
 		return err
@@ -1247,11 +1233,13 @@ func certifyCopiedCodexSessions(
 	return nil
 }
 
-// certifiedCopiedCodexSessionIDs inspects copied Codex sessions that still
-// contain Fernet-looking content and returns the ones every redactor leaves
-// unchanged. The checks intentionally ignore the scrub's scope filters:
-// content that any redactor would rewrite is a payload nothing examined, so
-// the session must not be certified even though the scoped passes skipped it.
+// certifiedCopiedCodexSessionIDs inspects every copied legacy Codex session
+// and returns the ones every redactor leaves unchanged after SanitizeUTF8.
+// The exhaustive scan is bounded by the copied batch and intentionally avoids
+// a raw SQL LIKE fast path: sanitation can join token fragments that raw SQL
+// cannot recognize. The checks also ignore the scrub's scope filters, so
+// content that any redactor would rewrite cannot be certified merely because
+// a scoped repair pass skipped it.
 func certifiedCopiedCodexSessionIDs(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -1263,17 +1251,7 @@ func certifiedCopiedCodexSessionIDs(
 		FROM main.sessions s
 		WHERE s.id IN (SELECT id FROM `+tempIDsTable+`)
 		  AND s.agent = 'codex'
-		  AND s.data_version < ?
-		  AND (s.first_message LIKE '%gAAAAA%'
-		    OR EXISTS (
-			SELECT 1 FROM main.messages m
-			WHERE m.session_id = s.id AND m.content LIKE '%gAAAAA%'
-		    )
-		    OR EXISTS (
-			SELECT 1 FROM main.tool_calls tc
-			WHERE tc.session_id = s.id
-			  AND tc.input_json LIKE '%gAAAAA%'
-		    ))`,
+		  AND s.data_version < ?`,
 		redactedCodexSourceDataVersion,
 	)
 	if err != nil {
@@ -1296,21 +1274,58 @@ func certifiedCopiedCodexSessionIDs(
 		return nil, nil
 	}
 	// Each surface is judged by the redactor that owns it via
-	// codexMessageUnverified, without the scrub's scope filters. Collab
-	// tool inputs are already a fixpoint of their scrub, and a token in a
-	// non-collab tool's input is content by the same policy the scrub
-	// applies.
+	// codexMessageUnverified, without the scrub's scope filters. Tool names and
+	// inputs are normalized before classification because shared-storage
+	// writers publish their SanitizeUTF8 forms.
+	collabMessages := make(map[int64]bool)
+	toolRows, err := tx.QueryContext(ctx, `
+		SELECT tc.session_id, tc.message_id, tc.tool_name,
+		       COALESCE(tc.input_json, '')
+		FROM main.tool_calls tc
+		JOIN main.sessions s ON s.id = tc.session_id
+		WHERE s.id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND s.agent = 'codex'
+		  AND s.data_version < ?`,
+		redactedCodexSourceDataVersion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying copied codex tool inputs: %w", err)
+	}
+	for toolRows.Next() {
+		var sessionID, toolName, input string
+		var messageID int64
+		if err := toolRows.Scan(
+			&sessionID, &messageID, &toolName, &input,
+		); err != nil {
+			_ = toolRows.Close()
+			return nil, fmt.Errorf("scanning copied codex tool input: %w", err)
+		}
+		flagged, tracked := suspicious[sessionID]
+		if !tracked || flagged ||
+			!parser.IsCodexCollabTool(SanitizeUTF8(toolName)) {
+			continue
+		}
+		collabMessages[messageID] = true
+		normalizedInput := SanitizeUTF8(input)
+		if parser.RedactCodexEncryptedTokens(normalizedInput) != normalizedInput {
+			suspicious[sessionID] = true
+		}
+	}
+	if err := toolRows.Err(); err != nil {
+		_ = toolRows.Close()
+		return nil, fmt.Errorf("iterating copied codex tool inputs: %w", err)
+	}
+	if err := toolRows.Close(); err != nil {
+		return nil, fmt.Errorf("closing copied codex tool inputs: %w", err)
+	}
 	msgRows, err := tx.QueryContext(ctx, `
-			SELECT m.session_id, m.content, m.role, m.has_tool_use,
-			       EXISTS (
-			           SELECT 1 FROM main.tool_calls tc
-			            WHERE tc.session_id = m.session_id
-			              AND tc.message_id = m.id
-			              AND tc.tool_name IN `+parser.CodexCollabToolsSQL()+`
-			       )
-			FROM main.messages m
-		WHERE m.session_id IN (SELECT id FROM `+tempIDsTable+`)
-		  AND m.content LIKE '%gAAAAA%'`,
+		SELECT m.id, m.session_id, m.content, m.role, m.has_tool_use
+		FROM main.messages m
+		JOIN main.sessions s ON s.id = m.session_id
+		WHERE s.id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND s.agent = 'codex'
+		  AND s.data_version < ?`,
+		redactedCodexSourceDataVersion,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying copied codex token messages: %w", err)
@@ -1318,10 +1333,10 @@ func certifiedCopiedCodexSessionIDs(
 	defer msgRows.Close()
 	for msgRows.Next() {
 		var sessionID, content, role string
-		var hasToolUse, hasCollabTool bool
+		var messageID int64
+		var hasToolUse bool
 		if err := msgRows.Scan(
-			&sessionID, &content, &role, &hasToolUse,
-			&hasCollabTool,
+			&messageID, &sessionID, &content, &role, &hasToolUse,
 		); err != nil {
 			return nil, fmt.Errorf("scanning copied codex token message: %w", err)
 		}
@@ -1330,7 +1345,7 @@ func certifiedCopiedCodexSessionIDs(
 			continue
 		}
 		suspicious[sessionID] = codexMessageUnverified(
-			role, hasToolUse, hasCollabTool, content,
+			role, hasToolUse, collabMessages[messageID], content,
 		)
 	}
 	if err := msgRows.Err(); err != nil {
@@ -1710,6 +1725,51 @@ type copiedNullableTextUpdate struct {
 	sessionID string
 	content   any
 	length    any
+}
+
+func sanitizeCopiedSessionPreviews(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, first_message
+		 FROM main.sessions
+		 WHERE id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND first_message IS NOT NULL`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied session previews: %w", err)
+	}
+	defer rows.Close()
+
+	type previewUpdate struct {
+		id      string
+		content string
+	}
+	var updates []previewUpdate
+	for rows.Next() {
+		var id, content string
+		if err := rows.Scan(&id, &content); err != nil {
+			return fmt.Errorf("scanning copied session preview: %w", err)
+		}
+		sanitized := SanitizeUTF8(content)
+		if sanitized != content {
+			updates = append(updates, previewUpdate{id: id, content: sanitized})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied session previews: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.sessions SET first_message = ? WHERE id = ?`,
+			row.content, row.id,
+		); err != nil {
+			return fmt.Errorf("updating copied session preview %s: %w", row.id, err)
+		}
+	}
+	return nil
 }
 
 func sanitizeCopiedToolCallInputs(
