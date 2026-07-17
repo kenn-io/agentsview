@@ -25,7 +25,7 @@ import (
 )
 
 const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1"
-const copilotReportedCostRepairKey = "copilot_reported_cost_reparse_v1"
+const copilotReportedCostRepairKey = "copilot_reported_cost_reparse_v2"
 
 // dataVersion tracks parser changes that require a full
 // re-sync. Increment this when parsing logic changes in ways
@@ -1658,6 +1658,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE messages ADD COLUMN has_output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"usage_events", "ai_credits",
+			"ALTER TABLE usage_events ADD COLUMN ai_credits REAL",
+		},
+		{
 			"messages", "claude_message_id",
 			"ALTER TABLE messages ADD COLUMN claude_message_id TEXT NOT NULL DEFAULT ''",
 		},
@@ -2233,6 +2237,9 @@ func (db *DB) migrateColumns() error {
 	}
 
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
+		return err
+	}
+	if err := migrateLegacyAICreditsLocked(w); err != nil {
 		return err
 	}
 	if err := markCopilotSessionsForReportedCostReparseLocked(w); err != nil {

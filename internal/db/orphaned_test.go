@@ -107,6 +107,43 @@ func TestCopyOrphanedDataPreservesUsageEvents(t *testing.T) {
 	assert.Equal(t, cost, usage.CostUSD)
 }
 
+func TestCopyOrphanedDataMigratesLegacyAICredits(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "copilot:legacy-orphan", "proj", func(s *Session) {
+		s.Agent = "copilot"
+	})
+	_, err := srcDB.getWriter().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, ai_credits, dedup_key
+		) VALUES (?, 'shutdown', 'claude-sonnet-4-6', 4.2, 'legacy')`,
+		"copilot:legacy-orphan",
+	)
+	require.NoError(t, err, "seed credits-first orphan")
+	require.NoError(t, srcDB.Close(), "close source")
+
+	dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	defer dstDB.Close()
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count)
+
+	events, err := dstDB.GetUsageEvents(ctx, "copilot:legacy-orphan")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].CostUSD)
+	assert.InDelta(t, 0.042, *events[0].CostUSD, 1e-12)
+	assert.Equal(t, "exact", events[0].CostStatus)
+	assert.Equal(t, CopilotReportedCostSource, events[0].CostSource)
+	usage, err := dstDB.GetSessionUsage(ctx, "copilot:legacy-orphan", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.InDelta(t, 0.042, usage.CostUSD, 1e-12)
+	assert.InDelta(t, 4.2, usage.AICredits, 1e-12)
+}
+
 func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

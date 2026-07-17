@@ -849,8 +849,9 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	// Three tables have missing columns (sessions: termination_status;
 	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
 	// thinking_text; source_project_identity_observations: repository/worktree/
-	// checkout/remote context). Per-table batching means one ALTER each. tool_calls
-	// lists all its migration columns (call_index, file_path) as present, so
-	// it contributes no ALTER.
-	assert.Equal(t, 3, state.alterTableExecCount(), "ALTER TABLE execs")
+	// checkout/remote context; usage_events: the retained ai_credits
+	// compatibility column). Per-table batching means one ALTER each.
+	// tool_calls lists all its migration columns (call_index, file_path) as
+	// present, so it contributes no ALTER.
+	assert.Equal(t, 4, state.alterTableExecCount(), "ALTER TABLE execs")
 }

@@ -42,6 +42,7 @@ func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 			cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
 			reasoning_tokens INTEGER NOT NULL DEFAULT 0,
 			cost_usd REAL,
+			ai_credits REAL,
 			cost_status TEXT NOT NULL DEFAULT '',
 			cost_source TEXT NOT NULL DEFAULT '',
 			occurred_at TEXT,
