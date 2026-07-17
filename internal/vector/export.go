@@ -25,6 +25,7 @@ type ExportChunk struct {
 // unit pg push replicates. OffsetsJSON is the mirror's raw offsets column.
 type ExportDoc struct {
 	DocKey, SessionID, SourceUUID     string
+	TranscriptRevision                string
 	Ordinal, OrdinalEnd               int
 	Subordinate                       bool
 	OffsetsJSON, Content, ContentHash string
@@ -69,7 +70,8 @@ func (ix *Index) ActiveExport(ctx context.Context) (ActiveExport, bool, error) {
 // SessionEmbeddedDocHashes returns, per session, a sha256 aggregate over the
 // full exported row identity of each doc embedded at its current revision in
 // genOrdinal, ordered by (doc_key). The aggregate covers doc_key, source_uuid,
-// ordinal, ordinal_end, subordinate, offsets, and content_hash so that a
+// transcript_revision, ordinal, ordinal_end, subordinate, offsets, and
+// content_hash so that a
 // metadata-only change (an ordinal shift on unchanged content, the
 // compaction/resync case) still moves the aggregate; hashing only
 // (doc_key, content_hash) would leave PG anchors stale. pg push compares these
@@ -85,7 +87,8 @@ func (ix *Index) SessionEmbeddedDocHashes(
 		return nil, ErrMirrorVersionMismatch
 	}
 	rows, err := ix.db.QueryContext(ctx, `
-SELECT d.session_id, d.doc_key, d.source_uuid, d.ordinal, d.ordinal_end,
+SELECT d.session_id, d.doc_key, d.source_uuid, d.transcript_revision,
+       d.ordinal, d.ordinal_end,
        d.subordinate, d.offsets, d.content_hash
   FROM `+ix.spec.DocsTable+` d
   JOIN `+ix.spec.stampsTable()+` st ON st.doc_key = d.doc_key
@@ -108,7 +111,8 @@ SELECT d.session_id, d.doc_key, d.source_uuid, d.ordinal, d.ordinal_end,
 	for rows.Next() {
 		var sessionID string
 		var d ExportDoc
-		if err := rows.Scan(&sessionID, &d.DocKey, &d.SourceUUID, &d.Ordinal,
+		if err := rows.Scan(
+			&sessionID, &d.DocKey, &d.SourceUUID, &d.TranscriptRevision, &d.Ordinal,
 			&d.OrdinalEnd, &d.Subordinate, &d.OffsetsJSON,
 			&d.ContentHash); err != nil {
 			return nil, fmt.Errorf("scan embedded doc hash row: %w", err)
@@ -139,6 +143,7 @@ func writeEmbeddedDocIdentity(h hash.Hash, d ExportDoc) {
 	}
 	writeField(d.DocKey)
 	writeField(d.SourceUUID)
+	writeField(d.TranscriptRevision)
 	writeField(strconv.Itoa(d.Ordinal))
 	writeField(strconv.Itoa(d.OrdinalEnd))
 	writeField(strconv.FormatBool(d.Subordinate))
@@ -189,7 +194,8 @@ func (ix *Index) ExportSessionDocs(
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, `
-SELECT d.doc_key, d.session_id, d.source_uuid, d.ordinal, d.ordinal_end,
+SELECT d.doc_key, d.session_id, d.source_uuid, d.transcript_revision,
+       d.ordinal, d.ordinal_end,
        d.subordinate, d.offsets, d.content, d.content_hash
   FROM `+ix.spec.DocsTable+` d
   JOIN `+ix.spec.stampsTable()+` st ON st.doc_key = d.doc_key
@@ -205,6 +211,7 @@ SELECT d.doc_key, d.session_id, d.source_uuid, d.ordinal, d.ordinal_end,
 	for rows.Next() {
 		var d ExportDoc
 		if err := rows.Scan(&d.DocKey, &d.SessionID, &d.SourceUUID,
+			&d.TranscriptRevision,
 			&d.Ordinal, &d.OrdinalEnd, &d.Subordinate,
 			&d.OffsetsJSON, &d.Content, &d.ContentHash); err != nil {
 			return nil, "", fmt.Errorf("scan export doc: %w", err)

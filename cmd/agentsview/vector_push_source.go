@@ -233,16 +233,17 @@ func convertVectorPushDocs(docs []vector.ExportDoc) []postgres.VectorPushDoc {
 			}
 		}
 		out[i] = postgres.VectorPushDoc{
-			DocKey:      d.DocKey,
-			SessionID:   d.SessionID,
-			SourceUUID:  d.SourceUUID,
-			Ordinal:     d.Ordinal,
-			OrdinalEnd:  d.OrdinalEnd,
-			Subordinate: d.Subordinate,
-			OffsetsJSON: d.OffsetsJSON,
-			Content:     d.Content,
-			ContentHash: d.ContentHash,
-			Chunks:      chunks,
+			DocKey:             d.DocKey,
+			SessionID:          d.SessionID,
+			SourceUUID:         d.SourceUUID,
+			TranscriptRevision: d.TranscriptRevision,
+			Ordinal:            d.Ordinal,
+			OrdinalEnd:         d.OrdinalEnd,
+			Subordinate:        d.Subordinate,
+			OffsetsJSON:        d.OffsetsJSON,
+			Content:            d.Content,
+			ContentHash:        d.ContentHash,
+			Chunks:             chunks,
 		}
 	}
 	return out

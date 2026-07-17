@@ -402,14 +402,15 @@ func (db *DB) GetResumeModelCounts(
 // EmbeddableUnit is one embedding document: a single embeddable user
 // message, or a run of contiguous embeddable assistant messages.
 type EmbeddableUnit struct {
-	SessionID   string
-	Kind        string // "user" | "run"
-	SourceUUID  string // first member's source_uuid ("" legacy)
-	Ordinal     int    // first member's ordinal (ordinal_start)
-	OrdinalEnd  int    // last member's ordinal (== Ordinal for user docs)
-	Subordinate bool
-	Content     string       // members joined with "\n\n"
-	Offsets     []UnitOffset // one per member; nil for user docs
+	SessionID          string
+	TranscriptRevision string
+	Kind               string // "user" | "run"
+	SourceUUID         string // first member's source_uuid ("" legacy)
+	Ordinal            int    // first member's ordinal (ordinal_start)
+	OrdinalEnd         int    // last member's ordinal (== Ordinal for user docs)
+	Subordinate        bool
+	Content            string       // members joined with "\n\n"
+	Offsets            []UnitOffset // one per member; nil for user docs
 }
 
 // UnitOffset locates one member message inside a run's joined content.
@@ -468,7 +469,8 @@ func (db *DB) ScanEmbeddableUnits(
 	}
 
 	query := `
-		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
+		SELECT m.session_id, s.transcript_revision,
+		       m.role, m.source_uuid, m.ordinal, m.content,
 		       m.is_sidechain, s.relationship_type, s.parent_session_id,
 		       s.ended_at
 		FROM messages m
@@ -509,7 +511,8 @@ func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err erro
 		var relationshipType string
 		var parentSessionID, ended sql.NullString
 		if err := rows.Scan(
-			&row.sessionID, &row.role, &row.sourceUUID, &row.ordinal,
+			&row.sessionID, &row.transcriptRevision,
+			&row.role, &row.sourceUUID, &row.ordinal,
 			&row.content, &row.sidechain, &relationshipType,
 			&parentSessionID, &ended,
 		); err != nil {
@@ -548,6 +551,7 @@ func isSubordinateSession(
 // needed to build either a user doc or a run member.
 type unitRow struct {
 	sessionID          string
+	transcriptRevision string
 	role               string
 	sourceUUID         string
 	ordinal            int
@@ -621,13 +625,14 @@ func (r *unitReducer) closeRun() error {
 // userUnit builds the single-member "user" unit for an embeddable user row.
 func userUnit(row unitRow) EmbeddableUnit {
 	return EmbeddableUnit{
-		SessionID:   row.sessionID,
-		Kind:        "user",
-		SourceUUID:  row.sourceUUID,
-		Ordinal:     row.ordinal,
-		OrdinalEnd:  row.ordinal,
-		Subordinate: row.subordinateSession || row.sidechain,
-		Content:     row.content,
+		SessionID:          row.sessionID,
+		TranscriptRevision: row.transcriptRevision,
+		Kind:               "user",
+		SourceUUID:         row.sourceUUID,
+		Ordinal:            row.ordinal,
+		OrdinalEnd:         row.ordinal,
+		Subordinate:        row.subordinateSession || row.sidechain,
+		Content:            row.content,
 	}
 }
 
@@ -654,14 +659,15 @@ func runUnit(members []unitRow) EmbeddableUnit {
 		byteStart += len(m.content)
 	}
 	return EmbeddableUnit{
-		SessionID:   first.sessionID,
-		Kind:        "run",
-		SourceUUID:  first.sourceUUID,
-		Ordinal:     first.ordinal,
-		OrdinalEnd:  members[len(members)-1].ordinal,
-		Subordinate: first.subordinateSession || first.sidechain,
-		Content:     b.String(),
-		Offsets:     offsets,
+		SessionID:          first.sessionID,
+		TranscriptRevision: first.transcriptRevision,
+		Kind:               "run",
+		SourceUUID:         first.sourceUUID,
+		Ordinal:            first.ordinal,
+		OrdinalEnd:         members[len(members)-1].ordinal,
+		Subordinate:        first.subordinateSession || first.sidechain,
+		Content:            b.String(),
+		Offsets:            offsets,
 	}
 }
 

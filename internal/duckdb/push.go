@@ -429,7 +429,11 @@ func (s *Sync) replaceStarredSessions(
 // retries them.
 func (s *Sync) prepareCodexSessionsForPush(
 	ctx context.Context, sessions []db.Session,
-) (kept, withheld []db.Session, err error) {
+) (
+	kept, withheld []db.Session,
+	verifiedMessages map[string][]db.Message,
+	err error,
+) {
 	kept = sessions[:0]
 	for _, sess := range sessions {
 		if sess.Agent == "codex" &&
@@ -447,7 +451,7 @@ func (s *Sync) prepareCodexSessionsForPush(
 				}
 				if err == nil {
 					if sess.TranscriptRevision == nil {
-						return nil, nil, fmt.Errorf(
+						return nil, nil, nil, fmt.Errorf(
 							"certifying Codex session %s: missing transcript revision",
 							sess.ID,
 						)
@@ -455,18 +459,25 @@ func (s *Sync) prepareCodexSessionsForPush(
 					if err := s.local.SetCodexSharedStorageCertification(
 						sess.ID, *sess.TranscriptRevision, sess.FirstMessage,
 					); err != nil {
-						return nil, nil, fmt.Errorf(
+						return nil, nil, nil, fmt.Errorf(
 							"persisting Codex payload certification %s: %w",
 							sess.ID, err,
 						)
 					}
+					if verifiedMessages == nil {
+						verifiedMessages = make(map[string][]db.Message)
+					}
+					// Keep the exact message and tool-call snapshot that passed
+					// verification. A concurrent local rewrite must not replace it
+					// after the prepared session enters the DuckDB batch.
+					verifiedMessages[sess.ID] = msgs
 					sess = prepared
 				}
 			}
 		}
 		kept = append(kept, sess)
 	}
-	return kept, withheld, nil
+	return kept, withheld, verifiedMessages, nil
 }
 
 // pushWithheldCodexCuration propagates only deletion or restoration state for
@@ -524,13 +535,19 @@ func (s *Sync) pushSession(
 	exec duckMutationExecutor,
 	target duckQueryer,
 	sess db.Session,
+	verifiedMessages []db.Message,
+	hasVerifiedSnapshot bool,
 	full bool,
 ) (int, error) {
-	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
-	if err != nil {
-		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
+	msgs := verifiedMessages
+	if !hasVerifiedSnapshot {
+		var err error
+		msgs, err = s.local.GetAllMessages(ctx, sess.ID)
+		if err != nil {
+			return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
+		}
 	}
-	sess, err = db.PrepareSessionForSharedStorage(sess, msgs)
+	sess, err := db.PrepareSessionForSharedStorage(sess, msgs)
 	if err != nil {
 		return 0, err
 	}

@@ -65,7 +65,8 @@ func TestScanEmbeddableUnitsUserAssistantAlternation(t *testing.T) {
 
 	require.Len(t, got, 4)
 	assert.Equal(t, EmbeddableUnit{
-		SessionID: "sess-1", Kind: "user", SourceUUID: "uuid-u0",
+		SessionID: "sess-1", TranscriptRevision: "1",
+		Kind: "user", SourceUUID: "uuid-u0",
 		Ordinal: 0, OrdinalEnd: 0, Content: "u0",
 	}, got[0])
 
@@ -77,7 +78,7 @@ func TestScanEmbeddableUnitsUserAssistantAlternation(t *testing.T) {
 	require.Len(t, got[1].Offsets, 2)
 
 	assert.Equal(t, EmbeddableUnit{
-		SessionID: "sess-1", Kind: "user",
+		SessionID: "sess-1", TranscriptRevision: "1", Kind: "user",
 		Ordinal: 3, OrdinalEnd: 3, Content: "u3",
 	}, got[2])
 
@@ -462,7 +463,8 @@ func TestScanEmbeddableUnitsFiltersRolesAndPrefixes(t *testing.T) {
 
 	require.Len(t, got, 2)
 	assert.Equal(t, EmbeddableUnit{
-		SessionID: "sess-1", Kind: "user", Ordinal: 0, OrdinalEnd: 0,
+		SessionID: "sess-1", TranscriptRevision: "1",
+		Kind: "user", Ordinal: 0, OrdinalEnd: 0,
 		Content: "hello there",
 	}, got[0])
 	assert.Equal(t, "run", got[1].Kind)

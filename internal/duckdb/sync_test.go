@@ -117,6 +117,89 @@ func TestSyncPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
 	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
 }
 
+func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const (
+		literal   = "literal gAAAAA-not-an-encrypted-token"
+		fernet    = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+		safeInput = `{"prompt":"safe"}`
+	)
+	sess := syncSession(
+		"duck-codex-certified-snapshot", "alpha", literal,
+		"2026-07-14T00:00:00.000Z", 1,
+	)
+	sess.Agent = "codex"
+	sess.RelationshipType = "subagent"
+	sess.DataVersion = 64
+	message := syncMessage(
+		sess.ID, 0, "user", literal, "2026-07-14T00:00:00.000Z",
+	)
+	message.HasToolUse = true
+	message.ToolCalls = []db.ToolCall{{
+		ToolName: "spawn_agent", ToolUseID: "safe-call", InputJSON: safeInput,
+	}}
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess, Messages: []db.Message{message},
+		DataVersion: 64, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	stored, err := local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	prepared, withheld, verifiedMessages, err :=
+		syncer.prepareCodexSessionsForPush(ctx, []db.Session{*stored})
+	require.NoError(t, err)
+	require.Empty(t, withheld)
+	require.Len(t, prepared, 1)
+	require.Len(t, verifiedMessages[sess.ID], 1)
+	certifiedRevision := *prepared[0].TranscriptRevision
+
+	changed := message
+	changed.Content = fernet
+	changed.ContentLength = len(fernet)
+	changed.ToolCalls = []db.ToolCall{{
+		ToolName: "spawn_agent", ToolUseID: "unsafe-call", InputJSON: fernet,
+	}}
+	require.NoError(t, local.ReplaceSessionMessages(sess.ID, []db.Message{changed}))
+	rewritten, err := local.GetAllMessages(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	assert.Equal(t, fernet, rewritten[0].Content)
+	require.Len(t, rewritten[0].ToolCalls, 1)
+	assert.Equal(t, fernet, rewritten[0].ToolCalls[0].InputJSON)
+	current, err := local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	require.NotEqual(t, certifiedRevision, *current.TranscriptRevision)
+
+	var result PushResult
+	var pushed []db.Session
+	require.NoError(t, syncer.pushSessionBatchForMode(
+		ctx, prepared, 0, len(prepared), &result, &pushed, nil, true,
+		verifiedMessages,
+	))
+	require.Zero(t, result.Errors)
+	require.Len(t, pushed, 1)
+
+	var mirroredContent, mirroredInput, mirroredRevision string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT m.content, tc.input_json, s.transcript_revision
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		  JOIN tool_calls tc ON tc.message_id = m.id
+		 WHERE s.id = ?`, sess.ID,
+	).Scan(&mirroredContent, &mirroredInput, &mirroredRevision))
+	assert.Equal(t, literal, mirroredContent)
+	assert.Equal(t, safeInput, mirroredInput)
+	assert.Equal(t, certifiedRevision, mirroredRevision)
+}
+
 func TestSyncPushWithholdsUnverifiedLegacyCodexSessions(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

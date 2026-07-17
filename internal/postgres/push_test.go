@@ -534,7 +534,7 @@ func TestPrepareSessionsForPushWithholdsUnverifiedCodexSessions(t *testing.T) {
 	good = storedSession(good.ID)
 
 	syncer := &Sync{pg: pg, local: local, machine: "push-machine"}
-	prepared, failed, withheld := syncer.prepareSessionsForPush(
+	prepared, failed, withheld, verifiedMessages := syncer.prepareSessionsForPush(
 		ctx, []db.Session{bad, unlinkedChild, legacyClean, good},
 	)
 	assert.Empty(t, failed,
@@ -557,7 +557,7 @@ func TestPrepareSessionsForPushWithholdsUnverifiedCodexSessions(t *testing.T) {
 
 	var pushed []db.Session
 	goodResult, err := syncer.pushBatch(
-		ctx, prepared, true, "marker", nil, nil, &pushed,
+		ctx, prepared, true, "marker", nil, nil, verifiedMessages, &pushed,
 	)
 	require.NoError(t, err)
 	assert.True(t, goodResult.ok, "prepared sessions must still push")

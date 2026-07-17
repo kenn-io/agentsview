@@ -381,28 +381,34 @@ func (s *Sync) Push(
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].ID < sessions[j].ID
 	})
-	var withheld []db.Session
-	sessions, withheld, err = s.prepareCodexSessionsForPush(ctx, sessions)
-	if err != nil {
-		return result, err
-	}
-	curationUpdates, absentWithheld, err :=
-		s.pushWithheldCodexCuration(ctx, withheld)
-	if err != nil {
-		return result, err
-	}
-	for _, id := range absentWithheld {
-		delete(priorFingerprints, id)
-	}
-
 	pushed := make([]db.Session, 0, len(sessions))
+	var curationUpdates []db.Session
 	for start := 0; start < len(sessions); start += duckSessionPushBatchSize {
 		end := min(start+duckSessionPushBatchSize, len(sessions))
-		if err := s.pushSessionBatchForMode(
-			ctx, sessions[start:end], start, len(sessions),
-			&result, &pushed, onProgress, full,
-		); err != nil {
+		prepared, withheld, verifiedMessages, err :=
+			s.prepareCodexSessionsForPush(ctx, sessions[start:end])
+		if err != nil {
 			return result, err
+		}
+		updates, absentWithheld, err :=
+			s.pushWithheldCodexCuration(ctx, withheld)
+		if err != nil {
+			return result, err
+		}
+		curationUpdates = append(curationUpdates, updates...)
+		for _, id := range absentWithheld {
+			delete(priorFingerprints, id)
+		}
+		if len(prepared) > 0 {
+			if err := s.pushSessionBatchForMode(
+				ctx, prepared, start, len(sessions),
+				&result, &pushed, onProgress, full, verifiedMessages,
+			); err != nil {
+				return result, err
+			}
+		}
+		if len(prepared) != end-start {
+			reportDuckPushProgress(end, len(sessions), &result, onProgress)
 		}
 	}
 	result.Diagnostics.PushedSessions = countPushSessions(pushed)
@@ -515,7 +521,7 @@ func (s *Sync) pushSessionBatch(
 	onProgress func(PushProgress),
 ) error {
 	return s.pushSessionBatchForMode(
-		ctx, sessions, offset, total, result, pushed, onProgress, false,
+		ctx, sessions, offset, total, result, pushed, onProgress, false, nil,
 	)
 }
 
@@ -528,14 +534,15 @@ func (s *Sync) pushSessionBatchForMode(
 	pushed *[]db.Session,
 	onProgress func(PushProgress),
 	full bool,
+	verifiedMessages map[string][]db.Message,
 ) error {
 	return pushSessionBatchWith(
 		ctx, sessions, offset, total, result, pushed, onProgress,
 		func(ctx context.Context, sessions []db.Session) ([]int, error) {
-			return s.tryPushSessionBatch(ctx, sessions, full)
+			return s.tryPushSessionBatch(ctx, sessions, full, verifiedMessages)
 		},
 		func(ctx context.Context, sess db.Session) (int, error) {
-			return s.pushSingleSession(ctx, sess, full)
+			return s.pushSingleSession(ctx, sess, full, verifiedMessages)
 		},
 		waitAfterRemoteMutationTimeout,
 	)
@@ -685,10 +692,13 @@ func reportDuckPushProgress(
 }
 
 func (s *Sync) tryPushSessionBatch(
-	ctx context.Context, sessions []db.Session, full bool,
+	ctx context.Context,
+	sessions []db.Session,
+	full bool,
+	verifiedMessages map[string][]db.Message,
 ) ([]int, error) {
 	if s.connectionKind == duckDBQuackClientConnection {
-		return s.tryPushRemoteSessionBatch(ctx, sessions, full)
+		return s.tryPushRemoteSessionBatch(ctx, sessions, full, verifiedMessages)
 	}
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
@@ -698,7 +708,8 @@ func (s *Sync) tryPushSessionBatch(
 	messagesBySession := make([]int, len(sessions))
 
 	for i, sess := range sessions {
-		messages, err := s.pushSession(ctx, tx, tx, sess, full)
+		verified, ok := verifiedMessages[sess.ID]
+		messages, err := s.pushSession(ctx, tx, tx, sess, verified, ok, full)
 		if err != nil {
 			return nil, fmt.Errorf("pushing duckdb session %s: %w", sess.ID, err)
 		}
@@ -711,7 +722,10 @@ func (s *Sync) tryPushSessionBatch(
 }
 
 func (s *Sync) tryPushRemoteSessionBatch(
-	ctx context.Context, sessions []db.Session, full bool,
+	ctx context.Context,
+	sessions []db.Session,
+	full bool,
+	verifiedMessages map[string][]db.Message,
 ) ([]int, error) {
 	const batchLabel = "duckdb remote session batch"
 
@@ -720,8 +734,9 @@ func (s *Sync) tryPushRemoteSessionBatch(
 
 	for i, sess := range sessions {
 		sessionBatch := &duckRemoteMutationBatch{}
+		verified, ok := verifiedMessages[sess.ID]
 		messages, err := s.pushSession(
-			ctx, sessionBatch, s.targetQueryer(), sess, full,
+			ctx, sessionBatch, s.targetQueryer(), sess, verified, ok, full,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("pushing duckdb remote session %s: %w", sess.ID, err)
@@ -759,17 +774,21 @@ func (s *Sync) tryPushRemoteSessionBatch(
 }
 
 func (s *Sync) pushSingleSession(
-	ctx context.Context, sess db.Session, full bool,
+	ctx context.Context,
+	sess db.Session,
+	full bool,
+	verifiedMessages map[string][]db.Message,
 ) (int, error) {
 	if s.connectionKind == duckDBQuackClientConnection {
-		return s.pushSingleRemoteSession(ctx, sess, full)
+		return s.pushSingleRemoteSession(ctx, sess, full, verifiedMessages)
 	}
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	messages, err := s.pushSession(ctx, tx, tx, sess, full)
+	verified, ok := verifiedMessages[sess.ID]
+	messages, err := s.pushSession(ctx, tx, tx, sess, verified, ok, full)
 	if err != nil {
 		return 0, err
 	}
@@ -780,10 +799,16 @@ func (s *Sync) pushSingleSession(
 }
 
 func (s *Sync) pushSingleRemoteSession(
-	ctx context.Context, sess db.Session, full bool,
+	ctx context.Context,
+	sess db.Session,
+	full bool,
+	verifiedMessages map[string][]db.Message,
 ) (int, error) {
 	batch := &duckRemoteMutationBatch{}
-	messages, err := s.pushSession(ctx, batch, s.targetQueryer(), sess, full)
+	verified, ok := verifiedMessages[sess.ID]
+	messages, err := s.pushSession(
+		ctx, batch, s.targetQueryer(), sess, verified, ok, full,
+	)
 	if err != nil {
 		return 0, err
 	}

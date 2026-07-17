@@ -30,8 +30,9 @@ const messageMirrorDDL = `
 CREATE TABLE IF NOT EXISTS vector_messages (
     doc_key      TEXT PRIMARY KEY,
     session_id   TEXT NOT NULL,
-    source_uuid  TEXT NOT NULL DEFAULT '',
-    ordinal      INTEGER NOT NULL,
+	source_uuid  TEXT NOT NULL DEFAULT '',
+	transcript_revision TEXT NOT NULL DEFAULT '0',
+	ordinal      INTEGER NOT NULL,
     ordinal_end  INTEGER NOT NULL,
     subordinate  INTEGER NOT NULL DEFAULT 0,
     offsets      TEXT NOT NULL DEFAULT '[]',
@@ -105,7 +106,8 @@ func (s IndexSpec) repairQueueTable() string { return s.VectorsPrefix + "_repair
 // messages) with no DDL change; "4" invalidated mirrors built before Codex
 // encrypted multi-agent payloads were removed from historical message content;
 // "5" invalidates mirrors built before argument-derived collaboration headers
-// were included in that redaction.
+// were included in that redaction; "6" binds every exported document to the
+// source transcript revision used to build it.
 func MessageIndexSpec() IndexSpec {
 	return IndexSpec{
 		Name:                "messages",
@@ -113,7 +115,7 @@ func MessageIndexSpec() IndexSpec {
 		MetaTable:           "vector_meta",
 		VectorsPrefix:       "message_vectors",
 		MirrorDDL:           messageMirrorDDL,
-		MirrorSchemaVersion: "5",
+		MirrorSchemaVersion: "6",
 	}
 }
 

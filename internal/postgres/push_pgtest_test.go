@@ -90,6 +90,101 @@ func TestPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
 	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
 }
 
+func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
+	t *testing.T,
+) {
+	const (
+		schema    = "agentsview_push_codex_certified_snapshot_test"
+		literal   = "literal gAAAAA-not-an-encrypted-token"
+		fernet    = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+		safeInput = `{"prompt":"safe"}`
+	)
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	firstMessage := literal
+	createdAt := "2026-07-14T00:00:00.000Z"
+	sess := db.Session{
+		ID: "pg-codex-certified-snapshot", Project: "alpha", Machine: "laptop",
+		Agent: "codex", FirstMessage: &firstMessage,
+		RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1,
+		DataVersion: 64, CreatedAt: createdAt,
+	}
+	message := db.Message{
+		SessionID: sess.ID, Ordinal: 0, Role: "user", Content: literal,
+		ContentLength: len(literal), Timestamp: createdAt, HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName: "spawn_agent", ToolUseID: "safe-call", InputJSON: safeInput,
+		}},
+	}
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess, Messages: []db.Message{message},
+		DataVersion: 64, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	stored, err := local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	prepared, failed, withheld, verifiedMessages :=
+		syncer.prepareSessionsForPush(ctx, []db.Session{*stored})
+	require.Empty(t, failed)
+	require.Empty(t, withheld)
+	require.Len(t, prepared, 1)
+	require.Len(t, verifiedMessages[sess.ID], 1)
+	certifiedRevision := *prepared[0].TranscriptRevision
+
+	changed := message
+	changed.Content = fernet
+	changed.ContentLength = len(fernet)
+	changed.ToolCalls = []db.ToolCall{{
+		ToolName: "spawn_agent", ToolUseID: "unsafe-call", InputJSON: fernet,
+	}}
+	require.NoError(t, local.ReplaceSessionMessages(sess.ID, []db.Message{changed}))
+	rewritten, err := local.GetAllMessages(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	assert.Equal(t, fernet, rewritten[0].Content)
+	require.Len(t, rewritten[0].ToolCalls, 1)
+	assert.Equal(t, fernet, rewritten[0].ToolCalls[0].InputJSON)
+	current, err := local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	require.NotEqual(t, certifiedRevision, *current.TranscriptRevision)
+
+	var pushed []db.Session
+	result, err := syncer.pushBatch(
+		ctx, prepared, true, "snapshot-marker", nil, nil,
+		verifiedMessages, &pushed,
+	)
+	require.NoError(t, err)
+	require.True(t, result.ok)
+	require.Len(t, pushed, 1)
+
+	var mirroredContent, mirroredInput, mirroredRevision string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT m.content, tc.input_json, s.transcript_revision
+		  FROM sessions s
+		  JOIN messages m ON m.session_id = s.id
+		  JOIN tool_calls tc
+		    ON tc.session_id = m.session_id AND tc.message_ordinal = m.ordinal
+		 WHERE s.id = $1`, sess.ID,
+	).Scan(&mirroredContent, &mirroredInput, &mirroredRevision))
+	assert.Equal(t, literal, mirroredContent)
+	assert.Equal(t, safeInput, mirroredInput)
+	assert.Equal(t, certifiedRevision, mirroredRevision)
+	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, syncer.pg))
+}
+
 func TestPushPropagatesDeletionForPreviouslyMirroredUnverifiedCodexSession(
 	t *testing.T,
 ) {

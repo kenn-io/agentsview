@@ -34,16 +34,17 @@ type VectorPushChunk struct {
 // vector_documents is a single backend-agnostic table upserted by doc_key
 // rather than a per-generation table.
 type VectorPushDoc struct {
-	DocKey      string
-	SessionID   string
-	SourceUUID  string
-	Ordinal     int
-	OrdinalEnd  int
-	Subordinate bool
-	OffsetsJSON string
-	Content     string
-	ContentHash string
-	Chunks      []VectorPushChunk
+	DocKey             string
+	SessionID          string
+	SourceUUID         string
+	TranscriptRevision string
+	Ordinal            int
+	OrdinalEnd         int
+	Subordinate        bool
+	OffsetsJSON        string
+	Content            string
+	ContentHash        string
+	Chunks             []VectorPushChunk
 }
 
 // VectorPushSource supplies the locally built vectors.db active generation to
@@ -749,10 +750,12 @@ func (s *Sync) pushVectorSession(
 	// primary key) before its own vector-table writes — a single, consistent
 	// lock so two vector pushes cannot form a cycle.
 	var ownerMarker, machine sql.NullString
+	var transcriptRevision string
 	err = tx.QueryRowContext(ctx,
-		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
+		`SELECT owner_marker, machine, transcript_revision
+		   FROM sessions WHERE id = $1 FOR UPDATE`,
 		sessionID,
-	).Scan(&ownerMarker, &machine)
+	).Scan(&ownerMarker, &machine, &transcriptRevision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vectorSessionOutcome{}, nil
 	}
@@ -782,6 +785,13 @@ func (s *Sync) pushVectorSession(
 	// content, same hash) would never repair. Defer instead: nothing is
 	// written, and the next push re-derives the delta from the settled index.
 	if exportHash != aggHash {
+		return vectorSessionOutcome{deferred: true}, nil
+	}
+	// The mirror records the source transcript revision on every document.
+	// Require the exported snapshot to match the already-published, locked
+	// session row so vectors can never run ahead of the exact transcript
+	// snapshot whose messages passed shared-storage certification.
+	if !vectorDocsMatchTranscriptRevision(docs, transcriptRevision) {
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
@@ -814,6 +824,18 @@ DO UPDATE SET doc_agg_hash = EXCLUDED.doc_agg_hash`,
 	return vectorSessionOutcome{
 		pushed: true, docs: len(docs), chunks: chunks, deleted: deleted,
 	}, nil
+}
+
+func vectorDocsMatchTranscriptRevision(
+	docs []VectorPushDoc, revision string,
+) bool {
+	for _, doc := range docs {
+		if doc.TranscriptRevision == "" ||
+			doc.TranscriptRevision != revision {
+			return false
+		}
+	}
+	return true
 }
 
 // parkSessionVectorDocs moves every non-negative-ordinal vector_documents row

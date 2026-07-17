@@ -36,6 +36,47 @@ func TestVectorOwnerIdentityOwns(t *testing.T) {
 	}
 }
 
+func TestVectorDocsMatchTranscriptRevision(t *testing.T) {
+	tests := []struct {
+		name     string
+		docs     []VectorPushDoc
+		revision string
+		want     bool
+	}{
+		{name: "empty document set", revision: "4", want: true},
+		{
+			name: "all documents match",
+			docs: []VectorPushDoc{
+				{TranscriptRevision: "4"},
+				{TranscriptRevision: "4"},
+			},
+			revision: "4",
+			want:     true,
+		},
+		{
+			name: "one document is newer",
+			docs: []VectorPushDoc{
+				{TranscriptRevision: "4"},
+				{TranscriptRevision: "5"},
+			},
+			revision: "4",
+			want:     false,
+		},
+		{
+			name:     "unstamped document fails closed",
+			docs:     []VectorPushDoc{{}},
+			revision: "0",
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				vectorDocsMatchTranscriptRevision(tt.docs, tt.revision))
+		})
+	}
+}
+
 // notReadyVectorSource reports a not-ready local index, as the vectors.db
 // adapter does while an embeddings build is rewriting the active generation.
 type notReadyVectorSource struct{}

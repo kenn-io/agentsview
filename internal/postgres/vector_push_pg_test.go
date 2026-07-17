@@ -153,13 +153,14 @@ func vdoc(
 	content, hash string, chunks ...[]float32,
 ) VectorPushDoc {
 	d := VectorPushDoc{
-		DocKey:      docKey,
-		SessionID:   sessionID,
-		Ordinal:     ordinal,
-		OrdinalEnd:  ordinal,
-		OffsetsJSON: "[]",
-		Content:     content,
-		ContentHash: hash,
+		DocKey:             docKey,
+		SessionID:          sessionID,
+		TranscriptRevision: "1",
+		Ordinal:            ordinal,
+		OrdinalEnd:         ordinal,
+		OffsetsJSON:        "[]",
+		Content:            content,
+		ContentHash:        hash,
 	}
 	for i, emb := range chunks {
 		d.Chunks = append(d.Chunks, VectorPushChunk{ChunkIndex: i, Embedding: emb})
@@ -1395,6 +1396,51 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 	assert.Equal(t, 1, res.SessionsPushed)
 	assert.Equal(t, 1,
 		countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)))
+}
+
+func TestVectorPushDefersSessionWhenTranscriptRevisionDiverges(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_transcript_revision_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	doc := vdoc(
+		"A", "A#0", 0, "safe content", "safe-hash",
+		[]float32{1, 0, 0, 0},
+	)
+	source := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-revision", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "safe-agg"},
+		docs:   map[string][]VectorPushDoc{"A": {doc}},
+	}
+	sync.vectorSource = source
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "seed Push")
+	genID, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-revision")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	changed := doc
+	changed.Content = "newer content"
+	changed.ContentHash = "newer-hash"
+	changed.TranscriptRevision = "2"
+	source.hashes = map[string]string{"A": "newer-agg"}
+	source.docs = map[string][]VectorPushDoc{"A": {changed}}
+
+	res, err := sync.pushVectors(ctx, false, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.SessionsDeferred)
+	assert.Zero(t, res.SessionsPushed)
+	assert.Equal(t, 1, countRows(t, pg, `
+		SELECT COUNT(*) FROM vector_push_state
+		 WHERE generation_id = $1 AND session_id = 'A' AND doc_agg_hash = 'safe-agg'`,
+		genID), "the published vector snapshot must remain bound to revision 1")
+	assert.Equal(t, 1, countRows(t, pg, `
+		SELECT COUNT(*) FROM vector_documents
+		 WHERE session_id = 'A' AND content = 'safe content'`))
 }
 
 // TestVectorEvictionRechecksOwnershipInTx pins the eviction-path TOCTOU

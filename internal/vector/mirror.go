@@ -274,19 +274,25 @@ func (ix *Index) upsertMirrorRow(
 		return false, evicted, err
 	}
 
+	revision := u.TranscriptRevision
+	if revision == "" {
+		revision = "0"
+	}
 	if _, err := ix.db.ExecContext(ctx, `
-INSERT INTO `+ix.spec.DocsTable+` (doc_key, session_id, source_uuid, ordinal, ordinal_end,
+INSERT INTO `+ix.spec.DocsTable+` (doc_key, session_id, source_uuid,
+    transcript_revision, ordinal, ordinal_end,
     subordinate, offsets, content, content_hash)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(doc_key) DO UPDATE SET
     session_id = excluded.session_id,
+	transcript_revision = excluded.transcript_revision,
     ordinal = excluded.ordinal,
     ordinal_end = excluded.ordinal_end,
     subordinate = excluded.subordinate,
     offsets = excluded.offsets,
     content = excluded.content,
     content_hash = excluded.content_hash`,
-		key, u.SessionID, u.SourceUUID, u.Ordinal, u.OrdinalEnd,
+		key, u.SessionID, u.SourceUUID, revision, u.Ordinal, u.OrdinalEnd,
 		u.Subordinate, offsets, u.Content, hash,
 	); err != nil {
 		return false, evicted, fmt.Errorf("upserting row: %w", err)

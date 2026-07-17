@@ -470,75 +470,77 @@ func (s *Sync) Push(
 	// ahead of them. Withheld sessions do not count as errors — the condition
 	// is permanent until a local repair, so erroring would pin the watermark.
 	var failedSessions map[string]struct{}
-	sessions, prepFailed, prepWithheld := s.prepareSessionsForPush(ctx, sessions)
-	for _, id := range prepFailed {
-		result.Errors++
-		if failedSessions == nil {
-			failedSessions = make(map[string]struct{})
-		}
-		failedSessions[id] = struct{}{}
-	}
-	for _, sess := range prepWithheld {
-		if failedSessions == nil {
-			failedSessions = make(map[string]struct{})
-		}
-		failedSessions[sess.ID] = struct{}{}
-		applied, absent, err := s.pushWithheldCodexCuration(
-			ctx, sess, markerID, legacyMarkerMachines,
-		)
-		if err != nil {
-			log.Printf(
-				"pgsync: applying withheld Codex curation %s: %v",
-				sess.ID, err,
-			)
-			result.Errors++
-			continue
-		}
-		if applied {
-			pushed = append(pushed, sess)
-		}
-		if absent {
-			delete(priorFingerprints, sess.ID)
-		}
-	}
 	const batchSize = 50
 	for i := 0; i < len(sessions); i += batchSize {
 		end := min(i+batchSize, len(sessions))
-		batch := sessions[i:end]
-
-		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, legacyMarkerMachines,
-			usageFingerprints, &pushed,
-		)
-		if err != nil {
-			return result, err
+		batch, prepFailed, prepWithheld, verifiedMessages :=
+			s.prepareSessionsForPush(ctx, sessions[i:end])
+		for _, id := range prepFailed {
+			result.Errors++
+			if failedSessions == nil {
+				failedSessions = make(map[string]struct{})
+			}
+			failedSessions[id] = struct{}{}
 		}
-		if batchResult.ok {
-			result.SessionsPushed += batchResult.sessions
-			result.MessagesPushed += batchResult.messages
-			result.SkippedConflicts += batchResult.skippedConflicts
-		} else {
-			// Batch failed — retry each session individually
-			// so one bad session doesn't block the rest.
-			for _, sess := range batch {
-				sr, retryErr := s.pushBatch(
-					ctx, []db.Session{sess},
-					full, markerID, legacyMarkerMachines,
-					usageFingerprints, &pushed,
+		for _, sess := range prepWithheld {
+			if failedSessions == nil {
+				failedSessions = make(map[string]struct{})
+			}
+			failedSessions[sess.ID] = struct{}{}
+			applied, absent, err := s.pushWithheldCodexCuration(
+				ctx, sess, markerID, legacyMarkerMachines,
+			)
+			if err != nil {
+				log.Printf(
+					"pgsync: applying withheld Codex curation %s: %v",
+					sess.ID, err,
 				)
-				if retryErr != nil {
-					return result, retryErr
-				}
-				if sr.ok {
-					result.SessionsPushed += sr.sessions
-					result.MessagesPushed += sr.messages
-					result.SkippedConflicts += sr.skippedConflicts
-				} else {
-					result.Errors++
-					if failedSessions == nil {
-						failedSessions = make(map[string]struct{})
+				result.Errors++
+				continue
+			}
+			if applied {
+				pushed = append(pushed, sess)
+			}
+			if absent {
+				delete(priorFingerprints, sess.ID)
+			}
+		}
+
+		if len(batch) > 0 {
+			batchResult, err := s.pushBatch(
+				ctx, batch, full, markerID, legacyMarkerMachines,
+				usageFingerprints, verifiedMessages, &pushed,
+			)
+			if err != nil {
+				return result, err
+			}
+			if batchResult.ok {
+				result.SessionsPushed += batchResult.sessions
+				result.MessagesPushed += batchResult.messages
+				result.SkippedConflicts += batchResult.skippedConflicts
+			} else {
+				// Batch failed — retry each session individually
+				// so one bad session doesn't block the rest.
+				for _, sess := range batch {
+					sr, retryErr := s.pushBatch(
+						ctx, []db.Session{sess},
+						full, markerID, legacyMarkerMachines,
+						usageFingerprints, verifiedMessages, &pushed,
+					)
+					if retryErr != nil {
+						return result, retryErr
 					}
-					failedSessions[sess.ID] = struct{}{}
+					if sr.ok {
+						result.SessionsPushed += sr.sessions
+						result.MessagesPushed += sr.messages
+						result.SkippedConflicts += sr.skippedConflicts
+					} else {
+						result.Errors++
+						if failedSessions == nil {
+							failedSessions = make(map[string]struct{})
+						}
+						failedSessions[sess.ID] = struct{}{}
+					}
 				}
 			}
 		}
@@ -1058,12 +1060,13 @@ func (s *Sync) pushBatch(
 	markerID string,
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
+	verifiedMessages map[string][]db.Message,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	preloadComparisons := len(batch) > 0 && !full
 	result, err := s.pushBatchAttempt(
 		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, preloadComparisons,
+		sessionUsageFingerprints, verifiedMessages, pushed, preloadComparisons,
 	)
 	if err == nil || !errors.Is(err, errPushComparisonPreload) {
 		return result, err
@@ -1075,7 +1078,7 @@ func (s *Sync) pushBatch(
 	)
 	return s.pushBatchAttempt(
 		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, false,
+		sessionUsageFingerprints, verifiedMessages, pushed, false,
 	)
 }
 
@@ -1095,7 +1098,12 @@ func (s *Sync) pushBatch(
 // rows.
 func (s *Sync) prepareSessionsForPush(
 	ctx context.Context, sessions []db.Session,
-) (prepared []db.Session, failed []string, withheld []db.Session) {
+) (
+	prepared []db.Session,
+	failed []string,
+	withheld []db.Session,
+	verifiedMessages map[string][]db.Message,
+) {
 	prepared = make([]db.Session, 0, len(sessions))
 	for _, sess := range sessions {
 		if sess.Agent == "codex" &&
@@ -1138,10 +1146,18 @@ func (s *Sync) prepareSessionsForPush(
 				failed = append(failed, sess.ID)
 				continue
 			}
+			if verifiedMessages == nil {
+				verifiedMessages = make(map[string][]db.Message)
+			}
+			// Publish the exact message and tool-call snapshot that passed
+			// verification. A later local rewrite invalidates the durable
+			// certification revision, but must not swap unchecked content into
+			// this already-prepared push.
+			verifiedMessages[sess.ID] = messages
 		}
 		prepared = append(prepared, sess)
 	}
-	return prepared, failed, withheld
+	return prepared, failed, withheld, verifiedMessages
 }
 
 // pushWithheldCodexCuration propagates only the source deletion or restoration
@@ -1234,6 +1250,7 @@ func (s *Sync) pushBatchAttempt(
 	markerID string,
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
+	verifiedMessages map[string][]db.Message,
 	pushed *[]db.Session,
 	preloadComparisons bool,
 ) (batchResult, error) {
@@ -1285,9 +1302,11 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
+		verified, hasVerifiedSnapshot := verifiedMessages[sess.ID]
 		msgCount, err := s.pushMessages(
 			ctx, tx, sess.ID, full,
 			sessionUsageFingerprints, comparisons,
+			verified, hasVerifiedSnapshot,
 		)
 		if err != nil {
 			log.Printf(
@@ -2333,12 +2352,23 @@ func (s *Sync) pushMessages(
 	full bool,
 	sessionUsageFingerprints map[string]string,
 	comparisons *pushMessageComparison,
+	verifiedMessages []db.Message,
+	hasVerifiedSnapshot bool,
 ) (int, error) {
-	localCount, err := s.local.MessageCount(sessionID)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"counting local messages: %w", err,
-		)
+	var err error
+	localCount := len(verifiedMessages)
+	if !hasVerifiedSnapshot {
+		localCount, err = s.local.MessageCount(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"counting local messages: %w", err,
+			)
+		}
+	} else {
+		// The verified snapshot is authoritative for this push. Always replace
+		// from it instead of comparing against local rows that may have changed
+		// after certification.
+		full = true
 	}
 	if localCount == 0 {
 		if _, err := tx.ExecContext(ctx,
@@ -2622,6 +2652,27 @@ func (s *Sync) pushMessages(
 	}
 
 	count := 0
+	if hasVerifiedSnapshot {
+		for start := 0; start < len(verifiedMessages); start += db.MaxMessageLimit {
+			end := min(start+db.MaxMessageLimit, len(verifiedMessages))
+			msgs := verifiedMessages[start:end]
+			if err := bulkInsertMessages(ctx, tx, sessionID, msgs); err != nil {
+				return count, err
+			}
+			if err := bulkInsertToolCalls(ctx, tx, sessionID, msgs); err != nil {
+				return count, err
+			}
+			if err := bulkInsertToolResultEvents(ctx, tx, sessionID, msgs); err != nil {
+				return count, err
+			}
+			count += len(msgs)
+		}
+		if err := reconcilePinnedMessages(ctx, tx, sessionID); err != nil {
+			return count, err
+		}
+		return count, nil
+	}
+
 	startOrdinal := 0
 	for {
 		msgs, err := s.local.GetMessages(

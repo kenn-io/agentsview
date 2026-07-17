@@ -237,6 +237,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 		assert.Equal(t, w.DocKey, got.DocKey)
 		assert.Equal(t, w.SessionID, got.SessionID)
 		assert.Equal(t, w.SourceUUID, got.SourceUUID)
+		assert.Equal(t, w.TranscriptRevision, got.TranscriptRevision)
 		assert.Equal(t, w.Ordinal, got.Ordinal)
 		assert.Equal(t, w.OrdinalEnd, got.OrdinalEnd)
 		assert.Equal(t, w.Subordinate, got.Subordinate)
