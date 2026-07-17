@@ -7033,6 +7033,11 @@ func (e *Engine) writeBatch(
 				"set data_version for %s: %v", s.ID, err,
 			)
 		}
+		if err := e.supersedeS3SessionIdentities(s); err != nil {
+			log.Printf("supersede S3 session identities for %s: %v", s.ID, err)
+			failedSessions++
+			continue
+		}
 
 		if !replaceMessages {
 			// Same ordering contract as recomputeSignalsFromDB: the
@@ -7947,6 +7952,20 @@ func (e *Engine) writeBatchBulk(
 	for _, err := range result.Errors {
 		log.Printf("write session batch: %v", err)
 	}
+	for _, write := range writes {
+		if e.db.GetSessionFilePath(write.Session.ID) !=
+			derefString(write.Session.FilePath) {
+			continue
+		}
+		if err := e.supersedeS3SessionIdentities(write.Session); err != nil {
+			log.Printf(
+				"supersede S3 session identities for %s: %v",
+				write.Session.ID, err,
+			)
+			result.FailedSessions++
+			result.WrittenSessions--
+		}
+	}
 	return result.WrittenSessions,
 		result.WrittenMessages,
 		result.FailedSessions,
@@ -8578,8 +8597,28 @@ func (e *Engine) writeSessionFullWithResolver(
 			"set data_version for %s: %v", s.ID, err,
 		)
 	}
+	if err := e.supersedeS3SessionIdentities(s); err != nil {
+		return fmt.Errorf("supersede S3 session identities for %s: %w", s.ID, err)
+	}
 
 	return nil
+}
+
+func (e *Engine) supersedeS3SessionIdentities(s db.Session) error {
+	if s.FilePath == nil || !isS3SourcePath(*s.FilePath) {
+		return nil
+	}
+	ids, err := e.db.ListSessionIDsByFilePath(*s.FilePath, s.Agent)
+	if err != nil {
+		return err
+	}
+	superseded := ids[:0]
+	for _, id := range ids {
+		if id != s.ID {
+			superseded = append(superseded, id)
+		}
+	}
+	return e.db.SupersedeSessionIdentities(s.ID, superseded)
 }
 
 func (e *Engine) shouldPreserveOpenCodeFormatArchive(

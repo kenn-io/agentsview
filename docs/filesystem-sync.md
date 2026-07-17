@@ -173,9 +173,10 @@ reliably; the periodic sync remains the backstop.
   metadata and download only changed or stale sessions.
 - Roots that cannot be watched fall back to polling, as described under
   [Large Watch Trees](/configuration/#large-watch-trees).
-- A machine label changes attribution, not source identity or conflict
-  resolution. Do not intentionally place different sessions with the same
-  native ID in separate roots.
+- A filesystem machine label changes attribution, not source identity or
+  conflict resolution. S3 machine labels participate in the established
+  machine-prefixed session identity. Do not intentionally place different
+  sessions with the same native ID in separate filesystem roots.
 - Deleting a transported source file does not automatically erase the archived
   session. The local SQLite database is a persistent archive; use pruning
   tools when removal is intended.

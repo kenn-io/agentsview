@@ -2218,6 +2218,88 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	return ids, nil
 }
 
+// SupersedeSessionIdentities removes stale active identities after a replacement
+// session for the same source has been written. References to the stale IDs are
+// retargeted first so parent/subagent relationships remain connected.
+func (db *DB) SupersedeSessionIdentities(
+	currentID string, supersededIDs []string,
+) error {
+	if len(supersededIDs) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning session identity supersession: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var currentExists int
+	if err := tx.QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NULL", currentID,
+	).Scan(&currentExists); err != nil {
+		return fmt.Errorf("checking replacement session %s: %w", currentID, err)
+	}
+
+	for _, oldID := range supersededIDs {
+		if oldID == "" || oldID == currentID {
+			continue
+		}
+		if _, err := tx.Exec(`
+			UPDATE sessions
+			SET display_name = COALESCE(
+				display_name,
+				(SELECT display_name FROM sessions WHERE id = ?)
+			)
+			WHERE id = ?`, oldID, currentID); err != nil {
+			return fmt.Errorf("preserving session name from %s: %w", oldID, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO starred_sessions (session_id, created_at)
+			SELECT ?, created_at
+			FROM starred_sessions
+			WHERE session_id = ?`, currentID, oldID); err != nil {
+			return fmt.Errorf("preserving session star from %s: %w", oldID, err)
+		}
+		for _, update := range []struct {
+			query string
+			name  string
+		}{
+			{
+				"UPDATE sessions SET parent_session_id = ? WHERE parent_session_id = ?",
+				"parent session references",
+			},
+			{
+				"UPDATE sessions SET source_session_id = ? WHERE source_session_id = ?",
+				"source session references",
+			},
+			{
+				"UPDATE tool_calls SET subagent_session_id = ? WHERE subagent_session_id = ?",
+				"tool-call subagent references",
+			},
+			{
+				"UPDATE tool_result_events SET subagent_session_id = ? WHERE subagent_session_id = ?",
+				"tool-result subagent references",
+			},
+		} {
+			if _, err := tx.Exec(update.query, currentID, oldID); err != nil {
+				return fmt.Errorf(
+					"retargeting %s from %s: %w", update.name, oldID, err,
+				)
+			}
+		}
+		if err := deleteSessionMessagesTx(tx, oldID); err != nil {
+			return fmt.Errorf("deleting superseded session %s messages: %w", oldID, err)
+		}
+		if _, err := tx.Exec("DELETE FROM sessions WHERE id = ?", oldID); err != nil {
+			return fmt.Errorf("deleting superseded session %s: %w", oldID, err)
+		}
+	}
+	return tx.Commit()
+}
+
 const storedSourcePathHintRootBatchSize = 100
 
 // ListStoredSourcePathHints returns active source paths for agent whose stored
