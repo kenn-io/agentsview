@@ -190,6 +190,15 @@ func (e *Engine) processS3Session(
 	case parser.AgentClaude:
 		sessionID := strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
 		fullID := applyIDPrefixToID(idPrefix, sessionID)
+		suppressed, err := e.db.PrepareSessionSourceIdentity(
+			file.Path, string(file.Agent), fullID,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if suppressed {
+			return processResult{skip: true}
+		}
 		if e.shouldSkipFileWithPrefix(
 			idPrefix, sessionID, sourceInfo, sourceFingerprint,
 		) &&
@@ -208,6 +217,15 @@ func (e *Engine) processS3Session(
 		); uuid != "" {
 			sessionID := "codex:" + uuid
 			fullID := applyIDPrefixToID(idPrefix, sessionID)
+			suppressed, err := e.db.PrepareSessionSourceIdentity(
+				file.Path, string(file.Agent), fullID,
+			)
+			if err != nil {
+				return processResult{err: err}
+			}
+			if suppressed {
+				return processResult{skip: true}
+			}
 			if e.shouldSkipFileWithPrefix(
 				idPrefix, sessionID, sourceInfo, sourceFingerprint,
 			) &&

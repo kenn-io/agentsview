@@ -337,9 +337,10 @@ func (s *Sync) Push(
 		}
 	}
 
-	if err := purgePGExcludedPushSessions(
-		ctx, s.pg, sessionByID,
-	); err != nil {
+	identityAliases, err = filterPGExcludedPushSessions(
+		ctx, s.pg, sessionByID, identityAliases,
+	)
+	if err != nil {
 		return result, err
 	}
 
@@ -1678,48 +1679,81 @@ func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 func purgePGExcludedPushSessions(
 	ctx context.Context, pg *sql.DB, sessionByID map[string]db.Session,
 ) error {
-	tombstoneIDsBySession := make(map[string][]string, len(sessionByID))
-	candidateIDs := []string{}
-	for id, sess := range sessionByID {
-		tombstoneIDs := pgSessionTombstoneIDs(sess)
-		tombstoneIDsBySession[id] = tombstoneIDs
-		candidateIDs = append(candidateIDs, tombstoneIDs...)
+	_, err := filterPGExcludedPushSessions(ctx, pg, sessionByID, nil)
+	return err
+}
+
+func filterPGExcludedPushSessions(
+	ctx context.Context,
+	pg *sql.DB,
+	sessionByID map[string]db.Session,
+	aliases []db.SessionIdentityAlias,
+) ([]db.SessionIdentityAlias, error) {
+	groups := newSessionIdentityGroups()
+	for _, alias := range aliases {
+		groups.union(alias.AliasID, alias.SessionID)
+	}
+	for _, sess := range sessionByID {
+		ids := pgSessionTombstoneIDs(sess)
+		for _, id := range ids[1:] {
+			groups.union(ids[0], id)
+		}
+		groups.add(sess.ID)
+	}
+	groupMembers := groups.members()
+	candidateIDs := make([]string, 0, len(groups.parent))
+	for id := range groups.parent {
+		candidateIDs = append(candidateIDs, id)
 	}
 	excludedIDs, err := readPGExcludedSessionIDs(ctx, pg, candidateIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(excludedIDs) == 0 {
-		return nil
+		return aliases, nil
 	}
 
-	purgeIDs := []string{}
-	for id, tombstoneIDs := range tombstoneIDsBySession {
-		if !hasPGExcludedSessionID(tombstoneIDs, excludedIDs) {
+	blockedRoots := make(map[string]struct{})
+	for id := range excludedIDs {
+		if _, ok := groups.parent[id]; ok {
+			blockedRoots[groups.find(id)] = struct{}{}
+		}
+	}
+	purgeIDs := make([]string, 0)
+	for root := range blockedRoots {
+		purgeIDs = append(purgeIDs, groupMembers[root]...)
+	}
+	for id := range sessionByID {
+		if _, ok := blockedRoots[groups.find(id)]; !ok {
 			continue
 		}
-		purgeIDs = append(purgeIDs, tombstoneIDs...)
 		delete(sessionByID, id)
 	}
 	purgeIDs = uniqueNonEmptyStrings(purgeIDs)
 	if len(purgeIDs) == 0 {
-		return nil
+		return aliases, nil
 	}
 	if err := insertPGExcludedSessionIDs(ctx, pg, purgeIDs); err != nil {
-		return err
+		return nil, err
 	}
-	return deletePGExcludedSessionRows(ctx, pg, purgeIDs)
-}
-
-func hasPGExcludedSessionID(
-	ids []string, excluded map[string]struct{},
-) bool {
-	for _, id := range ids {
-		if _, ok := excluded[id]; ok {
-			return true
+	if _, err := pg.ExecContext(ctx,
+		`DELETE FROM session_aliases
+		 WHERE session_id = ANY($1) OR alias_id = ANY($1)`,
+		purgeIDs,
+	); err != nil {
+		return nil, fmt.Errorf("deleting pg excluded session aliases: %w", err)
+	}
+	if err := deletePGExcludedSessionRows(ctx, pg, purgeIDs); err != nil {
+		return nil, err
+	}
+	filtered := aliases[:0]
+	for _, alias := range aliases {
+		if _, ok := blockedRoots[groups.find(alias.SessionID)]; ok {
+			continue
 		}
+		filtered = append(filtered, alias)
 	}
-	return false
+	return filtered, nil
 }
 
 type pgSessionQueryer interface {
@@ -1743,6 +1777,57 @@ func deletePGExcludedSessionRows(
 		return fmt.Errorf("deleting pg excluded session rows: %w", err)
 	}
 	return nil
+}
+
+type sessionIdentityGroups struct {
+	parent map[string]string
+}
+
+func newSessionIdentityGroups() *sessionIdentityGroups {
+	return &sessionIdentityGroups{parent: make(map[string]string)}
+}
+
+func (g *sessionIdentityGroups) add(id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := g.parent[id]; !ok {
+		g.parent[id] = id
+	}
+}
+
+func (g *sessionIdentityGroups) find(id string) string {
+	g.add(id)
+	root := id
+	for g.parent[root] != root {
+		root = g.parent[root]
+	}
+	for id != root {
+		parent := g.parent[id]
+		g.parent[id] = root
+		id = parent
+	}
+	return root
+}
+
+func (g *sessionIdentityGroups) union(left, right string) {
+	if left == "" || right == "" {
+		return
+	}
+	leftRoot := g.find(left)
+	rightRoot := g.find(right)
+	if leftRoot != rightRoot {
+		g.parent[rightRoot] = leftRoot
+	}
+}
+
+func (g *sessionIdentityGroups) members() map[string][]string {
+	out := make(map[string][]string)
+	for id := range g.parent {
+		root := g.find(id)
+		out[root] = append(out[root], id)
+	}
+	return out
 }
 
 func deletePGSessionIfExcluded(

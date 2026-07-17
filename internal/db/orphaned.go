@@ -368,9 +368,9 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	return nil
 }
 
-// CopyExcludedSessionsFrom copies the excluded_sessions table
-// from the source DB so permanently deleted sessions survive
-// full DB rebuilds. The source must not have active connections.
+// CopyExcludedSessionsFrom copies permanent deletion state and durable source
+// identity history so changed source IDs remain suppressed during a full
+// rebuild. The source must not have active connections.
 func (d *DB) CopyExcludedSessionsFrom(
 	sourcePath string,
 ) error {
@@ -414,6 +414,24 @@ func (d *DB) CopyExcludedSessionsFrom(
 		FROM old_db.excluded_sessions`)
 	if err != nil {
 		return fmt.Errorf("copying excluded sessions: %w", err)
+	}
+	err = conn.QueryRowContext(ctx,
+		"SELECT 1 FROM old_db.sqlite_master "+
+			"WHERE type='table' AND name='session_source_identities'",
+	).Scan(&tableExists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("probing session_source_identities table: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO session_source_identities (
+			source_path, agent, session_id, created_at
+		)
+		SELECT source_path, agent, session_id, created_at
+		FROM old_db.session_source_identities`); err != nil {
+		return fmt.Errorf("copying session source identities: %w", err)
 	}
 	return nil
 }

@@ -8608,7 +8608,7 @@ func (e *Engine) supersedeS3SessionIdentities(s db.Session) error {
 	if s.FilePath == nil || !isS3SourcePath(*s.FilePath) {
 		return nil
 	}
-	ids, err := e.db.ListSessionIDsByFilePath(*s.FilePath, s.Agent)
+	ids, err := e.db.ListSessionSourceIdentityIDs(*s.FilePath, s.Agent)
 	if err != nil {
 		return err
 	}

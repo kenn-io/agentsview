@@ -2218,6 +2218,155 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	return ids, nil
 }
 
+// PrepareSessionSourceIdentity records an identity for a source and propagates
+// any permanent deletion or trash state already attached to that source.
+func (db *DB) PrepareSessionSourceIdentity(
+	path, agent, id string,
+) (bool, error) {
+	if path == "" || agent == "" || id == "" {
+		return false, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return false, fmt.Errorf("beginning source identity preparation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO session_source_identities (
+			source_path, agent, session_id
+		) VALUES (?, ?, ?)`, path, agent, id); err != nil {
+		return false, fmt.Errorf("recording source identity %s: %w", id, err)
+	}
+	ids, err := sessionSourceIdentityIDsTx(tx, path, agent)
+	if err != nil {
+		return false, err
+	}
+	suppressed := false
+	for _, identityID := range ids {
+		var blocked int
+		if err := tx.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM excluded_sessions WHERE id = ?
+				UNION ALL
+				SELECT 1 FROM sessions
+				WHERE id = ? AND deleted_at IS NOT NULL
+			)`, identityID, identityID).Scan(&blocked); err != nil {
+			return false, fmt.Errorf(
+				"checking source identity %s suppression: %w", identityID, err,
+			)
+		}
+		if blocked != 0 {
+			suppressed = true
+			break
+		}
+	}
+	if suppressed {
+		for _, identityID := range ids {
+			if err := excludeSessionIDTx(tx, identityID); err != nil {
+				return false, fmt.Errorf(
+					"propagating source identity exclusion %s: %w",
+					identityID, err,
+				)
+			}
+			var live int
+			if err := tx.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1 FROM sessions
+					WHERE id = ? AND deleted_at IS NULL
+				)`, identityID).Scan(&live); err != nil {
+				return false, fmt.Errorf(
+					"checking live source identity %s: %w", identityID, err,
+				)
+			}
+			if live == 0 {
+				continue
+			}
+			if err := deleteSessionMessagesTx(tx, identityID); err != nil {
+				return false, fmt.Errorf(
+					"deleting suppressed source identity %s messages: %w",
+					identityID, err,
+				)
+			}
+			if _, err := tx.Exec(
+				"DELETE FROM sessions WHERE id = ? AND deleted_at IS NULL",
+				identityID,
+			); err != nil {
+				return false, fmt.Errorf(
+					"deleting suppressed source identity %s: %w",
+					identityID, err,
+				)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("committing source identity preparation: %w", err)
+	}
+	return suppressed, nil
+}
+
+// ListSessionSourceIdentityIDs returns every identity ever observed for a
+// source, including identities whose session rows no longer exist.
+func (db *DB) ListSessionSourceIdentityIDs(path, agent string) ([]string, error) {
+	rows, err := db.getReader().Query(`
+		SELECT session_id
+		FROM session_source_identities
+		WHERE source_path = ? AND agent = ?
+		UNION
+		SELECT id
+		FROM sessions
+		WHERE file_path = ? AND agent = ?
+		ORDER BY 1`, path, agent, path, agent)
+	if err != nil {
+		return nil, fmt.Errorf("listing source identity history: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning source identity history: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating source identity history: %w", err)
+	}
+	return ids, nil
+}
+
+func sessionSourceIdentityIDsTx(
+	tx *sql.Tx, path, agent string,
+) ([]string, error) {
+	rows, err := tx.Query(`
+		SELECT session_id
+		FROM session_source_identities
+		WHERE source_path = ? AND agent = ?
+		UNION
+		SELECT id
+		FROM sessions
+		WHERE file_path = ? AND agent = ?
+		ORDER BY 1`, path, agent, path, agent)
+	if err != nil {
+		return nil, fmt.Errorf("loading source identity history: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning source identity history: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating source identity history: %w", err)
+	}
+	return ids, nil
+}
+
 // SupersedeSessionIdentities merges stale identities into a replacement session
 // for the same source. The complete merge and old-row deletion are atomic.
 func (db *DB) SupersedeSessionIdentities(
@@ -2832,6 +2981,25 @@ func sessionAliasIDsTx(tx *sql.Tx, where string, args ...any) ([]string, error) 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session alias state: %w", err)
+	}
+	rows, err = tx.Query(`
+		SELECT a.alias_id
+		FROM session_identity_aliases a
+		JOIN sessions s ON s.id = a.session_id
+		WHERE `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("loading durable session aliases: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var aliasID string
+		if err := rows.Scan(&aliasID); err != nil {
+			return nil, fmt.Errorf("scanning durable session alias: %w", err)
+		}
+		aliases = append(aliases, aliasID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating durable session aliases: %w", err)
 	}
 	return aliases, nil
 }

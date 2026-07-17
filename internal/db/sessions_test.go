@@ -260,6 +260,53 @@ func TestSupersedeSessionIdentitiesPreservesCanonicalPinMetadata(t *testing.T) {
 	assert.Equal(t, "2026-07-17T11:00:00.000Z", pins[0].CreatedAt)
 }
 
+func TestDeletingReplacementExcludesIdentityAliasChain(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"old", "middle", "current"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "machine", Agent: "claude",
+		}))
+	}
+	require.NoError(t, d.SupersedeSessionIdentities("middle", []string{"old"}))
+	require.NoError(t, d.SupersedeSessionIdentities("current", []string{"middle"}))
+
+	require.NoError(t, d.DeleteSession("current"))
+	for _, id := range []string{"old", "middle", "current"} {
+		assert.True(t, d.IsSessionExcluded(id), id)
+	}
+}
+
+func TestCopyExcludedSessionsPreservesSourceIdentityTombstones(t *testing.T) {
+	sourcePath := t.TempDir() + "/source.db"
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	const objectPath = "s3://bucket/old/raw/claude/project/session.jsonl"
+	storedPath := objectPath
+	require.NoError(t, source.UpsertSession(Session{
+		ID: "old~session", Project: "project", Machine: "old", Agent: "claude",
+		FilePath: &storedPath,
+	}))
+	suppressed, err := source.PrepareSessionSourceIdentity(
+		objectPath, "claude", "old~session",
+	)
+	require.NoError(t, err)
+	assert.False(t, suppressed)
+	require.NoError(t, source.DeleteSession("old~session"))
+	require.NoError(t, source.Close())
+
+	destination, err := Open(t.TempDir() + "/destination.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, destination.Close()) })
+	require.NoError(t, destination.CopyExcludedSessionsFrom(sourcePath))
+	suppressed, err = destination.PrepareSessionSourceIdentity(
+		objectPath, "claude", "new~session",
+	)
+	require.NoError(t, err)
+	assert.True(t, suppressed)
+	assert.True(t, destination.IsSessionExcluded("old~session"))
+	assert.True(t, destination.IsSessionExcluded("new~session"))
+}
+
 func TestSupersedeSessionIdentitiesRollsBackOnError(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

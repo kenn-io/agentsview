@@ -1164,7 +1164,7 @@ func TestS3MachineLabelTransitionsReattributeStoredSession(t *testing.T) {
 	}
 }
 
-func TestS3MachineLabelTransitionKeepsOldIdentityWhenReplacementIsRejected(
+func TestS3MachineLabelTransitionPropagatesRejectedReplacement(
 	t *testing.T,
 ) {
 	database := openTestDB(t)
@@ -1213,20 +1213,80 @@ func TestS3MachineLabelTransitionKeepsOldIdentityWhenReplacementIsRejected(
 	}))
 	require.NoError(t, database.DeleteSession(replacementID))
 
-	replacement := parse("explicitbox")
-	written, _, failed, _ = engine.writeBatch([]pendingWrite{{
-		sess: replacement.Session,
-		msgs: replacement.Messages,
-	}}, syncWriteDefault, false)
-	assert.Zero(t, written)
-	assert.Zero(t, failed)
+	replacement := engine.processFile(
+		context.Background(),
+		parser.DiscoveredFile{
+			Agent:       parser.AgentClaude,
+			Path:        path,
+			Project:     "test-proj",
+			Machine:     "explicitbox",
+			SourceSize:  int64(len(content)),
+			SourceMtime: mtime,
+		},
+	)
+	require.NoError(t, replacement.err)
+	assert.True(t, replacement.skip)
+	assert.Empty(t, replacement.results)
 
 	old, err := database.GetSessionFull(
 		context.Background(), "pathbox~rejected-id",
 	)
 	require.NoError(t, err)
-	assert.NotNil(t, old)
+	assert.Nil(t, old)
+	assert.True(t, database.IsSessionExcluded("pathbox~rejected-id"))
 	assert.True(t, database.IsSessionExcluded(replacementID))
+}
+
+func TestS3MachineLabelTransitionDoesNotResurrectDeletedSource(t *testing.T) {
+	database := openTestDB(t)
+	sourcePath := "s3://bucket/pathbox/raw/claude/test-proj/deleted-id.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC).UnixNano()
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	engine := NewEngine(database, EngineConfig{Machine: "viewer"})
+	process := func(machine string) processResult {
+		t.Helper()
+		return engine.processFile(context.Background(), parser.DiscoveredFile{
+			Agent:       parser.AgentClaude,
+			Path:        sourcePath,
+			Project:     "test-proj",
+			Machine:     machine,
+			SourceSize:  int64(len(content)),
+			SourceMtime: mtime,
+		})
+	}
+
+	initial := process("pathbox")
+	require.NoError(t, initial.err)
+	require.Len(t, initial.results, 1)
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess: initial.results[0].Session,
+		msgs: initial.results[0].Messages,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+
+	const (
+		oldID = "pathbox~deleted-id"
+		newID = "renamedbox~deleted-id"
+	)
+	require.NoError(t, database.DeleteSession(oldID))
+	replacement := process("renamedbox")
+	require.NoError(t, replacement.err)
+	assert.True(t, replacement.skip)
+	assert.Empty(t, replacement.results)
+	assert.True(t, database.IsSessionExcluded(oldID))
+	assert.True(t, database.IsSessionExcluded(newID))
+	session, err := database.GetSessionFull(context.Background(), newID)
+	require.NoError(t, err)
+	assert.Nil(t, session)
 }
 
 func TestSyncS3MachineFromRootUsesRawAgentLayout(t *testing.T) {

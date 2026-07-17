@@ -231,6 +231,70 @@ func TestIncrementalPushPublishesSessionIdentitySupersession(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+func TestPushPropagatesIdentityAliasChainTombstones(t *testing.T) {
+	for i, tombstoneID := range []string{"old-session", "current-session"} {
+		t.Run(tombstoneID, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			schema := fmt.Sprintf("agentsview_alias_tombstone_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, local.Close()) })
+			for _, id := range []string{
+				"old-session", "middle-session", "current-session",
+			} {
+				require.NoError(t, local.UpsertSession(db.Session{
+					ID: id, Project: "app", Machine: "laptop", Agent: "claude",
+				}))
+			}
+			require.NoError(t, local.SupersedeSessionIdentities(
+				"middle-session", []string{"old-session"},
+			))
+			require.NoError(t, local.SupersedeSessionIdentities(
+				"current-session", []string{"middle-session"},
+			))
+
+			syncer, err := New(
+				pgURL, schema, local, "laptop", true, SyncOptions{},
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			require.NoError(t, syncer.EnsureSchema(ctx))
+			_, err = syncer.pg.ExecContext(ctx,
+				`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+				tombstoneID,
+			)
+			require.NoError(t, err)
+
+			for _, full := range []bool{false, false, true} {
+				_, err = syncer.Push(ctx, full, nil)
+				require.NoError(t, err)
+			}
+			var count int
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM excluded_sessions
+				WHERE id = ANY($1)`,
+				[]string{"old-session", "middle-session", "current-session"},
+			).Scan(&count))
+			assert.Equal(t, 3, count)
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM sessions
+				WHERE id = ANY($1)`,
+				[]string{"old-session", "middle-session", "current-session"},
+			).Scan(&count))
+			assert.Zero(t, count)
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM session_aliases
+				WHERE session_id = ANY($1) OR alias_id = ANY($1)`,
+				[]string{"old-session", "middle-session", "current-session"},
+			).Scan(&count))
+			assert.Zero(t, count)
+		})
+	}
+}
+
 func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
 	type testMessage struct {
 		ordinal    int

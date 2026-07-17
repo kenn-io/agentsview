@@ -465,6 +465,28 @@ CREATE TABLE IF NOT EXISTS session_identity_aliases (
 CREATE INDEX IF NOT EXISTS idx_session_identity_aliases_session
     ON session_identity_aliases(session_id);
 
+-- Durable source identity history survives session deletion so a source whose
+-- canonical ID changes cannot bypass an earlier user tombstone.
+CREATE TABLE IF NOT EXISTS session_source_identities (
+    source_path TEXT NOT NULL,
+    agent       TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (source_path, agent, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_source_identities_session
+    ON session_source_identities(session_id);
+
+CREATE TRIGGER IF NOT EXISTS sessions_preserve_source_identity
+BEFORE DELETE ON sessions
+WHEN OLD.file_path IS NOT NULL AND OLD.file_path != ''
+BEGIN
+    INSERT OR IGNORE INTO session_source_identities (
+        source_path, agent, session_id
+    ) VALUES (OLD.file_path, OLD.agent, OLD.id);
+END;
+
 -- Skipped files cache: persists skip decisions for files that
 -- produced no session (non-interactive, parse errors) so they
 -- survive process restarts without re-parsing.
