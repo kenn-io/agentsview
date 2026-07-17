@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
@@ -471,6 +472,21 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 
 	local := newLocalDB(t)
 	fixture := seedDuckDBSyncFixture(t, local)
+	// An observation with a git remote takes the stale-fallback DELETE
+	// branch of upsertProjectIdentityObservation, which routes typed enum
+	// arguments through the remote statement renderer.
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:              "alpha",
+			Machine:              "quack-client",
+			RootPath:             "/repo/alpha",
+			GitRemote:            "https://github.com/acme/alpha.git",
+			GitRemoteName:        "origin",
+			WorktreeRelationship: export.WorktreeMain,
+			CheckoutState:        export.CheckoutBranch,
+			ObservedAt:           time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC),
+		},
+	), "seed project identity observation with git remote")
 	require.NoError(t, local.InsertCursorUsageEvents([]db.CursorUsageEvent{
 		{
 			OccurredAt:       "2026-01-10T00:03:00Z",
@@ -550,6 +566,10 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	assert.Equal(t, "quack-client", machine)
 	assertDuckDBCount(t, server, "messages", 3)
 	assertDuckDBCount(t, server, "cursor_usage_events", 2)
+	assertDuckDBCountWhere(t, server,
+		"source_project_identity_observations",
+		"git_remote != ?", "", 1,
+	)
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
 
 	alphaState := readDuckMirrorSessionState(t, ctx, server, fixture.alphaID)

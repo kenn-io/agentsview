@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -1215,7 +1216,29 @@ func duckValueLiteral(v any) (string, error) {
 			value.UTC().Format("2006-01-02 15:04:05.999999"),
 		), nil
 	default:
-		return "", fmt.Errorf("unsupported duckdb remote argument type %T", v)
+		// Mirror database/sql's default parameter converter so named kinds
+		// (export.WorktreeRelationship and friends) render the same way on
+		// the remote transport as they bind on the local mirror path.
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.String:
+			return duckRemoteStringLiteral(rv.String())
+		case reflect.Bool:
+			if rv.Bool() {
+				return "TRUE", nil
+			}
+			return "FALSE", nil
+		case reflect.Int, reflect.Int8, reflect.Int16,
+			reflect.Int32, reflect.Int64:
+			return strconv.FormatInt(rv.Int(), 10), nil
+		case reflect.Uint, reflect.Uint8, reflect.Uint16,
+			reflect.Uint32, reflect.Uint64:
+			return strconv.FormatUint(rv.Uint(), 10), nil
+		case reflect.Float32, reflect.Float64:
+			return strconv.FormatFloat(rv.Float(), 'g', -1, 64), nil
+		default:
+			return "", fmt.Errorf("unsupported duckdb remote argument type %T", v)
+		}
 	}
 }
 
