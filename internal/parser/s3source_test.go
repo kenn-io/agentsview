@@ -296,11 +296,13 @@ func TestS3SourceRefFromDiscoveredFile(t *testing.T) {
 		SourceFingerprint: "fp-1",
 	}
 
-	ref := s3SourceRefFromDiscoveredFile(file)
+	root := "s3://bucket/laptop/raw/codex"
+	ref := s3SourceRefFromDiscoveredFile(root, file)
 
 	// The s3 URI is the stable identity across every key field so dedup and
 	// fingerprinting agree on one source.
 	assert.Equal(t, AgentCodex, ref.Provider)
+	assert.Equal(t, root, ref.ConfiguredRoot)
 	assert.Equal(t, uri, ref.Key)
 	assert.Equal(t, uri, ref.DisplayPath)
 	assert.Equal(t, uri, ref.FingerprintKey)

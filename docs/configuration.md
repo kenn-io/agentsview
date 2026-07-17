@@ -76,7 +76,7 @@ daemon_idle_timeout = "20m"
 | `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                                                                                                                                                          |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)                                                                                                                                                 |
-| `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/filesystem-sync/)                                                                                                                                  |
+| `[[session_sources]]`               | Additional filesystem or supported S3 session roots with per-root machine labels — see [Session Source Sync](/filesystem-sync/)                                                                                                                       |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                  |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing)                                                                                                                                         |
 
@@ -552,10 +552,11 @@ default path.
 
 All listed directories are discovered, watched, and synced independently.
 
-### Machine-Labeled Filesystem Sources
+### Machine-Labeled Session Sources
 
 Use `[[session_sources]]` when a root was produced on another machine and
-transported to this AgentsView host:
+is available to this AgentsView host through a filesystem or supported S3
+source:
 
 ```toml
 [[session_sources]]
@@ -566,12 +567,13 @@ machine = "buildbox"
 
 The fields are `agent`, `dir`, and optional `machine`. Entries are additive to
 the per-agent arrays, defaults, and environment variables above. Exact duplicate
-roots are deduplicated; a structured entry supplies the machine label when it
-duplicates a shorthand root. An omitted `machine` uses the local hostname.
+roots are deduplicated; an explicit structured machine label overrides the
+shorthand root's attribution. For filesystem roots, an omitted `machine` uses
+the local hostname. S3 defaults are described below.
 
-See [Filesystem Session Sync](/filesystem-sync/) for multi-machine examples,
-transport safety, ID deduplication, watcher behavior, and the comparison with
-PostgreSQL.
+See [Session Source Sync](/filesystem-sync/) for multi-machine examples,
+transport safety, S3 behavior, ID deduplication, watcher behavior, and the
+comparison with PostgreSQL.
 
 ### S3-Compatible Session Sources
 
@@ -626,6 +628,21 @@ The machine name is derived from the path segment immediately before `raw`. If
 no such segment exists, sessions use the local AgentsView machine label. Codex
 discovery only imports rollout files under the configured root plus a trailing
 slash, so sibling prefixes such as `raw/codex-backup` are ignored.
+
+As an alternative to path-derived attribution, configure the S3 root as a
+structured source with an explicit machine label:
+
+```toml
+[[session_sources]]
+agent = "claude"
+dir = "s3://agent-archive/imports/raw/claude"
+machine = "buildbox"
+```
+
+Structured S3 sources are supported for Claude and Codex. The explicit label
+overrides any machine segment in the S3 path and is used consistently for the
+stored machine and established S3 session ID prefix. If `machine` is omitted,
+the path-derived and local-host fallback behavior above remains unchanged.
 
 S3 object `Size`, `LastModified`, and available object fingerprints (`ETag`,
 version ID, and checksum headers) are stored in the session row and used for

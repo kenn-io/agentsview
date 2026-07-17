@@ -344,7 +344,9 @@ func (e *Engine) hydrateS3DiscoveredFile(
 			continue
 		}
 		if file.Machine == "" {
-			file.Machine = s3MachineFromRoot(root)
+			file.Machine = e.s3MachineForSource(
+				file.Agent, root, s3MachineFromRoot(root),
+			)
 		}
 		if file.Project == "" && file.Agent == parser.AgentClaude {
 			if first, _, ok := strings.Cut(rel, "/"); ok {

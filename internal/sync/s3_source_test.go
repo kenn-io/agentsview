@@ -940,6 +940,63 @@ func TestDedupeCodexS3IncludesSourceMachine(t *testing.T) {
 	})
 }
 
+func TestStructuredS3MachineOverrideChangesStoredMachineAndIDPrefix(t *testing.T) {
+	database := openTestDB(t)
+	root := "s3://bucket/pathbox/raw/claude"
+	sessionPath := root + "/test-proj/override-id.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, sessionPath, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewEngine(database, EngineConfig{
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentClaude: {root: "explicitbox"},
+		},
+		Machine: "viewer",
+	})
+	file := parser.DiscoveredFile{
+		Agent:       parser.AgentClaude,
+		Path:        sessionPath,
+		Project:     "test-proj",
+		Machine:     engine.s3MachineForSource(parser.AgentClaude, root, "pathbox"),
+		SourceSize:  int64(len(content)),
+		SourceMtime: mtime,
+	}
+
+	res := engine.processFile(context.Background(), file)
+
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess: res.results[0].Session,
+		msgs: res.results[0].Messages,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	sess, err := database.GetSessionFull(
+		context.Background(), "explicitbox~override-id",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "explicitbox", sess.Machine)
+	assert.Equal(t, sessionPath, derefString(sess.FilePath))
+	pathDerived, err := database.GetSessionFull(
+		context.Background(), "pathbox~override-id",
+	)
+	require.NoError(t, err)
+	assert.Nil(t, pathDerived)
+}
+
 func TestSyncS3MachineFromRootUsesRawAgentLayout(t *testing.T) {
 	assert.Equal(
 		t,

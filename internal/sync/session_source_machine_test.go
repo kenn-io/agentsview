@@ -180,6 +180,49 @@ func TestCopiedFilesystemSessionKeepsNativeIDDeduplication(t *testing.T) {
 	assert.Equal(t, "copied-session", page.Sessions[0].ID)
 }
 
+func TestS3SourceMachineAttribution(t *testing.T) {
+	root := "s3://session-archive/pathbox/raw/claude"
+	tests := []struct {
+		name           string
+		sourceMachines map[parser.AgentType]map[string]string
+		discovered     string
+		want           string
+	}{
+		{
+			name:       "path derived machine",
+			discovered: "pathbox",
+			want:       "pathbox",
+		},
+		{
+			name: "explicit machine overrides path",
+			sourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentClaude: {root: "explicitbox"},
+			},
+			discovered: "pathbox",
+			want:       "explicitbox",
+		},
+		{
+			name: "no derivable segment retains empty s3 attribution",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewEngine(openTestDB(t), EngineConfig{
+				SourceMachines: tt.sourceMachines,
+				Machine:        "viewer",
+			})
+
+			got := engine.s3MachineForSource(
+				parser.AgentClaude, root, tt.discovered,
+			)
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func writeSessionSourceClaudeFile(t *testing.T, root, name string) string {
 	t.Helper()
 	project := filepath.Join(root, "project")

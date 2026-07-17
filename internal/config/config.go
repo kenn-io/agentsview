@@ -485,7 +485,7 @@ type Config struct {
 	AgentDirs map[parser.AgentType][]string `json:"-" toml:"-"`
 
 	// SessionSources contains normalized structured sources. SourceMachines maps
-	// each normalized root to its effective machine label for sync.
+	// normalized roots with explicit attribution to their machine label for sync.
 	SessionSources       []SessionSource                        `json:"-" toml:"-"`
 	SourceMachines       map[parser.AgentType]map[string]string `json:"-" toml:"-"`
 	sessionSourceConfigs []sessionSourceConfig
@@ -1701,7 +1701,8 @@ func finalize(cfg *Config) error {
 
 func (c *Config) resolveSessionSources() error {
 	type rootState struct {
-		machine string
+		machine         string
+		machineOverride bool
 	}
 
 	resolved := make([]SessionSource, 0)
@@ -1714,14 +1715,21 @@ func (c *Config) resolveSessionSources() error {
 			if value == "" {
 				continue
 			}
-			dir := value
-			if !strings.HasPrefix(strings.ToLower(value), "s3://") {
+			var dir string
+			if isS3SessionSource(value) {
+				dir = strings.TrimSuffix(value, "/")
+			} else {
 				dir = filepath.Clean(value)
 			}
 			if _, ok := seen[dir]; ok {
 				continue
 			}
-			seen[dir] = rootState{machine: c.LocalMachineName}
+			state := rootState{}
+			if !isS3SessionSource(dir) {
+				state.machine = c.LocalMachineName
+				state.machineOverride = true
+			}
+			seen[dir] = state
 			dirs = append(dirs, dir)
 		}
 		c.AgentDirs[def.Type] = dirs
@@ -1743,9 +1751,9 @@ func (c *Config) resolveSessionSources() error {
 			continue
 		}
 		rawDir := strings.TrimSpace(input.Dir)
-		if strings.HasPrefix(strings.ToLower(rawDir), "s3://") {
+		if isS3SessionSource(rawDir) && !agentSupportsS3SessionSource(agent) {
 			problems = append(problems,
-				fmt.Sprintf("entry %d (%s): dir %q is an S3 root; session_sources supports filesystem roots only, so configure S3 through the existing per-agent directory setting", entry, agent, input.Dir))
+				fmt.Sprintf("entry %d (%s): dir %q is an S3 root, but %s does not support direct S3 ingestion; use a filesystem root for this agent (S3 session roots are currently supported for claude and codex)", entry, agent, input.Dir, agent))
 			continue
 		}
 		dir, err := normalizeSessionSourceDir(input.Dir)
@@ -1754,7 +1762,8 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
 			continue
 		}
-		machine := c.LocalMachineName
+		machine := ""
+		machineOverride := false
 		if input.Machine != nil {
 			machine = strings.TrimSpace(*input.Machine)
 			if machine == "" {
@@ -1762,6 +1771,10 @@ func (c *Config) resolveSessionSources() error {
 					fmt.Sprintf("entry %d (%s): machine must not be empty when set", entry, agent))
 				continue
 			}
+			machineOverride = true
+		} else if !isS3SessionSource(dir) {
+			machine = c.LocalMachineName
+			machineOverride = true
 		}
 
 		seen := rootsByAgent[agent]
@@ -1771,11 +1784,15 @@ func (c *Config) resolveSessionSources() error {
 		}
 		state, duplicate := seen[dir]
 		if duplicate {
-			state.machine = machine
+			if machineOverride {
+				state.machine = machine
+				state.machineOverride = true
+			}
 			seen[dir] = state
 		} else {
 			seen[dir] = rootState{
-				machine: machine,
+				machine:         machine,
+				machineOverride: machineOverride,
 			}
 			c.AgentDirs[agent] = append(c.AgentDirs[agent], dir)
 		}
@@ -1792,7 +1809,7 @@ func (c *Config) resolveSessionSources() error {
 	for agent, roots := range rootsByAgent {
 		machines := make(map[string]string, len(roots))
 		for root, state := range roots {
-			if strings.HasPrefix(strings.ToLower(root), "s3://") {
+			if !state.machineOverride {
 				continue
 			}
 			machines[root] = state.machine
@@ -1812,7 +1829,18 @@ func normalizeSessionSourceDir(raw string) (string, error) {
 	if strings.ContainsRune(value, '\x00') {
 		return "", fmt.Errorf("dir %q contains a NUL byte", raw)
 	}
+	if isS3SessionSource(value) {
+		return strings.TrimSuffix(value, "/"), nil
+	}
 	return filepath.Clean(value), nil
+}
+
+func isS3SessionSource(dir string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(dir)), "s3://")
+}
+
+func agentSupportsS3SessionSource(agent parser.AgentType) bool {
+	return agent == parser.AgentClaude || agent == parser.AgentCodex
 }
 
 func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {

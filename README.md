@@ -462,10 +462,11 @@ Sidecars stay on your machine. agentsview makes no outbound request to produce
 or read them, and treats sidecars as untrusted structured input -- see
 [SECURITY.md](SECURITY.md) for the trust model.
 
-## Filesystem Session Sync
+## Session Source Sync
 
 One primary AgentsView instance can ingest native agent session directories
-copied or mounted from other machines without PostgreSQL:
+copied or mounted from other machines, or read Claude/Codex sessions directly
+from S3-compatible storage, without PostgreSQL:
 
 ```toml
 [[session_sources]]
@@ -476,11 +477,12 @@ machine = "buildbox"
 
 Structured sources are additive to existing `copilot_dirs`,
 `claude_project_dirs`, and other per-agent settings. They label sessions by
-source machine without namespacing native session IDs. Transport source session
-files only -- never copy `sessions.db` or its WAL files.
+source machine. Filesystem labels retain native session IDs; S3 labels retain
+the established machine-based ID prefix. Transport source session files only --
+never copy `sessions.db` or its WAL files.
 
-See the [Filesystem Session Sync guide](https://agentsview.io/filesystem-sync/)
-for Git, rsync, shared-mount, freshness, and operational guidance.
+See the [Session Source Sync guide](https://agentsview.io/filesystem-sync/) for
+Git, rsync, shared-mount, S3, freshness, and operational guidance.
 
 ## PostgreSQL Sync
 
@@ -635,7 +637,7 @@ Full docs at **[agentsview.io](https://agentsview.io)**:
 [Usage Guide](https://agentsview.io/usage/) --
 [CLI Reference](https://agentsview.io/commands/) --
 [Configuration](https://agentsview.io/configuration/) --
-[Filesystem Sync](https://agentsview.io/filesystem-sync/) --
+[Session Source Sync](https://agentsview.io/filesystem-sync/) --
 [Architecture](https://agentsview.io/architecture/)
 
 ______________________________________________________________________

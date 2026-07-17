@@ -357,10 +357,29 @@ func (e *Engine) machineForFile(file parser.DiscoveredFile) string {
 func (e *Engine) machineForProviderSource(
 	agent parser.AgentType, source parser.SourceRef, fallbackPath string,
 ) string {
-	if source.ConfiguredRoot != "" {
-		return e.machineForPath(agent, source.ConfiguredRoot)
+	if machine, ok := e.sourceMachineOverride(agent, source.ConfiguredRoot); ok {
+		return machine
 	}
 	return e.machineForPath(agent, fallbackPath)
+}
+
+func (e *Engine) s3MachineForSource(
+	agent parser.AgentType, configuredRoot, discovered string,
+) string {
+	if machine, ok := e.sourceMachineOverride(agent, configuredRoot); ok {
+		return machine
+	}
+	return discovered
+}
+
+func (e *Engine) sourceMachineOverride(
+	agent parser.AgentType, configuredRoot string,
+) (string, bool) {
+	if configuredRoot == "" {
+		return "", false
+	}
+	machine, ok := e.sourceMachines[agent][configuredRoot]
+	return machine, ok
 }
 
 func pathWithinRoot(path, root string) bool {
@@ -2907,7 +2926,9 @@ func (e *Engine) discoverProviderSources(
 			// decline them so they route through processS3Session rather than the
 			// provider Fingerprint/Parse path, which cannot read a remote object.
 			if s3, ok := source.Opaque.(parser.S3DiscoveredSource); ok {
-				discovered.Machine = s3.Machine
+				discovered.Machine = e.s3MachineForSource(
+					agent, source.ConfiguredRoot, s3.Machine,
+				)
 				discovered.SourceSize = s3.Size
 				discovered.SourceMtime = s3.MtimeNS
 				discovered.SourceFingerprint = s3.Fingerprint

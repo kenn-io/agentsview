@@ -782,12 +782,47 @@ machine = "archivebox"
 func TestLoadFileSessionSourcesPreserveLegacyS3Roots(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"claude_project_dirs": []string{"s3://session-archive/claude"},
+		"codex_sessions_dirs": []string{"s3://session-archive/codex"},
 	})
 
 	assert.Equal(t, []string{"s3://session-archive/claude"},
 		cfg.ResolveDirs(parser.AgentClaude))
+	assert.Equal(t, []string{"s3://session-archive/codex"},
+		cfg.ResolveDirs(parser.AgentCodex))
 	assert.NotContains(t, cfg.SourceMachines[parser.AgentClaude],
 		"s3://session-archive/claude")
+	assert.NotContains(t, cfg.SourceMachines[parser.AgentCodex],
+		"s3://session-archive/codex")
+}
+
+func TestLoadFileSessionSourcesSupportS3MachineOverrides(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `
+claude_project_dirs = ["s3://session-archive/pathbox/raw/claude"]
+
+[[session_sources]]
+agent = "claude"
+dir = "s3://session-archive/pathbox/raw/claude"
+machine = "explicitbox"
+
+[[session_sources]]
+agent = "codex"
+dir = "s3://session-archive/pathbox/raw/codex"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{"s3://session-archive/pathbox/raw/claude"},
+		cfg.ResolveDirs(parser.AgentClaude))
+	assert.Equal(t, "explicitbox",
+		cfg.SourceMachines[parser.AgentClaude]["s3://session-archive/pathbox/raw/claude"])
+	assert.Contains(t, cfg.ResolveDirs(parser.AgentCodex),
+		"s3://session-archive/pathbox/raw/codex")
+	assert.NotContains(t, cfg.SourceMachines[parser.AgentCodex],
+		"s3://session-archive/pathbox/raw/codex")
+	require.Len(t, cfg.SessionSources, 2)
+	assert.Equal(t, "explicitbox", cfg.SessionSources[0].Machine)
+	assert.Empty(t, cfg.SessionSources[1].Machine)
 }
 
 func TestLoadFileSessionSourceDefaultsMachineToHostname(t *testing.T) {
@@ -840,14 +875,14 @@ machine = " "
 			wantErr: "entry 1 (copilot): machine must not be empty when set",
 		},
 		{
-			name: "s3 root",
+			name: "unsupported s3 agent",
 			config: `
 [[session_sources]]
 agent = "copilot"
 dir = "s3://session-archive/copilot"
 machine = "buildbox"
 `,
-			wantErr: "session_sources supports filesystem roots only",
+			wantErr: "copilot does not support direct S3 ingestion",
 		},
 	}
 
