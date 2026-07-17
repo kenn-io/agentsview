@@ -2630,13 +2630,21 @@ func TestCopilotReportedAICreditsSurviveDuckDBPush(t *testing.T) {
 	sess.Agent = "copilot"
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: sess,
-		UsageEvents: []db.UsageEvent{{
-			Source: "shutdown", Model: "claude-opus-4-6",
-			InputTokens: 1000, OutputTokens: 500,
-			AICredits:  &reportedCredits,
-			OccurredAt: "2026-01-18T00:01:00.000Z",
-			DedupKey:   "shutdown-1",
-		}},
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "shutdown", Model: "claude-opus-4-6",
+				InputTokens: 1000, OutputTokens: 500,
+				OccurredAt: "2026-01-18T00:01:00.000Z",
+				DedupKey:   "shutdown-1",
+			},
+			{
+				Source: "shutdown", Model: "claude-opus-4-6",
+				InputTokens: 1000, OutputTokens: 500,
+				AICredits:  &reportedCredits,
+				OccurredAt: "2026-01-19T00:01:00.000Z",
+				DedupKey:   "shutdown-2",
+			},
+		},
 		DataVersion: 1, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
@@ -2651,12 +2659,13 @@ func TestCopilotReportedAICreditsSurviveDuckDBPush(t *testing.T) {
 	require.NotNil(t, usage)
 	assert.InDelta(t, 3.5, usage.AICredits, 1e-12)
 	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
-	assert.InDelta(t, 0.0175, usage.CostUSD, 1e-12)
+	assert.InDelta(t, 0.035, usage.CostUSD, 1e-12)
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-01-18", To: "2026-01-18", Timezone: "UTC",
+		From: "2026-01-18", To: "2026-01-19", Timezone: "UTC",
 	})
 	require.NoError(t, err)
+	require.Len(t, daily.Daily, 2)
 	assert.InDelta(t, 3.5, daily.Totals.CopilotAICredits, 1e-12)
 	assert.Equal(t, db.AICreditsSourceReported,
 		daily.Totals.CopilotAICreditsSource)

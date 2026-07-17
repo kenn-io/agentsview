@@ -1171,7 +1171,7 @@ func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
 			 0.10, NULL, '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
-			 0.10, 2.75, '2026-03-12T10:02:00Z'::timestamptz, 'segment-2')`)
+			 0.10, 2.75, '2026-03-13T10:02:00Z'::timestamptz, 'segment-2')`)
 	require.NoError(t, err)
 
 	usage, err := store.GetSessionUsage(ctx, "copilot:reported", false)
@@ -1180,6 +1180,15 @@ func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
 	assert.Equal(t, 0.20, usage.CostUSD)
 	assert.Equal(t, 2.75, usage.AICredits)
 	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
+
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-03-12", To: "2026-03-13", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Len(t, daily.Daily, 2)
+	assert.Equal(t, 2.75, daily.Totals.CopilotAICredits)
+	assert.Equal(t, db.AICreditsSourceReported,
+		daily.Totals.CopilotAICreditsSource)
 }
 
 func TestStoreGetSessionUsage_CopilotNoAICreditsUnpriced(t *testing.T) {

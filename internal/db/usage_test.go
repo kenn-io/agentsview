@@ -3744,7 +3744,7 @@ func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
 		{
 			Source: "shutdown", Model: "claude-opus-4-6",
 			InputTokens: 1000, OutputTokens: 500,
-			AICredits: &lastCredits, OccurredAt: "2026-05-20T10:20:00Z",
+			AICredits: &lastCredits, OccurredAt: "2026-05-21T10:20:00Z",
 			DedupKey: "segment-2",
 		},
 	}))
@@ -3771,16 +3771,26 @@ func TestCopilotReportedAICreditsOverrideEstimatedFallback(t *testing.T) {
 	assert.Equal(t, AICreditsSourceEstimated, fallback.AICreditsSource)
 
 	daily, err := d.GetDailyUsage(ctx, UsageFilter{
-		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+		From: "2026-05-20", To: "2026-05-21", Timezone: "UTC",
 	})
 	require.NoError(t, err)
+	require.Len(t, daily.Daily, 2, "reported session spans two selected days")
 	assert.InDelta(t, 4.5, daily.Totals.CopilotAICredits, 1e-12,
-		"reported session total plus fallback session estimate")
+		"reported session must suppress its earlier-day estimate")
 	assert.Equal(t, AICreditsSourceMixed,
 		daily.Totals.CopilotAICreditsSource)
 
-	modelFiltered, err := d.GetDailyUsage(ctx, UsageFilter{
+	earlyDay, err := d.GetDailyUsage(ctx, UsageFilter{
 		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.InDelta(t, 3.5, earlyDay.Totals.CopilotAICredits, 1e-12,
+		"a window before the cumulative shutdown uses selected-row estimates")
+	assert.Equal(t, AICreditsSourceEstimated,
+		earlyDay.Totals.CopilotAICreditsSource)
+
+	modelFiltered, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-20", To: "2026-05-21", Timezone: "UTC",
 		Model: "claude-opus-4-6",
 	})
 	require.NoError(t, err)
