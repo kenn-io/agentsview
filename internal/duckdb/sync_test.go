@@ -159,6 +159,14 @@ func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
 	require.Len(t, prepared, 1)
 	require.Len(t, verifiedMessages[sess.ID], 1)
 	certifiedRevision := *prepared[0].TranscriptRevision
+	var seedResult PushResult
+	var seeded []db.Session
+	require.NoError(t, syncer.pushSessionBatchForMode(
+		ctx, prepared, 0, len(prepared), &seedResult, &seeded, nil, true,
+		verifiedMessages,
+	))
+	require.Zero(t, seedResult.Errors)
+	require.Len(t, seeded, 1)
 
 	changed := message
 	changed.Content = fernet
@@ -178,10 +186,25 @@ func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
 	require.NotNil(t, current)
 	require.NotEqual(t, certifiedRevision, *current.TranscriptRevision)
 
+	// Reproduce the dangerous incremental state: the mirror and the current
+	// local rows agree on the post-certification ciphertext rewrite. The
+	// certified snapshot must still replace them instead of taking the skip
+	// path.
+	_, err = syncer.DB().ExecContext(ctx,
+		`DELETE FROM tool_calls WHERE session_id = ?`, sess.ID,
+	)
+	require.NoError(t, err)
+	_, err = syncer.DB().ExecContext(ctx,
+		`DELETE FROM messages WHERE session_id = ?`, sess.ID,
+	)
+	require.NoError(t, err)
+	require.NoError(t, insertMessages(ctx, syncer.DB(), rewritten))
+	require.NoError(t, insertToolCalls(ctx, syncer.DB(), rewritten))
+
 	var result PushResult
 	var pushed []db.Session
 	require.NoError(t, syncer.pushSessionBatchForMode(
-		ctx, prepared, 0, len(prepared), &result, &pushed, nil, true,
+		ctx, prepared, 0, len(prepared), &result, &pushed, nil, false,
 		verifiedMessages,
 	))
 	require.Zero(t, result.Errors)

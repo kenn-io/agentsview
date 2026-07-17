@@ -554,6 +554,12 @@ func (s *Sync) pushSession(
 	if err := s.upsertSession(ctx, exec, sess); err != nil {
 		return 0, err
 	}
+	if hasVerifiedSnapshot {
+		// The certified snapshot is authoritative for this push. Do not let the
+		// incremental comparison path fingerprint local rows that may have been
+		// rewritten after certification.
+		full = true
+	}
 
 	if !full {
 		action, err := s.duckMessagePushAction(ctx, target, sess.ID, msgs)
