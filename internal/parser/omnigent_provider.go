@@ -378,6 +378,14 @@ func (t *omnigentChangeTracker) changedMembers(
 	if match.MemberID != "" || !IsRegularFile(match.Container) {
 		return []multiSessionMatch{match}, nil
 	}
+	if req.EventKind == ChangedPathEventRecovery {
+		t.mu.Lock()
+		delete(t.containers, match.Container)
+		t.mu.Unlock()
+		return t.initializeColdContainer(
+			ctx, root, match, req.StoredSourcePaths,
+		)
+	}
 	t.mu.Lock()
 	_, initialized := t.containers[match.Container]
 	t.mu.Unlock()

@@ -240,6 +240,12 @@ type ChangedPathRequest struct {
 	StoredSourcePaths []string
 }
 
+// ChangedPathEventRecovery asks a provider to restart bounded source
+// enumeration after the caller discarded more per-source retry identities than
+// it can safely retain. Providers that do not recognize it may treat it like a
+// normal changed-path event.
+const ChangedPathEventRecovery = "recovery"
+
 // FindSourceRequest contains lookup inputs and persisted source hints for
 // provider-owned source resolution. RawSessionID and FullSessionID identify the
 // requested logical session. StoredFilePath and FingerprintKey are advisory

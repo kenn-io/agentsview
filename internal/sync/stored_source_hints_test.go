@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	gosync "sync"
 	"testing"
 
@@ -363,18 +362,30 @@ func TestOmnigentRetryDiscoveryDoesNotWrapShortQueue(t *testing.T) {
 	assert.Len(t, provider.seen, 3)
 }
 
-func TestOmnigentMemberRetryOverflowActivatesBoundedHintSweep(t *testing.T) {
+func TestOmnigentMemberRetryOverflowRecoversUnstoredMembersInBoundedPages(t *testing.T) {
 	root := t.TempDir()
-	container := filepath.Join(root, "chat.db")
+	container := writeOmnigentResyncSource(t, root)
+	memberIDs := []string{"conversation"}
+	writer, err := sql.Open("sqlite3", container)
+	require.NoError(t, err)
+	for i := 1; i < 2*omnigentRetryBatchSize+1; i++ {
+		member := fmt.Sprintf("member-%03d", i)
+		memberIDs = append(memberIDs, member)
+		_, err = writer.Exec(`INSERT INTO conversations
+			(id, created_at, updated_at, title, kind, root_conversation_id)
+			VALUES (?, 1699999999, ?, ?, 'default', ?)`,
+			member, 1_700_000_000+i, member, member)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Close())
+
 	database := dbtest.OpenTestDB(t)
 	engine := &Engine{db: database}
-	for i := range 4 * omnigentRetryBatchSize {
-		member := fmt.Sprintf("member-%03d", i)
+	missing, err := database.GetSession(context.Background(), "omnigent:conversation")
+	require.NoError(t, err)
+	require.Nil(t, missing, "the retry source must not depend on an archived row")
+	for _, member := range memberIDs {
 		path := parser.VirtualSourcePath(container, member)
-		require.NoError(t, database.UpsertSession(db.Session{
-			ID: "omnigent:" + member, Agent: string(parser.AgentOmnigent),
-			Project: "fixture", Machine: "local", FilePath: strPtr(path),
-		}))
 		engine.storeOmnigentRetry(omnigentRetrySource{
 			sessionID: "omnigent:" + member,
 			filePath:  path,
@@ -382,18 +393,34 @@ func TestOmnigentMemberRetryOverflowActivatesBoundedHintSweep(t *testing.T) {
 	}
 
 	engine.omnigentRetryMu.Lock()
-	assert.Empty(t, engine.omnigentRetrySources)
-	assert.Nil(t, engine.omnigentRetryHead)
-	assert.Nil(t, engine.omnigentRetryTail)
+	require.Len(t, engine.omnigentRetrySources, 1)
+	require.NotNil(t, engine.omnigentRetryHead)
+	assert.True(t, engine.omnigentRetryHead.recovery)
+	assert.Equal(t, container, engine.omnigentRetryHead.filePath)
+	assert.Same(t, engine.omnigentRetryHead, engine.omnigentRetryTail)
 	engine.omnigentRetryMu.Unlock()
 
-	hints, claimed, err := engine.nextOmnigentStoredHintPage(root, false)
-	require.NoError(t, err)
-	require.True(t, claimed)
-	require.Len(t, hints, omnigentStoredHintBatchSize)
-	for _, path := range hints {
-		assert.True(t, strings.HasPrefix(path, container+"#"))
+	factory, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
+	require.True(t, ok)
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{root}})
+	first, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
+	require.Len(t, first, omnigentRetryBatchSize)
+	for _, source := range first {
+		_, member, virtual := parser.ParseOmnigentVirtualSourcePath(
+			providerDiscoveredPath(source),
+		)
+		assert.True(t, virtual)
+		assert.NotEmpty(t, member)
 	}
+	second, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, second, omnigentRetryBatchSize)
+	last, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, last, 1)
 }
 
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {

@@ -3051,6 +3051,36 @@ func (e *Engine) discoverOmnigentRetrySources(
 	var sources []parser.SourceRef
 	var failures int
 	for _, retry := range pending {
+		if retry.recovery {
+			recovered, err := provider.SourcesForChangedPath(
+				ctx,
+				parser.ChangedPathRequest{
+					Path:      retry.filePath,
+					EventKind: parser.ChangedPathEventRecovery,
+					WatchRoot: filepath.Dir(retry.filePath),
+				},
+			)
+			if err != nil {
+				log.Printf("%s provider recovery lookup: %v", parser.AgentOmnigent, err)
+				failures++
+				continue
+			}
+			e.omnigentRetryMu.Lock()
+			e.removeOmnigentRetryLocked(retry.key())
+			e.omnigentRetryMu.Unlock()
+			for _, source := range recovered {
+				path := filepath.Clean(providerDiscoveredPath(source))
+				if path == "." {
+					continue
+				}
+				if _, exists := currentSources[path]; exists {
+					continue
+				}
+				currentSources[path] = struct{}{}
+				sources = append(sources, source)
+			}
+			continue
+		}
 		source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
 			FullSessionID:      retry.sessionID,
 			StoredFilePath:     retry.filePath,
@@ -7149,6 +7179,7 @@ type pendingWrite struct {
 type omnigentRetrySource struct {
 	sessionID string
 	filePath  string
+	recovery  bool
 }
 
 type omnigentRetryEntry struct {
@@ -7159,6 +7190,9 @@ type omnigentRetryEntry struct {
 }
 
 func (r omnigentRetrySource) key() string {
+	if r.recovery {
+		return "recovery\x00" + filepath.Clean(r.filePath)
+	}
 	if r.sessionID != "" {
 		return "session\x00" + r.sessionID
 	}
@@ -7216,8 +7250,12 @@ func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) string {
 	}
 	container, member := omnigentRetryContainer(retry.filePath)
 	containerKey := omnigentRetrySource{filePath: container}.key()
+	recoveryKey := omnigentRetrySource{filePath: container, recovery: true}.key()
 	if member {
 		if _, recoveringContainer := e.omnigentRetrySources[containerKey]; recoveringContainer {
+			return ""
+		}
+		if _, recoveringMembers := e.omnigentRetrySources[recoveryKey]; recoveringMembers {
 			return ""
 		}
 	} else if container != "" {
@@ -7239,6 +7277,10 @@ func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) string {
 		bucket[key] = struct{}{}
 		if member && len(bucket) >= omnigentRetryBatchSize {
 			e.collapseOmnigentRetryContainerLocked(container)
+			e.storeOmnigentRetryLocked(omnigentRetrySource{
+				filePath: container,
+				recovery: true,
+			})
 			return filepath.Dir(container)
 		}
 	}
