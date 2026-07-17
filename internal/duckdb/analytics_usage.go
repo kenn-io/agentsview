@@ -3623,7 +3623,7 @@ func (s *Store) dailyUsageAggregateRows(
 		machineOrder = ", machine ASC"
 	}
 	query := cte + `
-		SELECT local_date, project, agent, ` + machineSelect + `, model,
+		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model,
 			SUM(input_tokens_norm) AS input_tokens,
 			SUM(output_tokens_norm) AS output_tokens,
 			SUM(cache_create_norm) AS cache_creation_tokens,
@@ -3642,8 +3642,8 @@ func (s *Store) dailyUsageAggregateRows(
 				COALESCE(SUM(cost_usd) FILTER (WHERE cost_source = 'copilot-reported'), 0) AS authoritative_cost,
 				COUNT(cost_usd) FILTER (WHERE cost_source = 'copilot-reported') AS authoritative_cost_rows
 		FROM usage_localized
-		GROUP BY local_date, project, agent` + machineGroup + `, model
-		ORDER BY local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC`
+		GROUP BY session_id, local_date, project, agent` + machineGroup + `, model
+		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -3653,7 +3653,7 @@ func (s *Store) dailyUsageAggregateRows(
 	for rows.Next() {
 		var r duckUsageAggregateRow
 		if err := rows.Scan(
-			&r.date, &r.project, &r.agent, &r.machine, &r.model,
+			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheRd,

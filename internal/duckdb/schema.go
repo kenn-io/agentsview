@@ -305,6 +305,7 @@ var mirrorTables = []tableSpec{
 			cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
 			reasoning_tokens INTEGER NOT NULL DEFAULT 0,
 			cost_usd DOUBLE,
+			ai_credits DOUBLE,
 			cost_status TEXT NOT NULL DEFAULT '',
 			cost_source TEXT NOT NULL DEFAULT '',
 			occurred_at TIMESTAMP,
@@ -322,6 +323,7 @@ var mirrorTables = []tableSpec{
 			{"cache_read_input_tokens", "cache_read_input_tokens INTEGER NOT NULL DEFAULT 0"},
 			{"reasoning_tokens", "reasoning_tokens INTEGER NOT NULL DEFAULT 0"},
 			{"cost_usd", "cost_usd DOUBLE"},
+			{"ai_credits", "ai_credits DOUBLE"},
 			{"cost_status", "cost_status TEXT NOT NULL DEFAULT ''"},
 			{"cost_source", "cost_source TEXT NOT NULL DEFAULT ''"},
 			{"occurred_at", "occurred_at TIMESTAMP"},
@@ -711,6 +713,15 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 				}
 			}
 		}
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE usage_events
+		SET cost_usd = ai_credits * 0.01,
+			cost_status = 'exact',
+			cost_source = 'copilot-reported',
+			ai_credits = NULL
+		WHERE ai_credits IS NOT NULL`); err != nil {
+		return fmt.Errorf("migrating duckdb legacy Copilot AI credits: %w", err)
 	}
 
 	if err := migrateMessagesIDPrimaryKey(ctx, db); err != nil {

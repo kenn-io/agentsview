@@ -2523,6 +2523,69 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	assert.InDelta(t, 3.5, daily.Totals.CopilotAICredits, 1e-12)
 }
 
+func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-6",
+		InputPerMTok:  10,
+		OutputPerMTok: 20,
+	}}))
+	reportedCost := 0.035
+	authoritative := syncSession(
+		"copilot:authoritative", "alpha", "reported",
+		"2026-01-18T00:00:00.000Z", 1,
+	)
+	authoritative.Agent = "copilot"
+	estimated := syncSession(
+		"copilot:estimated", "alpha", "estimated",
+		"2026-01-18T01:00:00.000Z", 1,
+	)
+	estimated.Agent = "copilot"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: authoritative,
+			UsageEvents: []db.UsageEvent{{
+				Source: "shutdown", Model: "claude-sonnet-4-6",
+				InputTokens: 1000, OutputTokens: 500,
+				CostUSD: &reportedCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-01-18T00:01:00.000Z",
+				DedupKey:   "authoritative",
+			}},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+		{
+			Session: estimated,
+			UsageEvents: []db.UsageEvent{{
+				Source: "shutdown", Model: "claude-sonnet-4-6",
+				InputTokens: 1000, OutputTokens: 500,
+				OccurredAt: "2026-01-18T01:01:00.000Z",
+				DedupKey:   "estimated",
+			}},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	filter := db.UsageFilter{
+		From: "2026-01-18", To: "2026-01-18", Timezone: "UTC",
+	}
+	want, err := local.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	got, err := NewStoreFromDB(syncer.DB()).GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.055, want.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, want.Totals.TotalCost, got.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, want.Totals.CopilotAICredits,
+		got.Totals.CopilotAICredits, 1e-12)
+	assert.Equal(t, want.Daily, got.Daily)
+}
+
 func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

@@ -115,6 +115,40 @@ func TestEnsureSchemaIsIdempotent(t *testing.T) {
 	assert.True(t, columnExists(t, db, "messages", "thinking_text"))
 }
 
+func TestEnsureSchemaMigratesLegacyAICredits(t *testing.T) {
+	ctx := context.Background()
+	duck := openTestDuckDB(t)
+	_, err := duck.ExecContext(ctx, `
+		CREATE TABLE usage_events (
+			id BIGINT,
+			session_id TEXT NOT NULL,
+			source TEXT NOT NULL,
+			model TEXT NOT NULL,
+			cost_usd DOUBLE,
+			ai_credits DOUBLE,
+			cost_status TEXT,
+			cost_source TEXT
+		);
+		INSERT INTO usage_events (
+			id, session_id, source, model, ai_credits
+		) VALUES (1, 'copilot:draft', 'shutdown', 'claude-sonnet-4-6', 3.5)`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(ctx, duck))
+
+	var cost float64
+	var status, source string
+	var legacyCredits sql.NullFloat64
+	require.NoError(t, duck.QueryRowContext(ctx, `
+		SELECT cost_usd, cost_status, cost_source, ai_credits
+		FROM usage_events WHERE id = 1`,
+	).Scan(&cost, &status, &source, &legacyCredits))
+	assert.InDelta(t, 0.035, cost, 1e-12)
+	assert.Equal(t, "exact", status)
+	assert.Equal(t, "copilot-reported", source)
+	assert.False(t, legacyCredits.Valid)
+}
+
 func TestEnsureSchemaAddsMissingColumnsNonDestructively(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDuckDB(t)
