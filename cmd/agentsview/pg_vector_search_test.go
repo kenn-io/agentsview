@@ -109,7 +109,7 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 	svc, cleanup, err := newPGReadService(cfg, config.PGConfig{
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
-	})
+	}, pgReadBounded)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	t.Cleanup(cleanup)
@@ -121,38 +121,69 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 		"wiring must see the caller's vector config")
 }
 
-// TestNewPGReadServiceUsesPersistentCompatibilityGate protects long-lived
-// direct PostgreSQL readers such as `mcp --pg` and `session watch --pg` from
-// accepting CockroachDB's one-time scan mode. The persistent gate must receive
-// the database owned by the store that will serve subsequent reads.
-func TestNewPGReadServiceUsesPersistentCompatibilityGate(t *testing.T) {
-	fakeStore := dbtest.OpenTestDBAt(t, filepath.Join(t.TempDir(), "pg.db"))
-	pg := new(sql.DB)
-	stubPGReadStore(t, pgReadCompatibilityTestStore{
-		Store: fakeStore,
-		pg:    pg,
-	})
-
-	calls := 0
-	orig := checkPGPersistentReadCompatDBFn
-	checkPGPersistentReadCompatDBFn = func(
-		_ context.Context, got *sql.DB,
-	) error {
-		calls++
-		assert.Same(t, pg, got)
-		return nil
+// TestNewPGReadServiceUsesRequestedCompatibilityGate protects bounded CLI
+// reads from an unnecessarily strict persistent gate while ensuring long-lived
+// readers reject CockroachDB's one-time scan mode. The selected gate must
+// receive the database owned by the store that will serve the reads.
+func TestNewPGReadServiceUsesRequestedCompatibilityGate(t *testing.T) {
+	tests := []struct {
+		name           string
+		mode           pgReadCompatibilityMode
+		wantBounded    int
+		wantPersistent int
+	}{
+		{name: "bounded", mode: pgReadBounded, wantBounded: 1},
+		{name: "persistent", mode: pgReadPersistent, wantPersistent: 1},
 	}
-	t.Cleanup(func() { checkPGPersistentReadCompatDBFn = orig })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeStore := dbtest.OpenTestDBAt(
+				t, filepath.Join(t.TempDir(), "pg.db"),
+			)
+			pg := new(sql.DB)
+			stubPGReadStore(t, pgReadCompatibilityTestStore{
+				Store: fakeStore,
+				pg:    pg,
+			})
 
-	svc, cleanup, err := newPGReadService(config.Config{}, config.PGConfig{
-		URL:    "postgres://example.test/agentsview",
-		Schema: "agentsview",
-	})
-	require.NoError(t, err)
-	require.NotNil(t, svc)
-	t.Cleanup(cleanup)
-	assert.Equal(t, 1, calls,
-		"persistent compatibility must be checked exactly once at startup")
+			boundedCalls := 0
+			persistentCalls := 0
+			origBounded := checkPGBoundedReadCompatDBFn
+			origPersistent := checkPGPersistentReadCompatDBFn
+			checkPGBoundedReadCompatDBFn = func(
+				_ context.Context, got *sql.DB,
+			) error {
+				boundedCalls++
+				assert.Same(t, pg, got)
+				return nil
+			}
+			checkPGPersistentReadCompatDBFn = func(
+				_ context.Context, got *sql.DB,
+			) error {
+				persistentCalls++
+				assert.Same(t, pg, got)
+				return nil
+			}
+			t.Cleanup(func() {
+				checkPGBoundedReadCompatDBFn = origBounded
+				checkPGPersistentReadCompatDBFn = origPersistent
+			})
+
+			svc, cleanup, err := newPGReadService(
+				config.Config{},
+				config.PGConfig{
+					URL:    "postgres://example.test/agentsview",
+					Schema: "agentsview",
+				},
+				tt.mode,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, svc)
+			t.Cleanup(cleanup)
+			assert.Equal(t, tt.wantBounded, boundedCalls)
+			assert.Equal(t, tt.wantPersistent, persistentCalls)
+		})
+	}
 }
 
 func TestNewPGReadServiceRejectsIncompatibleDataBeforeVectorWiring(t *testing.T) {
@@ -161,8 +192,11 @@ func TestNewPGReadServiceRejectsIncompatibleDataBeforeVectorWiring(t *testing.T)
 
 	wantErr := errors.New("encrypted payload repair required")
 	origCheck := checkPGReadCompatFn
-	checkPGReadCompatFn = func(_ context.Context, got db.Store) error {
+	checkPGReadCompatFn = func(
+		_ context.Context, got db.Store, mode pgReadCompatibilityMode,
+	) error {
 		assert.Same(t, db.Store(fakeStore), got)
+		assert.Equal(t, pgReadBounded, mode)
 		return wantErr
 	}
 	t.Cleanup(func() { checkPGReadCompatFn = origCheck })
@@ -177,7 +211,7 @@ func TestNewPGReadServiceRejectsIncompatibleDataBeforeVectorWiring(t *testing.T)
 	svc, cleanup, err := newPGReadService(config.Config{}, config.PGConfig{
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
-	})
+	}, pgReadBounded)
 
 	require.ErrorIs(t, err, wantErr)
 	assert.Nil(t, svc)

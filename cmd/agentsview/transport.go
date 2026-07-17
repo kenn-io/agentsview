@@ -98,14 +98,31 @@ type pgReadCompatibilityStore interface {
 	DB() *sql.DB
 }
 
+type pgReadCompatibilityMode int
+
+const (
+	pgReadBounded pgReadCompatibilityMode = iota
+	pgReadPersistent
+)
+
+var checkPGBoundedReadCompatDBFn = postgres.CheckCodexEncryptedPayloadCompat
 var checkPGPersistentReadCompatDBFn = postgres.CheckCodexEncryptedPayloadPersistentReadCompat
 
-var checkPGReadCompatFn = func(ctx context.Context, store db.Store) error {
+var checkPGReadCompatFn = func(
+	ctx context.Context, store db.Store, mode pgReadCompatibilityMode,
+) error {
 	pgStore, ok := store.(pgReadCompatibilityStore)
 	if !ok {
 		return nil
 	}
-	return checkPGPersistentReadCompatDBFn(ctx, pgStore.DB())
+	switch mode {
+	case pgReadBounded:
+		return checkPGBoundedReadCompatDBFn(ctx, pgStore.DB())
+	case pgReadPersistent:
+		return checkPGPersistentReadCompatDBFn(ctx, pgStore.DB())
+	default:
+		return fmt.Errorf("unknown PG read compatibility mode %d", mode)
+	}
 }
 
 // detectTransport picks the transport mode:
@@ -511,7 +528,9 @@ func directIncompatibleDaemonError(tr transport) error {
 // --semantic|--hybrid` and `mcp --pg` get the same semantic search
 // the SQLite direct path wires via installDirectVectorSearcher.
 func newPGReadService(
-	cfg config.Config, pgCfg config.PGConfig,
+	cfg config.Config,
+	pgCfg config.PGConfig,
+	compatMode pgReadCompatibilityMode,
 ) (service.SessionService, func(), error) {
 	store, cleanup, err := openPGReadStore(cfg, pgCfg)
 	if err != nil {
@@ -520,7 +539,9 @@ func newPGReadService(
 		}
 		return nil, nil, fmt.Errorf("opening pg store: %w", err)
 	}
-	if err := checkPGReadCompatFn(context.Background(), store); err != nil {
+	if err := checkPGReadCompatFn(
+		context.Background(), store, compatMode,
+	); err != nil {
 		if cleanup != nil {
 			cleanup()
 		}

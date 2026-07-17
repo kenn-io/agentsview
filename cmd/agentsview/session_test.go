@@ -109,6 +109,24 @@ type pgReadStoreStub struct {
 	PG            config.PGConfig
 }
 
+type pgReadCompatibilityStub struct {
+	Modes []pgReadCompatibilityMode
+}
+
+func stubPGReadCompatibility(t *testing.T) *pgReadCompatibilityStub {
+	t.Helper()
+	stub := &pgReadCompatibilityStub{}
+	orig := checkPGReadCompatFn
+	checkPGReadCompatFn = func(
+		_ context.Context, _ db.Store, mode pgReadCompatibilityMode,
+	) error {
+		stub.Modes = append(stub.Modes, mode)
+		return nil
+	}
+	t.Cleanup(func() { checkPGReadCompatFn = orig })
+	return stub
+}
+
 // stubPGReadStore replaces openPGReadStore with one that returns store,
 // records the PGConfig it was called with, and restores the original on
 // cleanup. The caller owns the lifecycle of store; the stub's cleanup only
@@ -689,6 +707,7 @@ func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 
 	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
 	stub := stubPGReadStore(t, remoteDB)
+	compat := stubPGReadCompatibility(t)
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "list", "--pg", "--format", "json")
@@ -701,6 +720,7 @@ func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 	assert.Equal(t, "postgres://example.test/agentsview", stub.PG.URL)
 	assert.Equal(t, "custom_schema", stub.PG.Schema)
 	assert.True(t, stub.CleanupCalled, "expected PG store cleanup")
+	assert.Equal(t, []pgReadCompatibilityMode{pgReadBounded}, compat.Modes)
 }
 
 func TestSessionList_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
@@ -765,7 +785,7 @@ func TestPGReadServiceClosesStoreWhenOpenFailsAfterCleanupProvided(t *testing.T)
 	_, _, err := newPGReadService(config.Config{}, config.PGConfig{
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
-	})
+	}, pgReadBounded)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "opening pg store")
 	assert.True(t, closed, "expected cleanup on error-after-open path")
@@ -1801,6 +1821,33 @@ func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 		require.NoError(t, json.Unmarshal(line, &ev),
 			"non-NDJSON line: %q", line)
 	}
+}
+
+func TestSessionWatch_PGFlagUsesPersistentCompatibility(t *testing.T) {
+	newAgentDataDir(t)
+	remoteDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+	seedSession(t, remoteDir, "pg-watch", "remote")
+
+	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
+	stubPGReadStore(t, remoteDB)
+	compat := stubPGReadCompatibility(t)
+
+	root := newRootCommand()
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"session", "watch", "pg-watch", "--pg"})
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+
+	err := root.ExecuteContext(ctx)
+	assert.True(t, err == nil || errors.Is(err, context.DeadlineExceeded),
+		"session watch returned unexpected error: %v", err)
+	assert.Equal(t,
+		[]pgReadCompatibilityMode{pgReadPersistent}, compat.Modes,
+		"the long-lived PG watch must reject one-time scan mode",
+	)
 }
 
 // TestSessionWatch_UnknownID_FailsFast verifies that `session

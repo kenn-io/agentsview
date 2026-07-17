@@ -162,7 +162,7 @@ func resolveMCPService(
 		return nil, nil, err
 	}
 	if usePG {
-		return newPGReadService(cfg, pgCfg)
+		return newPGReadService(cfg, pgCfg, pgReadPersistent)
 	}
 	return newMCPDaemonService(cfg), func() {}, nil
 }

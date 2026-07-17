@@ -20,7 +20,7 @@ func newSessionWatchCommand() *cobra.Command {
 			); err != nil {
 				return err
 			}
-			svc, cleanup, err := resolveService(cmd)
+			svc, cleanup, err := resolvePersistentService(cmd)
 			if err != nil {
 				return err
 			}

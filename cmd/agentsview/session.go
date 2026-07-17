@@ -59,6 +59,22 @@ func newSessionCommand() *cobra.Command {
 func resolveService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
+	return resolveServiceWithPGCompatibility(cmd, pgReadBounded)
+}
+
+// resolvePersistentService is the long-lived counterpart of resolveService.
+// PostgreSQL/CockroachDB readers must have durable write guards because a
+// one-time scan cannot protect later reads from an outdated concurrent writer.
+func resolvePersistentService(
+	cmd *cobra.Command,
+) (service.SessionService, func(), error) {
+	return resolveServiceWithPGCompatibility(cmd, pgReadPersistent)
+}
+
+func resolveServiceWithPGCompatibility(
+	cmd *cobra.Command,
+	compatMode pgReadCompatibilityMode,
+) (service.SessionService, func(), error) {
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
@@ -84,7 +100,7 @@ func resolveService(
 		return nil, nil, err
 	}
 	if usePG {
-		return newPGReadService(cfg, pgCfg)
+		return newPGReadService(cfg, pgCfg, compatMode)
 	}
 	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
 	if err != nil {

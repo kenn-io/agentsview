@@ -128,6 +128,7 @@ func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
 
 	remoteDB := dbtest.OpenTestDBAt(t, filepath.Join(remoteDir, "sessions.db"))
 	stub := stubPGReadStore(t, remoteDB)
+	compat := stubPGReadCompatibility(t)
 	forbidStartBackgroundServeForTransport(t,
 		"agentsview mcp --pg must use the PG read store, not the daemon")
 
@@ -145,6 +146,10 @@ func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
 	assert.Equal(t, "pg-session", res.Sessions[0].ID)
 	assert.Equal(t, "postgres://example.test/agentsview", stub.PG.URL)
 	assert.Equal(t, "custom_schema", stub.PG.Schema)
+	assert.Equal(t,
+		[]pgReadCompatibilityMode{pgReadPersistent}, compat.Modes,
+		"the long-lived MCP server must reject one-time scan mode",
+	)
 }
 
 func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
