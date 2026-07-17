@@ -25,6 +25,8 @@ type omnigentTrackedContainer struct {
 	schema             omnigentSchema
 	metas              map[string]omnigentMeta
 	initializing       bool
+	recovering         bool
+	recoveryBoundary   bool
 	initialScanRowID   int64
 	checkedAt          int64
 	maxRowID           int64
@@ -39,13 +41,15 @@ type omnigentTrackedContainer struct {
 }
 
 type omnigentChangeTracker struct {
-	mu         sync.Mutex
-	containers map[string]omnigentTrackedContainer
+	mu              sync.Mutex
+	containers      map[string]omnigentTrackedContainer
+	recoveryPending map[string]struct{}
 }
 
 func newOmnigentChangeTracker() *omnigentChangeTracker {
 	return &omnigentChangeTracker{
-		containers: make(map[string]omnigentTrackedContainer),
+		containers:      make(map[string]omnigentTrackedContainer),
+		recoveryPending: make(map[string]struct{}),
 	}
 }
 
@@ -156,7 +160,11 @@ func (t *omnigentChangeTracker) discoverSources(
 		}
 		t.mu.Lock()
 		_, initialized := t.containers[container]
+		_, recoveryPending := t.recoveryPending[container]
 		t.mu.Unlock()
+		if recoveryPending {
+			continue
+		}
 		if !initialized {
 			t.seedContainer(container)
 		}
@@ -378,16 +386,27 @@ func (t *omnigentChangeTracker) changedMembers(
 	if match.MemberID != "" || !IsRegularFile(match.Container) {
 		return []multiSessionMatch{match}, nil
 	}
-	if req.EventKind == ChangedPathEventRecovery {
-		t.mu.Lock()
-		delete(t.containers, match.Container)
-		t.mu.Unlock()
-		return t.initializeColdContainer(
-			ctx, root, match, req.StoredSourcePaths,
-		)
-	}
 	t.mu.Lock()
-	_, initialized := t.containers[match.Container]
+	tracked, initialized := t.containers[match.Container]
+	_, recoveryPending := t.recoveryPending[match.Container]
+	if req.EventKind == ChangedPathEventRecovery {
+		if tracked.recoveryBoundary {
+			tracked.recoveryBoundary = false
+			t.containers[match.Container] = tracked
+			t.mu.Unlock()
+			return nil, nil
+		}
+		if !tracked.recovering {
+			t.recoveryPending[match.Container] = struct{}{}
+			t.mu.Unlock()
+			return t.initializeRecoveryContainer(
+				ctx, root, match, req.StoredSourcePaths,
+			)
+		}
+	} else if recoveryPending || tracked.recovering || tracked.recoveryBoundary {
+		t.mu.Unlock()
+		return nil, nil
+	}
 	t.mu.Unlock()
 	if !initialized {
 		return t.initializeColdContainer(
@@ -411,14 +430,22 @@ func (t *omnigentChangeTracker) changedMembers(
 	}
 
 	t.mu.Lock()
-	tracked := t.containers[match.Container]
-	defer t.mu.Unlock()
+	tracked = t.containers[match.Container]
 	if tracked.schema != schema {
+		if req.EventKind == ChangedPathEventRecovery {
+			t.recoveryPending[match.Container] = struct{}{}
+			t.mu.Unlock()
+			return t.initializeRecoveryContainer(
+				ctx, root, match, req.StoredSourcePaths,
+			)
+		}
+		t.mu.Unlock()
 		// Member identities and joins change across schema generations. Reparse
 		// the whole container so every new identity is emitted and legacy IDs are
 		// retired even when the migrated rows reuse rowids and old timestamps.
 		return []multiSessionMatch{match}, nil
 	}
+	defer t.mu.Unlock()
 	if tracked.initializing {
 		page, err := listOmnigentConversationMetasAfterRowID(
 			ctx, conn, schema, tracked.initialScanRowID,
@@ -435,7 +462,12 @@ func (t *omnigentChangeTracker) changedMembers(
 			tracked.initialScanRowID = batch[len(batch)-1].rowID
 			addOmnigentTrackedMetas(&tracked, batch)
 		}
-		tracked.initializing = len(page) > omnigentChangedBatchSize
+		more := len(page) > omnigentChangedBatchSize
+		tracked.initializing = more
+		if tracked.recovering {
+			tracked.recovering = more
+			tracked.recoveryBoundary = !more && len(batch) == omnigentChangedBatchSize
+		}
 		t.containers[match.Container] = tracked
 		return appendOmnigentMatches(
 			omnigentMatches(match.Container, schema, batch), tombstones,
@@ -611,6 +643,55 @@ func (t *omnigentChangeTracker) initializeColdContainer(
 	if err != nil {
 		return nil, err
 	}
+	return appendOmnigentMatches(
+		omnigentMatches(match.Container, schema, batch), tombstones,
+	), nil
+}
+
+func (t *omnigentChangeTracker) initializeRecoveryContainer(
+	ctx context.Context, root string, match multiSessionMatch,
+	storedSourcePaths []string,
+) ([]multiSessionMatch, error) {
+	conn, err := openOmnigentDB(match.Container)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	schema, err := detectOmnigentSchema(conn)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	page, err := listOmnigentConversationMetasAfterRowID(
+		ctx, conn, schema, 0, omnigentChangedBatchSize+1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	batch := page
+	if len(batch) > omnigentChangedBatchSize {
+		batch = batch[:omnigentChangedBatchSize]
+	}
+	tombstones, err := omnigentMissingStoredMatches(
+		ctx, conn, root, match.Container, schema, storedSourcePaths,
+	)
+	if err != nil {
+		return nil, err
+	}
+	tracked := newOmnigentTrackedContainer(match.Container, schema, batch)
+	more := len(page) > omnigentChangedBatchSize
+	tracked.initializing = more
+	tracked.recovering = more
+	tracked.recoveryBoundary = !more && len(batch) == omnigentChangedBatchSize
+	if len(batch) > 0 {
+		tracked.initialScanRowID = batch[len(batch)-1].rowID
+	}
+	t.mu.Lock()
+	t.containers[match.Container] = tracked
+	delete(t.recoveryPending, match.Container)
+	t.mu.Unlock()
 	return appendOmnigentMatches(
 		omnigentMatches(match.Container, schema, batch), tombstones,
 	), nil
@@ -911,6 +992,16 @@ func (t *omnigentChangeTracker) parseMemberWith(
 func (t *omnigentChangeTracker) replace(
 	container string, schema omnigentSchema, metas []omnigentMeta,
 ) {
+	tracked := newOmnigentTrackedContainer(container, schema, metas)
+	t.mu.Lock()
+	t.containers[container] = tracked
+	delete(t.recoveryPending, container)
+	t.mu.Unlock()
+}
+
+func newOmnigentTrackedContainer(
+	container string, schema omnigentSchema, metas []omnigentMeta,
+) omnigentTrackedContainer {
 	compositeMTimeNS, _ := sqliteDBCompositeMtime(container)
 	tracked := omnigentTrackedContainer{
 		schema: schema, metas: make(map[string]omnigentMeta, len(metas)),
@@ -920,9 +1011,7 @@ func (t *omnigentChangeTracker) replace(
 		workspaceCounts:    make(map[int64]int),
 	}
 	addOmnigentTrackedMetas(&tracked, metas)
-	t.mu.Lock()
-	t.containers[container] = tracked
-	t.mu.Unlock()
+	return tracked
 }
 
 func addOmnigentTrackedMetas(

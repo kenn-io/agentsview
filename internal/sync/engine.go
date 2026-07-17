@@ -3065,9 +3065,16 @@ func (e *Engine) discoverOmnigentRetrySources(
 				failures++
 				continue
 			}
-			e.omnigentRetryMu.Lock()
-			e.removeOmnigentRetryLocked(retry.key())
-			e.omnigentRetryMu.Unlock()
+			if len(recovered) < omnigentRetryBatchSize {
+				e.omnigentRetryMu.Lock()
+				entry := e.omnigentRetrySources[retry.key()]
+				if entry != nil && entry.reactivate {
+					entry.reactivate = false
+				} else {
+					e.removeOmnigentRetryLocked(retry.key())
+				}
+				e.omnigentRetryMu.Unlock()
+			}
 			for _, source := range recovered {
 				path := filepath.Clean(providerDiscoveredPath(source))
 				if path == "." {
@@ -7184,9 +7191,10 @@ type omnigentRetrySource struct {
 
 type omnigentRetryEntry struct {
 	omnigentRetrySource
-	container string
-	prev      *omnigentRetryEntry
-	next      *omnigentRetryEntry
+	container  string
+	reactivate bool
+	prev       *omnigentRetryEntry
+	next       *omnigentRetryEntry
 }
 
 func (r omnigentRetrySource) key() string {
@@ -7255,7 +7263,8 @@ func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) string {
 		if _, recoveringContainer := e.omnigentRetrySources[containerKey]; recoveringContainer {
 			return ""
 		}
-		if _, recoveringMembers := e.omnigentRetrySources[recoveryKey]; recoveringMembers {
+		if recovery := e.omnigentRetrySources[recoveryKey]; recovery != nil {
+			recovery.reactivate = true
 			return ""
 		}
 	} else if container != "" {

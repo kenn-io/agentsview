@@ -408,19 +408,47 @@ func TestOmnigentMemberRetryOverflowRecoversUnstoredMembersInBoundedPages(t *tes
 	)
 	require.Zero(t, failures)
 	require.Len(t, first, omnigentRetryBatchSize)
+	firstPaths := make([]string, 0, len(first))
 	for _, source := range first {
-		_, member, virtual := parser.ParseOmnigentVirtualSourcePath(
-			providerDiscoveredPath(source),
-		)
+		path := providerDiscoveredPath(source)
+		firstPaths = append(firstPaths, path)
+		_, member, virtual := parser.ParseOmnigentVirtualSourcePath(path)
 		assert.True(t, virtual)
 		assert.NotEmpty(t, member)
+		engine.storeOmnigentRetry(omnigentRetrySource{
+			sessionID: "omnigent:" + member,
+			filePath:  path,
+		})
 	}
-	second, err := provider.Discover(context.Background())
-	require.NoError(t, err)
+	engine.omnigentRetryMu.Lock()
+	assert.Len(t, engine.omnigentRetrySources, 1,
+		"failed early members must not restart or expand active recovery")
+	engine.omnigentRetryMu.Unlock()
+	second, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
 	require.Len(t, second, omnigentRetryBatchSize)
-	last, err := provider.Discover(context.Background())
-	require.NoError(t, err)
+	last, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
 	require.Len(t, last, 1)
+	engine.omnigentRetryMu.Lock()
+	require.Len(t, engine.omnigentRetrySources, 1)
+	assert.False(t, engine.omnigentRetryHead.reactivate)
+	engine.omnigentRetryMu.Unlock()
+	restarted, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
+	require.Len(t, restarted, omnigentRetryBatchSize)
+	restartedPaths := make([]string, 0, len(restarted))
+	for _, source := range restarted {
+		restartedPaths = append(restartedPaths, providerDiscoveredPath(source))
+	}
+	assert.Equal(t, firstPaths, restartedPaths,
+		"failed early members retry only after the active sweep reaches its end")
 }
 
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {

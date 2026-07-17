@@ -586,6 +586,44 @@ func TestOmnigentChangedPathEventuallyDetectsDirectEditWithoutMetadataAdvance(t 
 	assert.Equal(t, VirtualSourcePath(path, "conv_064"), found.DisplayPath)
 }
 
+func TestOmnigentRecoveryFailurePreservesTrackerAndBlocksColdFallback(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 65)
+	root := filepath.Dir(path)
+	tracker := newOmnigentChangeTracker()
+	tracker.seedContainer(path)
+	tracker.mu.Lock()
+	require.Len(t, tracker.containers[path].metas, 65)
+	tracker.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := tracker.changedMembers(ctx, root, ChangedPathRequest{
+		Path: path, EventKind: ChangedPathEventRecovery,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	tracker.mu.Lock()
+	assert.Len(t, tracker.containers[path].metas, 65,
+		"failed recovery must preserve the previous tracker")
+	_, pending := tracker.recoveryPending[path]
+	tracker.mu.Unlock()
+	assert.True(t, pending)
+	assert.Empty(t, tracker.discoverSources(root, false),
+		"ordinary discovery must not seed or emit a whole container while recovery is pending")
+
+	recovered, err := tracker.changedMembers(
+		context.Background(), root, ChangedPathRequest{
+			Path: path, EventKind: ChangedPathEventRecovery,
+		},
+	)
+	require.NoError(t, err)
+	assert.Len(t, recovered, omnigentChangedBatchSize)
+	tracker.mu.Lock()
+	_, pending = tracker.recoveryPending[path]
+	assert.True(t, tracker.containers[path].recovering)
+	tracker.mu.Unlock()
+	assert.False(t, pending)
+}
+
 func TestOmnigentProbeReconcilesReplacementWithReusedRowID(t *testing.T) {
 	path := writeOmnigentCardinalityDB(t, 65)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
