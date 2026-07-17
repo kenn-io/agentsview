@@ -90,6 +90,50 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 	assert.Equal(t, "1", codexPayloadsRepaired)
 }
 
+func TestSessionReadDefaultsNullableCertificationFromOlderWriter(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, database), "initial EnsureSchema")
+
+	for _, index := range []string{
+		"idx_sessions_ended",
+		"idx_sessions_project",
+		"idx_sessions_machine",
+		"idx_sessions_parent",
+		"idx_sessions_started",
+		"idx_sessions_agent",
+		"idx_sessions_agent_data_version",
+		"idx_sessions_termination_status",
+	} {
+		_, err := database.ExecContext(ctx, "DROP INDEX "+index)
+		require.NoError(t, err)
+	}
+	for _, column := range []string{
+		"codex_payload_certified_revision",
+		"codex_payload_certification_version",
+	} {
+		_, err := database.ExecContext(ctx,
+			"ALTER TABLE sessions DROP COLUMN "+column,
+		)
+		require.NoError(t, err)
+	}
+	require.NoError(t, EnsureSchema(ctx, database), "additive EnsureSchema")
+
+	// An older compatible writer does not name certification columns. DuckDB
+	// therefore stores NULL after the additive migration added them without
+	// defaults for Quack compatibility.
+	_, err := database.ExecContext(ctx, `
+		INSERT INTO sessions (id, project)
+		VALUES ('older-writer-session', 'project')`)
+	require.NoError(t, err)
+
+	got, err := NewStoreFromDB(database).GetSession(ctx, "older-writer-session")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, got.CodexPayloadCertifiedRevision)
+	assert.Zero(t, got.CodexPayloadCertificationVersion)
+}
+
 func TestEnsureSchemaRepairsOldCodexPayloads(t *testing.T) {
 	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 	ctx := context.Background()
