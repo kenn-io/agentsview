@@ -137,6 +137,8 @@ type Engine struct {
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
 	omnigentRetryMu         gosync.Mutex
 	omnigentRetrySources    map[string]omnigentRetrySource
+	omnigentHintMu          gosync.Mutex
+	omnigentHintCursors     map[string]string
 	resyncOmnigentAdvanced  atomic.Bool
 	projectIdentityMu       gosync.Mutex
 	projectIdentityCache    map[string]projectIdentityCacheEntry
@@ -296,6 +298,7 @@ func NewEngine(
 		emitter:                 cfg.Emitter,
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
+		omnigentHintCursors:     make(map[string]string),
 		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
 		projectIdentityWritten:  make(map[string]struct{}),
 		startupMaintenanceReady: make(chan struct{}),
@@ -767,9 +770,8 @@ func (e *Engine) classifyProviderChangedPath(
 			var storedSourcePaths []string
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				var err error
-				storedSourcePaths, err = e.db.ListStoredSourcePathHints(
-					string(def.Type),
-					[]string{watchRoot},
+				storedSourcePaths, err = e.changedPathStoredSourcePaths(
+					def.Type, watchRoot,
 				)
 				if err != nil {
 					log.Printf(
@@ -837,6 +839,38 @@ func (e *Engine) classifyProviderChangedPath(
 		}
 	}
 	return files
+}
+
+const omnigentStoredHintBatchSize = 32
+
+func (e *Engine) changedPathStoredSourcePaths(
+	agent parser.AgentType, watchRoot string,
+) ([]string, error) {
+	if agent != parser.AgentOmnigent {
+		return e.db.ListStoredSourcePathHints(string(agent), []string{watchRoot})
+	}
+	key := string(agent) + "\x00" + filepath.Clean(watchRoot)
+	e.omnigentHintMu.Lock()
+	after := e.omnigentHintCursors[key]
+	e.omnigentHintMu.Unlock()
+
+	paths, err := e.db.ListStoredSourcePathHintPage(
+		string(agent), watchRoot, after, omnigentStoredHintBatchSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	next := ""
+	if len(paths) == omnigentStoredHintBatchSize {
+		next = paths[len(paths)-1]
+	}
+	e.omnigentHintMu.Lock()
+	if e.omnigentHintCursors == nil {
+		e.omnigentHintCursors = make(map[string]string)
+	}
+	e.omnigentHintCursors[key] = next
+	e.omnigentHintMu.Unlock()
+	return paths, nil
 }
 
 func providerChangedPathWatchRoots(

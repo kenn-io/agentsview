@@ -132,6 +132,39 @@ func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
+func TestListStoredSourcePathHintPageUsesExclusiveCursorAndDistinctPaths(t *testing.T) {
+	d := testDB(t)
+	root := t.TempDir()
+	for i := range 5 {
+		path := filepath.Join(root, fmt.Sprintf("container.db#member-%02d", i))
+		insertSessionWithSourcePath(t, d, fmt.Sprintf("omnigent:%02d-a", i), "omnigent", path)
+		insertSessionWithSourcePath(t, d, fmt.Sprintf("omnigent:%02d-b", i), "omnigent", path)
+	}
+
+	first, err := d.ListStoredSourcePathHintPage("omnigent", root, "", 2)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	second, err := d.ListStoredSourcePathHintPage(
+		"omnigent", root, first[len(first)-1], 2,
+	)
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	last, err := d.ListStoredSourcePathHintPage(
+		"omnigent", root, second[len(second)-1], 2,
+	)
+	require.NoError(t, err)
+	require.Len(t, last, 1)
+
+	all := append(append(first, second...), last...)
+	assert.Equal(t, []string{
+		filepath.Join(root, "container.db#member-00"),
+		filepath.Join(root, "container.db#member-01"),
+		filepath.Join(root, "container.db#member-02"),
+		filepath.Join(root, "container.db#member-03"),
+		filepath.Join(root, "container.db#member-04"),
+	}, all)
+}
+
 func TestStoredSourcePathHintsLookupUsesAgentFilePathIndex(t *testing.T) {
 
 	d := testDB(t)

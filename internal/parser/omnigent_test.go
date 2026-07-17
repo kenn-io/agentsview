@@ -701,6 +701,50 @@ func TestOmnigentColdChangedPathCancellationDoesNotAdvanceTracker(t *testing.T) 
 	assert.False(t, initialized)
 }
 
+func TestOmnigentColdChangedPathCursorAdvancesWithoutParsing(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 1000)
+	factory, ok := ProviderFactoryByType(AgentOmnigent)
+	require.True(t, ok)
+	provider := factory.NewProvider(ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	first, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{Path: path, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.Len(t, first, omnigentChangedBatchSize)
+
+	second, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{Path: path, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.Len(t, second, omnigentChangedBatchSize)
+	assert.Equal(t, VirtualSourcePath(path, "conv_000"), first[0].DisplayPath)
+	assert.Equal(t, VirtualSourcePath(path, "conv_032"), second[0].DisplayPath)
+}
+
+func TestOmnigentColdChangedPathEmitsBoundedStoredTombstones(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 1000)
+	factory, ok := ProviderFactoryByType(AgentOmnigent)
+	require.True(t, ok)
+	provider := factory.NewProvider(ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	missing := VirtualSourcePath(path, "deleted")
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{
+			Path: path, EventKind: "write", StoredSourcePaths: []string{missing},
+		},
+	)
+	require.NoError(t, err)
+	paths := make([]string, 0, len(changed))
+	for _, source := range changed {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.Contains(t, paths, missing)
+	assert.LessOrEqual(t, len(changed), omnigentChangedBatchSize+1)
+}
+
 func TestOmnigentReplacementRowLookupUsesRowIDSearch(t *testing.T) {
 	tests := []struct {
 		name string

@@ -2212,6 +2212,51 @@ func (db *DB) ListStoredSourcePathHints(
 	return hints, nil
 }
 
+// ListStoredSourcePathHintPage returns one lexicographically ordered page of
+// distinct active source paths under root. after is an exclusive cursor. It is
+// used by high-cardinality shared-container providers so each filesystem event
+// reconciles a bounded archived-membership sample instead of materializing the
+// provider's complete archive.
+func (db *DB) ListStoredSourcePathHintPage(
+	agent, root, after string, limit int,
+) ([]string, error) {
+	root = cleanStoredSourcePathHint(root)
+	if after != "" {
+		after = cleanStoredSourcePathHint(after)
+	}
+	if agent == "" || root == "" || root == "." || limit <= 0 {
+		return nil, nil
+	}
+	query, args := storedSourcePathHintQuery(agent, []string{root})
+	query = strings.Replace(
+		query,
+		"ORDER BY file_path",
+		"AND file_path > ? GROUP BY file_path ORDER BY file_path LIMIT ?",
+		1,
+	)
+	args = append(args, after, limit)
+	rows, err := db.getReader().Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing stored source path hint page: %w", err)
+	}
+	defer rows.Close()
+	paths := make([]string, 0, limit)
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scanning stored source path hint page: %w", err)
+		}
+		path = cleanStoredSourcePathHint(path)
+		if storedSourcePathHintInRoot(path, root) {
+			paths = append(paths, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stored source path hint page: %w", err)
+	}
+	return paths, nil
+}
+
 func normalizeStoredSourcePathHintRoots(roots []string) []string {
 	seen := make(map[string]struct{}, len(roots))
 	out := make([]string, 0, len(roots))

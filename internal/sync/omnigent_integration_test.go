@@ -271,6 +271,70 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 	}
 }
 
+func TestSyncOmnigentColdChangedPathAdvancesPastFreshArchiveMembers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	const archiveSize = 200
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, archiveSize)
+	archive := dbtest.OpenTestDB(t)
+	seedEngine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOmnigent: {root}},
+		Machine:   "local",
+	})
+	seedEngine.SyncAll(context.Background(), nil)
+	require.Equal(t, archiveSize, seedEngine.LastSyncStats().Synced)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	changedAt := time.Now().Unix()
+	_, err = writer.Exec(
+		`UPDATE conversations SET updated_at = ? WHERE id = 'conv_0100'`,
+		changedAt,
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('conv_0100_1', 'conv_0100', 1, 'message', ?, 'changed')`,
+		`{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}`)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`DELETE FROM conversation_items WHERE conversation_id = 'conv_0050'`,
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_0050'`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	var parseCount atomic.Int64
+	factory := omnigentParseCountingFactory{
+		delegate: omnigentDefaultProviderFactory(t), count: &parseCount,
+	}
+	coldEngine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentOmnigent: {root}},
+		Machine:   "local", ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	var changed *db.Session
+	var deleted *db.Session
+	for range 8 {
+		before := parseCount.Load()
+		coldEngine.SyncPaths([]string{dbPath})
+		assert.LessOrEqual(t, parseCount.Load()-before, int64(omnigentMemberBatchForTest+1),
+			"each cold event must keep parse work within one member page plus tombstones")
+		changed, err = archive.GetSession(context.Background(), "omnigent:conv_0100")
+		require.NoError(t, err)
+		deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0050")
+		require.NoError(t, err)
+		if changed != nil && changed.MessageCount == 2 && deleted == nil {
+			break
+		}
+	}
+	require.NotNil(t, changed)
+	assert.Equal(t, 2, changed.MessageCount)
+	assert.Nil(t, deleted)
+}
+
 func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
