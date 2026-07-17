@@ -193,6 +193,13 @@ SELECT deleted_at FROM sessions WHERE id = 'legacy-curation'`,
 	assert.False(t, deletedAt.Valid, "the legacy session must be restored")
 
 	_, err = pg.ExecContext(ctx, `
+UPDATE sessions SET relationship_type = ''
+ WHERE id = 'legacy-curation'`)
+	require.Error(t, err,
+		"changing guarded relationship evidence must still be rejected")
+	assert.Contains(t, err.Error(), "23514")
+
+	_, err = pg.ExecContext(ctx, `
 UPDATE sessions SET first_message = first_message || ' changed'
  WHERE id = 'legacy-curation'`)
 	require.Error(t, err,

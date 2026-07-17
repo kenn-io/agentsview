@@ -866,6 +866,7 @@ func codexPayloadGuardDDL(
     IF TG_OP = 'UPDATE'
        AND (NEW).agent IS NOT DISTINCT FROM (OLD).agent
        AND (NEW).data_version IS NOT DISTINCT FROM (OLD).data_version
+       AND (NEW).relationship_type IS NOT DISTINCT FROM (OLD).relationship_type
        AND (NEW).first_message IS NOT DISTINCT FROM (OLD).first_message THEN
         RETURN NEW;
     END IF;`
