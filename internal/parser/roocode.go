@@ -88,6 +88,15 @@ func parseRooCodeSession(
 		return nil, nil, fmt.Errorf("parsing ui_messages.json: %w", err)
 	}
 
+	// If the history item records that a child task completed this
+	// session (CompletedByChildID) but the transcript carried no
+	// subtask_result message to pair, resolve the last unresolved
+	// newTask so termination analysis does not report a false
+	// tool_call_pending for the delegation.
+	if historyItem.CompletedByChildID != "" {
+		resolveTrailingRooNewTask(parsedMessages)
+	}
+
 	// Build session ID: "roocode:" + task ID.
 	sessionID := string(AgentRooCode) + ":" + historyItem.ID
 
@@ -332,6 +341,10 @@ func parseRooCodeMessages(
 	// -1 means no pending command.
 	pendingCmdMsgIdx := -1
 	pendingMcpMsgIdx := -1
+	// pendingNewTaskMsgIdx tracks the index of the most recent newTask
+	// (delegated child) tool call awaiting a subtask_result. -1 means
+	// none pending.
+	pendingNewTaskMsgIdx := -1
 	for _, rawMsg := range rawMessages {
 		var msg rooCodeMessage
 		if err := json.Unmarshal(rawMsg, &msg); err != nil {
@@ -514,6 +527,47 @@ func parseRooCodeMessages(
 			continue
 		}
 
+		// Handle subtask_result by pairing it with the preceding
+		// newTask (delegated child) tool call, marking the delegation
+		// completed. Without this, a session that ends right after the
+		// child finishes leaves the newTask call unresolved and
+		// termination analysis reports a false tool_call_pending.
+		if msg.Say == "subtask_result" {
+			paired := false
+			if pendingNewTaskMsgIdx >= 0 &&
+				pendingNewTaskMsgIdx < len(parsedMessages) {
+				target := &parsedMessages[pendingNewTaskMsgIdx]
+				for ci := range target.ToolCalls {
+					tc := &target.ToolCalls[ci]
+					tc.ResultEvents = append(
+						tc.ResultEvents,
+						ParsedToolResultEvent{
+							Status:    "completed",
+							Content:   content,
+							Timestamp: ts,
+						},
+					)
+				}
+				pendingNewTaskMsgIdx = -1
+				paired = true
+			}
+			if !paired && content != "" {
+				// No pending newTask to pair with — emit as
+				// standalone system message (fallback).
+				parsedMessages = append(parsedMessages, ParsedMessage{
+					Ordinal:       ordinal,
+					Role:          RoleSystem,
+					Content:       content,
+					Model:         model,
+					IsSystem:      true,
+					Timestamp:     ts,
+					ContentLength: len(content),
+				})
+				ordinal++
+			}
+			continue
+		}
+
 		if len(toolCalls) > 0 {
 			// Emit assistant message with tool calls.
 			parsedMessages = append(parsedMessages, ParsedMessage{
@@ -532,6 +586,10 @@ func parseRooCodeMessages(
 			switch toolCalls[0].ToolName {
 			case "execute_command":
 				pendingCmdMsgIdx = len(parsedMessages) - 1
+			case "newTask":
+				// Track delegated child task for pairing with
+				// the subtask_result that reports its completion.
+				pendingNewTaskMsgIdx = len(parsedMessages) - 1
 			default:
 				// Track any MCP tool call (Category="MCP") for
 				// pairing with mcp_server_response.
@@ -621,7 +679,9 @@ func classifyRooCodeMessage(
 	case "completion_result":
 		return RoleAssistant, nil, nil
 	case "subtask_result":
-		// Result from a delegated child task. Treat as system.
+		// Result from a delegated child task. parseRooCodeMessages
+		// intercepts this say type and pairs it with the preceding
+		// newTask tool call; the standalone fallback is a system msg.
 		return RoleSystem, nil, nil
 	case "user_feedback", "user_feedback_diff":
 		// User feedback on the assistant's work.
@@ -746,6 +806,33 @@ func classifyRooCodeTermination(
 		return TerminationClean
 	}
 	return ""
+}
+
+// resolveTrailingRooNewTask marks the last unresolved newTask tool
+// call in messages as completed. It is used as a fallback when the
+// history item reports completion via a child task (CompletedByChildID)
+// but the transcript carried no subtask_result message to pair. Only
+// the most recent unresolved newTask is resolved; earlier ones that
+// already have ResultEvents are left untouched.
+func resolveTrailingRooNewTask(messages []ParsedMessage) {
+	if len(messages) == 0 {
+		return
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		tcs := messages[i].ToolCalls
+		for ci := len(tcs) - 1; ci >= 0; ci-- {
+			tc := &tcs[ci]
+			if tc.ToolName != "newTask" {
+				continue
+			}
+			if len(tc.ResultEvents) > 0 {
+				return
+			}
+			tc.ResultEvents = append(tc.ResultEvents,
+				ParsedToolResultEvent{Status: "completed"})
+			return
+		}
+	}
 }
 
 // rooLastMessageIsThinkingOnly reports whether the last

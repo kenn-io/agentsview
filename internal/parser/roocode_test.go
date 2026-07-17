@@ -1621,6 +1621,159 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 	)
 }
 
+func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
+	tmpDir := t.TempDir()
+	taskDir := filepath.Join(tmpDir, "tasks", "test-task-subtask-end")
+	require.NoError(t, os.MkdirAll(taskDir, 0755))
+
+	childID := "child-task-uuid-9999"
+	historyItem := rooCodeHistoryItem{
+		ID:        "test-task-subtask-end",
+		Number:    1,
+		Timestamp: 1688836851000,
+		Task:      "Delegate and finish",
+		TokensIn:  100,
+		TokensOut: 200,
+		Workspace: "/Users/test/project",
+		ChildIDs:  []string{childID},
+		Status:    "completed",
+	}
+	historyJSON, err := json.Marshal(historyItem)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "history_item.json"),
+		historyJSON, 0644,
+	))
+
+	// The session ends immediately after the child completes:
+	// user task, newTask delegation, subtask_result (last message).
+	messages := []rooCodeMessage{
+		{
+			Timestamp: 1688836851000,
+			Type:      "say",
+			Say:       "text",
+			Text:      "Delegate the work",
+		},
+		{
+			Timestamp: 1688836860000,
+			Type:      "ask",
+			Ask:       "tool",
+			Text:      `{"tool":"newTask","mode":"Code","content":"Implement it"}`,
+		},
+		{
+			Timestamp: 1688836870000,
+			Type:      "say",
+			Say:       "subtask_result",
+			Text:      "Child finished the work",
+		},
+	}
+	messagesJSON, err := json.Marshal(messages)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "ui_messages.json"),
+		messagesJSON, 0644,
+	))
+
+	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	require.NoError(t, err)
+
+	// The subtask_result must resolve the newTask call as completed,
+	// not be emitted as a trailing standalone system message.
+	var newTask *ParsedToolCall
+	for mi := range msgs {
+		for ci := range msgs[mi].ToolCalls {
+			if msgs[mi].ToolCalls[ci].ToolName == "newTask" {
+				newTask = &msgs[mi].ToolCalls[ci]
+			}
+		}
+	}
+	require.NotNil(t, newTask, "newTask tool call should exist")
+	require.Len(t, newTask.ResultEvents, 1,
+		"subtask_result must pair as a completed result on newTask")
+	assert.Equal(t, "completed", newTask.ResultEvents[0].Status)
+	assert.Equal(t, "Child finished the work",
+		newTask.ResultEvents[0].Content)
+
+	// A completed parent ending on child completion must not be
+	// misreported as tool_call_pending.
+	assert.NotEqual(t, TerminationToolCallPending, sess.TerminationStatus,
+		"resolved newTask must not leave the session tool_call_pending")
+	assert.Equal(t, TerminationClean, sess.TerminationStatus)
+
+	// EndedAt must include the subtask_result timestamp even though it
+	// is consumed during pairing and not emitted as a message.
+	assert.Equal(t, time.UnixMilli(1688836870000).UTC(),
+		sess.EndedAt.UTC())
+}
+
+func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
+	tmpDir := t.TempDir()
+	taskDir := filepath.Join(tmpDir, "tasks", "test-task-completedby")
+	require.NoError(t, os.MkdirAll(taskDir, 0755))
+
+	childID := "child-task-uuid-8888"
+	historyItem := rooCodeHistoryItem{
+		ID:                 "test-task-completedby",
+		Number:             1,
+		Timestamp:          1688836851000,
+		Task:               "Delegate and complete via child",
+		TokensIn:           100,
+		TokensOut:          200,
+		Workspace:          "/Users/test/project",
+		ChildIDs:           []string{childID},
+		CompletedByChildID: childID,
+		Status:             "completed",
+	}
+	historyJSON, err := json.Marshal(historyItem)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "history_item.json"),
+		historyJSON, 0644,
+	))
+
+	// No subtask_result message; completion is recorded only via
+	// CompletedByChildID in the history item.
+	messages := []rooCodeMessage{
+		{
+			Timestamp: 1688836851000,
+			Type:      "say",
+			Say:       "text",
+			Text:      "Delegate the work",
+		},
+		{
+			Timestamp: 1688836860000,
+			Type:      "ask",
+			Ask:       "tool",
+			Text:      `{"tool":"newTask","mode":"Code","content":"Implement it"}`,
+		},
+	}
+	messagesJSON, err := json.Marshal(messages)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "ui_messages.json"),
+		messagesJSON, 0644,
+	))
+
+	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	require.NoError(t, err)
+
+	var newTask *ParsedToolCall
+	for mi := range msgs {
+		for ci := range msgs[mi].ToolCalls {
+			if msgs[mi].ToolCalls[ci].ToolName == "newTask" {
+				newTask = &msgs[mi].ToolCalls[ci]
+			}
+		}
+	}
+	require.NotNil(t, newTask, "newTask tool call should exist")
+	require.Len(t, newTask.ResultEvents, 1,
+		"CompletedByChildID must resolve the newTask as completed")
+	assert.Equal(t, "completed", newTask.ResultEvents[0].Status)
+
+	assert.NotEqual(t, TerminationToolCallPending, sess.TerminationStatus,
+		"child-completed delegation must not be tool_call_pending")
+}
+
 func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-no-children")
