@@ -4727,11 +4727,11 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 		// Every aider run in a history file shares the file's content hash, so
 		// a same-mtime append/truncate is caught by the hash compare.
 		compareHash = true
-	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-		// OpenCode-family providers fan one shared container out to per-session
-		// results. The per-session mtime is the session's own updated time, and
-		// the hash compare uses the opencode storage fingerprint to catch
-		// same-mtime content changes.
+	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode,
+		parser.AgentIcodemate, parser.AgentOmnigent:
+		// These providers fan one shared container out to per-session results.
+		// The per-session mtime is the session's own updated time, and the hash
+		// compare catches same-mtime content changes.
 		compareHash = true
 	case parser.AgentZed, parser.AgentKiro:
 		// Zed and Kiro fan one container DB out to a session per row and have no

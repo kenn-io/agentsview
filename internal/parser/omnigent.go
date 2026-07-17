@@ -104,6 +104,40 @@ type omnigentSchema struct {
 	hasSessionUsage bool
 }
 
+type omnigentMemberID struct {
+	workspaceID int64
+	rawID       string
+}
+
+func omnigentMemberForSchema(s omnigentSchema, value string) (omnigentMemberID, error) {
+	if !s.splitMetadata {
+		if !IsValidSessionID(value) {
+			return omnigentMemberID{}, fmt.Errorf("invalid omnigent session ID: %s", value)
+		}
+		return omnigentMemberID{rawID: value}, nil
+	}
+	workspace, rawID, ok := strings.Cut(value, ":")
+	if !ok || rawID == "" || !IsValidSessionID(rawID) {
+		return omnigentMemberID{}, fmt.Errorf("invalid omnigent member ID: %s", value)
+	}
+	workspaceID, err := strconv.ParseInt(workspace, 10, 64)
+	if err != nil {
+		return omnigentMemberID{}, fmt.Errorf("invalid omnigent workspace ID %q: %w", workspace, err)
+	}
+	return omnigentMemberID{workspaceID: workspaceID, rawID: rawID}, nil
+}
+
+func (m omnigentMemberID) key(s omnigentSchema) string {
+	if !s.splitMetadata {
+		return m.rawID
+	}
+	return fmt.Sprintf("%d:%s", m.workspaceID, m.rawID)
+}
+
+func (m omnigentMemberID) sessionID(s omnigentSchema) string {
+	return omnigentIDPrefix + m.key(s)
+}
+
 // openOmnigentDB opens chat.db read-only. Callers own Close.
 func openOmnigentDB(dbPath string) (*sql.DB, error) {
 	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&_busy_timeout=3000"
@@ -204,16 +238,31 @@ func omnigentColumnType(conn *sql.DB, table, column string) (string, bool) {
 }
 
 // omnigentConversationExists reports whether a conversation ID is present.
-func omnigentConversationExists(dbPath, rawID string) bool {
+func omnigentConversationExists(dbPath, memberKey string) bool {
 	conn, err := openOmnigentDB(dbPath)
 	if err != nil {
 		return false
 	}
 	defer conn.Close()
+	schema, err := detectOmnigentSchema(conn)
+	if err != nil {
+		return false
+	}
+	member, err := omnigentMemberForSchema(schema, memberKey)
+	if err != nil {
+		return false
+	}
 	var one int
-	err = conn.QueryRow(
-		`SELECT 1 FROM conversations WHERE id = ? LIMIT 1`, rawID,
-	).Scan(&one)
+	if schema.splitMetadata {
+		err = conn.QueryRow(
+			`SELECT 1 FROM conversations WHERE workspace_id = ? AND id = ? LIMIT 1`,
+			member.workspaceID, member.rawID,
+		).Scan(&one)
+	} else {
+		err = conn.QueryRow(
+			`SELECT 1 FROM conversations WHERE id = ? LIMIT 1`, member.rawID,
+		).Scan(&one)
+	}
 	return err == nil
 }
 
@@ -222,10 +271,15 @@ func omnigentConversationExists(dbPath, rawID string) bool {
 // content digest (updated_at + item count + max position) that changes exactly
 // when a conversation gains or edits items.
 type omnigentMeta struct {
+	workspaceID int64
 	rawID       string
 	updatedAt   int64
 	itemCount   int
 	maxPosition int
+}
+
+func (m omnigentMeta) member() omnigentMemberID {
+	return omnigentMemberID{workspaceID: m.workspaceID, rawID: m.rawID}
 }
 
 func (m omnigentMeta) fingerprint() string {
@@ -237,13 +291,25 @@ func (m omnigentMeta) fingerprint() string {
 // listOmnigentConversationMetas returns one meta per conversation with a cheap
 // aggregate fingerprint. The query touches only conversations and
 // conversation_items, which exist in every generation.
-func listOmnigentConversationMetas(conn *sql.DB) ([]omnigentMeta, error) {
-	rows, err := conn.Query(`
-		SELECT c.id, COALESCE(c.updated_at, 0),
+func listOmnigentConversationMetas(
+	conn *sql.DB, schema omnigentSchema,
+) ([]omnigentMeta, error) {
+	query := `
+		SELECT 0, c.id, COALESCE(c.updated_at, 0),
 		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
 		  FROM conversations c
 		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
-		 GROUP BY c.id`)
+		 GROUP BY c.id`
+	if schema.splitMetadata {
+		query = `
+			SELECT c.workspace_id, c.id, COALESCE(c.updated_at, 0),
+			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+			  FROM conversations c
+			  LEFT JOIN conversation_items ci
+			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+			 GROUP BY c.workspace_id, c.id`
+	}
+	rows, err := conn.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("listing omnigent conversation metas: %w", err)
 	}
@@ -253,7 +319,7 @@ func listOmnigentConversationMetas(conn *sql.DB) ([]omnigentMeta, error) {
 	for rows.Next() {
 		var m omnigentMeta
 		if err := rows.Scan(
-			&m.rawID, &m.updatedAt, &m.itemCount, &m.maxPosition,
+			&m.workspaceID, &m.rawID, &m.updatedAt, &m.itemCount, &m.maxPosition,
 		); err != nil {
 			return nil, fmt.Errorf("scanning omnigent meta: %w", err)
 		}
@@ -265,6 +331,7 @@ func listOmnigentConversationMetas(conn *sql.DB) ([]omnigentMeta, error) {
 // omnigentConversationRow holds a conversation's session-level metadata,
 // gathered from either the single conversations table or the split tables.
 type omnigentConversationRow struct {
+	workspaceID   int64
 	id            string
 	rootID        string
 	createdAt     int64
@@ -291,7 +358,7 @@ func omnigentConvSelect(s omnigentSchema) string {
 	}
 	if !s.splitMetadata {
 		return `
-			SELECT c.id, COALESCE(c.root_conversation_id, ''),
+			SELECT 0, c.id, COALESCE(c.root_conversation_id, ''),
 			       COALESCE(c.created_at, 0), COALESCE(c.updated_at, 0),
 			       COALESCE(c.title, ''), COALESCE(c.kind, ''),
 			       COALESCE(c.model_override, ''),
@@ -307,10 +374,12 @@ func omnigentConvSelect(s omnigentSchema) string {
 	}
 	join := ""
 	if s.hasAgentConfig {
-		join = " LEFT JOIN agent_configuration a ON a.conversation_id = c.id"
+		join = ` LEFT JOIN agent_configuration a
+		               ON a.workspace_id = c.workspace_id
+		              AND a.conversation_id = c.id`
 	}
 	return `
-		SELECT c.id, COALESCE(c.root_conversation_id, ''),
+		SELECT c.workspace_id, c.id, COALESCE(c.root_conversation_id, ''),
 		       COALESCE(c.created_at, 0), COALESCE(c.updated_at, 0),
 		       COALESCE(c.title, ''), COALESCE(CAST(m.kind AS TEXT), ''),
 		       ` + model + `,
@@ -318,17 +387,22 @@ func omnigentConvSelect(s omnigentSchema) string {
 		       COALESCE(m.sub_agent_name, ''), COALESCE(m.workspace, ''),
 		       COALESCE(m.git_branch, ''), ` + usage + `
 		  FROM conversations c
-		  LEFT JOIN omnigent_conversation_metadata m ON m.id = c.id` +
+		  LEFT JOIN omnigent_conversation_metadata m
+		    ON m.workspace_id = c.workspace_id AND m.id = c.id` +
 		join + `
-		 WHERE c.id = ?`
+		 WHERE c.workspace_id = ? AND c.id = ?`
 }
 
 func loadOmnigentConversation(
-	conn *sql.DB, s omnigentSchema, rawID string,
+	conn *sql.DB, s omnigentSchema, member omnigentMemberID,
 ) (omnigentConversationRow, error) {
 	row := omnigentConversationRow{}
-	err := conn.QueryRow(omnigentConvSelect(s), rawID).Scan(
-		&row.id, &row.rootID, &row.createdAt, &row.updatedAt, &row.title,
+	args := []any{member.rawID}
+	if s.splitMetadata {
+		args = []any{member.workspaceID, member.rawID}
+	}
+	err := conn.QueryRow(omnigentConvSelect(s), args...).Scan(
+		&row.workspaceID, &row.id, &row.rootID, &row.createdAt, &row.updatedAt, &row.title,
 		&row.kindRaw, &row.modelOverride, &row.parentID, &row.subAgentName,
 		&row.workspace, &row.gitBranch, &row.sessionUsage,
 	)
@@ -373,7 +447,7 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	metas, err := listOmnigentConversationMetas(conn)
+	metas, err := listOmnigentConversationMetas(conn, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +455,7 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 	var results []ParseResult
 	for _, meta := range metas {
 		res, err := parseOmnigentConversationFromDB(
-			conn, schema, dbPath, meta.rawID, machine, dbInfo, &meta)
+			conn, schema, dbPath, meta.member(), machine, dbInfo, &meta)
 		if err != nil {
 			return nil, err
 		}
@@ -398,9 +472,10 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 // items so the stored hash matches listOmnigentConversationMetas.
 func parseOmnigentConversationFromDB(
 	conn *sql.DB, schema omnigentSchema,
-	dbPath, rawID, machine string, dbInfo os.FileInfo, meta *omnigentMeta,
+	dbPath string, member omnigentMemberID, machine string, dbInfo os.FileInfo,
+	meta *omnigentMeta,
 ) (*ParseResult, error) {
-	conv, err := loadOmnigentConversation(conn, schema, rawID)
+	conv, err := loadOmnigentConversation(conn, schema, member)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -408,7 +483,7 @@ func parseOmnigentConversationFromDB(
 		return nil, err
 	}
 
-	messages, maxPos, err := loadOmnigentMessages(conn, schema, rawID)
+	messages, maxPos, err := loadOmnigentMessages(conn, schema, member)
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +493,8 @@ func parseOmnigentConversationFromDB(
 		fingerprint = meta.fingerprint()
 	} else {
 		fingerprint = omnigentMeta{
-			rawID:       rawID,
+			workspaceID: member.workspaceID,
+			rawID:       member.rawID,
 			updatedAt:   conv.updatedAt,
 			itemCount:   len(messages),
 			maxPosition: maxPos,
@@ -439,7 +515,7 @@ func parseOmnigentConversationFromDB(
 	}
 
 	sess := ParsedSession{
-		ID:               omnigentIDPrefix + conv.id,
+		ID:               member.sessionID(schema),
 		Agent:            omnigentAgent,
 		Machine:          machine,
 		Project:          ExtractProjectFromCwd(workspace),
@@ -452,14 +528,16 @@ func parseOmnigentConversationFromDB(
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
 		File: FileInfo{
-			Path:  VirtualSourcePath(dbPath, conv.id),
+			Path:  VirtualSourcePath(dbPath, member.key(schema)),
 			Size:  dbInfo.Size(),
-			Mtime: dbInfo.ModTime().UnixNano(),
+			Mtime: conv.updatedAt * int64(time.Second),
 			Hash:  fingerprint,
 		},
 	}
 	if conv.parentID != "" {
-		sess.ParentSessionID = omnigentIDPrefix + conv.parentID
+		sess.ParentSessionID = omnigentMemberID{
+			workspaceID: conv.workspaceID, rawID: conv.parentID,
+		}.sessionID(schema)
 	}
 	if omnigentIsSubAgent(conv.kindRaw) {
 		sess.RelationshipType = RelSubagent
@@ -467,6 +545,7 @@ func parseOmnigentConversationFromDB(
 
 	usageEvents := omnigentUsageEvents(sess.ID, conv.sessionUsage)
 	accumulateMessageTokenUsage(&sess, messages)
+	applyUsageEventTokenTotals(&sess, usageEvents)
 
 	return &ParseResult{
 		Session:     sess,
@@ -483,7 +562,9 @@ func omnigentResolveWorkspace(
 	if conv.workspace != "" || conv.rootID == "" || conv.rootID == conv.id {
 		return conv.workspace, conv.gitBranch
 	}
-	root, err := loadOmnigentConversation(conn, schema, conv.rootID)
+	root, err := loadOmnigentConversation(conn, schema, omnigentMemberID{
+		workspaceID: conv.workspaceID, rawID: conv.rootID,
+	})
 	if err != nil {
 		return conv.workspace, conv.gitBranch
 	}
@@ -557,16 +638,26 @@ type omnigentSlashCommandData struct {
 // order, folding function_call_output onto its originating call. It returns the
 // messages and the maximum position seen (for fingerprinting).
 func loadOmnigentMessages(
-	conn *sql.DB, schema omnigentSchema, rawID string,
+	conn *sql.DB, schema omnigentSchema, member omnigentMemberID,
 ) ([]ParsedMessage, int, error) {
-	rows, err := conn.Query(`
+	query := `
 		SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
 		  FROM conversation_items
 		 WHERE conversation_id = ?
-		 ORDER BY position ASC`, rawID)
+		 ORDER BY position ASC`
+	args := []any{member.rawID}
+	if schema.splitMetadata {
+		query = `
+			SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
+			  FROM conversation_items
+			 WHERE workspace_id = ? AND conversation_id = ?
+			 ORDER BY position ASC`
+		args = []any{member.workspaceID, member.rawID}
+	}
+	rows, err := conn.Query(query, args...)
 	if err != nil {
 		return nil, -1, fmt.Errorf(
-			"listing omnigent items for %s: %w", rawID, err)
+			"listing omnigent items for %s: %w", member.key(schema), err)
 	}
 	defer rows.Close()
 

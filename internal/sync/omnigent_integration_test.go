@@ -1,0 +1,175 @@
+package sync_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"path/filepath"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
+)
+
+const omnigentSyncDDL = `
+CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL);
+CREATE TABLE conversations (
+	id VARCHAR(64) PRIMARY KEY,
+	created_at INTEGER, updated_at INTEGER, title TEXT,
+	kind VARCHAR(32), model_override VARCHAR(128),
+	parent_conversation_id VARCHAR(64), root_conversation_id VARCHAR(64),
+	sub_agent_name VARCHAR(128), workspace VARCHAR(2048),
+	git_branch VARCHAR(255), session_usage TEXT
+);
+CREATE TABLE conversation_items (
+	id VARCHAR(64) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
+	position INTEGER NOT NULL, type VARCHAR(32) NOT NULL,
+	data TEXT NOT NULL, search_text TEXT NOT NULL
+);`
+
+func writeOmnigentSyncDB(t *testing.T, root string, count int) string {
+	t.Helper()
+	path := filepath.Join(root, "chat.db")
+	database, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	for _, statement := range splitSQLStatements(omnigentSyncDDL) {
+		_, err = database.Exec(statement)
+		require.NoError(t, err)
+	}
+	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('sync-test')`)
+	require.NoError(t, err)
+	for i := range count {
+		id := fmt.Sprintf("conv_%04d", i)
+		updatedAt := int64(1_700_000_000 + i)
+		_, err = database.Exec(`INSERT INTO conversations
+			(id, created_at, updated_at, title, kind, root_conversation_id)
+			VALUES (?, ?, ?, ?, 'default', ?)`,
+			id, updatedAt-1, updatedAt, id, id)
+		require.NoError(t, err)
+		_, err = database.Exec(`INSERT INTO conversation_items
+			(id, conversation_id, position, type, data, search_text)
+			VALUES (?, ?, 0, 'message', ?, 'initial')`, id+"_0", id,
+			`{"role":"user","content":[{"type":"input_text","text":"initial"}]}`)
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.Close())
+	return path
+}
+
+func splitSQLStatements(ddl string) []string {
+	var statements []string
+	start := 0
+	for i, char := range ddl {
+		if char != ';' {
+			continue
+		}
+		if statement := ddl[start:i]; statement != "" {
+			statements = append(statements, statement)
+		}
+		start = i + 1
+	}
+	return statements
+}
+
+func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	for _, archiveSize := range []int{5, 200} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := writeOmnigentSyncDB(t, root, archiveSize)
+			archive := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {root},
+				},
+				Machine: "local",
+			})
+			engine.SyncAll(context.Background(), nil)
+			require.Equal(t, archiveSize, engine.LastSyncStats().Synced)
+			engine.SyncAll(context.Background(), nil)
+			assert.Zero(t, engine.LastSyncStats().Synced,
+				"unchanged full sync should not rewrite member sessions")
+
+			writer, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			const changedAt = int64(1_800_000_000)
+			_, err = writer.Exec(
+				`UPDATE conversations SET updated_at = ? WHERE id = 'conv_0000'`,
+				changedAt)
+			require.NoError(t, err)
+			_, err = writer.Exec(`INSERT INTO conversation_items
+				(id, conversation_id, position, type, data, search_text)
+				VALUES ('conv_0000_1', 'conv_0000', 1, 'message', ?, 'changed')`,
+				`{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}`)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			engine.SyncPaths([]string{dbPath + "-wal"})
+			assert.Equal(t, 1, engine.LastSyncStats().Synced,
+				"one changed conversation should produce one archive write")
+			changed, err := archive.GetSessionFull(context.Background(), "omnigent:conv_0000")
+			require.NoError(t, err)
+			require.NotNil(t, changed)
+			assert.Equal(t, 2, changed.MessageCount)
+			require.NotNil(t, changed.FileMtime)
+			assert.Equal(t, changedAt*1_000_000_000, *changed.FileMtime)
+
+			unchanged, err := archive.GetSession(context.Background(), "omnigent:conv_0001")
+			require.NoError(t, err)
+			require.NotNil(t, unchanged)
+			assert.Equal(t, 1, unchanged.MessageCount)
+
+			writer, err = sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(
+				`DELETE FROM conversation_items WHERE conversation_id = 'conv_0001'`)
+			require.NoError(t, err)
+			_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_0001'`)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			engine.SyncPaths([]string{dbPath})
+			deleted, err := archive.GetSession(context.Background(), "omnigent:conv_0001")
+			require.NoError(t, err)
+			assert.Nil(t, deleted, "deleted conversation should retire its member session")
+		})
+	}
+}
+
+func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+	before, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DROP TABLE conversation_items`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	engine.SyncAll(context.Background(), nil)
+	after, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, after, "unsupported source must not retire archived sessions")
+	assert.Equal(t, before.MessageCount, after.MessageCount)
+}

@@ -339,7 +339,7 @@ thread JSON files.
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                              |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                           |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                |
-| Omnigent              | `~/.omnigent/chat.db` (single SQLite database; see note below)                                                                                                          |
+| Omnigent              | `~/.omnigent/chat.db`                                                                                                                                                   |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                        |
@@ -364,15 +364,6 @@ for the full transcript (user turns, assistant replies, thinking, and tool
 calls). If `chat_history.jsonl` is missing, AgentsView falls back to
 summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
-
-Omnigent is an open-source meta-harness that orchestrates other coding agents
-and stores every conversation in one SQLite database (`~/.omnigent/chat.db`),
-which agentsview fans out into one session per conversation, preserving the
-sub-agent hierarchy. The schema is read by feature detection, so both the older
-single-table layout and newer split-table layouts are supported; a database
-whose session metadata lives in a separate physical database is skipped rather
-than parsed partially. Set `OMNIGENT_DIR` or `omnigent_dirs` to override the
-default directory.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor

@@ -3,18 +3,39 @@
 package parser
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+type omnigentTrackedContainer struct {
+	schema     omnigentSchema
+	metas      map[string]omnigentMeta
+	maxUpdated int64
+}
+
+type omnigentChangeTracker struct {
+	mu         sync.Mutex
+	containers map[string]omnigentTrackedContainer
+}
+
+func newOmnigentChangeTracker() *omnigentChangeTracker {
+	return &omnigentChangeTracker{
+		containers: make(map[string]omnigentTrackedContainer),
+	}
+}
 
 // omnigent stores every conversation in one shared SQLite database (chat.db).
 // It is a multi-session container provider: discovery surfaces the database as
 // a single source and Parse fans it out into one session per conversation,
 // addressed by "<db>#<conversationID>" virtual paths.
 func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
+	tracker := newOmnigentChangeTracker()
 	return NewMultiSessionProviderFactory(
 		def,
 		omnigentProviderCapabilities(),
@@ -25,11 +46,13 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithContainerDiscovery(omnigentDiscoverContainers),
 				WithWatchRoots(omnigentWatchRoots),
 				WithChangedPathClassifier(omnigentClassifyPath),
+				WithChangedPathMembers(tracker.changedMembers),
 				WithMemberLookup(omnigentFindMember),
 				WithFingerprint(omnigentFingerprintSource),
-				WithContainerParse(omnigentParseContainer),
-				WithMemberParse(omnigentParseMember),
+				WithContainerParse(tracker.parseContainer),
+				WithMemberParse(tracker.parseMember),
 				WithMemberPresence(omnigentMemberPresent),
+				WithUnsupportedSourceError(omnigentSchemaUnsupported),
 			)
 		},
 	)
@@ -107,7 +130,7 @@ func omnigentClassifyPath(
 }
 
 func omnigentFindMember(root, rawID string) (multiSessionMatch, bool) {
-	if root == "" || !IsValidSessionID(rawID) {
+	if root == "" {
 		return multiSessionMatch{}, false
 	}
 	dbPath := omnigentDBPath(root)
@@ -149,14 +172,19 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 		return SourceFingerprint{}, err
 	}
 	defer conn.Close()
-	metas, err := listOmnigentConversationMetas(conn)
+	schema, err := detectOmnigentSchema(conn)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
-	for _, meta := range metas {
-		if meta.rawID != src.MemberID {
-			continue
-		}
+	member, err := omnigentMemberForSchema(schema, src.MemberID)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	meta, ok, err := loadOmnigentConversationMeta(conn, schema, member)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	if ok {
 		fingerprint.MTimeNS = meta.updatedAt * int64(1_000_000_000)
 		fingerprint.Hash = meta.fingerprint()
 		return fingerprint, nil
@@ -165,6 +193,261 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 	// fingerprint without error so the engine proceeds to Parse, which
 	// force-replaces the deleted session out of the archive.
 	return SourceFingerprint{}, nil
+}
+
+func loadOmnigentConversationMeta(
+	conn *sql.DB, schema omnigentSchema, member omnigentMemberID,
+) (omnigentMeta, bool, error) {
+	query := `
+		SELECT 0, c.id, COALESCE(c.updated_at, 0),
+		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+		  FROM conversations c
+		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
+		 WHERE c.id = ?
+		 GROUP BY c.id`
+	args := []any{member.rawID}
+	if schema.splitMetadata {
+		query = `
+			SELECT c.workspace_id, c.id, COALESCE(c.updated_at, 0),
+			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+			  FROM conversations c
+			  LEFT JOIN conversation_items ci
+			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+			 WHERE c.workspace_id = ? AND c.id = ?
+			 GROUP BY c.workspace_id, c.id`
+		args = []any{member.workspaceID, member.rawID}
+	}
+	var meta omnigentMeta
+	err := conn.QueryRow(query, args...).Scan(
+		&meta.workspaceID, &meta.rawID, &meta.updatedAt,
+		&meta.itemCount, &meta.maxPosition,
+	)
+	if err == sql.ErrNoRows {
+		return omnigentMeta{}, false, nil
+	}
+	if err != nil {
+		return omnigentMeta{}, false, fmt.Errorf("loading omnigent conversation meta: %w", err)
+	}
+	return meta, true, nil
+}
+
+func (t *omnigentChangeTracker) changedMembers(
+	root string, req ChangedPathRequest,
+) ([]multiSessionMatch, error) {
+	match, ok := omnigentClassifyPath(root, req.Path, true)
+	if !ok {
+		return nil, nil
+	}
+	if match.MemberID != "" || !IsRegularFile(match.Container) {
+		return []multiSessionMatch{match}, nil
+	}
+	conn, err := openOmnigentDB(match.Container)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	schema, err := detectOmnigentSchema(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	t.mu.Lock()
+	tracked, initialized := t.containers[match.Container]
+	if initialized {
+		copied := make(map[string]omnigentMeta, len(tracked.metas))
+		maps.Copy(copied, tracked.metas)
+		tracked.metas = copied
+	}
+	t.mu.Unlock()
+	if !initialized {
+		metas, err := listOmnigentConversationMetas(conn, schema)
+		if err != nil {
+			return nil, err
+		}
+		return omnigentMatches(match.Container, schema, metas), nil
+	}
+
+	changed, err := listOmnigentConversationMetasSince(
+		conn, schema, tracked.maxUpdated,
+	)
+	if err != nil {
+		return nil, err
+	}
+	selected := make([]omnigentMeta, 0, len(changed))
+	for _, meta := range changed {
+		previous, exists := tracked.metas[meta.member().key(schema)]
+		if !exists || previous.fingerprint() != meta.fingerprint() {
+			selected = append(selected, meta)
+		}
+	}
+
+	count, err := omnigentConversationCount(conn)
+	if err != nil {
+		return nil, err
+	}
+	if count < len(tracked.metas) {
+		current, err := listOmnigentConversationMetas(conn, schema)
+		if err != nil {
+			return nil, err
+		}
+		present := make(map[string]struct{}, len(current))
+		for _, meta := range current {
+			present[meta.member().key(schema)] = struct{}{}
+		}
+		for key := range tracked.metas {
+			if _, exists := present[key]; exists {
+				continue
+			}
+			selected = append(selected, tracked.metas[key])
+		}
+	}
+	return omnigentMatches(match.Container, schema, selected), nil
+}
+
+func omnigentConversationCount(conn *sql.DB) (int, error) {
+	var count int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting omnigent conversations: %w", err)
+	}
+	return count, nil
+}
+
+func listOmnigentConversationMetasSince(
+	conn *sql.DB, schema omnigentSchema, updatedAt int64,
+) ([]omnigentMeta, error) {
+	query := `
+		SELECT 0, c.id, COALESCE(c.updated_at, 0),
+		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+		  FROM conversations c
+		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
+		 WHERE COALESCE(c.updated_at, 0) >= ?
+		 GROUP BY c.id`
+	if schema.splitMetadata {
+		query = `
+			SELECT c.workspace_id, c.id, COALESCE(c.updated_at, 0),
+			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+			  FROM conversations c
+			  LEFT JOIN conversation_items ci
+			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+			 WHERE COALESCE(c.updated_at, 0) >= ?
+			 GROUP BY c.workspace_id, c.id`
+	}
+	rows, err := conn.Query(query, updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("listing changed omnigent conversations: %w", err)
+	}
+	defer rows.Close()
+	var metas []omnigentMeta
+	for rows.Next() {
+		var meta omnigentMeta
+		if err := rows.Scan(&meta.workspaceID, &meta.rawID, &meta.updatedAt,
+			&meta.itemCount, &meta.maxPosition); err != nil {
+			return nil, fmt.Errorf("scanning changed omnigent conversation: %w", err)
+		}
+		metas = append(metas, meta)
+	}
+	return metas, rows.Err()
+}
+
+func omnigentMatches(
+	container string, schema omnigentSchema, metas []omnigentMeta,
+) []multiSessionMatch {
+	matches := make([]multiSessionMatch, 0, len(metas))
+	seen := make(map[string]struct{}, len(metas))
+	for _, meta := range metas {
+		key := meta.member().key(schema)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		matches = append(matches, multiSessionMatch{
+			Path: VirtualSourcePath(container, key), Container: container, MemberID: key,
+		})
+	}
+	return matches
+}
+
+func (t *omnigentChangeTracker) parseContainer(
+	src multiSessionSource, req ParseRequest,
+) ([]ParseResult, error) {
+	results, schema, metas, err := omnigentParseContainerData(src, req)
+	if err != nil {
+		return nil, err
+	}
+	t.replace(src.Container, schema, metas)
+	return results, nil
+}
+
+func (t *omnigentChangeTracker) parseMember(
+	src multiSessionSource, req ParseRequest,
+) (*ParseResult, error) {
+	result, err := omnigentParseMember(src, req)
+	if err != nil {
+		return nil, err
+	}
+	conn, openErr := openOmnigentDB(src.Container)
+	if openErr != nil {
+		return result, nil
+	}
+	defer conn.Close()
+	schema, schemaErr := detectOmnigentSchema(conn)
+	if schemaErr != nil {
+		return result, nil
+	}
+	member, memberErr := omnigentMemberForSchema(schema, src.MemberID)
+	if memberErr != nil {
+		return result, nil
+	}
+	meta, exists, metaErr := loadOmnigentConversationMeta(conn, schema, member)
+	if metaErr == nil {
+		t.observe(src.Container, schema, member.key(schema), meta, exists)
+	}
+	return result, nil
+}
+
+func (t *omnigentChangeTracker) replace(
+	container string, schema omnigentSchema, metas []omnigentMeta,
+) {
+	tracked := omnigentTrackedContainer{
+		schema: schema, metas: make(map[string]omnigentMeta, len(metas)),
+	}
+	for _, meta := range metas {
+		tracked.metas[meta.member().key(schema)] = meta
+		if meta.updatedAt > tracked.maxUpdated {
+			tracked.maxUpdated = meta.updatedAt
+		}
+	}
+	t.mu.Lock()
+	t.containers[container] = tracked
+	t.mu.Unlock()
+}
+
+func (t *omnigentChangeTracker) observe(
+	container string, schema omnigentSchema, key string, meta omnigentMeta, exists bool,
+) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tracked, ok := t.containers[container]
+	if !ok || tracked.schema != schema {
+		tracked = omnigentTrackedContainer{
+			schema: schema, metas: make(map[string]omnigentMeta),
+		}
+	}
+	if exists {
+		tracked.metas[key] = meta
+		if meta.updatedAt > tracked.maxUpdated {
+			tracked.maxUpdated = meta.updatedAt
+		}
+	} else {
+		delete(tracked.metas, key)
+		tracked.maxUpdated = 0
+		for _, current := range tracked.metas {
+			if current.updatedAt > tracked.maxUpdated {
+				tracked.maxUpdated = current.updatedAt
+			}
+		}
+	}
+	t.containers[container] = tracked
 }
 
 func omnigentMemberPresent(src multiSessionSource) bool {
@@ -184,9 +467,6 @@ func omnigentParseMember(
 		}
 		return nil, fmt.Errorf("stat %s: %w", src.Container, err)
 	}
-	if !IsValidSessionID(src.MemberID) {
-		return nil, fmt.Errorf("invalid omnigent session ID: %s", src.MemberID)
-	}
 	conn, err := openOmnigentDB(src.Container)
 	if err != nil {
 		return nil, err
@@ -195,58 +475,57 @@ func omnigentParseMember(
 
 	schema, err := detectOmnigentSchema(conn)
 	if err != nil {
-		if omnigentSchemaUnsupported(err) {
-			return nil, nil
-		}
+		return nil, err
+	}
+	member, err := omnigentMemberForSchema(schema, src.MemberID)
+	if err != nil {
 		return nil, err
 	}
 	return parseOmnigentConversationFromDB(
-		conn, schema, src.Container, src.MemberID, req.Machine, dbInfo, nil,
+		conn, schema, src.Container, member, req.Machine, dbInfo, nil,
 	)
 }
 
-func omnigentParseContainer(
+func omnigentParseContainerData(
 	src multiSessionSource, req ParseRequest,
-) ([]ParseResult, error) {
+) ([]ParseResult, omnigentSchema, []omnigentMeta, error) {
 	dbInfo, err := os.Stat(src.Container)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, omnigentSchema{}, nil, nil
 		}
-		return nil, fmt.Errorf("stat %s: %w", src.Container, err)
+		return nil, omnigentSchema{}, nil,
+			fmt.Errorf("stat %s: %w", src.Container, err)
 	}
 	conn, err := openOmnigentDB(src.Container)
 	if err != nil {
-		return nil, err
+		return nil, omnigentSchema{}, nil, err
 	}
 	defer conn.Close()
 
 	schema, err := detectOmnigentSchema(conn)
 	if err != nil {
-		if omnigentSchemaUnsupported(err) {
-			return nil, nil
-		}
-		return nil, err
+		return nil, omnigentSchema{}, nil, err
 	}
-	metas, err := listOmnigentConversationMetas(conn)
+	metas, err := listOmnigentConversationMetas(conn, schema)
 	if err != nil {
-		return nil, err
+		return nil, omnigentSchema{}, nil, err
 	}
 	results := make([]ParseResult, 0, len(metas))
 	for i := range metas {
 		result, err := parseOmnigentConversationFromDB(
-			conn, schema, src.Container, metas[i].rawID,
+			conn, schema, src.Container, metas[i].member(),
 			req.Machine, dbInfo, &metas[i],
 		)
 		if err != nil {
-			return nil, err
+			return nil, omnigentSchema{}, nil, err
 		}
 		if result == nil {
 			continue
 		}
 		results = append(results, *result)
 	}
-	return results, nil
+	return results, schema, metas, nil
 }
 
 func omnigentSchemaUnsupported(err error) bool {
