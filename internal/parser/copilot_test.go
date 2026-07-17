@@ -710,7 +710,7 @@ func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 			carriers++
 		}
 	}
-	assert.Equal(t, 1, carriers, "event-level credits must have one carrier row")
+	assert.Equal(t, 1, carriers, "session credits must have one carrier row")
 	assert.InDelta(t, 2.5, reported, 1e-12)
 }
 
@@ -740,10 +740,26 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 	// Second segment: fresh = 300 - 250 - 20 = 30
 	assert.Equal(t, 30, usage[1].InputTokens)
 	assert.Equal(t, 80, usage[1].OutputTokens)
-	require.NotNil(t, usage[0].AICredits)
+	assert.Nil(t, usage[0].AICredits,
+		"earlier cumulative shutdown total must be superseded")
 	require.NotNil(t, usage[1].AICredits)
-	assert.InDelta(t, 1.25, *usage[0].AICredits, 1e-12)
 	assert.InDelta(t, 2.75, *usage[1].AICredits, 1e-12)
+}
+
+func TestParseCopilotSession_MultiShutdown_LastZeroIsAuthoritative(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"multi-shut-zero","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":0,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":200,"outputTokens":80}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	require.Len(t, usage, 2)
+	assert.Nil(t, usage[0].AICredits)
+	require.NotNil(t, usage[1].AICredits)
+	assert.Zero(t, *usage[1].AICredits)
 }
 
 func TestParseCopilotSession_ShutdownZeroUsage_Skipped(t *testing.T) {

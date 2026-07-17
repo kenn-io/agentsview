@@ -1169,7 +1169,7 @@ func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
 			cost_usd, ai_credits, occurred_at, dedup_key
 		) VALUES
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
-			 0.10, 1.25, '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
+			 0.10, NULL, '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
 			 0.10, 2.75, '2026-03-12T10:02:00Z'::timestamptz, 'segment-2')`)
 	require.NoError(t, err)
@@ -1178,7 +1178,7 @@ func TestStoreGetSessionUsage_CopilotAICreditsReported(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.Equal(t, 0.20, usage.CostUSD)
-	assert.Equal(t, 4.0, usage.AICredits)
+	assert.Equal(t, 2.75, usage.AICredits)
 	assert.Equal(t, db.AICreditsSourceReported, usage.AICreditsSource)
 }
 

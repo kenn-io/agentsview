@@ -42,6 +42,119 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
+func TestCopyOrphanedDataPreservesUsageEvents(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "copilot:orphan", "proj", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-07-17T10:00:00Z")
+	})
+	ordinal := 3
+	cost := 0.42
+	credits := 2.75
+	require.NoError(t, srcDB.ReplaceSessionUsageEvents(
+		"copilot:orphan",
+		[]UsageEvent{
+			{
+				MessageOrdinal:           &ordinal,
+				Source:                   "message",
+				Model:                    "claude-sonnet-4-6",
+				InputTokens:              11,
+				OutputTokens:             12,
+				CacheCreationInputTokens: 13,
+				CacheReadInputTokens:     14,
+				ReasoningTokens:          15,
+				CostUSD:                  &cost,
+				CostStatus:               "reported",
+				CostSource:               "copilot",
+				OccurredAt:               "2026-07-17T10:01:00Z",
+				DedupKey:                 "message-3",
+			},
+			{
+				Source:     "shutdown",
+				Model:      "claude-sonnet-4-6",
+				AICredits:  &credits,
+				OccurredAt: "2026-07-17T10:02:00Z",
+				DedupKey:   "shutdown-final",
+			},
+		},
+	), "seed source usage events")
+	require.NoError(t, srcDB.Close(), "close source")
+
+	dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	defer dstDB.Close()
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count)
+
+	got, err := dstDB.GetUsageEvents(ctx, "copilot:orphan")
+	require.NoError(t, err, "GetUsageEvents")
+	require.Len(t, got, 2)
+	byKey := make(map[string]UsageEvent, len(got))
+	for _, event := range got {
+		byKey[event.DedupKey] = event
+	}
+	messageEvent := byKey["message-3"]
+	require.NotNil(t, messageEvent.MessageOrdinal)
+	assert.Equal(t, ordinal, *messageEvent.MessageOrdinal)
+	assert.Equal(t, "message", messageEvent.Source)
+	assert.Equal(t, "claude-sonnet-4-6", messageEvent.Model)
+	assert.Equal(t, 11, messageEvent.InputTokens)
+	assert.Equal(t, 12, messageEvent.OutputTokens)
+	assert.Equal(t, 13, messageEvent.CacheCreationInputTokens)
+	assert.Equal(t, 14, messageEvent.CacheReadInputTokens)
+	assert.Equal(t, 15, messageEvent.ReasoningTokens)
+	require.NotNil(t, messageEvent.CostUSD)
+	assert.Equal(t, cost, *messageEvent.CostUSD)
+	assert.Equal(t, "reported", messageEvent.CostStatus)
+	assert.Equal(t, "copilot", messageEvent.CostSource)
+	assert.Equal(t, "2026-07-17T10:01:00Z", messageEvent.OccurredAt)
+	creditEvent := byKey["shutdown-final"]
+	require.NotNil(t, creditEvent.AICredits)
+	assert.Equal(t, credits, *creditEvent.AICredits)
+
+	usage, err := dstDB.GetSessionUsage(ctx, "copilot:orphan", false)
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage)
+	assert.Equal(t, credits, usage.AICredits)
+	assert.Equal(t, AICreditsSourceReported, usage.AICreditsSource)
+}
+
+func TestCopyOrphanedDataSupportsUsageEventsWithoutAICreditsColumn(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "legacy-orphan", "proj")
+	require.NoError(t, srcDB.ReplaceSessionUsageEvents(
+		"legacy-orphan",
+		[]UsageEvent{{
+			Source: "shutdown", Model: "legacy-model",
+			InputTokens: 7, OccurredAt: "2026-07-17T10:00:00Z",
+			DedupKey: "legacy-event",
+		}},
+	), "seed legacy usage event")
+	_, err := srcDB.getWriter().Exec(
+		"ALTER TABLE usage_events DROP COLUMN ai_credits")
+	require.NoError(t, err, "remove newer source column")
+	require.NoError(t, srcDB.Close(), "close source")
+
+	dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+	defer dstDB.Close()
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count)
+
+	got, err := dstDB.GetUsageEvents(ctx, "legacy-orphan")
+	require.NoError(t, err, "GetUsageEvents")
+	require.Len(t, got, 1)
+	assert.Equal(t, 7, got[0].InputTokens)
+	assert.Nil(t, got[0].AICredits)
+	assert.Equal(t, "legacy-event", got[0].DedupKey)
+}
+
 func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
