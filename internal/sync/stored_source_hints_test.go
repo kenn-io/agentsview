@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	gosync "sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,6 +106,45 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 			}
 		})
 	}
+}
+
+func TestOmnigentStoredHintCursorSerializesConcurrentPages(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	for i := range 2 * omnigentStoredHintBatchSize {
+		path := filepath.Join(root, fmt.Sprintf("chat.db#member-%03d", i))
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: fmt.Sprintf("omnigent:member-%03d", i), Agent: string(parser.AgentOmnigent),
+			Project: "fixture", Machine: "local", FilePath: strPtr(path),
+		}))
+	}
+	engine := &Engine{db: database}
+	type pageResult struct {
+		paths []string
+		err   error
+	}
+	results := make(chan pageResult, 2)
+	var wg gosync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			paths, err := engine.changedPathStoredSourcePaths(parser.AgentOmnigent, root)
+			results <- pageResult{paths: paths, err: err}
+		})
+	}
+	wg.Wait()
+	close(results)
+
+	seen := make(map[string]struct{}, 2*omnigentStoredHintBatchSize)
+	for result := range results {
+		require.NoError(t, result.err)
+		require.Len(t, result.paths, omnigentStoredHintBatchSize)
+		for _, path := range result.paths {
+			_, duplicate := seen[path]
+			assert.False(t, duplicate, "concurrent page claims must not overlap")
+			seen[path] = struct{}{}
+		}
+	}
+	assert.Len(t, seen, 2*omnigentStoredHintBatchSize)
 }
 
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {

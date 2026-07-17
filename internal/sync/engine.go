@@ -138,7 +138,7 @@ type Engine struct {
 	omnigentRetryMu         gosync.Mutex
 	omnigentRetrySources    map[string]omnigentRetrySource
 	omnigentHintMu          gosync.Mutex
-	omnigentHintCursors     map[string]string
+	omnigentHintCursors     map[string]omnigentHintCursor
 	resyncOmnigentAdvanced  atomic.Bool
 	projectIdentityMu       gosync.Mutex
 	projectIdentityCache    map[string]projectIdentityCacheEntry
@@ -298,7 +298,7 @@ func NewEngine(
 		emitter:                 cfg.Emitter,
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
-		omnigentHintCursors:     make(map[string]string),
+		omnigentHintCursors:     make(map[string]omnigentHintCursor),
 		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
 		projectIdentityWritten:  make(map[string]struct{}),
 		startupMaintenanceReady: make(chan struct{}),
@@ -843,34 +843,55 @@ func (e *Engine) classifyProviderChangedPath(
 
 const omnigentStoredHintBatchSize = 32
 
+type omnigentHintCursor struct {
+	after  string
+	active bool
+}
+
 func (e *Engine) changedPathStoredSourcePaths(
 	agent parser.AgentType, watchRoot string,
 ) ([]string, error) {
 	if agent != parser.AgentOmnigent {
 		return e.db.ListStoredSourcePathHints(string(agent), []string{watchRoot})
 	}
-	key := string(agent) + "\x00" + filepath.Clean(watchRoot)
-	e.omnigentHintMu.Lock()
-	after := e.omnigentHintCursors[key]
-	e.omnigentHintMu.Unlock()
+	paths, _, err := e.nextOmnigentStoredHintPage(watchRoot, true)
+	return paths, err
+}
 
+func (e *Engine) nextOmnigentStoredHintPage(
+	watchRoot string, activate bool,
+) ([]string, bool, error) {
+	key := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(watchRoot)
+	e.omnigentHintMu.Lock()
+	defer e.omnigentHintMu.Unlock()
+	if e.omnigentHintCursors == nil {
+		e.omnigentHintCursors = make(map[string]omnigentHintCursor)
+	}
+	cursor := e.omnigentHintCursors[key]
+	if activate {
+		cursor.active = true
+	}
+	if !cursor.active {
+		return nil, false, nil
+	}
 	paths, err := e.db.ListStoredSourcePathHintPage(
-		string(agent), watchRoot, after, omnigentStoredHintBatchSize,
+		string(parser.AgentOmnigent), watchRoot, cursor.after,
+		omnigentStoredHintBatchSize,
 	)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	next := ""
+	cursor.after = ""
+	// Once a filesystem event activates reconciliation, periodic passes keep
+	// rotating through the bounded archive pages. This makes progress without
+	// requiring more watcher events and retries a page on a later cycle if its
+	// classification or write failed after the cursor advanced.
+	cursor.active = true
 	if len(paths) == omnigentStoredHintBatchSize {
-		next = paths[len(paths)-1]
+		cursor.after = paths[len(paths)-1]
 	}
-	e.omnigentHintMu.Lock()
-	if e.omnigentHintCursors == nil {
-		e.omnigentHintCursors = make(map[string]string)
-	}
-	e.omnigentHintCursors[key] = next
-	e.omnigentHintMu.Unlock()
-	return paths, nil
+	e.omnigentHintCursors[key] = cursor
+	return paths, cursor.active, nil
 }
 
 func providerChangedPathWatchRoots(
@@ -2848,6 +2869,12 @@ func (e *Engine) discoverProviderSources(
 		currentSources := providerSourcePathSet(sources)
 		forceParseSources := map[string]struct{}{}
 		if !forceFullDiscovery && agentType == parser.AgentOmnigent {
+			reconciliationSources, reconciliationFailures :=
+				e.discoverOmnigentReconciliationSources(
+					ctx, provider, currentSources,
+				)
+			sources = append(sources, reconciliationSources...)
+			failures += reconciliationFailures
 			retrySources, retryFailures := e.discoverOmnigentRetrySources(
 				ctx, provider, currentSources,
 			)
@@ -2972,6 +2999,69 @@ func (e *Engine) discoverOmnigentRetrySources(
 		}
 		currentSources[path] = struct{}{}
 		sources = append(sources, source)
+	}
+	return sources, failures
+}
+
+func (e *Engine) discoverOmnigentReconciliationSources(
+	ctx context.Context,
+	provider parser.Provider,
+	currentSources map[string]struct{},
+) ([]parser.SourceRef, int) {
+	plan, err := provider.WatchPlan(ctx)
+	if err != nil {
+		log.Printf("%s provider reconciliation watch plan: %v", parser.AgentOmnigent, err)
+		return nil, 1
+	}
+	var sources []parser.SourceRef
+	var failures int
+	for _, watchRoot := range plan.Roots {
+		hints, _, err := e.nextOmnigentStoredHintPage(watchRoot.Path, false)
+		if err != nil {
+			log.Printf("%s provider reconciliation hints: %v", parser.AgentOmnigent, err)
+			failures++
+			continue
+		}
+		if len(hints) == 0 {
+			continue
+		}
+		for _, include := range watchRoot.IncludeGlobs {
+			if include == "" || strings.ContainsAny(include, `*?[\`) {
+				continue
+			}
+			container := filepath.Join(watchRoot.Path, include)
+			if !parser.IsRegularFile(container) {
+				continue
+			}
+			matches, err := provider.SourcesForChangedPath(
+				ctx,
+				parser.ChangedPathRequest{
+					Path:              container,
+					EventKind:         "poll",
+					WatchRoot:         watchRoot.Path,
+					StoredSourcePaths: hints,
+				},
+			)
+			if err != nil {
+				log.Printf(
+					"%s provider reconciliation classification: %v",
+					parser.AgentOmnigent, err,
+				)
+				failures++
+				continue
+			}
+			for _, source := range matches {
+				path := filepath.Clean(providerDiscoveredPath(source))
+				if path == "." {
+					continue
+				}
+				if _, exists := currentSources[path]; exists {
+					continue
+				}
+				currentSources[path] = struct{}{}
+				sources = append(sources, source)
+			}
+		}
 	}
 	return sources, failures
 }

@@ -315,13 +315,17 @@ func TestSyncOmnigentColdChangedPathAdvancesPastFreshArchiveMembers(t *testing.T
 		AgentDirs: map[parser.AgentType][]string{parser.AgentOmnigent: {root}},
 		Machine:   "local", ProviderFactories: []parser.ProviderFactory{factory},
 	})
+	before := parseCount.Load()
+	coldEngine.SyncPaths([]string{dbPath})
+	assert.LessOrEqual(t, parseCount.Load()-before, int64(omnigentMemberBatchForTest+1),
+		"the activating event must keep parse work within one member page plus tombstones")
 	var changed *db.Session
 	var deleted *db.Session
-	for range 8 {
-		before := parseCount.Load()
-		coldEngine.SyncPaths([]string{dbPath})
-		assert.LessOrEqual(t, parseCount.Load()-before, int64(omnigentMemberBatchForTest+1),
-			"each cold event must keep parse work within one member page plus tombstones")
+	for range 7 {
+		before = parseCount.Load()
+		coldEngine.SyncAll(context.Background(), nil)
+		assert.LessOrEqual(t, parseCount.Load()-before, int64(2*omnigentMemberBatchForTest+1),
+			"each periodic continuation must keep parse work within bounded member pages")
 		changed, err = archive.GetSession(context.Background(), "omnigent:conv_0100")
 		require.NoError(t, err)
 		deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0050")
