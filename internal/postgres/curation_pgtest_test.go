@@ -326,12 +326,11 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	assert.Equal(t, "current note", *pins[0].Note)
 }
 
-// TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone covers the
-// case where a source-backed pin's source_uuid no longer exists in
-// the messages table, but a different message now occupies the
-// pin's original ordinal. The pin must be deleted: otherwise it
-// would silently re-anchor on an unrelated message.
-func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
+// TestReconcilePinnedMessagesFallsBackToOrdinalWhenSourceUUIDGone covers a
+// changed source UUID while the saved ordinal remains valid.
+func TestReconcilePinnedMessagesFallsBackToOrdinalWhenSourceUUIDGone(
+	t *testing.T,
+) {
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_source_gone_test"
@@ -397,8 +396,18 @@ func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
 
 	pins, err := store.ListPinnedMessages(ctx, "pg-pin-source-gone", "")
 	require.NoError(t, err, "ListPinnedMessages")
-	assert.Empty(t, pins,
-		"stale source_uuid should be pruned: %v", pins)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 1, pins[0].Ordinal)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, "stale pin", *pins[0].Note)
+	var sourceUUID string
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT source_uuid
+		FROM pinned_messages
+		WHERE session_id = $1 AND message_id = $2`,
+		"pg-pin-source-gone", 1,
+	).Scan(&sourceUUID))
+	assert.Equal(t, "uuid-new-answer", sourceUUID)
 }
 
 // TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID

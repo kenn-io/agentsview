@@ -656,27 +656,27 @@ func applyPGSessionIdentityAliases(
 				session_id, message_id, ordinal, source_uuid, note, created_at
 			)
 			SELECT $1, target.ordinal, target.ordinal,
-				old.source_uuid, old.note, old.created_at
+				target.source_uuid, old.note, old.created_at
 			FROM pinned_messages old
 			JOIN LATERAL (
-				SELECT m.ordinal
+				SELECT m.ordinal, m.source_uuid
 				FROM messages m
 				WHERE m.session_id = $1
-				  AND (
-					(old.source_uuid <> '' AND m.source_uuid = old.source_uuid)
-					OR (old.source_uuid = '' AND m.ordinal = old.ordinal)
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = $1
+						  AND old.source_uuid <> ''
+						  AND candidate.source_uuid = old.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					old.ordinal
 				  )
-				ORDER BY m.ordinal
-				LIMIT 1
 			) target ON TRUE
 			WHERE old.session_id = $2
-			ON CONFLICT (session_id, message_id) DO UPDATE SET
-				ordinal = EXCLUDED.ordinal,
-				source_uuid = EXCLUDED.source_uuid,
-				note = EXCLUDED.note,
-				created_at = LEAST(
-					pinned_messages.created_at, EXCLUDED.created_at
-				)`, alias.SessionID, alias.AliasID); err != nil {
+			ON CONFLICT (session_id, message_id) DO NOTHING`,
+			alias.SessionID, alias.AliasID); err != nil {
 			return fmt.Errorf("retargeting postgres session pins %s: %w",
 				alias.AliasID, err)
 		}
@@ -2655,26 +2655,32 @@ func reconcilePinnedMessages(
 		)
 	}
 
-	// Move shifted source-backed pins out of the real ordinal range
-	// first. Pins already on their resolved target stay in place so
-	// duplicate repairs prefer the current target row's metadata.
-	// When multiple messages share a source_uuid (the schema allows
-	// it), prefer the message at the pin's current message_id so a
-	// correctly-placed pin is not relocated to a different duplicate.
+	// Move shifted pins out of the real ordinal range first. A source UUID is
+	// authoritative only when it identifies exactly one message; otherwise the
+	// saved ordinal remains the anchor.
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
+			SELECT
 				p.id, p.message_id, p.ordinal,
-				m.ordinal AS target_ordinal
+				target.ordinal AS target_ordinal
 			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
+			JOIN LATERAL (
+				SELECT m.ordinal
+				FROM messages m
+				WHERE m.session_id = p.session_id
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = p.session_id
+						  AND p.source_uuid <> ''
+						  AND candidate.source_uuid = p.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					p.ordinal
+				  )
+			) target ON TRUE
 			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
 		),
 		numbered AS (
 			SELECT id,
@@ -2697,18 +2703,27 @@ func reconcilePinnedMessages(
 
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
+			SELECT
 				p.id, p.message_id, p.created_at,
-				m.ordinal AS target_ordinal
+				target.ordinal AS target_ordinal
 			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
+			JOIN LATERAL (
+				SELECT m.ordinal
+				FROM messages m
+				WHERE m.session_id = p.session_id
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = p.session_id
+						  AND p.source_uuid <> ''
+						  AND candidate.source_uuid = p.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					p.ordinal
+				  )
+			) target ON TRUE
 			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
 		),
 		ranked AS (
 			SELECT id, target_ordinal,
@@ -2736,21 +2751,31 @@ func reconcilePinnedMessages(
 
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
+			SELECT
 				p.id, p.message_id, p.created_at,
-				m.ordinal AS target_ordinal
+				target.ordinal AS target_ordinal,
+				target.source_uuid AS target_source_uuid
 			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
+			JOIN LATERAL (
+				SELECT m.ordinal, m.source_uuid
+				FROM messages m
+				WHERE m.session_id = p.session_id
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = p.session_id
+						  AND p.source_uuid <> ''
+						  AND candidate.source_uuid = p.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					p.ordinal
+				  )
+			) target ON TRUE
 			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
 		),
 		ranked AS (
-			SELECT id, target_ordinal,
+			SELECT id, target_ordinal, target_source_uuid,
 				ROW_NUMBER() OVER (
 					PARTITION BY target_ordinal
 					ORDER BY
@@ -2762,7 +2787,8 @@ func reconcilePinnedMessages(
 		)
 		UPDATE pinned_messages p
 		SET message_id = r.target_ordinal,
-			ordinal = r.target_ordinal
+			ordinal = r.target_ordinal,
+			source_uuid = r.target_source_uuid
 		FROM ranked r
 		WHERE p.id = r.id
 			AND r.target_rank = 1`,
@@ -2773,31 +2799,15 @@ func reconcilePinnedMessages(
 		)
 	}
 
-	// Prune pins whose anchor no longer exists. For source-backed
-	// pins (source_uuid <> '') the canonical anchor is source_uuid,
-	// so a pin must be dropped when no message in this session has
-	// that source_uuid — otherwise a stale pin can survive on top
-	// of an unrelated message that now occupies the same ordinal.
-	// The ordinal-NOT-EXISTS clause additionally removes legacy
-	// pins (source_uuid = '') with a stale ordinal and clears any
-	// non-rank-1 duplicate left at the sentinel ordinal by step 2.
+	// Prune pins whose UUID and ordinal anchors both failed, plus non-winning
+	// conflicts left at sentinel ordinals.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM pinned_messages p
 		WHERE p.session_id = $1
-			AND (
-				(
-					p.source_uuid <> ''
-					AND NOT EXISTS (
-						SELECT 1 FROM messages m
-						WHERE m.session_id = p.session_id
-							AND m.source_uuid = p.source_uuid
-					)
-				)
-				OR NOT EXISTS (
-					SELECT 1 FROM messages m
-					WHERE m.session_id = p.session_id
-						AND m.ordinal = p.message_id
-				)
+			AND NOT EXISTS (
+				SELECT 1 FROM messages m
+				WHERE m.session_id = p.session_id
+					AND m.ordinal = p.message_id
 			)`,
 		sessionID,
 	); err != nil {

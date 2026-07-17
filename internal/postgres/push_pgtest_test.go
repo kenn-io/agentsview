@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -228,6 +229,166 @@ func TestIncrementalPushPublishesSessionIdentitySupersession(t *testing.T) {
 		WHERE session_id = $1 AND alias_id = $2`,
 		currentID, oldID).Scan(&count))
 	assert.Equal(t, 1, count)
+}
+
+func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
+	type testMessage struct {
+		ordinal    int
+		sourceUUID string
+	}
+	tests := []struct {
+		name          string
+		oldOrdinal    int
+		oldSourceUUID string
+		current       []testMessage
+		canonicalPin  bool
+		wantOrdinal   int
+		wantSource    string
+		wantNote      string
+		wantCreatedAt time.Time
+	}{
+		{
+			name:          "canonical conflict",
+			oldSourceUUID: "stable",
+			current:       []testMessage{{ordinal: 2, sourceUUID: "stable"}},
+			canonicalPin:  true,
+			wantOrdinal:   2,
+			wantSource:    "stable",
+			wantNote:      "canonical note",
+			wantCreatedAt: time.Date(2026, 7, 17, 11, 0, 0, 0, time.UTC),
+		},
+		{
+			name:          "duplicate UUID falls back to ordinal",
+			oldOrdinal:    1,
+			oldSourceUUID: "duplicate",
+			current: []testMessage{
+				{ordinal: 0, sourceUUID: "duplicate"},
+				{ordinal: 1, sourceUUID: "changed"},
+				{ordinal: 2, sourceUUID: "duplicate"},
+			},
+			wantOrdinal:   1,
+			wantSource:    "changed",
+			wantNote:      "superseded note",
+			wantCreatedAt: time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			name:          "missing UUID falls back to ordinal",
+			oldOrdinal:    1,
+			oldSourceUUID: "missing",
+			current:       []testMessage{{ordinal: 1, sourceUUID: "changed"}},
+			wantOrdinal:   1,
+			wantSource:    "changed",
+			wantNote:      "superseded note",
+			wantCreatedAt: time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "empty UUID falls back to ordinal",
+			oldOrdinal:  1,
+			current:     []testMessage{{ordinal: 1}},
+			wantOrdinal: 1,
+			wantNote:    "superseded note",
+			wantCreatedAt: time.Date(
+				2026, 7, 17, 10, 0, 0, 0, time.UTC,
+			),
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			schema := fmt.Sprintf("agentsview_identity_pin_restore_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			pg, err := Open(pgURL, schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, pg.Close()) })
+			require.NoError(t, EnsureSchema(ctx, pg, schema))
+			const (
+				oldID     = "old-session"
+				currentID = "current-session"
+			)
+			for _, id := range []string{oldID, currentID} {
+				_, err = pg.ExecContext(ctx, `
+					INSERT INTO sessions (
+						id, machine, project, agent, first_message,
+						started_at, message_count, user_message_count
+					)
+					VALUES (
+						$1, 'machine', 'project', 'claude', 'message',
+						'2026-07-17T09:00:00Z'::timestamptz, 1, 1
+					)`, id)
+				require.NoError(t, err)
+			}
+			_, err = pg.ExecContext(ctx, `
+				INSERT INTO messages (
+					session_id, ordinal, role, content, content_length,
+					source_uuid
+				)
+				VALUES ($1, $2, 'user', 'old', 3, $3)`,
+				oldID, tt.oldOrdinal, tt.oldSourceUUID,
+			)
+			require.NoError(t, err)
+			for _, message := range tt.current {
+				_, err = pg.ExecContext(ctx, `
+					INSERT INTO messages (
+						session_id, ordinal, role, content, content_length,
+						source_uuid
+					)
+					VALUES ($1, $2, 'user', 'current', 7, $3)`,
+					currentID, message.ordinal, message.sourceUUID,
+				)
+				require.NoError(t, err)
+			}
+			_, err = pg.ExecContext(ctx, `
+				INSERT INTO pinned_messages (
+					session_id, message_id, ordinal, source_uuid, note, created_at
+				)
+				VALUES (
+					$1, $2, $2, $3, 'superseded note',
+					'2026-07-17T10:00:00Z'::timestamptz
+				)`, oldID, tt.oldOrdinal, tt.oldSourceUUID)
+			require.NoError(t, err)
+			if tt.canonicalPin {
+				_, err = pg.ExecContext(ctx, `
+					INSERT INTO pinned_messages (
+						session_id, message_id, ordinal, source_uuid,
+						note, created_at
+					)
+					VALUES (
+						$1, $2, $2, $3, 'canonical note',
+						'2026-07-17T11:00:00Z'::timestamptz
+					)`, currentID, tt.wantOrdinal, tt.wantSource)
+				require.NoError(t, err)
+			}
+
+			require.NoError(t, applyPGSessionIdentityAliases(
+				ctx, pg, []db.SessionIdentityAlias{{
+					AliasID: oldID, SessionID: currentID,
+				}},
+			))
+
+			rows, err := pg.QueryContext(ctx, `
+				SELECT ordinal, source_uuid, note, created_at
+				FROM pinned_messages
+				WHERE session_id = $1`, currentID)
+			require.NoError(t, err)
+			defer rows.Close()
+			require.True(t, rows.Next())
+			var ordinal int
+			var sourceUUID, note string
+			var createdAt time.Time
+			require.NoError(t, rows.Scan(
+				&ordinal, &sourceUUID, &note, &createdAt,
+			))
+			assert.Equal(t, tt.wantOrdinal, ordinal)
+			assert.Equal(t, tt.wantSource, sourceUUID)
+			assert.Equal(t, tt.wantNote, note)
+			assert.Equal(t, tt.wantCreatedAt, createdAt.UTC())
+			assert.False(t, rows.Next(), "expected exactly one canonical pin")
+			require.NoError(t, rows.Err())
+		})
+	}
 }
 
 func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(

@@ -208,6 +208,58 @@ func TestSupersedeSessionIdentitiesPreservesDependentData(t *testing.T) {
 	assert.ElementsMatch(t, []string{currentID, "child", "parent"}, modifiedIDs)
 }
 
+func TestSupersedeSessionIdentitiesPreservesCanonicalPinMetadata(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	const (
+		oldID     = "old-machine~pin-conflict"
+		currentID = "new-machine~pin-conflict"
+	)
+	for _, id := range []string{oldID, currentID} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "machine", Agent: "claude",
+		}))
+	}
+	require.NoError(t, d.InsertMessages([]Message{
+		{SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+			SourceUUID: "stable-source"},
+		{SessionID: currentID, Ordinal: 0, Role: "user", Content: "unrelated",
+			SourceUUID: "unrelated-source"},
+		{SessionID: currentID, Ordinal: 2, Role: "user", Content: "current",
+			SourceUUID: "stable-source"},
+	}))
+	oldMessages, err := d.GetAllMessages(ctx, oldID)
+	require.NoError(t, err)
+	currentMessages, err := d.GetAllMessages(ctx, currentID)
+	require.NoError(t, err)
+	require.Len(t, currentMessages, 2)
+	oldNote, currentNote := "superseded note", "canonical note"
+	_, err = d.PinMessage(oldID, oldMessages[0].ID, &oldNote)
+	require.NoError(t, err)
+	_, err = d.PinMessage(currentID, currentMessages[1].ID, &currentNote)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
+		UPDATE pinned_messages
+		SET created_at = CASE session_id
+			WHEN ? THEN '2026-07-17T10:00:00.000Z'
+			ELSE '2026-07-17T11:00:00.000Z'
+		END
+		WHERE session_id IN (?, ?)`,
+		oldID, oldID, currentID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, d.SupersedeSessionIdentities(currentID, []string{oldID}))
+
+	pins, err := d.ListPinnedMessages(ctx, currentID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 2, pins[0].Ordinal)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, currentNote, *pins[0].Note)
+	assert.Equal(t, "2026-07-17T11:00:00.000Z", pins[0].CreatedAt)
+}
+
 func TestSupersedeSessionIdentitiesRollsBackOnError(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
