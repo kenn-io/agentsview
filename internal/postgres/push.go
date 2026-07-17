@@ -419,8 +419,14 @@ func (s *Sync) Push(
 	})
 
 	if len(sessions) == 0 {
+		ownedAliasTargets, err := s.ownedPGSessionIdentityAliasTargets(
+			ctx, identityAliases, nil, markerID, legacyMarkerMachines,
+		)
+		if err != nil {
+			return result, err
+		}
 		if err := applyPGSessionIdentityAliases(
-			ctx, s.pg, identityAliases,
+			ctx, s.pg, identityAliases, ownedAliasTargets,
 		); err != nil {
 			return result, err
 		}
@@ -533,8 +539,14 @@ func (s *Sync) Push(
 	}
 
 	if result.Errors == 0 {
+		ownedAliasTargets, err := s.ownedPGSessionIdentityAliasTargets(
+			ctx, identityAliases, pushed, markerID, legacyMarkerMachines,
+		)
+		if err != nil {
+			return result, err
+		}
 		if err := applyPGSessionIdentityAliases(
-			ctx, s.pg, identityAliases,
+			ctx, s.pg, identityAliases, ownedAliasTargets,
 		); err != nil {
 			return result, err
 		}
@@ -608,10 +620,110 @@ func (s *Sync) Push(
 	return result, nil
 }
 
+func (s *Sync) ownedPGSessionIdentityAliasTargets(
+	ctx context.Context,
+	aliases []db.SessionIdentityAlias,
+	pushed []db.Session,
+	markerID string,
+	legacyMarkerMachines []string,
+) (map[string]struct{}, error) {
+	owned := make(map[string]struct{}, len(pushed))
+	for _, sess := range pushed {
+		owned[sess.ID] = struct{}{}
+	}
+
+	targetSet := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		if alias.SessionID == "" {
+			continue
+		}
+		if _, ok := owned[alias.SessionID]; ok {
+			continue
+		}
+		targetSet[alias.SessionID] = struct{}{}
+	}
+	targetIDs := make([]string, 0, len(targetSet))
+	for targetID := range targetSet {
+		targetIDs = append(targetIDs, targetID)
+	}
+	sort.Strings(targetIDs)
+	for _, targetID := range targetIDs {
+		localSession, err := s.local.GetSessionFull(ctx, targetID)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"reading replacement session %s ownership: %w",
+				targetID, err,
+			)
+		}
+		if localSession == nil {
+			log.Printf(
+				"pgsync: skipping session identity aliases targeting %s: "+
+					"replacement is missing locally",
+				targetID,
+			)
+			continue
+		}
+
+		var existingMachine, existingOwnerMarker string
+		err = s.pg.QueryRowContext(ctx,
+			`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+			targetID,
+		).Scan(&existingMachine, &existingOwnerMarker)
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf(
+				"pgsync: skipping session identity aliases targeting %s: "+
+					"replacement is missing from postgres",
+				targetID,
+			)
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf(
+				"checking replacement session %s ownership: %w",
+				targetID, err,
+			)
+		}
+		if !sameSessionOwner(
+			existingOwnerMarker,
+			existingMachine,
+			markerID,
+			pushedSessionMachine(*localSession, s.machine),
+			legacyMarkerMachines,
+		) {
+			log.Printf(
+				"pgsync: skipping session identity aliases targeting %s: "+
+					"replacement is owned by machine %q",
+				targetID, existingMachine,
+			)
+			continue
+		}
+		owned[targetID] = struct{}{}
+	}
+	return owned, nil
+}
+
 func applyPGSessionIdentityAliases(
-	ctx context.Context, pg *sql.DB, aliases []db.SessionIdentityAlias,
+	ctx context.Context,
+	pg *sql.DB,
+	aliases []db.SessionIdentityAlias,
+	ownedTargetIDs map[string]struct{},
 ) error {
 	if len(aliases) == 0 {
+		return nil
+	}
+	eligibleAliases := make([]db.SessionIdentityAlias, 0, len(aliases))
+	for _, alias := range aliases {
+		if _, ok := ownedTargetIDs[alias.SessionID]; ok {
+			eligibleAliases = append(eligibleAliases, alias)
+		}
+	}
+	sort.Slice(eligibleAliases, func(i, j int) bool {
+		if eligibleAliases[i].SessionID != eligibleAliases[j].SessionID {
+			return eligibleAliases[i].SessionID < eligibleAliases[j].SessionID
+		}
+		return eligibleAliases[i].AliasID < eligibleAliases[j].AliasID
+	})
+	if len(eligibleAliases) == 0 {
 		return nil
 	}
 	tx, err := pg.BeginTx(ctx, nil)
@@ -620,7 +732,7 @@ func applyPGSessionIdentityAliases(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, alias := range aliases {
+	for _, alias := range eligibleAliases {
 		if alias.AliasID == "" || alias.SessionID == "" ||
 			alias.AliasID == alias.SessionID {
 			continue
@@ -638,6 +750,35 @@ func applyPGSessionIdentityAliases(
 			return fmt.Errorf(
 				"replacement session %s is missing from postgres",
 				alias.SessionID,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE sessions current
+			SET display_name = CASE
+					WHEN current.display_name IS DISTINCT FROM
+						current.source_display_name
+						THEN current.display_name
+					WHEN old.display_name IS DISTINCT FROM
+						old.source_display_name
+						THEN old.display_name
+					ELSE current.display_name
+				END,
+				deleted_at = CASE
+					WHEN current.deleted_at IS DISTINCT FROM
+						current.source_deleted_at
+						THEN current.deleted_at
+					WHEN old.deleted_at IS DISTINCT FROM
+						old.source_deleted_at
+						THEN old.deleted_at
+					ELSE current.deleted_at
+				END
+			FROM sessions old
+			WHERE current.id = $1 AND old.id = $2`,
+			alias.SessionID, alias.AliasID,
+		); err != nil {
+			return fmt.Errorf(
+				"preserving postgres session curation from %s: %w",
+				alias.AliasID, err,
 			)
 		}
 		if _, err := tx.ExecContext(ctx, `

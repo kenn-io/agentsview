@@ -429,7 +429,7 @@ func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
 			require.NoError(t, applyPGSessionIdentityAliases(
 				ctx, pg, []db.SessionIdentityAlias{{
 					AliasID: oldID, SessionID: currentID,
-				}},
+				}}, map[string]struct{}{currentID: {}},
 			))
 
 			rows, err := pg.QueryContext(ctx, `
@@ -452,6 +452,175 @@ func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
 			assert.False(t, rows.Next(), "expected exactly one canonical pin")
 			require.NoError(t, rows.Err())
 		})
+	}
+}
+
+func TestPushBlocksIdentityAliasMigrationToForeignOwnedTarget(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_foreign_target_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	const (
+		oldID     = "owned-old-session"
+		currentID = "foreign-current-session"
+	)
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: oldID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+	}}))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	_, err = syncer.pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent,
+			parent_session_id, message_count, user_message_count
+		)
+		VALUES
+			($1, 'foreign-machine', 'foreign-owner', 'app', 'claude', NULL, 0, 0),
+			('foreign-dependent', 'foreign-machine', 'foreign-owner',
+			 'app', 'claude', $2, 0, 0)`,
+		currentID, oldID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: currentID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: currentID, Ordinal: 0, Role: "user", Content: "new",
+	}}))
+	require.NoError(t, local.SupersedeSessionIdentities(
+		currentID, []string{oldID},
+	))
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SkippedConflicts)
+
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Equal(t, 1, count, "owned old session must not be deleted")
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_aliases
+		WHERE session_id = $1 OR alias_id = $2`,
+		currentID, oldID,
+	).Scan(&count))
+	assert.Zero(t, count, "foreign replacement must not receive the alias")
+
+	var parentSessionID, ownerMarker string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT parent_session_id, owner_marker
+		FROM sessions
+		WHERE id = 'foreign-dependent'`,
+	).Scan(&parentSessionID, &ownerMarker))
+	assert.Equal(t, oldID, parentSessionID,
+		"blocked migration must not rewire foreign relationships")
+	assert.Equal(t, "foreign-owner", ownerMarker)
+}
+
+func TestPushIdentityMigrationPreservesPGCuration(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_curation_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	const (
+		oldID       = "curated-old-session"
+		currentID   = "curated-current-session"
+		curatedName = "PG curated name"
+	)
+	oldSourceName := "Old source name"
+	currentSourceName := "Current source name"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: oldID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.RenameSession(oldID, &oldSourceName))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+	}}))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `
+		UPDATE sessions
+		SET display_name = $2, deleted_at = NOW()
+		WHERE id = $1`,
+		oldID, curatedName,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: currentID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.RenameSession(currentID, &currentSourceName))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: currentID, Ordinal: 0, Role: "user", Content: "current",
+	}}))
+	require.NoError(t, local.SupersedeSessionIdentities(
+		currentID, []string{oldID},
+	))
+
+	for i, full := range []bool{false, true} {
+		_, err = syncer.Push(ctx, full, nil)
+		require.NoError(t, err, "push iteration %d", i)
+
+		var displayName, sourceDisplayName string
+		var deletedAt sql.NullTime
+		var sourceDeletedAt sql.NullTime
+		require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+			SELECT display_name, source_display_name,
+				deleted_at, source_deleted_at
+			FROM sessions
+			WHERE id = $1`,
+			currentID,
+		).Scan(
+			&displayName, &sourceDisplayName, &deletedAt, &sourceDeletedAt,
+		))
+		assert.Equal(t, curatedName, displayName)
+		assert.Equal(t, currentSourceName, sourceDisplayName,
+			"replacement source name remains the curation baseline")
+		assert.True(t, deletedAt.Valid,
+			"identity migration must not resurrect a PG-trashed session")
+		assert.False(t, sourceDeletedAt.Valid,
+			"active replacement remains the source trash baseline")
+
+		var count int
+		require.NoError(t, syncer.pg.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID,
+		).Scan(&count))
+		assert.Zero(t, count)
+		require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM session_aliases
+			WHERE session_id = $1 AND alias_id = $2`,
+			currentID, oldID,
+		).Scan(&count))
+		assert.Equal(t, 1, count)
 	}
 }
 
