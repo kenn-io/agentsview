@@ -629,6 +629,26 @@ func TestOmnigentProbeReconcilesReplacementWithReusedRowID(t *testing.T) {
 	assert.LessOrEqual(t, len(changed), omnigentProbeBatchSize+1)
 }
 
+func TestOmnigentColdChangedPathReturnsAuthoritativeContainer(t *testing.T) {
+	for _, archiveSize := range []int{0, 1000} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			path := writeOmnigentCardinalityDB(t, archiveSize)
+			factory, ok := ProviderFactoryByType(AgentOmnigent)
+			require.True(t, ok)
+			provider := factory.NewProvider(ProviderConfig{
+				Roots: []string{filepath.Dir(path)}, Machine: "host",
+			})
+			changed, err := provider.SourcesForChangedPath(
+				context.Background(), ChangedPathRequest{Path: path, EventKind: "write"},
+			)
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			assert.Equal(t, path, changed[0].DisplayPath)
+			assert.True(t, IsOmnigentContainerSource(changed[0]))
+		})
+	}
+}
+
 func TestOmnigentReplacementRowLookupUsesRowIDSearch(t *testing.T) {
 	tests := []struct {
 		name string

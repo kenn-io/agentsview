@@ -4024,7 +4024,7 @@ func (e *Engine) collectAndBatch(
 		select {
 		case <-ctx.Done():
 			stats.Aborted = true
-			drainResults(results, total-i)
+			e.drainCanceledResults(results, total-i)
 			goto flush
 		case r = <-results:
 		}
@@ -4035,7 +4035,8 @@ func (e *Engine) collectAndBatch(
 			// ctx.Done() branch above.
 			if ctx.Err() != nil {
 				stats.Aborted = true
-				drainResults(results, total-i-1)
+				e.markOmnigentSourceRetry(r.agent, r.path)
+				e.drainCanceledResults(results, total-i-1)
 				goto flush
 			}
 			stats.RecordFailed()
@@ -4243,8 +4244,17 @@ flush:
 	return stats
 }
 
-// drainResults consumes remaining items from the results
-// channel so that worker goroutines can exit and be collected.
+// drainCanceledResults consumes remaining items so workers can exit while
+// preserving Omnigent sources whose parse-side tracker changes were discarded.
+func (e *Engine) drainCanceledResults(results <-chan syncJob, remaining int) {
+	for range remaining {
+		r := <-results
+		e.markOmnigentSourceRetry(r.agent, r.path)
+	}
+}
+
+// drainResults consumes remaining items from the results channel so worker
+// goroutines can exit when the caller has no provider retry state to preserve.
 func drainResults(results <-chan syncJob, remaining int) {
 	for range remaining {
 		<-results

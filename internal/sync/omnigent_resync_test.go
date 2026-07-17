@@ -45,6 +45,48 @@ type cancelAfterOmnigentParseProvider struct {
 	once   *stdsync.Once
 }
 
+type blockAfterOmnigentParseFactory struct {
+	delegate parser.ProviderFactory
+	parsed   chan struct{}
+	release  <-chan struct{}
+	once     *stdsync.Once
+}
+
+func (f blockAfterOmnigentParseFactory) Definition() parser.AgentDef {
+	return f.delegate.Definition()
+}
+
+func (f blockAfterOmnigentParseFactory) Capabilities() parser.Capabilities {
+	return f.delegate.Capabilities()
+}
+
+func (f blockAfterOmnigentParseFactory) NewProvider(
+	cfg parser.ProviderConfig,
+) parser.Provider {
+	return &blockAfterOmnigentParseProvider{
+		Provider: f.delegate.NewProvider(cfg), parsed: f.parsed,
+		release: f.release, once: f.once,
+	}
+}
+
+type blockAfterOmnigentParseProvider struct {
+	parser.Provider
+	parsed  chan struct{}
+	release <-chan struct{}
+	once    *stdsync.Once
+}
+
+func (p *blockAfterOmnigentParseProvider) Parse(
+	ctx context.Context, req parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	outcome, err := p.Provider.Parse(ctx, req)
+	if err == nil {
+		p.once.Do(func() { close(p.parsed) })
+		<-p.release
+	}
+	return outcome, err
+}
+
 func (p *cancelAfterOmnigentParseProvider) Parse(
 	ctx context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
@@ -274,4 +316,104 @@ func TestCanceledResyncAfterEmptyOmnigentParseQueuesHashPathContainer(t *testing
 	require.NoError(t, err)
 	assert.Nil(t, stored,
 		"the queued hash-path container must reconcile the empty source")
+}
+
+func TestCanceledFullSyncQueuesDiscardedOmnigentContainer(t *testing.T) {
+	root := t.TempDir()
+	writeOmnigentResyncSource(t, root)
+	archive := openTestDB(t)
+	delegate, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
+	require.True(t, ok)
+	parsed := make(chan struct{})
+	release := make(chan struct{})
+	factory := blockAfterOmnigentParseFactory{
+		delegate: delegate, parsed: parsed, release: release, once: &stdsync.Once{},
+	}
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	t.Cleanup(engine.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan SyncStats, 1)
+	go func() { done <- engine.SyncAll(ctx, nil) }()
+	<-parsed
+	cancel()
+	close(release)
+	stats := <-done
+	assert.True(t, stats.Aborted)
+	engine.omnigentRetryMu.Lock()
+	retryCount := len(engine.omnigentRetrySources)
+	engine.omnigentRetryMu.Unlock()
+	assert.Equal(t, 1, retryCount)
+
+	recovered := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, recovered.Synced)
+	stored, err := archive.GetSession(context.Background(), "omnigent:conversation")
+	require.NoError(t, err)
+	assert.NotNil(t, stored)
+}
+
+func TestCanceledChangedPathQueuesDiscardedOmnigentMember(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := writeOmnigentResyncSource(t, root)
+	archive := openTestDB(t)
+	delegate, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
+	require.True(t, ok)
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{delegate},
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+
+	writer, err := sql.Open("sqlite3", sourcePath)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE conversations SET updated_at = 1800000000 WHERE id = 'conversation'`,
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('item-1', 'conversation', 1, 'message',
+		        '{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
+		        'changed')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	parsed := make(chan struct{})
+	release := make(chan struct{})
+	engine.providerFactories[parser.AgentOmnigent] = blockAfterOmnigentParseFactory{
+		delegate: delegate, parsed: parsed, release: release, once: &stdsync.Once{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		engine.SyncPathsContext(ctx, []string{sourcePath})
+		close(done)
+	}()
+	<-parsed
+	cancel()
+	close(release)
+	<-done
+	assert.True(t, engine.LastSyncStats().Aborted)
+	engine.omnigentRetryMu.Lock()
+	retryCount := len(engine.omnigentRetrySources)
+	engine.omnigentRetryMu.Unlock()
+	assert.Equal(t, 1, retryCount)
+
+	recovered := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, recovered.Synced)
+	messages, err := archive.GetMessages(
+		context.Background(), "omnigent:conversation", 0, 10, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, messages, 2)
 }

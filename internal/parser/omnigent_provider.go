@@ -374,6 +374,15 @@ func (t *omnigentChangeTracker) changedMembers(
 	if match.MemberID != "" || !IsRegularFile(match.Container) {
 		return []multiSessionMatch{match}, nil
 	}
+	t.mu.Lock()
+	_, initialized := t.containers[match.Container]
+	t.mu.Unlock()
+	if !initialized {
+		// A cold tracker has no authoritative member set to diff against.
+		// Return the rowless container source so one complete parse both
+		// reconciles archived membership and initializes bounded discovery.
+		return []multiSessionMatch{match}, nil
+	}
 	conn, err := openOmnigentDB(match.Container)
 	if err != nil {
 		return nil, err
@@ -385,15 +394,7 @@ func (t *omnigentChangeTracker) changedMembers(
 	}
 
 	t.mu.Lock()
-	tracked, initialized := t.containers[match.Container]
-	if !initialized {
-		t.mu.Unlock()
-		metas, err := listOmnigentConversationMetas(conn, schema)
-		if err != nil {
-			return nil, err
-		}
-		return omnigentMatches(match.Container, schema, metas), nil
-	}
+	tracked := t.containers[match.Container]
 	defer t.mu.Unlock()
 	if tracked.schema != schema {
 		// Member identities and joins change across schema generations. Reparse
