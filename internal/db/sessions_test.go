@@ -194,6 +194,7 @@ func TestSupersedeSessionIdentitiesPreservesDependentData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []SessionIdentityAlias{{
 		AliasID: oldID, SessionID: currentID,
+		Project: "project", Machine: "new-machine",
 	}}, aliases)
 	assert.False(t, d.IsSessionExcluded(oldID))
 
@@ -267,6 +268,7 @@ func TestDeletingReplacementExcludesIdentityAliasChain(t *testing.T) {
 			ID: id, Project: "project", Machine: "machine", Agent: "claude",
 		}))
 	}
+
 	require.NoError(t, d.SupersedeSessionIdentities("middle", []string{"old"}))
 	require.NoError(t, d.SupersedeSessionIdentities("current", []string{"middle"}))
 
@@ -274,6 +276,45 @@ func TestDeletingReplacementExcludesIdentityAliasChain(t *testing.T) {
 	for _, id := range []string{"old", "middle", "current"} {
 		assert.True(t, d.IsSessionExcluded(id), id)
 	}
+}
+
+func TestSessionIdentityAliasPublicationRevisionTracksTombstones(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	for _, id := range []string{"old-session", "current-session"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "app", Machine: "machine", Agent: "claude",
+		}))
+	}
+	before, err := d.SessionIdentityAliasPublicationRevision(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, d.SupersedeSessionIdentities(
+		"current-session", []string{"old-session"},
+	))
+	afterInsert, err := d.SessionIdentityAliasPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, afterInsert, before)
+	inserted, err := d.ListSessionIdentityAliasChanges(
+		ctx, before, afterInsert, nil, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, inserted, 1)
+	assert.Equal(t, "old-session", inserted[0].AliasID)
+	assert.False(t, inserted[0].Deleted)
+
+	require.NoError(t, d.DeleteSession("current-session"))
+	afterDelete, err := d.SessionIdentityAliasPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, afterDelete, afterInsert)
+	deleted, err := d.ListSessionIdentityAliasChanges(
+		ctx, afterInsert, afterDelete, nil, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, deleted, 1)
+	assert.Equal(t, "old-session", deleted[0].AliasID)
+	assert.Equal(t, "app", deleted[0].Project)
+	assert.True(t, deleted[0].Deleted)
 }
 
 func TestCopyExcludedSessionsPreservesSourceIdentityTombstones(t *testing.T) {
@@ -421,6 +462,7 @@ func TestCopySessionMetadataPreservesIdentityAliases(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []SessionIdentityAlias{{
 		AliasID: "old-machine~session", SessionID: "new-machine~session",
+		Project: "project", Machine: "machine",
 	}}, aliases)
 }
 

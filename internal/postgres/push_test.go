@@ -6,8 +6,10 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -520,6 +522,90 @@ func TestSessionAliasBackfillKeysStayFilteredForPushState(t *testing.T) {
 		store.values[sessionAliasBackfillStateKey+":work"],
 	)
 	assert.Empty(t, store.values["last_push_at:work"])
+}
+
+func TestSessionIdentityAliasNoChangeWorkIsCardinalityBounded(t *testing.T) {
+	for _, aliasCount := range []int{10, 1000} {
+		t.Run(strconv.Itoa(aliasCount), func(t *testing.T) {
+			local := testDB(t)
+			ctx := context.Background()
+			for i := 0; i <= aliasCount; i++ {
+				require.NoError(t, local.UpsertSession(db.Session{
+					ID:      fmt.Sprintf("session-%04d", i),
+					Project: "app",
+					Machine: "machine",
+					Agent:   "claude",
+				}))
+			}
+			for i := range aliasCount {
+				require.NoError(t, local.SupersedeSessionIdentities(
+					fmt.Sprintf("session-%04d", i+1),
+					[]string{fmt.Sprintf("session-%04d", i)},
+				))
+			}
+			revision, err := local.SessionIdentityAliasPublicationRevision(ctx)
+			require.NoError(t, err)
+			generation, err := local.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			stateKey := sessionIdentityAliasStateKey + ":" + generation
+			require.NoError(t, local.SetSyncState(
+				stateKey, strconv.FormatInt(revision, 10),
+			))
+			syncer := &Sync{local: local}
+
+			aliases, through, gotKey, err :=
+				syncer.sessionIdentityAliasesForPush(ctx, false)
+			require.NoError(t, err)
+			assert.Empty(t, aliases,
+				"unchanged publication must not materialize alias history")
+			assert.Equal(t, revision, through)
+			assert.Equal(t, stateKey, gotKey)
+		})
+	}
+}
+
+func TestSessionIdentityAliasPublicationSelectsDeltaAndFullPush(t *testing.T) {
+	local := testDB(t)
+	ctx := context.Background()
+	for _, id := range []string{"old", "middle", "current"} {
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: id, Project: "app", Machine: "machine", Agent: "claude",
+		}))
+	}
+	require.NoError(t, local.SupersedeSessionIdentities("middle", []string{"old"}))
+	syncer := &Sync{local: local}
+
+	initial, revision, stateKey, err :=
+		syncer.sessionIdentityAliasesForPush(ctx, false)
+	require.NoError(t, err)
+	require.Len(t, initial, 1)
+	require.NoError(t, markSessionIdentityAliasesPublished(
+		local, stateKey, revision, initial,
+	))
+	pending, pendingRevision, _, err :=
+		syncer.sessionIdentityAliasesForPush(ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, revision, pendingRevision)
+	assert.Equal(t, initial, pending)
+	require.NoError(t, markSessionIdentityAliasesPublished(
+		local, stateKey, revision, nil,
+	))
+
+	require.NoError(t, local.SupersedeSessionIdentities(
+		"current", []string{"middle"},
+	))
+	delta, nextRevision, _, err :=
+		syncer.sessionIdentityAliasesForPush(ctx, false)
+	require.NoError(t, err)
+	assert.Greater(t, nextRevision, revision)
+	require.Len(t, delta, 2)
+	assert.ElementsMatch(t, []string{"middle", "old"}, []string{
+		delta[0].AliasID, delta[1].AliasID,
+	})
+
+	full, _, _, err := syncer.sessionIdentityAliasesForPush(ctx, true)
+	require.NoError(t, err)
+	assert.Len(t, full, 2)
 }
 
 func TestReadPushBoundaryStateValidity(t *testing.T) {

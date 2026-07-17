@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -2546,8 +2547,12 @@ func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
 
 // SessionIdentityAlias records a durable old-to-current session identity.
 type SessionIdentityAlias struct {
-	AliasID   string
-	SessionID string
+	AliasID   string `json:"alias_id"`
+	SessionID string `json:"session_id"`
+	Project   string `json:"project,omitempty"`
+	Machine   string `json:"machine,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	Deleted   bool   `json:"deleted,omitempty"`
 }
 
 // ListSessionIdentityAliases returns aliases whose current session is within
@@ -2555,7 +2560,7 @@ type SessionIdentityAlias struct {
 func (db *DB) ListSessionIdentityAliases(
 	ctx context.Context, projects, excludeProjects []string,
 ) ([]SessionIdentityAlias, error) {
-	query := `SELECT a.alias_id, a.session_id
+	query := `SELECT a.alias_id, a.session_id, s.project, s.machine
 		FROM session_identity_aliases a
 		JOIN sessions s ON s.id = a.session_id`
 	var (
@@ -2589,7 +2594,9 @@ func (db *DB) ListSessionIdentityAliases(
 	var aliases []SessionIdentityAlias
 	for rows.Next() {
 		var alias SessionIdentityAlias
-		if err := rows.Scan(&alias.AliasID, &alias.SessionID); err != nil {
+		if err := rows.Scan(
+			&alias.AliasID, &alias.SessionID, &alias.Project, &alias.Machine,
+		); err != nil {
 			return nil, fmt.Errorf("scanning session identity alias: %w", err)
 		}
 		aliases = append(aliases, alias)
@@ -2597,6 +2604,151 @@ func (db *DB) ListSessionIdentityAliases(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session identity aliases: %w", err)
 	}
+	return aliases, nil
+}
+
+// SessionIdentityAliasPublicationRevision is an O(1) change token for durable
+// session aliases.
+func (db *DB) SessionIdentityAliasPublicationRevision(
+	ctx context.Context,
+) (int64, error) {
+	var raw string
+	err := db.getReader().QueryRowContext(ctx,
+		`SELECT value FROM archive_metadata WHERE key = ?`,
+		"session_identity_alias_publication_revision",
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf(
+			"reading session identity alias publication revision: %w", err,
+		)
+	}
+	revision, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || revision < 0 {
+		return 0, fmt.Errorf(
+			"invalid session identity alias publication revision %q", raw,
+		)
+	}
+	return revision, nil
+}
+
+// ListSessionIdentityAliasChanges returns the latest alias changes in the
+// requested revision interval and project scope.
+func (db *DB) ListSessionIdentityAliasChanges(
+	ctx context.Context, after, through int64,
+	projects, excludeProjects []string,
+) ([]SessionIdentityAlias, error) {
+	query := `SELECT alias_id, session_id, project, machine, revision, deleted
+		FROM session_identity_alias_changes
+		WHERE revision > ? AND revision <= ?`
+	args := []any{after, through}
+	if len(projects) > 0 {
+		query += " AND project IN (" +
+			strings.TrimSuffix(strings.Repeat("?,", len(projects)), ",") + ")"
+		for _, project := range projects {
+			args = append(args, project)
+		}
+	}
+	if len(excludeProjects) > 0 {
+		query += " AND project NOT IN (" +
+			strings.TrimSuffix(strings.Repeat("?,", len(excludeProjects)), ",") + ")"
+		for _, project := range excludeProjects {
+			args = append(args, project)
+		}
+	}
+	query += " ORDER BY revision, alias_id"
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing session identity alias changes: %w", err)
+	}
+	defer rows.Close()
+	var aliases []SessionIdentityAlias
+	for rows.Next() {
+		var alias SessionIdentityAlias
+		if err := rows.Scan(
+			&alias.AliasID, &alias.SessionID, &alias.Project, &alias.Machine,
+			&alias.Revision, &alias.Deleted,
+		); err != nil {
+			return nil, fmt.Errorf("scanning session identity alias change: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session identity alias changes: %w", err)
+	}
+	return aliases, nil
+}
+
+// ListSessionIdentityAliasesForSessions returns durable aliases for a bounded
+// set of replacement sessions.
+func (db *DB) ListSessionIdentityAliasesForSessions(
+	ctx context.Context, sessionIDs []string,
+) ([]SessionIdentityAlias, error) {
+	seen := make(map[string]struct{}, len(sessionIDs))
+	uniqueIDs := make([]string, 0, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	sessionIDs = uniqueIDs
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+	var aliases []SessionIdentityAlias
+	const batchSize = 500
+	for start := 0; start < len(sessionIDs); start += batchSize {
+		end := min(start+batchSize, len(sessionIDs))
+		batch := sessionIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		query := `SELECT a.alias_id, a.session_id, s.project, s.machine
+			FROM session_identity_aliases a
+			JOIN sessions s ON s.id = a.session_id
+			WHERE a.session_id IN (` +
+			strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `)`
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"listing session identity aliases for sessions: %w", err,
+			)
+		}
+		for rows.Next() {
+			var alias SessionIdentityAlias
+			if err := rows.Scan(
+				&alias.AliasID, &alias.SessionID, &alias.Project, &alias.Machine,
+			); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf(
+					"scanning bounded session identity alias: %w", err,
+				)
+			}
+			aliases = append(aliases, alias)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf(
+				"iterating bounded session identity aliases: %w", err,
+			)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf(
+				"closing bounded session identity aliases: %w", err,
+			)
+		}
+	}
+	sort.Slice(aliases, func(i, j int) bool {
+		return aliases[i].AliasID < aliases[j].AliasID
+	})
 	return aliases, nil
 }
 

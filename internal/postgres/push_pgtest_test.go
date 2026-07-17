@@ -426,11 +426,13 @@ func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			require.NoError(t, applyPGSessionIdentityAliases(
-				ctx, pg, []db.SessionIdentityAlias{{
-					AliasID: oldID, SessionID: currentID,
-				}}, map[string]struct{}{currentID: {}},
-			))
+			syncer := &Sync{pg: pg, machine: "machine"}
+			_, err = syncer.applyPGSessionIdentityAliases(
+				ctx, []db.SessionIdentityAlias{{
+					AliasID: oldID, SessionID: currentID, Machine: "machine",
+				}}, "", nil,
+			)
+			require.NoError(t, err)
 
 			rows, err := pg.QueryContext(ctx, `
 				SELECT ordinal, source_uuid, note, created_at
@@ -451,6 +453,101 @@ func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
 			assert.Equal(t, tt.wantCreatedAt, createdAt.UTC())
 			assert.False(t, rows.Next(), "expected exactly one canonical pin")
 			require.NoError(t, rows.Err())
+		})
+	}
+}
+
+func TestApplyPGSessionIdentityAliasesRequiresBothRowsOwned(t *testing.T) {
+	tests := []struct {
+		name        string
+		sourceOwner string
+		targetOwner string
+		wantMigrate bool
+	}{
+		{
+			name:        "source foreign",
+			sourceOwner: "foreign-owner",
+			targetOwner: "local-owner",
+		},
+		{
+			name:        "target foreign",
+			sourceOwner: "local-owner",
+			targetOwner: "foreign-owner",
+		},
+		{
+			name:        "both owned",
+			sourceOwner: "local-owner",
+			targetOwner: "local-owner",
+			wantMigrate: true,
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			schema := fmt.Sprintf("agentsview_identity_ownership_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			pg, err := Open(pgURL, schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, pg.Close()) })
+			require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+			_, err = pg.ExecContext(ctx, `
+				INSERT INTO sessions (
+					id, machine, owner_marker, project, agent,
+					parent_session_id, message_count, user_message_count
+				)
+				VALUES
+					('old-session', 'machine', $1, 'app', 'claude', NULL, 0, 0),
+					('current-session', 'machine', $2, 'app', 'claude', NULL, 0, 0),
+					('dependent', 'machine', 'foreign-dependent', 'app', 'claude',
+					 'old-session', 0, 0)`,
+				tt.sourceOwner, tt.targetOwner,
+			)
+			require.NoError(t, err)
+
+			syncer := &Sync{pg: pg, machine: "machine"}
+			pending, err := syncer.applyPGSessionIdentityAliases(
+				ctx, []db.SessionIdentityAlias{{
+					AliasID: "old-session", SessionID: "current-session",
+					Machine: "machine",
+				}}, "local-owner", nil,
+			)
+			require.NoError(t, err)
+			if tt.wantMigrate {
+				assert.Empty(t, pending)
+			} else {
+				assert.Len(t, pending, 1)
+			}
+
+			var oldCount, currentCount, aliasCount int
+			require.NoError(t, pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sessions WHERE id = 'old-session'`,
+			).Scan(&oldCount))
+			require.NoError(t, pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sessions WHERE id = 'current-session'`,
+			).Scan(&currentCount))
+			require.NoError(t, pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM session_aliases
+				WHERE session_id = 'current-session' AND alias_id = 'old-session'`,
+			).Scan(&aliasCount))
+			var parentID string
+			require.NoError(t, pg.QueryRowContext(ctx, `
+				SELECT parent_session_id FROM sessions WHERE id = 'dependent'`,
+			).Scan(&parentID))
+
+			if tt.wantMigrate {
+				assert.Zero(t, oldCount)
+				assert.Equal(t, 1, currentCount)
+				assert.Equal(t, 1, aliasCount)
+				assert.Equal(t, "current-session", parentID)
+			} else {
+				assert.Equal(t, 1, oldCount)
+				assert.Equal(t, 1, currentCount)
+				assert.Zero(t, aliasCount)
+				assert.Equal(t, "old-session", parentID)
+			}
 		})
 	}
 }
