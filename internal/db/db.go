@@ -308,7 +308,9 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // and entrypoint fields on existing Claude rows.)
 // (67: Antigravity CLI reader metadata. Re-parsing populates parent_session_id
 // and relationship_type from agyReader.parentCascadeId in trajectory sidecars.)
-const dataVersion = 67
+// (68: Hermes skill_view metadata. Re-parsing populates tool_calls.skill_name
+// for existing Hermes sessions so historical skill usage appears in analytics.)
+const dataVersion = 68
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
