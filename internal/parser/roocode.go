@@ -633,9 +633,9 @@ func classifyRooCodeMessage(
 		if tc == nil {
 			return RoleAssistant, nil, nil
 		}
-		// Extract embedded result content for file tools
-		// (readFile, appliedDiff, searchFiles, etc.). Exclude
-		// newTask/skill where "content" is an input, not a result.
+		// Extract embedded result content for tools whose schemas
+		// define "content" as result data (e.g. readFile). Write/
+		// edit tools use "content" as input and are excluded.
 		if resultContent := rooToolResultContent(
 			tc.ToolName, msg.Text,
 		); resultContent != "" {
@@ -844,14 +844,14 @@ func rooPairErrorToPendingTool(
 }
 
 // rooToolResultContent extracts the embedded result content from
-// a file tool's JSON payload. RooCode file tools (readFile,
-// appliedDiff, searchFiles, etc.) carry their result in the
-// "content" field of the same ask="tool" message. Returns ""
-// for tools where "content" is an input (newTask, skill, etc.).
+// a tool's JSON payload. Only tools whose schemas define "content"
+// as result data are included; write/edit tools use "content" as
+// input and must not be treated as completed results.
 func rooToolResultContent(toolName, text string) string {
-	// These tools use "content" as an input, not a result.
 	switch strings.ToLower(toolName) {
-	case "newtask", "skill":
+	case "readfile":
+		// readFile returns file contents in the "content" field.
+	default:
 		return ""
 	}
 	text = strings.TrimSpace(text)

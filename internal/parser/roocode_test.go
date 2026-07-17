@@ -1748,6 +1748,59 @@ func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 	assert.Equal(t, "package main\nfunc main() {}", tc.ResultEvents[0].Content)
 }
 
+func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	taskDir := filepath.Join(tmpDir, "tasks", "test-task-writenoresult")
+	require.NoError(t, os.MkdirAll(taskDir, 0755))
+
+	historyItem := rooCodeHistoryItem{
+		ID:        "test-task-writenoresult",
+		Number:    1,
+		Timestamp: 1688836851000,
+		Task:      "Write tool content not result",
+		TokensIn:  10,
+		TokensOut: 5,
+		Workspace: "/Users/test/project",
+	}
+	historyJSON, err := json.Marshal(historyItem)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "history_item.json"),
+		historyJSON, 0644,
+	))
+
+	messages := []rooCodeMessage{
+		{
+			Timestamp: 1688836851000,
+			Type:      "say",
+			Say:       "text",
+			Text:      "Write the file",
+		},
+		{
+			Timestamp: 1688836860000,
+			Type:      "ask",
+			Ask:       "tool",
+			Text:      `{"tool":"writeToFile","path":"src/main.go","content":"package main"}`,
+		},
+	}
+	messagesJSON, err := json.Marshal(messages)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "ui_messages.json"),
+		messagesJSON, 0644,
+	))
+
+	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	require.NoError(t, err)
+
+	// writeToFile content is input, not a result — no ResultEvents.
+	require.Len(t, msgs[1].ToolCalls, 1)
+	tc := msgs[1].ToolCalls[0]
+	assert.Equal(t, "writeToFile", tc.ToolName)
+	assert.Empty(t, tc.ResultEvents,
+		"writeToFile content should not be treated as a completed result")
+}
+
 func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-newtask-noresult")
