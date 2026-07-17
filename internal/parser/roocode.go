@@ -1113,10 +1113,10 @@ func IsThinkingOnlyContent(content string) bool {
 	}
 	rest := strings.TrimSpace(trimmed[len("[Thinking]"):])
 	closingTag := "[/Thinking]"
-	idx := strings.Index(rest, closingTag)
-	if idx < 0 {
+	_, after, ok := strings.Cut(rest, closingTag)
+	if !ok {
 		return false
 	}
-	afterClose := strings.TrimSpace(rest[idx+len(closingTag):])
+	afterClose := strings.TrimSpace(after)
 	return afterClose == ""
 }
