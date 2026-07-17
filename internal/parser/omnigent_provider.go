@@ -65,6 +65,7 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithFingerprint(omnigentFingerprintSource),
 				WithContainerParse(tracker.parseContainer),
 				WithMemberParse(tracker.parseMember),
+				WithMemberResultHashPreservation(),
 				WithMemberPresence(omnigentMemberPresent),
 				WithUnsupportedSourceError(omnigentSchemaUnsupported),
 				WithExcludedSessionIDs(omnigentLegacySessionIDs),

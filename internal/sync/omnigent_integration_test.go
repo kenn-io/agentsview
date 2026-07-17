@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,51 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+type omnigentParseCountingFactory struct {
+	delegate parser.ProviderFactory
+	count    *atomic.Int64
+}
+
+func (f omnigentParseCountingFactory) Definition() parser.AgentDef {
+	return f.delegate.Definition()
+}
+
+func (f omnigentParseCountingFactory) Capabilities() parser.Capabilities {
+	return f.delegate.Capabilities()
+}
+
+func (f omnigentParseCountingFactory) NewProvider(
+	cfg parser.ProviderConfig,
+) parser.Provider {
+	return &omnigentParseCountingProvider{
+		Provider: f.delegate.NewProvider(cfg),
+		count:    f.count,
+	}
+}
+
+type omnigentParseCountingProvider struct {
+	parser.Provider
+	count *atomic.Int64
+}
+
+func (p *omnigentParseCountingProvider) Parse(
+	ctx context.Context, req parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	p.count.Add(1)
+	return p.Provider.Parse(ctx, req)
+}
+
+func omnigentDefaultProviderFactory(t *testing.T) parser.ProviderFactory {
+	t.Helper()
+	for _, factory := range parser.ProviderFactories() {
+		if factory.Definition().Type == parser.AgentOmnigent {
+			return factory
+		}
+	}
+	require.FailNow(t, "Omnigent provider factory not registered")
+	return nil
+}
 
 const omnigentSyncDDL = `
 CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL);
@@ -158,6 +204,9 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, unchanged)
 			assert.Equal(t, 1, unchanged.MessageCount)
+			engine.SyncAll(context.Background(), nil)
+			assert.Zero(t, engine.LastSyncStats().Synced,
+				"member sync followed by unchanged full sync should not rewrite")
 
 			writer, err = sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
@@ -191,6 +240,34 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			require.NotNil(t, replacement)
 		})
 	}
+}
+
+func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	writeOmnigentSyncDB(t, root, 200)
+	archive := dbtest.OpenTestDB(t)
+	var parseCount atomic.Int64
+	factory := omnigentParseCountingFactory{
+		delegate: omnigentDefaultProviderFactory(t),
+		count:    &parseCount,
+	}
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	engine.SyncAll(context.Background(), nil)
+	require.Equal(t, int64(1), parseCount.Load())
+
+	parseCount.Store(0)
+	engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, parseCount.Load(),
+		"unchanged container must not reparse every conversation")
 }
 
 func TestSyncPathsOmnigentSameTimestampAppendUsesMemberHash(t *testing.T) {

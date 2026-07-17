@@ -3917,6 +3917,7 @@ func (e *Engine) collectAndBatch(
 	}
 
 	var pending []pendingWrite
+	var pendingCacheWrites []skipCacheWrite
 
 	for i := range total {
 		var r syncJob
@@ -4049,6 +4050,13 @@ func (e *Engine) collectAndBatch(
 					storageTrustSnap:  r.storageTrustSnap,
 				})
 			}
+			if r.cacheAfterWrite && vetoed == 0 && len(r.retrySessionIDs) == 0 {
+				pendingCacheWrites = append(pendingCacheWrites, skipCacheWrite{
+					key:               r.skipCacheKey(),
+					mtime:             r.mtime,
+					sourceFingerprint: r.sourceFingerprint,
+				})
+			}
 			// A Kiro SQLite store is discovered as one container source
 			// but fans out into one session per row, so `total` counted it
 			// as a single file. Add the extra sessions it produced to keep
@@ -4074,6 +4082,11 @@ func (e *Engine) collectAndBatch(
 			// sessions, so they block every container promotion this pass.
 			if failedWrites > 0 {
 				e.poisonSQLiteContainerPass()
+			} else if cwdFiltered == 0 {
+				for _, candidate := range pendingCacheWrites {
+					e.cacheSkip(candidate.key, candidate.mtime,
+						candidate.sourceFingerprint)
+				}
 			}
 			e.promoteOpenCodeStorageTrustAfterWrite(
 				pending, writtenSessions, failedWrites, cwdFiltered,
@@ -4082,6 +4095,7 @@ func (e *Engine) collectAndBatch(
 			progress.MessagesIndexed += writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
 			pending = pending[:0]
+			pendingCacheWrites = pendingCacheWrites[:0]
 		}
 
 		progress.SessionsDone++
@@ -4098,6 +4112,11 @@ flush:
 		}
 		if failedWrites > 0 {
 			e.poisonSQLiteContainerPass()
+		} else if cwdFiltered == 0 {
+			for _, candidate := range pendingCacheWrites {
+				e.cacheSkip(candidate.key, candidate.mtime,
+					candidate.sourceFingerprint)
+			}
 		}
 		e.promoteOpenCodeStorageTrustAfterWrite(
 			pending, writtenSessions, failedWrites, cwdFiltered,
@@ -4175,6 +4194,11 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	// cacheAfterWrite records a successful, complete rowless container parse
+	// after its member writes commit. Unlike ordinary provider results, these
+	// containers have no physical-path session row that can make the next full
+	// sync fresh through the archive database.
+	cacheAfterWrite bool
 	// sourceFingerprint carries S3 object fingerprints into
 	// skip-cache writes so same-mtime object rewrites do not stay
 	// hidden behind a cached parse failure or non-interactive result.
@@ -4677,6 +4701,14 @@ func (e *Engine) processProviderFile(
 		forceReplace:          outcome.ForceReplace || incForceReplace,
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 	}
+	if file.Agent == parser.AgentOmnigent && cacheSkip && cleanCache &&
+		!e.forceParse && !file.ForceParse &&
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
+		fingerprint.Hash != "" {
+		path := providerDiscoveredPath(source)
+		_, _, virtual := parser.ParseVirtualSourcePath(path)
+		res.cacheAfterWrite = !virtual
+	}
 	// Incremental-append providers (Claude and Codex) need the stored file
 	// identity so a later sync can detect an atomic file replacement
 	// (new inode/device) and fall back to a full parse instead of
@@ -5067,6 +5099,16 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 	}
 	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
 		return true
+	}
+	if agent == parser.AgentOmnigent {
+		path := providerDiscoveredPath(source)
+		if _, _, virtual := parser.ParseVirtualSourcePath(path); !virtual {
+			// Whole-container Omnigent sources have only virtual member rows in
+			// the archive. The cache key already includes the physical database
+			// hash, so an exact cache hit is authoritative without a nonexistent
+			// stored container row to validate against.
+			return true
+		}
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
 	if e.pathRewriter != nil {
@@ -6783,6 +6825,12 @@ type pendingWrite struct {
 	storageTrustPath  string
 	storageTrustState string
 	storageTrustSnap  storageTrustSnapshot
+}
+
+type skipCacheWrite struct {
+	key               string
+	mtime             int64
+	sourceFingerprint string
 }
 
 func dataVersionForWrite(pw pendingWrite) int {

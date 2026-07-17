@@ -86,8 +86,11 @@ type multiSessionConfig struct {
 	freshStoredMember func(src multiSessionSource, rawID string) bool
 	// stampContainerHash stamps the request fingerprint hash onto every fanned
 	// out container result (used when all members share the container's content
-	// hash). Member parses are always stamped.
+	// hash). Member parses are stamped unless preserveMemberHash is set.
 	stampContainerHash bool
+	// preserveMemberHash keeps a semantic hash produced by parseMember instead
+	// of replacing it with the cheaper source-classification fingerprint.
+	preserveMemberHash bool
 	// unsupportedSource identifies typed parse errors that mean the physical
 	// source is valid but its schema is intentionally unsupported.
 	unsupportedSource func(error) bool
@@ -185,6 +188,10 @@ func WithFreshStoredMember(
 
 func WithContainerHashStamping() MultiSessionOption {
 	return func(c *multiSessionConfig) { c.stampContainerHash = true }
+}
+
+func WithMemberResultHashPreservation() MultiSessionOption {
+	return func(c *multiSessionConfig) { c.preserveMemberHash = true }
 }
 
 func WithUnsupportedSourceError(fn func(error) bool) MultiSessionOption {
@@ -470,7 +477,7 @@ func (s multiSessionContainerSourceSet) parse(
 		if result == nil {
 			return s.skipOutcome(src), nil
 		}
-		if fingerprintHash != "" {
+		if fingerprintHash != "" && !s.cfg.preserveMemberHash {
 			result.Session.File.Hash = fingerprintHash
 		}
 		return ParseOutcome{
