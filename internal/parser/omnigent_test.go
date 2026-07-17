@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -490,10 +491,10 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 }
 
 // TestOmnigentChangedPathParsingIsBounded is the production-path cardinality
-// regression: the provider resolves and parses the same one-member batch when
-// the unchanged archive grows from a handful of conversations to hundreds.
+// regression: the provider resolves the same bounded member batch when the
+// unchanged archive grows from one hundred conversations to two hundred.
 func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
-	for _, archiveSize := range []int{5, 200} {
+	for _, archiveSize := range []int{100, 200} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			path := writeOmnigentCardinalityDB(t, archiveSize)
 			changedID := fmt.Sprintf("conv_%03d", archiveSize/2)
@@ -530,10 +531,13 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 					Path: path + "-wal", EventKind: "write",
 				})
 			require.NoError(t, err)
-			require.Len(t, changed, 1)
-			assert.Equal(t, VirtualSourcePath(path, changedID), changed[0].DisplayPath)
+			require.Len(t, changed, omnigentProbeBatchSize+1)
+			changedIndex := slices.IndexFunc(changed, func(source SourceRef) bool {
+				return source.DisplayPath == VirtualSourcePath(path, changedID)
+			})
+			require.NotEqual(t, -1, changedIndex)
 			outcome, err := provider.Parse(context.Background(), ParseRequest{
-				Source: changed[0],
+				Source: changed[changedIndex],
 			})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
@@ -543,7 +547,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 	}
 }
 
-func TestOmnigentChangedPathEventuallyDetectsAppendWithoutTimestampAdvance(t *testing.T) {
+func TestOmnigentChangedPathEventuallyDetectsDirectEditWithoutMetadataAdvance(t *testing.T) {
 	path := writeOmnigentCardinalityDB(t, 65)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 		Roots: []string{filepath.Dir(path)}, Machine: "host",
@@ -557,25 +561,28 @@ func TestOmnigentChangedPathEventuallyDetectsAppendWithoutTimestampAdvance(t *te
 
 	writer, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = writer.Exec(`INSERT INTO conversation_items
-		(id, conversation_id, position, type, data, search_text)
-		VALUES ('conv_064_i1', 'conv_064', 1, 'message',
-			'{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
-			'changed')`)
+	_, err = writer.Exec(`UPDATE conversation_items
+		SET data = '{"role":"user","content":[{"type":"input_text","text":"changed"}]}'
+		WHERE id = 'conv_064_i0'`)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	var changed []SourceRef
+	var found SourceRef
 	for range 3 {
-		changed, err = provider.SourcesForChangedPath(
+		changed, changedErr := provider.SourcesForChangedPath(
 			context.Background(), ChangedPathRequest{Path: path, EventKind: "write"})
-		require.NoError(t, err)
-		if len(changed) > 0 {
+		require.NoError(t, changedErr)
+		assert.LessOrEqual(t, len(changed), omnigentProbeBatchSize)
+		for _, source := range changed {
+			if source.DisplayPath == VirtualSourcePath(path, "conv_064") {
+				found = source
+			}
+		}
+		if found.DisplayPath != "" {
 			break
 		}
 	}
-	require.Len(t, changed, 1)
-	assert.Equal(t, VirtualSourcePath(path, "conv_064"), changed[0].DisplayPath)
+	assert.Equal(t, VirtualSourcePath(path, "conv_064"), found.DisplayPath)
 }
 
 func TestOmnigentSplitWorkspaceClassificationIsBatched(t *testing.T) {
@@ -650,9 +657,10 @@ func TestOmnigentMemberParseDoesNotObserveNewerMetadata(t *testing.T) {
 		Path: path, EventKind: "write",
 	})
 	require.NoError(t, err)
-	require.Len(t, changed, 1,
+	assert.True(t, slices.ContainsFunc(changed, func(match multiSessionMatch) bool {
+		return match.MemberID == "conv_root"
+	}),
 		"a commit concurrent with parsing must remain visible to the next event")
-	assert.Equal(t, "conv_root", changed[0].MemberID)
 }
 
 func writeOmnigentCardinalityDB(t *testing.T, count int) string {

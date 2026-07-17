@@ -134,6 +134,8 @@ type Engine struct {
 	emitter                 Emitter
 	providerFactories       map[parser.AgentType]parser.ProviderFactory
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
+	omnigentRetryMu         gosync.Mutex
+	omnigentRetrySources    map[string]omnigentRetrySource
 	projectIdentityMu       gosync.Mutex
 	projectIdentityCache    map[string]projectIdentityCacheEntry
 	projectIdentityWritten  map[string]struct{}
@@ -2472,7 +2474,9 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
+	providerFound, providerFailures := e.discoverProviderSources(
+		ctx, scope, forceDiscoveredFiles || writeMode == syncWriteBulk,
+	)
 	for _, file := range providerFound {
 		counts[file.Agent]++
 	}
@@ -2740,6 +2744,7 @@ const slowProviderDiscoveryThreshold = 100 * time.Millisecond
 func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
+	forceFullDiscovery bool,
 ) ([]parser.DiscoveredFile, int) {
 	var files []parser.DiscoveredFile
 	var failures int
@@ -2775,8 +2780,9 @@ func (e *Engine) discoverProviderSources(
 			continue
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:   filteredRoots,
-			Machine: e.machine,
+			Roots:              filteredRoots,
+			Machine:            e.machine,
+			ForceFullDiscovery: forceFullDiscovery,
 		})
 		tDiscover := time.Now()
 		sources, err := provider.Discover(ctx)
@@ -2795,6 +2801,13 @@ func (e *Engine) discoverProviderSources(
 			continue
 		}
 		currentSources := providerSourcePathSet(sources)
+		if !forceFullDiscovery && agentType == parser.AgentOmnigent {
+			retrySources, retryFailures := e.discoverOmnigentRetrySources(
+				ctx, provider, currentSources,
+			)
+			sources = append(sources, retrySources...)
+			failures += retryFailures
+		}
 		forceParseSources := map[string]struct{}{}
 		if agentType == parser.AgentVSCopilot {
 			missingSources, forceSources :=
@@ -2873,6 +2886,45 @@ func providerSourcePathSet(sources []parser.SourceRef) map[string]struct{} {
 		seen[filepath.Clean(path)] = struct{}{}
 	}
 	return seen
+}
+
+func (e *Engine) discoverOmnigentRetrySources(
+	ctx context.Context,
+	provider parser.Provider,
+	currentSources map[string]struct{},
+) ([]parser.SourceRef, int) {
+	e.omnigentRetryMu.Lock()
+	pending := make([]omnigentRetrySource, 0, len(e.omnigentRetrySources))
+	for _, retry := range e.omnigentRetrySources {
+		pending = append(pending, retry)
+	}
+	e.omnigentRetryMu.Unlock()
+
+	var sources []parser.SourceRef
+	var failures int
+	for _, retry := range pending {
+		source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+			FullSessionID:      retry.sessionID,
+			StoredFilePath:     retry.filePath,
+			FingerprintKey:     retry.filePath,
+			PreferStoredSource: true,
+		})
+		if err != nil {
+			log.Printf("%s provider retry lookup: %v", parser.AgentOmnigent, err)
+			failures++
+			continue
+		}
+		if !found {
+			continue
+		}
+		path := filepath.Clean(providerDiscoveredPath(source))
+		if _, exists := currentSources[path]; exists {
+			continue
+		}
+		currentSources[path] = struct{}{}
+		sources = append(sources, source)
+	}
+	return sources, failures
 }
 
 func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
@@ -6827,6 +6879,36 @@ type pendingWrite struct {
 	storageTrustSnap  storageTrustSnapshot
 }
 
+type omnigentRetrySource struct {
+	sessionID string
+	filePath  string
+}
+
+func (e *Engine) markOmnigentSessionRetry(pw pendingWrite) {
+	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" ||
+		pw.sess.File.Path == "" {
+		return
+	}
+	e.omnigentRetryMu.Lock()
+	defer e.omnigentRetryMu.Unlock()
+	if e.omnigentRetrySources == nil {
+		e.omnigentRetrySources = make(map[string]omnigentRetrySource)
+	}
+	e.omnigentRetrySources[pw.sess.ID] = omnigentRetrySource{
+		sessionID: pw.sess.ID,
+		filePath:  pw.sess.File.Path,
+	}
+}
+
+func (e *Engine) clearOmnigentSessionRetry(pw pendingWrite) {
+	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
+		return
+	}
+	e.omnigentRetryMu.Lock()
+	delete(e.omnigentRetrySources, pw.sess.ID)
+	e.omnigentRetryMu.Unlock()
+}
+
 type skipCacheWrite struct {
 	key               string
 	mtime             int64
@@ -6937,6 +7019,7 @@ func (e *Engine) writeBatch(
 				continue
 			}
 			log.Printf("upsert session %s: %v", s.ID, err)
+			e.markOmnigentSessionRetry(pw)
 			failedSessions++
 			continue
 		}
@@ -6966,6 +7049,7 @@ func (e *Engine) writeBatch(
 				"write messages for %s: %v",
 				s.ID, werr,
 			)
+			e.markOmnigentSessionRetry(pw)
 			failedSessions++
 			continue
 		}
@@ -6976,6 +7060,7 @@ func (e *Engine) writeBatch(
 				"write usage events for %s: %v",
 				s.ID, err,
 			)
+			e.markOmnigentSessionRetry(pw)
 			failedSessions++
 			continue
 		}
@@ -6991,9 +7076,11 @@ func (e *Engine) writeBatch(
 			log.Printf(
 				"set data_version for %s: %v", s.ID, err,
 			)
+			e.markOmnigentSessionRetry(pw)
 			failedSessions++
 			continue
 		}
+		e.clearOmnigentSessionRetry(pw)
 
 		if !replaceMessages {
 			// Same ordering contract as recomputeSignalsFromDB: the

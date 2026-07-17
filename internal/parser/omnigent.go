@@ -575,7 +575,9 @@ func parseOmnigentConversationFromDB(
 		sess.RelationshipType = RelSubagent
 	}
 
-	usageEvents := omnigentUsageEvents(sess.ID, conv.sessionUsage)
+	usageEvents := omnigentUsageEvents(
+		sess.ID, conv.modelOverride, conv.sessionUsage,
+	)
 	accumulateMessageTokenUsage(&sess, messages)
 	applyUsageEventTokenTotals(&sess, usageEvents)
 
@@ -917,7 +919,9 @@ func omnigentSystemLine(typeName, data, searchText string) string {
 // omnigentUsageEvents decodes the session_usage blob (zstd-framed on newer
 // builds, plaintext JSON on older ones) into a single session-level usage
 // event, plus per-model breakdown when present.
-func omnigentUsageEvents(sessionID string, raw []byte) []ParsedUsageEvent {
+func omnigentUsageEvents(
+	sessionID, fallbackModel string, raw []byte,
+) []ParsedUsageEvent {
 	text, err := decodeOmnigentCompressed(raw)
 	if err != nil || strings.TrimSpace(text) == "" {
 		return nil
@@ -958,13 +962,18 @@ func omnigentUsageEvents(sessionID string, raw []byte) []ParsedUsageEvent {
 	}
 
 	cost := usage.TotalCostUSD
+	fallbackModel = strings.TrimSpace(fallbackModel)
+	if fallbackModel == "" {
+		fallbackModel = "unknown"
+	}
 	return []ParsedUsageEvent{{
 		SessionID:    sessionID,
 		Source:       "omnigent_session_usage",
+		Model:        fallbackModel,
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,
 		CostUSD:      &cost,
-		DedupKey:     sessionID + "|usage",
+		DedupKey:     sessionID + "|usage|" + fallbackModel,
 	}}
 }
 

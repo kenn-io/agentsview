@@ -714,10 +714,9 @@ var Registry = []AgentDef{
 		WatchRootsFunc: ResolveIcodemateWatchRoots,
 	},
 	{
-		// Omnigent (github.com/omnigent-ai/omnigent) is an open-source
-		// meta-harness. Like Shelley, it stores every conversation in one
-		// shared SQLite database (chat.db); the provider fans it out into one
-		// session per conversation addressed by a "<db>#<id>" virtual path.
+		// Omnigent stores every conversation in one shared SQLite database
+		// (chat.db); the provider fans it out into one session per conversation
+		// addressed by a "<db>#<id>" virtual path.
 		Type:        AgentOmnigent,
 		DisplayName: "Omnigent",
 		EnvVar:      "OMNIGENT_DIR",

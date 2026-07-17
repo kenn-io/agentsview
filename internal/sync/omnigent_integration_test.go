@@ -23,6 +23,7 @@ import (
 type omnigentParseCountingFactory struct {
 	delegate parser.ProviderFactory
 	count    *atomic.Int64
+	results  *atomic.Int64
 }
 
 func (f omnigentParseCountingFactory) Definition() parser.AgentDef {
@@ -39,19 +40,25 @@ func (f omnigentParseCountingFactory) NewProvider(
 	return &omnigentParseCountingProvider{
 		Provider: f.delegate.NewProvider(cfg),
 		count:    f.count,
+		results:  f.results,
 	}
 }
 
 type omnigentParseCountingProvider struct {
 	parser.Provider
-	count *atomic.Int64
+	count   *atomic.Int64
+	results *atomic.Int64
 }
 
 func (p *omnigentParseCountingProvider) Parse(
 	ctx context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
 	p.count.Add(1)
-	return p.Provider.Parse(ctx, req)
+	outcome, err := p.Provider.Parse(ctx, req)
+	if p.results != nil {
+		p.results.Add(int64(len(outcome.Results)))
+	}
+	return outcome, err
 }
 
 func omnigentDefaultProviderFactory(t *testing.T) parser.ProviderFactory {
@@ -271,6 +278,111 @@ func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
 		"unchanged container must not reparse every conversation")
 }
 
+func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	const boundedMemberBatch = int64(32)
+	for _, archiveSize := range []int{200, 2000} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := writeOmnigentSyncDB(t, root, archiveSize)
+			archive := dbtest.OpenTestDB(t)
+			var parseCount, resultCount atomic.Int64
+			factory := omnigentParseCountingFactory{
+				delegate: omnigentDefaultProviderFactory(t),
+				count:    &parseCount,
+				results:  &resultCount,
+			}
+			engine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {root},
+				},
+				Machine:           "local",
+				ProviderFactories: []parser.ProviderFactory{factory},
+			})
+			engine.SyncAll(context.Background(), nil)
+
+			writer, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(`UPDATE conversations
+				SET updated_at = ? WHERE id = 'conv_0000'`, time.Now().Unix())
+			require.NoError(t, err)
+			_, err = writer.Exec(`INSERT INTO conversation_items
+				(id, conversation_id, position, type, data, search_text)
+				VALUES ('changed', 'conv_0000', 1, 'message', ?, 'changed')`,
+				`{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}`)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			parseCount.Store(0)
+			resultCount.Store(0)
+			engine.SyncAll(context.Background(), nil)
+			assert.Equal(t, boundedMemberBatch, parseCount.Load())
+			assert.Equal(t, boundedMemberBatch, resultCount.Load(),
+				"periodic work must not grow with unchanged archive size")
+			assert.Equal(t, 1, engine.LastSyncStats().Synced)
+
+			deleteIndex := 1
+			if archiveSize > 32 {
+				deleteIndex = 32
+			}
+			deletedID := fmt.Sprintf("conv_%04d", deleteIndex)
+			writer, err = sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(`DELETE FROM conversation_items
+				WHERE conversation_id = ?`, deletedID)
+			require.NoError(t, err)
+			_, err = writer.Exec(`DELETE FROM conversations WHERE id = ?`, deletedID)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			parseCount.Store(0)
+			resultCount.Store(0)
+			engine.SyncAll(context.Background(), nil)
+			assert.Equal(t, boundedMemberBatch, parseCount.Load())
+			assert.Equal(t, boundedMemberBatch-1, resultCount.Load(),
+				"tombstone reconciliation must remain one bounded batch")
+			deleted, err := archive.GetSession(
+				context.Background(), "omnigent:"+deletedID)
+			require.NoError(t, err)
+			assert.Nil(t, deleted)
+		})
+	}
+}
+
+func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	writeOmnigentSyncDB(t, root, 3)
+	archive := dbtest.OpenTestDB(t)
+	var parseCount, resultCount atomic.Int64
+	factory := omnigentParseCountingFactory{
+		delegate: omnigentDefaultProviderFactory(t),
+		count:    &parseCount,
+		results:  &resultCount,
+	}
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	parseCount.Store(0)
+	resultCount.Store(0)
+	stats := engine.ResyncAll(context.Background(), nil)
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 3, stats.Synced)
+	assert.Equal(t, int64(1), parseCount.Load())
+	assert.Equal(t, int64(3), resultCount.Load(),
+		"archive rebuild must bypass incremental discovery")
+}
+
 func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -348,6 +460,44 @@ func TestSyncOmnigentPersistsJSONStringToolResult(t *testing.T) {
 	assert.Equal(t, `{"ok":true}`, messages[1].ToolCalls[0].ResultContent)
 	assert.Equal(t, len(`{"ok":true}`),
 		messages[1].ToolCalls[0].ResultContentLength)
+}
+
+func TestSyncOmnigentFallbackUsageAppearsInAnalytics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE conversations
+		SET model_override = 'claude-sonnet',
+		    session_usage = '{"input_tokens":120,"output_tokens":30,"total_cost_usd":0.25}'
+		WHERE id = 'conv_0000'`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	events, err := archive.GetUsageEvents(context.Background(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "claude-sonnet", events[0].Model)
+	daily, err := archive.GetDailyUsage(context.Background(), db.UsageFilter{
+		From: "2023-11-01", To: "2023-11-30",
+	})
+	require.NoError(t, err)
+	require.Len(t, daily.Daily, 1)
+	assert.Equal(t, 120, daily.Daily[0].InputTokens)
+	assert.Equal(t, 30, daily.Daily[0].OutputTokens)
+	assert.InDelta(t, 0.25, daily.Daily[0].TotalCost, 0.0001)
 }
 
 func TestSyncPathsOmnigentSameTimestampAppendUsesMemberHash(t *testing.T) {

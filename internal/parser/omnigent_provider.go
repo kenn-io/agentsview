@@ -27,6 +27,8 @@ type omnigentTrackedContainer struct {
 	maxRowID           int64
 	probeKeys          []string
 	probeCursor        int
+	probeRemaining     int
+	compositeMTimeNS   int64
 	workspaceIDs       []int64
 	workspaceCursor    int
 	workspaceCheckedAt map[int64]int64
@@ -45,9 +47,9 @@ func newOmnigentChangeTracker() *omnigentChangeTracker {
 }
 
 // omnigent stores every conversation in one shared SQLite database (chat.db).
-// It is a multi-session container provider: discovery surfaces the database as
-// a single source and Parse fans it out into one session per conversation,
-// addressed by "<db>#<conversationID>" virtual paths.
+// It is a multi-session container provider: initial discovery surfaces the
+// database as a single source, then scheduled discovery emits bounded changed
+// member batches addressed by "<db>#<conversationID>" virtual paths.
 func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 	tracker := newOmnigentChangeTracker()
 	return NewMultiSessionProviderFactory(
@@ -57,7 +59,9 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 			return NewMultiSessionContainerSourceSet(
 				AgentOmnigent,
 				cfg.Roots,
-				WithContainerDiscovery(omnigentDiscoverContainers),
+				WithSourceDiscovery(func(root string) []multiSessionMatch {
+					return tracker.discoverSources(root, cfg.ForceFullDiscovery)
+				}),
 				WithWatchRoots(omnigentWatchRoots),
 				WithChangedPathClassifier(omnigentClassifyPath),
 				WithChangedPathMembers(tracker.changedMembers),
@@ -124,6 +128,35 @@ func omnigentDiscoverContainers(root string) []string {
 		return []string{dbPath}
 	}
 	return nil
+}
+
+func (t *omnigentChangeTracker) discoverSources(
+	root string, forceFull bool,
+) []multiSessionMatch {
+	containers := omnigentDiscoverContainers(root)
+	matches := make([]multiSessionMatch, 0, len(containers))
+	for _, container := range containers {
+		whole := multiSessionMatch{Path: container, Container: container}
+		t.mu.Lock()
+		_, initialized := t.containers[container]
+		t.mu.Unlock()
+		if forceFull || !initialized {
+			matches = append(matches, whole)
+			continue
+		}
+		changed, err := t.changedMembers(root, ChangedPathRequest{
+			Path: container, EventKind: "poll",
+		})
+		if err != nil {
+			// Fall back to the authoritative container source so operational
+			// failures are surfaced by fingerprinting/parsing instead of turning
+			// a failed discovery probe into a clean empty sync.
+			matches = append(matches, whole)
+			continue
+		}
+		matches = append(matches, changed...)
+	}
+	return matches
 }
 
 func omnigentWatchRoots(roots []string) []WatchRoot {
@@ -308,6 +341,14 @@ func (t *omnigentChangeTracker) changedMembers(
 		// retired even when the migrated rows reuse rowids and old timestamps.
 		return []multiSessionMatch{match}, nil
 	}
+	compositeMTimeNS, err := sqliteDBCompositeMtime(match.Container)
+	if err != nil {
+		return nil, err
+	}
+	if compositeMTimeNS != tracked.compositeMTimeNS {
+		tracked.compositeMTimeNS = compositeMTimeNS
+		tracked.probeRemaining = len(tracked.probeKeys)
+	}
 
 	checkedAt := time.Now().Unix()
 	// Omnigent's store advances updated_at on supported item appends and title
@@ -358,10 +399,15 @@ func (t *omnigentChangeTracker) changedMembers(
 		selectChanged(meta)
 	}
 
-	// A bounded rotating probe catches direct/imported writes that bypass the
-	// store's updated_at invariant without turning every filesystem event into
-	// an archive-wide scan. Every tracked member is eventually revisited.
-	probeCount := min(omnigentProbeBatchSize, len(tracked.probeKeys))
+	// A bounded rotating probe catches direct/imported transcript edits that
+	// bypass every conversation metadata invariant. A physical container change
+	// starts one complete probe cycle, spread across scheduled passes, so work per
+	// pass stays constant while every tracked member is eventually revisited.
+	probeCount := min(
+		omnigentProbeBatchSize,
+		len(tracked.probeKeys),
+		tracked.probeRemaining,
+	)
 	for i := range probeCount {
 		key := tracked.probeKeys[(tracked.probeCursor+i)%len(tracked.probeKeys)]
 		previous, stillTracked := tracked.metas[key]
@@ -378,10 +424,9 @@ func (t *omnigentChangeTracker) changedMembers(
 			selected[key] = previous
 			continue
 		}
-		if previous.fingerprint() != meta.fingerprint() {
-			selected[key] = meta
-		}
+		selected[key] = meta
 	}
+	tracked.probeRemaining -= probeCount
 
 	maxRowID, err := omnigentMaxConversationRowID(conn)
 	if err != nil {
@@ -665,9 +710,11 @@ func (t *omnigentChangeTracker) parseMemberWith(
 func (t *omnigentChangeTracker) replace(
 	container string, schema omnigentSchema, metas []omnigentMeta,
 ) {
+	compositeMTimeNS, _ := sqliteDBCompositeMtime(container)
 	tracked := omnigentTrackedContainer{
 		schema: schema, metas: make(map[string]omnigentMeta, len(metas)),
 		checkedAt: time.Now().Unix(), count: len(metas),
+		compositeMTimeNS:   compositeMTimeNS,
 		workspaceCheckedAt: make(map[int64]int64),
 		workspaceCounts:    make(map[int64]int),
 	}
