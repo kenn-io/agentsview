@@ -1034,6 +1034,7 @@ type ParsedUsageEvent struct {
 	CacheReadInputTokens     int
 	ReasoningTokens          int
 	CostUSD                  *float64
+	AICredits                *float64
 	CostStatus               string
 	CostSource               string
 	OccurredAt               string

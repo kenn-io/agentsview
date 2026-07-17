@@ -842,6 +842,9 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 		"tool_calls": {
 			"call_index", "file_path",
 		},
+		"usage_events": {
+			"ai_credits",
+		},
 	})
 
 	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))

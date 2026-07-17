@@ -2884,7 +2884,7 @@ func pgUsageEventFingerprint(
 		`SELECT message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
 			occurred_at, dedup_key
 		 FROM usage_events
 		 WHERE session_id = $1
@@ -2903,14 +2903,14 @@ func pgUsageEventFingerprint(
 		var inputTokens, outputTokens int
 		var cacheCreationInputTokens, cacheReadInputTokens int
 		var reasoningTokens int
-		var cost sql.NullFloat64
+		var cost, aiCredits sql.NullFloat64
 		var occurredAt sql.NullTime
 		var dedupKey sql.NullString
 		if err := rows.Scan(
 			&ordinal, &source, &model,
 			&inputTokens, &outputTokens,
 			&cacheCreationInputTokens, &cacheReadInputTokens,
-			&reasoningTokens, &cost, &costStatus, &costSource,
+			&reasoningTokens, &cost, &aiCredits, &costStatus, &costSource,
 			&occurredAt, &dedupKey,
 		); err != nil {
 			return "", err
@@ -2920,7 +2920,7 @@ func pgUsageEventFingerprint(
 			occurred = FormatISO8601(occurredAt.Time)
 		}
 		fmt.Fprintf(&b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
+			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
 			len(source), source,
@@ -2932,6 +2932,8 @@ func pgUsageEventFingerprint(
 			reasoningTokens,
 			cost.Valid,
 			cost.Float64,
+			aiCredits.Valid,
+			aiCredits.Float64,
 			len(costStatus), costStatus,
 			len(costSource), costSource,
 			len(occurred), occurred,
@@ -3037,18 +3039,18 @@ func bulkInsertUsageEvents(
 			session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_usd, ai_credits, cost_status, cost_source,
 			occurred_at, dedup_key) VALUES `)
-		args := make([]any, 0, len(batch)*14)
+		args := make([]any, 0, len(batch)*15)
 		for j, ev := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*14 + 1
+			p := j*15 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4, p+5, p+6,
-				p+7, p+8, p+9, p+10, p+11, p+12, p+13,
+				p+7, p+8, p+9, p+10, p+11, p+12, p+13, p+14,
 			)
 			var occurred any
 			if ev.OccurredAt != "" {
@@ -3064,6 +3066,10 @@ func bulkInsertUsageEvents(
 			if ev.CostUSD != nil {
 				cost = *ev.CostUSD
 			}
+			var aiCredits any
+			if ev.AICredits != nil {
+				aiCredits = *ev.AICredits
+			}
 			args = append(args,
 				ev.SessionID,
 				ordinal,
@@ -3075,6 +3081,7 @@ func bulkInsertUsageEvents(
 				ev.CacheReadInputTokens,
 				ev.ReasoningTokens,
 				cost,
+				aiCredits,
 				sanitizePG(ev.CostStatus),
 				sanitizePG(ev.CostSource),
 				occurred,

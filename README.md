@@ -207,6 +207,7 @@ agentsview usage statusline
 Features:
 
 - Automatic pricing via LiteLLM rates (with offline fallback)
+- Authoritative Copilot CLI AI credits when session logs provide them
 - Prompt-caching-aware cost calculation (cache creation / read tokens)
 - Per-model breakdown with `--breakdown`
 - Date filtering (`--since`, `--until`, `--all`), agent filtering (`--agent`)
