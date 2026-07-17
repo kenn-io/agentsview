@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -268,6 +269,51 @@ func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
 	engine.SyncAll(context.Background(), nil)
 	assert.Zero(t, parseCount.Load(),
 		"unchanged container must not reparse every conversation")
+}
+
+func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	writeOmnigentSyncDB(t, root, 2)
+	archive := dbtest.OpenTestDB(t)
+	raw, err := sql.Open("sqlite3", archive.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`CREATE TRIGGER fail_omnigent_data_version
+		BEFORE UPDATE OF data_version ON sessions
+		WHEN NEW.id = 'omnigent:conv_0000'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected data-version failure');
+		END`)
+	require.NoError(t, err)
+
+	var parseCount atomic.Int64
+	factory := omnigentParseCountingFactory{
+		delegate: omnigentDefaultProviderFactory(t),
+		count:    &parseCount,
+	}
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+	assert.Less(t, archive.GetSessionDataVersion("omnigent:conv_0000"),
+		db.CurrentDataVersion())
+
+	_, err = raw.Exec(`DROP TRIGGER fail_omnigent_data_version`)
+	require.NoError(t, err)
+	parseCount.Store(0)
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, int64(1), parseCount.Load(),
+		"stale virtual member must bypass the container cache")
+	assert.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion("omnigent:conv_0000"))
 }
 
 func TestSyncPathsOmnigentSameTimestampAppendUsesMemberHash(t *testing.T) {

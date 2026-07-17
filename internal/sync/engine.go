@@ -6991,6 +6991,8 @@ func (e *Engine) writeBatch(
 			log.Printf(
 				"set data_version for %s: %v", s.ID, err,
 			)
+			failedSessions++
+			continue
 		}
 
 		if !replaceMessages {
