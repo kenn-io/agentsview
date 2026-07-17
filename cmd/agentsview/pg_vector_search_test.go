@@ -121,10 +121,10 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 		"wiring must see the caller's vector config")
 }
 
-// TestNewPGReadServiceUsesRequestedCompatibilityGate protects bounded CLI
-// reads from an unnecessarily strict persistent gate while ensuring long-lived
-// readers reject CockroachDB's one-time scan mode. The selected gate must
-// receive the database owned by the store that will serve the reads.
+// TestNewPGReadServiceUsesRequestedCompatibilityGate keeps the bounded and
+// persistent policies explicit while both reject CockroachDB's one-time scan
+// mode. The selected gate must receive the database owned by the store that
+// will serve the reads.
 func TestNewPGReadServiceUsesRequestedCompatibilityGate(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -1467,10 +1467,9 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 //
 // On PostgreSQL, missing write guards always fail closed. CockroachDB
 // servers without trigger support record scan mode during the migration and
-// are gated by the ciphertext scans below instead. This fallback is safe only
-// for bounded operations that gate immediately before their reads; persistent
-// services must use CheckCodexEncryptedPayloadPersistentReadCompat so a later
-// legacy writer cannot race past a one-time startup scan.
+// are gated by the ciphertext scans below instead. This fallback is suitable
+// for repair verification, but direct readers must use one of the stricter
+// reader gates below because their queries do not share this scan's snapshot.
 func CheckCodexEncryptedPayloadCompat(ctx context.Context, pg *sql.DB) error {
 	guarded, err := codexPayloadWriteGuardsInstalledPG(ctx, pg)
 	if err != nil {
@@ -1538,6 +1537,19 @@ func CheckCodexEncryptedPayloadCompat(ctx context.Context, pg *sql.DB) error {
 	)
 }
 
+// CheckCodexEncryptedPayloadBoundedReadCompat gates a bounded direct reader.
+// Even a short-lived command cannot rely on triggerless scan mode: a legacy
+// writer could commit ciphertext after the scan and before the command's
+// service queries. Until those reads share the scan transaction, require
+// durable write guards just like a persistent reader.
+func CheckCodexEncryptedPayloadBoundedReadCompat(
+	ctx context.Context, pg *sql.DB,
+) error {
+	return checkCodexEncryptedPayloadGuardedReadCompat(
+		ctx, pg, "bounded shared-storage reads require",
+	)
+}
+
 // CheckCodexEncryptedPayloadPersistentReadCompat gates a long-running reader.
 // Persistent services require write guards even on CockroachDB: scan mode can
 // prove only that the database is clean at one instant, while a triggerless
@@ -1545,14 +1557,22 @@ func CheckCodexEncryptedPayloadCompat(ctx context.Context, pg *sql.DB) error {
 func CheckCodexEncryptedPayloadPersistentReadCompat(
 	ctx context.Context, pg *sql.DB,
 ) error {
+	return checkCodexEncryptedPayloadGuardedReadCompat(
+		ctx, pg, "persistent shared-storage serving requires",
+	)
+}
+
+func checkCodexEncryptedPayloadGuardedReadCompat(
+	ctx context.Context, pg *sql.DB, requirement string,
+) error {
 	guarded, err := codexPayloadWriteGuardsInstalledPG(ctx, pg)
 	if err != nil {
 		return err
 	}
 	if !guarded {
 		return fmt.Errorf(
-			"%w: persistent shared-storage serving requires installed Codex payload write guards; use a trigger-capable PostgreSQL or CockroachDB server and run the migration with a writable current AgentsView build",
-			ErrCodexEncryptedPayloadRepairRequired,
+			"%w: %s installed Codex payload write guards; use a trigger-capable PostgreSQL or CockroachDB server and run the migration with a writable current AgentsView build",
+			ErrCodexEncryptedPayloadRepairRequired, requirement,
 		)
 	}
 	return CheckCodexEncryptedPayloadCompat(ctx, pg)

@@ -269,7 +269,12 @@ DROP TRIGGER %s ON tool_calls`,
 	require.NoError(t, setCodexPayloadGuardModePG(
 		ctx, pg, codexPayloadGuardModeScan), "record scan mode")
 	require.NoError(t, CheckCodexEncryptedPayloadCompat(ctx, pg),
-		"scan mode with no legacy ciphertext must be admitted")
+		"repair verification may admit clean scan mode")
+	err = CheckCodexEncryptedPayloadBoundedReadCompat(ctx, pg)
+	require.Error(t, err,
+		"bounded readers must reject a scan outside their query snapshot")
+	require.ErrorIs(t, err, ErrCodexEncryptedPayloadRepairRequired)
+	assert.Contains(t, err.Error(), "bounded shared-storage reads")
 	err = CheckCodexEncryptedPayloadPersistentReadCompat(ctx, pg)
 	require.Error(t, err,
 		"persistent readers must reject triggerless scan mode even while clean")

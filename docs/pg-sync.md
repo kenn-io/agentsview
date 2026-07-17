@@ -391,11 +391,12 @@ The Codex encrypted-payload write guards install as row-level
 triggers on CockroachDB v24.3 and later, matching the PostgreSQL
 behavior: writes that would land legacy Codex ciphertext are
 rejected. Older CockroachDB versions cannot run triggers; there
-the migration still redacts stored rows but records a scan-based
-guard mode, and `pg serve` verifies at startup that no legacy
-ciphertext or stale vectors exist, failing closed until a current
-build repairs them. On such deployments keep every machine that
-pushes to the shared database on a current AgentsView build.
+the migration still redacts stored rows and records a scan-based
+guard mode for repair verification. Direct `--pg` reads and `pg serve`
+fail closed in that mode because a scan cannot protect later queries
+from a concurrent legacy writer. Upgrade to trigger-capable
+CockroachDB and run the migration with a writable current AgentsView
+build before serving the shared archive.
 
 !!! warning
     Query-parameter tokens can leak through server logs, browser

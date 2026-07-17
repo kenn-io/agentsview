@@ -105,7 +105,7 @@ const (
 	pgReadPersistent
 )
 
-var checkPGBoundedReadCompatDBFn = postgres.CheckCodexEncryptedPayloadCompat
+var checkPGBoundedReadCompatDBFn = postgres.CheckCodexEncryptedPayloadBoundedReadCompat
 var checkPGPersistentReadCompatDBFn = postgres.CheckCodexEncryptedPayloadPersistentReadCompat
 
 var checkPGReadCompatFn = func(
