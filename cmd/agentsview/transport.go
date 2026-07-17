@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -92,12 +93,19 @@ var openPGReadStore = func(
 	return store, func() { _ = store.Close() }, nil
 }
 
+type pgReadCompatibilityStore interface {
+	db.Store
+	DB() *sql.DB
+}
+
+var checkPGPersistentReadCompatDBFn = postgres.CheckCodexEncryptedPayloadPersistentReadCompat
+
 var checkPGReadCompatFn = func(ctx context.Context, store db.Store) error {
-	pgStore, ok := store.(*postgres.Store)
+	pgStore, ok := store.(pgReadCompatibilityStore)
 	if !ok {
 		return nil
 	}
-	return postgres.CheckCodexEncryptedPayloadCompat(ctx, pgStore.DB())
+	return checkPGPersistentReadCompatDBFn(ctx, pgStore.DB())
 }
 
 // detectTransport picks the transport mode:

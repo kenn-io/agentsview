@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 )
+
+type pgReadCompatibilityTestStore struct {
+	db.Store
+	pg *sql.DB
+}
+
+func (s pgReadCompatibilityTestStore) DB() *sql.DB { return s.pg }
 
 func TestResolvePGServeVectorState(t *testing.T) {
 	tests := []struct {
@@ -111,6 +119,40 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 		"wiring must target the store the service serves reads from")
 	assert.True(t, gotCfg.Vector.Enabled,
 		"wiring must see the caller's vector config")
+}
+
+// TestNewPGReadServiceUsesPersistentCompatibilityGate protects long-lived
+// direct PostgreSQL readers such as `mcp --pg` and `session watch --pg` from
+// accepting CockroachDB's one-time scan mode. The persistent gate must receive
+// the database owned by the store that will serve subsequent reads.
+func TestNewPGReadServiceUsesPersistentCompatibilityGate(t *testing.T) {
+	fakeStore := dbtest.OpenTestDBAt(t, filepath.Join(t.TempDir(), "pg.db"))
+	pg := new(sql.DB)
+	stubPGReadStore(t, pgReadCompatibilityTestStore{
+		Store: fakeStore,
+		pg:    pg,
+	})
+
+	calls := 0
+	orig := checkPGPersistentReadCompatDBFn
+	checkPGPersistentReadCompatDBFn = func(
+		_ context.Context, got *sql.DB,
+	) error {
+		calls++
+		assert.Same(t, pg, got)
+		return nil
+	}
+	t.Cleanup(func() { checkPGPersistentReadCompatDBFn = orig })
+
+	svc, cleanup, err := newPGReadService(config.Config{}, config.PGConfig{
+		URL:    "postgres://example.test/agentsview",
+		Schema: "agentsview",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	t.Cleanup(cleanup)
+	assert.Equal(t, 1, calls,
+		"persistent compatibility must be checked exactly once at startup")
 }
 
 func TestNewPGReadServiceRejectsIncompatibleDataBeforeVectorWiring(t *testing.T) {
