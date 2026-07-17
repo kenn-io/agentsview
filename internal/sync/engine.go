@@ -1272,6 +1272,12 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	ops rebuildOperations,
 ) (stats SyncStats, retErr error) {
 	ops = ops.withDefaults()
+	resyncAccepted := false
+	defer func() {
+		if !resyncAccepted {
+			e.queueOmnigentContainerRetries()
+		}
+	}()
 	reportResyncProgress := func(p Progress) {
 		p.Resync = true
 		if p.Phase == PhaseSyncing && p.Detail == "" {
@@ -1928,6 +1934,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	e.mu.Lock()
 	e.lastSyncStats = stats
 	e.mu.Unlock()
+	resyncAccepted = true
 
 	// Emission happens via the deferred closure above, after
 	// syncMu is released.
@@ -2930,6 +2937,33 @@ func (e *Engine) discoverOmnigentRetrySources(
 		sources = append(sources, source)
 	}
 	return sources, failures
+}
+
+func (e *Engine) queueOmnigentContainerRetries() {
+	factory, ok := e.providerFactories[parser.AgentOmnigent]
+	if !ok || factory == nil {
+		return
+	}
+	roots := e.agentDirs[parser.AgentOmnigent]
+	if len(roots) == 0 {
+		return
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:              roots,
+		Machine:            e.machine,
+		ForceFullDiscovery: true,
+	})
+	sources, err := provider.Discover(context.Background())
+	if err != nil {
+		log.Printf("%s provider abort recovery discovery: %v", parser.AgentOmnigent, err)
+		return
+	}
+	for _, source := range sources {
+		path := providerDiscoveredPath(source)
+		if path != "" {
+			e.markOmnigentSourceRetry(parser.AgentOmnigent, path)
+		}
+	}
 }
 
 func (e *Engine) visualStudioCopilotMissingVS2026PollSources(

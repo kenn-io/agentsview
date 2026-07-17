@@ -579,7 +579,18 @@ func parseOmnigentConversationFromDB(
 		sess.ID, conv.modelOverride, conv.sessionUsage,
 	)
 	accumulateMessageTokenUsage(&sess, messages)
-	applyUsageEventTokenTotals(&sess, usageEvents)
+	totalUsageOutput := 0
+	hasUsageOutput := false
+	for _, event := range usageEvents {
+		if event.OutputTokens > 0 {
+			hasUsageOutput = true
+			totalUsageOutput += event.OutputTokens
+		}
+	}
+	if hasUsageOutput {
+		sess.HasTotalOutputTokens = true
+		sess.TotalOutputTokens = totalUsageOutput
+	}
 
 	return &ParseResult{
 		Session:     sess,
@@ -950,7 +961,7 @@ func omnigentUsageEvents(
 			cost := m.TotalCostUSD
 			events = append(events, ParsedUsageEvent{
 				SessionID:    sessionID,
-				Source:       "omnigent_session_usage",
+				Source:       "session",
 				Model:        model,
 				InputTokens:  m.InputTokens,
 				OutputTokens: m.OutputTokens,
@@ -968,7 +979,7 @@ func omnigentUsageEvents(
 	}
 	return []ParsedUsageEvent{{
 		SessionID:    sessionID,
-		Source:       "omnigent_session_usage",
+		Source:       "session",
 		Model:        fallbackModel,
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,

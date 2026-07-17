@@ -266,6 +266,7 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 	assert.Contains(t, root.Messages[7].Content, "[terminal_command]")
 
 	require.Len(t, root.UsageEvents, 1)
+	assert.Equal(t, "session", root.UsageEvents[0].Source)
 	assert.Equal(t, "claude-opus-4-8", root.UsageEvents[0].Model)
 	assert.Equal(t, 100, root.UsageEvents[0].InputTokens)
 	assert.Equal(t, 50, root.UsageEvents[0].OutputTokens)
@@ -273,8 +274,8 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 	assert.InDelta(t, 1.5, *root.UsageEvents[0].CostUSD, 0.0001)
 	assert.True(t, root.Session.HasTotalOutputTokens)
 	assert.Equal(t, 50, root.Session.TotalOutputTokens)
-	assert.True(t, root.Session.HasPeakContextTokens)
-	assert.Equal(t, 100, root.Session.PeakContextTokens)
+	assert.False(t, root.Session.HasPeakContextTokens)
+	assert.Zero(t, root.Session.PeakContextTokens)
 
 	kid, ok := byID[kidID]
 	require.True(t, ok, "sub-agent session present")
@@ -583,6 +584,49 @@ func TestOmnigentChangedPathEventuallyDetectsDirectEditWithoutMetadataAdvance(t 
 		}
 	}
 	assert.Equal(t, VirtualSourcePath(path, "conv_064"), found.DisplayPath)
+}
+
+func TestOmnigentProbeReconcilesReplacementWithReusedRowID(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 65)
+	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	_, err = provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+
+	writer, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversation_items
+		WHERE conversation_id = 'conv_000'`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversations WHERE id = 'conv_000'`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversations
+		(rowid, id, created_at, updated_at, title, kind, root_conversation_id)
+		VALUES (1, 'replacement', 1, 2, 'replacement', 'default', 'replacement')`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('replacement_i0', 'replacement', 0, 'message',
+			'{"role":"user","content":[{"type":"input_text","text":"replacement"}]}',
+			'replacement')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(), ChangedPathRequest{Path: path, EventKind: "write"})
+	require.NoError(t, err)
+	paths := make([]string, 0, len(changed))
+	for _, source := range changed {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.Contains(t, paths, VirtualSourcePath(path, "conv_000"))
+	assert.Contains(t, paths, VirtualSourcePath(path, "replacement"))
+	assert.LessOrEqual(t, len(changed), omnigentProbeBatchSize+1)
 }
 
 func TestOmnigentSplitWorkspaceClassificationIsBatched(t *testing.T) {

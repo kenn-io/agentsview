@@ -428,6 +428,7 @@ func (t *omnigentChangeTracker) changedMembers(
 		len(tracked.probeKeys),
 		tracked.probeRemaining,
 	)
+	probeMissing := false
 	for i := range probeCount {
 		key := tracked.probeKeys[(tracked.probeCursor+i)%len(tracked.probeKeys)]
 		previous, stillTracked := tracked.metas[key]
@@ -441,6 +442,7 @@ func (t *omnigentChangeTracker) changedMembers(
 			return nil, err
 		}
 		if !exists {
+			probeMissing = true
 			selected[key] = previous
 			continue
 		}
@@ -458,7 +460,7 @@ func (t *omnigentChangeTracker) changedMembers(
 			newMemberCount++
 		}
 	}
-	membershipLoss := maxRowID < tracked.maxRowID
+	membershipLoss := probeMissing || maxRowID < tracked.maxRowID
 	if newMemberCount > 0 {
 		count, err := omnigentConversationCount(conn)
 		if err != nil {
@@ -478,7 +480,11 @@ func (t *omnigentChangeTracker) changedMembers(
 		}
 		present := make(map[string]struct{}, len(current))
 		for _, meta := range current {
-			present[meta.member().key(schema)] = struct{}{}
+			key := meta.member().key(schema)
+			present[key] = struct{}{}
+			if _, exists := tracked.metas[key]; !exists {
+				selected[key] = meta
+			}
 		}
 		for key := range tracked.metas {
 			if _, exists := present[key]; exists {

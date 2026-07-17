@@ -1,0 +1,103 @@
+// ABOUTME: Regression tests for Omnigent state across full archive rebuilds.
+// ABOUTME: Ensures discarded resync work is retried against the live archive.
+package sync
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+)
+
+func TestAbortedResyncQueuesOmnigentContainer(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "chat.db")
+	writer, err := sql.Open("sqlite3", sourcePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+
+	statements := []string{
+		`CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)`,
+		`CREATE TABLE conversations (
+			id VARCHAR(64) PRIMARY KEY,
+			created_at INTEGER, updated_at INTEGER, title TEXT,
+			kind VARCHAR(32), model_override VARCHAR(128),
+			parent_conversation_id VARCHAR(64), root_conversation_id VARCHAR(64),
+			sub_agent_name VARCHAR(128), workspace VARCHAR(2048),
+			git_branch VARCHAR(255), session_usage TEXT
+		)`,
+		`CREATE TABLE conversation_items (
+			id VARCHAR(64) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
+			position INTEGER NOT NULL, type VARCHAR(32) NOT NULL,
+			data TEXT NOT NULL, search_text TEXT NOT NULL
+		)`,
+		`INSERT INTO alembic_version VALUES ('resync-test')`,
+		`INSERT INTO conversations
+			(id, created_at, updated_at, title, kind, root_conversation_id)
+			VALUES ('conversation', 1699999999, 1700000000,
+			        'conversation', 'default', 'conversation')`,
+		`INSERT INTO conversation_items
+			(id, conversation_id, position, type, data, search_text)
+			VALUES ('item-0', 'conversation', 0, 'message',
+			        '{"role":"user","content":[{"type":"input_text","text":"initial"}]}',
+			        'initial')`,
+	}
+	for _, statement := range statements {
+		_, err = writer.Exec(statement)
+		require.NoError(t, err)
+	}
+
+	archive := openTestDB(t)
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+
+	_, err = writer.Exec(
+		`UPDATE conversations SET updated_at = 1800000000 WHERE id = 'conversation'`,
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('item-1', 'conversation', 1, 'message',
+		        '{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
+		        'changed')`)
+	require.NoError(t, err)
+
+	sentinel := errors.New("fts sentinel")
+	engine.syncMu.Lock()
+	stats, err := engine.resyncAllWithOptionsLocked(
+		context.Background(), nil, RebuildOptions{}, rebuildOperations{
+			rebuildFTS: func(*db.DB) error { return sentinel },
+		},
+	)
+	engine.syncMu.Unlock()
+	require.ErrorIs(t, err, sentinel)
+	assert.True(t, stats.Aborted)
+
+	unchanged, err := archive.GetMessages(
+		context.Background(), "omnigent:conversation", 0, 10, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, unchanged, 1,
+		"an aborted resync must not publish temporary archive data")
+
+	recovered := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, recovered.Synced)
+	updated, err := archive.GetMessages(
+		context.Background(), "omnigent:conversation", 0, 10, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, updated, 2,
+		"the next regular sync must retry work discarded with the resync")
+}
