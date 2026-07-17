@@ -569,7 +569,8 @@ func (e *Engine) Machine() string {
 
 type syncJob struct {
 	processResult
-	path string
+	path  string
+	agent parser.AgentType
 }
 
 func (j syncJob) skipCacheKey() string {
@@ -2801,14 +2802,18 @@ func (e *Engine) discoverProviderSources(
 			continue
 		}
 		currentSources := providerSourcePathSet(sources)
+		forceParseSources := map[string]struct{}{}
 		if !forceFullDiscovery && agentType == parser.AgentOmnigent {
 			retrySources, retryFailures := e.discoverOmnigentRetrySources(
 				ctx, provider, currentSources,
 			)
 			sources = append(sources, retrySources...)
 			failures += retryFailures
+			for _, source := range retrySources {
+				path := filepath.Clean(providerDiscoveredPath(source))
+				forceParseSources[path] = struct{}{}
+			}
 		}
-		forceParseSources := map[string]struct{}{}
 		if agentType == parser.AgentVSCopilot {
 			missingSources, forceSources :=
 				e.visualStudioCopilotMissingVS2026PollSources(
@@ -3923,13 +3928,15 @@ func (e *Engine) startWorkers(
 						processResult: processResult{
 							err: ctx.Err(),
 						},
-						path: file.Path,
+						path:  file.Path,
+						agent: file.Agent,
 					}
 					continue
 				}
 				results <- syncJob{
 					processResult: e.processFile(ctx, file),
 					path:          file.Path,
+					agent:         file.Agent,
 				}
 			}
 		})
@@ -3991,6 +3998,7 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
+			e.markOmnigentSourceRetry(r.agent, r.path)
 			e.noteSQLiteContainerResult(r.path, false)
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
@@ -4538,7 +4546,7 @@ func (e *Engine) processProviderFile(
 	// parse entirely. This reproduces the legacy process arm's
 	// shouldSkipFile gate so an unchanged session is not re-parsed on
 	// every full sync.
-	sourceForceReplace := false
+	sourceForceReplace := file.Agent == parser.AgentOmnigent && file.ForceParse
 	if mtime, fresh, forceReplace, contentVerified := e.providerSingleSessionFresh(
 		ctx, provider, source, file,
 	); fresh {
@@ -6884,20 +6892,44 @@ type omnigentRetrySource struct {
 	filePath  string
 }
 
+func (e *Engine) markOmnigentSourceRetry(agent parser.AgentType, path string) {
+	if agent != parser.AgentOmnigent {
+		return
+	}
+	_, memberID, virtual := parser.ParseVirtualSourcePath(path)
+	if !virtual || memberID == "" {
+		return
+	}
+	e.storeOmnigentRetry(omnigentRetrySource{
+		sessionID: string(parser.AgentOmnigent) + ":" + memberID,
+		filePath:  path,
+	})
+}
+
 func (e *Engine) markOmnigentSessionRetry(pw pendingWrite) {
 	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" ||
 		pw.sess.File.Path == "" {
 		return
 	}
+	staleVersion := max(db.CurrentDataVersion()-1, 0)
+	if e.db.GetSessionDataVersion(pw.sess.ID) > staleVersion {
+		if err := e.db.SetSessionDataVersion(pw.sess.ID, staleVersion); err != nil {
+			log.Printf("mark omnigent retry stale for %s: %v", pw.sess.ID, err)
+		}
+	}
+	e.storeOmnigentRetry(omnigentRetrySource{
+		sessionID: pw.sess.ID,
+		filePath:  pw.sess.File.Path,
+	})
+}
+
+func (e *Engine) storeOmnigentRetry(retry omnigentRetrySource) {
 	e.omnigentRetryMu.Lock()
 	defer e.omnigentRetryMu.Unlock()
 	if e.omnigentRetrySources == nil {
 		e.omnigentRetrySources = make(map[string]omnigentRetrySource)
 	}
-	e.omnigentRetrySources[pw.sess.ID] = omnigentRetrySource{
-		sessionID: pw.sess.ID,
-		filePath:  pw.sess.File.Path,
-	}
+	e.omnigentRetrySources[retry.sessionID] = retry
 }
 
 func (e *Engine) clearOmnigentSessionRetry(pw pendingWrite) {

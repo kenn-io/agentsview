@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ type omnigentParseCountingFactory struct {
 	delegate parser.ProviderFactory
 	count    *atomic.Int64
 	results  *atomic.Int64
+	failPath string
+	failOnce *atomic.Bool
 }
 
 func (f omnigentParseCountingFactory) Definition() parser.AgentDef {
@@ -41,19 +44,27 @@ func (f omnigentParseCountingFactory) NewProvider(
 		Provider: f.delegate.NewProvider(cfg),
 		count:    f.count,
 		results:  f.results,
+		failPath: f.failPath,
+		failOnce: f.failOnce,
 	}
 }
 
 type omnigentParseCountingProvider struct {
 	parser.Provider
-	count   *atomic.Int64
-	results *atomic.Int64
+	count    *atomic.Int64
+	results  *atomic.Int64
+	failPath string
+	failOnce *atomic.Bool
 }
 
 func (p *omnigentParseCountingProvider) Parse(
 	ctx context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
 	p.count.Add(1)
+	if p.failOnce != nil && req.Source.DisplayPath == p.failPath &&
+		p.failOnce.CompareAndSwap(false, true) {
+		return parser.ParseOutcome{}, errors.New("injected omnigent member parse failure")
+	}
 	outcome, err := p.Provider.Parse(ctx, req)
 	if p.results != nil {
 		p.results.Add(int64(len(outcome.Results)))
@@ -278,6 +289,51 @@ func TestSyncOmnigentUnchangedFullSyncUsesContainerCache(t *testing.T) {
 		"unchanged container must not reparse every conversation")
 }
 
+func TestSyncOmnigentFreshTrackerUsesWarmContainerCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 200)
+	archive := dbtest.OpenTestDB(t)
+	first := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{omnigentDefaultProviderFactory(t)},
+	})
+	first.SyncAll(context.Background(), nil)
+	first.Close()
+
+	var parseCount atomic.Int64
+	second := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{omnigentParseCountingFactory{
+			delegate: omnigentDefaultProviderFactory(t),
+			count:    &parseCount,
+		}},
+	})
+	defer second.Close()
+	second.SyncAll(context.Background(), nil)
+	assert.Zero(t, parseCount.Load(),
+		"a fresh tracker should seed without defeating the persisted cache")
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE conversations SET updated_at = ?
+		WHERE id = 'conv_0000'`, time.Now().Unix())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	parseCount.Store(0)
+	second.SyncAll(context.Background(), nil)
+	assert.Equal(t, int64(32), parseCount.Load(),
+		"the next change should use bounded member discovery")
+}
+
 func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -349,6 +405,49 @@ func TestSyncOmnigentChangedFullSyncWorkIsBounded(t *testing.T) {
 			assert.Nil(t, deleted)
 		})
 	}
+}
+
+func TestSyncOmnigentRetriesFailedDirectEditProbe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 65)
+	archive := dbtest.OpenTestDB(t)
+	var failed atomic.Bool
+	factory := omnigentParseCountingFactory{
+		delegate: omnigentDefaultProviderFactory(t),
+		count:    &atomic.Int64{},
+		failPath: parser.VirtualSourcePath(dbPath, "conv_0000"),
+		failOnce: &failed,
+	}
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	defer engine.Close()
+	engine.SyncAll(context.Background(), nil)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE conversation_items
+		SET data = '{"role":"user","content":[{"type":"input_text","text":"direct edit"}]}'
+		WHERE id = 'conv_0000_0'`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+
+	engine.SyncAll(context.Background(), nil)
+	messages, err := archive.GetMessages(
+		context.Background(), "omnigent:conv_0000", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "direct edit", messages[0].Content)
 }
 
 func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {
@@ -426,6 +525,63 @@ func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 		"stale virtual member must bypass the container cache")
 	assert.Equal(t, db.CurrentDataVersion(),
 		archive.GetSessionDataVersion("omnigent:conv_0000"))
+}
+
+func TestSyncOmnigentFailedCurrentUpdateForcesContentReplacement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	defer engine.Close()
+	engine.SyncAll(context.Background(), nil)
+	require.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion("omnigent:conv_0000"))
+
+	raw, err := sql.Open("sqlite3", archive.Path())
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.Exec(`CREATE TRIGGER fail_omnigent_message_append
+		BEFORE INSERT ON messages
+		WHEN NEW.session_id = 'omnigent:conv_0000' AND NEW.ordinal = 1
+		BEGIN
+			SELECT RAISE(FAIL, 'injected message append failure');
+		END`)
+	require.NoError(t, err)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE conversations SET updated_at = ?
+		WHERE id = 'conv_0000'`, time.Now().Unix())
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, position, type, data, search_text)
+		VALUES ('conv_0000_1', 'conv_0000', 1, 'message', ?, 'second')`,
+		`{"role":"assistant","content":[{"type":"output_text","text":"second"}]}`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+	assert.Less(t, archive.GetSessionDataVersion("omnigent:conv_0000"),
+		db.CurrentDataVersion(),
+		"an incomplete current-session update must persist retry state")
+
+	_, err = raw.Exec(`DROP TRIGGER fail_omnigent_message_append`)
+	require.NoError(t, err)
+	engine.SyncAll(context.Background(), nil)
+	messages, err := archive.GetMessages(
+		context.Background(), "omnigent:conv_0000", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "second", messages[1].Content)
 }
 
 func TestSyncOmnigentPersistsJSONStringToolResult(t *testing.T) {

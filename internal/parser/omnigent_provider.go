@@ -140,6 +140,9 @@ func (t *omnigentChangeTracker) discoverSources(
 		t.mu.Lock()
 		_, initialized := t.containers[container]
 		t.mu.Unlock()
+		if !initialized {
+			t.seedContainer(container)
+		}
 		if forceFull || !initialized {
 			matches = append(matches, whole)
 			continue
@@ -157,6 +160,23 @@ func (t *omnigentChangeTracker) discoverSources(
 		matches = append(matches, changed...)
 	}
 	return matches
+}
+
+func (t *omnigentChangeTracker) seedContainer(container string) {
+	conn, err := openOmnigentDB(container)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	schema, err := detectOmnigentSchema(conn)
+	if err != nil {
+		return
+	}
+	metas, err := listOmnigentConversationMetas(conn, schema)
+	if err != nil {
+		return
+	}
+	t.replace(container, schema, metas)
 }
 
 func omnigentWatchRoots(roots []string) []WatchRoot {
