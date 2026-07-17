@@ -136,7 +136,10 @@ type Engine struct {
 	providerFactories       map[parser.AgentType]parser.ProviderFactory
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
 	omnigentRetryMu         gosync.Mutex
-	omnigentRetrySources    map[string]omnigentRetrySource
+	omnigentRetrySources    map[string]*omnigentRetryEntry
+	omnigentRetryContainers map[string]map[string]struct{}
+	omnigentRetryHead       *omnigentRetryEntry
+	omnigentRetryTail       *omnigentRetryEntry
 	omnigentHintMu          gosync.Mutex
 	omnigentHintCursors     map[string]omnigentHintCursor
 	resyncOmnigentAdvanced  atomic.Bool
@@ -767,6 +770,10 @@ func (e *Engine) classifyProviderChangedPath(
 			continue
 		}
 		for _, watchRoot := range watchRoots {
+			if agentType == parser.AgentOmnigent &&
+				!omnigentChangedPathOwnedByWatchRoot(path, watchRoot) {
+				continue
+			}
 			var storedSourcePaths []string
 			var omnigentHintClaimed bool
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
@@ -845,7 +852,18 @@ func (e *Engine) classifyProviderChangedPath(
 	return files
 }
 
-const omnigentStoredHintBatchSize = 32
+func omnigentChangedPathOwnedByWatchRoot(path, watchRoot string) bool {
+	if container, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); virtual {
+		path = container
+	}
+	rel, err := filepath.Rel(filepath.Clean(watchRoot), filepath.Clean(path))
+	return err == nil && rel != "." && filepath.Dir(rel) == "."
+}
+
+const (
+	omnigentStoredHintBatchSize = 32
+	omnigentRetryBatchSize      = 32
+)
 
 type omnigentHintCursor struct {
 	after          string
@@ -3019,9 +3037,13 @@ func (e *Engine) discoverOmnigentRetrySources(
 	currentSources map[string]struct{},
 ) ([]parser.SourceRef, int) {
 	e.omnigentRetryMu.Lock()
-	pending := make([]omnigentRetrySource, 0, len(e.omnigentRetrySources))
-	for _, retry := range e.omnigentRetrySources {
-		pending = append(pending, retry)
+	pending := make([]omnigentRetrySource, 0, omnigentRetryBatchSize)
+	entry := e.omnigentRetryHead
+	for entry != nil && len(pending) < omnigentRetryBatchSize {
+		next := entry.next
+		pending = append(pending, entry.omnigentRetrySource)
+		e.moveOmnigentRetryToTailLocked(entry)
+		entry = next
 	}
 	e.omnigentRetryMu.Unlock()
 
@@ -7128,6 +7150,13 @@ type omnigentRetrySource struct {
 	filePath  string
 }
 
+type omnigentRetryEntry struct {
+	omnigentRetrySource
+	container string
+	prev      *omnigentRetryEntry
+	next      *omnigentRetryEntry
+}
+
 func (r omnigentRetrySource) key() string {
 	if r.sessionID != "" {
 		return "session\x00" + r.sessionID
@@ -7168,9 +7197,112 @@ func (e *Engine) storeOmnigentRetry(retry omnigentRetrySource) {
 	e.omnigentRetryMu.Lock()
 	defer e.omnigentRetryMu.Unlock()
 	if e.omnigentRetrySources == nil {
-		e.omnigentRetrySources = make(map[string]omnigentRetrySource)
+		e.omnigentRetrySources = make(map[string]*omnigentRetryEntry)
 	}
-	e.omnigentRetrySources[retry.key()] = retry
+	if e.omnigentRetryContainers == nil {
+		e.omnigentRetryContainers = make(map[string]map[string]struct{})
+	}
+	e.storeOmnigentRetryLocked(retry)
+}
+
+func (e *Engine) storeOmnigentRetryLocked(retry omnigentRetrySource) {
+	key := retry.key()
+	if _, exists := e.omnigentRetrySources[key]; exists {
+		return
+	}
+	container, member := omnigentRetryContainer(retry.filePath)
+	containerKey := omnigentRetrySource{filePath: container}.key()
+	if member {
+		if _, recoveringContainer := e.omnigentRetrySources[containerKey]; recoveringContainer {
+			return
+		}
+	} else if container != "" {
+		e.collapseOmnigentRetryContainerLocked(container)
+	}
+
+	entry := &omnigentRetryEntry{
+		omnigentRetrySource: retry,
+		container:           container,
+	}
+	e.omnigentRetrySources[key] = entry
+	e.appendOmnigentRetryLocked(entry)
+	if container != "" {
+		bucket := e.omnigentRetryContainers[container]
+		if bucket == nil {
+			bucket = make(map[string]struct{})
+			e.omnigentRetryContainers[container] = bucket
+		}
+		bucket[key] = struct{}{}
+		if member && len(bucket) >= omnigentRetryBatchSize {
+			e.collapseOmnigentRetryContainerLocked(container)
+			e.storeOmnigentRetryLocked(omnigentRetrySource{filePath: container})
+		}
+	}
+}
+
+func omnigentRetryContainer(path string) (string, bool) {
+	if container, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); virtual {
+		return filepath.Clean(container), true
+	}
+	path = filepath.Clean(path)
+	if path == "" || path == "." {
+		return "", false
+	}
+	return path, false
+}
+
+func (e *Engine) appendOmnigentRetryLocked(entry *omnigentRetryEntry) {
+	entry.prev = e.omnigentRetryTail
+	entry.next = nil
+	if e.omnigentRetryTail != nil {
+		e.omnigentRetryTail.next = entry
+	} else {
+		e.omnigentRetryHead = entry
+	}
+	e.omnigentRetryTail = entry
+}
+
+func (e *Engine) moveOmnigentRetryToTailLocked(entry *omnigentRetryEntry) {
+	if entry == nil || entry == e.omnigentRetryTail {
+		return
+	}
+	if entry.prev != nil {
+		entry.prev.next = entry.next
+	} else {
+		e.omnigentRetryHead = entry.next
+	}
+	entry.next.prev = entry.prev
+	e.appendOmnigentRetryLocked(entry)
+}
+
+func (e *Engine) collapseOmnigentRetryContainerLocked(container string) {
+	for key := range e.omnigentRetryContainers[container] {
+		e.removeOmnigentRetryLocked(key)
+	}
+}
+
+func (e *Engine) removeOmnigentRetryLocked(key string) {
+	entry, exists := e.omnigentRetrySources[key]
+	if !exists {
+		return
+	}
+	if entry.prev != nil {
+		entry.prev.next = entry.next
+	} else {
+		e.omnigentRetryHead = entry.next
+	}
+	if entry.next != nil {
+		entry.next.prev = entry.prev
+	} else {
+		e.omnigentRetryTail = entry.prev
+	}
+	delete(e.omnigentRetrySources, key)
+	if bucket := e.omnigentRetryContainers[entry.container]; bucket != nil {
+		delete(bucket, key)
+		if len(bucket) == 0 {
+			delete(e.omnigentRetryContainers, entry.container)
+		}
+	}
 }
 
 func (e *Engine) clearOmnigentSessionRetry(pw pendingWrite) {
@@ -7178,7 +7310,7 @@ func (e *Engine) clearOmnigentSessionRetry(pw pendingWrite) {
 		return
 	}
 	e.omnigentRetryMu.Lock()
-	delete(e.omnigentRetrySources, omnigentRetrySource{
+	e.removeOmnigentRetryLocked(omnigentRetrySource{
 		sessionID: pw.sess.ID,
 	}.key())
 	e.omnigentRetryMu.Unlock()
@@ -7194,7 +7326,7 @@ func (e *Engine) clearOmnigentSourceRetry(agent parser.AgentType, path string) {
 		retry.sessionID = string(parser.AgentOmnigent) + ":" + memberID
 	}
 	e.omnigentRetryMu.Lock()
-	delete(e.omnigentRetrySources, retry.key())
+	e.removeOmnigentRetryLocked(retry.key())
 	e.omnigentRetryMu.Unlock()
 }
 

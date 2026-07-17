@@ -43,7 +43,32 @@ type hintRecordingProvider struct {
 }
 
 func (p *hintRecordingProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {
-	return parser.WatchPlan{Roots: []parser.WatchRoot{{Path: p.Config.Roots[0]}}}, nil
+	roots := make([]parser.WatchRoot, 0, len(p.Config.Roots))
+	for _, root := range p.Config.Roots {
+		roots = append(roots, parser.WatchRoot{Path: root})
+	}
+	return parser.WatchPlan{Roots: roots}, nil
+}
+
+type retryRecordingProvider struct {
+	parser.ProviderBase
+	seen []parser.FindSourceRequest
+}
+
+func (p *retryRecordingProvider) FindSource(
+	_ context.Context, req parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	p.seen = append(p.seen, req)
+	return parser.SourceRef{
+		Provider: parser.AgentOmnigent, Key: req.StoredFilePath,
+		DisplayPath: req.StoredFilePath, FingerprintKey: req.StoredFilePath,
+	}, true, nil
+}
+
+func (p *retryRecordingProvider) Parse(
+	context.Context, parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{}, nil
 }
 
 func (p *hintRecordingProvider) SourcesForChangedPath(
@@ -107,6 +132,54 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 			}
 		})
 	}
+}
+
+func TestOmnigentChangedPathClaimsHintsOnlyForOwningWatchRoot(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	changedPath := filepath.Join(rootA, "chat.db")
+	require.NoError(t, os.WriteFile(changedPath, []byte("fixture"), 0o600))
+	database := dbtest.OpenTestDB(t)
+	pathA := filepath.Join(rootA, "chat.db#member-a")
+	pathB := filepath.Join(rootB, "chat.db#member-b")
+	for id, path := range map[string]string{"member-a": pathA, "member-b": pathB} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: "omnigent:" + id, Agent: string(parser.AgentOmnigent),
+			Project: "fixture", Machine: "local", FilePath: strPtr(path),
+		}))
+	}
+
+	var seen [][]string
+	caps := parser.Capabilities{Source: parser.SourceCapabilities{
+		ClassifyChangedPath: parser.CapabilitySupported,
+		StoredSourceHints:   parser.CapabilitySupported,
+	}}
+	factory := hintRecordingFactory{
+		agent: parser.AgentOmnigent, caps: caps, seen: &seen,
+	}
+	engine := &Engine{
+		db: database, machine: "local",
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {rootA, rootB},
+		},
+		providerFactories: map[parser.AgentType]parser.ProviderFactory{
+			parser.AgentOmnigent: factory,
+		},
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentOmnigent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}
+
+	files := engine.classifyProviderChangedPath(changedPath)
+
+	require.Len(t, files, 1)
+	require.Equal(t, [][]string{{pathA}}, seen)
+	unrelatedKey := string(parser.AgentOmnigent) + "\x00" + filepath.Clean(rootB)
+	engine.omnigentHintMu.Lock()
+	_, unrelatedActivated := engine.omnigentHintCursors[unrelatedKey]
+	engine.omnigentHintMu.Unlock()
+	assert.False(t, unrelatedActivated,
+		"the event must not consume the unrelated root's archived hints")
 }
 
 func TestOmnigentStoredHintCursorSerializesConcurrentPages(t *testing.T) {
@@ -237,6 +310,67 @@ func TestOmnigentStoredHintActivationDuringFinalPageRestartsSweep(t *testing.T) 
 	require.NoError(t, err)
 	assert.False(t, claimed)
 	assert.Empty(t, remaining)
+}
+
+func TestOmnigentRetryDiscoveryProcessesBoundedRotatingPages(t *testing.T) {
+	engine := &Engine{}
+	for i := range 3 * omnigentRetryBatchSize {
+		engine.storeOmnigentRetry(omnigentRetrySource{
+			filePath: fmt.Sprintf("/retry/container-%03d.db", i),
+		})
+	}
+	provider := &retryRecordingProvider{ProviderBase: parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentOmnigent},
+	}}
+
+	first, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
+	require.Len(t, first, omnigentRetryBatchSize)
+	second, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
+	require.Len(t, second, omnigentRetryBatchSize)
+	require.Len(t, provider.seen, 2*omnigentRetryBatchSize)
+
+	seen := make(map[string]struct{}, 2*omnigentRetryBatchSize)
+	for _, req := range provider.seen {
+		_, duplicate := seen[req.StoredFilePath]
+		assert.False(t, duplicate, "successive retry pages must advance")
+		seen[req.StoredFilePath] = struct{}{}
+	}
+}
+
+func TestOmnigentMemberRetriesCollapseToBoundedContainerRecovery(t *testing.T) {
+	engine := &Engine{}
+	container := filepath.Join(t.TempDir(), "chat.db")
+	for i := range 4 * omnigentRetryBatchSize {
+		member := fmt.Sprintf("member-%03d", i)
+		engine.storeOmnigentRetry(omnigentRetrySource{
+			sessionID: "omnigent:" + member,
+			filePath:  parser.VirtualSourcePath(container, member),
+		})
+	}
+
+	engine.omnigentRetryMu.Lock()
+	require.Len(t, engine.omnigentRetrySources, 1)
+	require.NotNil(t, engine.omnigentRetryHead)
+	assert.Equal(t, container, engine.omnigentRetryHead.filePath)
+	assert.Empty(t, engine.omnigentRetryHead.sessionID)
+	assert.Same(t, engine.omnigentRetryHead, engine.omnigentRetryTail)
+	engine.omnigentRetryMu.Unlock()
+
+	provider := &retryRecordingProvider{ProviderBase: parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentOmnigent},
+	}}
+	sources, failures := engine.discoverOmnigentRetrySources(
+		context.Background(), provider, map[string]struct{}{},
+	)
+	require.Zero(t, failures)
+	require.Len(t, sources, 1)
+	assert.Equal(t, container, sources[0].DisplayPath)
 }
 
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {
