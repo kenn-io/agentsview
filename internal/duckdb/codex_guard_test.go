@@ -122,6 +122,8 @@ type closeGuardErrRows struct{ delivered bool }
 
 var lazyGuardErrRegisterOnce sync.Once
 
+var closeGuardErrRegisterOnce sync.Once
+
 func (lazyGuardErrDriver) Open(string) (driver.Conn, error) {
 	return lazyGuardErrConn{}, nil
 }
@@ -211,8 +213,11 @@ func TestGuardMappedRowsRestoreSentinelOnIterationErrors(t *testing.T) {
 }
 
 func TestDuckSingleRowReturnsGuardFailureDeferredUntilClose(t *testing.T) {
-	sql.Register(t.Name(), closeGuardErrDriver{})
-	conn, err := sql.Open(t.Name(), "")
+	const driverName = "agentsview_close_guard_err"
+	closeGuardErrRegisterOnce.Do(func() {
+		sql.Register(driverName, closeGuardErrDriver{})
+	})
+	conn, err := sql.Open(driverName, t.Name())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 
