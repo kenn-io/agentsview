@@ -50,6 +50,23 @@ func openCRDBSchema(t *testing.T, schema string) *sql.DB {
 	return pg
 }
 
+func insertCRDBUncertifiedSession(
+	t *testing.T, ctx context.Context, pg *sql.DB, id string,
+) {
+	t.Helper()
+	require.NoError(t, withCodexRepairTxPG(ctx, pg, true, func(tx *sql.Tx) error {
+		if err := markCodexPayloadRepairPG(ctx, tx); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO sessions (
+    id, machine, project, agent, relationship_type, data_version, first_message
+) VALUES ($1, 'test-machine', 'project', 'codex', 'subagent', 64, $2)`,
+			id, crdbCodexFernet)
+		return err
+	}), "seed intentionally uncertified session %s", id)
+}
+
 func TestCRDBDetection(t *testing.T) {
 	pg := openCRDBSchema(t, "agentsview_crdb_detect_test")
 	ctx := context.Background()
@@ -162,17 +179,7 @@ func TestCRDBCurationUpdatesUncertifiedSession(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, schema),
 		"EnsureSchema on CockroachDB")
 
-	require.NoError(t, withCodexRepairTxPG(ctx, pg, true, func(tx *sql.Tx) error {
-		if err := markCodexPayloadRepairPG(ctx, tx); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `
-INSERT INTO sessions (
-    id, machine, project, agent, relationship_type, data_version, first_message
-) VALUES ('legacy-curation', 'test-machine', 'project', 'codex', 'subagent', 64, $1)`,
-			crdbCodexFernet)
-		return err
-	}), "seed an intentionally uncertified session")
+	insertCRDBUncertifiedSession(t, ctx, pg, "legacy-curation")
 
 	store := &Store{pg: pg}
 	require.NoError(t, store.SoftDeleteSession("legacy-curation"),
@@ -204,6 +211,69 @@ UPDATE sessions SET first_message = first_message || ' changed'
  WHERE id = 'legacy-curation'`)
 	require.Error(t, err,
 		"changing guarded payload evidence must still be rejected")
+	assert.Contains(t, err.Error(), "23514")
+}
+
+func TestCRDBUpgradesSessionGuardV6(t *testing.T) {
+	const schema = "agentsview_crdb_codex_guard_v6_upgrade_test"
+	pg := openCRDBSchema(t, schema)
+	ctx := context.Background()
+	require.NoError(t, EnsureSchema(ctx, pg, schema),
+		"EnsureSchema on CockroachDB")
+
+	_, err := pg.ExecContext(ctx, fmt.Sprintf(`
+DROP TRIGGER %s ON sessions;
+DROP TRIGGER IF EXISTS %s ON sessions;
+CREATE OR REPLACE FUNCTION agentsview_guard_codex_payload_session()
+RETURNS trigger LANGUAGE plpgsql AS $function$
+BEGIN
+    IF TG_OP = 'UPDATE'
+       AND (NEW).agent IS NOT DISTINCT FROM (OLD).agent
+       AND (NEW).data_version IS NOT DISTINCT FROM (OLD).data_version
+       AND (NEW).first_message IS NOT DISTINCT FROM (OLD).first_message THEN
+        RETURN NEW;
+    END IF;
+    IF (NEW).agent = 'codex'
+       AND (NEW).data_version < %d
+       AND current_setting('%s', true) IS DISTINCT FROM '%d'
+       AND COALESCE((NEW).first_message, '') LIKE '%%gAAAAA%%' THEN
+        RAISE EXCEPTION 'legacy Codex preview contains an encrypted payload'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END
+$function$;
+CREATE TRIGGER %s
+BEFORE INSERT OR UPDATE ON sessions
+FOR EACH ROW EXECUTE FUNCTION agentsview_guard_codex_payload_session()`,
+		codexSessionWriteGuardTrigger, previousCodexSessionWriteGuardV6,
+		codexEncryptedPayloadDataVersion, codexPayloadRepairSetting,
+		codexEncryptedPayloadDataVersion, previousCodexSessionWriteGuardV6))
+	require.NoError(t, err, "install the previous v6 session guard")
+
+	insertCRDBUncertifiedSession(t, ctx, pg, "legacy-v6")
+	_, err = pg.ExecContext(ctx, `
+UPDATE sessions SET relationship_type = '' WHERE id = 'legacy-v6'`)
+	require.NoError(t, err,
+		"the v6 fixture must reproduce the relationship-only bypass")
+
+	require.NoError(t, ensureCodexEncryptedPayloadCompatibilityPG(ctx, pg),
+		"upgrade the v6 guard")
+	installed, err := codexPayloadWriteGuardsInstalledPG(ctx, pg)
+	require.NoError(t, err, "probe upgraded guards")
+	assert.True(t, installed, "the current guard generation must be installed")
+	var previousCount int
+	require.NoError(t, pg.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM pg_trigger WHERE tgname = $1`,
+		previousCodexSessionWriteGuardV6).Scan(&previousCount),
+		"count previous session guards")
+	assert.Zero(t, previousCount, "the v6 session guard must be removed")
+
+	insertCRDBUncertifiedSession(t, ctx, pg, "legacy-v7")
+	_, err = pg.ExecContext(ctx, `
+UPDATE sessions SET relationship_type = '' WHERE id = 'legacy-v7'`)
+	require.Error(t, err,
+		"the upgraded guard must reject relationship-only mutations")
 	assert.Contains(t, err.Error(), "23514")
 }
 

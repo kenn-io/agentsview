@@ -21,10 +21,11 @@ const (
 	// codexPayloadWriteGuardsInstalledPG).
 	codexEncryptedPayloadDataVersion   = db.CodexRedactionDataVersion
 	codexVectorRepairCompletedMetadata = "codex_encrypted_payload_vectors_v1"
-	codexSessionWriteGuardTrigger      = "agentsview_codex_payload_session_guard_v6"
+	codexSessionWriteGuardTrigger      = "agentsview_codex_payload_session_guard_v7"
 	codexMessageWriteGuardTrigger      = "agentsview_codex_payload_message_guard_v5"
 	codexToolWriteGuardTrigger         = "agentsview_codex_payload_tool_guard_v4"
 	codexVectorWriteGuardTrigger       = "agentsview_codex_payload_vector_guard_v4"
+	previousCodexSessionWriteGuardV6   = "agentsview_codex_payload_session_guard_v6"
 	previousCodexSessionWriteGuardV5   = "agentsview_codex_payload_session_guard_v5"
 	previousCodexSessionWriteGuardV4   = "agentsview_codex_payload_session_guard_v4"
 	previousCodexMessageWriteGuardV4   = "agentsview_codex_payload_message_guard_v4"
@@ -895,6 +896,7 @@ DROP TRIGGER IF EXISTS %s ON sessions;
 DROP TRIGGER IF EXISTS %s ON sessions;
 DROP TRIGGER IF EXISTS %s ON sessions;
 DROP TRIGGER IF EXISTS %s ON sessions;
+DROP TRIGGER IF EXISTS %s ON sessions;
 CREATE TRIGGER %s
 BEFORE INSERT OR %s ON sessions
 FOR EACH ROW EXECUTE FUNCTION agentsview_guard_codex_payload_session()`,
@@ -902,6 +904,7 @@ FOR EACH ROW EXECUTE FUNCTION agentsview_guard_codex_payload_session()`,
 			previousCodexSessionWriteGuardV3,
 			previousCodexSessionWriteGuardV4,
 			previousCodexSessionWriteGuardV5,
+			previousCodexSessionWriteGuardV6,
 			codexSessionWriteGuardTrigger, codexSessionWriteGuardTrigger,
 			sessionUpdate)},
 		{"creating PG Codex message write guard", fmt.Sprintf(`
