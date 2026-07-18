@@ -124,7 +124,7 @@ test.describe("Session list", () => {
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page
-      .getByRole("checkbox", { name: "Link date ranges across pages" })
+      .getByRole("switch", { name: "Link date ranges across pages" })
       .check();
 
     const requestPromise = page.waitForRequest((request) =>
@@ -179,7 +179,7 @@ test.describe("Session list", () => {
     await page.getByRole("button", { name: "90d", exact: true }).click();
     await page.getByRole("button", { name: "Settings" }).click();
     await page
-      .getByRole("checkbox", { name: "Link date ranges across pages" })
+      .getByRole("switch", { name: "Link date ranges across pages" })
       .check();
 
     await page.goto(

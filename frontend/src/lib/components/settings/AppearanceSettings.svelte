@@ -51,7 +51,7 @@
     </Button>
   </div>
 
-  <div class="setting-row">
+  <div class="setting-row option-row">
     <span class="setting-label">{m.appearance_message_layout()}</span>
     <SegmentedControl
       options={LAYOUT_OPTIONS}
@@ -61,7 +61,7 @@
     />
   </div>
 
-  <div class="setting-row">
+  <div class="setting-row option-row">
     <span class="setting-label">{m.appearance_text_size()}</span>
     <SegmentedControl
       options={FONT_SCALE_OPTIONS}
@@ -109,5 +109,26 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  @media (max-width: 640px) {
+    .setting-row.option-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .option-row .setting-label {
+      align-self: flex-start;
+    }
+
+    .option-row :global(.kit-segmented) {
+      width: 100%;
+    }
+
+    .option-row :global(.kit-segmented__btn) {
+      flex: 1;
+      min-width: 0;
+      padding-inline: 6px;
+    }
   }
 </style>

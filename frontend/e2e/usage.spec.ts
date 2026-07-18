@@ -214,7 +214,7 @@ test.describe("Usage page", () => {
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page
-      .getByRole("checkbox", { name: "Link date ranges across pages" })
+      .getByRole("switch", { name: "Link date ranges across pages" })
       .check();
 
     await clickNavTab(page, "Usage");
