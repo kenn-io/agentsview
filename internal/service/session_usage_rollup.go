@@ -63,6 +63,7 @@ func GetSessionUsageRollup(
 			return nil, err
 		}
 		if rows != nil {
+			rows = activity.SubstituteAuthoritativeSessionCosts(rows)
 			for _, row := range rows {
 				if !row.Contributes {
 					continue

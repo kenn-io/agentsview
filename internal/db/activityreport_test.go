@@ -125,6 +125,45 @@ func TestGetActivityReport_UsageCostAndTokens(t *testing.T) {
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
 }
 
+func TestGetActivityReport_CopilotReportedCostReplacesSessionEstimates(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "copilot-model-a", InputPerMTok: 10},
+		{ModelPattern: "copilot-model-b", InputPerMTok: 20},
+	}))
+	insertSession(t, d, "copilot:activity-authoritative", "proj1", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:10:00Z")
+	})
+	reportedCost := 0.03
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"copilot:activity-authoritative",
+		[]UsageEvent{
+			{
+				Source: "shutdown", Model: "copilot-model-a",
+				InputTokens: 1_000_000,
+				OccurredAt:  "2026-06-16T10:05:00Z", DedupKey: "first",
+			},
+			{
+				Source: "shutdown", Model: "copilot-model-b",
+				InputTokens: 1_000_000,
+				CostUSD:     &reportedCost, CostStatus: "exact",
+				CostSource: CopilotReportedCostSource,
+				OccurredAt: "2026-06-16T10:10:00Z", DedupKey: "final",
+			},
+		},
+	))
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.InDelta(t, reportedCost, r.Totals.Cost, 1e-12)
+	require.Len(t, r.BySession, 1)
+	assert.InDelta(t, reportedCost, r.BySession[0].Cost, 1e-12)
+}
+
 func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

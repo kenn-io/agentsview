@@ -170,6 +170,7 @@ func (db *DB) GetSessionUsageRows(
 			Timestamp:       r.ts,
 			OutputTokens:    outputTok,
 			Cost:            cost,
+			CostSource:      r.costSource,
 			Priced:          priced,
 			Contributes:     contributes,
 			Agent:           r.agent,
@@ -475,6 +476,7 @@ func (db *DB) activityReportUsage(
 		row := o.row
 		row.OutputTokens = outputTok
 		row.Cost = cost
+		row.CostSource = o.scan.costSource
 		row.Priced = priced
 		row.Contributes = contributes
 		out = append(out, row)

@@ -158,6 +158,7 @@ type sessionExportUsageAccum struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	costUSD                  float64
+	authoritativeCost        *float64
 	contributing             bool
 	allPriced                bool
 	seen                     map[usageDedupToken]struct{}
@@ -770,7 +771,16 @@ func (db *DB) attachSessionExportUsage(
 		}
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
 			sessionExportUsageTokens(r)
-		cost, priced, contributes := sessionRowCost(r, resolver)
+		costRow := r
+		authoritative := r.costSource == CopilotReportedCostSource &&
+			r.costUSD.Valid
+		if authoritative {
+			v := r.costUSD.Float64
+			a.authoritativeCost = &v
+			costRow.costUSD = sql.NullFloat64{}
+			resolver.RecordReported(r.model, resolver.Lookup(r.model))
+		}
+		cost, priced, contributes := sessionRowCost(costRow, resolver)
 		if !contributes {
 			continue
 		}
@@ -797,7 +807,10 @@ func (db *DB) attachSessionExportUsage(
 		ma.cacheCreationInputTokens += cacheCrTok
 		ma.cacheReadInputTokens += cacheRdTok
 		ma.reasoningTokens += reasoningTok
-		if r.costUSD.Valid {
+		if authoritative {
+			ma.computed = true
+			ma.reported = true
+		} else if r.costUSD.Valid {
 			ma.reported = true
 		} else {
 			ma.computed = true
@@ -825,8 +838,12 @@ func (db *DB) attachSessionExportUsage(
 			CacheReadInputTokens:     a.cacheReadInputTokens,
 			ReasoningTokens:          a.reasoningTokens,
 			CostUSD:                  a.costUSD,
-			HasCost:                  a.contributing && a.allPriced,
-			ByModel:                  sessionExportModelUsageBreakdowns(a.byModel),
+			HasCost: a.authoritativeCost != nil ||
+				(a.contributing && a.allPriced),
+			ByModel: sessionExportModelUsageBreakdowns(a.byModel),
+		}
+		if a.authoritativeCost != nil {
+			rows[i].ModelUsage.CostUSD = *a.authoritativeCost
 		}
 	}
 	block, err := resolver.BuildBlock()

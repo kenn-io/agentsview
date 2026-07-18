@@ -58,6 +58,7 @@ type UsageRow struct {
 	Timestamp       string // ts, RFC3339 or ""
 	OutputTokens    int
 	Cost            float64
+	CostSource      string
 	Priced          bool
 	Contributes     bool
 	Agent           string
@@ -65,6 +66,42 @@ type UsageRow struct {
 	ClaudeRequestID string
 	SourceUUID      string
 	UsageDedupKey   string
+}
+
+// CopilotReportedCostSource identifies Copilot's cumulative authoritative
+// session cost. When present, the last such row replaces every estimated row
+// cost for that session.
+const CopilotReportedCostSource = "copilot-reported"
+
+// SubstituteAuthoritativeSessionCosts applies cumulative reported session
+// costs without dropping the other rows' token contributions. Rows must be in
+// chronological order so the last reported total wins, matching session usage.
+func SubstituteAuthoritativeSessionCosts(usage []UsageRow) []UsageRow {
+	type authoritativeCost struct {
+		index int
+		cost  float64
+	}
+	authoritative := make(map[string]authoritativeCost)
+	for i, row := range usage {
+		if row.CostSource == CopilotReportedCostSource {
+			authoritative[row.SessionID] = authoritativeCost{
+				index: i,
+				cost:  row.Cost,
+			}
+		}
+	}
+	for i := range usage {
+		reported, ok := authoritative[usage[i].SessionID]
+		if !ok || !usage[i].Contributes {
+			continue
+		}
+		usage[i].Cost = 0
+		usage[i].Priced = true
+		if i == reported.index {
+			usage[i].Cost = reported.cost
+		}
+	}
+	return usage
 }
 
 // Report is the API payload.
@@ -625,7 +662,7 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 			out = append(out, usage[i])
 		}
 	}
-	return out
+	return SubstituteAuthoritativeSessionCosts(out)
 }
 
 // applyUsage dedups usage rows to the range, then accumulates output tokens

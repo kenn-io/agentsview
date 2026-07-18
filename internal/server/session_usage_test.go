@@ -115,6 +115,49 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
 }
 
+func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "copilot-rollup-root", "project", 1, func(s *db.Session) {
+		s.Agent = "copilot"
+	})
+	te.seedSession(t, "copilot-rollup-child", "project", 1, func(s *db.Session) {
+		s.Agent = "copilot"
+		parent := "copilot-rollup-root"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+	reportedRootCost := 0.03
+	reportedChildCost := 0.02
+	require.NoError(t, te.db.ReplaceSessionUsageEvents("copilot-rollup-root", []db.UsageEvent{
+		{
+			Source: "shutdown", Model: "gpt-5.1",
+			InputTokens: 1000, OutputTokens: 500,
+			OccurredAt: tsSeed, DedupKey: "first",
+		},
+		{
+			Source: "shutdown", Model: "gpt-5.1",
+			InputTokens: 1000, OutputTokens: 500,
+			CostUSD: &reportedRootCost, CostStatus: "exact",
+			CostSource: db.CopilotReportedCostSource,
+			OccurredAt: tsSeed, DedupKey: "final",
+		},
+	}))
+	require.NoError(t, te.db.ReplaceSessionUsageEvents("copilot-rollup-child", []db.UsageEvent{{
+		Source: "provider", Model: "gpt-5.1",
+		CostUSD: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
+		OccurredAt: tsSeed, DedupKey: "child",
+	}}))
+
+	w := te.get(t, "/api/v1/sessions/copilot-rollup-root/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, true, got["has_rollup_cost"])
+	assert.InDelta(t, reportedRootCost+reportedChildCost,
+		got["rollup_cost_usd"], 1e-12)
+}
+
 func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
 	te := setup(t)
 	seedSessionUsagePricing(t, te.db)

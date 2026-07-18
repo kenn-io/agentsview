@@ -3136,6 +3136,67 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
 }
 
+func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "gpt-5.1", InputPerMTok: 3, OutputPerMTok: 15,
+	}}))
+	root := syncSession(
+		"duck-copilot-rollup-root", "alpha", "root",
+		"2026-01-10T00:00:00.000Z", 1)
+	root.Agent = "copilot"
+	child := syncSession(
+		"duck-copilot-rollup-child", "alpha", "child",
+		"2026-01-10T01:00:00.000Z", 1)
+	child.Agent = "copilot"
+	parentID := root.ID
+	child.ParentSessionID = &parentID
+	child.RelationshipType = "subagent"
+	reportedRootCost := 0.03
+	reportedChildCost := 0.02
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: root,
+			UsageEvents: []db.UsageEvent{
+				{
+					Source: "shutdown", Model: "gpt-5.1",
+					InputTokens: 1000, OutputTokens: 500,
+					OccurredAt: "2026-01-10T00:01:00.000Z", DedupKey: "first",
+				},
+				{
+					Source: "shutdown", Model: "gpt-5.1",
+					InputTokens: 1000, OutputTokens: 500,
+					CostUSD: &reportedRootCost, CostStatus: "exact",
+					CostSource: db.CopilotReportedCostSource,
+					OccurredAt: "2026-01-10T00:02:00.000Z", DedupKey: "final",
+				},
+			},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+		{
+			Session: child,
+			UsageEvents: []db.UsageEvent{{
+				Source: "provider", Model: "gpt-5.1",
+				CostUSD: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
+				OccurredAt: "2026-01-10T01:01:00.000Z", DedupKey: "child",
+			}},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	rollup, err := service.GetSessionUsageRollup(
+		ctx, NewStoreFromDB(syncer.DB()), root.ID, false)
+	require.NoError(t, err)
+	require.True(t, rollup.HasCost)
+	assert.InDelta(t, reportedRootCost+reportedChildCost,
+		rollup.CostUSD, 1e-12)
+}
+
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

@@ -289,6 +289,46 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	assert.InDelta(t, 0.021, rollup.CostUSD, 1e-9)
 }
 
+func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_session_usage_rollup_copilot_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, message_count,
+			user_message_count, parent_session_id, relationship_type
+		) VALUES
+			('pg-copilot-rollup-root', 'test', 'project', 'copilot',
+			 '2026-03-12T10:00:00Z', 1, 1, NULL, 'root'),
+			('pg-copilot-rollup-child', 'test', 'project', 'copilot',
+			 '2026-03-12T10:02:00Z', 1, 1,
+			 'pg-copilot-rollup-root', 'subagent')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+		) VALUES
+			('pg-copilot-rollup-root', 'shutdown', 'gpt-5.1', 1000, 500,
+			 NULL, '', '', '2026-03-12T10:01:00Z', 'first'),
+			('pg-copilot-rollup-root', 'shutdown', 'gpt-5.1', 1000, 500,
+			 0.03, 'exact', 'copilot-reported', '2026-03-12T10:02:00Z', 'final'),
+			('pg-copilot-rollup-child', 'provider', 'gpt-5.1', 0, 0,
+			 0.02, 'exact', 'provider', '2026-03-12T10:03:00Z', 'child')`)
+	require.NoError(t, err)
+
+	rollup, err := service.GetSessionUsageRollup(
+		ctx, store, "pg-copilot-rollup-root", false)
+	require.NoError(t, err)
+	require.True(t, rollup.HasCost)
+	assert.InDelta(t, 0.05, rollup.CostUSD, 1e-12)
+}
+
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_rollup_untimed_test")
 	ctx := context.Background()
