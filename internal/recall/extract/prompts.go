@@ -224,14 +224,26 @@ func LoadPromptOverrides(dir string) (map[PromptRole]string, error) {
 	return overrides, nil
 }
 
-// Fingerprint digests everything that changes extraction output: the model,
-// the segmentation strategy and its parameters, the resolved prompts, the
-// request shape (including the output token budget), and the extraction
-// protocol version covering the response schema and recovery behavior baked
-// into this binary. Two configurations with the same fingerprint produce
-// interchangeable corpora; any difference is a new generation.
+// ModelIdentity names what produces the output: the model, and optionally
+// a deployment label distinguishing servers that expose different weights
+// under the same model name. The label is deliberately not the endpoint
+// URL: moving a deployment to a new address or port does not change its
+// output, and hashing the URL would orphan the whole corpus on every move.
+// Leave Deployment empty when the model name alone identifies the weights.
+type ModelIdentity struct {
+	Model      string `json:"model"`
+	Deployment string `json:"deployment,omitempty"`
+}
+
+// Fingerprint digests everything that changes extraction output: the model
+// identity (name plus optional deployment label), the segmentation strategy
+// and its parameters, the resolved prompts, the request shape (including
+// the output token budget), and the extraction protocol version covering
+// the response schema and recovery behavior baked into this binary. Two
+// configurations with the same fingerprint produce interchangeable corpora;
+// any difference is a new generation.
 func Fingerprint(
-	model string,
+	model ModelIdentity,
 	segmenter Segmenter,
 	prompts map[PromptRole]string,
 	request RequestShape,
@@ -243,7 +255,7 @@ func Fingerprint(
 	}
 	identity := struct {
 		Protocol      int               `json:"protocol"`
-		Model         string            `json:"model"`
+		Model         ModelIdentity     `json:"model"`
 		Segmenter     string            `json:"segmenter"`
 		Params        map[string]any    `json:"params"`
 		PromptDigests map[string]string `json:"prompt_digests"`

@@ -118,12 +118,13 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 	seg := TurnsV1{MaxWindowChars: 50000}
 	prompts := PromptsFor(mustProfile(t, "base"), nil)
 	shape := RequestShape{Temperature: 0}
+	id := ModelIdentity{Model: "model-x"}
 
-	a, err := Fingerprint("model-x", seg, prompts, shape)
+	a, err := Fingerprint(id, seg, prompts, shape)
 	if err != nil {
 		t.Fatalf("Fingerprint: %v", err)
 	}
-	b, err := Fingerprint("model-x", seg, prompts, shape)
+	b, err := Fingerprint(id, seg, prompts, shape)
 	if err != nil {
 		t.Fatalf("Fingerprint: %v", err)
 	}
@@ -131,18 +132,28 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 		t.Fatalf("fingerprint not stable: %s vs %s", a, b)
 	}
 
-	changedModel, _ := Fingerprint("model-y", seg, prompts, shape)
+	changedModel, _ := Fingerprint(
+		ModelIdentity{Model: "model-y"}, seg, prompts, shape,
+	)
 	if changedModel == a {
 		t.Fatal("model change must change the fingerprint")
 	}
+	changedDeployment, _ := Fingerprint(
+		ModelIdentity{Model: "model-x", Deployment: "gpu-b"},
+		seg, prompts, shape,
+	)
+	if changedDeployment == a {
+		t.Fatal("deployment label change must change the fingerprint: two " +
+			"deployments can serve different weights under one model name")
+	}
 	changedSeg, _ := Fingerprint(
-		"model-x", TurnsV1{MaxWindowChars: 40000}, prompts, shape,
+		id, TurnsV1{MaxWindowChars: 40000}, prompts, shape,
 	)
 	if changedSeg == a {
 		t.Fatal("segmenter parameter change must change the fingerprint")
 	}
 	changedPrompt, _ := Fingerprint(
-		"model-x", seg,
+		id, seg,
 		PromptsFor(mustProfile(t, "base"),
 			map[PromptRole]string{RoleIntent: "edited"}),
 		shape,
@@ -151,13 +162,13 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 		t.Fatal("prompt change must change the fingerprint")
 	}
 	changedTokens, _ := Fingerprint(
-		"model-x", seg, prompts, RequestShape{Temperature: 0, MaxTokens: 512},
+		id, seg, prompts, RequestShape{Temperature: 0, MaxTokens: 512},
 	)
 	if changedTokens == a {
 		t.Fatal("max_tokens change must change the fingerprint")
 	}
 	changedFloor, _ := Fingerprint(
-		"model-x", seg, prompts,
+		id, seg, prompts,
 		RequestShape{Temperature: 0, CompactFloorChars: 128},
 	)
 	if changedFloor == a {

@@ -409,3 +409,29 @@ func TestUpsertExtractProgressZeroUnitsCompletesImmediately(t *testing.T) {
 	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-3", -1)
 	require.Error(t, err, "negative unit totals must be refused")
 }
+
+func TestAdvanceExtractCursorStaleAfterShrinkingReset(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 10)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 7))
+
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 4)
+	require.NoError(t, err)
+
+	err = d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 8)
+	require.ErrorIs(t, err, ErrStaleExtractProgress,
+		"a stale worker beyond the shrunken total must get the typed stale "+
+			"error that triggers re-read, not a bounds error")
+
+	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Equal(t, 0, progress.UnitCursor)
+	assert.Equal(t, "digest-2", progress.ContentDigest)
+}

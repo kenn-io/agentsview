@@ -365,6 +365,16 @@ func (db *DB) AdvanceExtractCursor(
 			sessionID, fingerprint,
 		)
 	}
+	// Digest mismatch outranks the bounds check: after a reset to fewer
+	// units a stale worker's cursor may exceed the new total, and it must
+	// still get the typed stale error that tells it to re-read the row and
+	// re-derive units.
+	if progress.ContentDigest != expectedDigest {
+		return fmt.Errorf(
+			"advancing session %s past digest change: %w",
+			sessionID, ErrStaleExtractProgress,
+		)
+	}
 	if cursor > progress.UnitsTotal {
 		return fmt.Errorf(
 			"cursor %d exceeds %d units for session %s",
@@ -372,7 +382,7 @@ func (db *DB) AdvanceExtractCursor(
 		)
 	}
 	return fmt.Errorf(
-		"advancing session %s past digest change or cursor regression: %w",
+		"advancing session %s past cursor regression: %w",
 		sessionID, ErrStaleExtractProgress,
 	)
 }
