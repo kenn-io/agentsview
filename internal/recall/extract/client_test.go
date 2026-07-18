@@ -344,6 +344,8 @@ func TestIsContextOverflowDetail(t *testing.T) {
 		`the request exceeds the available context size`,
 		`prompt is too long: 20000 tokens > 16000 maximum`,
 		`input is too large for the model context`,
+		`input length 5000 exceeds maximum 4096`,
+		`input tokens (6000) exceed the model maximum`,
 	}
 	for _, body := range overflow {
 		if !isContextOverflowDetail(body) {
@@ -384,6 +386,28 @@ func TestParseRetryAfter(t *testing.T) {
 		if got := parseRetryAfter(value); got != 0 {
 			t.Fatalf("parseRetryAfter(%q) = %v, want 0", value, got)
 		}
+	}
+}
+
+func TestClientNonStopFinishReasonIsError(t *testing.T) {
+	// A content-filtered or otherwise cut-off response can still carry
+	// valid JSON with fewer (or zero) entries; accepting it would advance
+	// progress over silently lost facts. Only "stop" means complete.
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: "content_filter", content: entriesJSON(t, "partial")},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err == nil || !strings.Contains(err.Error(), "content_filter") {
+		t.Fatalf("err = %v, want an error naming the finish reason", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1 (a filtered response is "+
+			"deterministic)", len(requests))
 	}
 }
 

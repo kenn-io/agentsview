@@ -343,6 +343,15 @@ func (c *Client) distill(
 			"at max_tokens=%d: %w", c.Request.MaxTokens, errTruncated,
 		)
 	}
+	if choice.FinishReason != "stop" {
+		// A filtered or otherwise cut-off response can still carry valid
+		// JSON with fewer entries; only "stop" means the model finished.
+		// Deterministic for the same input, so it fails fast.
+		return nil, parsed.Usage, fmt.Errorf(
+			"distill response finished with %q instead of completing; "+
+				"refusing possibly incomplete entries", choice.FinishReason,
+		)
+	}
 	if choice.Message.Content == "" {
 		// Empty content with a normal finish reason means the token budget
 		// went somewhere invisible (typically hidden reasoning the request
@@ -561,8 +570,11 @@ func isContextOverflowDetail(body string) bool {
 	}
 	// Bare "input" is deliberately not a subject: servers prefix arbitrary
 	// validation errors with "Input validation error:", which would pair
-	// with the overflow term of any out-of-range parameter.
-	subjects := []string{"context", "prompt"}
+	// with the overflow term of any out-of-range parameter. The
+	// length-qualified forms "input length" and "input tokens" are safe
+	// subjects — paired with an overflow term they describe the input's
+	// size, while "invalid input length parameter" has no overflow term.
+	subjects := []string{"context", "prompt", "input length", "input tokens"}
 	overflowTerms := []string{"exceed", "too long", "too large", "maximum"}
 	hasSubject := slices.ContainsFunc(subjects, func(subject string) bool {
 		return strings.Contains(lower, subject)
