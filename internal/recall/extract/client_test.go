@@ -92,10 +92,6 @@ func testClient(url string) *Client {
 		Request: RequestShape{
 			Temperature: 0,
 			MaxTokens:   100,
-			// The compact floor covers the short unit texts these tests
-			// send, so truncation exercises the compact retry unless a
-			// test says otherwise.
-			CompactFloorChars: 64,
 			ExtraBody: map[string]any{
 				"chat_template_kwargs": map[string]any{
 					"enable_thinking": false,
@@ -155,27 +151,28 @@ func TestClientTrailingSlashBaseURL(t *testing.T) {
 	}
 }
 
-func TestClientCompactFloorCountsRunesNotBytes(t *testing.T) {
-	// Segmentation budgets count code points, so the compact floor must
-	// too: 40 three-byte runes are 120 bytes but still one unsplittable
-	// 40-rune unit under the 64-rune floor, and must get the compact retry.
+func TestClientTruncationIsTypedSplitSignal(t *testing.T) {
+	// Truncation is never retried or compacted: any retry that caps the
+	// entry count would look complete while silently dropping entries, so
+	// the only recovery is the caller splitting the unit.
 	var requests []map[string]any
 	server := newScriptedServer(t, []scriptedResponse{
 		{finishReason: "length", content: ""},
-		{finishReason: "stop", content: entriesJSON(t, "compact")},
 	}, &requests)
 	defer server.Close()
 
-	text := strings.Repeat("日", 40)
-	entries, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", text, 3,
+	_, usage, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "unit text", 3,
 	)
-	if err != nil {
-		t.Fatalf("DistillWithRecovery: %v", err)
+	if !errors.Is(err, ErrPersistentTruncation) {
+		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
 	}
-	if len(entries) != 1 || len(requests) != 2 {
-		t.Fatalf("entries=%d requests=%d, want compact retry to run",
-			len(entries), len(requests))
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1 (truncation is deterministic)",
+			len(requests))
+	}
+	if usage.PromptTokens != 7 || usage.CompletionTokens != 3 {
+		t.Fatalf("usage = %+v, want the truncated attempt accounted", usage)
 	}
 }
 
@@ -251,39 +248,12 @@ func TestClientBadRequestOtherThanOverflowIsPermanent(t *testing.T) {
 	}
 }
 
-func TestClientCompactRetryOnTruncation(t *testing.T) {
+func TestClientTruncationAfterTransientRetryAccountsUsage(t *testing.T) {
+	// A transient failure followed by truncation must surface the split
+	// signal with the usage of every attempt that reported it.
 	var requests []map[string]any
 	server := newScriptedServer(t, []scriptedResponse{
-		{finishReason: "length", content: ""},
-		{finishReason: "stop", content: entriesJSON(t, "compact")},
-	}, &requests)
-	defer server.Close()
-
-	entries, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "unit text", 3,
-	)
-	if err != nil {
-		t.Fatalf("DistillWithRecovery: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("entries = %+v", entries)
-	}
-	if len(requests) != 2 {
-		t.Fatalf("requests = %d, want 2 (truncation triggers one compact retry)", len(requests))
-	}
-	second := requests[1]["messages"].([]any)[1].(map[string]any)
-	if !strings.Contains(second["content"].(string), "output budget is tight") {
-		t.Fatal("compact retry must append the compact instruction")
-	}
-	if usage.PromptTokens != 14 || usage.CompletionTokens != 6 {
-		t.Fatalf("usage = %+v, want both attempts accounted (14/6)", usage)
-	}
-}
-
-func TestClientPersistentTruncationIsTyped(t *testing.T) {
-	var requests []map[string]any
-	server := newScriptedServer(t, []scriptedResponse{
-		{finishReason: "length", content: ""},
+		{status: http.StatusInternalServerError},
 		{finishReason: "length", content: ""},
 	}, &requests)
 	defer server.Close()
@@ -295,35 +265,11 @@ func TestClientPersistentTruncationIsTyped(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
 	}
 	if len(requests) != 2 {
-		t.Fatalf("requests = %d, want 2 (below the floor: one compact retry)",
-			len(requests))
+		t.Fatalf("requests = %d, want 2 (one transient retry, then "+
+			"truncation)", len(requests))
 	}
-	if usage.PromptTokens != 14 || usage.CompletionTokens != 6 {
-		t.Fatalf("usage = %+v, want truncated attempts accounted (14/6)",
-			usage)
-	}
-}
-
-func TestClientTruncationAboveFloorSplitsInsteadOfCompacting(t *testing.T) {
-	// The compact retry caps the entry count, so on a unit large enough to
-	// split it would silently drop entries; truncation must surface the
-	// typed split signal without a compact attempt.
-	var requests []map[string]any
-	server := newScriptedServer(t, []scriptedResponse{
-		{finishReason: "length", content: ""},
-	}, &requests)
-	defer server.Close()
-
-	longText := strings.Repeat("dense unit text ", 32)
-	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", longText, 3,
-	)
-	if !errors.Is(err, ErrPersistentTruncation) {
-		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
-	}
-	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (no compact retry above the floor)",
-			len(requests))
+	if usage.PromptTokens != 7 || usage.CompletionTokens != 3 {
+		t.Fatalf("usage = %+v, want the truncated attempt accounted", usage)
 	}
 }
 
@@ -413,6 +359,7 @@ func TestIsContextOverflowDetail(t *testing.T) {
 		`max_tokens must be a positive integer`,
 		`max_tokens exceeds the maximum allowed value`,
 		`max_new_tokens exceeds the model limit`,
+		`Input validation error: max_tokens exceeds the maximum allowed value`,
 		`model "test-model" not found`,
 	}
 	for _, body := range notOverflow {

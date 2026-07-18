@@ -159,9 +159,13 @@ func TestExtractProgressFailureKeepsCursor(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
 
-	require.NoError(t, d.MarkExtractProgressFailed(
-		ctx, "sess-1", "fp-a", "digest-1", "endpoint unreachable",
-	))
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 2,
+		LastError:      "endpoint unreachable",
+	}))
 	progress, ok, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -237,7 +241,12 @@ func TestMarkExtractProgressFailedRejectsStaleDigest(t *testing.T) {
 	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 6)
 	require.NoError(t, err)
 
-	err = d.MarkExtractProgressFailed(ctx, "sess-1", "fp-a", "digest-1", "boom")
+	err = d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		LastError:      "boom",
+	})
 	require.ErrorIs(t, err, ErrStaleExtractProgress)
 
 	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
@@ -320,7 +329,13 @@ func TestMarkExtractProgressFailedRejectsDoneRow(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
 
-	err = d.MarkExtractProgressFailed(ctx, "sess-1", "fp-a", "digest-1", "late worker")
+	err = d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 2,
+		LastError:      "late worker",
+	})
 	require.ErrorIs(t, err, ErrStaleExtractProgress,
 		"a completed row must not be demoted to failed")
 
@@ -365,7 +380,19 @@ func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 			return d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 1)
 		},
 		"MarkExtractProgressFailed": func() error {
-			return d.MarkExtractProgressFailed(ctx, "sess-1", "fp-a", "digest-1", "x")
+			// The advance subtest may or may not have run yet, so observe
+			// the stored cursor the way a real worker would.
+			progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+			if err != nil {
+				return err
+			}
+			return d.MarkExtractProgressFailed(ctx, ExtractFailure{
+				SessionID:      "sess-1",
+				Fingerprint:    "fp-a",
+				ExpectedDigest: "digest-1",
+				ExpectedCursor: progress.UnitCursor,
+				LastError:      "x",
+			})
 		},
 	}
 	for name, mutate := range mutations {
@@ -434,4 +461,34 @@ func TestAdvanceExtractCursorStaleAfterShrinkingReset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, progress.UnitCursor)
 	assert.Equal(t, "digest-2", progress.ContentDigest)
+}
+
+func TestMarkExtractProgressFailedRejectsAdvancedCursor(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
+
+	err = d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 1,
+		LastError:      "worker that lost the race",
+	})
+	require.ErrorIs(t, err, ErrStaleExtractProgress,
+		"a failure from a worker behind the stored cursor must not demote "+
+			"newer progress")
+
+	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressPartial, progress.State)
+	assert.Equal(t, 2, progress.UnitCursor)
+	assert.Empty(t, progress.LastError)
 }

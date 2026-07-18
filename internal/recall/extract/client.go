@@ -22,16 +22,17 @@ import (
 var ErrContextOverflow = errors.New("unit text overflows the model context")
 
 // ErrPersistentTruncation reports output the client cannot recover: the
-// token budget truncated a unit large enough to split (splitting preserves
-// every entry, so no compact retry is attempted), or a unit at the compact
-// floor stayed truncated even after the compact retry. Like an overflow,
-// the recovery is splitting the unit into smaller pieces.
+// token budget truncated the unit's entries. Splitting the unit preserves
+// every entry, so the caller splits until SplitFloorChars; a unit at the
+// floor that still truncates needs a larger max_tokens, and the error says
+// so. There is deliberately no retry that caps the entry count: a capped
+// response looks complete while silently dropping entries.
 var ErrPersistentTruncation = errors.New(
 	"model output truncated at the token budget",
 )
 
 // errTruncated is the per-request truncation signal that
-// DistillWithRecovery converts into a split signal or a compact retry.
+// DistillWithRecovery converts into the typed split signal.
 var errTruncated = errors.New("model output truncated")
 
 // errPermanentRequest marks a server rejection that retrying the same
@@ -62,20 +63,12 @@ var reservedRequestKeys = []string{
 // backoff growth or an excessive Retry-After header.
 const maxRetryDelay = 30 * time.Second
 
-// compactSuffix is appended on the truncation retry of a unit too small to
-// split. Sampling at temperature zero makes a same-input retry
-// deterministic, so the retry must change the input instead of hoping for
-// different output; capping the entry count is acceptable only here, where
-// splitting cannot recover the lost entries anyway.
-const compactSuffix = "\n\nIMPORTANT: the output budget is tight for this " +
-	"window. Return at most 4 entries, each with a body of at most 2 " +
-	"sentences."
-
 // extractionProtocolVersion feeds the generation fingerprint. Bump it when
 // the response schema or the recovery behavior changes in a way that alters
 // extraction output for an identical configuration.
 // v2: minLength constraints on entry title and body.
-const extractionProtocolVersion = 2
+// v3: truncation always splits; the entry-capped compact retry is gone.
+const extractionProtocolVersion = 3
 
 // Entry is one distilled memory entry as the model produces it.
 type Entry struct {
@@ -159,15 +152,12 @@ func (c *Client) retryBackoff() time.Duration {
 
 // DistillWithRecovery runs one unit through the model with the recovery
 // ladder: transient failures (network errors, timeouts, rate limits,
-// server errors) are retried up to maxAttempts per phase with exponential
-// backoff honoring Retry-After, while permanent rejections fail fast;
-// truncated output on a unit at or below the compact floor triggers exactly
-// one compact retry (temperature-zero sampling makes same-input retries
-// useless); truncation on a splittable unit, or truncation that survives
-// the compact retry, surfaces as ErrPersistentTruncation and a context
-// overflow as ErrContextOverflow — both mean "split this unit", which the
-// caller owns because it also owns unit identity. The returned Usage sums
-// every attempt, successful or not, so recovery costs are accounted.
+// server errors) are retried up to maxAttempts with exponential backoff
+// honoring Retry-After, while permanent rejections fail fast; truncated
+// output surfaces as ErrPersistentTruncation and a context overflow as
+// ErrContextOverflow — both mean "split this unit", which the caller owns
+// because it also owns unit identity. The returned Usage sums every
+// attempt, successful or not, so recovery costs are accounted.
 func (c *Client) DistillWithRecovery(
 	ctx context.Context, systemPrompt, text string, maxAttempts int,
 ) ([]Entry, Usage, error) {
@@ -186,75 +176,61 @@ func (c *Client) DistillWithRecovery(
 			)
 		}
 	}
-	// Rune count, not byte length: segmentation budgets count code points,
-	// so the floor must measure units the same way.
-	unitChars := utf8.RuneCountInString(text)
-	compactAllowed := unitChars <= c.Request.CompactFloorChars
-	for _, compact := range []bool{false, true} {
-		var lastErr error
-		truncated := false
-		for attempt := range maxAttempts {
-			entries, usage, err := c.distill(ctx, systemPrompt, text, compact)
-			total.PromptTokens += usage.PromptTokens
-			total.CompletionTokens += usage.CompletionTokens
-			if err == nil {
-				return entries, total, nil
-			}
-			if errors.Is(err, errTruncated) {
-				truncated = true
-				break
-			}
-			var transient *transientError
-			if !errors.As(err, &transient) {
-				return nil, total, err
-			}
-			lastErr = err
-			if attempt+1 >= maxAttempts {
-				break
-			}
-			delay := transient.retryAfter
-			if delay <= 0 {
-				delay = c.retryBackoff() << attempt
-			}
-			if delay > maxRetryDelay {
-				delay = maxRetryDelay
-			}
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, total, ctx.Err()
-			case <-timer.C:
-			}
+	var lastErr error
+	for attempt := range maxAttempts {
+		entries, usage, err := c.distill(ctx, systemPrompt, text)
+		total.PromptTokens += usage.PromptTokens
+		total.CompletionTokens += usage.CompletionTokens
+		if err == nil {
+			return entries, total, nil
 		}
-		if !truncated {
+		if errors.Is(err, errTruncated) {
+			// Rune count, not byte length: split budgets count code points.
 			return nil, total, fmt.Errorf(
-				"distilling unit after %d attempts: %w", maxAttempts, lastErr,
+				"unit of %d chars at max_tokens=%d (split the unit, or raise "+
+					"max_tokens if it is already at the split floor): %w",
+				utf8.RuneCountInString(text), c.Request.MaxTokens,
+				ErrPersistentTruncation,
 			)
 		}
-		if !compactAllowed {
+		var transient *transientError
+		if !errors.As(err, &transient) {
+			return nil, total, err
+		}
+		lastErr = err
+		if attempt+1 >= maxAttempts {
 			break
+		}
+		delay := transient.retryAfter
+		if delay <= 0 {
+			delay = c.retryBackoff() << attempt
+		}
+		if delay > maxRetryDelay {
+			delay = maxRetryDelay
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, total, ctx.Err()
+		case <-timer.C:
 		}
 	}
 	return nil, total, fmt.Errorf(
-		"unit of %d chars: %w", unitChars, ErrPersistentTruncation,
+		"distilling unit after %d attempts: %w", maxAttempts, lastErr,
 	)
 }
 
 func (c *Client) distill(
-	ctx context.Context, systemPrompt, text string, compact bool,
+	ctx context.Context, systemPrompt, text string,
 ) ([]Entry, Usage, error) {
-	userText := text
-	if compact {
-		userText += compactSuffix
-	}
 	payload := map[string]any{
 		"model":       c.Model,
 		"max_tokens":  c.Request.MaxTokens,
 		"temperature": c.Request.Temperature,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userText},
+			{"role": "user", "content": text},
 		},
 		"response_format": map[string]any{
 			"type": "json_schema",
@@ -309,7 +285,7 @@ func (c *Client) distill(
 		if isContextOverflowDetail(string(raw)) {
 			return nil, Usage{}, fmt.Errorf(
 				"%d-char unit: %w: %s",
-				utf8.RuneCountInString(userText), ErrContextOverflow, detail,
+				utf8.RuneCountInString(text), ErrContextOverflow, detail,
 			)
 		}
 		return nil, Usage{}, fmt.Errorf(
@@ -557,6 +533,21 @@ func isContextOverflowDetail(body string) bool {
 		if strings.Contains(lower, code) {
 			return true
 		}
+	}
+	// Output-budget validation names the parameter ("Input validation
+	// error: max_tokens exceeds the maximum allowed value") and often
+	// carries both a subject and an overflow term; unless the message also
+	// names the context length explicitly, splitting the input cannot fix
+	// it, so it is not an overflow.
+	outputBudgetParams := []string{
+		"max_tokens", "max_new_tokens", "max_completion_tokens",
+	}
+	if slices.ContainsFunc(outputBudgetParams, func(param string) bool {
+		return strings.Contains(lower, param)
+	}) {
+		return strings.Contains(lower, "context length") ||
+			strings.Contains(lower, "context size") ||
+			strings.Contains(lower, "context window")
 	}
 	subjects := []string{"context", "prompt", "input"}
 	overflowTerms := []string{"exceed", "too long", "too large", "maximum"}
