@@ -712,6 +712,7 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 			}
 		}
 	}
+
 	if err := migrateMessagesIDPrimaryKey(ctx, db); err != nil {
 		return err
 	}
