@@ -48,6 +48,39 @@ func TestResolveProfileExplicitWinsAndUnknownErrors(t *testing.T) {
 	}
 }
 
+func TestResolveProfileCopiesAreIsolated(t *testing.T) {
+	// Resolved profiles get mutated by callers (merging config, editing
+	// request shape); that must never write through to the built-in
+	// registry and corrupt later resolutions.
+	first, err := ResolveProfile("", "qwen3.6-27b-mtp")
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	kwargs, ok := first.Request.ExtraBody["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatal("qwen profile must carry chat_template_kwargs")
+	}
+	kwargs["enable_thinking"] = true
+	first.Request.ExtraBody["injected"] = "x"
+	first.MatchPrefixes[0] = "mutated"
+
+	second, err := ResolveProfile("", "qwen3.6-27b-mtp")
+	if err != nil {
+		t.Fatalf("ResolveProfile after mutation: %v", err)
+	}
+	if second.Name != "qwen" {
+		t.Fatalf("profile = %q, prefix mutation must not leak into registry",
+			second.Name)
+	}
+	if _, ok := second.Request.ExtraBody["injected"]; ok {
+		t.Fatal("top-level extra-body mutation leaked into registry")
+	}
+	secondKwargs := second.Request.ExtraBody["chat_template_kwargs"].(map[string]any)
+	if secondKwargs["enable_thinking"] != false {
+		t.Fatal("nested extra-body mutation leaked into registry")
+	}
+}
+
 func TestPromptsForMergesProfileAndOverrides(t *testing.T) {
 	base, err := ResolveProfile("base", "m")
 	if err != nil {

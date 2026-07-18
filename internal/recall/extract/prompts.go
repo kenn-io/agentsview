@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -121,12 +122,14 @@ const defaultMaxTokens = 4096
 
 // ResolveProfile picks the profile for a model. An explicit name wins and
 // must exist; otherwise the model name selects a profile by prefix, falling
-// back to the base profile.
+// back to the base profile. The returned profile is a deep copy: callers
+// merge configuration into it, and none of that may write through to the
+// built-in registry.
 func ResolveProfile(explicit, model string) (Profile, error) {
 	if explicit != "" {
 		for _, profile := range builtinProfiles {
 			if profile.Name == explicit {
-				return profile, nil
+				return profile.clone(), nil
 			}
 		}
 		names := make([]string, 0, len(builtinProfiles))
@@ -142,11 +145,46 @@ func ResolveProfile(explicit, model string) (Profile, error) {
 	for _, profile := range builtinProfiles {
 		for _, prefix := range profile.MatchPrefixes {
 			if strings.HasPrefix(lowerModel, prefix) {
-				return profile, nil
+				return profile.clone(), nil
 			}
 		}
 	}
 	return ResolveProfile("base", model)
+}
+
+func (p Profile) clone() Profile {
+	out := p
+	out.MatchPrefixes = slices.Clone(p.MatchPrefixes)
+	out.Prompts = maps.Clone(p.Prompts)
+	if p.Request.ExtraBody != nil {
+		out.Request.ExtraBody = cloneJSONMap(p.Request.ExtraBody)
+	}
+	return out
+}
+
+// cloneJSONMap deep-copies the JSON-shaped values profiles carry: nested
+// maps and slices are duplicated, scalars pass through.
+func cloneJSONMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for key, item := range m {
+		out[key] = cloneJSONValue(item)
+	}
+	return out
+}
+
+func cloneJSONValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = cloneJSONValue(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // PromptsFor resolves the effective prompt per role: user overrides win,
