@@ -187,6 +187,27 @@ func TestTraeMalformedSessionEntryDoesNotBlockSiblingDiscovery(t *testing.T) {
 	assert.Contains(t, sources[1].Key, "#workspace-good")
 }
 
+func TestTraeMalformedStorageDoesNotBlockSiblingDiscovery(t *testing.T) {
+	root := t.TempDir()
+	workspaceDB := filepath.Join(root, "workspaceStorage", "hash", traeStateDBName)
+	globalDB := filepath.Join(root, "globalStorage", traeStateDBName)
+	writeTraeDB(t, workspaceDB, `{"list":[`, "memento/unrelated-chat-storage")
+	writeTraeDB(t, globalDB, traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "global-good",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "global"}},
+		},
+	}), "memento/unrelated-chat-storage")
+
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Contains(t, sources[0].Key, "#global-good")
+}
+
 func TestTraeAssistantFallbackVariants(t *testing.T) {
 	assert.Equal(t, "plain text", traeAssistantFallback(json.RawMessage(`"plain text"`)))
 	assert.Equal(t, "text field", traeAssistantFallback(json.RawMessage(`{"text":"text field"}`)))

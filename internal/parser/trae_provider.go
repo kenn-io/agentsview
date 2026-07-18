@@ -343,7 +343,7 @@ func listTraeSessionRecords(path string) ([]traeSessionRecord, error) {
 	}
 	var store traeStore
 	if err := json.Unmarshal([]byte(value), &store); err != nil {
-		return nil, fmt.Errorf("parse trae storage: %w", err)
+		return nil, nil
 	}
 	records := make([]traeSessionRecord, 0, len(store.List))
 	seen := map[string]struct{}{}
