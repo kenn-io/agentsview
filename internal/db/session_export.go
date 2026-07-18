@@ -778,7 +778,7 @@ func (db *DB) attachSessionExportUsage(
 			v := r.costUSD.Float64
 			a.authoritativeCost = &v
 			costRow.costUSD = sql.NullFloat64{}
-			resolver.RecordReported(r.model, resolver.Lookup(r.model))
+			resolver.RecordUnattributedReported()
 		}
 		cost, priced, contributes := sessionRowCost(costRow, resolver)
 		if !contributes {
@@ -809,7 +809,6 @@ func (db *DB) attachSessionExportUsage(
 		ma.reasoningTokens += reasoningTok
 		if authoritative {
 			ma.computed = true
-			ma.reported = true
 		} else if r.costUSD.Valid {
 			ma.reported = true
 		} else {

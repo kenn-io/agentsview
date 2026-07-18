@@ -53,6 +53,7 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 		"has_token_data":      true,
 		"cost_usd":            0.01134,
 		"has_cost":            true,
+		"cost_source":         "computed",
 		"models":              []any{"gpt-5.1"},
 		"unpriced_models":     []any{},
 		"breakdown_count":     float64(1),
@@ -112,6 +113,7 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, float64(1), got["rollup_subagent_count"])
 	assert.Equal(t, true, got["has_rollup_cost"])
+	assert.Equal(t, "computed", got["rollup_cost_source"])
 	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
 }
 
@@ -154,6 +156,8 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, true, got["has_rollup_cost"])
+	assert.Equal(t, "reported", got["cost_source"])
+	assert.Equal(t, "reported", got["rollup_cost_source"])
 	assert.InDelta(t, reportedRootCost+reportedChildCost,
 		got["rollup_cost_usd"], 1e-12)
 }

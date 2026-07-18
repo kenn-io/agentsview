@@ -3741,7 +3741,7 @@ func (s *Store) GetDailyUsage(
 				key  usageAccumKey
 				cost float64
 			}{key: key, cost: r.authoritativeCost}
-			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
+			rateResolver.RecordUnattributedReported()
 		}
 	}
 	for _, sc := range sessionCosts {
@@ -4282,12 +4282,12 @@ func (s *Store) GetSessionUsage(
 	unpriced := map[string]bool{}
 	totalCost := 0.0
 	var authoritativeCost *float64
+	var hasComputedCost, hasReportedCost bool
 	hasRows := false
 	for _, r := range rows {
 		if r.authoritativeCostRows > 0 {
 			v := r.authoritativeCost
 			authoritativeCost = &v
-			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
 		}
 		cost, _, priced, contributes := duckUsageAggregateCost(
 			r.model,
@@ -4307,6 +4307,10 @@ func (s *Store) GetSessionUsage(
 		hasRows = true
 		models[r.model] = true
 		totalCost += cost
+		hasReportedCost = hasReportedCost || r.reportedCostRows > 0
+		hasComputedCost = hasComputedCost || r.billableInput != 0 ||
+			r.billableOutput != 0 || r.billableReason != 0 ||
+			r.billableCacheCr != 0 || r.billableCacheRd != 0
 		if !priced {
 			unpriced[r.model] = true
 		}
@@ -4336,9 +4340,12 @@ func (s *Store) GetSessionUsage(
 	if authoritativeCost != nil {
 		out.HasCost = true
 		out.CostUSD = *authoritativeCost
+		out.CostSource = export.CostSourceReported
 	} else if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
+		out.CostSource = export.CombinedCostSource(
+			hasComputedCost, hasReportedCost)
 	}
 	if out.HasCost {
 		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)

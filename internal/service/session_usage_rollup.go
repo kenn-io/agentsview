@@ -5,6 +5,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 type sessionUsageRowsProvider interface {
@@ -17,6 +18,7 @@ type SessionUsageRollup struct {
 	Usage         *db.SessionUsage
 	CostUSD       float64
 	HasCost       bool
+	CostSource    export.CostSource
 	SubagentCount int
 }
 
@@ -57,35 +59,41 @@ func GetSessionUsageRollup(
 	subagentContributing := false
 	allPriced := true
 	totalCostUSD := 0.0
+	var hasComputedCost, hasReportedCost bool
 	if provider, ok := store.(sessionUsageRowsProvider); ok {
 		rows, err := provider.GetSessionUsageRows(ctx, usageIDs)
 		if err != nil {
 			return nil, err
 		}
 		if rows != nil {
-			rows = activity.SubstituteAuthoritativeSessionCosts(rows)
-			for _, row := range rows {
-				if !row.Contributes {
+			allocated := activity.AllocateUsageCosts(rows)
+			for i, row := range rows {
+				cost := allocated[i]
+				if !cost.Contributes {
 					continue
 				}
 				if row.SessionID != rootID {
 					subagentContributing = true
 				}
-				if !row.Priced {
+				if !cost.Priced {
 					allPriced = false
 					continue
 				}
-				totalCostUSD += row.Cost
+				totalCostUSD += cost.Cost
+				recordRollupCostSource(
+					cost.CostSource, &hasComputedCost, &hasReportedCost)
 			}
 		} else {
-			subagentContributing, totalCostUSD, allPriced, err =
+			subagentContributing, totalCostUSD, allPriced,
+				hasComputedCost, hasReportedCost, err =
 				sumRollupUsageFallback(ctx, store, root, usageIDs)
 			if err != nil {
 				return nil, err
 			}
 		}
 	} else {
-		subagentContributing, totalCostUSD, allPriced, err =
+		subagentContributing, totalCostUSD, allPriced,
+			hasComputedCost, hasReportedCost, err =
 			sumRollupUsageFallback(ctx, store, root, usageIDs)
 		if err != nil {
 			return nil, err
@@ -94,6 +102,8 @@ func GetSessionUsageRollup(
 	out.HasCost = subagentContributing && allPriced
 	if out.HasCost {
 		out.CostUSD = totalCostUSD
+		out.CostSource = export.CombinedCostSource(
+			hasComputedCost, hasReportedCost)
 	}
 	return out, nil
 }
@@ -103,15 +113,20 @@ func sumRollupUsageFallback(
 	store db.Store,
 	root *db.SessionUsage,
 	usageIDs []string,
-) (subagentContributing bool, totalCostUSD float64, allPriced bool, err error) {
+) (subagentContributing bool, totalCostUSD float64, allPriced,
+	hasComputedCost, hasReportedCost bool, err error) {
 	allPriced = true
 	if root.BreakdownCount > 0 && !root.HasCost {
 		allPriced = false
 	}
+	if root.HasCost {
+		recordRollupCostSource(
+			root.CostSource, &hasComputedCost, &hasReportedCost)
+	}
 	for _, id := range usageIDs[1:] {
 		usage, getErr := store.GetSessionUsage(ctx, id, false)
 		if getErr != nil {
-			return false, 0, false, getErr
+			return false, 0, false, false, false, getErr
 		}
 		if usage == nil || usage.BreakdownCount == 0 {
 			continue
@@ -119,10 +134,27 @@ func sumRollupUsageFallback(
 		subagentContributing = true
 		if usage.HasCost {
 			totalCostUSD += usage.CostUSD
+			recordRollupCostSource(
+				usage.CostSource, &hasComputedCost, &hasReportedCost)
 		} else {
 			allPriced = false
 		}
 	}
 	totalCostUSD += root.CostUSD
-	return subagentContributing, totalCostUSD, allPriced, nil
+	return subagentContributing, totalCostUSD, allPriced,
+		hasComputedCost, hasReportedCost, nil
+}
+
+func recordRollupCostSource(
+	source export.CostSource, hasComputed, hasReported *bool,
+) {
+	switch source {
+	case export.CostSourceComputed:
+		*hasComputed = true
+	case export.CostSourceReported:
+		*hasReported = true
+	case export.CostSourceMixed:
+		*hasComputed = true
+		*hasReported = true
+	}
 }

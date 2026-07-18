@@ -26,6 +26,41 @@ func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 	assert.Contains(t, s, "claude-opus-4-6", "output missing model")
 }
 
+func TestRenderSessionUsageHuman_ReportedCostIsNotEstimated(t *testing.T) {
+	var out sessionUsageOutput
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"session_id":"reported:s1",
+		"agent":"provider",
+		"cost_usd":0.03,
+		"has_cost":true,
+		"cost_source":"reported",
+		"models":["model-a"]
+	}`), &out))
+
+	var b strings.Builder
+	require.NoError(t, renderSessionUsageHuman(&b, &out))
+	assert.Contains(t, b.String(), "$0.03 (model-a)")
+	assert.NotContains(t, b.String(), "~$0.03")
+}
+
+func TestRenderSessionUsageHuman_ReportedCostWithoutModelsOmitsParentheses(t *testing.T) {
+	var out sessionUsageOutput
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"session_id":"reported:cost-only",
+		"agent":"provider",
+		"cost_usd":0.03,
+		"has_cost":true,
+		"cost_source":"reported",
+		"models":[]
+	}`), &out))
+
+	var b strings.Builder
+	require.NoError(t, renderSessionUsageHuman(&b, &out))
+	assert.Contains(t, b.String(), "$0.03")
+	assert.NotContains(t, b.String(), "~$0.03")
+	assert.NotContains(t, b.String(), "()")
+}
+
 func TestRenderSessionUsageHuman_NoCostNoModels(t *testing.T) {
 	out := &sessionUsageOutput{
 		SessionUsage: db.SessionUsage{

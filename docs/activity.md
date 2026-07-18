@@ -46,7 +46,8 @@ The summary cards show:
 - **Sessions** — session count, with interactive/automated and untimed-session
     detail when applicable
 - **Projects** and **Models** — distinct counts in the range
-- **Total Cost** — estimated cost attributed to activity in the range
+- **Total Cost** — selected session cost attributed to activity in the range:
+    authoritative reported totals when available, otherwise catalog estimates
 
 The report counts subagent sessions (for example Claude Code Task-tool agents)
 and fork sessions (rewound conversation branches) alongside their parent
@@ -98,6 +99,12 @@ stacked bars to compare interactive and automated contributions.
 
 Rows with no value for the selected metric are omitted from that view, so
 cost-only untimed sessions appear in **Cost** but not **Agent-min**.
+
+Project, agent, session, bucket, and report totals use the authoritative
+session total when one is available. The model breakdown remains a token-price
+attribution view because a session-wide reported amount cannot be divided among
+models without inventing an allocation. Its model costs can therefore differ
+from, and need not sum to, the authoritative total.
 
 ## Activity Insight
 

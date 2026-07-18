@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
@@ -19,7 +18,7 @@ import (
 
 // CopilotReportedCostSource identifies the authoritative cumulative cost
 // reported by Copilot CLI shutdown records.
-const CopilotReportedCostSource = activity.CopilotReportedCostSource
+const CopilotReportedCostSource = "copilot-reported"
 
 // aiCreditUSD is the USD value of one AI credit for agents whose cost
 // is denominated in AI credits (the AICreditsDenominated capability).
@@ -1967,7 +1966,7 @@ func (db *DB) GetDailyUsage(
 				key  accumKey
 				cost float64
 			}{key: key, cost: r.costUSD.Float64}
-			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
+			rateResolver.RecordUnattributedReported()
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -2555,6 +2554,7 @@ type SessionUsage struct {
 	HasTokenData      bool                         `json:"has_token_data"`
 	CostUSD           float64                      `json:"cost_usd"`
 	HasCost           bool                         `json:"has_cost"`
+	CostSource        export.CostSource            `json:"cost_source,omitempty"`
 	AICredits         float64                      `json:"ai_credits,omitempty"`
 	Models            []string                     `json:"models"`
 	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
@@ -2705,6 +2705,7 @@ func (db *DB) GetSessionUsage(
 
 	var cost float64
 	var authoritativeCost *float64
+	var hasComputedCost, hasReportedCost bool
 	contributing := false
 	allPriced := true
 	modelsSet := make(map[string]struct{})
@@ -2730,11 +2731,11 @@ func (db *DB) GetSessionUsage(
 		}
 
 		costRow := r
-		if r.costSource == CopilotReportedCostSource && r.costUSD.Valid {
+		authoritative := r.costSource == CopilotReportedCostSource && r.costUSD.Valid
+		if authoritative {
 			v := r.costUSD.Float64
 			authoritativeCost = &v
 			costRow.costUSD = sql.NullFloat64{}
-			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
 		}
 		c, priced, contributes := sessionRowCost(costRow, rateResolver)
 		if !contributes {
@@ -2742,6 +2743,13 @@ func (db *DB) GetSessionUsage(
 		}
 		contributing = true
 		modelsSet[r.model] = struct{}{}
+		if !authoritative {
+			if r.costUSD.Valid {
+				hasReportedCost = true
+			} else {
+				hasComputedCost = true
+			}
+		}
 		if priced {
 			cost += c
 		} else {
@@ -2772,8 +2780,11 @@ func (db *DB) GetSessionUsage(
 	}
 	if authoritativeCost != nil {
 		out.CostUSD = *authoritativeCost
+		out.CostSource = export.CostSourceReported
 	} else if out.HasCost {
 		out.CostUSD = cost
+		out.CostSource = export.CombinedCostSource(
+			hasComputedCost, hasReportedCost)
 	}
 	if out.HasCost {
 		out.AICredits = AICreditsFromCost(sess.Agent, out.CostUSD)

@@ -1102,6 +1102,16 @@ func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) 
 	require.NotNil(t, result.Rows[0].ModelUsage)
 	assert.True(t, result.Rows[0].ModelUsage.HasCost)
 	assert.InDelta(t, reportedCost, result.Rows[0].ModelUsage.CostUSD, 1e-12)
+	assert.InDelta(t, 10.0,
+		result.Rows[0].ModelUsage.ByModel["copilot-model-a"].CostUSD, 1e-12)
+	assert.InDelta(t, 20.0,
+		result.Rows[0].ModelUsage.ByModel["copilot-model-b"].CostUSD, 1e-12)
+	assert.Equal(t, export.CostSourceComputed,
+		result.Rows[0].ModelUsage.ByModel["copilot-model-a"].CostSource)
+	assert.Equal(t, export.CostSourceComputed,
+		result.Rows[0].ModelUsage.ByModel["copilot-model-b"].CostSource)
+	require.NotNil(t, result.Pricing)
+	assert.Equal(t, export.CostSourceMixed, result.Pricing.CostSource)
 }
 
 func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {

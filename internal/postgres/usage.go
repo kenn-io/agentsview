@@ -1193,6 +1193,7 @@ func (s *Store) GetSessionUsage(
 
 	var cost float64
 	var authoritativeCost *float64
+	var hasComputedCost, hasReportedCost bool
 	contributing := false
 	allPriced := true
 	modelsSet := make(map[string]struct{})
@@ -1219,11 +1220,11 @@ func (s *Store) GetSessionUsage(
 		}
 
 		costRow := r
-		if r.costSource == db.CopilotReportedCostSource && r.costUSD.Valid {
+		authoritative := r.costSource == db.CopilotReportedCostSource && r.costUSD.Valid
+		if authoritative {
 			v := r.costUSD.Float64
 			authoritativeCost = &v
 			costRow.costUSD = sql.NullFloat64{}
-			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
 		}
 		c, priced, contributes := pgSessionRowCost(costRow, rateResolver)
 		if !contributes {
@@ -1231,6 +1232,13 @@ func (s *Store) GetSessionUsage(
 		}
 		contributing = true
 		modelsSet[r.model] = struct{}{}
+		if !authoritative {
+			if r.costUSD.Valid {
+				hasReportedCost = true
+			} else {
+				hasComputedCost = true
+			}
+		}
 		if priced {
 			cost += c
 		} else {
@@ -1262,8 +1270,11 @@ func (s *Store) GetSessionUsage(
 	}
 	if authoritativeCost != nil {
 		out.CostUSD = *authoritativeCost
+		out.CostSource = export.CostSourceReported
 	} else if out.HasCost {
 		out.CostUSD = cost
+		out.CostSource = export.CombinedCostSource(
+			hasComputedCost, hasReportedCost)
 	}
 	if out.HasCost {
 		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
@@ -1412,7 +1423,7 @@ func (s *Store) GetDailyUsage(
 				key  accumKey
 				cost float64
 			}{key: key, cost: r.costUSD.Float64}
-			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
+			rateResolver.RecordUnattributedReported()
 		}
 	}
 	if err := rows.Err(); err != nil {

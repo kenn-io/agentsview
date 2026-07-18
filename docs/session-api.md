@@ -647,6 +647,7 @@ agentsview session usage <id> [--format json]
   "has_token_data": true,
   "cost_usd": 2.41,
   "has_cost": true,
+  "cost_source": "computed",
   "models": ["claude-opus-4-7"],
   "unpriced_models": [],
   "breakdown_count": 42,
@@ -677,13 +678,15 @@ agentsview session usage <id> [--format json]
 | `has_token_data`      | `false` when the session has no per-message token usage              |
 | `cost_usd`            | Reported session cost when available, otherwise a model-pricing estimate; `0` when `has_cost` is `false` |
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
+| `cost_source`         | Omitted without a complete cost; `reported` for an authoritative session total, otherwise `computed`, `reported`, or `mixed` for the contributing rows |
 | `ai_credits`          | Omitted unless the priced agent uses AI Credits; derived from `cost_usd` at 100 credits per dollar |
-| `models`              | Models that contributed to the cost estimate, sorted by model name      |
+| `models`              | Models with contributing usage, sorted by model name; not an allocation of an authoritative session total |
 | `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing |
 | `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
 | `breakdown`           | Per-step usage rows, in session order; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`      | `true` when the report came from an already-running daemon           |
 | `rollup_cost_usd`      | REST only, with `rollup=true`; present only when `has_rollup_cost` is true, then carries the complete cost across the root and explicit subagent descendants |
+| `rollup_cost_source`   | REST only, with `rollup=true`; provenance of `rollup_cost_usd` across sessions, so a reported root plus a computed child is `mixed` |
 | `has_rollup_cost`      | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced |
 | `rollup_subagent_count`| REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows |
 
@@ -707,11 +710,13 @@ Peak ctx:      84000
 Cost:          ~$2.41 (claude-opus-4-7)
 ```
 
-The leading `~` on the cost line marks the figure as a
-model-pricing estimate. When some contributing models are
-unpriced, the cost line reads `n/a (unpriced: model-x)`; when
-the session has no token data at all, it reads `n/a`. Priced
-Copilot-family sessions add an `AI Credits` line after the cost.
+The leading `~` on the cost line marks a computed or mixed figure. An
+authoritative reported session total omits it. The parenthesized model list is
+shown only when contributing models exist, so a cost-only reported session does
+not render empty parentheses. When some contributing models are unpriced, the
+cost line reads `n/a (unpriced: model-x)`; when the session has no token data at
+all, it reads `n/a`. Priced Copilot-family sessions add an `AI Credits` line
+after the cost.
 
 **HTTP endpoint** — as of 0.32.0, the same data is available
 over REST:

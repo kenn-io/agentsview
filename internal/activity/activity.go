@@ -53,55 +53,69 @@ type ActivityEvent struct {
 // GetDailyUsage). Rows MUST be delivered ordered by
 // (ts ASC, session_id ASC, COALESCE(message_ordinal,-1) ASC).
 type UsageRow struct {
-	SessionID       string
-	Model           string
-	Timestamp       string // ts, RFC3339 or ""
-	OutputTokens    int
-	Cost            float64
-	CostSource      string
-	Priced          bool
-	Contributes     bool
-	Agent           string
-	ClaudeMessageID string
-	ClaudeRequestID string
-	SourceUUID      string
-	UsageDedupKey   string
+	SessionID         string
+	Model             string
+	Timestamp         string // ts, RFC3339 or ""
+	OutputTokens      int
+	Cost              float64
+	CostSource        export.CostSource
+	AuthoritativeCost *float64
+	Priced            bool
+	Contributes       bool
+	Agent             string
+	ClaudeMessageID   string
+	ClaudeRequestID   string
+	SourceUUID        string
+	UsageDedupKey     string
 }
 
-// CopilotReportedCostSource identifies Copilot's cumulative authoritative
-// session cost. When present, the last such row replaces every estimated row
-// cost for that session.
-const CopilotReportedCostSource = "copilot-reported"
+type UsageCostAllocation struct {
+	Cost        float64
+	CostSource  export.CostSource
+	Priced      bool
+	Contributes bool
+}
 
-// SubstituteAuthoritativeSessionCosts applies cumulative reported session
-// costs without dropping the other rows' token contributions. Rows must be in
-// chronological order so the last reported total wins, matching session usage.
-func SubstituteAuthoritativeSessionCosts(usage []UsageRow) []UsageRow {
+// AllocateUsageCosts selects aggregate row costs without changing the
+// row/model estimates. A session may carry one authoritative total; when it
+// does, that settlement wholly replaces the session's row costs.
+func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 	type authoritativeCost struct {
 		index int
 		cost  float64
 	}
+	allocated := make([]UsageCostAllocation, len(usage))
 	authoritative := make(map[string]authoritativeCost)
 	for i, row := range usage {
-		if row.CostSource == CopilotReportedCostSource {
+		allocated[i] = UsageCostAllocation{
+			Cost: row.Cost, CostSource: row.CostSource,
+			Priced: row.Priced, Contributes: row.Contributes,
+		}
+		if row.AuthoritativeCost != nil {
 			authoritative[row.SessionID] = authoritativeCost{
 				index: i,
-				cost:  row.Cost,
+				cost:  *row.AuthoritativeCost,
 			}
 		}
 	}
-	for i := range usage {
+	for i := range allocated {
 		reported, ok := authoritative[usage[i].SessionID]
-		if !ok || !usage[i].Contributes {
+		if !ok {
 			continue
 		}
-		usage[i].Cost = 0
-		usage[i].Priced = true
+		if allocated[i].Contributes {
+			allocated[i].Cost = 0
+			allocated[i].CostSource = ""
+			allocated[i].Priced = true
+		}
 		if i == reported.index {
-			usage[i].Cost = reported.cost
+			allocated[i] = UsageCostAllocation{
+				Cost: reported.cost, CostSource: export.CostSourceReported,
+				Priced: true, Contributes: true,
+			}
 		}
 	}
-	return usage
+	return allocated
 }
 
 // Report is the API payload.
@@ -662,7 +676,7 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 			out = append(out, usage[i])
 		}
 	}
-	return SubstituteAuthoritativeSessionCosts(out)
+	return out
 }
 
 // applyUsage dedups usage rows to the range, then accumulates output tokens
@@ -670,18 +684,21 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 // timestamp.
 func applyUsage(r *Report, p Params, windows []BucketWindow, start, end time.Time,
 	usage []UsageRow, automatedBy map[string]bool) {
-	for _, u := range dedupUsage(start, end, p.EffectiveEnd, usage) {
+	usage = dedupUsage(start, end, p.EffectiveEnd, usage)
+	allocated := AllocateUsageCosts(usage)
+	for i, u := range usage {
+		cost := allocated[i].Cost
 		r.Totals.OutputTokens += u.OutputTokens
-		r.Totals.Cost += u.Cost
+		r.Totals.Cost += cost
 		if automatedBy[u.SessionID] {
-			r.Totals.AutomatedCost += u.Cost
+			r.Totals.AutomatedCost += cost
 		} else {
-			r.Totals.InteractiveCost += u.Cost
+			r.Totals.InteractiveCost += cost
 		}
 		t, _ := parseTS(u.Timestamp)
 		if b := windowIndex(windows, t); b >= 0 && b < len(r.Buckets) {
 			r.Buckets[b].OutputTokens += u.OutputTokens
-			r.Buckets[b].Cost += u.Cost
+			r.Buckets[b].Cost += cost
 		}
 	}
 }
@@ -750,13 +767,15 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	}
 	// Per-session cost/tokens/models from deduped usage.
 	cost := map[string]*usageAgg{}
-	for _, u := range dedupUsage(start, end, effEnd, usage) {
+	usage = dedupUsage(start, end, effEnd, usage)
+	allocated := AllocateUsageCosts(usage)
+	for i, u := range usage {
 		c := cost[u.SessionID]
 		if c == nil {
 			c = &usageAgg{models: map[string]float64{}}
 			cost[u.SessionID] = c
 		}
-		c.cost += u.Cost
+		c.cost += allocated[i].Cost
 		c.outputTokens += u.OutputTokens
 		if u.Model != "" {
 			c.models[u.Model] += u.Cost

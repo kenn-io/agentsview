@@ -656,11 +656,17 @@ and `cost_source`.
 
 `cost_source` is a closed v2 enum everywhere it appears: `computed`, `reported`,
 or `mixed`. `computed` means AgentsView derived cost from token counts and the
-effective pricing resolver. `reported` means at least one source row supplied
-explicit cost, such as Cursor Admin API billing data; those rows may not be
-derivable from tokens times rates. `mixed` means both computed and reported
-costs contributed. For computed costs, reasoning tokens are priced at the
+effective pricing resolver. `reported` means a source supplied explicit cost,
+such as Cursor Admin API billing data; those amounts may not be derivable from
+tokens times rates. `mixed` means the enclosing report or rollup contains both
+provenance kinds. For computed costs, reasoning tokens are priced at the
 output-token rate.
+
+An authoritative session total is never added to that session's computed
+estimate. It replaces the estimate completely. A report-level pricing block can
+still be `mixed` when it records that authoritative settlement alongside
+computed per-model attribution, and a multi-session rollup can be `mixed` when
+different sessions use different sources.
 
 If a source reports an amount for a model with no matching effective pricing
 row, the model entry has `cost_source: "reported"`, `matched_pattern: null`, and
