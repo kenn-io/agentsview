@@ -1063,6 +1063,47 @@ func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 	assert.Equal(t, 10, rows[0].ModelUsage.OutputTokens)
 }
 
+func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "copilot-model-a", InputPerMTok: 10},
+		{ModelPattern: "copilot-model-b", InputPerMTok: 20},
+	}))
+	insertExportSession(t, d, Session{
+		ID: "copilot:export-authoritative", Project: "alpha", Machine: "local",
+		Agent: "copilot", StartedAt: Ptr("2026-06-16T10:00:00Z"),
+		EndedAt: Ptr("2026-06-16T10:10:00Z"), UserMessageCount: 1,
+	})
+	reportedCost := 0.03
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"copilot:export-authoritative",
+		[]UsageEvent{
+			{
+				Source: "shutdown", Model: "copilot-model-a",
+				InputTokens: 1_000_000,
+				OccurredAt:  "2026-06-16T10:05:00Z", DedupKey: "first",
+			},
+			{
+				Source: "shutdown", Model: "copilot-model-b",
+				InputTokens: 1_000_000,
+				CostUSD:     &reportedCost, CostStatus: "exact",
+				CostSource: CopilotReportedCostSource,
+				OccurredAt: "2026-06-16T10:10:00Z", DedupKey: "final",
+			},
+		},
+	))
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{IncludeChildren: true}, Limit: 10, Format: "json",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Rows, 1)
+	require.NotNil(t, result.Rows[0].ModelUsage)
+	assert.True(t, result.Rows[0].ModelUsage.HasCost)
+	assert.InDelta(t, reportedCost, result.Rows[0].ModelUsage.CostUSD, 1e-12)
+}
+
 func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 	d := testSessionExportDB(t)
 	ctx := context.Background()

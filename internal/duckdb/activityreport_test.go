@@ -193,6 +193,45 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
 }
 
+func TestDuckGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
+	ctx := context.Background()
+	reportedCost := 0.03
+	sess := syncSession(
+		"copilot:activity-authoritative", "proj1", "copilot activity",
+		"2026-06-14T10:00:00.000Z", 1,
+	)
+	sess.Agent = "copilot"
+	store := activityReportStore(t, []db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "shutdown", Model: "copilot-model-a",
+				InputTokens: 1_000_000,
+				OccurredAt:  "2026-06-14T10:05:00.000Z", DedupKey: "first",
+			},
+			{
+				Source: "shutdown", Model: "copilot-model-b",
+				InputTokens: 1_000_000,
+				CostUSD:     &reportedCost, CostStatus: "exact",
+				CostSource: db.CopilotReportedCostSource,
+				OccurredAt: "2026-06-14T10:10:00.000Z", DedupKey: "final",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}}, []db.ModelPricing{
+		{ModelPattern: "copilot-model-a", InputPerMTok: 10},
+		{ModelPattern: "copilot-model-b", InputPerMTok: 20},
+	})
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.InDelta(t, reportedCost, r.Totals.Cost, 1e-12)
+	require.Len(t, r.BySession, 1)
+	assert.InDelta(t, reportedCost, r.BySession[0].Cost, 1e-12)
+}
+
 func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
 	ctx := context.Background()
 	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00.000Z", 1)

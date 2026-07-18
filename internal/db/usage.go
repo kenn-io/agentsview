@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
@@ -18,7 +19,7 @@ import (
 
 // CopilotReportedCostSource identifies the authoritative cumulative cost
 // reported by Copilot CLI shutdown records.
-const CopilotReportedCostSource = "copilot-reported"
+const CopilotReportedCostSource = activity.CopilotReportedCostSource
 
 // aiCreditUSD is the USD value of one AI credit for agents whose cost
 // is denominated in AI credits (the AICreditsDenominated capability).

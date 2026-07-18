@@ -166,6 +166,48 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
 }
 
+func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_activity_copilot_authoritative_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES
+			('copilot-model-a', 10, 0, 0, 0, 'seed'),
+			('copilot-model-b', 20, 0, 0, 0, 'seed')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES (
+			'copilot:activity-authoritative', 'test-machine', 'proj1', 'copilot',
+			'2026-06-16T10:00:00Z'::timestamptz,
+			'2026-06-16T10:10:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, cost_usd,
+			cost_status, cost_source, occurred_at, dedup_key
+		) VALUES
+			('copilot:activity-authoritative', 'shutdown', 'copilot-model-a',
+			 1000000, NULL, '', '', '2026-06-16T10:05:00Z'::timestamptz, 'first'),
+			('copilot:activity-authoritative', 'shutdown', 'copilot-model-b',
+			 1000000, 0.03, 'exact', 'copilot-reported',
+			 '2026-06-16T10:10:00Z'::timestamptz, 'final')`)
+	require.NoError(t, err)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.InDelta(t, 0.03, r.Totals.Cost, 1e-12)
+	require.Len(t, r.BySession, 1)
+	assert.InDelta(t, 0.03, r.BySession[0].Cost, 1e-12)
+}
+
 // TestPGGetActivityReportIncludesSubagentUsage mirrors the SQLite
 // TestGetActivityReport_IncludesSubagentUsage: subagent and fork sessions
 // are candidates so their usage lands in the totals (matching
