@@ -2735,6 +2735,10 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 
 	assert.InDelta(t, 0.055, want.Totals.TotalCost, 1e-12)
 	assert.InDelta(t, want.Totals.TotalCost, got.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 5.5, want.Totals.CopilotAICredits, 1e-9,
+		"credits derive from the authoritative-substituted totals")
+	assert.InDelta(t, want.Totals.CopilotAICredits,
+		got.Totals.CopilotAICredits, 1e-9)
 	assert.Equal(t, want.Daily, got.Daily)
 }
 

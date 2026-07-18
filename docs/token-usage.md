@@ -49,7 +49,9 @@ rows, AgentsView reports that as an unsupported usage state instead of silently
 showing an empty chart. Copilot-family filters (`copilot`, `vscode-copilot`, and
 `visualstudio-copilot`) keep Copilot-specific wording; any other no-token agent
 falls back to a generic "matching sessions do not expose token usage data"
-message.
+message. AI-credit cost denomination (surfaced as `copilotAICredits` for
+Copilot agents) is tracked as a separate capability from no-token-data, so
+future agents can opt into either behavior independently.
 
 ### Cursor Admin Usage Events
 
@@ -415,6 +417,15 @@ estimates because the session-level cost cannot be allocated accurately among
 models. Their sum can therefore differ from the authoritative session or
 aggregate total.
 
+### Copilot AI Credits
+
+Usage report totals include a `copilotAICredits` field for Copilot-family
+agents (`copilot`, `vscode-copilot`, and `visualstudio-copilot`) when their
+usage rows have a cost. The conversion is cost divided by `$0.01`, matching
+the unit AgentsView uses for Copilot credit reporting. When a session carries
+an authoritative Copilot-reported cost, the credits derive from that reported
+total; otherwise they derive from the catalog estimate.
+
 ### Claude Streaming & Codex Token Events
 
 The 0.20.0 cost tracking release also improved how raw token usage is extracted
@@ -609,11 +620,10 @@ version 1. Current builds correct all three markers to version 2; those two
 transitional releases must not be treated as v1-compatible. The commands do
 not provide a v1 output mode.
 
-Relative to the v1-era payloads, usage daily v2 also drops the
-`copilotAICredits` totals field, and totals substitute the authoritative
-Copilot-reported session cost for catalog estimates when one is present.
-Consumers should require the expected `schema_version` and ignore unknown
-additive fields.
+Relative to the v1-era payloads, usage daily v2 totals substitute the
+authoritative Copilot-reported session cost for catalog estimates when one is
+present. Consumers should require the expected `schema_version` and ignore
+unknown additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |

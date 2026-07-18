@@ -1562,6 +1562,7 @@ func TestNoTokenDataNote(t *testing.T) {
 			DisplayName: "Credit Note Agent",
 			Usage: parser.UsageCapabilities{
 				NoPerMessageTokenData: true,
+				AICreditsDenominated:  true,
 			},
 		},
 	)

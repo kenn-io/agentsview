@@ -1190,6 +1190,8 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 	assert.Zero(t, daily.Daily[0].TotalCost)
 	assert.InDelta(t, 0.0275, daily.Daily[1].TotalCost, 1e-12)
 	assert.InDelta(t, 0.0275, daily.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 2.75, daily.Totals.CopilotAICredits, 1e-9,
+		"credits derive from the authoritative reported cost")
 	require.NotNil(t, daily.Pricing)
 	assert.Equal(t, export.CostSourceMixed, daily.Pricing.CostSource,
 		"authoritative reported cost must surface in pricing provenance")

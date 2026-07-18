@@ -97,6 +97,7 @@ type AgentDef struct {
 
 type UsageCapabilities struct {
 	NoPerMessageTokenData bool
+	AICreditsDenominated  bool
 }
 
 // Registry lists all supported agents. Order is stable and
@@ -156,6 +157,7 @@ var Registry = []AgentDef{
 		FileBased:    true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
 		},
 	},
 	{
@@ -286,6 +288,7 @@ var Registry = []AgentDef{
 		FileBased: true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
 		},
 	},
 	{
@@ -311,6 +314,7 @@ var Registry = []AgentDef{
 		FileBased: true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
 		},
 	},
 	{
@@ -354,6 +358,7 @@ var Registry = []AgentDef{
 		FileBased: true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
 		},
 	},
 	{
@@ -789,6 +794,13 @@ func AgentNameLacksPerMessageTokenData(agent string) bool {
 	return ok && def.Usage.NoPerMessageTokenData
 }
 
+// AgentNameUsesAICredits reports whether the named agent's cost is
+// denominated in AI credits rather than USD.
+func AgentNameUsesAICredits(agent string) bool {
+	def, ok := AgentByType(AgentType(agent))
+	return ok && def.Usage.AICreditsDenominated
+}
+
 // AgentFilterLacksPerMessageTokenData reports whether a (possibly
 // comma-separated) agent filter selects only agents without
 // per-message token data, with at least one entry.
@@ -814,8 +826,8 @@ func agentFilterMatches(agentFilter string, match func(string) bool) bool {
 // AgentIsCopilot reports whether t is one of the GitHub Copilot
 // family agents. Copilot-specific user-facing wording keys on this
 // identity; the usage capabilities above intentionally do not imply
-// it, so a future agent can adopt NoPerMessageTokenData without
-// inheriting Copilot messaging.
+// it, so a future agent can adopt NoPerMessageTokenData or
+// AICreditsDenominated without inheriting Copilot messaging.
 func AgentIsCopilot(t AgentType) bool {
 	switch t {
 	case AgentCopilot, AgentVSCodeCopilot, AgentVSCopilot:
