@@ -436,14 +436,21 @@ func TestClientRejectsSchemaViolatingContent(t *testing.T) {
 	// advancing progress with silently lost or malformed entries. At
 	// temperature zero the violation is deterministic, so no retry.
 	cases := map[string]string{
-		"empty object":     `{}`,
-		"null":             `null`,
-		"top-level array":  `[]`,
-		"unknown type":     `{"entries":[{"type":"story","title":"t","body":"b","entities":[]}]}`,
-		"blank title":      `{"entries":[{"type":"fact","title":" ","body":"b","entities":[]}]}`,
-		"blank body":       `{"entries":[{"type":"fact","title":"t","body":"","entities":[]}]}`,
-		"missing entities": `{"entries":[{"type":"fact","title":"t","body":"b"}]}`,
-		"unknown field":    `{"entries":[{"type":"fact","title":"t","body":"b","entities":[],"extra":1}]}`,
+		"empty object":        `{}`,
+		"null":                `null`,
+		"top-level array":     `[]`,
+		"unknown type":        `{"entries":[{"type":"story","title":"t","body":"b","entities":[]}]}`,
+		"blank title":         `{"entries":[{"type":"fact","title":" ","body":"b","entities":[]}]}`,
+		"blank body":          `{"entries":[{"type":"fact","title":"t","body":"","entities":[]}]}`,
+		"missing entities":    `{"entries":[{"type":"fact","title":"t","body":"b"}]}`,
+		"unknown field":       `{"entries":[{"type":"fact","title":"t","body":"b","entities":[],"extra":1}]}`,
+		"case-mismatched key": `{"Entries":[]}`,
+		"null entries":        `{"entries":null}`,
+		"null entry":          `{"entries":[null]}`,
+		"null title":          `{"entries":[{"type":"fact","title":null,"body":"b","entities":[]}]}`,
+		"null entity element": `{"entries":[{"type":"fact","title":"t","body":"b","entities":["a",null]}]}`,
+		"non-string entity":   `{"entries":[{"type":"fact","title":"t","body":"b","entities":[1]}]}`,
+		"trailing delimiter":  `{"entries":[]}]`,
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

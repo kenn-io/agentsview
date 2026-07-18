@@ -74,7 +74,8 @@ const compactSuffix = "\n\nIMPORTANT: the output budget is tight for this " +
 // extractionProtocolVersion feeds the generation fingerprint. Bump it when
 // the response schema or the recovery behavior changes in a way that alters
 // extraction output for an identical configuration.
-const extractionProtocolVersion = 1
+// v2: minLength constraints on entry title and body.
+const extractionProtocolVersion = 2
 
 // Entry is one distilled memory entry as the model produces it.
 type Entry struct {
@@ -111,8 +112,8 @@ var entrySchema = map[string]any{
 						"type": "string",
 						"enum": entryTypes,
 					},
-					"title": map[string]any{"type": "string"},
-					"body":  map[string]any{"type": "string"},
+					"title": map[string]any{"type": "string", "minLength": 1},
+					"body":  map[string]any{"type": "string", "minLength": 1},
 					"entities": map[string]any{
 						"type":  "array",
 						"items": map[string]any{"type": "string"},
@@ -390,53 +391,119 @@ func (c *Client) distill(
 
 // parseEntries decodes and validates distilled content against the same
 // constraints entrySchema requests: an entries array must be present,
-// unknown fields are rejected, and every entry needs a known type, a
-// non-blank title and body, and an entities array.
+// keys are matched exactly (Go's struct decoding is case-insensitive, so
+// this walks raw messages instead), unknown keys, nulls, and trailing data
+// are rejected, and every entry needs a known type, a non-blank title and
+// body, and an entities array of strings.
 func parseEntries(content string) ([]Entry, error) {
-	decoder := json.NewDecoder(strings.NewReader(content))
-	decoder.DisallowUnknownFields()
-	var out struct {
-		Entries *[]struct {
-			Type     string    `json:"type"`
-			Title    string    `json:"title"`
-			Body     string    `json:"body"`
-			Entities *[]string `json:"entities"`
-		} `json:"entries"`
-	}
-	if err := decoder.Decode(&out); err != nil {
+	top, err := strictObject(json.RawMessage(content), []string{"entries"})
+	if err != nil {
 		return nil, err
 	}
-	if decoder.More() {
-		return nil, fmt.Errorf("trailing data after the entries object")
+	rawEntries, err := strictArray(top["entries"], "entries")
+	if err != nil {
+		return nil, err
 	}
-	if out.Entries == nil {
-		return nil, fmt.Errorf("entries array is missing")
-	}
-	entries := make([]Entry, 0, len(*out.Entries))
-	for i, raw := range *out.Entries {
-		if !slices.Contains(entryTypes, raw.Type) {
+	entryKeys := []string{"type", "title", "body", "entities"}
+	entries := make([]Entry, 0, len(rawEntries))
+	for i, rawEntry := range rawEntries {
+		fields, err := strictObject(rawEntry, entryKeys)
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		var entry Entry
+		if entry.Type, err = strictString(fields["type"], "type"); err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		if !slices.Contains(entryTypes, entry.Type) {
 			return nil, fmt.Errorf(
 				"entry %d: type %q is not one of %s",
-				i, raw.Type, strings.Join(entryTypes, ", "),
+				i, entry.Type, strings.Join(entryTypes, ", "),
 			)
 		}
-		if strings.TrimSpace(raw.Title) == "" {
+		if entry.Title, err = strictString(fields["title"], "title"); err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		if strings.TrimSpace(entry.Title) == "" {
 			return nil, fmt.Errorf("entry %d: title is blank", i)
 		}
-		if strings.TrimSpace(raw.Body) == "" {
+		if entry.Body, err = strictString(fields["body"], "body"); err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		if strings.TrimSpace(entry.Body) == "" {
 			return nil, fmt.Errorf("entry %d: body is blank", i)
 		}
-		if raw.Entities == nil {
-			return nil, fmt.Errorf("entry %d: entities array is missing", i)
+		rawEntities, err := strictArray(fields["entities"], "entities")
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
 		}
-		entries = append(entries, Entry{
-			Type:     raw.Type,
-			Title:    raw.Title,
-			Body:     raw.Body,
-			Entities: *raw.Entities,
-		})
+		entry.Entities = make([]string, 0, len(rawEntities))
+		for j, rawEntity := range rawEntities {
+			entity, err := strictString(rawEntity, "entity")
+			if err != nil {
+				return nil, fmt.Errorf("entry %d, entity %d: %w", i, j, err)
+			}
+			entry.Entities = append(entry.Entities, entity)
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// strictObject unmarshals data as a JSON object holding exactly the given
+// keys, matched case-sensitively. json.Unmarshal already rejects trailing
+// data after the value.
+func strictObject(
+	data json.RawMessage, keys []string,
+) (map[string]json.RawMessage, error) {
+	if isJSONNull(data) {
+		return nil, fmt.Errorf("expected an object, got null")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if _, ok := object[key]; !ok {
+			return nil, fmt.Errorf("required key %q is missing", key)
+		}
+	}
+	for key := range object {
+		if !slices.Contains(keys, key) {
+			return nil, fmt.Errorf("unknown key %q", key)
+		}
+	}
+	return object, nil
+}
+
+func strictArray(
+	data json.RawMessage, name string,
+) ([]json.RawMessage, error) {
+	if isJSONNull(data) {
+		return nil, fmt.Errorf("%s must be an array, got null", name)
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("%s must be an array: %w", name, err)
+	}
+	return list, nil
+}
+
+func strictString(data json.RawMessage, name string) (string, error) {
+	if isJSONNull(data) {
+		return "", fmt.Errorf("%s must be a string, got null", name)
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string: %w", name, err)
+	}
+	return value, nil
+}
+
+// isJSONNull matters because json.Unmarshal treats null as a no-op for
+// maps, slices, and strings instead of reporting a type mismatch.
+func isJSONNull(data json.RawMessage) bool {
+	return string(bytes.TrimSpace(data)) == "null"
 }
 
 // isTransientStatus reports whether an HTTP status is worth retrying:
