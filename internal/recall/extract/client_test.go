@@ -430,6 +430,64 @@ func TestClientEmptyContentIsError(t *testing.T) {
 	}
 }
 
+func TestClientRejectsSchemaViolatingContent(t *testing.T) {
+	// Constrained decoding is requested, but not every server enforces it;
+	// content that violates the schema must fail the unit instead of
+	// advancing progress with silently lost or malformed entries. At
+	// temperature zero the violation is deterministic, so no retry.
+	cases := map[string]string{
+		"empty object":     `{}`,
+		"null":             `null`,
+		"top-level array":  `[]`,
+		"unknown type":     `{"entries":[{"type":"story","title":"t","body":"b","entities":[]}]}`,
+		"blank title":      `{"entries":[{"type":"fact","title":" ","body":"b","entities":[]}]}`,
+		"blank body":       `{"entries":[{"type":"fact","title":"t","body":"","entities":[]}]}`,
+		"missing entities": `{"entries":[{"type":"fact","title":"t","body":"b"}]}`,
+		"unknown field":    `{"entries":[{"type":"fact","title":"t","body":"b","entities":[],"extra":1}]}`,
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{
+				{finishReason: "stop", content: content},
+			}, &requests)
+			defer server.Close()
+
+			entries, _, err := testClient(server.URL).DistillWithRecovery(
+				context.Background(), "p", "text", 3,
+			)
+			if err == nil {
+				t.Fatalf("content %q must be rejected, got entries %+v",
+					content, entries)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("requests = %d, want 1 (schema violations are "+
+					"deterministic)", len(requests))
+			}
+		})
+	}
+}
+
+func TestClientAcceptsEmptyEntriesArray(t *testing.T) {
+	// A unit can legitimately yield nothing; an explicit empty array is
+	// schema-valid and distinct from a response that lacks the array.
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: "stop", content: `{"entries":[]}`},
+	}, &requests)
+	defer server.Close()
+
+	entries, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err != nil {
+		t.Fatalf("DistillWithRecovery: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %+v, want none", entries)
+	}
+}
+
 func TestSplitFloorChars(t *testing.T) {
 	if got := SplitFloorChars(50000); got != 2000 {
 		t.Fatalf("SplitFloorChars(50000) = %d, want 2000", got)

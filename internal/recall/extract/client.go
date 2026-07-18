@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -89,6 +90,12 @@ type Usage struct {
 	CompletionTokens int `json:"completion_tokens"`
 }
 
+// entryTypes is the closed set of entry kinds, shared by the request
+// schema and the client-side validation of what actually came back.
+var entryTypes = []string{
+	"fact", "decision", "procedure", "warning", "preference", "open_question",
+}
+
 // entrySchema constrains decoding so the model can only produce parseable
 // entries; validation failures become server-side sampling constraints
 // instead of client-side parse errors.
@@ -102,10 +109,7 @@ var entrySchema = map[string]any{
 				"properties": map[string]any{
 					"type": map[string]any{
 						"type": "string",
-						"enum": []string{
-							"fact", "decision", "procedure",
-							"warning", "preference", "open_question",
-						},
+						"enum": entryTypes,
 					},
 					"title": map[string]any{"type": "string"},
 					"body":  map[string]any{"type": "string"},
@@ -371,13 +375,68 @@ func (c *Client) distill(
 				"request shape",
 		)
 	}
+	entries, err := parseEntries(choice.Message.Content)
+	if err != nil {
+		// The server was asked for constrained decoding, so a violation
+		// means it did not enforce the schema; at temperature zero that is
+		// deterministic and not worth retrying.
+		return nil, parsed.Usage, fmt.Errorf(
+			"distilled content violates the response schema (does the "+
+				"server enforce json_schema?): %w", err,
+		)
+	}
+	return entries, parsed.Usage, nil
+}
+
+// parseEntries decodes and validates distilled content against the same
+// constraints entrySchema requests: an entries array must be present,
+// unknown fields are rejected, and every entry needs a known type, a
+// non-blank title and body, and an entities array.
+func parseEntries(content string) ([]Entry, error) {
+	decoder := json.NewDecoder(strings.NewReader(content))
+	decoder.DisallowUnknownFields()
 	var out struct {
-		Entries []Entry `json:"entries"`
+		Entries *[]struct {
+			Type     string    `json:"type"`
+			Title    string    `json:"title"`
+			Body     string    `json:"body"`
+			Entities *[]string `json:"entities"`
+		} `json:"entries"`
 	}
-	if err := json.Unmarshal([]byte(choice.Message.Content), &out); err != nil {
-		return nil, parsed.Usage, fmt.Errorf("parsing distilled entries: %w", err)
+	if err := decoder.Decode(&out); err != nil {
+		return nil, err
 	}
-	return out.Entries, parsed.Usage, nil
+	if decoder.More() {
+		return nil, fmt.Errorf("trailing data after the entries object")
+	}
+	if out.Entries == nil {
+		return nil, fmt.Errorf("entries array is missing")
+	}
+	entries := make([]Entry, 0, len(*out.Entries))
+	for i, raw := range *out.Entries {
+		if !slices.Contains(entryTypes, raw.Type) {
+			return nil, fmt.Errorf(
+				"entry %d: type %q is not one of %s",
+				i, raw.Type, strings.Join(entryTypes, ", "),
+			)
+		}
+		if strings.TrimSpace(raw.Title) == "" {
+			return nil, fmt.Errorf("entry %d: title is blank", i)
+		}
+		if strings.TrimSpace(raw.Body) == "" {
+			return nil, fmt.Errorf("entry %d: body is blank", i)
+		}
+		if raw.Entities == nil {
+			return nil, fmt.Errorf("entry %d: entities array is missing", i)
+		}
+		entries = append(entries, Entry{
+			Type:     raw.Type,
+			Title:    raw.Title,
+			Body:     raw.Body,
+			Entities: *raw.Entities,
+		})
+	}
+	return entries, nil
 }
 
 // isTransientStatus reports whether an HTTP status is worth retrying:
