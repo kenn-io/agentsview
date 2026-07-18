@@ -17,6 +17,7 @@ import {
   AnalyticsService,
   CancelablePromise,
 } from "../../api/generated/index.js";
+import type { SignalsAnalyticsResponse } from "../../api/types.js";
 // @ts-ignore
 import InsightsPage from "./InsightsPage.svelte";
 import source from "./InsightsPage.svelte?raw";
@@ -106,6 +107,7 @@ const mocks = vi.hoisted(() => ({
   loadAgents: vi.fn(),
   loadInsights: vi.fn(),
   loadProjects: vi.fn(),
+  navigateToSession: vi.fn(),
   watchEvents: vi.fn(() => ({ close() {} })),
 }));
 
@@ -195,6 +197,7 @@ vi.mock("../../stores/sessions.svelte.js", () => ({
     projects: [],
     loadAgents: mocks.loadAgents,
     loadProjects: mocks.loadProjects,
+    navigateToSession: mocks.navigateToSession,
   },
 }));
 
@@ -280,6 +283,58 @@ async function selectCustomRange(fromLabel: string, toLabel: string) {
   to!.click();
   await flushEffects();
 }
+
+const signalsFixture: SignalsAnalyticsResponse = {
+  scored_sessions: 2,
+  unscored_sessions: 0,
+  grade_distribution: { A: 1, B: 1 },
+  avg_health_score: 85,
+  outcome_distribution: { completed: 2 },
+  outcome_confidence_distribution: { high: 2 },
+  tool_health: {
+    total_failure_signals: 1,
+    total_retries: 0,
+    total_edit_churn: 0,
+    sessions_with_failures: 1,
+    failure_rate: 50,
+  },
+  context_health: {
+    avg_compaction_count: 0,
+    sessions_with_compaction: 0,
+    mid_task_compaction_count: 0,
+    sessions_with_mid_task_compaction: 0,
+    sessions_with_context_data: 2,
+    avg_context_pressure: 0.2,
+    high_pressure_sessions: 0,
+  },
+  quality_health: {
+    computed_sessions: 2,
+    totals: {
+      short_prompt_count: 2,
+      unstructured_start: 0,
+      missing_success_criteria_count: 0,
+      missing_verification_count: 0,
+      duplicate_prompt_count: 0,
+      no_code_context_count: 0,
+      runaway_tool_loop_count: 0,
+      frustration_marker_count: 0,
+    },
+    sessions_with_signal: {
+      short_prompt_count: 2,
+      unstructured_start: 0,
+      missing_success_criteria_count: 0,
+      missing_verification_count: 0,
+      duplicate_prompt_count: 0,
+      no_code_context_count: 0,
+      runaway_tool_loop_count: 0,
+      frustration_marker_count: 0,
+    },
+  },
+  trend: [],
+  by_agent: [],
+  by_project: [],
+  calibration: {},
+};
 
 describe("InsightsPage date yoke integration", () => {
   let component: ReturnType<typeof mount> | undefined;
@@ -591,6 +646,103 @@ describe("InsightsPage date yoke integration", () => {
       isPinned: true,
       from: "2026-06-01",
       to: "2026-06-07",
+    });
+  });
+});
+
+describe("InsightsPage evidence navigation", () => {
+  let component: ReturnType<typeof mount> | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    analytics.signals = signalsFixture;
+    analytics.loading.signals = false;
+    analytics.errors.signals = null;
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+  });
+
+  afterEach(() => {
+    if (component) {
+      unmount(component);
+      component = undefined;
+    }
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+    analytics.signals = null;
+    analytics.loading.signals = false;
+    analytics.errors.signals = null;
+    window.history.replaceState(null, "", "/");
+    router.route = "sessions";
+    router.params = {};
+  });
+
+  it("navigates with the clicked example's session and message ordinal", async () => {
+    vi.spyOn(
+      AnalyticsService,
+      "getApiV1AnalyticsSignalSessions",
+    ).mockResolvedValue({
+      signal: "short_prompt_count",
+      sessions: [
+        {
+          session_id: "first-session",
+          project: "alpha",
+          agent: "codex",
+          date: "2026-07-10",
+          is_automated: false,
+          outcome: "completed",
+          health_score: 90,
+          health_grade: "A",
+          signal_total: 1,
+          reason_code: "short_prompt",
+          excerpt: "First example",
+          message_ordinal: 7,
+          failure_signals: 0,
+          retries: 0,
+          edit_churn: 0,
+        },
+        {
+          session_id: "second-session",
+          project: "beta",
+          agent: "claude",
+          date: "2026-07-09",
+          is_automated: false,
+          outcome: "errored",
+          health_score: 55,
+          health_grade: "D",
+          signal_total: 2,
+          reason_code: "short_prompt",
+          excerpt: "Second example",
+          message_ordinal: 23,
+          failure_signals: 2,
+          retries: 1,
+          edit_churn: 1,
+        },
+      ],
+    });
+    const scrollToOrdinal = vi.spyOn(ui, "scrollToOrdinal");
+    const routeToSession = vi
+      .spyOn(router, "navigateToSession")
+      .mockImplementation(() => {});
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>(".driver-row")!.click();
+    await flushEffects();
+
+    const evidenceLinks = document.querySelectorAll<HTMLAnchorElement>(
+      "a.evidence-row",
+    );
+    expect(evidenceLinks).toHaveLength(2);
+    evidenceLinks[1]!.click();
+    await flushEffects();
+
+    expect(scrollToOrdinal).toHaveBeenCalledWith(23, "second-session");
+    expect(mocks.navigateToSession).toHaveBeenCalledWith("second-session");
+    expect(routeToSession).toHaveBeenCalledWith("second-session", {
+      msg: "23",
     });
   });
 });

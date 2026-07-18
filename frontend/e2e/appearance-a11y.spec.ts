@@ -57,6 +57,126 @@ function expectReadableContrast(colors: {
 }
 
 test.describe("Appearance accessibility", () => {
+  test("keeps Insights semantic wrappers as rendered layout boxes", async ({
+    page,
+  }) => {
+    let failSignals = false;
+    await page.route("**/api/v1/analytics/signals*", (route) => {
+      if (failSignals) {
+        return route.fulfill({ status: 500, body: "request failed" });
+      }
+      return route.fulfill({
+        json: {
+          scored_sessions: 2,
+          unscored_sessions: 0,
+          grade_distribution: { A: 1, B: 1 },
+          avg_health_score: 85,
+          outcome_distribution: { completed: 2 },
+          outcome_confidence_distribution: { high: 2 },
+          tool_health: {
+            total_failure_signals: 1,
+            total_retries: 0,
+            total_edit_churn: 0,
+            sessions_with_failures: 1,
+            failure_rate: 50,
+          },
+          context_health: {
+            avg_compaction_count: 0,
+            sessions_with_compaction: 0,
+            mid_task_compaction_count: 0,
+            sessions_with_mid_task_compaction: 0,
+            sessions_with_context_data: 2,
+            avg_context_pressure: 0.2,
+            high_pressure_sessions: 0,
+          },
+          quality_health: {
+            computed_sessions: 2,
+            totals: {
+              short_prompt_count: 2,
+              unstructured_start: 1,
+              missing_success_criteria_count: 0,
+              missing_verification_count: 0,
+              duplicate_prompt_count: 0,
+              no_code_context_count: 0,
+              runaway_tool_loop_count: 0,
+              frustration_marker_count: 0,
+            },
+            sessions_with_signal: {
+              short_prompt_count: 2,
+              unstructured_start: 1,
+              missing_success_criteria_count: 0,
+              missing_verification_count: 0,
+              duplicate_prompt_count: 0,
+              no_code_context_count: 0,
+              runaway_tool_loop_count: 0,
+              frustration_marker_count: 0,
+            },
+          },
+          trend: [],
+          by_agent: [],
+          by_project: [],
+          calibration: {},
+        },
+      });
+    });
+    await page.route("**/api/v1/analytics/signal-sessions*", (route) =>
+      route.fulfill({
+        json: {
+          signal: "short_prompt_count",
+          sessions: [
+            {
+              session_id: "example-session",
+              project: "agentsview",
+              agent: "codex",
+              date: "2026-07-10",
+              is_automated: false,
+              outcome: "completed",
+              health_score: 90,
+              health_grade: "A",
+              signal_total: 1,
+              reason_code: "short_prompt",
+              excerpt: "Example evidence",
+              message_ordinal: 7,
+              failure_signals: 0,
+              retries: 0,
+              edit_churn: 0,
+            },
+          ],
+        },
+      }),
+    );
+
+    await page.goto("/insights");
+    await expect(
+      page.getByRole("heading", { name: "Quality Patterns" }),
+    ).toBeVisible();
+    await page.locator(".driver-row").first().click();
+    await expect(page.locator(".evidence-panel-live")).toBeVisible();
+
+    const contentDisplays = await page.evaluate(() => {
+      const display = (selector: string) =>
+        getComputedStyle(document.querySelector(selector)!).display;
+      return {
+        recommendation: display(".recommendation-content"),
+        summary: display(".summary-card-content"),
+        pattern: display(".pattern-card-content"),
+        evidence: display(".evidence-panel-live"),
+      };
+    });
+    expect(contentDisplays).toEqual({
+      recommendation: "grid",
+      summary: "flex",
+      pattern: "flex",
+      evidence: "grid",
+    });
+
+    failSignals = true;
+    await page.reload();
+    const alert = page.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveCSS("display", "grid");
+  });
+
   test("text size scales the UI on web without horizontal overflow", async ({
     page,
   }) => {
