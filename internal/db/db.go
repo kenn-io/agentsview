@@ -1979,6 +1979,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"project_identity_observations", "remote_candidate_count",
 			"ALTER TABLE project_identity_observations ADD COLUMN remote_candidate_count INTEGER NOT NULL DEFAULT 0",
 		},
+		{
+			"sessions", "sync_marker",
+			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
+		},
 	}
 }
 
@@ -2079,6 +2083,12 @@ func (db *DB) migrateColumns() error {
 	defer db.mu.Unlock()
 	w := db.getWriter()
 	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
+		return err
+	}
+	if _, err := w.Exec(syncMarkerSchemaSQL); err != nil {
+		return fmt.Errorf("creating sync_marker index and triggers: %w", err)
+	}
+	if err := backfillSyncMarkerLocked(w); err != nil {
 		return err
 	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
@@ -2240,6 +2250,75 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
+	}
+	return nil
+}
+
+// syncMarkerSchemaSQL creates the sync_marker index and the triggers that
+// keep it equal to the max of created_at, local_modified_at, ended_at,
+// started_at, and file_mtime (the SQL twin of localSessionSyncMarker in
+// internal/duckdb/sync.go), normalized to ms-precision UTC text.
+// MAX(a,b,...) returns NULL if any argument is NULL, hence the COALESCEs.
+// AFTER UPDATE OF only fires on the five source columns, and the trigger
+// body writes only sync_marker, so it cannot recurse.
+//
+// This lives here rather than in schema.sql because schema.sql runs
+// unconditionally on every Open() (via db.init) before
+// applySchemaColumnMigrations has a chance to add sync_marker to a
+// pre-existing sessions table, and a trigger body referencing a column that
+// doesn't exist yet fails to create. Running it here, right after the
+// column migration, guarantees the column is present first.
+const syncMarkerSchemaSQL = `
+CREATE INDEX IF NOT EXISTS idx_sessions_sync_marker ON sessions(sync_marker);
+
+DROP TRIGGER IF EXISTS trg_sessions_sync_marker_insert;
+CREATE TRIGGER trg_sessions_sync_marker_insert
+AFTER INSERT ON sessions
+BEGIN
+    UPDATE sessions SET sync_marker = MAX(
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.file_mtime / 1000000000.0, 'unixepoch'), '')
+    ) WHERE id = NEW.id;
+END;
+
+DROP TRIGGER IF EXISTS trg_sessions_sync_marker_update;
+CREATE TRIGGER trg_sessions_sync_marker_update
+AFTER UPDATE OF created_at, local_modified_at, ended_at, started_at, file_mtime ON sessions
+BEGIN
+    UPDATE sessions SET sync_marker = MAX(
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.file_mtime / 1000000000.0, 'unixepoch'), '')
+    ) WHERE id = NEW.id;
+END;
+`
+
+// backfillSyncMarkerSQL computes sync_marker for rows written before
+// the column existed. It is the SQL twin of the trigger bodies above
+// and of localSessionSyncMarker in internal/duckdb/sync.go: the max of
+// created_at, local_modified_at, ended_at, started_at, and file_mtime,
+// normalized to ms-precision UTC text. The WHERE clause makes it idempotent
+// and cheap once every row has a marker.
+const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(local_modified_at, '')), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(ended_at, '')), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(started_at, '')), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', file_mtime / 1000000000.0, 'unixepoch'), '')
+) WHERE sync_marker IS NULL`
+
+// backfillSyncMarkerLocked seeds sync_marker for sessions rows that predate
+// the column (or the trigger-maintenance introduced by this migration). Safe
+// to run on every startup: the WHERE sync_marker IS NULL clause makes it a
+// no-op once the archive is caught up.
+func backfillSyncMarkerLocked(w *writerHandle) error {
+	if _, err := w.Exec(backfillSyncMarkerSQL); err != nil {
+		return fmt.Errorf("backfilling sync_marker: %w", err)
 	}
 	return nil
 }

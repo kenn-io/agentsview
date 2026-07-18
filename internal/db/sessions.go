@@ -3250,6 +3250,126 @@ func (db *DB) ListSessionsModifiedBetween(
 	return sessions, rows.Err()
 }
 
+// ListSessionsForMirrorWindow returns sessions whose sync_marker lies in
+// [since, until], both bounds inclusive. Empty bounds are unbounded. The
+// marker is the trigger-maintained max of the four sync signals, so
+// "marker >= since" is equivalent to "any signal >= since" and
+// "marker <= until" to "all signals <= until". Inclusive selection is
+// required for mirror pushes: a boundary-equal update must be re-selected
+// (the caller dedupes with fingerprints).
+func (db *DB) ListSessionsForMirrorWindow(
+	ctx context.Context, since, until string,
+	projects, excludeProjects []string,
+) ([]Session, error) {
+	query := "SELECT " + sessionFullCols + " FROM sessions"
+	var (
+		args  []any
+		where []string
+	)
+	if since != "" {
+		normalized, err := normalizeMirrorWindowBound(since)
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, "sync_marker >= ?")
+		args = append(args, normalized)
+	}
+	if until != "" {
+		normalized, err := normalizeMirrorWindowBound(until)
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, "sync_marker <= ?")
+		args = append(args, normalized)
+	}
+	if len(projects) > 0 {
+		placeholders := make([]string, len(projects))
+		for i, p := range projects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(excludeProjects) > 0 {
+		placeholders := make([]string, len(excludeProjects))
+		for i, p := range excludeProjects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY created_at"
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"listing sessions for mirror window %s to %s: %w",
+			since, until, err,
+		)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		var s Session
+		err := rows.Scan(
+			&s.ID, &s.Project, &s.Machine, &s.Agent,
+			&s.AgentLabel, &s.Entrypoint,
+			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
+			&s.MessageCount, &s.UserMessageCount,
+			&s.ParentSessionID, &s.RelationshipType,
+			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.IsAutomated,
+			&s.ToolFailureSignalCount, &s.ToolRetryCount,
+			&s.EditChurnCount, &s.ConsecutiveFailureMax,
+			&s.Outcome, &s.OutcomeConfidence,
+			&s.EndedWithRole, &s.FinalFailureStreak,
+			&s.SignalsPendingSince,
+			&s.CompactionCount, &s.MidTaskCompactionCount,
+			&s.ContextPressureMax,
+			&s.HealthScore, &s.HealthGrade,
+			&s.HasToolCalls, &s.HasContextData,
+			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.QualitySignalVersion,
+			&s.ShortPromptCount, &s.UnstructuredStart,
+			&s.MissingSuccessCriteriaCount,
+			&s.MissingVerificationCount, &s.DuplicatePromptCount,
+			&s.NoCodeContextCount, &s.RunawayToolLoopCount,
+			&s.DataVersion,
+			&s.Cwd, &s.GitBranch,
+			&s.SourceSessionID, &s.SourceVersion,
+			&s.TranscriptFidelity,
+			&s.ParserMalformedLines, &s.IsTruncated,
+			&s.LastWriteIncremental,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
+			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
+			&s.FileInode, &s.FileDevice,
+			&s.FileHash, &s.LocalModifiedAt,
+			&s.TranscriptRevision, &s.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+// normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
+// as ms-precision UTC text matching the sync_marker column format, so the
+// bound compares correctly against trigger-maintained markers.
+func normalizeMirrorWindowBound(bound string) (string, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, bound)
+	if err != nil {
+		return "", fmt.Errorf("parsing mirror window bound %q: %w", bound, err)
+	}
+	return parsed.UTC().Format("2006-01-02T15:04:05.000Z"), nil
+}
+
 // SessionProjectsByIDs returns each session's current project keyed by session
 // ID. IDs with no sessions row are absent from the result, so a caller can tell
 // "unknown session" (missing key) from "empty project" (present, empty value).

@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     termination_status TEXT,
     secret_leak_count INTEGER NOT NULL DEFAULT 0,
-    secrets_rules_version TEXT NOT NULL DEFAULT ''
+    secrets_rules_version TEXT NOT NULL DEFAULT '',
+    sync_marker TEXT
 );
 
 -- Messages table with ordinal for efficient range queries
@@ -745,6 +746,13 @@ AFTER INSERT ON sessions BEGIN
         NEW.git_branch, 'unknown', strftime('%Y-%m-%dT%H:%M:%fZ','now')
     ) ON CONFLICT(session_id) DO NOTHING;
 END;
+
+-- sync_marker's index and trigger-maintenance DDL live in
+-- syncMarkerSchemaSQL (internal/db/db.go), executed post-migration in
+-- migrateColumns rather than here. schema.sql runs unconditionally on every
+-- Open() before schemaColumnMigrations adds columns to legacy archives, so a
+-- trigger body referencing sync_marker here would fail to create against a
+-- pre-migration sessions table that doesn't have the column yet.
 
 -- PG sync state: stores watermarks for push sync
 CREATE TABLE IF NOT EXISTS pg_sync_state (
