@@ -677,6 +677,7 @@ agentsview session usage <id> [--format json]
 | `has_token_data`      | `false` when the session has no per-message token usage              |
 | `cost_usd`            | Reported session cost when available, otherwise a model-pricing estimate; `0` when `has_cost` is `false` |
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
+| `ai_credits`          | Omitted unless the priced agent uses AI Credits; derived from `cost_usd` at 100 credits per dollar |
 | `models`              | Models that contributed to the cost estimate, sorted by model name      |
 | `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing |
 | `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
@@ -709,7 +710,8 @@ Cost:          ~$2.41 (claude-opus-4-7)
 The leading `~` on the cost line marks the figure as a
 model-pricing estimate. When some contributing models are
 unpriced, the cost line reads `n/a (unpriced: model-x)`; when
-the session has no token data at all, it reads `n/a`.
+the session has no token data at all, it reads `n/a`. Priced
+Copilot-family sessions add an `AI Credits` line after the cost.
 
 **HTTP endpoint** — as of 0.32.0, the same data is available
 over REST:

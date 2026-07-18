@@ -2659,6 +2659,7 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.InDelta(t, reportedCost, usage.CostUSD, 1e-12)
+	assert.InDelta(t, reportedCost/0.01, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
 	assert.InDelta(t, 0.0175, usage.Breakdown[1].CostUSD, 1e-12)
 
