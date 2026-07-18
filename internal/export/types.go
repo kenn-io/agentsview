@@ -5,7 +5,7 @@ package export
 
 import "time"
 
-const UsageDailySchemaVersion = 3
+const UsageDailySchemaVersion = 2
 const ActivityReportSchemaVersion = 2
 const SessionSummarySchemaVersion = 2
 
