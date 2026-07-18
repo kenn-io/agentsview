@@ -118,9 +118,12 @@ const linkedDates = getByRole("switch", {
 expect(linkedDates.checked).toBe(false);
 
 const normalize = document.querySelector<HTMLInputElement>(
-  'input[role="switch"][aria-label="Normalize by number of messages"]',
+  'input[role="switch"]',
 );
 expect(normalize).not.toBeNull();
+expect(normalize?.closest("label")?.textContent).toContain(
+  "Normalize by number of messages",
+);
 ```
 
 Both assertions are expected to fail against the current native checkbox markup
