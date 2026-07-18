@@ -2890,13 +2890,23 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
 	}}))
 	root := syncSession("duck-rollup-root", "alpha", "root", "2026-01-10T00:00:00.000Z", 1)
+	continuation := syncSession("duck-rollup-continuation", "alpha", "continuation", "2026-01-10T00:30:00.000Z", 0)
 	child := syncSession("duck-rollup-child", "alpha", "child", "2026-01-10T01:00:00.000Z", 1)
 	parentID := root.ID
-	child.ParentSessionID = &parentID
+	continuationParentID := continuation.ID
+	continuation.ParentSessionID = &parentID
+	continuation.RelationshipType = "continuation"
+	child.ParentSessionID = &continuationParentID
 	child.RelationshipType = "subagent"
+	rootMessage := syncMessage(root.ID, 0, "assistant", "root", *root.StartedAt)
+	childMessage := syncMessage(child.ID, 0, "assistant", "child", *child.StartedAt)
+	childUnique := syncMessage(child.ID, 1, "assistant", "child unique", "2026-01-10T01:05:00.000Z")
+	rootMessage.ClaudeMessageID, rootMessage.ClaudeRequestID = "duck-rollup-shared", "duck-rollup-request"
+	childMessage.ClaudeMessageID, childMessage.ClaudeRequestID = "duck-rollup-shared", "duck-rollup-request"
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
-		{Session: root, Messages: []db.Message{syncMessage(root.ID, 0, "assistant", "root", *root.StartedAt)}, DataVersion: 1, ReplaceMessages: true},
-		{Session: child, Messages: []db.Message{syncMessage(child.ID, 0, "assistant", "child", *child.StartedAt)}, DataVersion: 1, ReplaceMessages: true},
+		{Session: root, Messages: []db.Message{rootMessage}, DataVersion: 1, ReplaceMessages: true},
+		{Session: continuation, DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{childMessage, childUnique}, DataVersion: 1, ReplaceMessages: true},
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})

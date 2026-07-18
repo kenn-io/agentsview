@@ -3,8 +3,13 @@ package service
 import (
 	"context"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+type sessionUsageRowsProvider interface {
+	GetSessionUsageRows(context.Context, []string) ([]activity.UsageRow, error)
+}
 
 // SessionUsageRollup combines a root session's usage with explicit subagent
 // descendants. SubagentCount includes descendants without usage rows.
@@ -28,23 +33,7 @@ func GetSessionUsageRollup(
 	out := &SessionUsageRollup{Usage: root}
 	visited := map[string]struct{}{rootID: {}}
 	queue := []string{rootID}
-	subagentContributing := false
-	allPriced := true
-	totalCostUSD := 0.0
-	addUsage := func(usage *db.SessionUsage, isSubagent bool) {
-		if usage.BreakdownCount == 0 {
-			return
-		}
-		if isSubagent {
-			subagentContributing = true
-		}
-		if usage.HasCost {
-			totalCostUSD += usage.CostUSD
-		} else {
-			allPriced = false
-		}
-	}
-	addUsage(root, false)
+	usageIDs := []string{rootID}
 
 	for len(queue) > 0 {
 		parentID := queue[0]
@@ -58,19 +47,74 @@ func GetSessionUsageRollup(
 				continue
 			}
 			visited[child.ID] = struct{}{}
-			if child.RelationshipType != "subagent" {
-				continue
-			}
-			out.SubagentCount++
-			usage, err := store.GetSessionUsage(ctx, child.ID, false)
-			if err != nil {
-				return nil, err
-			}
-			if usage != nil {
-				addUsage(usage, true)
+			if child.RelationshipType == "subagent" {
+				out.SubagentCount++
+				usageIDs = append(usageIDs, child.ID)
 			}
 			queue = append(queue, child.ID)
 		}
+	}
+	subagentContributing := false
+	allPriced := true
+	totalCostUSD := 0.0
+	if provider, ok := store.(sessionUsageRowsProvider); ok {
+		rows, err := provider.GetSessionUsageRows(ctx, usageIDs)
+		if err != nil {
+			return nil, err
+		}
+		if rows != nil {
+			for _, row := range rows {
+				if !row.Contributes {
+					continue
+				}
+				if row.SessionID != rootID {
+					subagentContributing = true
+				}
+				if !row.Priced {
+					allPriced = false
+					continue
+				}
+				totalCostUSD += row.Cost
+			}
+		} else {
+			if root.BreakdownCount > 0 && !root.HasCost {
+				allPriced = false
+			}
+			for _, id := range usageIDs[1:] {
+				usage, err := store.GetSessionUsage(ctx, id, false)
+				if err != nil {
+					return nil, err
+				}
+				if usage != nil && usage.BreakdownCount > 0 {
+					subagentContributing = true
+					if usage.HasCost {
+						totalCostUSD += usage.CostUSD
+					} else {
+						allPriced = false
+					}
+				}
+			}
+			totalCostUSD += root.CostUSD
+		}
+	} else {
+		if root.BreakdownCount > 0 && !root.HasCost {
+			allPriced = false
+		}
+		for _, id := range usageIDs[1:] {
+			usage, err := store.GetSessionUsage(ctx, id, false)
+			if err != nil {
+				return nil, err
+			}
+			if usage != nil && usage.BreakdownCount > 0 {
+				subagentContributing = true
+				if usage.HasCost {
+					totalCostUSD += usage.CostUSD
+				} else {
+					allPriced = false
+				}
+			}
+		}
+		totalCostUSD += root.CostUSD
 	}
 	out.HasCost = subagentContributing && allPriced
 	if out.HasCost {

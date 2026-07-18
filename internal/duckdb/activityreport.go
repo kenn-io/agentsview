@@ -86,6 +86,19 @@ func (s *Store) GetActivityReport(
 	return report, nil
 }
 
+// GetSessionUsageRows returns the backend-priced usage rows for the supplied
+// sessions, with the same cross-session deduplication as activity reports.
+func (s *Store) GetSessionUsageRows(
+	ctx context.Context, ids []string,
+) ([]activity.UsageRow, error) {
+	end := time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
+	rows, _, err := s.activityReportUsage(ctx, ids,
+		"0001-01-01T00:00:00Z", "9999-12-31T23:59:59Z", activity.Query{
+			RangeStart: time.Time{}, RangeEnd: end, EffectiveEnd: end,
+		})
+	return rows, err
+}
+
 func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
 	set := make(map[string]bool, len(sessions))
 	for _, session := range sessions {
@@ -344,9 +357,11 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, cost := duckActivityReportRowCost(o.scan, rateResolver)
+		_, cost, priced, contributes := duckActivityReportRowStatus(o.scan, rateResolver)
 		row := o.row
 		row.Cost = cost
+		row.Priced = priced
+		row.Contributes = contributes
 		out = append(out, row)
 	}
 	block, err := rateResolver.BuildBlock()
@@ -448,20 +463,33 @@ func duckActivityReportUsageQuery(inClause string) string {
 			AND ts <= CAST(? AS TIMESTAMP)`, inClause, db.MaxPlausibleTokens)
 }
 
-// duckActivityReportRowCost computes one usage row's cost the same way
+// duckActivityReportRowStatus computes one usage row's cost and pricing state the same way
 // GetDailyUsage does: an explicit cost_usd wins, otherwise the per-model
 // rates price the normalized token amounts. Billable amounts equal the
 // normalized amounts when there is no explicit cost (mirroring the
 // billable_* SQL in dailyUsageAggregateRows). It returns the cache
 // savings delta and the cost.
-func duckActivityReportRowCost(
+func duckActivityReportRowStatus(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
-) (savings, cost float64) {
+) (savings, cost float64, priced, contributes bool) {
 	var explicitCost float64
 	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int
 	if r.costUSD != nil {
 		explicitCost = *r.costUSD
+		priced = true
+		contributes = true
+	} else if r.inputTok != 0 || r.outputTok != 0 || r.reasoningTok != 0 ||
+		r.cacheCr != 0 || r.cacheRd != 0 {
+		contributes = true
+		lookup := pricing.Lookup(r.model)
+		priced = lookup.OK
+		billableInput = r.inputTok
+		billableOutput = r.outputTok
+		billableReasoning = r.reasoningTok
+		billableCacheCr = r.cacheCr
+		billableCacheRd = r.cacheRd
 	} else {
+		priced = true
 		billableInput = r.inputTok
 		billableOutput = r.outputTok
 		billableReasoning = r.reasoningTok
@@ -477,7 +505,7 @@ func duckActivityReportRowCost(
 		r.costUSD != nil,
 		pricing,
 	)
-	return savings, cost
+	return savings, cost, priced, contributes
 }
 
 // duckUsageOrdinal extracts a non-negative message ordinal from a

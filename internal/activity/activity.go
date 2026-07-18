@@ -58,6 +58,8 @@ type UsageRow struct {
 	Timestamp       string // ts, RFC3339 or ""
 	OutputTokens    int
 	Cost            float64
+	Priced          bool
+	Contributes     bool
 	Agent           string
 	ClaudeMessageID string
 	ClaudeRequestID string

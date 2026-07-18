@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -16,6 +17,17 @@ type rollupStore struct {
 	children map[string][]db.Session
 	usageErr map[string]error
 	childErr map[string]error
+	rows     []activity.UsageRow
+	rowsErr  error
+}
+
+func (s *rollupStore) GetSessionUsageRows(
+	_ context.Context, _ []string,
+) ([]activity.UsageRow, error) {
+	if s.rows == nil {
+		return nil, nil
+	}
+	return s.rows, s.rowsErr
 }
 
 func (s *rollupStore) GetSessionUsage(
@@ -149,4 +161,48 @@ func TestGetSessionUsageRollupReturnsChildUsageError(t *testing.T) {
 	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
 	require.Nil(t, got)
 	require.EqualError(t, err, "child usage failed")
+}
+
+func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t *testing.T) {
+	store := &rollupStore{
+		usages: map[string]*db.SessionUsage{
+			"root":   {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+			"nested": {SessionID: "nested", HasCost: true, CostUSD: 2, BreakdownCount: 2},
+		},
+		children: map[string][]db.Session{
+			"root":         {{ID: "continuation", RelationshipType: "continuation"}},
+			"continuation": {{ID: "nested", RelationshipType: "subagent"}},
+		},
+		rows: []activity.UsageRow{
+			{SessionID: "root", Cost: 1, Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+			{SessionID: "nested", Cost: 2, Priced: true, Contributes: true, ClaudeMessageID: "unique", ClaudeRequestID: "request"},
+		},
+	}
+
+	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.SubagentCount)
+	require.True(t, got.HasCost)
+	require.Equal(t, 3.0, got.CostUSD)
+}
+
+func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
+	store := &rollupStore{
+		usages: map[string]*db.SessionUsage{
+			"root":   {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+			"nested": {SessionID: "nested", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+		},
+		children: map[string][]db.Session{
+			"root": {{ID: "nested", RelationshipType: "subagent"}},
+		},
+		rows: []activity.UsageRow{
+			{SessionID: "root", Cost: 1, Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+		},
+	}
+
+	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.SubagentCount)
+	require.False(t, got.HasCost)
+	require.Zero(t, got.CostUSD)
 }

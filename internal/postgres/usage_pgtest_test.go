@@ -263,15 +263,17 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 			user_message_count, parent_session_id, relationship_type
 		) VALUES
 			('pg-rollup-root', 'test', 'project', 'codex', '2026-03-12T10:00:00Z', 1, 1, NULL, 'root'),
-			('pg-rollup-child', 'test', 'project', 'codex', '2026-03-12T10:01:00Z', 1, 1, 'pg-rollup-root', 'subagent')`)
+			('pg-rollup-continuation', 'test', 'project', 'codex', '2026-03-12T10:01:00Z', 0, 0, 'pg-rollup-root', 'continuation'),
+			('pg-rollup-child', 'test', 'project', 'codex', '2026-03-12T10:02:00Z', 1, 1, 'pg-rollup-continuation', 'subagent')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp, content_length,
-			model, token_usage
+			model, token_usage, claude_message_id, claude_request_id
 		) VALUES
-			('pg-rollup-root', 0, 'assistant', 'root', '2026-03-12T10:00:00Z', 4, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}'),
-			('pg-rollup-child', 0, 'assistant', 'child', '2026-03-12T10:01:00Z', 5, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}')`)
+			('pg-rollup-root', 0, 'assistant', 'root', '2026-03-12T10:00:00Z', 4, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-shared', 'pg-rollup-request'),
+			('pg-rollup-child', 0, 'assistant', 'child', '2026-03-12T10:02:00Z', 5, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-shared', 'pg-rollup-request'),
+			('pg-rollup-child', 1, 'assistant', 'child unique', '2026-03-12T10:03:00Z', 12, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-unique', 'pg-rollup-unique-request')`)
 	require.NoError(t, err)
 
 	rollup, err := service.GetSessionUsageRollup(ctx, store, "pg-rollup-root", false)

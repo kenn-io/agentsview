@@ -91,6 +91,19 @@ func (db *DB) GetActivityReport(
 	return report, nil
 }
 
+// GetSessionUsageRows returns the backend-priced usage rows for the supplied
+// sessions, with the same cross-session deduplication as activity reports.
+func (db *DB) GetSessionUsageRows(
+	ctx context.Context, ids []string,
+) ([]activity.UsageRow, error) {
+	end := time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
+	rows, _, err := db.activityReportUsage(ctx, ids,
+		"0001-01-01T00:00:00Z", "9999-12-31T23:59:59Z", activity.Query{
+			RangeStart: time.Time{}, RangeEnd: end, EffectiveEnd: end,
+		})
+	return rows, err
+}
+
 func activityReportProjectLabels(
 	sessions []activity.SessionMeta,
 ) []string {
@@ -334,10 +347,13 @@ func (db *DB) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, cost, _ := dailyUsageAmounts(o.scan, rateResolver)
+		_, outputTok, _, _, _, _ := dailyUsageAmounts(o.scan, rateResolver)
+		cost, priced, contributes := sqliteActivityReportRowStatus(o.scan, rateResolver)
 		row := o.row
 		row.OutputTokens = outputTok
 		row.Cost = cost
+		row.Priced = priced
+		row.Contributes = contributes
 		out = append(out, row)
 	}
 	block, err := rateResolver.BuildBlock()
@@ -345,4 +361,38 @@ func (db *DB) activityReportUsage(
 		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
 	return out, &block, nil
+}
+
+func sqliteActivityReportRowStatus(
+	r dailyUsageScanRow, pricing *export.PricingResolver,
+) (cost float64, priced, contributes bool) {
+	var inTok, outTok, crTok, rdTok int
+	reasoningTok := r.reasoningTokens
+	if r.usageSource == "message" {
+		inTok, outTok, crTok, rdTok, reasoningTok =
+			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+	} else {
+		inTok, outTok, crTok, rdTok = usageEventRowTokens(
+			r.usageSource,
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
+	}
+
+	if r.costUSD.Valid {
+		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		return r.costUSD.Float64, true, true
+	}
+	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
+		crTok == 0 && rdTok == 0 {
+		return 0, true, false
+	}
+	lookup := pricing.Lookup(r.model)
+	if !lookup.OK {
+		pricing.RecordComputed(r.model, lookup)
+		return 0, false, true
+	}
+	cost = lookup.Rates.CostForTokens(
+		inTok, outTok, reasoningTok, crTok, rdTok)
+	pricing.RecordComputed(r.model, lookup)
+	return cost, true, true
 }

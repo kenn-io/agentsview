@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -84,6 +85,19 @@ func (s *Store) GetActivityReport(
 	activity.SanitizeProjectLabels(&report, projects)
 	report.Projects = export.ProjectMapForWire(projects)
 	return report, nil
+}
+
+// GetSessionUsageRows returns the backend-priced usage rows for the supplied
+// sessions, with the same cross-session deduplication as activity reports.
+func (s *Store) GetSessionUsageRows(
+	ctx context.Context, ids []string,
+) ([]activity.UsageRow, error) {
+	end := time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
+	rows, _, err := s.activityReportUsage(ctx, ids,
+		"0001-01-01T00:00:00Z", "9999-12-31T23:59:59Z", activity.Query{
+			RangeStart: time.Time{}, RangeEnd: end, EffectiveEnd: end,
+		})
+	return rows, err
 }
 
 func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
@@ -325,10 +339,13 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, cost, _ := pgDailyUsageAmounts(o.scan, rateResolver)
+		_, outputTok, _, _, _, _ := pgDailyUsageAmounts(o.scan, rateResolver)
+		cost, priced, contributes := pgActivityReportRowStatus(o.scan, rateResolver)
 		row := o.row
 		row.OutputTokens = outputTok
 		row.Cost = cost
+		row.Priced = priced
+		row.Contributes = contributes
 		out = append(out, row)
 	}
 	block, err := rateResolver.BuildBlock()
@@ -336,4 +353,42 @@ func (s *Store) activityReportUsage(
 		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
 	return out, &block, nil
+}
+
+func pgActivityReportRowStatus(
+	r pgDailyUsageScanRow, pricing *export.PricingResolver,
+) (cost float64, priced, contributes bool) {
+	var inTok, outTok, crTok, rdTok int
+	reasoningTok := r.reasoningTokens
+	if r.usageSource == "message" {
+		usage := gjson.Parse(r.tokenJSON)
+		inTok = pgTokenJSONCount(usage, "input_tokens")
+		outTok = pgTokenJSONCount(usage, "output_tokens")
+		crTok = pgTokenJSONCount(usage, "cache_creation_input_tokens")
+		rdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
+		reasoningTok = pgTokenJSONCount(usage, "reasoning_tokens")
+	} else {
+		inTok, outTok, crTok, rdTok = pgUsageEventRowTokens(
+			r.usageSource,
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
+	}
+
+	if r.costUSD.Valid {
+		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		return r.costUSD.Float64, true, true
+	}
+	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
+		crTok == 0 && rdTok == 0 {
+		return 0, true, false
+	}
+	lookup := pricing.Lookup(r.model)
+	if !lookup.OK {
+		pricing.RecordComputed(r.model, lookup)
+		return 0, false, true
+	}
+	cost = lookup.Rates.CostForTokens(
+		inTok, outTok, reasoningTok, crTok, rdTok)
+	pricing.RecordComputed(r.model, lookup)
+	return cost, true, true
 }
