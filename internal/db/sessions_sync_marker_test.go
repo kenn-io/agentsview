@@ -86,3 +86,24 @@ func TestListSessionsForMirrorWindowInclusiveBounds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, none)
 }
+
+func TestSyncMarkerMalformedCreatedAtRawFallback(t *testing.T) {
+	database := testDB(t)
+	ctx := context.Background()
+
+	// Insert a session with malformed created_at.
+	sess := Session{ID: "sm-malformed", Project: "p", Machine: "m", Agent: "claude-code"}
+	require.NoError(t, database.UpsertSession(sess))
+
+	// Update created_at to a non-ISO string (all other signals NULL/empty).
+	_, err := database.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET created_at = ? WHERE id = ?`, "garbage", "sm-malformed")
+	require.NoError(t, err)
+
+	// sync_marker should equal the raw created_at string (raw fallback),
+	// matching localSessionSyncMarker's behavior when parsing fails.
+	var marker string
+	require.NoError(t, database.getReader().QueryRowContext(ctx,
+		`SELECT sync_marker FROM sessions WHERE id = ?`, "sm-malformed").Scan(&marker))
+	assert.Equal(t, "garbage", marker)
+}

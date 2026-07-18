@@ -2259,6 +2259,8 @@ func (db *DB) migrateColumns() error {
 // started_at, and file_mtime (the SQL twin of localSessionSyncMarker in
 // internal/duckdb/sync.go), normalized to ms-precision UTC text.
 // MAX(a,b,...) returns NULL if any argument is NULL, hence the COALESCEs.
+// Only created_at falls back to the raw string if parsing fails (matching
+// localSessionSyncMarker's behavior); other fields fall back to ''.
 // AFTER UPDATE OF only fires on the five source columns, and the trigger
 // body writes only sync_marker, so it cannot recurse.
 //
@@ -2276,7 +2278,7 @@ CREATE TRIGGER trg_sessions_sync_marker_insert
 AFTER INSERT ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), NEW.created_at, ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
@@ -2289,7 +2291,7 @@ CREATE TRIGGER trg_sessions_sync_marker_update
 AFTER UPDATE OF created_at, local_modified_at, ended_at, started_at, file_mtime ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), NEW.created_at, ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
@@ -2302,10 +2304,12 @@ END;
 // the column existed. It is the SQL twin of the trigger bodies above
 // and of localSessionSyncMarker in internal/duckdb/sync.go: the max of
 // created_at, local_modified_at, ended_at, started_at, and file_mtime,
-// normalized to ms-precision UTC text. The WHERE clause makes it idempotent
-// and cheap once every row has a marker.
+// normalized to ms-precision UTC text. Only created_at falls back to the
+// raw string if parsing fails (matching localSessionSyncMarker's behavior);
+// other fields fall back to ''. The WHERE clause makes it idempotent and
+// cheap once every row has a marker.
 const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), created_at, ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(local_modified_at, '')), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(ended_at, '')), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(started_at, '')), ''),
