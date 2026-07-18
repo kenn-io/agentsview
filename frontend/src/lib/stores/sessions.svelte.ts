@@ -1296,6 +1296,7 @@ class SessionsStore {
       () => {
         this.load();
         this.refreshActiveChildSessions();
+        this.bumpActiveSessionUsageVersion();
       },
       SAFETY_NET_REFRESH_MS,
     );

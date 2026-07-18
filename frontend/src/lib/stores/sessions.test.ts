@@ -3040,7 +3040,7 @@ describe("SessionsStore live refresh", () => {
       expect(sessions.childSessions.get("child")?.total_output_tokens).toBe(9);
     });
     expect(SessionsService.getApiV1SessionsIdChildren).toHaveBeenCalledTimes(2);
-    expect(sessions.activeSessionUsageVersion).toBe(0);
+    expect(sessions.activeSessionUsageVersion).toBe(1);
 
     detach();
     spy.mockRestore();
