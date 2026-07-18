@@ -411,6 +411,8 @@ func TestIsContextOverflowDetail(t *testing.T) {
 		`invalid input length parameter`,
 		`unknown field "context_size" in request`,
 		`max_tokens must be a positive integer`,
+		`max_tokens exceeds the maximum allowed value`,
+		`max_new_tokens exceeds the model limit`,
 		`model "test-model" not found`,
 	}
 	for _, body := range notOverflow {

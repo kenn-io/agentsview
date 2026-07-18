@@ -538,12 +538,15 @@ func parseRetryAfter(value string) time.Duration {
 
 // isContextOverflowDetail reports whether a 400 body identifies an
 // input-length error. A structured error code is unambiguous; otherwise
-// the message must pair a length subject (context, prompt, input, token)
-// with an overflow term (exceed, too long/large, maximum), so validation
-// errors that merely mention the subject — "context window must be an
-// integer" — do not match. A phrasing this misses fails the unit with the
-// server's message intact, which is recoverable by configuration; the
-// reverse mistake would send the caller splitting units in a useless loop.
+// the message must pair an input-side subject (context, prompt, input)
+// with an overflow term (exceed, too long/large, maximum). Bare "token" is
+// deliberately not a subject: output-budget rejections like "max_tokens
+// exceeds the maximum allowed value" would match it, and splitting the
+// input cannot fix an invalid output limit — while every genuine overflow
+// phrasing also names the prompt, input, or context. A phrasing this
+// misses fails the unit with the server's message intact, which is
+// recoverable by configuration; the reverse mistake would send the caller
+// splitting units in a useless loop.
 func isContextOverflowDetail(body string) bool {
 	lower := strings.ToLower(body)
 	codes := []string{
@@ -555,7 +558,7 @@ func isContextOverflowDetail(body string) bool {
 			return true
 		}
 	}
-	subjects := []string{"context", "prompt", "input", "token"}
+	subjects := []string{"context", "prompt", "input"}
 	overflowTerms := []string{"exceed", "too long", "too large", "maximum"}
 	hasSubject := slices.ContainsFunc(subjects, func(subject string) bool {
 		return strings.Contains(lower, subject)
