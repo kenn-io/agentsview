@@ -2260,7 +2260,8 @@ func (db *DB) migrateColumns() error {
 // internal/duckdb/sync.go), normalized to ms-precision UTC text.
 // MAX(a,b,...) returns NULL if any argument is NULL, hence the COALESCEs.
 // Only created_at falls back to the raw string if parsing fails (matching
-// localSessionSyncMarker's behavior); other fields fall back to ''.
+// localSessionSyncMarker's behavior); other fields fall back to the empty
+// string.
 // AFTER UPDATE OF only fires on the five source columns, and the trigger
 // body writes only sync_marker, so it cannot recurse.
 //
@@ -2306,7 +2307,8 @@ END;
 // created_at, local_modified_at, ended_at, started_at, and file_mtime,
 // normalized to ms-precision UTC text. Only created_at falls back to the
 // raw string if parsing fails (matching localSessionSyncMarker's behavior);
-// other fields fall back to ''. The WHERE clause makes it idempotent and
+// other fields fall back to the empty string. The WHERE clause makes it
+// idempotent and
 // cheap once every row has a marker.
 const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), created_at, ''),
