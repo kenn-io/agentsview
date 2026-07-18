@@ -283,6 +283,39 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	assert.InDelta(t, 0.021, rollup.CostUSD, 1e-9)
 }
 
+func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_session_usage_rollup_untimed_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, message_count,
+			user_message_count, parent_session_id, relationship_type
+		) VALUES
+			('pg-rollup-untimed-root', 'test', 'project', 'codex', '2026-03-12T10:00:00Z', 1, 1, NULL, 'root'),
+			('pg-rollup-untimed-child', 'test', 'project', 'codex', '2026-03-12T10:02:00Z', 1, 1, 'pg-rollup-untimed-root', 'subagent')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage
+		) VALUES
+			('pg-rollup-untimed-root', 0, 'assistant', 'root', NULL, 4, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}'),
+			('pg-rollup-untimed-child', 0, 'assistant', 'child', NULL, 5, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}')`)
+	require.NoError(t, err)
+
+	rollup, err := service.GetSessionUsageRollup(ctx, store, "pg-rollup-untimed-root", false)
+	require.NoError(t, err)
+	require.Equal(t, 1, rollup.SubagentCount)
+	require.True(t, rollup.HasCost)
+	assert.InDelta(t, 0.021, rollup.CostUSD, 1e-9)
+}
+
 func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_source_uuid_test")
 

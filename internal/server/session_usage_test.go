@@ -184,6 +184,71 @@ func TestHandleSessionUsage_RollupTraversesContinuationAndDedupesSharedRows(t *t
 	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
 }
 
+func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "root-rollup-untimed", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+	})
+	te.seedSession(t, "child-rollup-untimed", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+		parent := "root-rollup-untimed"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "root-rollup-untimed", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.Timestamp = ""
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+	te.seedMessages(t, "child-rollup-untimed", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.Timestamp = ""
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+
+	w := te.get(t, "/api/v1/sessions/root-rollup-untimed/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.Equal(t, true, got["has_rollup_cost"])
+	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
+}
+
+func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "z-root-rollup-attribution", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+	})
+	te.seedSession(t, "a-child-rollup-attribution", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+		parent := "z-root-rollup-attribution"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+	for _, id := range []string{"z-root-rollup-attribution", "a-child-rollup-attribution"} {
+		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
+			m.Role, m.Model = "assistant", "gpt-5.1"
+			m.Timestamp = "2026-03-12T10:00:00Z"
+			m.ClaudeMessageID = "shared-rollup-attribution"
+			m.ClaudeRequestID = "shared-rollup-attribution-request"
+			m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		})
+	}
+
+	w := te.get(t, "/api/v1/sessions/z-root-rollup-attribution/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.Equal(t, false, got["has_rollup_cost"])
+	_, hasRollupCost := got["rollup_cost_usd"]
+	assert.False(t, hasRollupCost)
+	assert.InDelta(t, 0.0105, got["cost_usd"], 1e-9)
+}
+
 func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
 	te := setup(t)
 	seedSessionUsagePricing(t, te.db)

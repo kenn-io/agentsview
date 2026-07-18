@@ -79,7 +79,7 @@ test.describe("Navigation", () => {
     }
 
     const fallback = page.locator(
-      '.session-item:not([data-session-id="test-session-mixed-content-7"])',
+      '.session-item:visible:not([data-session-id="test-session-mixed-content-7"])',
     ).first();
     await fallback.click();
     await expect(page.locator(".cost-badge")).toContainText("$1.00");

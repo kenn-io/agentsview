@@ -2922,6 +2922,47 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
 }
 
+func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+	}}))
+	root := syncSession("duck-rollup-untimed-root", "alpha", "root", "2026-01-10T00:00:00.000Z", 1)
+	child := syncSession("duck-rollup-untimed-child", "alpha", "child", "2026-01-10T01:00:00.000Z", 1)
+	parentID := root.ID
+	child.ParentSessionID = &parentID
+	child.RelationshipType = "subagent"
+	rootMessage := syncMessage(root.ID, 0, "assistant", "root", "")
+	childMessage := syncMessage(child.ID, 0, "assistant", "child", "")
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         root,
+			Messages:        []db.Message{rootMessage},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         child,
+			Messages:        []db.Message{childMessage},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	rollup, err := service.GetSessionUsageRollup(
+		ctx, NewStoreFromDB(syncer.DB()), root.ID, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, rollup.SubagentCount)
+	require.True(t, rollup.HasCost)
+	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
+}
+
 // TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks exercises the SQL
 // pushdown path: COUNT(*) aggregation per message timestamp and trend
 // buckets spread across the weeks a skill was actually used.

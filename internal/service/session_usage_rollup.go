@@ -77,48 +77,51 @@ func GetSessionUsageRollup(
 				totalCostUSD += row.Cost
 			}
 		} else {
-			if root.BreakdownCount > 0 && !root.HasCost {
-				allPriced = false
-			}
-			for _, id := range usageIDs[1:] {
-				usage, err := store.GetSessionUsage(ctx, id, false)
-				if err != nil {
-					return nil, err
-				}
-				if usage != nil && usage.BreakdownCount > 0 {
-					subagentContributing = true
-					if usage.HasCost {
-						totalCostUSD += usage.CostUSD
-					} else {
-						allPriced = false
-					}
-				}
-			}
-			totalCostUSD += root.CostUSD
-		}
-	} else {
-		if root.BreakdownCount > 0 && !root.HasCost {
-			allPriced = false
-		}
-		for _, id := range usageIDs[1:] {
-			usage, err := store.GetSessionUsage(ctx, id, false)
+			subagentContributing, totalCostUSD, allPriced, err =
+				sumRollupUsageFallback(ctx, store, root, usageIDs)
 			if err != nil {
 				return nil, err
 			}
-			if usage != nil && usage.BreakdownCount > 0 {
-				subagentContributing = true
-				if usage.HasCost {
-					totalCostUSD += usage.CostUSD
-				} else {
-					allPriced = false
-				}
-			}
 		}
-		totalCostUSD += root.CostUSD
+	} else {
+		subagentContributing, totalCostUSD, allPriced, err =
+			sumRollupUsageFallback(ctx, store, root, usageIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out.HasCost = subagentContributing && allPriced
 	if out.HasCost {
 		out.CostUSD = totalCostUSD
 	}
 	return out, nil
+}
+
+func sumRollupUsageFallback(
+	ctx context.Context,
+	store db.Store,
+	root *db.SessionUsage,
+	usageIDs []string,
+) (subagentContributing bool, totalCostUSD float64, allPriced bool, err error) {
+	allPriced = true
+	if root.BreakdownCount > 0 && !root.HasCost {
+		allPriced = false
+	}
+	for _, id := range usageIDs[1:] {
+		usage, getErr := store.GetSessionUsage(ctx, id, false)
+		if getErr != nil {
+			return false, 0, false, getErr
+		}
+		if usage == nil || usage.BreakdownCount == 0 {
+			continue
+		}
+		subagentContributing = true
+		if usage.HasCost {
+			totalCostUSD += usage.CostUSD
+		} else {
+			allPriced = false
+		}
+	}
+	totalCostUSD += root.CostUSD
+	return subagentContributing, totalCostUSD, allPriced, nil
 }

@@ -89,15 +89,136 @@ func (s *Store) GetActivityReport(
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied
 // sessions, with the same cross-session deduplication as activity reports.
+type pgSessionUsageOrderedRow struct {
+	scan    pgUsageScanRow
+	tsText  string
+	ordinal int64
+}
+
 func (s *Store) GetSessionUsageRows(
 	ctx context.Context, ids []string,
 ) ([]activity.UsageRow, error) {
-	end := time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
-	rows, _, err := s.activityReportUsage(ctx, ids,
-		"0001-01-01T00:00:00Z", "9999-12-31T23:59:59Z", activity.Query{
-			RangeStart: time.Time{}, RangeEnd: end, EffectiveEnd: end,
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	pricing, err := s.loadPricingMap(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading pg pricing: %w", err)
+	}
+	rateResolver := export.NewPricingResolver(pricing)
+	sessionOrder := make(map[string]int, len(ids))
+	for i, id := range ids {
+		sessionOrder[id] = i
+	}
+	var rowsAcc []pgSessionUsageOrderedRow
+	err = pgQueryChunked(ids, func(chunk []string) error {
+		pb := &paramBuilder{}
+		ph := pgInPlaceholders(chunk, pb)
+		query := pgUsageRowSelect() + " AND u.session_id IN " + ph
+		rows, queryErr := s.pg.QueryContext(ctx, query, pb.args...)
+		if queryErr != nil {
+			return fmt.Errorf("querying pg session usage rows: %w", queryErr)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			r, scanErr := scanPGUsageRow(rows)
+			if scanErr != nil {
+				return fmt.Errorf(
+					"scanning pg session usage rows: %w", scanErr)
+			}
+			ordinal := int64(-1)
+			if r.messageOrdinal.Valid {
+				ordinal = r.messageOrdinal.Int64
+			}
+			rowsAcc = append(rowsAcc, pgSessionUsageOrderedRow{
+				scan:    r,
+				tsText:  startedAtString(r.ts),
+				ordinal: ordinal,
+			})
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(rowsAcc, func(i, j int) bool {
+		return pgSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
+	})
+	seen := make(map[pgUsageDedupToken]struct{})
+	out := make([]activity.UsageRow, 0, len(rowsAcc))
+	for _, o := range rowsAcc {
+		r := o.scan
+		if key, ok := pgUsageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		_, outputTok, _, _, _, _ := pgDailyUsageAmounts(
+			pgDailyUsageScanRow{
+				usageSource:              r.usageSource,
+				tokenJSON:                r.tokenJSON,
+				inputTokens:              r.inputTokens,
+				outputTokens:             r.outputTokens,
+				cacheCreationInputTokens: r.cacheCreationInputTokens,
+				cacheReadInputTokens:     r.cacheReadInputTokens,
+				reasoningTokens:          r.reasoningTokens,
+				costUSD:                  r.costUSD,
+				model:                    r.model,
+			},
+			rateResolver,
+		)
+		cost, priced, contributes := pgSessionRowCost(r, rateResolver)
+		out = append(out, activity.UsageRow{
+			SessionID:       r.sessionID,
+			Model:           r.model,
+			Timestamp:       o.tsText,
+			OutputTokens:    outputTok,
+			Cost:            cost,
+			Priced:          priced,
+			Contributes:     contributes,
+			Agent:           r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID,
+			UsageDedupKey:   r.usageDedupKey,
 		})
-	return rows, err
+	}
+	return out, nil
+}
+
+func pgSessionUsageRowLess(
+	a, b pgSessionUsageOrderedRow,
+	sessionOrder map[string]int,
+) bool {
+	if a.scan.ts.Valid && b.scan.ts.Valid {
+		if !a.scan.ts.Time.Equal(b.scan.ts.Time) {
+			return a.scan.ts.Time.Before(b.scan.ts.Time)
+		}
+	} else if a.scan.ts.Valid != b.scan.ts.Valid {
+		return a.scan.ts.Valid
+	}
+	if a.tsText != b.tsText {
+		return a.tsText < b.tsText
+	}
+	if ai, ok := sessionOrder[a.scan.sessionID]; ok {
+		if bi, ok := sessionOrder[b.scan.sessionID]; ok && ai != bi {
+			return ai < bi
+		}
+	}
+	if a.scan.sessionID != b.scan.sessionID {
+		return a.scan.sessionID < b.scan.sessionID
+	}
+	if a.ordinal != b.ordinal {
+		return a.ordinal < b.ordinal
+	}
+	if a.scan.usageSource != b.scan.usageSource {
+		return a.scan.usageSource < b.scan.usageSource
+	}
+	return a.scan.usageDedupKey < b.scan.usageDedupKey
 }
 
 func activityReportProjectLabels(sessions []activity.SessionMeta) []string {

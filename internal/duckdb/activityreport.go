@@ -88,15 +88,194 @@ func (s *Store) GetActivityReport(
 
 // GetSessionUsageRows returns the backend-priced usage rows for the supplied
 // sessions, with the same cross-session deduplication as activity reports.
+type duckSessionUsageOrderedRow struct {
+	scan    duckActivityReportUsageRow
+	ts      time.Time
+	validTS bool
+	ordinal int64
+}
+
 func (s *Store) GetSessionUsageRows(
 	ctx context.Context, ids []string,
 ) ([]activity.UsageRow, error) {
-	end := time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
-	rows, _, err := s.activityReportUsage(ctx, ids,
-		"0001-01-01T00:00:00Z", "9999-12-31T23:59:59Z", activity.Query{
-			RangeStart: time.Time{}, RangeEnd: end, EffectiveEnd: end,
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	pricing, err := s.loadPricing(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading duckdb pricing: %w", err)
+	}
+	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
+	sessionOrder := make(map[string]int, len(ids))
+	for i, id := range ids {
+		sessionOrder[id] = i
+	}
+	args, placeholders := stringInArgs(ids)
+	inClause := strings.Join(placeholders, ",")
+	rawSQL := fmt.Sprintf(`
+		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
+			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
+			m.model AS model, m.token_usage AS token_json,
+			m.claude_message_id AS claude_message_id,
+			m.claude_request_id AS claude_request_id,
+			m.source_uuid AS source_uuid,
+			'' AS usage_dedup_key,
+			0 AS input_tokens, 0 AS output_tokens,
+			0 AS cache_create, 0 AS cache_read,
+			COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
+			NULL AS cost_usd,
+			s.project AS project, s.agent AS agent, s.machine AS machine,
+			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			s.started_at AS started_at,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE %s
+			AND s.id IN (%s)
+		UNION ALL
+		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
+			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
+			ue.model AS model, '' AS token_json,
+			'' AS claude_message_id, '' AS claude_request_id,
+			'' AS source_uuid,
+			CASE
+				WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
+				ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+			END AS usage_dedup_key,
+			ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
+			ue.cache_creation_input_tokens AS cache_create,
+			ue.cache_read_input_tokens AS cache_read,
+			ue.reasoning_tokens AS reasoning_tokens,
+			ue.cost_usd AS cost_usd,
+			s.project AS project, s.agent AS agent, s.machine AS machine,
+			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			s.started_at AS started_at,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
+		FROM usage_events ue
+		JOIN sessions s ON s.id = ue.session_id
+		WHERE %s
+			AND s.id IN (%s)`,
+		duckUsageMessageEligibility, inClause,
+		duckUsageEventEligibility, inClause,
+	)
+	queryArgs := make([]any, 0, len(args)*2)
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, args...)
+	cte, queryArgs := duckUsageCTEFromRaw(db.UsageFilter{}, rawSQL, queryArgs)
+	query := cte + `
+		SELECT session_id, message_ordinal, CAST(ts AS VARCHAR), source, model,
+			agent, claude_message_id, claude_request_id, source_uuid,
+			usage_dedup_key, input_tokens_norm, output_tokens_norm,
+			cache_create_norm, cache_read_norm, reasoning_tokens_norm, cost_usd
+		FROM usage_normalized`
+	rows, err := s.queryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb session usage rows: %w", err)
+	}
+	defer rows.Close()
+	var rowsAcc []duckSessionUsageOrderedRow
+	for rows.Next() {
+		var r duckActivityReportUsageRow
+		if err := rows.Scan(
+			&r.sessionID, &r.messageOrdinal, &r.ts, &r.source, &r.model,
+			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
+			&r.usageDedupKey,
+			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
+			&r.reasoningTok, &r.costUSD,
+		); err != nil {
+			return nil, fmt.Errorf("scanning duckdb session usage rows: %w", err)
+		}
+		ordinal := int64(-1)
+		if o, ok := duckUsageOrdinal(r.messageOrdinal); ok {
+			ordinal = o
+		}
+		parsedTS, ok := parseTimestamp(r.ts)
+		rowsAcc = append(rowsAcc, duckSessionUsageOrderedRow{
+			scan:    r,
+			ts:      parsedTS,
+			validTS: ok,
+			ordinal: ordinal,
 		})
-	return rows, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating duckdb session usage rows: %w", err)
+	}
+	sort.SliceStable(rowsAcc, func(i, j int) bool {
+		return duckSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
+	})
+	seen := make(map[string]struct{})
+	out := make([]activity.UsageRow, 0, len(rowsAcc))
+	for _, o := range rowsAcc {
+		r := o.scan
+		if key, ok := duckSessionUsageDedupKey(r); ok {
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		_, cost, priced, contributes := duckActivityReportRowStatus(r, rateResolver)
+		out = append(out, activity.UsageRow{
+			SessionID:       r.sessionID,
+			Model:           r.model,
+			Timestamp:       r.ts,
+			OutputTokens:    r.outputTok,
+			Cost:            cost,
+			Priced:          priced,
+			Contributes:     contributes,
+			Agent:           r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID,
+			UsageDedupKey:   r.usageDedupKey,
+		})
+	}
+	return out, nil
+}
+
+func duckSessionUsageDedupKey(r duckActivityReportUsageRow) (string, bool) {
+	if r.claudeMessageID != "" && r.claudeRequestID != "" {
+		return "claude:" + r.claudeMessageID + ":" + r.claudeRequestID, true
+	}
+	if r.source == "message" && r.agent != "" && r.sourceUUID != "" {
+		return "source:" + r.agent + ":" + r.sourceUUID, true
+	}
+	if r.usageDedupKey != "" {
+		return "usage:" + r.usageDedupKey, true
+	}
+	return "", false
+}
+
+func duckSessionUsageRowLess(
+	a, b duckSessionUsageOrderedRow,
+	sessionOrder map[string]int,
+) bool {
+	if a.validTS && b.validTS {
+		if !a.ts.Equal(b.ts) {
+			return a.ts.Before(b.ts)
+		}
+	} else if a.validTS != b.validTS {
+		return a.validTS
+	}
+	if a.scan.ts != b.scan.ts {
+		return a.scan.ts < b.scan.ts
+	}
+	if ai, ok := sessionOrder[a.scan.sessionID]; ok {
+		if bi, ok := sessionOrder[b.scan.sessionID]; ok && ai != bi {
+			return ai < bi
+		}
+	}
+	if a.scan.sessionID != b.scan.sessionID {
+		return a.scan.sessionID < b.scan.sessionID
+	}
+	if a.ordinal != b.ordinal {
+		return a.ordinal < b.ordinal
+	}
+	if a.scan.source != b.scan.source {
+		return a.scan.source < b.scan.source
+	}
+	return a.scan.usageDedupKey < b.scan.usageDedupKey
 }
 
 func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
