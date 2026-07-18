@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -143,4 +144,21 @@ func TestTraeUnsupportedKeyNegativeSpace(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.NotContains(t, sources[0].Key, "ignored")
+}
+
+func TestTraeAssistantFallbackVariants(t *testing.T) {
+	assert.Equal(t, "plain text", traeAssistantFallback(json.RawMessage(`"plain text"`)))
+	assert.Equal(t, "text field", traeAssistantFallback(json.RawMessage(`{"text":"text field"}`)))
+	assert.Equal(t, "proposal field", traeAssistantFallback(json.RawMessage(`{"proposal":"proposal field"}`)))
+	assert.Equal(t, "step one\nstep two", traeAssistantFallback(json.RawMessage(`{"guideline":{"planItems":[{"content":"step one"},{"content":"step two"}]}}`)))
+}
+
+func TestTraeTimeUnmarshalVariants(t *testing.T) {
+	var seconds traeTime
+	require.NoError(t, json.Unmarshal([]byte(`1715340600`), &seconds))
+	assert.Equal(t, int64(1715340600000), seconds.UnixMilli())
+
+	var rfc3339 traeTime
+	require.NoError(t, json.Unmarshal([]byte(`"2024-05-10T08:10:00Z"`), &rfc3339))
+	assert.Equal(t, "2024-05-10T08:10:00Z", rfc3339.UTC().Format(time.RFC3339))
 }

@@ -135,27 +135,31 @@ func newSessionExportCommand() *cobra.Command {
 				}
 				return err
 			}
-			if dbPath, sessionID, ok := parser.SplitWindsurfVirtualPath(storedPath); ok {
-				err := parser.WriteWindsurfSessionJSON(
-					cmd.OutOrStdout(), dbPath, sessionID,
-				)
-				if errors.Is(err, os.ErrNotExist) {
-					return fmt.Errorf(
-						"source file not found: %s", dbPath,
+			switch session.Agent {
+			case string(parser.AgentWindsurf):
+				if dbPath, sessionID, ok := parser.SplitWindsurfVirtualPath(storedPath); ok {
+					err := parser.WriteWindsurfSessionJSON(
+						cmd.OutOrStdout(), dbPath, sessionID,
 					)
+					if errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf(
+							"source file not found: %s", dbPath,
+						)
+					}
+					return err
 				}
-				return err
-			}
-			if dbPath, sessionID, ok := parser.SplitTraeVirtualPath(storedPath); ok {
-				err := parser.WriteTraeSessionJSON(
-					cmd.OutOrStdout(), dbPath, sessionID,
-				)
-				if errors.Is(err, os.ErrNotExist) {
-					return fmt.Errorf(
-						"source file not found: %s", dbPath,
+			case string(parser.AgentTrae):
+				if dbPath, sessionID, ok := parser.SplitTraeVirtualPath(storedPath); ok {
+					err := parser.WriteTraeSessionJSON(
+						cmd.OutOrStdout(), dbPath, sessionID,
 					)
+					if errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf(
+							"source file not found: %s", dbPath,
+						)
+					}
+					return err
 				}
-				return err
 			}
 			if session.Agent == string(parser.AgentHermes) &&
 				filepath.Base(parser.ResolveSourceFilePath(storedPath)) == "state.db" {

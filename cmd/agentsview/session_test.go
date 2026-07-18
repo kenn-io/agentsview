@@ -950,6 +950,54 @@ func TestSessionExport_StreamsFromDisk(t *testing.T) {
 	assert.Equal(t, body, out)
 }
 
+func createTraeExportStateDB(t *testing.T, root string) string {
+	t.Helper()
+	dbPath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Exec(`
+		CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);
+		INSERT INTO ItemTable(key, value) VALUES (
+			'memento/icube-ai-agent-storage',
+			'{"list":[{"sessionId":"session-1","messages":[{"role":"user","content":"target trae message"}]}]}'
+		);
+	`)
+	require.NoError(t, err)
+	return dbPath
+}
+
+func TestSessionExportTraeStateDB(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	root := t.TempDir()
+	dbPath := createTraeExportStateDB(t, root)
+	virtualPath := dbPath + "#session-1"
+
+	seedSessionWithOpts(t, dataDir, "trae:session-1", "proj",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentTrae)
+			s.SourceSessionID = "session-1"
+			s.FilePath = &virtualPath
+		})
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "trae:session-1")
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &doc))
+	assert.Equal(t, "session-1", doc["sessionId"])
+	messages, ok := doc["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	first, ok := messages[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "user", first["role"])
+	assert.Equal(t, "target trae message", first["content"])
+}
+
 func createHermesExportStateDB(t *testing.T, root string) string {
 	t.Helper()
 	sessionsDir := filepath.Join(root, "sessions")
