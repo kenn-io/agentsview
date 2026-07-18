@@ -13,7 +13,7 @@
   import { rollingRange } from "../../utils/dates.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
-  import { Spinner } from "@kenn-io/kit-ui";
+  import { Spinner, Toggle } from "@kenn-io/kit-ui";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -189,11 +189,6 @@
     return panelDateState(range.from, range.to, { mode: "fixed" });
   }
 
-  function setNormalized(event: Event) {
-    trends.normalized = (event.currentTarget as HTMLInputElement).checked;
-    writeUrl();
-  }
-
   async function resetTerms() {
     materializeRollingWindow();
     writeUrl();
@@ -329,14 +324,14 @@
             </div>
           {/if}
         </div>
-        <label class="normalize-toggle">
-          <input
-            type="checkbox"
-            bind:checked={trends.normalized}
-            onchange={setNormalized}
-          />
-          <span>{m.trends_normalize()}</span>
-        </label>
+        <Toggle
+          checked={trends.normalized}
+          onchange={(checked) => {
+            trends.normalized = checked;
+            writeUrl();
+          }}
+          label={m.trends_normalize()}
+        />
       </div>
       <TrendsLineChart
         buckets={trends.response?.buckets ?? []}
@@ -423,7 +418,6 @@
   }
 
   button,
-  input,
   textarea {
     font: inherit;
   }
@@ -478,18 +472,11 @@
     font-weight: 600;
   }
 
-  input,
   textarea {
     border: 1px solid var(--border-default);
     border-radius: 6px;
     background: var(--bg-surface);
     color: var(--text-primary);
-  }
-
-  input {
-    height: 32px;
-    padding: 0 8px;
-    font-size: 12px;
   }
 
   .chart-options {
@@ -572,22 +559,6 @@
   .group-item.active {
     color: var(--accent-blue);
     font-weight: 500;
-  }
-
-  .normalize-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .normalize-toggle input {
-    width: 14px;
-    height: 14px;
-    padding: 0;
   }
 
   .content-grid {

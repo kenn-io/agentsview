@@ -23,14 +23,14 @@ afterEach(() => {
 
 describe("DateRangeSettings", () => {
   it("enables date linking and persists the browser preference", async () => {
-    const { getByLabelText } = render(DateRangeSettings);
-    const checkbox = getByLabelText(
-      "Link date ranges across pages",
-    ) as HTMLInputElement;
+    const { getByRole } = render(DateRangeSettings);
+    const linkedDates = getByRole("switch", {
+      name: "Link date ranges across pages",
+    }) as HTMLInputElement;
 
-    expect(checkbox.checked).toBe(false);
+    expect(linkedDates.checked).toBe(false);
 
-    await fireEvent.click(checkbox);
+    await fireEvent.click(linkedDates);
 
     expect(yokedDates.enabled).toBe(true);
     expect(JSON.parse(localStorage.getItem(YOKED_DATES_STORAGE_KEY)!)).toEqual({

@@ -448,6 +448,13 @@ describe("TrendsPage", () => {
     expect(document.body.textContent).toContain(
       "Normalize by number of messages",
     );
+    const normalize = document.querySelector<HTMLInputElement>(
+      'input[role="switch"]',
+    );
+    expect(normalize).not.toBeNull();
+    expect(normalize?.closest("label")?.textContent).toContain(
+      "Normalize by number of messages",
+    );
   });
 
   it("shows a y-axis metric label", async () => {

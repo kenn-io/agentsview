@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Checkbox } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
@@ -262,10 +263,7 @@
           {isRepoDotWorktrees ? m.worktree_project_derived() : m.worktree_project_required()}
         </div>
       </label>
-      <label class="enabled-toggle">
-        <input type="checkbox" bind:checked={enabled} />
-        {m.worktree_enabled()}
-      </label>
+      <Checkbox bind:checked={enabled} label={m.worktree_enabled()} />
     </div>
 
     {#if error}
@@ -425,14 +423,6 @@
     color: var(--text-muted);
     font-size: 11px;
     line-height: 1.3;
-  }
-
-  .enabled-toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    color: var(--text-secondary);
-    font-size: 12px;
   }
 
   .small-btn,

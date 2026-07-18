@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Checkbox } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
@@ -77,14 +78,11 @@
     <span class="setting-label">{m.appearance_block_visibility()}</span>
     <div class="block-toggles">
       {#each ALL_BLOCK_TYPES as bt}
-        <label class="block-toggle">
-          <input
-            type="checkbox"
-            checked={ui.isBlockVisible(bt)}
-            onchange={() => ui.toggleBlock(bt)}
-          />
-          <span>{BLOCK_LABELS[bt]}</span>
-        </label>
+        <Checkbox
+          checked={ui.isBlockVisible(bt)}
+          onchange={() => ui.toggleBlock(bt)}
+          label={BLOCK_LABELS[bt]}
+        />
       {/each}
     </div>
   </div>
@@ -160,18 +158,5 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-  }
-
-  .block-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-
-  .block-toggle input {
-    accent-color: var(--accent-blue);
   }
 </style>
