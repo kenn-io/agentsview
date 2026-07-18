@@ -79,15 +79,16 @@ func TestComputeCacheStats_UncachedPassesInputThrough(t *testing.T) {
 }
 
 // TestUnsupportedUsageKindForAgentFilter pins Copilot branding to Copilot
-// identity: an agent that merely shares Copilot's no-token-data
-// capability must degrade to the generic kind, not be described as
-// Copilot. No t.Parallel: it stubs the parser registry.
+// identity: an agent that merely shares Copilot's capabilities (no token
+// data, AI-credits denominated) must degrade to the generic kind, not be
+// described as Copilot. No t.Parallel: it stubs the parser registry.
 func TestUnsupportedUsageKindForAgentFilter(t *testing.T) {
 	parsertest.StubAgentDefs(t, parser.AgentDef{
 		Type:        parser.AgentType("credit-note-agent"),
 		DisplayName: "Credit Note Agent",
 		Usage: parser.UsageCapabilities{
 			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
 		},
 	})
 

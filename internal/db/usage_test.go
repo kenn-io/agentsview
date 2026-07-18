@@ -20,6 +20,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest"
 )
 
 var (
@@ -3626,6 +3628,8 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	assert.InDelta(t, 0.0175, daily.Daily[0].TotalCost, 1e-12)
 	assert.InDelta(t, reportedCost, daily.Daily[1].TotalCost, 1e-12)
 	assert.InDelta(t, 0.045, daily.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 4.5, daily.Totals.CopilotAICredits, 1e-9,
+		"credits derive from the authoritative reported cost")
 	require.NotNil(t, daily.Pricing)
 	assert.Equal(t, export.CostSourceMixed, daily.Pricing.CostSource,
 		"authoritative reported cost must surface in pricing provenance")
@@ -3644,6 +3648,8 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.InDelta(t, 0.0525, modelFiltered.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 5.25, modelFiltered.Totals.CopilotAICredits, 1e-9,
+		"model-filtered credits track the estimated totals")
 	require.NotNil(t, modelFiltered.Pricing)
 	assert.Equal(t, export.CostSourceComputed, modelFiltered.Pricing.CostSource,
 		"model-filtered totals stay estimated, so provenance stays computed")
@@ -3683,4 +3689,133 @@ func TestCopilotReportedZeroCostSuppressesEstimate(t *testing.T) {
 	require.Len(t, daily.Daily, 1)
 	require.Len(t, daily.Daily[0].ModelBreakdowns, 1)
 	assert.InDelta(t, 0.0175, daily.Daily[0].ModelBreakdowns[0].Cost, 1e-12)
+}
+
+// TestGetDailyUsage_CopilotAICredits verifies AI credits are computed from
+// agents with the parser AI-credit capability: costUSD / 0.01.
+func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
+	parsertest.StubAgentDefs(t, parser.AgentDef{
+		Type:        parser.AgentType("ai-credit-agent"),
+		DisplayName: "AI Credit Agent",
+		Usage: parser.UsageCapabilities{
+			AICreditsDenominated: true,
+		},
+	})
+
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:         "gpt-4",
+			InputPerMTok:         15.0,
+			OutputPerMTok:        60.0,
+			CacheCreationPerMTok: 15.0,
+			CacheReadPerMTok:     6.0,
+		},
+		{
+			ModelPattern:         "claude-opus-4-6",
+			InputPerMTok:         3.0,
+			OutputPerMTok:        15.0,
+			CacheCreationPerMTok: 3.75,
+			CacheReadPerMTok:     0.30,
+		},
+	}))
+
+	tests := []struct {
+		name        string
+		sessionID   string
+		agent       string
+		model       string
+		inputRate   float64
+		outputRate  float64
+		wantCredits bool
+	}{
+		{
+			name:        "copilot credits computed",
+			sessionID:   "copilot:aicredits",
+			agent:       "copilot",
+			model:       "gpt-4",
+			inputRate:   15.0,
+			outputRate:  60.0,
+			wantCredits: true,
+		},
+		{
+			name:        "non copilot capability credits computed",
+			sessionID:   "ai-credit-agent:aicredits",
+			agent:       "ai-credit-agent",
+			model:       "gpt-4",
+			inputRate:   15.0,
+			outputRate:  60.0,
+			wantCredits: true,
+		},
+		{
+			name:       "non copilot has no credits",
+			sessionID:  "claude:nocredits",
+			agent:      "claude-code",
+			model:      "claude-opus-4-6",
+			inputRate:  3.0,
+			outputRate: 15.0,
+		},
+	}
+
+	for _, tt := range tests {
+		insertSession(t, d, tt.sessionID, "proj", func(s *Session) {
+			s.Agent = tt.agent
+			s.StartedAt = new("2024-06-15T10:00:00Z")
+			s.EndedAt = new("2024-06-15T11:00:00Z")
+		})
+		insertMessages(t, d, Message{
+			SessionID: tt.sessionID,
+			Ordinal:   0,
+			Role:      "assistant",
+			Timestamp: "2024-06-15T10:30:00Z",
+			Model:     tt.model,
+			TokenUsage: json.RawMessage(`{
+				"input_tokens": 1000,
+				"output_tokens": 500
+			}`),
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := d.GetDailyUsage(ctx, UsageFilter{
+				From:  "2024-06-01",
+				To:    "2024-06-30",
+				Agent: tt.agent,
+			})
+			requireNoError(t, err, "GetDailyUsage")
+
+			wantCost := (1000*tt.inputRate + 500*tt.outputRate) / 1_000_000
+			wantCredits := 0.0
+			if tt.wantCredits {
+				wantCredits = wantCost / 0.01
+			}
+			assert.InDelta(t, wantCost, result.Totals.TotalCost, 1e-9,
+				"TotalCost")
+			assert.InDelta(t, wantCredits, result.Totals.CopilotAICredits,
+				1e-6, "CopilotAICredits")
+		})
+	}
+}
+
+func TestAICreditsFromCost(t *testing.T) {
+	cases := []struct {
+		name  string
+		agent string
+		cost  float64
+		want  float64
+	}{
+		{"copilot converts at a cent per credit", "copilot", 0.42, 42},
+		{"zero cost yields zero credits", "copilot", 0, 0},
+		{"non-credit agent yields zero", "claude", 3.5, 0},
+		{"unknown agent yields zero", "unknown-agent", 3.5, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.InDelta(t, tc.want,
+				AICreditsFromCost(tc.agent, tc.cost), 1e-9)
+		})
+	}
 }

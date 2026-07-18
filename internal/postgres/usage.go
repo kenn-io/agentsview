@@ -1543,6 +1543,14 @@ func (s *Store) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
+		var aiCredits float64
+		for key, b := range accum {
+			aiCredits += db.AICreditsFromCost(key.agent, b.aggregateCost)
+		}
+		if aiCredits > 0 {
+			totals.CopilotAICredits = aiCredits
+		}
+
 		var sessionCounts db.UsageSessionCounts
 		if seenSessions != nil {
 			sessionCounts = db.NewUsageSessionCounts(seenSessions)
@@ -1742,6 +1750,16 @@ func (s *Store) GetDailyUsage(
 		daily = []db.DailyUsageEntry{}
 	}
 	totals.CacheSavings = totalSavings
+
+	var aiCredits float64
+	for _, d := range daily {
+		for _, ab := range d.AgentBreakdowns {
+			aiCredits += db.AICreditsFromCost(ab.Agent, ab.Cost)
+		}
+	}
+	if aiCredits > 0 {
+		totals.CopilotAICredits = aiCredits
+	}
 
 	var sessionCounts db.UsageSessionCounts
 	if seenSessions != nil {

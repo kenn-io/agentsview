@@ -134,21 +134,25 @@ func TestAgentUsageCapabilities(t *testing.T) {
 		name        string
 		agent       AgentType
 		wantNoToken bool
+		wantCredits bool
 	}{
 		{
 			name:        "copilot",
 			agent:       AgentCopilot,
 			wantNoToken: true,
+			wantCredits: true,
 		},
 		{
 			name:        "vscode copilot",
 			agent:       AgentVSCodeCopilot,
 			wantNoToken: true,
+			wantCredits: true,
 		},
 		{
 			name:        "visual studio copilot",
 			agent:       AgentVSCopilot,
 			wantNoToken: true,
+			wantCredits: true,
 		},
 		{
 			name:  "claude",
@@ -159,6 +163,8 @@ func TestAgentUsageCapabilities(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.wantNoToken,
 				AgentNameLacksPerMessageTokenData(string(tc.agent)))
+			assert.Equal(t, tc.wantCredits,
+				AgentNameUsesAICredits(string(tc.agent)))
 		})
 	}
 }
