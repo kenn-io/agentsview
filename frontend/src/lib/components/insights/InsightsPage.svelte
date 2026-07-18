@@ -2377,6 +2377,16 @@
 
   .content :global(.inline-warning) {
     padding: 9px 10px;
+    background: color-mix(
+      in srgb,
+      var(--accent-amber) 10%,
+      var(--bg-surface)
+    );
+    border-color: color-mix(
+      in srgb,
+      var(--accent-amber) 24%,
+      var(--border-muted)
+    );
     color: var(--text-secondary);
     font-size: 12px;
   }
