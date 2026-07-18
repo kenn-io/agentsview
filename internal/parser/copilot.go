@@ -24,6 +24,10 @@ const (
 	copilotReportedCostSource   = "copilot-reported"
 )
 
+var copilotUsageBasedPricingStartedAt = time.Date(
+	2026, time.June, 1, 0, 0, 0, 0, time.UTC,
+)
+
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
@@ -246,13 +250,18 @@ func (b *copilotSessionBuilder) handleAssistantReasoning() {
 func (b *copilotSessionBuilder) handleShutdown(
 	data gjson.Result, ts time.Time,
 ) {
+	useReportedCost := !b.startedAt.IsZero() &&
+		!b.startedAt.Before(copilotUsageBasedPricingStartedAt)
+
 	// totalNanoAiu is cumulative. Keep its authoritative cost on only the
 	// latest shutdown, including when that final value is zero.
-	for i := range b.usageEvents {
-		if b.usageEvents[i].CostSource == copilotReportedCostSource {
-			b.usageEvents[i].CostUSD = nil
-			b.usageEvents[i].CostStatus = ""
-			b.usageEvents[i].CostSource = ""
+	if useReportedCost {
+		for i := range b.usageEvents {
+			if b.usageEvents[i].CostSource == copilotReportedCostSource {
+				b.usageEvents[i].CostUSD = nil
+				b.usageEvents[i].CostStatus = ""
+				b.usageEvents[i].CostSource = ""
+			}
 		}
 	}
 
@@ -294,7 +303,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 	})
 
 	totalNanoAiu := data.Get("totalNanoAiu")
-	if totalNanoAiu.Exists() {
+	if useReportedCost && totalNanoAiu.Exists() {
 		if len(events) == 0 {
 			events = append(events, ParsedUsageEvent{
 				Source:     "shutdown",
