@@ -1293,7 +1293,10 @@ class SessionsStore {
       this.handleLiveRefreshEvent(event);
     });
     this.safetyNetTimer = setInterval(
-      () => { this.load(); },
+      () => {
+        this.load();
+        this.refreshActiveChildSessions();
+      },
       SAFETY_NET_REFRESH_MS,
     );
   }

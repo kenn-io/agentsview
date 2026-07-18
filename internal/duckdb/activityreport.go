@@ -165,7 +165,7 @@ func (s *Store) GetSessionUsageRows(
 	queryArgs = append(queryArgs, args...)
 	cte, queryArgs := duckUsageCTEFromRaw(db.UsageFilter{}, rawSQL, queryArgs)
 	query := cte + `
-		SELECT session_id, message_ordinal, CAST(ts AS VARCHAR), source, model,
+		SELECT session_id, message_ordinal, ts, source, model,
 			agent, claude_message_id, claude_request_id, source_uuid,
 			usage_dedup_key, input_tokens_norm, output_tokens_norm,
 			cache_create_norm, cache_read_norm, reasoning_tokens_norm, cost_usd
@@ -178,8 +178,9 @@ func (s *Store) GetSessionUsageRows(
 	var rowsAcc []duckSessionUsageOrderedRow
 	for rows.Next() {
 		var r duckActivityReportUsageRow
+		var ts any
 		if err := rows.Scan(
-			&r.sessionID, &r.messageOrdinal, &r.ts, &r.source, &r.model,
+			&r.sessionID, &r.messageOrdinal, &ts, &r.source, &r.model,
 			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 			&r.usageDedupKey,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
@@ -187,6 +188,7 @@ func (s *Store) GetSessionUsageRows(
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb session usage rows: %w", err)
 		}
+		r.ts = formatDBTime(ts)
 		ordinal := int64(-1)
 		if o, ok := duckUsageOrdinal(r.messageOrdinal); ok {
 			ordinal = o

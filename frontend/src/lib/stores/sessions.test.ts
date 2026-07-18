@@ -3003,6 +3003,50 @@ describe("SessionsStore live refresh", () => {
     vi.useRealTimers();
   });
 
+  it("refreshes active child sessions on the 5-minute safety-net interval", async () => {
+    vi.useFakeTimers();
+    const { events } = await import("./events.svelte.js");
+    const spy = vi
+      .spyOn(events, "subscribe")
+      .mockReturnValue(() => {});
+
+    vi.mocked(SessionsService.getApiV1SessionsIdChildren)
+      .mockResolvedValueOnce([
+        makeSession({
+          id: "child",
+          parent_session_id: "root",
+          total_output_tokens: 1,
+        }),
+      ] as Session[])
+      .mockResolvedValueOnce([
+        makeSession({
+          id: "child",
+          parent_session_id: "root",
+          total_output_tokens: 9,
+        }),
+      ] as Session[]);
+
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    sessions.activeSessionId = "root";
+    await sessions.load();
+    await sessions.loadChildSessions("root");
+    expect(sessions.childSessions.get("child")?.total_output_tokens).toBe(1);
+    expect(sessions.activeSessionUsageVersion).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    await vi.waitFor(() => {
+      expect(sessions.childSessions.get("child")?.total_output_tokens).toBe(9);
+    });
+    expect(SessionsService.getApiV1SessionsIdChildren).toHaveBeenCalledTimes(2);
+    expect(sessions.activeSessionUsageVersion).toBe(0);
+
+    detach();
+    spy.mockRestore();
+    vi.useRealTimers();
+  });
+
   it("dispose() unsubscribes and clears the safety-net timer", async () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");
