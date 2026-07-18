@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -33,8 +34,32 @@ var ErrPersistentTruncation = errors.New(
 var errTruncated = errors.New("model output truncated")
 
 // errPermanentRequest marks a server rejection that retrying the same
-// request can never fix (wrong model name, malformed field).
+// request can never fix (wrong model name, bad credentials, malformed
+// field).
 var errPermanentRequest = errors.New("model server rejected the request")
+
+// transientError marks a failure worth retrying: network errors, timeouts,
+// rate limits, and server errors. RetryAfter carries the server's requested
+// delay, zero when it gave none.
+type transientError struct {
+	err        error
+	retryAfter time.Duration
+}
+
+func (e *transientError) Error() string { return e.err.Error() }
+func (e *transientError) Unwrap() error { return e.err }
+
+// reservedRequestKeys are payload fields the client owns. ExtraBody must
+// not shadow them: a profile smuggling max_tokens or response_format
+// through the extra body would bypass validation and desynchronize the
+// generation fingerprint from the request actually sent.
+var reservedRequestKeys = []string{
+	"model", "messages", "max_tokens", "temperature", "response_format",
+}
+
+// maxRetryDelay caps the wait between transient retries, whether from
+// backoff growth or an excessive Retry-After header.
+const maxRetryDelay = 30 * time.Second
 
 // compactSuffix is appended on the truncation retry of a unit too small to
 // split. Sampling at temperature zero makes a same-input retry
@@ -103,10 +128,14 @@ var entrySchema = map[string]any{
 // parameter lives in Request so it is covered by the generation
 // fingerprint.
 type Client struct {
-	BaseURL    string
-	Model      string
-	HTTPClient *http.Client
-	Request    RequestShape
+	BaseURL string
+	Model   string
+	// RetryBackoff seeds the exponential wait between transient retries;
+	// zero means 500ms. It shapes latency, not output, so it stays outside
+	// RequestShape and the fingerprint.
+	RetryBackoff time.Duration
+	HTTPClient   *http.Client
+	Request      RequestShape
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -116,8 +145,17 @@ func (c *Client) httpClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Minute}
 }
 
+func (c *Client) retryBackoff() time.Duration {
+	if c.RetryBackoff > 0 {
+		return c.RetryBackoff
+	}
+	return 500 * time.Millisecond
+}
+
 // DistillWithRecovery runs one unit through the model with the recovery
-// ladder: transient failures are retried up to maxAttempts per phase;
+// ladder: transient failures (network errors, timeouts, rate limits,
+// server errors) are retried up to maxAttempts per phase with exponential
+// backoff honoring Retry-After, while permanent rejections fail fast;
 // truncated output on a unit at or below the compact floor triggers exactly
 // one compact retry (temperature-zero sampling makes same-input retries
 // useless); truncation on a splittable unit, or truncation that survives
@@ -135,6 +173,14 @@ func (c *Client) DistillWithRecovery(
 				"configuration must set it (got %d)", c.Request.MaxTokens,
 		)
 	}
+	for _, key := range reservedRequestKeys {
+		if _, ok := c.Request.ExtraBody[key]; ok {
+			return nil, total, fmt.Errorf(
+				"extra body must not set reserved request field %q; use the "+
+					"dedicated configuration for it", key,
+			)
+		}
+	}
 	// Rune count, not byte length: segmentation budgets count code points,
 	// so the floor must measure units the same way.
 	unitChars := utf8.RuneCountInString(text)
@@ -142,25 +188,39 @@ func (c *Client) DistillWithRecovery(
 	for _, compact := range []bool{false, true} {
 		var lastErr error
 		truncated := false
-		for range maxAttempts {
+		for attempt := range maxAttempts {
 			entries, usage, err := c.distill(ctx, systemPrompt, text, compact)
 			total.PromptTokens += usage.PromptTokens
 			total.CompletionTokens += usage.CompletionTokens
 			if err == nil {
 				return entries, total, nil
 			}
-			if errors.Is(err, ErrContextOverflow) ||
-				errors.Is(err, errPermanentRequest) {
-				return nil, total, err
-			}
 			if errors.Is(err, errTruncated) {
 				truncated = true
 				break
 			}
-			if ctx.Err() != nil {
-				return nil, total, ctx.Err()
+			var transient *transientError
+			if !errors.As(err, &transient) {
+				return nil, total, err
 			}
 			lastErr = err
+			if attempt+1 >= maxAttempts {
+				break
+			}
+			delay := transient.retryAfter
+			if delay <= 0 {
+				delay = c.retryBackoff() << attempt
+			}
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, total, ctx.Err()
+			case <-timer.C:
+			}
 		}
 		if !truncated {
 			return nil, total, fmt.Errorf(
@@ -200,8 +260,12 @@ func (c *Client) distill(
 			},
 		},
 	}
-	maps.Copy(payload, c.Request.ExtraBody)
-	body, err := json.Marshal(payload)
+	// Extras first, client-owned fields last: even if validation of
+	// reserved keys were bypassed, the extra body could not shadow them.
+	merged := make(map[string]any, len(c.Request.ExtraBody)+len(payload))
+	maps.Copy(merged, c.Request.ExtraBody)
+	maps.Copy(merged, payload)
+	body, err := json.Marshal(merged)
 	if err != nil {
 		return nil, Usage{}, fmt.Errorf("encoding distill request: %w", err)
 	}
@@ -217,12 +281,16 @@ func (c *Client) distill(
 
 	response, err := c.httpClient().Do(request)
 	if err != nil {
-		return nil, Usage{}, fmt.Errorf("posting distill request: %w", err)
+		return nil, Usage{}, &transientError{
+			err: fmt.Errorf("posting distill request: %w", err),
+		}
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
 	if err != nil {
-		return nil, Usage{}, fmt.Errorf("reading distill response: %w", err)
+		return nil, Usage{}, &transientError{
+			err: fmt.Errorf("reading distill response: %w", err),
+		}
 	}
 	if response.StatusCode == http.StatusBadRequest {
 		detail := string(raw)
@@ -244,8 +312,24 @@ func (c *Client) distill(
 		)
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, Usage{}, fmt.Errorf(
+		statusErr := fmt.Errorf(
 			"distill request failed with HTTP %d", response.StatusCode,
+		)
+		if isTransientStatus(response.StatusCode) {
+			return nil, Usage{}, &transientError{
+				err: statusErr,
+				retryAfter: parseRetryAfter(
+					response.Header.Get("Retry-After"),
+				),
+			}
+		}
+		detail := string(raw)
+		if len(detail) > 200 {
+			detail = detail[:200]
+		}
+		return nil, Usage{}, fmt.Errorf(
+			"%w (HTTP %d): %s", errPermanentRequest,
+			response.StatusCode, detail,
 		)
 	}
 
@@ -258,11 +342,17 @@ func (c *Client) distill(
 		} `json:"choices"`
 		Usage Usage `json:"usage"`
 	}
+	// A 200 with an unreadable or choiceless body is a glitch in transit or
+	// in the serving layer, not a property of the input, so it retries.
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, Usage{}, fmt.Errorf("parsing distill response: %w", err)
+		return nil, Usage{}, &transientError{
+			err: fmt.Errorf("parsing distill response: %w", err),
+		}
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, Usage{}, fmt.Errorf("distill response has no choices")
+		return nil, Usage{}, &transientError{
+			err: fmt.Errorf("distill response has no choices"),
+		}
 	}
 	// From here the server reports token usage even when the attempt fails,
 	// so error returns carry parsed.Usage for the caller's accounting.
@@ -288,6 +378,36 @@ func (c *Client) distill(
 		return nil, parsed.Usage, fmt.Errorf("parsing distilled entries: %w", err)
 	}
 	return out.Entries, parsed.Usage, nil
+}
+
+// isTransientStatus reports whether an HTTP status is worth retrying:
+// timeouts, rate limits, and server-side errors. Other non-200 statuses
+// (auth failures, missing routes, validation rejections) are deterministic
+// for the same request and fail fast.
+func isTransientStatus(status int) bool {
+	return status == http.StatusRequestTimeout ||
+		status == http.StatusTooManyRequests ||
+		status >= 500
+}
+
+// parseRetryAfter reads a Retry-After header in either the delay-seconds or
+// HTTP-date form, returning zero for absent or unparseable values.
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		return 0
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(when); delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 // isContextOverflowDetail reports whether a 400 body identifies an

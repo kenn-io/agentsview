@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type scriptedResponse struct {
@@ -86,6 +87,8 @@ func testClient(url string) *Client {
 	return &Client{
 		BaseURL: url,
 		Model:   "test-model",
+		// Keep transient-retry backoff out of test wall-clock time.
+		RetryBackoff: time.Millisecond,
 		Request: RequestShape{
 			Temperature: 0,
 			MaxTokens:   100,
@@ -328,6 +331,7 @@ func TestClientRetriesTransientErrors(t *testing.T) {
 	var requests []map[string]any
 	server := newScriptedServer(t, []scriptedResponse{
 		{status: http.StatusInternalServerError},
+		{status: http.StatusTooManyRequests},
 		{finishReason: "stop", content: entriesJSON(t, "ok")},
 	}, &requests)
 	defer server.Close()
@@ -338,18 +342,80 @@ func TestClientRetriesTransientErrors(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("entries=%v err=%v", entries, err)
 	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want 3 (5xx and 429 are transient)",
+			len(requests))
+	}
+}
+
+func TestClientPermanentHTTPStatusFailsFast(t *testing.T) {
+	// 401/403/404 will not fix themselves; retrying burns the budget and
+	// hides the configuration problem behind attempt noise.
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{status: http.StatusUnauthorized},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err == nil {
+		t.Fatal("unauthorized must be an error")
+	}
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1 (permanent statuses are not retried)",
+			len(requests))
+	}
+}
+
+func TestClientRejectsReservedExtraBodyKeys(t *testing.T) {
+	// A profile or override smuggling max_tokens through the extra body
+	// would bypass validation and desynchronize the generation fingerprint
+	// from the request actually sent.
+	var requests []map[string]any
+	server := newScriptedServer(t, nil, &requests)
+	defer server.Close()
+
+	client := testClient(server.URL)
+	client.Request.ExtraBody = map[string]any{"max_tokens": 5}
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err == nil || !strings.Contains(err.Error(), "max_tokens") {
+		t.Fatalf("err = %v, want reserved-key rejection naming the key", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("requests = %d, want 0 (rejected before any call)",
+			len(requests))
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if got := parseRetryAfter("2"); got != 2*time.Second {
+		t.Fatalf("parseRetryAfter(2) = %v", got)
+	}
+	future := time.Now().Add(5 * time.Second).UTC().Format(http.TimeFormat)
+	got := parseRetryAfter(future)
+	if got <= 0 || got > 5*time.Second {
+		t.Fatalf("parseRetryAfter(http-date) = %v", got)
+	}
+	for _, value := range []string{"", "garbage", "-3"} {
+		if got := parseRetryAfter(value); got != 0 {
+			t.Fatalf("parseRetryAfter(%q) = %v, want 0", value, got)
+		}
+	}
 }
 
 func TestClientEmptyContentIsError(t *testing.T) {
 	// A model that burns its budget on hidden reasoning returns empty
 	// content with finish_reason stop; that must surface as an error, not
-	// as zero entries.
+	// as zero entries — and at temperature zero a same-input retry gives
+	// the same emptiness, so it must not be retried.
 	var requests []map[string]any
-	responses := make([]scriptedResponse, 3)
-	for i := range responses {
-		responses[i] = scriptedResponse{finishReason: "stop", content: ""}
-	}
-	server := newScriptedServer(t, responses, &requests)
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: "stop", content: ""},
+	}, &requests)
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
@@ -357,6 +423,10 @@ func TestClientEmptyContentIsError(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("empty content must be an error")
+	}
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1 (deterministic emptiness is not retried)",
+			len(requests))
 	}
 }
 
