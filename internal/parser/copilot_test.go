@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -649,11 +650,11 @@ func parseCopilotFull(
 }
 
 func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
-	shutdownLine := `{"type":"session.shutdown","data":{"totalNanoAiu":1750000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":931647,"outputTokens":7150,"cacheReadTokens":873267,"cacheWriteTokens":51438,"reasoningTokens":432}}}},"timestamp":"2025-01-15T10:01:00Z"}`
+	shutdownLine := `{"type":"session.shutdown","data":{"totalNanoAiu":1750000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":931647,"outputTokens":7150,"cacheReadTokens":873267,"cacheWriteTokens":51438,"reasoningTokens":432}}}},"timestamp":"2026-06-15T10:01:00Z"}`
 	path := writeCopilotJSONL(t,
-		`{"type":"session.start","data":{"sessionId":"shut-test","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
-		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
-		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.start","data":{"sessionId":"shut-test","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-06-15T10:00:02Z"}`,
 		shutdownLine,
 	)
 
@@ -678,12 +679,60 @@ func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
 	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6:0", u.DedupKey)
 }
 
+func TestParseCopilotSession_ReportedCostPricingCutoff(t *testing.T) {
+	tests := []struct {
+		name         string
+		startedAt    string
+		shutdownAt   string
+		wantReported bool
+	}{
+		{
+			name:         "before cutoff",
+			startedAt:    "2026-05-31T23:59:59Z",
+			shutdownAt:   "2026-06-01T00:01:00Z",
+			wantReported: false,
+		},
+		{
+			name:         "exactly at cutoff",
+			startedAt:    "2026-06-01T00:00:00Z",
+			shutdownAt:   "2026-06-01T00:01:00Z",
+			wantReported: true,
+		},
+		{
+			name:         "after cutoff",
+			startedAt:    "2026-06-01T00:00:01Z",
+			shutdownAt:   "2026-06-01T00:01:00Z",
+			wantReported: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeCopilotJSONL(t,
+				fmt.Sprintf(`{"type":"session.start","data":{"sessionId":"cutoff"},"timestamp":%q}`, tt.startedAt),
+				fmt.Sprintf(`{"type":"user.message","data":{"content":"Hello"},"timestamp":%q}`, tt.startedAt),
+				fmt.Sprintf(`{"type":"session.shutdown","data":{"totalNanoAiu":2500000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":%q}`, tt.shutdownAt),
+			)
+			_, _, usage := parseCopilotFull(t, path, "m")
+			require.Len(t, usage, 1)
+			if tt.wantReported {
+				require.NotNil(t, usage[0].CostUSD)
+				assert.InDelta(t, 0.025, *usage[0].CostUSD, 1e-12)
+				assert.Equal(t, "copilot-reported", usage[0].CostSource)
+			} else {
+				assert.Nil(t, usage[0].CostUSD)
+				assert.Empty(t, usage[0].CostSource)
+			}
+		})
+	}
+}
+
 func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 	path := writeCopilotJSONL(t,
-		`{"type":"session.start","data":{"sessionId":"multi-model","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
-		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
-		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
-		`{"type":"session.shutdown","data":{"totalNanoAiu":2500000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}},"claude-haiku-4.5":{"usage":{"inputTokens":200,"outputTokens":80,"cacheReadTokens":120,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+		`{"type":"session.start","data":{"sessionId":"multi-model","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":2500000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}},"claude-haiku-4.5":{"usage":{"inputTokens":200,"outputTokens":80,"cacheReadTokens":120,"cacheWriteTokens":20}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
 	)
 
 	_, _, usage := parseCopilotFull(t, path, "m")
@@ -721,13 +770,13 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 	// Sessions with compaction have multiple shutdown events for the
 	// same model. All segments must be captured with distinct DedupKeys.
 	path := writeCopilotJSONL(t,
-		`{"type":"session.start","data":{"sessionId":"multi-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
-		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
-		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
-		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
-		`{"type":"user.message","data":{"content":"Continue"},"timestamp":"2025-01-15T10:02:00Z"}`,
-		`{"type":"assistant.message","data":{"content":"Sure."},"timestamp":"2025-01-15T10:02:01Z"}`,
-		`{"type":"session.shutdown","data":{"totalNanoAiu":2750000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":300,"outputTokens":80,"cacheReadTokens":250,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
+		`{"type":"session.start","data":{"sessionId":"multi-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+		`{"type":"user.message","data":{"content":"Continue"},"timestamp":"2026-06-15T10:02:00Z"}`,
+		`{"type":"assistant.message","data":{"content":"Sure."},"timestamp":"2026-06-15T10:02:01Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":2750000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":300,"outputTokens":80,"cacheReadTokens":250,"cacheWriteTokens":20}}}},"timestamp":"2026-06-15T10:03:00Z"}`,
 	)
 
 	_, _, usage := parseCopilotFull(t, path, "m")
@@ -752,11 +801,11 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 
 func TestParseCopilotSession_MultiShutdown_LastZeroIsAuthoritative(t *testing.T) {
 	path := writeCopilotJSONL(t,
-		`{"type":"session.start","data":{"sessionId":"multi-shut-zero","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
-		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
-		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
-		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
-		`{"type":"session.shutdown","data":{"totalNanoAiu":0,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":200,"outputTokens":80}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
+		`{"type":"session.start","data":{"sessionId":"multi-shut-zero","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":0,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":200,"outputTokens":80}}}},"timestamp":"2026-06-15T10:03:00Z"}`,
 	)
 
 	_, _, usage := parseCopilotFull(t, path, "m")
