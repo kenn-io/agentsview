@@ -1148,6 +1148,7 @@ func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 	require.NotNil(t, u, "usage is nil")
 	assert.True(t, u.HasCost, "HasCost")
 	assert.Equal(t, 0.10, u.CostUSD, "CostUSD")
+	assert.Equal(t, 10.0, u.AICredits, "AICredits")
 }
 
 func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
@@ -1264,4 +1265,5 @@ func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	require.NotNil(t, u, "usage is nil")
 	assert.False(t, u.HasCost, "HasCost should be false")
 	assert.Zero(t, u.CostUSD, "CostUSD should be 0 when unpriced")
+	assert.Equal(t, 0.0, u.AICredits, "AICredits should be 0 when unpriced")
 }
