@@ -12,41 +12,23 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
-
-// aiCreditUSD is the USD value of one AI credit for agents whose cost
-// is denominated in AI credits (the AICreditsDenominated capability).
-const aiCreditUSD = 0.01
 
 // CopilotReportedCostSource identifies the authoritative cumulative cost
 // reported by Copilot CLI shutdown records.
 const CopilotReportedCostSource = "copilot-reported"
 
-// AICreditsFromCost converts a USD cost into AI credits when the
-// agent's cost is denominated in AI credits, and returns 0 otherwise.
-// It is the single home of the credit conversion shared by the SQLite,
-// PostgreSQL, and DuckDB usage paths; a per-agent credit rate would
-// slot in here rather than at each accumulation site.
-func AICreditsFromCost(agent string, costUSD float64) float64 {
-	if costUSD == 0 || !parser.AgentNameUsesAICredits(agent) {
-		return 0
-	}
-	return costUSD / aiCreditUSD
-}
-
 // NoTokenData reports whether a daily-usage total carries neither token
-// data nor cost: every token counter, the cost total, and any Copilot AI
-// credits are zero. It distinguishes a window whose sessions simply do not
-// record token usage from one that genuinely has no sessions.
+// data nor cost: every token counter and the cost total are zero. It
+// distinguishes a window whose sessions simply do not record token usage
+// from one that genuinely has no sessions.
 func NoTokenData(t UsageTotals) bool {
 	return t.InputTokens == 0 &&
 		t.OutputTokens == 0 &&
 		t.CacheCreationTokens == 0 &&
 		t.CacheReadTokens == 0 &&
-		t.TotalCost == 0 &&
-		t.CopilotAICredits == 0
+		t.TotalCost == 0
 }
 
 // UsageFilter controls the date range, agent, and timezone
@@ -1636,7 +1618,6 @@ type UsageTotals struct {
 	CacheCreationTokens int     `json:"cacheCreationTokens"`
 	CacheReadTokens     int     `json:"cacheReadTokens"`
 	TotalCost           float64 `json:"totalCost"`
-	CopilotAICredits    float64 `json:"copilotAICredits,omitempty"`
 	// CacheSavings is the net dollar delta vs an uncached run:
 	// cache reads save (input_rate - cache_read_rate) per token,
 	// cache creations cost (input_rate - cache_creation_rate)
@@ -1867,7 +1848,6 @@ func (db *DB) GetDailyUsage(
 		aggregateCost float64
 	}
 	type sessionCost struct {
-		agent         string
 		estimated     map[accumKey]float64
 		authoritative *struct {
 			key  accumKey
@@ -1955,7 +1935,6 @@ func (db *DB) GetDailyUsage(
 		sc := sessionCosts[r.sessionID]
 		if sc == nil {
 			sc = &sessionCost{
-				agent:     r.agent,
 				estimated: make(map[accumKey]float64),
 			}
 			sessionCosts[r.sessionID] = sc
@@ -1968,6 +1947,7 @@ func (db *DB) GetDailyUsage(
 				key  accumKey
 				cost float64
 			}{key: key, cost: r.costUSD.Float64}
+			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1975,9 +1955,7 @@ func (db *DB) GetDailyUsage(
 			fmt.Errorf("iterating daily usage rows: %w", err)
 	}
 
-	var copilotAICredits float64
 	for _, sc := range sessionCosts {
-		resolvedCost := 0.0
 		if sc.authoritative != nil {
 			b := accum[sc.authoritative.key]
 			if b == nil {
@@ -1985,7 +1963,6 @@ func (db *DB) GetDailyUsage(
 				accum[sc.authoritative.key] = b
 			}
 			b.aggregateCost += sc.authoritative.cost
-			resolvedCost = sc.authoritative.cost
 		} else {
 			for key, cost := range sc.estimated {
 				b := accum[key]
@@ -1994,10 +1971,8 @@ func (db *DB) GetDailyUsage(
 					accum[key] = b
 				}
 				b.aggregateCost += cost
-				resolvedCost += cost
 			}
 		}
-		copilotAICredits += AICreditsFromCost(sc.agent, resolvedCost)
 	}
 
 	// Two paths: without breakdowns (CLI, fast) and with breakdowns
@@ -2122,9 +2097,6 @@ func (db *DB) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
-		if copilotAICredits > 0 {
-			totals.CopilotAICredits = copilotAICredits
-		}
 		var sessionCounts UsageSessionCounts
 		if seenSessions != nil {
 			sessionCounts = NewUsageSessionCounts(seenSessions)
@@ -2340,10 +2312,6 @@ func (db *DB) GetDailyUsage(
 
 	totals.CacheSavings = totalSavings
 
-	if copilotAICredits > 0 {
-		totals.CopilotAICredits = copilotAICredits
-	}
-
 	var sessionCounts UsageSessionCounts
 	if seenSessions != nil {
 		sessionCounts = NewUsageSessionCounts(seenSessions)
@@ -2550,7 +2518,6 @@ type SessionUsage struct {
 	HasTokenData      bool                         `json:"has_token_data"`
 	CostUSD           float64                      `json:"cost_usd"`
 	HasCost           bool                         `json:"has_cost"`
-	AICredits         float64                      `json:"ai_credits,omitempty"`
 	Models            []string                     `json:"models"`
 	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
 	BreakdownCount    int                          `json:"breakdown_count"`
@@ -2767,10 +2734,8 @@ func (db *DB) GetSessionUsage(
 	}
 	if authoritativeCost != nil {
 		out.CostUSD = *authoritativeCost
-		out.AICredits = AICreditsFromCost(sess.Agent, out.CostUSD)
 	} else if out.HasCost {
 		out.CostUSD = cost
-		out.AICredits = AICreditsFromCost(sess.Agent, cost)
 	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedSetKeys(unpricedSet)

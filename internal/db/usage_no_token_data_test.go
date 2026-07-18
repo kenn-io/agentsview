@@ -18,7 +18,6 @@ func TestNoTokenData(t *testing.T) {
 		{"cache creation", UsageTotals{CacheCreationTokens: 1}, false},
 		{"cache read", UsageTotals{CacheReadTokens: 1}, false},
 		{"cost", UsageTotals{TotalCost: 0.01}, false},
-		{"copilot credits", UsageTotals{CopilotAICredits: 1}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

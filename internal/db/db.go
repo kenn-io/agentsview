@@ -25,7 +25,6 @@ import (
 )
 
 const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1"
-const copilotReportedCostRepairKey = "copilot_reported_cost_reparse_v2"
 
 // dataVersion tracks parser changes that require a full
 // re-sync. Increment this when parsing logic changes in ways
@@ -1658,10 +1657,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE messages ADD COLUMN has_output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
-			"usage_events", "ai_credits",
-			"ALTER TABLE usage_events ADD COLUMN ai_credits REAL",
-		},
-		{
 			"messages", "claude_message_id",
 			"ALTER TABLE messages ADD COLUMN claude_message_id TEXT NOT NULL DEFAULT ''",
 		},
@@ -2239,12 +2234,6 @@ func (db *DB) migrateColumns() error {
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}
-	if err := migrateLegacyAICreditsLocked(w); err != nil {
-		return err
-	}
-	if err := markCopilotSessionsForReportedCostReparseLocked(w); err != nil {
-		return err
-	}
 	if err := db.ensureCursorUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}
@@ -2393,36 +2382,6 @@ func execSchemaScriptLocked(w *writerHandle) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing schema script: %w", err)
-	}
-	return nil
-}
-
-func markCopilotSessionsForReportedCostReparseLocked(w *writerHandle) error {
-	var completed int
-	err := w.QueryRow(
-		"SELECT COUNT(*) FROM archive_metadata WHERE key = ?",
-		copilotReportedCostRepairKey,
-	).Scan(&completed)
-	if err != nil {
-		return fmt.Errorf("checking Copilot reported-cost repair: %w", err)
-	}
-	if completed > 0 {
-		return nil
-	}
-	if _, err := w.Exec(`
-		UPDATE sessions
-		SET data_version = ?
-		WHERE agent = 'copilot' AND data_version >= ?`,
-		dataVersion-1, dataVersion,
-	); err != nil {
-		return fmt.Errorf("marking Copilot sessions for reported-cost reparse: %w", err)
-	}
-	if _, err := w.Exec(`
-		INSERT INTO archive_metadata (key, value)
-		VALUES (?, '1')`,
-		copilotReportedCostRepairKey,
-	); err != nil {
-		return fmt.Errorf("recording Copilot reported-cost repair: %w", err)
 	}
 	return nil
 }

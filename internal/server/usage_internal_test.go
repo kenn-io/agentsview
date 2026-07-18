@@ -333,15 +333,14 @@ func TestUsageSummarySetsUnsupportedUsageFromAgentCapability(t *testing.T) {
 }
 
 // TestUsageSummaryKeepsGenericKindForNonCopilotAICreditAgent pins the
-// Copilot-branded kind to Copilot identity: an agent that shares both of
-// Copilot's usage capabilities must still surface the generic kind.
+// Copilot-branded kind to Copilot identity: an agent that shares
+// Copilot's usage capability must still surface the generic kind.
 func TestUsageSummaryKeepsGenericKindForNonCopilotAICreditAgent(t *testing.T) {
 	parsertest.StubAgentDefs(t, parser.AgentDef{
 		Type:        parser.AgentType("credit-note-agent"),
 		DisplayName: "Credit Note Agent",
 		Usage: parser.UsageCapabilities{
 			NoPerMessageTokenData: true,
-			AICreditsDenominated:  true,
 		},
 	})
 

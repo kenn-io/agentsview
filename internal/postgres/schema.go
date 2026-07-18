@@ -137,7 +137,6 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cache_read_input_tokens INT NOT NULL DEFAULT 0,
     reasoning_tokens INT NOT NULL DEFAULT 0,
     cost_usd DOUBLE PRECISION,
-    ai_credits DOUBLE PRECISION,
     cost_status TEXT NOT NULL DEFAULT '',
     cost_source TEXT NOT NULL DEFAULT '',
     occurred_at TIMESTAMPTZ,
@@ -527,11 +526,6 @@ func EnsureSchema(
 			"adding messages.has_output_tokens",
 		},
 		{
-			"usage_events", "ai_credits",
-			`ai_credits DOUBLE PRECISION`,
-			"adding usage_events.ai_credits",
-		},
-		{
 			"messages", "claude_message_id",
 			`claude_message_id TEXT NOT NULL DEFAULT ''`,
 			"adding messages.claude_message_id",
@@ -846,15 +840,6 @@ func EnsureSchema(
 		case "source_display_name", "source_deleted_at":
 			sourceCurationColumnsAdded = true
 		}
-	}
-	if _, err := db.ExecContext(ctx, `
-		UPDATE usage_events
-		SET cost_usd = ai_credits * 0.01,
-			cost_status = 'exact',
-			cost_source = 'copilot-reported',
-			ai_credits = NULL
-		WHERE ai_credits IS NOT NULL`); err != nil {
-		return fmt.Errorf("migrating PG legacy Copilot AI credits: %w", err)
 	}
 	log.Printf(
 		"pg schema: column migration step completed in %s"+

@@ -791,7 +791,6 @@
   "usage_models": "모델",
   "usage_refresh": "사용량 데이터 새로고침",
   "usage_summary_total_cost": "총 비용",
-  "usage_summary_copilot_ai_credits": "Copilot AI 크레딧",
   "usage_summary_unsupported_copilot_no_token_data": "이 기간에 해당하는 Copilot 세션이 있지만, Copilot은 메시지별 토큰 사용량을 기록하지 않습니다.",
   "usage_summary_unsupported_generic": "일치하는 세션에 토큰 사용량 데이터가 없습니다.",
   "usage_summary_input_tokens": "입력 토큰",

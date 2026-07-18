@@ -1086,68 +1086,26 @@ func copyUsageEventsForIDs(
 	}
 
 	// Copy the intersection of known columns so archives created before later
-	// nullable usage fields were introduced remain safe to resync. Credits-first
-	// draft archives keep ai_credits as a compatibility column; translate it
-	// while copying because the source file may be gone permanently.
-	var targetCols, selectExprs []string
+	// nullable usage fields were introduced remain safe to resync.
+	var targetCols []string
 	for _, col := range []string{
 		"session_id", "message_ordinal", "source", "model",
 		"input_tokens", "output_tokens",
 		"cache_creation_input_tokens", "cache_read_input_tokens",
-		"reasoning_tokens",
+		"reasoning_tokens", "cost_usd", "cost_status", "cost_source",
+		"occurred_at", "dedup_key",
 	} {
 		if oldDBHasColumn(ctx, tx, "usage_events", col) {
 			targetCols = append(targetCols, col)
-			selectExprs = append(selectExprs, col)
-		}
-	}
-	hasLegacyCredits := oldDBHasColumn(ctx, tx, "usage_events", "ai_credits")
-	hasCostUSD := oldDBHasColumn(ctx, tx, "usage_events", "cost_usd")
-	if hasLegacyCredits || hasCostUSD {
-		targetCols = append(targetCols, "cost_usd")
-		switch {
-		case hasLegacyCredits && hasCostUSD:
-			selectExprs = append(selectExprs,
-				"CASE WHEN ai_credits IS NOT NULL THEN ai_credits * 0.01 ELSE cost_usd END")
-		case hasLegacyCredits:
-			selectExprs = append(selectExprs, "ai_credits * 0.01")
-		default:
-			selectExprs = append(selectExprs, "cost_usd")
-		}
-	}
-	for _, col := range []string{"cost_status", "cost_source"} {
-		hasColumn := oldDBHasColumn(ctx, tx, "usage_events", col)
-		if !hasColumn && !hasLegacyCredits {
-			continue
-		}
-		targetCols = append(targetCols, col)
-		fallback := "''"
-		if hasColumn {
-			fallback = col
-		}
-		if hasLegacyCredits {
-			value := "'exact'"
-			if col == "cost_source" {
-				value = "'copilot-reported'"
-			}
-			selectExprs = append(selectExprs,
-				"CASE WHEN ai_credits IS NOT NULL THEN "+value+" ELSE "+fallback+" END")
-		} else {
-			selectExprs = append(selectExprs, fallback)
-		}
-	}
-	for _, col := range []string{"occurred_at", "dedup_key"} {
-		if oldDBHasColumn(ctx, tx, "usage_events", col) {
-			targetCols = append(targetCols, col)
-			selectExprs = append(selectExprs, col)
 		}
 	}
 	if len(targetCols) == 0 {
 		return nil
 	}
+	cols := strings.Join(targetCols, ", ")
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO usage_events ("+strings.Join(targetCols, ", ")+") "+
-			"SELECT "+strings.Join(selectExprs, ", ")+" FROM old_db.usage_events "+
+		"INSERT INTO usage_events ("+cols+") "+
+			"SELECT "+cols+" FROM old_db.usage_events "+
 			"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
 	); err != nil {
 		return fmt.Errorf("copying usage_events: %w", err)

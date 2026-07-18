@@ -78,11 +78,7 @@
     });
   });
 
-  function fmtCredits(v: number): string {
-    return String(v.toFixed(0));
-  }
-
-  interface SummaryCard {
+  interface Card {
     label: () => string;
     value: () => string;
     sub?: () => string;
@@ -90,21 +86,13 @@
   }
 
   const cards = $derived.by(() => {
-    const baseCards: SummaryCard[] = [
+    const baseCards: Card[] = [
       {
         label: () => m.usage_summary_total_cost(),
         value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
         sub: () => vsPrior ?? "",
         featured: true,
       },
-      ...(usage.summary?.totals.copilotAICredits
-        ? [
-            {
-              label: () => m.usage_summary_copilot_ai_credits(),
-              value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
-            },
-          ]
-        : []),
       {
         label: () => m.usage_summary_input_tokens(),
         value: () => fmtTokens(inputTokens),
