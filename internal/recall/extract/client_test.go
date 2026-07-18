@@ -86,12 +86,13 @@ func testClient(url string) *Client {
 	return &Client{
 		BaseURL: url,
 		Model:   "test-model",
-		// The compact floor covers the short unit texts these tests send, so
-		// truncation exercises the compact retry unless a test says otherwise.
-		CompactFloorChars: 64,
 		Request: RequestShape{
 			Temperature: 0,
 			MaxTokens:   100,
+			// The compact floor covers the short unit texts these tests
+			// send, so truncation exercises the compact retry unless a
+			// test says otherwise.
+			CompactFloorChars: 64,
 			ExtraBody: map[string]any{
 				"chat_template_kwargs": map[string]any{
 					"enable_thinking": false,
@@ -255,7 +256,7 @@ func TestClientCompactRetryOnTruncation(t *testing.T) {
 	}, &requests)
 	defer server.Close()
 
-	entries, _, err := testClient(server.URL).DistillWithRecovery(
+	entries, usage, err := testClient(server.URL).DistillWithRecovery(
 		context.Background(), "p", "unit text", 3,
 	)
 	if err != nil {
@@ -271,6 +272,9 @@ func TestClientCompactRetryOnTruncation(t *testing.T) {
 	if !strings.Contains(second["content"].(string), "output budget is tight") {
 		t.Fatal("compact retry must append the compact instruction")
 	}
+	if usage.PromptTokens != 14 || usage.CompletionTokens != 6 {
+		t.Fatalf("usage = %+v, want both attempts accounted (14/6)", usage)
+	}
 }
 
 func TestClientPersistentTruncationIsTyped(t *testing.T) {
@@ -281,7 +285,7 @@ func TestClientPersistentTruncationIsTyped(t *testing.T) {
 	}, &requests)
 	defer server.Close()
 
-	_, _, err := testClient(server.URL).DistillWithRecovery(
+	_, usage, err := testClient(server.URL).DistillWithRecovery(
 		context.Background(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrPersistentTruncation) {
@@ -290,6 +294,10 @@ func TestClientPersistentTruncationIsTyped(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("requests = %d, want 2 (below the floor: one compact retry)",
 			len(requests))
+	}
+	if usage.PromptTokens != 14 || usage.CompletionTokens != 6 {
+		t.Fatalf("usage = %+v, want truncated attempts accounted (14/6)",
+			usage)
 	}
 }
 

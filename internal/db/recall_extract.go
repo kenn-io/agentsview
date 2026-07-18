@@ -243,7 +243,9 @@ func (db *DB) extractGenerationByFingerprint(
 // UpsertExtractProgress ensures a progress row exists for the session under
 // the generation. A matching content digest keeps existing progress; a
 // changed digest resets the row to pending at cursor zero so the grown
-// session is re-segmented and topped up.
+// session is re-segmented and topped up. A session with zero units has
+// nothing to extract, so its row lands directly in done — no worker will
+// ever advance a cursor over an empty unit list.
 func (db *DB) UpsertExtractProgress(
 	ctx context.Context,
 	sessionID, fingerprint, contentDigest string,
@@ -253,10 +255,20 @@ func (db *DB) UpsertExtractProgress(
 	if err := db.requireWritable(); err != nil {
 		return zero, err
 	}
+	if unitsTotal < 0 {
+		return zero, fmt.Errorf(
+			"units total %d for session %s must not be negative",
+			unitsTotal, sessionID,
+		)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	initialState := ExtractProgressPending
+	if unitsTotal == 0 {
+		initialState = ExtractProgressDone
 	}
 	_, err := db.getWriter().ExecContext(ctx, `
 		INSERT INTO recall_extract_progress
@@ -278,8 +290,8 @@ func (db *DB) UpsertExtractProgress(
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
 				THEN recall_extract_progress.last_error ELSE '' END,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
-		sessionID, fingerprint, unitsTotal, ExtractProgressPending,
-		contentDigest, ExtractProgressPending,
+		sessionID, fingerprint, unitsTotal, initialState,
+		contentDigest, initialState,
 	)
 	if err != nil {
 		return zero, fmt.Errorf(

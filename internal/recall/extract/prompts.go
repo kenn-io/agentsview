@@ -58,14 +58,24 @@ func basePrompts() map[PromptRole]string {
 	}
 }
 
-// RequestShape carries the model-dependent request parameters that change
-// extraction output. ExtraBody is merged into the request top-level, giving
-// server-specific knobs (template arguments, sampling controls) a home
-// without the client knowing about any particular server.
+// RequestShape carries every model-dependent parameter that changes
+// extraction output — what is sent to the server (temperature, token
+// budget, extra body) and how the client recovers from truncation (the
+// compact floor). Keeping them in one fingerprinted struct means no output-
+// affecting knob can change without producing a new generation. ExtraBody
+// is merged into the request top-level, giving server-specific knobs
+// (template arguments, sampling controls) a home without the client
+// knowing about any particular server.
 type RequestShape struct {
-	Temperature float64        `json:"temperature"`
-	MaxTokens   int            `json:"max_tokens"`
-	ExtraBody   map[string]any `json:"extra_body,omitempty"`
+	Temperature float64 `json:"temperature"`
+	MaxTokens   int     `json:"max_tokens"`
+	// CompactFloorChars bounds the compact retry: a truncated unit longer
+	// than this (in code points) surfaces a split error so no entries are
+	// lost; a unit at or below it (too small for splitting to help) gets
+	// one entry-capped compact retry. Callers set it to SplitFloorChars of
+	// their window budget; zero disables the compact retry entirely.
+	CompactFloorChars int            `json:"compact_floor_chars"`
+	ExtraBody         map[string]any `json:"extra_body,omitempty"`
 }
 
 // Profile bundles the prompt variants and request shape a family of models

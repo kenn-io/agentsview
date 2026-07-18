@@ -99,19 +99,14 @@ var entrySchema = map[string]any{
 }
 
 // Client distills unit text into entries through an OpenAI-compatible chat
-// completion endpoint with constrained decoding.
+// completion endpoint with constrained decoding. Every output-affecting
+// parameter lives in Request so it is covered by the generation
+// fingerprint.
 type Client struct {
-	BaseURL string
-	Model   string
-	// CompactFloorChars bounds the compact retry: a truncated unit longer
-	// than this returns ErrPersistentTruncation immediately so the caller
-	// splits it without losing entries; a unit at or below it (too small
-	// for splitting to help) gets one compact retry first. Callers set it
-	// to SplitFloorChars of their window budget; zero disables the compact
-	// retry entirely.
-	CompactFloorChars int
-	HTTPClient        *http.Client
-	Request           RequestShape
+	BaseURL    string
+	Model      string
+	HTTPClient *http.Client
+	Request    RequestShape
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -123,17 +118,19 @@ func (c *Client) httpClient() *http.Client {
 
 // DistillWithRecovery runs one unit through the model with the recovery
 // ladder: transient failures are retried up to maxAttempts per phase;
-// truncated output on a unit at or below CompactFloorChars triggers exactly
+// truncated output on a unit at or below the compact floor triggers exactly
 // one compact retry (temperature-zero sampling makes same-input retries
 // useless); truncation on a splittable unit, or truncation that survives
 // the compact retry, surfaces as ErrPersistentTruncation and a context
 // overflow as ErrContextOverflow — both mean "split this unit", which the
-// caller owns because it also owns unit identity.
+// caller owns because it also owns unit identity. The returned Usage sums
+// every attempt, successful or not, so recovery costs are accounted.
 func (c *Client) DistillWithRecovery(
 	ctx context.Context, systemPrompt, text string, maxAttempts int,
 ) ([]Entry, Usage, error) {
+	var total Usage
 	if c.Request.MaxTokens <= 0 {
-		return nil, Usage{}, fmt.Errorf(
+		return nil, total, fmt.Errorf(
 			"extraction request max_tokens must be positive; the profile or "+
 				"configuration must set it (got %d)", c.Request.MaxTokens,
 		)
@@ -141,30 +138,32 @@ func (c *Client) DistillWithRecovery(
 	// Rune count, not byte length: segmentation budgets count code points,
 	// so the floor must measure units the same way.
 	unitChars := utf8.RuneCountInString(text)
-	compactAllowed := unitChars <= c.CompactFloorChars
+	compactAllowed := unitChars <= c.Request.CompactFloorChars
 	for _, compact := range []bool{false, true} {
 		var lastErr error
 		truncated := false
 		for range maxAttempts {
 			entries, usage, err := c.distill(ctx, systemPrompt, text, compact)
+			total.PromptTokens += usage.PromptTokens
+			total.CompletionTokens += usage.CompletionTokens
 			if err == nil {
-				return entries, usage, nil
+				return entries, total, nil
 			}
 			if errors.Is(err, ErrContextOverflow) ||
 				errors.Is(err, errPermanentRequest) {
-				return nil, Usage{}, err
+				return nil, total, err
 			}
 			if errors.Is(err, errTruncated) {
 				truncated = true
 				break
 			}
 			if ctx.Err() != nil {
-				return nil, Usage{}, ctx.Err()
+				return nil, total, ctx.Err()
 			}
 			lastErr = err
 		}
 		if !truncated {
-			return nil, Usage{}, fmt.Errorf(
+			return nil, total, fmt.Errorf(
 				"distilling unit after %d attempts: %w", maxAttempts, lastErr,
 			)
 		}
@@ -172,7 +171,7 @@ func (c *Client) DistillWithRecovery(
 			break
 		}
 	}
-	return nil, Usage{}, fmt.Errorf(
+	return nil, total, fmt.Errorf(
 		"unit of %d chars: %w", unitChars, ErrPersistentTruncation,
 	)
 }
@@ -265,9 +264,11 @@ func (c *Client) distill(
 	if len(parsed.Choices) == 0 {
 		return nil, Usage{}, fmt.Errorf("distill response has no choices")
 	}
+	// From here the server reports token usage even when the attempt fails,
+	// so error returns carry parsed.Usage for the caller's accounting.
 	choice := parsed.Choices[0]
 	if choice.FinishReason == "length" {
-		return nil, Usage{}, fmt.Errorf(
+		return nil, parsed.Usage, fmt.Errorf(
 			"at max_tokens=%d: %w", c.Request.MaxTokens, errTruncated,
 		)
 	}
@@ -275,7 +276,7 @@ func (c *Client) distill(
 		// Empty content with a normal finish reason means the token budget
 		// went somewhere invisible (typically hidden reasoning the request
 		// shape should have disabled).
-		return nil, Usage{}, fmt.Errorf(
+		return nil, parsed.Usage, fmt.Errorf(
 			"distill response content is empty; check the model profile's " +
 				"request shape",
 		)
@@ -284,7 +285,7 @@ func (c *Client) distill(
 		Entries []Entry `json:"entries"`
 	}
 	if err := json.Unmarshal([]byte(choice.Message.Content), &out); err != nil {
-		return nil, Usage{}, fmt.Errorf("parsing distilled entries: %w", err)
+		return nil, parsed.Usage, fmt.Errorf("parsing distilled entries: %w", err)
 	}
 	return out.Entries, parsed.Usage, nil
 }

@@ -123,6 +123,14 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 	if changedTokens == a {
 		t.Fatal("max_tokens change must change the fingerprint")
 	}
+	changedFloor, _ := Fingerprint(
+		"model-x", seg, prompts,
+		RequestShape{Temperature: 0, CompactFloorChars: 128},
+	)
+	if changedFloor == a {
+		t.Fatal("compact floor change must change the fingerprint: it " +
+			"decides between capped compact output and splitting")
+	}
 }
 
 func mustProfile(t *testing.T, name string) Profile {

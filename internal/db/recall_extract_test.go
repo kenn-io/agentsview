@@ -385,3 +385,27 @@ func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 		})
 	}
 }
+
+func TestUpsertExtractProgressZeroUnitsCompletesImmediately(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+
+	progress, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 0)
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, progress.State,
+		"a session with no units has nothing left to extract")
+	assert.Equal(t, 0, progress.UnitCursor)
+
+	progress, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 0)
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, progress.State,
+		"a digest reset to zero units must also complete immediately")
+
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-3", -1)
+	require.Error(t, err, "negative unit totals must be refused")
+}
