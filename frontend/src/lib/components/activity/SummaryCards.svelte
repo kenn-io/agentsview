@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
 
@@ -55,14 +56,14 @@
   const peakAt = $derived(fmtClock(report.peak.at));
   const asOf = $derived(fmtClock(report.as_of));
 
-  interface Card {
+  interface SummaryCard {
     label: string;
     value: string;
     sub?: string;
     featured?: boolean;
   }
 
-  const cards = $derived.by((): Card[] => {
+  const cards = $derived.by((): SummaryCard[] => {
     const t = report.totals;
     return [
       {
@@ -105,13 +106,17 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <div class="card" class:featured={card.featured}>
+    <Card
+      level="default"
+      padding="none"
+      class={card.featured ? "card featured" : "card"}
+    >
       <span class="card-value">{card.value}</span>
       <span class="card-label">{card.label}</span>
       {#if card.sub}
         <span class="card-sub">{card.sub}</span>
       {/if}
-    </div>
+    </Card>
   {/each}
 </div>
 
@@ -126,19 +131,20 @@
     flex-wrap: wrap;
   }
 
-  .card {
+  .summary-cards :global(.card) {
     flex: 1;
     min-width: 110px;
     padding: 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
 
-  .card.featured {
+  .summary-cards :global(.card > .kit-card__body) {
+    display: contents;
+  }
+
+  .summary-cards :global(.card.featured) {
     border-width: 2px;
     border-color: var(--accent-blue);
   }

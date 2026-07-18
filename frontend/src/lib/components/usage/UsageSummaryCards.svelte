@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -81,7 +82,7 @@
     return String(v.toFixed(0));
   }
 
-  interface Card {
+  interface SummaryCard {
     label: () => string;
     value: () => string;
     sub?: () => string;
@@ -89,7 +90,7 @@
   }
 
   const cards = $derived.by(() => {
-    const baseCards: Card[] = [
+    const baseCards: SummaryCard[] = [
       {
         label: () => m.usage_summary_total_cost(),
         value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
@@ -158,9 +159,10 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <div
-      class="card"
-      class:featured={card.featured}
+    <Card
+      level="default"
+      padding="none"
+      class={card.featured ? "card featured" : "card"}
     >
       {#if usage.errors.summary}
         <span class="card-value error">--</span>
@@ -175,7 +177,7 @@
           {/if}
         {/if}
       {/if}
-    </div>
+    </Card>
   {/each}
 </div>
 
@@ -198,19 +200,20 @@
     flex-wrap: wrap;
   }
 
-  .card {
+  .summary-cards :global(.card) {
     flex: 1;
     min-width: 120px;
     padding: 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
 
-  .card.featured {
+  .summary-cards :global(.card > .kit-card__body) {
+    display: contents;
+  }
+
+  .summary-cards :global(.card.featured) {
     border-width: 2px;
     border-color: var(--accent-blue);
   }

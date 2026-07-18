@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { onMount, onDestroy, untrack } from "svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -562,11 +563,11 @@
     <SummaryCards />
 
     <div class="chart-grid">
-      <div class="chart-panel wide">
+      <Card level="default" padding="none" class="chart-panel wide">
         <Heatmap />
-      </div>
+      </Card>
 
-      <div class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel">
         <div class="chart-header">
           <h3 class="chart-title">
             {m.analytics_activity_by_day_hour()}
@@ -578,39 +579,39 @@
         <ActivityTimeline onDateRangeChange={handleDateRangeChange} />
         <div class="chart-divider"></div>
         <HourOfWeekHeatmap />
-      </div>
+      </Card>
 
-      <div class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel">
         <TopSessions />
-      </div>
+      </Card>
 
-      <div class="chart-panel wide">
+      <Card level="default" padding="none" class="chart-panel wide">
         <ProjectBreakdown />
-      </div>
+      </Card>
 
-      <div class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel">
         <SessionShape />
-      </div>
+      </Card>
 
-      <div class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel">
         <ToolUsage />
-      </div>
+      </Card>
 
-      <div class="chart-panel wide">
+      <Card level="default" padding="none" class="chart-panel wide">
         <TopSkills />
-      </div>
+      </Card>
 
-      <div class="chart-panel wide">
+      <Card level="default" padding="none" class="chart-panel wide">
         <SkillTrend />
-      </div>
+      </Card>
 
-      <div class="chart-panel wide">
+      <Card level="default" padding="none" class="chart-panel wide">
         <VelocityMetrics />
-      </div>
+      </Card>
 
-      <div class="chart-panel wide">
+      <Card level="default" padding="none" class="chart-panel wide">
         <AgentComparison />
-      </div>
+      </Card>
     </div>
 
     <SessionHealthSection />
@@ -704,19 +705,21 @@
     gap: 12px;
   }
 
-  .chart-panel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  .chart-grid :global(.chart-panel) {
     padding: 12px;
     min-height: 200px;
     min-width: 0;
     overflow-x: hidden;
     display: flex;
     flex-direction: column;
+    gap: 0;
   }
 
-  .chart-panel.wide {
+  .chart-grid :global(.chart-panel > .kit-card__body) {
+    display: contents;
+  }
+
+  .chart-grid :global(.chart-panel.wide) {
     grid-column: 1 / -1;
   }
 

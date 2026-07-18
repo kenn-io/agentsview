@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Checkbox } from "@kenn-io/kit-ui";
+  import { Card, Checkbox } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
@@ -196,7 +196,11 @@
           <div class="empty">{m.worktree_no_mappings()}</div>
         {:else}
           {#each mappings as mapping (mapping.id)}
-            <div class="mapping-row" class:disabled={!mapping.enabled}>
+            <Card
+              level="inset"
+              padding="none"
+              class={!mapping.enabled ? "mapping-row disabled" : "mapping-row"}
+            >
               <div class="mapping-main">
                 <div class="mapping-project">
                   {mapping.project || (mapping.layout === repoDotWorktreesLayout ? m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" }) : m.worktree_layout_explicit({}))}
@@ -212,7 +216,7 @@
                 {m.worktree_delete()}
               </button>
             </div>
-          </div>
+          </Card>
         {/each}
       {/if}
     </div>
@@ -328,19 +332,20 @@
     gap: 6px;
   }
 
-  .mapping-row {
+  .mapping-list :global(.mapping-row) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     min-height: 48px;
     padding: 8px 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
   }
 
-  .mapping-row.disabled {
+  .mapping-list :global(.mapping-row > .kit-card__body) {
+    display: contents;
+  }
+
+  .mapping-list :global(.mapping-row.disabled) {
     opacity: 0.65;
   }
 
@@ -480,7 +485,7 @@
   }
 
   @media (max-width: 640px) {
-    .mapping-row,
+    .mapping-list :global(.mapping-row),
     .button-row {
       align-items: stretch;
       flex-direction: column;

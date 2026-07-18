@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
     usage,
@@ -467,33 +468,35 @@
     {/if}
 
     {#if unsupportedUsageMessage}
-      <div class="usage-note" role="status">
-        {unsupportedUsageMessage}
-      </div>
+      <Card level="default" padding="none" class="usage-note">
+        <div role="status">
+          {unsupportedUsageMessage}
+        </div>
+      </Card>
     {/if}
 
     <UsageSummaryCards />
 
-    <div class="chart-panel wide">
+    <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart />
-    </div>
+    </Card>
 
-    <div class="chart-panel wide">
+    <Card level="default" padding="none" class="chart-panel wide">
       <AttributionPanel />
-    </div>
+    </Card>
 
     <div class="bottom-grid">
-      <div class="chart-panel bounded">
+      <Card level="default" padding="none" class="chart-panel bounded">
         <TopSessionsTable />
-      </div>
-      <div class="chart-panel bounded">
+      </Card>
+      <Card level="default" padding="none" class="chart-panel bounded">
         <CacheEfficiencyPanel />
-      </div>
+      </Card>
     </div>
 
-    <div class="chart-panel wide">
+    <Card level="default" padding="none" class="chart-panel wide">
       <UsagePairwiseComparisonPanel />
-    </div>
+    </Card>
   </div>
 </div>
 
@@ -540,12 +543,9 @@
     transition: opacity 0.12s;
   }
 
-  .usage-note {
+  .usage-content :global(.usage-note) {
     padding: 12px 14px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
     border-left: 4px solid var(--accent-blue);
-    border-radius: var(--radius-md);
     color: var(--text-secondary);
   }
 
@@ -578,15 +578,12 @@
     animation: query-progress 1s ease-in-out infinite;
   }
 
-  .chart-panel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  .usage-content :global(.chart-panel) {
     padding: 12px;
     min-width: 0;
   }
 
-  .chart-panel.wide {
+  .usage-content :global(.chart-panel.wide) {
     width: 100%;
   }
 
@@ -597,7 +594,7 @@
     align-items: start;
   }
 
-  .chart-panel.bounded {
+  .usage-content :global(.chart-panel.bounded) {
     max-height: min(420px, 48vh);
     overflow: auto;
   }

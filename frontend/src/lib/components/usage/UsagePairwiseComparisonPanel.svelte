@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
@@ -177,7 +177,7 @@
   </div>
 
   <div class="selectors">
-    <div class="side">
+    <Card level="default" padding="none" class="side">
       <span class="side-label">{m.usage_pairwise_left()}</span>
       <div class="side-controls">
         <label>
@@ -217,9 +217,9 @@
           </div>
         </label>
       </div>
-    </div>
+    </Card>
 
-    <div class="side">
+    <Card level="default" padding="none" class="side">
       <span class="side-label">{m.usage_pairwise_right()}</span>
       <div class="side-controls">
         <label>
@@ -259,22 +259,22 @@
           </div>
         </label>
       </div>
-    </div>
+    </Card>
   </div>
 
   {#if usage.errors.pairwise}
-    <div class="error-bar">
+    <Card level="default" padding="none" class="error-bar">
       <span>{usage.errors.pairwise}</span>
       <button class="retry-btn" onclick={() => usage.fetchAll()}>
         {m.shared_retry()}
       </button>
-    </div>
+    </Card>
   {:else if !hasSelection}
-    <div class="pairwise-note">
+    <Card level="default" padding="none" class="pairwise-note">
       {m.usage_pairwise_not_enough_data()}
-    </div>
+    </Card>
   {:else if usage.loading.pairwise && rows.length === 0}
-    <div class="pairwise-note">{m.shared_refresh()}</div>
+    <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
   {:else if rows.length > 0}
     <div class="table-wrap">
       <table>
@@ -341,11 +341,8 @@
     gap: 12px;
   }
 
-  .side {
+  .selectors :global(.side) {
     padding: 12px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
   }
 
   .side-label {
@@ -422,22 +419,24 @@
     font-size: 11px;
   }
 
-  .pairwise-note,
-  .error-bar {
+  .pairwise-panel :global(.pairwise-note) {
     padding: 12px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
-    background: var(--bg-surface);
     color: var(--text-muted);
     font-size: 12px;
   }
 
-  .error-bar {
+  .pairwise-panel :global(.error-bar) {
     display: flex;
     align-items: center;
     gap: 8px;
+    padding: 12px;
     border-color: var(--accent-red);
     color: var(--accent-red);
+    font-size: 12px;
+  }
+
+  .pairwise-panel :global(.error-bar > .kit-card__body) {
+    display: contents;
   }
 
   .retry-btn {

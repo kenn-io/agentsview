@@ -35,7 +35,7 @@
     SignalCalibration,
     SignalSessionExample,
   } from "../../api/types.js";
-  import { CopyButton, IconButton, Typeahead } from "@kenn-io/kit-ui";
+  import { Card, CopyButton, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -466,6 +466,35 @@
     router.navigateToSession(example.session_id, params);
   }
 
+  function openEvidenceListSession(event: MouseEvent) {
+    if (
+      !(event.target instanceof Element) ||
+      !(event.currentTarget instanceof HTMLElement)
+    ) return;
+    const link = event.target.closest<HTMLAnchorElement>("a.evidence-row");
+    if (!link) return;
+    const links = Array.from(
+      event.currentTarget.querySelectorAll<HTMLAnchorElement>(
+        "a.evidence-row",
+      ),
+    );
+    const example = signalExamples[links.indexOf(link)];
+    if (!example) return;
+    openEvidenceSession(example, event);
+  }
+
+  function delegateEvidenceClicks(node: HTMLElement) {
+    const handleClick = (event: MouseEvent) => {
+      openEvidenceListSession(event);
+    };
+    node.addEventListener("click", handleClick);
+    return {
+      destroy() {
+        node.removeEventListener("click", handleClick);
+      },
+    };
+  }
+
   function evidenceSessionParams(
     example: SignalSessionExample,
   ): Record<string, string> {
@@ -848,20 +877,22 @@
       </div>
 
       {#if recommendations.length === 0}
-        <div class="state-panel compact-state">
+        <Card level="default" padding="none" class="state-panel compact-state">
           <strong>{m.insights_page_no_rule_actions()}</strong>
           <span>
             {m.insights_page_patterns_clear()}
           </span>
-        </div>
+        </Card>
       {:else}
         <div class="recommendation-list">
           {#each recommendations as rec}
-            <article class="recommendation">
-              <span class="badge rule">{m.insights_page_rule_based()}</span>
-              <strong>{rec.label}</strong>
-              <p>{rec.rationale}</p>
-            </article>
+            <Card level="default" padding="none" class="recommendation">
+              <article class="recommendation-content">
+                <span class="badge rule">{m.insights_page_rule_based()}</span>
+                <strong>{rec.label}</strong>
+                <p>{rec.rationale}</p>
+              </article>
+            </Card>
           {/each}
         </div>
       {/if}
@@ -889,63 +920,80 @@
         </div>
         <div class="pattern-grid">
           {#each Array(4) as _}
-            <div class="skeleton-pattern"></div>
+            <Card level="default" padding="none" class="skeleton-pattern"></Card>
           {/each}
         </div>
       {:else if error && !signals}
-        <div class="state-panel error" role="alert">
-          <strong>{m.insights_page_could_not_load()}</strong>
-          <span>{error}</span>
-          <button onclick={fetchInsightSignals}>
-            {m.insights_page_retry()}
-          </button>
-        </div>
+        <Card level="default" padding="none" class="state-panel error">
+          <div class="state-panel-alert" role="alert">
+            <strong>{m.insights_page_could_not_load()}</strong>
+            <span>{error}</span>
+            <button onclick={fetchInsightSignals}>
+              {m.insights_page_retry()}
+            </button>
+          </div>
+        </Card>
       {:else if !hasData}
-        <div class="state-panel">
+        <Card level="default" padding="none" class="state-panel">
           <strong>{m.insights_page_no_scored_data()}</strong>
           <span>
             {m.insights_page_no_scored_data_hint()}
           </span>
-        </div>
+        </Card>
       {:else}
         {#if error}
-          <div class="inline-warning" role="status">
-            {m.insights_page_cached_warning({ error })}
-          </div>
+          <Card level="default" padding="none" class="inline-warning">
+            <div role="status">
+              {m.insights_page_cached_warning({ error })}
+            </div>
+          </Card>
         {/if}
 
         <div class="summary-grid">
-          <article class="summary-card">
-            <span class="label">{m.insights_page_average_score()}</span>
-            <strong>
-              {summary.avgHealthScore == null
-                ? "--"
-                : Math.round(summary.avgHealthScore)}
-            </strong>
-            <span>
-              {summary.avgHealthScore == null
-                ? m.insights_page_no_scored_sessions()
-                : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
-            </span>
-          </article>
-          <article class="summary-card">
-            <span class="label">{m.insights_page_scored_sessions()}</span>
-            <strong>{summary.scoredSessions}</strong>
-            <span>{m.insights_page_unscored_count({ count: summary.unscoredSessions })}</span>
-          </article>
-          <article class="summary-card">
-            <span class="label">{m.insights_page_low_quality()}</span>
-            <strong>{summary.lowQualitySessions}</strong>
-            <span>{m.insights_page_df_graded()}</span>
-          </article>
-          <article class="summary-card">
-            <span class="label">{m.insights_page_prompt_signals()}</span>
-            <strong>{summary.computedQualitySessions}</strong>
-            <span>{m.insights_page_sessions_computed()}</span>
-          </article>
+          <Card level="default" padding="none" class="summary-card">
+            <article class="summary-card-content">
+              <span class="label">{m.insights_page_average_score()}</span>
+              <strong>
+                {summary.avgHealthScore == null
+                  ? "--"
+                  : Math.round(summary.avgHealthScore)}
+              </strong>
+              <span>
+                {summary.avgHealthScore == null
+                  ? m.insights_page_no_scored_sessions()
+                  : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
+              </span>
+            </article>
+          </Card>
+          <Card level="default" padding="none" class="summary-card">
+            <article class="summary-card-content">
+              <span class="label">{m.insights_page_scored_sessions()}</span>
+              <strong>{summary.scoredSessions}</strong>
+              <span>{m.insights_page_unscored_count({ count: summary.unscoredSessions })}</span>
+            </article>
+          </Card>
+          <Card level="default" padding="none" class="summary-card">
+            <article class="summary-card-content">
+              <span class="label">{m.insights_page_low_quality()}</span>
+              <strong>{summary.lowQualitySessions}</strong>
+              <span>{m.insights_page_df_graded()}</span>
+            </article>
+          </Card>
+          <Card level="default" padding="none" class="summary-card">
+            <article class="summary-card-content">
+              <span class="label">{m.insights_page_prompt_signals()}</span>
+              <strong>{summary.computedQualitySessions}</strong>
+              <span>{m.insights_page_sessions_computed()}</span>
+            </article>
+          </Card>
         </div>
 
-        <div class="distribution-row" aria-label={m.insights_page_score_distribution()}>
+        <Card
+          level="default"
+          padding="none"
+          class="distribution-row"
+          ariaLabel={m.insights_page_score_distribution()}
+        >
           {#each summary.scoreDistribution as bucket}
             <div class="grade-bar">
               <span>{bucket.grade}</span>
@@ -958,14 +1006,19 @@
               <strong>{bucket.count}</strong>
             </div>
           {/each}
-        </div>
+        </Card>
 
         <div class="pattern-grid">
           {#each patterns as pattern}
-            <article
+            <Card
+              level="default"
+              padding="none"
               class={`pattern-card severity-${pattern.severity}`}
-              aria-labelledby={`${pattern.id}-title`}
             >
+              <article
+                class="pattern-card-content"
+                aria-labelledby={`${pattern.id}-title`}
+              >
               <div class="pattern-head">
                 <div>
                   <h3 id={`${pattern.id}-title`}>
@@ -1031,13 +1084,15 @@
                   {/each}
                 </div>
               {/if}
-            </article>
+              </article>
+            </Card>
           {/each}
         </div>
 
         {#if selectedSignalId}
-          <section class="evidence-panel" aria-live="polite">
-            <div class="evidence-head">
+          <Card level="default" padding="none" class="evidence-panel">
+            <section class="evidence-panel-live" aria-live="polite">
+              <div class="evidence-head">
               <div>
                 <span class="examples-label">{m.insights_page_session_evidence()}</span>
                 <h3>{selectedSignalLabel()}</h3>
@@ -1056,42 +1111,43 @@
               >
                 {m.insights_page_close()}
               </button>
-            </div>
-            {#if signalExamplesLoading}
-              <p class="evidence-state">{m.insights_page_loading_examples()}</p>
-            {:else if signalExamplesError}
-              <p class="evidence-state error">{signalExamplesError}</p>
-            {:else if signalExamples.length === 0}
-              <p class="evidence-state">
-                {m.insights_page_no_triggering_sessions()}
-              </p>
-            {:else}
-              <div class="evidence-list">
-                {#each signalExamples as example}
-                  <a
-                    class="evidence-row"
-                    href={router.buildSessionHref(
+              </div>
+              {#if signalExamplesLoading}
+                <p class="evidence-state">{m.insights_page_loading_examples()}</p>
+              {:else if signalExamplesError}
+                <p class="evidence-state error">{signalExamplesError}</p>
+              {:else if signalExamples.length === 0}
+                <p class="evidence-state">
+                  {m.insights_page_no_triggering_sessions()}
+                </p>
+              {:else}
+                <div class="evidence-list" use:delegateEvidenceClicks>
+                  {#each signalExamples as example}
+                    <Card
+                      level="inset"
+                      padding="none"
+                      class="evidence-row"
+                      href={router.buildSessionHref(
                       example.session_id,
                       evidenceSessionParams(example),
                     )}
-                    onclick={(event) =>
-                      openEvidenceSession(example, event)}
-                  >
-                    <span class="evidence-main">
-                      <strong>{example.project || m.insights_page_unassigned_project()}</strong>
-                      <em>{example.excerpt || m.insights_page_no_excerpt()}</em>
-                    </span>
-                    <span class="evidence-meta">
-                      <span>{agentLabel(example.agent)}</span>
-                      <span>{example.outcome || m.insights_page_unknown()}</span>
-                      <span>{qualityBadge(example)}</span>
-                      <span>{m.insights_page_failures({ count: example.failure_signals })}</span>
-                    </span>
-                  </a>
-                {/each}
-              </div>
-            {/if}
-          </section>
+                    >
+                      <span class="evidence-main">
+                        <strong>{example.project || m.insights_page_unassigned_project()}</strong>
+                        <em>{example.excerpt || m.insights_page_no_excerpt()}</em>
+                      </span>
+                      <span class="evidence-meta">
+                        <span>{agentLabel(example.agent)}</span>
+                        <span>{example.outcome || m.insights_page_unknown()}</span>
+                        <span>{qualityBadge(example)}</span>
+                        <span>{m.insights_page_failures({ count: example.failure_signals })}</span>
+                      </span>
+                    </Card>
+                  {/each}
+                </div>
+              {/if}
+            </section>
+          </Card>
         {/if}
       {/if}
     </section>
@@ -1113,7 +1169,7 @@
         </p>
       </div>
 
-      <div class="generated-controls">
+      <Card level="default" padding="none" class="generated-controls">
         <label class="generated-control">
           <span>{m.insights_page_template_label()}</span>
           <Typeahead
@@ -1162,24 +1218,26 @@
         >
           {m.insights_page_generate()}
         </button>
-      </div>
+      </Card>
 
       {#if insights.loading}
-        <div class="state-panel compact-state">{m.insights_page_loading_archive()}</div>
+        <Card level="default" padding="none" class="state-panel compact-state">{m.insights_page_loading_archive()}</Card>
       {:else if insights.items.length === 0 && insights.tasks.length === 0}
-        <div class="state-panel compact-state">
+        <Card level="default" padding="none" class="state-panel compact-state">
           <strong>{m.insights_page_no_generated_saved()}</strong>
           <span>
             {m.insights_page_no_generated_hint()}
           </span>
-        </div>
+        </Card>
       {:else}
         <div class="generated-layout">
           <div class="generated-list">
             {#each insights.tasks as task (task.clientId)}
-              <button
-                class:active={insights.selectedTaskId === task.clientId}
-                class:error-task={task.status === "error"}
+              <Card
+                level="default"
+                padding="none"
+                class={task.status === "error" ? "error-task" : ""}
+                selected={insights.selectedTaskId === task.clientId}
                 onclick={() => selectGeneratedTask(task.clientId)}
               >
                 <span>{task.status === "error" ? m.insights_page_error() : m.insights_page_running()}</span>
@@ -1187,11 +1245,13 @@
                 <em>
                   {task.kind ? cannedKindLabel(task.kind) : task.phase}
                 </em>
-              </button>
+              </Card>
             {/each}
             {#each insights.items as item (item.id)}
-              <button
-                class:active={insights.selectedId === item.id}
+              <Card
+                level="default"
+                padding="none"
+                selected={insights.selectedId === item.id}
                 onclick={() => selectGeneratedInsight(item.id)}
               >
                 <span>
@@ -1202,11 +1262,12 @@
                   {formatDateRange(item.date_from, item.date_to)}
                   · {formatTime(item.created_at)}
                 </em>
-              </button>
+              </Card>
             {/each}
           </div>
 
-          <article class="generated-detail">
+          <Card level="default" padding="none" class="generated-detail">
+            <article>
             {#if insights.selectedTask}
               <div class="generated-detail-head">
                 <span class="badge generated">
@@ -1335,7 +1396,8 @@
             {:else}
               <p>{m.insights_page_select_to_read()}</p>
             {/if}
-          </article>
+            </article>
+          </Card>
         </div>
       {/if}
     </section>
@@ -1539,25 +1601,21 @@
     gap: var(--space-5);
   }
 
-  .summary-card,
-  .pattern-card,
-  .recommendation,
-  .generated-detail,
-  .state-panel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
-  }
-
-  .summary-card {
+  .summary-grid :global(.summary-card) {
     min-height: 92px;
     padding: 12px;
     display: flex;
     flex-direction: column;
+    gap: 0;
     justify-content: space-between;
   }
 
-  .summary-card .label {
+  .summary-grid :global(.summary-card > .kit-card__body),
+  .summary-card-content {
+    display: contents;
+  }
+
+  .summary-grid :global(.summary-card .label) {
     color: var(--text-muted);
     font-size: 11px;
     font-weight: 600;
@@ -1565,26 +1623,27 @@
     letter-spacing: 0.04em;
   }
 
-  .summary-card strong {
+  .summary-grid :global(.summary-card strong) {
     font-size: 28px;
     line-height: 1;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
   }
 
-  .summary-card span:last-child {
+  .summary-grid :global(.summary-card span:last-child) {
     color: var(--text-secondary);
     font-size: 12px;
   }
 
-  .distribution-row {
+  .content :global(.distribution-row) {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 8px;
     padding: 10px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  }
+
+  .content :global(.distribution-row > .kit-card__body) {
+    display: contents;
   }
 
   .grade-bar {
@@ -1621,12 +1680,17 @@
     gap: 12px;
   }
 
-  .pattern-card {
+  .pattern-grid :global(.pattern-card) {
     min-height: 310px;
     padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .pattern-grid :global(.pattern-card > .kit-card__body),
+  .pattern-card-content {
+    display: contents;
   }
 
   .pattern-head {
@@ -1656,7 +1720,7 @@
     border: 1px solid var(--border-muted);
   }
 
-  .severity-critical .severity {
+  .pattern-grid :global(.severity-critical .severity) {
     color: var(--accent-red);
     background: color-mix(
       in srgb,
@@ -1665,8 +1729,8 @@
     );
   }
 
-  .severity-warning .severity,
-  .severity-watch .severity {
+  .pattern-grid :global(.severity-warning .severity),
+  .pattern-grid :global(.severity-watch .severity) {
     color: var(--accent-amber);
     background: color-mix(
       in srgb,
@@ -1675,7 +1739,7 @@
     );
   }
 
-  .severity-clear .severity {
+  .pattern-grid :global(.severity-clear .severity) {
     color: var(--accent-green);
     background: color-mix(
       in srgb,
@@ -1684,7 +1748,7 @@
     );
   }
 
-  .severity-unavailable .severity {
+  .pattern-grid :global(.severity-unavailable .severity) {
     color: var(--text-muted);
     background: var(--bg-inset);
   }
@@ -1840,13 +1904,15 @@
     white-space: nowrap;
   }
 
-  .evidence-panel {
+  .content :global(.evidence-panel) {
     display: grid;
     gap: var(--space-5);
     padding: 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  }
+
+  .content :global(.evidence-panel > .kit-card__body),
+  .evidence-panel-live {
+    display: contents;
   }
 
   .evidence-head {
@@ -1876,19 +1942,20 @@
     gap: 6px;
   }
 
-  .evidence-row {
+  .evidence-list :global(.evidence-row) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 12px;
     align-items: center;
     padding: 9px 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
     text-decoration: none;
   }
 
-  .evidence-row:hover {
+  .evidence-list :global(.evidence-row > .kit-card__body) {
+    display: contents;
+  }
+
+  .evidence-list :global(.evidence-row:hover) {
     border-color: var(--border-default);
     background: var(--bg-surface-hover);
   }
@@ -1929,18 +1996,23 @@
     gap: var(--space-5);
   }
 
-  .recommendation {
+  .recommendation-list :global(.recommendation) {
     padding: 12px;
     display: grid;
     gap: var(--space-3);
   }
 
-  .recommendation strong {
+  .recommendation-list :global(.recommendation > .kit-card__body),
+  .recommendation-content {
+    display: contents;
+  }
+
+  .recommendation-list :global(.recommendation strong) {
     color: var(--text-primary);
     font-size: 13px;
   }
 
-  .recommendation p {
+  .recommendation-list :global(.recommendation p) {
     color: var(--text-secondary);
     font-size: 12px;
     line-height: 1.45;
@@ -1961,7 +2033,7 @@
     container-type: inline-size;
   }
 
-  .generated-controls {
+  .generated-block :global(.generated-controls) {
     display: grid;
     grid-template-columns:
       minmax(180px, 220px) minmax(130px, 160px)
@@ -1969,9 +2041,10 @@
     gap: var(--space-5);
     align-items: end;
     padding: 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  }
+
+  .generated-block :global(.generated-controls > .kit-card__body) {
+    display: contents;
   }
 
   .generated-control {
@@ -2052,7 +2125,7 @@
   }
 
   @container (max-width: 760px) {
-    .generated-controls,
+    .generated-block :global(.generated-controls),
     .generated-layout {
       grid-template-columns: 1fr;
     }
@@ -2064,42 +2137,37 @@
     gap: 6px;
   }
 
-  .generated-list button {
+  .generated-list :global(.kit-card) {
     min-height: 54px;
     padding: 9px 10px;
     display: grid;
     gap: 2px;
     text-align: left;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
   }
 
-  .generated-list button:hover,
-  .generated-list button.active {
-    background: var(--bg-surface-hover);
-    border-color: var(--border-default);
+  .generated-list :global(.kit-card > .kit-card__body) {
+    display: contents;
   }
 
-  .generated-list button span {
+  .generated-list :global(.kit-card span) {
     color: var(--accent-purple);
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
   }
 
-  .generated-list button strong {
+  .generated-list :global(.kit-card strong) {
     color: var(--text-primary);
     font-size: 12px;
   }
 
-  .generated-list button em {
+  .generated-list :global(.kit-card em) {
     color: var(--text-muted);
     font-size: 11px;
     font-style: normal;
   }
 
-  .generated-list button.error-task span {
+  .generated-list :global(.kit-card.error-task span) {
     color: var(--accent-red);
   }
 
@@ -2141,7 +2209,7 @@
     color: var(--accent-red);
   }
 
-  .generated-detail {
+  .generated-layout :global(.generated-detail) {
     min-height: 220px;
     padding: 14px;
   }
@@ -2267,18 +2335,23 @@
     padding-left: 18px;
   }
 
-  .state-panel {
+  .content :global(.state-panel) {
     padding: 18px;
     display: grid;
     gap: 6px;
     color: var(--text-secondary);
   }
 
-  .state-panel strong {
+  .content :global(.state-panel > .kit-card__body),
+  .state-panel-alert {
+    display: contents;
+  }
+
+  .content :global(.state-panel strong) {
     color: var(--text-primary);
   }
 
-  .state-panel button {
+  .content :global(.state-panel button) {
     justify-self: start;
     margin-top: 6px;
     height: 26px;
@@ -2290,7 +2363,7 @@
     font-weight: 700;
   }
 
-  .state-panel.error {
+  .content :global(.state-panel.error) {
     border-color: color-mix(
       in srgb,
       var(--accent-red) 35%,
@@ -2298,30 +2371,18 @@
     );
   }
 
-  .compact-state {
+  .content :global(.compact-state) {
     padding: 14px;
   }
 
-  .inline-warning {
+  .content :global(.inline-warning) {
     padding: 9px 10px;
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 10%,
-      var(--bg-surface)
-    );
-    border: 1px solid color-mix(
-      in srgb,
-      var(--accent-amber) 24%,
-      var(--border-muted)
-    );
-    border-radius: var(--radius-md);
     color: var(--text-secondary);
     font-size: 12px;
   }
 
   .skeleton-card,
-  .skeleton-pattern {
-    border-radius: var(--radius-md);
+  .pattern-grid :global(.skeleton-pattern) {
     background: linear-gradient(
       90deg,
       var(--bg-surface) 0%,
@@ -2330,14 +2391,15 @@
     );
     background-size: 200% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
-    border: 1px solid var(--border-muted);
   }
 
   .skeleton-card {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-muted);
     height: 92px;
   }
 
-  .skeleton-pattern {
+  .pattern-grid :global(.skeleton-pattern) {
     height: 310px;
   }
 
@@ -2382,12 +2444,12 @@
       grid-template-columns: 1fr;
     }
 
-    .distribution-row {
+    .content :global(.distribution-row) {
       grid-template-columns: 1fr;
     }
 
     .driver-row,
-    .evidence-row {
+    .evidence-list :global(.evidence-row) {
       grid-template-columns: 1fr;
     }
 

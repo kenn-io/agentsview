@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -10,13 +11,13 @@
     return `${(n * 100).toFixed(1)}%`;
   }
 
-  interface Card {
+  interface SummaryCard {
     label: () => string;
     value: () => string;
     sub?: () => string;
   }
 
-  const cards: Card[] = [
+  const cards: SummaryCard[] = [
     {
       label: () => m.analytics_summary_sessions(),
       value: () =>
@@ -63,7 +64,7 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <div class="card">
+    <Card level="default" padding="none" class="card">
       {#if analytics.errors.summary}
         <span class="card-value error">--</span>
         <span class="card-label">{card.label()}</span>
@@ -79,7 +80,7 @@
           {/if}
         {/if}
       {/if}
-    </div>
+    </Card>
   {/each}
 </div>
 
@@ -102,16 +103,17 @@
     flex-wrap: wrap;
   }
 
-  .card {
+  .summary-cards :global(.card) {
     flex: 1;
     min-width: 120px;
     padding: 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .summary-cards :global(.card > .kit-card__body) {
+    display: contents;
   }
 
   .card-value {

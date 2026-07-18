@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import GradeDistribution
@@ -39,7 +40,7 @@
     </div>
 
     <div class="health-summary-cards">
-      <div class="card">
+      <Card level="default" padding="none" class="card">
         <span class="card-label">{m.analytics_session_health_avg_score()}</span>
         <span class="card-value">
           {signals.avg_health_score != null
@@ -51,8 +52,8 @@
             {m.analytics_session_health_grade({ grade: scoreToGrade(signals.avg_health_score) })}
           </span>
         {/if}
-      </div>
-      <div class="card">
+      </Card>
+      <Card level="default" padding="none" class="card">
         <span class="card-label">{m.analytics_session_health_completed()}</span>
         <span class="card-value" style:color="var(--accent-green)">
           {#if signals.scored_sessions > 0}
@@ -69,8 +70,8 @@
         <span class="card-sub">
           {formatSessionCount(signals.outcome_distribution?.completed ?? 0)}
         </span>
-      </div>
-      <div class="card">
+      </Card>
+      <Card level="default" padding="none" class="card">
         <span class="card-label">{m.analytics_session_health_errored()}</span>
         <span class="card-value" style:color="var(--accent-red)">
           {#if signals.scored_sessions > 0}
@@ -87,8 +88,8 @@
         <span class="card-sub">
           {formatSessionCount(signals.outcome_distribution?.errored ?? 0)}
         </span>
-      </div>
-      <div class="card">
+      </Card>
+      <Card level="default" padding="none" class="card">
         <span class="card-label">{m.analytics_session_health_tool_failures()}</span>
         <span class="card-value" style:color="var(--accent-amber)">
           {#if signals.scored_sessions > 0}
@@ -100,8 +101,8 @@
         <span class="card-sub">
           {formatSessionCount(signals.tool_health.sessions_with_failures)}
         </span>
-      </div>
-      <div class="card">
+      </Card>
+      <Card level="default" padding="none" class="card">
         <span class="card-label">{m.analytics_session_health_compactions()}</span>
         <span
           class="card-value"
@@ -121,24 +122,24 @@
             value: signals.context_health.avg_compaction_count.toFixed(1),
           })}
         </span>
-      </div>
+      </Card>
     </div>
 
     <div class="chart-grid">
-      <div class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel">
         <GradeDistribution
           distribution={signals.grade_distribution}
         />
-      </div>
-      <div class="chart-panel">
+      </Card>
+      <Card level="default" padding="none" class="chart-panel">
         <OutcomeDistribution
           distribution={signals.outcome_distribution}
         />
-      </div>
-      <div class="chart-panel wide">
+      </Card>
+      <Card level="default" padding="none" class="chart-panel wide">
         <HealthTrend trend={signals.trend} />
-      </div>
-      <div class="chart-panel">
+      </Card>
+      <Card level="default" padding="none" class="chart-panel">
         <div class="mini-table">
           <div class="table-title">{m.analytics_by_agent()}</div>
           <table>
@@ -170,8 +171,8 @@
             </tbody>
           </table>
         </div>
-      </div>
-      <div class="chart-panel">
+      </Card>
+      <Card level="default" padding="none" class="chart-panel">
         <div class="mini-table">
           <div class="table-title">{m.analytics_by_project()}</div>
           <table>
@@ -203,7 +204,7 @@
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
     </div>
   </div>
 {/if}
@@ -231,10 +232,7 @@
     gap: 12px;
     margin-bottom: 12px;
   }
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  .health-summary-cards :global(.card) {
     padding: 12px;
   }
   .card-label {
@@ -261,13 +259,10 @@
     grid-template-columns: 1fr 1fr;
     gap: 12px;
   }
-  .chart-panel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  .chart-grid :global(.chart-panel) {
     padding: 12px;
   }
-  .chart-panel.wide {
+  .chart-grid :global(.chart-panel.wide) {
     grid-column: 1 / -1;
   }
   .mini-table {
@@ -304,7 +299,7 @@
     .chart-grid {
       grid-template-columns: 1fr;
     }
-    .chart-panel.wide {
+    .chart-grid :global(.chart-panel.wide) {
       grid-column: 1;
     }
   }
