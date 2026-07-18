@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Card, Checkbox } from "@kenn-io/kit-ui";
+  import { Card, Checkbox, SegmentedControl, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
@@ -23,6 +23,17 @@
 
   const explicitLayout = "explicit";
   const repoDotWorktreesLayout = "repo_dot_worktrees";
+
+  const layoutOptions = $derived([
+    { value: explicitLayout, label: m.worktree_layout_explicit({}) },
+    {
+      value: repoDotWorktreesLayout,
+      label: m.worktree_layout_repo_dot_worktrees({
+        repo: "repo",
+        branch: "branch",
+      }),
+    },
+  ]);
 
   let { readOnly = false }: Props = $props();
 
@@ -222,32 +233,22 @@
     </div>
 
     <div class="form-grid">
-      <label class="field">
+      <div class="field">
         <span>{m.worktree_layout()}</span>
-        <div class="layout-options" role="group" aria-label={m.worktree_layout()}>
-          <button
-            type="button"
-            class:active={layout === explicitLayout}
-            onclick={() => (layout = explicitLayout)}
-          >
-            {m.worktree_layout_explicit({})}
-          </button>
-          <button
-            type="button"
-            class:active={layout === repoDotWorktreesLayout}
-            onclick={() => (layout = repoDotWorktreesLayout)}
-          >
-            {m.worktree_layout_repo_dot_worktrees({
-              repo: "repo",
-              branch: "branch",
-            })}
-          </button>
-        </div>
-      </label>
+        <SegmentedControl
+          options={layoutOptions}
+          value={layout}
+          block
+          ariaLabel={m.worktree_layout()}
+          onchange={(value) => (layout = value)}
+        />
+      </div>
       <label class="field">
         <span>{isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}</span>
-        <input
+        <TextInput
           type="text"
+          size="md"
+          block
           bind:value={pathPrefix}
           placeholder={isRepoDotWorktrees ? "/Users/me" : "/Users/me/project.worktrees"}
         />
@@ -257,8 +258,10 @@
       </label>
       <label class="field">
         <span>{m.worktree_project()}</span>
-        <input
+        <TextInput
           type="text"
+          size="md"
+          block
           bind:value={project}
           placeholder="project-name"
           disabled={isRepoDotWorktrees}
@@ -386,42 +389,8 @@
     min-width: 0;
   }
 
-  .field input {
-    height: 30px;
+  .field :global(.kit-text-input) {
     min-width: 0;
-    padding: 0 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
-    color: var(--text-primary);
-    font-size: 12px;
-  }
-
-  .layout-options {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 4px;
-  }
-
-  .layout-options button {
-    min-height: 30px;
-    padding: 4px 8px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
-    color: var(--text-secondary);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .layout-options button.active {
-    border-color: var(--accent-blue);
-    color: var(--text-primary);
-  }
-
-  .field input:focus {
-    outline: none;
-    border-color: var(--accent-blue);
   }
 
   .hint {

@@ -15,16 +15,16 @@ describe("AppearanceSettings", () => {
     ui.setFontScale(110);
     const { getByRole } = render(AppearanceSettings);
     for (const pct of [90, 100, 110, 120, 130]) {
-      expect(getByRole("button", { name: `${pct}%` })).toBeTruthy();
+      expect(getByRole("radio", { name: `${pct}%` })).toBeTruthy();
     }
     expect(
-      getByRole("button", { name: "110%" }).classList.contains("active"),
-    ).toBe(true);
+      getByRole("radio", { name: "110%" }).getAttribute("aria-checked"),
+    ).toBe("true");
   });
 
   it("changes the font scale when an option is clicked", async () => {
     const { getByRole } = render(AppearanceSettings);
-    await fireEvent.click(getByRole("button", { name: "120%" }));
+    await fireEvent.click(getByRole("radio", { name: "120%" }));
     expect(ui.fontScale).toBe(120);
   });
 

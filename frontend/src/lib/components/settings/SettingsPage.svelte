@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button, TextInput } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -44,8 +45,9 @@
         {m.app_auth_description()}
       </p>
       <div class="auth-field">
-        <input
+        <TextInput
           class="auth-input"
+          size="md"
           type="password"
           placeholder={m.app_auth_placeholder()}
           bind:value={authTokenInput}
@@ -100,8 +102,7 @@
       <RemoteSettings />
 
       <div class="settings-actions">
-        <button
-          class="resync-btn"
+        <Button
           onclick={() => {
             if (!sync.readOnly) ui.activeModal = "resync";
           }}
@@ -111,7 +112,7 @@
             : m.resync_title()}
         >
           {m.resync_title()}
-        </button>
+        </Button>
         <span class="settings-actions-hint">
           {sync.readOnly
             ? m.settings_resync_unavailable_hint()
@@ -174,29 +175,6 @@
     border-top: 1px solid var(--border-muted);
   }
 
-  .resync-btn {
-    height: 30px;
-    padding: 0 14px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-primary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: opacity 0.12s;
-  }
-
-  .resync-btn:hover:not(:disabled) {
-    opacity: 0.8;
-  }
-
-  .resync-btn:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-
   .settings-actions-hint {
     font-size: 11px;
     color: var(--text-muted);
@@ -231,21 +209,10 @@
     margin: 0 auto;
   }
 
-  .auth-input {
+  :global(.auth-input.kit-text-input) {
     flex: 1;
     height: 34px;
-    padding: 0 12px;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
     font-family: var(--font-mono, monospace);
-    color: var(--text-primary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-  }
-
-  .auth-input:focus {
-    outline: none;
-    border-color: var(--accent-blue);
   }
 
   .auth-btn {

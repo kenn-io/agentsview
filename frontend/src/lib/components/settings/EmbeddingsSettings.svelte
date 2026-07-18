@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
@@ -194,6 +195,13 @@
     if (state === "retired") return m.settings_embeddings_state_retired();
     return state;
   }
+
+  function stateTone(state: string): ChipTone {
+    if (state === "active") return "success";
+    if (state === "building") return "warning";
+    if (state === "failed") return "danger";
+    return "muted";
+  }
 </script>
 
 <SettingsSection
@@ -220,11 +228,11 @@
       <span class="row-label">{m.settings_embeddings_status_label()}</span>
       <span class="row-value">
         {#if running}
-          <span class="state-badge building">{phaseLabel()}</span>
+          <Chip size="xs" tone="warning">{phaseLabel()}</Chip>
         {:else if status.last_error}
-          <span class="state-badge failed"
-            >{m.settings_embeddings_last_build_failed()}</span
-          >
+          <Chip size="xs" tone="danger">
+            {m.settings_embeddings_last_build_failed()}
+          </Chip>
         {:else}
           {m.settings_embeddings_status_idle()}
         {/if}
@@ -327,7 +335,9 @@
         <ul class="generation-list">
           {#each generations as gen (gen.id)}
             <li class="generation-row">
-              <span class="state-badge {gen.state}">{stateLabel(gen.state)}</span>
+              <Chip size="xs" tone={stateTone(gen.state)}>
+                {stateLabel(gen.state)}
+              </Chip>
               <span class="gen-model mono">{gen.model} · {numberFormat.format(gen.dimension)}d</span>
               <span class="gen-coverage">
                 {m.settings_embeddings_coverage({
@@ -450,33 +460,6 @@
     align-items: center;
     gap: var(--space-4);
     font-size: 12px;
-  }
-
-  .state-badge {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 1px 6px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
-    color: var(--text-muted);
-    border: 1px solid var(--border-muted);
-  }
-
-  .state-badge.active {
-    color: var(--accent-green, #22c55e);
-    border-color: var(--accent-green, #22c55e);
-  }
-
-  .state-badge.building {
-    color: var(--accent-amber, #f59e0b);
-    border-color: var(--accent-amber, #f59e0b);
-  }
-
-  .state-badge.failed {
-    color: var(--accent-red, #ef4444);
-    border-color: var(--accent-red, #ef4444);
   }
 
   .gen-model {

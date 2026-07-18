@@ -35,7 +35,7 @@
     SignalCalibration,
     SignalSessionExample,
   } from "../../api/types.js";
-  import { Card, CopyButton, IconButton, Typeahead } from "@kenn-io/kit-ui";
+  import { Button, Card, CopyButton, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -1287,21 +1287,22 @@
                     >
                       {m.insights_page_retry()}
                     </button>
-                    <button
-                      class="icon-action danger"
-                      type="button"
+                    <IconButton
+                      class="icon-action"
+                      size="sm"
+                      tone="danger"
                       onclick={() =>
                         insights.dismissTask(
                           insights.selectedTask!.clientId,
                         )}
                       title={m.insights_page_dismiss_failed()}
-                      aria-label={m.insights_page_dismiss_failed()}
+                      ariaLabel={m.insights_page_dismiss_failed()}
                     >
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                         <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
                         <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
                       </svg>
-                    </button>
+                    </IconButton>
                   </div>
                 {/if}
               </div>
@@ -1338,27 +1339,27 @@
                   {/if}
                 </div>
                 <div class="generated-actions">
-                  <button
+                  <Button
                     class="header-action"
-                    type="button"
+                    size="sm"
                     onclick={handleInsightExport}
                   >
                     Export
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     class="header-action"
-                    type="button"
+                    size="sm"
                     onclick={() => openInsightPublish(false)}
                   >
                     Publish
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     class="header-action subtle"
-                    type="button"
+                    size="sm"
                     onclick={() => openInsightPublish(true)}
                   >
                     Secret
-                  </button>
+                  </Button>
                   <CopyButton
                     class="insight-link-copy"
                     copied={copiedInsightLinkId === insights.selectedItem.id}
@@ -1369,9 +1370,10 @@
                     onclick={() =>
                       handleCopyInsightLink(insights.selectedItem!.id)}
                   />
-                  <button
-                    class="icon-action danger"
-                    type="button"
+                  <IconButton
+                    class="icon-action"
+                    size="sm"
+                    tone="danger"
                     onclick={() => {
                       if (insights.selectedItem) {
                         insights.deleteItem(insights.selectedItem.id);
@@ -1381,13 +1383,13 @@
                       }
                     }}
                     title={m.insights_page_delete_insight()}
-                    aria-label={m.insights_page_delete_insight()}
+                    ariaLabel={m.insights_page_delete_insight()}
                   >
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                       <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
                       <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
                     </svg>
-                  </button>
+                  </IconButton>
                 </div>
               </div>
               <div class="markdown-body">
@@ -2177,26 +2179,11 @@
     gap: 8px;
   }
 
-  .header-action {
-    height: 28px;
-    padding: 0 10px;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
+  :global(.header-action.kit-button) {
     font-weight: 600;
-    color: var(--text-secondary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    transition: background 0.12s, color 0.12s,
-      border-color 0.12s;
   }
 
-  .header-action:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-    border-color: var(--border-default);
-  }
-
-  .header-action.subtle {
+  :global(.header-action.subtle.kit-button) {
     color: var(--text-muted);
   }
 
@@ -2244,39 +2231,6 @@
 
   .generated-actions :global(.insight-link-copy.kit-copy-btn:hover) {
     border-color: var(--border-default);
-  }
-
-  .icon-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
-    color: var(--text-muted);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition:
-      background 0.15s,
-      border-color 0.15s,
-      color 0.15s,
-      transform 0.08s;
-  }
-
-  .icon-action:hover {
-    background: var(--bg-surface-hover);
-    border-color: var(--border-default);
-    color: var(--text-primary);
-  }
-
-  .icon-action.danger:hover {
-    color: var(--accent-red);
-  }
-
-  .icon-action:active {
-    transform: scale(0.94);
   }
 
   .detail-chip {

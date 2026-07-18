@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
@@ -43,8 +44,9 @@
   </div>
 
   <div class="token-row">
-    <input
+    <TextInput
       class="setting-input"
+      size="md"
       type="password"
       placeholder="ghp_..."
       bind:value={tokenInput}
@@ -93,22 +95,9 @@
     gap: 8px;
   }
 
-  .setting-input {
+  :global(.setting-input.kit-text-input) {
     flex: 1;
-    height: 30px;
-    padding: 0 10px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
     font-family: var(--font-mono, monospace);
-    color: var(--text-primary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    transition: border-color 0.15s;
-  }
-
-  .setting-input:focus {
-    outline: none;
-    border-color: var(--accent-blue);
   }
 
   .save-btn {

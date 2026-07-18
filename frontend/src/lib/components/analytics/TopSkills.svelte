@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Chip } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type {
     SkillAgentBreakdown,
@@ -140,13 +141,13 @@
             <span class="breakdown-label">{m.analytics_top_skills_agents()}</span>
             {#if skill.agent_breakdown?.length}
               {#each skill.agent_breakdown as agent}
-                <span class="agent-chip">
+                <Chip size="xs" uppercase={false} class="agent-chip">
                   <span class="agent-name">{agent.agent}</span>
                   <span class="agent-count">{agent.count.toLocaleString()}</span>
                   <span class="agent-pct">
                     {agentPct(agent, skill.call_count)}
                   </span>
-                </span>
+                </Chip>
               {/each}
             {:else}
               <span class="muted">{m.shared_none()}</span>
@@ -285,15 +286,8 @@
     color: var(--text-secondary);
   }
 
-  .agent-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+  :global(.agent-chip.kit-chip) {
     max-width: 160px;
-    padding: 2px 5px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
     color: var(--text-secondary);
   }
 

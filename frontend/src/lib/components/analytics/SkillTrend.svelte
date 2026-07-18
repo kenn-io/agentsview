@@ -461,7 +461,7 @@
     margin-bottom: 10px;
   }
 
-  .legend-chip {
+  .legend-chip { /* kit-ui-check-ignore: the legend is a pressed-state toggle, and the current kit Chip and Button controls cannot preserve aria-pressed. */
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);

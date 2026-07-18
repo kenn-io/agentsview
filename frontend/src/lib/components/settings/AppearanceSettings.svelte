@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Checkbox } from "@kenn-io/kit-ui";
+  import { Button, Checkbox, SegmentedControl } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
@@ -24,6 +24,13 @@
     tool: m.header_transcript_blocks_tool(),
     code: m.header_transcript_blocks_code(),
   });
+
+  const FONT_SCALE_OPTIONS = $derived(
+    FONT_SCALE_STEPS.map((step) => ({
+      value: String(step),
+      label: `${step}%`,
+    })),
+  );
 </script>
 
 <SettingsSection
@@ -32,46 +39,36 @@
 >
   <div class="setting-row">
     <span class="setting-label">{m.appearance_theme()}</span>
-    <button class="setting-toggle" onclick={() => ui.toggleTheme()}>
+    <Button size="sm" onclick={() => ui.toggleTheme()}>
       {ui.theme === "light" ? m.appearance_light() : m.appearance_dark()}
-    </button>
+    </Button>
   </div>
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_high_contrast()}</span>
-    <button class="setting-toggle" onclick={() => ui.toggleHighContrast()}>
+    <Button size="sm" onclick={() => ui.toggleHighContrast()}>
       {ui.highContrast ? m.appearance_on() : m.appearance_off()}
-    </button>
+    </Button>
   </div>
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_message_layout()}</span>
-    <div class="setting-options">
-      {#each LAYOUT_OPTIONS as opt}
-        <button
-          class="option-btn"
-          class:active={ui.messageLayout === opt.value}
-          onclick={() => ui.setLayout(opt.value)}
-        >
-          {opt.label}
-        </button>
-      {/each}
-    </div>
+    <SegmentedControl
+      options={LAYOUT_OPTIONS}
+      value={ui.messageLayout}
+      ariaLabel={m.appearance_message_layout()}
+      onchange={(value) => ui.setLayout(value as MessageLayout)}
+    />
   </div>
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_text_size()}</span>
-    <div class="setting-options">
-      {#each FONT_SCALE_STEPS as step}
-        <button
-          class="option-btn"
-          class:active={ui.fontScale === step}
-          onclick={() => ui.setFontScale(step)}
-        >
-          {step}%
-        </button>
-      {/each}
-    </div>
+    <SegmentedControl
+      options={FONT_SCALE_OPTIONS}
+      value={String(ui.fontScale)}
+      ariaLabel={m.appearance_text_size()}
+      onchange={(value) => ui.setFontScale(Number(value))}
+    />
   </div>
 
   <div class="setting-row column">
@@ -106,52 +103,6 @@
     font-weight: 500;
     color: var(--text-secondary);
     white-space: nowrap;
-  }
-
-  .setting-toggle {
-    height: 26px;
-    padding: 0 12px;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-
-  .setting-toggle:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .setting-options {
-    display: flex;
-    gap: 4px;
-  }
-
-  .option-btn {
-    height: 26px;
-    padding: 0 10px;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    cursor: pointer;
-    transition: all 0.12s;
-  }
-
-  .option-btn:hover {
-    color: var(--text-secondary);
-    background: var(--bg-surface-hover);
-  }
-
-  .option-btn.active {
-    color: var(--accent-blue);
-    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
-    border-color: var(--accent-blue);
   }
 
   .block-toggles {
