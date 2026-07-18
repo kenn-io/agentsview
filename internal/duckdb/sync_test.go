@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -117,6 +118,70 @@ func TestSyncPushCertifiesVerifiedLegacyCodexPayload(t *testing.T) {
 	require.NoError(t, checkCodexEncryptedPayloadCompatDuckDB(ctx, syncer.DB()))
 }
 
+func TestSyncPushRetriesLegacyCodexAfterPreflightReadFailure(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	const (
+		sessionID = "duck-codex-preflight-read-retry"
+		literal   = "literal gAAAAA-not-an-encrypted-token"
+	)
+	sess := syncSession(
+		sessionID, "alpha", literal, "2026-07-14T00:00:00.000Z", 1,
+	)
+	sess.Agent = "codex"
+	sess.RelationshipType = "subagent"
+	sess.DataVersion = 64
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{syncMessage(
+			sessionID, 0, "user", literal, "2026-07-14T00:00:00.000Z",
+		)},
+		DataVersion: 64, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	realLoad := syncer.loadCodexPushMessages
+	readCalls := 0
+	syncer.loadCodexPushMessages = func(
+		ctx context.Context, gotSessionID string,
+	) ([]db.Message, error) {
+		assert.Equal(t, sessionID, gotSessionID)
+		readCalls++
+		if readCalls == 1 {
+			return nil, errors.New("transient legacy message read failure")
+		}
+		return realLoad(ctx, gotSessionID)
+	}
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, readCalls)
+	assert.Equal(t, 1, first.Errors)
+	assert.Zero(t, first.SessionsPushed)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", sessionID, 0)
+	watermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.Empty(t, watermark, "the failed session must pin the push watermark")
+	unverified, err := local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, unverified, sessionID)
+
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, readCalls)
+	assert.Zero(t, second.Errors)
+	assert.Equal(t, 1, second.SessionsPushed)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", sessionID, 1)
+	watermark, err = local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.NotEmpty(t, watermark)
+	unverified, err = local.UnverifiedCodexSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, unverified, sessionID,
+		"the successful retry must persist local certification")
+}
+
 func TestSyncPushWithholdsLegacyCodexPayloadExposedBySanitization(t *testing.T) {
 	const fernet = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 	ctx := context.Background()
@@ -197,9 +262,10 @@ func TestPushVerifiedLegacyCodexUsesCertifiedSnapshotAfterLocalRewrite(
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, syncer.EnsureSchema(ctx))
-	prepared, withheld, verifiedMessages, err :=
+	prepared, failed, withheld, verifiedMessages, err :=
 		syncer.prepareCodexSessionsForPush(ctx, []db.Session{*stored})
 	require.NoError(t, err)
+	require.Empty(t, failed)
 	require.Empty(t, withheld)
 	require.Len(t, prepared, 1)
 	require.Len(t, verifiedMessages[sess.ID], 1)

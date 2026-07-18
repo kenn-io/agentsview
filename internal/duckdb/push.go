@@ -425,12 +425,15 @@ func (s *Sync) replaceStarredSessions(
 // counting it as an error would pin the push watermark and skip curation
 // refresh on every future push. Successful certification is persisted locally
 // so the vector gate can recognize the same clean transcript revision.
-// Transient read failures stay in the batch so the regular push error path
-// retries them.
+// Transient read failures are returned separately so the caller counts them as
+// errors and pins the watermark. They must not fall through to a later batch
+// read that can publish the session without persisting local certification.
 func (s *Sync) prepareCodexSessionsForPush(
 	ctx context.Context, sessions []db.Session,
 ) (
-	kept, withheld []db.Session,
+	kept []db.Session,
+	failed []string,
+	withheld []db.Session,
 	verifiedMessages map[string][]db.Message,
 	err error,
 ) {
@@ -438,46 +441,52 @@ func (s *Sync) prepareCodexSessionsForPush(
 	for _, sess := range sessions {
 		if sess.Agent == "codex" &&
 			sess.DataVersion < db.ExpectedSharedStorageDataVersion(sess) {
-			msgs, err := s.local.GetAllMessages(ctx, sess.ID)
-			if err == nil {
-				var prepared db.Session
-				prepared, err = db.PrepareSessionForSharedStorage(sess, msgs)
-				if errors.Is(err, db.ErrCodexSessionUnverified) {
-					log.Printf(
-						"duckdbsync: withholding session from push: %v", err,
-					)
-					withheld = append(withheld, sess)
-					continue
-				}
-				if err == nil {
-					if sess.TranscriptRevision == nil {
-						return nil, nil, nil, fmt.Errorf(
-							"certifying Codex session %s: missing transcript revision",
-							sess.ID,
-						)
-					}
-					if err := s.local.SetCodexSharedStorageCertification(
-						sess.ID, *sess.TranscriptRevision, sess.FirstMessage,
-					); err != nil {
-						return nil, nil, nil, fmt.Errorf(
-							"persisting Codex payload certification %s: %w",
-							sess.ID, err,
-						)
-					}
-					if verifiedMessages == nil {
-						verifiedMessages = make(map[string][]db.Message)
-					}
-					// Keep the exact message and tool-call snapshot that passed
-					// verification. A concurrent local rewrite must not replace it
-					// after the prepared session enters the DuckDB batch.
-					verifiedMessages[sess.ID] = msgs
-					sess = prepared
-				}
+			msgs, err := s.loadCodexPushMessages(ctx, sess.ID)
+			if err != nil {
+				log.Printf(
+					"duckdbsync: reading legacy Codex session %s: %v",
+					sess.ID, err,
+				)
+				failed = append(failed, sess.ID)
+				continue
 			}
+			prepared, err := db.PrepareSessionForSharedStorage(sess, msgs)
+			if errors.Is(err, db.ErrCodexSessionUnverified) {
+				log.Printf(
+					"duckdbsync: withholding session from push: %v", err,
+				)
+				withheld = append(withheld, sess)
+				continue
+			}
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			if sess.TranscriptRevision == nil {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"certifying Codex session %s: missing transcript revision",
+					sess.ID,
+				)
+			}
+			if err := s.local.SetCodexSharedStorageCertification(
+				sess.ID, *sess.TranscriptRevision, sess.FirstMessage,
+			); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"persisting Codex payload certification %s: %w",
+					sess.ID, err,
+				)
+			}
+			if verifiedMessages == nil {
+				verifiedMessages = make(map[string][]db.Message)
+			}
+			// Keep the exact message and tool-call snapshot that passed
+			// verification. A concurrent local rewrite must not replace it
+			// after the prepared session enters the DuckDB batch.
+			verifiedMessages[sess.ID] = msgs
+			sess = prepared
 		}
 		kept = append(kept, sess)
 	}
-	return kept, withheld, verifiedMessages, nil
+	return kept, failed, withheld, verifiedMessages, nil
 }
 
 // pushWithheldCodexCuration propagates only deletion or restoration state for

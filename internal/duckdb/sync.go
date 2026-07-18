@@ -32,16 +32,17 @@ type syncState struct {
 
 // Sync manages push-only mirroring from the SQLite primary archive to DuckDB.
 type Sync struct {
-	duck                *sql.DB
-	local               *db.DB
-	machine             string
-	syncStateScope      string
-	backfillTargetScope string
-	projects            []string
-	excludeProjects     []string
-	connectionKind      duckDBConnectionKind
-	quack               *quackClient
-	maintenance         duckDBMaintenance
+	duck                  *sql.DB
+	local                 *db.DB
+	machine               string
+	syncStateScope        string
+	backfillTargetScope   string
+	projects              []string
+	excludeProjects       []string
+	connectionKind        duckDBConnectionKind
+	quack                 *quackClient
+	maintenance           duckDBMaintenance
+	loadCodexPushMessages func(context.Context, string) ([]db.Message, error)
 
 	closeOnce sync.Once
 	closeErr  error
@@ -122,14 +123,15 @@ func New(
 		backfillTargetScope = localDuckDBBackfillTargetScope(path)
 	}
 	return &Sync{
-		duck:                duck,
-		local:               local,
-		machine:             machine,
-		syncStateScope:      opts.SyncStateTarget,
-		backfillTargetScope: backfillTargetScope,
-		projects:            opts.Projects,
-		excludeProjects:     opts.ExcludeProjects,
-		maintenance:         duckDBCheckpointMaintenance{},
+		duck:                  duck,
+		local:                 local,
+		machine:               machine,
+		syncStateScope:        opts.SyncStateTarget,
+		backfillTargetScope:   backfillTargetScope,
+		projects:              opts.Projects,
+		excludeProjects:       opts.ExcludeProjects,
+		maintenance:           duckDBCheckpointMaintenance{},
+		loadCodexPushMessages: local.GetAllMessages,
 	}, nil
 }
 
@@ -385,11 +387,12 @@ func (s *Sync) Push(
 	var curationUpdates []db.Session
 	for start := 0; start < len(sessions); start += duckSessionPushBatchSize {
 		end := min(start+duckSessionPushBatchSize, len(sessions))
-		prepared, withheld, verifiedMessages, err :=
+		prepared, failed, withheld, verifiedMessages, err :=
 			s.prepareCodexSessionsForPush(ctx, sessions[start:end])
 		if err != nil {
 			return result, err
 		}
+		result.Errors += len(failed)
 		updates, absentWithheld, err :=
 			s.pushWithheldCodexCuration(ctx, withheld)
 		if err != nil {

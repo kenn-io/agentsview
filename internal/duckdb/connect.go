@@ -235,16 +235,17 @@ func NewFromConfig(
 		}
 	}
 	return &Sync{
-		duck:                duck,
-		local:               local,
-		machine:             cfg.MachineName,
-		syncStateScope:      opts.SyncStateTarget,
-		backfillTargetScope: backfillTargetScope,
-		projects:            opts.Projects,
-		excludeProjects:     opts.ExcludeProjects,
-		connectionKind:      connectionKind,
-		quack:               quack,
-		maintenance:         duckDBCheckpointMaintenance{},
+		duck:                  duck,
+		local:                 local,
+		machine:               cfg.MachineName,
+		syncStateScope:        opts.SyncStateTarget,
+		backfillTargetScope:   backfillTargetScope,
+		projects:              opts.Projects,
+		excludeProjects:       opts.ExcludeProjects,
+		connectionKind:        connectionKind,
+		quack:                 quack,
+		maintenance:           duckDBCheckpointMaintenance{},
+		loadCodexPushMessages: local.GetAllMessages,
 	}, nil
 }
 
