@@ -21,10 +21,15 @@
   let saving: boolean = $state(false);
   let saveMsg: string | null = $state(null);
   let remoteToggling: boolean = $state(false);
+  let pendingRequireAuth: boolean = $state(settings.requireAuth);
 
   let isRemote: boolean = $derived(isRemoteConnection());
   let copied: boolean = $state(false);
   const versionRead = new LatestRead();
+
+  $effect(() => {
+    if (!remoteToggling) pendingRequireAuth = settings.requireAuth;
+  });
 
   async function handleTestConnection() {
     if (!serverUrl.trim()) return;
@@ -79,11 +84,13 @@
     setTimeout(() => window.location.reload(), 500);
   }
 
-  async function handleToggleRemote() {
+  async function handleToggleRemote(requireAuth: boolean) {
+    pendingRequireAuth = requireAuth;
     remoteToggling = true;
     try {
-      await settings.save({ require_auth: !settings.requireAuth });
+      await settings.save({ require_auth: requireAuth });
     } finally {
+      pendingRequireAuth = settings.requireAuth;
       remoteToggling = false;
     }
   }
@@ -107,12 +114,12 @@
       <div class="toggle-row">
         <span class="toggle-label">{m.settings_remote_require_auth()}</span>
         <Toggle
-          checked={settings.requireAuth}
+          checked={pendingRequireAuth}
           disabled={remoteToggling}
           ariaLabel={m.settings_remote_require_auth()}
           onchange={handleToggleRemote}
         >
-          {settings.requireAuth ? m.settings_remote_enabled() : m.settings_remote_disabled()}
+          {pendingRequireAuth ? m.settings_remote_enabled() : m.settings_remote_disabled()}
         </Toggle>
       </div>
 
