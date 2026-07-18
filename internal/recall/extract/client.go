@@ -537,30 +537,33 @@ func parseRetryAfter(value string) time.Duration {
 }
 
 // isContextOverflowDetail reports whether a 400 body identifies an
-// input-length error. The markers are specific phrasings chat servers use
-// for exceeded input, not lone words like "context" that also appear in
-// unrelated rejections. A phrasing this list misses fails the unit with the
+// input-length error. A structured error code is unambiguous; otherwise
+// the message must pair a length subject (context, prompt, input, token)
+// with an overflow term (exceed, too long/large, maximum), so validation
+// errors that merely mention the subject — "context window must be an
+// integer" — do not match. A phrasing this misses fails the unit with the
 // server's message intact, which is recoverable by configuration; the
 // reverse mistake would send the caller splitting units in a useless loop.
 func isContextOverflowDetail(body string) bool {
 	lower := strings.ToLower(body)
-	markers := []string{
+	codes := []string{
 		"context_length_exceeded",
-		"maximum context length",
-		"context length",
-		"context window",
-		"context size",
-		"prompt is too long",
-		"input is too long",
-		"input length",
-		"too many tokens",
+		"exceed_context_size_error",
 	}
-	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
+	for _, code := range codes {
+		if strings.Contains(lower, code) {
 			return true
 		}
 	}
-	return false
+	subjects := []string{"context", "prompt", "input", "token"}
+	overflowTerms := []string{"exceed", "too long", "too large", "maximum"}
+	hasSubject := slices.ContainsFunc(subjects, func(subject string) bool {
+		return strings.Contains(lower, subject)
+	})
+	hasOverflowTerm := slices.ContainsFunc(overflowTerms, func(term string) bool {
+		return strings.Contains(lower, term)
+	})
+	return hasSubject && hasOverflowTerm
 }
 
 // SplitFloorChars is the smallest unit size worth splitting further. A unit

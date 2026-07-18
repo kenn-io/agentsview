@@ -391,6 +391,35 @@ func TestClientRejectsReservedExtraBodyKeys(t *testing.T) {
 	}
 }
 
+func TestIsContextOverflowDetail(t *testing.T) {
+	overflow := []string{
+		`{"error":{"code":"context_length_exceeded"}}`,
+		`This model's maximum context length is 32768 tokens.`,
+		`the request exceeds the available context size`,
+		`prompt is too long: 20000 tokens > 16000 maximum`,
+		`input is too large for the model context`,
+	}
+	for _, body := range overflow {
+		if !isContextOverflowDetail(body) {
+			t.Errorf("must classify as overflow: %q", body)
+		}
+	}
+	// A length-related noun alone is not an overflow: these are validation
+	// errors that splitting the unit can never fix.
+	notOverflow := []string{
+		`{"error":{"message":"context window must be an integer"}}`,
+		`invalid input length parameter`,
+		`unknown field "context_size" in request`,
+		`max_tokens must be a positive integer`,
+		`model "test-model" not found`,
+	}
+	for _, body := range notOverflow {
+		if isContextOverflowDetail(body) {
+			t.Errorf("must not classify as overflow: %q", body)
+		}
+	}
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	if got := parseRetryAfter("2"); got != 2*time.Second {
 		t.Fatalf("parseRetryAfter(2) = %v", got)
