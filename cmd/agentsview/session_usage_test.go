@@ -57,7 +57,7 @@ func TestRenderSessionUsageHuman_NoCost(t *testing.T) {
 		"output should note unpriced model")
 }
 
-func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
+func TestRenderSessionUsageHuman_CopilotReportedCost(t *testing.T) {
 	out := &sessionUsageOutput{
 		SessionUsage: db.SessionUsage{
 			SessionID:         "copilot:s1",
@@ -68,7 +68,6 @@ func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 			HasTokenData:      true,
 			CostUSD:           10.00,
 			HasCost:           true,
-			AICredits:         1000.0,
 			Models:            []string{"gpt-4"},
 		},
 	}
@@ -76,30 +75,8 @@ func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 	require.NoError(t, renderSessionUsageHuman(&b, out))
 	s := b.String()
 	assert.Contains(t, s, "~$10.00", "output missing cost")
-	assert.Contains(t, s, "1000", "output missing AI Credits")
-	assert.Contains(t, s, "AI Credits", "output missing AI Credits label")
-}
-
-func TestRenderSessionUsageHuman_NonCopilotNoAICredits(t *testing.T) {
-	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID:         "claude:s1",
-			Agent:             "claude-code",
-			Project:           "proj",
-			TotalOutputTokens: 1000,
-			PeakContextTokens: 5000,
-			HasTokenData:      true,
-			CostUSD:           0.42,
-			HasCost:           true,
-			Models:            []string{"claude-opus"},
-		},
-	}
-	var b strings.Builder
-	require.NoError(t, renderSessionUsageHuman(&b, out))
-	s := b.String()
-	assert.Contains(t, s, "~$0.42", "output missing cost")
 	assert.NotContains(t, s, "AI Credits",
-		"non-Copilot sessions should not show AI Credits")
+		"cost output must not include a credits line")
 }
 
 func TestRenderSessionUsageHuman_CopilotNoCost(t *testing.T) {
@@ -109,15 +86,14 @@ func TestRenderSessionUsageHuman_CopilotNoCost(t *testing.T) {
 			Agent:          "copilot",
 			HasTokenData:   true,
 			HasCost:        false,
-			AICredits:      0,
 			UnpricedModels: []string{"gpt-4"},
 		},
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
 	s := b.String()
-	assert.NotContains(t, s, "AI Credits",
-		"unpriced Copilot sessions should not show AI Credits")
+	assert.Contains(t, s, "n/a (unpriced: gpt-4)",
+		"unpriced Copilot sessions should report n/a cost")
 }
 
 func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {

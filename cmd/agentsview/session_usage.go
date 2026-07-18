@@ -293,8 +293,5 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	} else {
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	}
-	if out.AICredits > 0 {
-		fmt.Fprintf(w, "%s %.0f\n", label("AI Credits"), out.AICredits)
-	}
 	return nil
 }

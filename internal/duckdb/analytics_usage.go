@@ -3688,7 +3688,6 @@ func (s *Store) GetDailyUsage(
 	}
 	accum := map[usageAccumKey]*duckUsageBucket{}
 	type sessionCost struct {
-		agent         string
 		estimated     map[usageAccumKey]float64
 		authoritative *struct {
 			key  usageAccumKey
@@ -3731,7 +3730,6 @@ func (s *Store) GetDailyUsage(
 		sc := sessionCosts[r.sessionID]
 		if sc == nil {
 			sc = &sessionCost{
-				agent:     r.agent,
 				estimated: map[usageAccumKey]float64{},
 			}
 			sessionCosts[r.sessionID] = sc
@@ -3743,11 +3741,10 @@ func (s *Store) GetDailyUsage(
 				key  usageAccumKey
 				cost float64
 			}{key: key, cost: r.authoritativeCost}
+			rateResolver.RecordReported(r.model, rateResolver.Lookup(r.model))
 		}
 	}
-	var copilotAICredits float64
 	for _, sc := range sessionCosts {
-		resolvedCost := 0.0
 		if sc.authoritative != nil {
 			b := accum[sc.authoritative.key]
 			if b == nil {
@@ -3755,7 +3752,6 @@ func (s *Store) GetDailyUsage(
 				accum[sc.authoritative.key] = b
 			}
 			b.aggregateCost += sc.authoritative.cost
-			resolvedCost = sc.authoritative.cost
 		} else {
 			for key, cost := range sc.estimated {
 				b := accum[key]
@@ -3764,10 +3760,8 @@ func (s *Store) GetDailyUsage(
 					accum[key] = b
 				}
 				b.aggregateCost += cost
-				resolvedCost += cost
 			}
 		}
-		copilotAICredits += db.AICreditsFromCost(sc.agent, resolvedCost)
 	}
 
 	type dayMaps struct {
@@ -3878,10 +3872,6 @@ func (s *Store) GetDailyUsage(
 	result.Totals.CacheSavings = roundCost(totalSavings)
 	if !hasAuthoritativeCost {
 		result.Totals.TotalCost = roundCost(result.Totals.TotalCost)
-	}
-
-	if copilotAICredits > 0 {
-		result.Totals.CopilotAICredits = copilotAICredits
 	}
 
 	if result.Daily == nil {
@@ -4335,11 +4325,9 @@ func (s *Store) GetSessionUsage(
 	if authoritativeCost != nil {
 		out.HasCost = true
 		out.CostUSD = *authoritativeCost
-		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
 	} else if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
-		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
 	}
 	return out, nil
 }

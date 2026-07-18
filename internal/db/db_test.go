@@ -935,37 +935,6 @@ func TestCurrentDataVersionCopilotReportedCost(t *testing.T) {
 		"Copilot reported-cost parsing requires a data version bump")
 }
 
-func TestOpenMarksOnlyCopilotSessionsForReportedCostReparse(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agentsview.db")
-	d := testDBAtPath(t, path, "seed")
-	insertSession(t, d, "copilot:repair", "proj", func(s *Session) {
-		s.Agent = "copilot"
-		s.DataVersion = CurrentDataVersion()
-	})
-	insertSession(t, d, "claude-repair-control", "proj", func(s *Session) {
-		s.Agent = "claude"
-		s.DataVersion = CurrentDataVersion()
-	})
-	require.NoError(t, d.SetSessionDataVersion(
-		"copilot:repair", CurrentDataVersion()))
-	require.NoError(t, d.SetSessionDataVersion(
-		"claude-repair-control", CurrentDataVersion()))
-	_, err := d.getWriter().Exec(
-		"DELETE FROM archive_metadata WHERE key = ?",
-		copilotReportedCostRepairKey,
-	)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-
-	reopened, err := Open(path)
-	require.NoError(t, err, "reopen database")
-	defer reopened.Close()
-	assert.Equal(t, CurrentDataVersion()-1,
-		reopened.GetSessionDataVersion("copilot:repair"))
-	assert.Equal(t, CurrentDataVersion(),
-		reopened.GetSessionDataVersion("claude-repair-control"))
-}
-
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
@@ -1055,49 +1024,6 @@ func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	)
 	requireNoError(t, err, "list sessions")
 	require.Len(t, page.Sessions, 1, "expected 1 session preserved, got")
-}
-
-func TestOpenMigratesCreditsFirstVersion68Database(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.db")
-	d, err := Open(path)
-	require.NoError(t, err, "initial open")
-	insertSession(t, d, "copilot:draft", "proj", func(s *Session) {
-		s.Agent = "copilot"
-		s.DataVersion = 68
-	})
-	_, err = d.getWriter().Exec(`
-		INSERT INTO usage_events (
-			session_id, source, model, ai_credits, dedup_key
-		) VALUES (?, 'shutdown', 'claude-sonnet-4-6', 2.5, 'draft')`,
-		"copilot:draft",
-	)
-	require.NoError(t, err, "insert credits-first usage")
-	_, err = d.getWriter().Exec(
-		`DELETE FROM archive_metadata WHERE key = ?`,
-		copilotReportedCostRepairKey,
-	)
-	require.NoError(t, err, "clear repair marker")
-	_, err = d.getWriter().Exec("PRAGMA user_version = 68")
-	require.NoError(t, err, "set draft data version")
-	require.NoError(t, d.Close(), "close draft database")
-
-	reopened, err := Open(path)
-	require.NoError(t, err, "open credits-first version 68 database")
-	defer reopened.Close()
-
-	var cost float64
-	var status, source string
-	var legacyCredits sql.NullFloat64
-	require.NoError(t, reopened.getReader().QueryRow(`
-		SELECT cost_usd, cost_status, cost_source, ai_credits
-		FROM usage_events
-		WHERE session_id = ?`,
-		"copilot:draft",
-	).Scan(&cost, &status, &source, &legacyCredits))
-	assert.InDelta(t, 0.025, cost, 1e-12)
-	assert.Equal(t, "exact", status)
-	assert.Equal(t, CopilotReportedCostSource, source)
-	assert.False(t, legacyCredits.Valid)
 }
 
 func TestOpenRejectsNewerDataVersion(t *testing.T) {

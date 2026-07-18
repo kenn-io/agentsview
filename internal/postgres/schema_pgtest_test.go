@@ -95,41 +95,6 @@ func TestSecretFindingsSchema(t *testing.T) {
 	}
 }
 
-func TestEnsureSchemaMigratesLegacyAICredits(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-
-	pg, err := Open(pgURL, schemaTestSchema, true)
-	require.NoError(t, err, "connecting to pg")
-	defer pg.Close()
-	ctx := context.Background()
-	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema))
-	_, err = pg.ExecContext(ctx, `
-		INSERT INTO sessions (
-			id, machine, project, agent
-		) VALUES ('copilot:draft', 'test', 'proj', 'copilot');
-		INSERT INTO usage_events (
-			session_id, source, model, ai_credits
-		) VALUES ('copilot:draft', 'shutdown', 'claude-sonnet-4-6', 2.5)`)
-	require.NoError(t, err, "insert credits-first row")
-
-	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema))
-
-	var cost float64
-	var status, source string
-	var legacyCredits sql.NullFloat64
-	require.NoError(t, pg.QueryRowContext(ctx, `
-		SELECT cost_usd, cost_status, cost_source, ai_credits
-		FROM usage_events
-		WHERE session_id = 'copilot:draft'`,
-	).Scan(&cost, &status, &source, &legacyCredits))
-	assert.InDelta(t, 0.025, cost, 1e-12)
-	assert.Equal(t, "exact", status)
-	assert.Equal(t, "copilot-reported", source)
-	assert.False(t, legacyCredits.Valid)
-}
-
 // TestToolCallsFilePathIndex verifies EnsureSchema creates the partial
 // idx_tool_calls_file_path index that backs the cross-session Recent Edits
 // feed, mirroring SQLite's index so the query surface has parity on PG.

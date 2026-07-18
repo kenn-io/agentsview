@@ -19,11 +19,8 @@ func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
 			},
 		},
 		parser.AgentDef{
-			Type:        parser.AgentType("ai-credit-only"),
-			DisplayName: "AI Credit Only",
-			Usage: parser.UsageCapabilities{
-				AICreditsDenominated: true,
-			},
+			Type:        parser.AgentType("plain-usage"),
+			DisplayName: "Plain Usage",
 		},
 	)
 
@@ -31,13 +28,9 @@ func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
 	// trims, so a padded name fails closed at the name level.
 	assert.False(t, parser.AgentNameLacksPerMessageTokenData(" no-token-only "))
 	assert.True(t, parser.AgentNameLacksPerMessageTokenData("no-token-only"))
-	assert.False(t, parser.AgentNameUsesAICredits("no-token-only"))
-	assert.False(t, parser.AgentNameLacksPerMessageTokenData("ai-credit-only"))
-	assert.True(t, parser.AgentNameUsesAICredits("ai-credit-only"))
+	assert.False(t, parser.AgentNameLacksPerMessageTokenData("plain-usage"))
 	assert.False(t, parser.AgentNameLacksPerMessageTokenData(""))
-	assert.False(t, parser.AgentNameUsesAICredits(""))
 	assert.False(t, parser.AgentNameLacksPerMessageTokenData("unknown-agent"))
-	assert.False(t, parser.AgentNameUsesAICredits("unknown-agent"))
 
 	assert.True(t, parser.AgentFilterLacksPerMessageTokenData(
 		"copilot, vscode-copilot,no-token-only,",

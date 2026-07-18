@@ -800,7 +800,6 @@
   "usage_models": "Modèles",
   "usage_refresh": "Actualiser les données de consommation",
   "usage_summary_total_cost": "Coût total",
-  "usage_summary_copilot_ai_credits": "Crédits Copilot AI",
   "usage_summary_unsupported_copilot_no_token_data": "Des sessions Copilot correspondent à cette plage, mais Copilot n'enregistre pas la consommation de tokens par message.",
   "usage_summary_unsupported_generic": "Les sessions correspondantes n'exposent aucune donnée de consommation de tokens.",
   "usage_summary_input_tokens": "Tokens d'entrée",

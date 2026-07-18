@@ -2508,7 +2508,6 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.InDelta(t, reportedCost, usage.CostUSD, 1e-12)
-	assert.InDelta(t, 3.5, usage.AICredits, 1e-12)
 	require.Len(t, usage.Breakdown, 2)
 	assert.InDelta(t, 0.0175, usage.Breakdown[1].CostUSD, 1e-12)
 
@@ -2520,7 +2519,11 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	assert.Zero(t, daily.Daily[0].TotalCost)
 	assert.InDelta(t, reportedCost, daily.Daily[1].TotalCost, 1e-12)
 	assert.InDelta(t, reportedCost, daily.Totals.TotalCost, 1e-12)
-	assert.InDelta(t, 3.5, daily.Totals.CopilotAICredits, 1e-12)
+	require.NotNil(t, daily.Pricing)
+	assert.Equal(t, export.CostSourceMixed, daily.Pricing.CostSource,
+		"authoritative reported cost must surface in pricing provenance")
+	assert.Equal(t, export.CostSourceMixed,
+		daily.Pricing.Models["claude-opus-4-6"].CostSource)
 }
 
 func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
@@ -2581,8 +2584,6 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 
 	assert.InDelta(t, 0.055, want.Totals.TotalCost, 1e-12)
 	assert.InDelta(t, want.Totals.TotalCost, got.Totals.TotalCost, 1e-12)
-	assert.InDelta(t, want.Totals.CopilotAICredits,
-		got.Totals.CopilotAICredits, 1e-12)
 	assert.Equal(t, want.Daily, got.Daily)
 }
 

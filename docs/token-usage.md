@@ -49,9 +49,7 @@ rows, AgentsView reports that as an unsupported usage state instead of silently
 showing an empty chart. Copilot-family filters (`copilot`, `vscode-copilot`, and
 `visualstudio-copilot`) keep Copilot-specific wording; any other no-token agent
 falls back to a generic "matching sessions do not expose token usage data"
-message. AI-credit cost denomination (surfaced as "Copilot AI Credits" for
-Copilot agents) is tracked as a separate capability from no-token-data, so
-future agents can opt into either behavior independently.
+message.
 
 ### Cursor Admin Usage Events
 
@@ -149,10 +147,7 @@ at a glance.
 
 Eight baseline cards at the top summarize the selected window. The Total Cost
 card is featured with a larger value; the rest show total tokens, daily burn,
-peak day, cache hit rate, project and model counts, and active days. When
-Copilot-family sessions have usage data, an additional **Copilot AI Credits**
-card shows reported credits when available, otherwise the existing cost-based
-estimate.
+peak day, cache hit rate, project and model counts, and active days.
 
 ![Usage summary cards](/assets/generated/screenshots/usage-summary-cards.png)
 
@@ -394,22 +389,20 @@ model attributes. AgentsView deduplicates repeated trace flushes for the same
 chat turn and keeps the copy with the most complete token usage before pricing
 it.
 
-### Copilot AI Credits
+### Copilot Reported Billing
 
 Copilot CLI `session.shutdown` events can report an authoritative
-`totalNanoAiu`. AgentsView converts that cumulative billing amount exactly:
-credits are `totalNanoAiu / 1e9`, and USD cost is `totalNanoAiu / 1e11`.
-The session-level USD value is stored through the normal reported-cost fields,
-on one stable usage-event row. Later shutdowns supersede earlier totals,
-including an authoritative final zero.
+`totalNanoAiu` billing total. AgentsView converts that cumulative amount
+exactly (`totalNanoAiu / 1e11` USD) and stores the session-level value
+through the normal reported-cost fields, on one stable usage-event row.
+Later shutdowns supersede earlier totals, including an authoritative final
+zero.
 
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents
 double counting across models, days, and resumed segments. Historical Copilot
-sessions without `totalNanoAiu`, other Copilot-family agents, and other
-AI-credit-denominated agents retain catalog pricing. The displayed credit
-total remains the generic cost conversion (`cost / $0.01`), so aggregate USD
-cost and displayed Copilot credits always agree.
+sessions without `totalNanoAiu` and other Copilot-family agents retain
+catalog pricing.
 
 The cumulative cost is attributed to the final shutdown day. Consequently, a
 date window containing that shutdown receives the full session cost, while a
@@ -421,9 +414,6 @@ Model-filtered reports and per-model breakdown costs remain token-price
 estimates because the session-level cost cannot be allocated accurately among
 models. Their sum can therefore differ from the authoritative session or
 aggregate total.
-
-The Usage dashboard shows credits as an optional summary card, and
-`agentsview session usage` prints an `AI Credits` line.
 
 ### Claude Streaming & Codex Token Events
 
