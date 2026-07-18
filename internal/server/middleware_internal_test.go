@@ -12,12 +12,12 @@ import (
 // A non-positive write timeout must disable the deadline instead of wrapping the
 // handler in http.TimeoutHandler with a 0 duration, which would fire immediately
 // and 503 every request.
-func TestWithTimeout_NonPositiveDisablesDeadline(t *testing.T) {
+func TestWithTimeout_DisabledTimeout(t *testing.T) {
 	t.Parallel()
 	s := testServer(t, 0)
 
 	called := false
-	h := s.withTimeout(func(w http.ResponseWriter, _ *http.Request) {
+	h := s.withTimeout("GET /api/v1/recall/entries", func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})

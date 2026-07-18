@@ -36,7 +36,10 @@ type evalTrajectoryIngestRequest struct {
 func (s *Server) registerEvalIngestRoutes() {
 	s.mux.Handle(
 		"POST /api/v1/recall/eval/trajectories",
-		s.withTimeout(s.handleIngestEvalTrajectory),
+		s.withTimeout(
+			"POST /api/v1/recall/eval/trajectories",
+			s.handleIngestEvalTrajectory,
+		),
 	)
 }
 

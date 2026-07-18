@@ -61,7 +61,7 @@ func withHandlerDelay(d time.Duration) Option {
 // a JSON body containing "request timed out" and the correct
 // Content-Type header.
 func assertTimeoutResponse(
-	t *testing.T, resp *http.Response,
+	t *testing.T, resp *http.Response, detailSubstrings ...string,
 ) {
 	t.Helper()
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
@@ -74,7 +74,12 @@ func assertTimeoutResponse(
 	var je jsonError
 	require.NoError(t, json.Unmarshal(body, &je),
 		"body is not valid JSON; body=%q", string(body))
+	t.Logf("timeout body: %s", string(body))
 	require.Equal(t, "request timed out", je.Error)
+	require.NotEmpty(t, je.Detail)
+	for _, want := range detailSubstrings {
+		require.Contains(t, je.Detail, want)
+	}
 	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 }
 

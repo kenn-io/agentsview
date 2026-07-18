@@ -2,26 +2,40 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 )
 
 // jsonError is the standard JSON error response.
 type jsonError struct {
-	Error string `json:"error"`
+	Error  string `json:"error"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func timeoutErrorBody(
+	operation string, timeout time.Duration,
+) string {
+	if operation == "" {
+		operation = "request"
+	}
+	msgBytes, _ := json.Marshal(jsonError{
+		Error: "request timed out",
+		Detail: fmt.Sprintf(
+			"%s did not finish writing a response within the %s write timeout; the request or backing store is likely too slow. Retry, narrow the query, or raise --write-timeout if this request is expected to run longer.",
+			operation, timeout,
+		),
+	})
+	return string(msgBytes)
 }
 
 // withTimeout applies a write timeout to standard handlers.
 // It uses http.TimeoutHandler but ensures the response is
 // JSON with correct headers.
 func (s *Server) withTimeout(
+	operation string,
 	h http.HandlerFunc,
 ) http.Handler {
-	msgBytes, _ := json.Marshal(
-		jsonError{Error: "request timed out"},
-	)
-	msg := string(msgBytes)
-
 	inner := h
 	if s.handlerDelay > 0 {
 		delay := s.handlerDelay
@@ -39,7 +53,8 @@ func (s *Server) withTimeout(
 	}
 
 	handler := http.TimeoutHandler(
-		inner, s.cfg.WriteTimeout, msg,
+		inner, s.cfg.WriteTimeout,
+		timeoutErrorBody(operation, s.cfg.WriteTimeout),
 	)
 
 	return http.HandlerFunc(

@@ -393,7 +393,10 @@ func (s *Server) humaTimeout() func(*huma.Operation) {
 					next(huma.WithContext(humago.NewContext(ctx.Operation(), r, w), r.Context()))
 				}),
 				s.cfg.WriteTimeout,
-				`{"error":"request timed out"}`,
+				timeoutErrorBody(
+					req.Method+" "+req.URL.Path,
+					s.cfg.WriteTimeout,
+				),
 			)
 			tw := &contentTypeWrapper{
 				ResponseWriter: writer,

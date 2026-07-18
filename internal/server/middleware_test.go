@@ -120,13 +120,14 @@ func TestMiddlewareTimeout(t *testing.T) {
 		name        string
 		path        string
 		wantTimeout bool
+		wantDetail  []string
 		wantStatus  int // Only checked if wantTimeout is false
 	}{
-		{"Wrapped_ListSessions", "/api/v1/sessions", true, 0},
-		{"Wrapped_GetStats", "/api/v1/stats", true, 0},
-		{"Unwrapped_SearchContent", "/api/v1/search/content?pattern=needle", false, http.StatusOK},
-		{"Unwrapped_ExportSession", "/api/v1/sessions/invalid-id/export", false, http.StatusNotFound},
-		{"Unwrapped_SPA", "/", false, http.StatusOK},
+		{"Wrapped_ListSessions", "/api/v1/sessions", true, []string{"GET /api/v1/sessions", "10ms", "--write-timeout"}, 0},
+		{"Wrapped_GetStats", "/api/v1/stats", true, []string{"GET /api/v1/stats", "10ms", "--write-timeout"}, 0},
+		{"Unwrapped_SearchContent", "/api/v1/search/content?pattern=needle", false, nil, http.StatusOK},
+		{"Unwrapped_ExportSession", "/api/v1/sessions/invalid-id/export", false, nil, http.StatusNotFound},
+		{"Unwrapped_SPA", "/", false, nil, http.StatusOK},
 	}
 
 	for _, tt := range tests {
@@ -137,7 +138,7 @@ func TestMiddlewareTimeout(t *testing.T) {
 			defer resp.Body.Close()
 
 			if tt.wantTimeout {
-				assertTimeoutResponse(t, resp)
+				assertTimeoutResponse(t, resp, tt.wantDetail...)
 			} else {
 				assert.False(t, isTimeoutResponse(t, resp),
 					"%s: unexpected timeout for unwrapped route", tt.path)
