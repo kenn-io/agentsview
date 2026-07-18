@@ -507,7 +507,7 @@ to X" still works.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -605,9 +605,13 @@ versioned surfaces, so a future bump in one does not imply a bump in the others.
 Usage and activity already emitted `schema_version: 1` before 0.38, and the
 session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
 emitted the substantially revised project-evidence shape while still reporting
-version 1. Current builds correct all three markers to version 2; those two
+version 1. Builds after that correct all three markers to version 2; those two
 transitional releases must not be treated as v1-compatible. The commands do
-not provide a v1 output mode.
+not provide older output modes.
+
+Usage daily is now `schema_version: 3`: the v2 `copilotAICredits` totals
+field is removed, and totals substitute the authoritative Copilot-reported
+session cost for catalog estimates when one is present.
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
 
@@ -624,8 +628,8 @@ additive fields.
 | Project key derivation, remote normalization, or path fallback normalization changes  | Yes                             |
 | New closed-enum values for project resolution, session classification, or cost source | Yes                             |
 
-Additive fields may appear in future v1 payloads. Consumers should ignore
-unknown keys.
+Additive fields may appear in future payloads without a bump. Consumers
+should ignore unknown keys.
 
 ### Pricing Provenance
 

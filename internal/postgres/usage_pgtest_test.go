@@ -1197,6 +1197,43 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 		daily.Pricing.Models["gpt-4"].CostSource)
 }
 
+func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_copilot_cost_only_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'copilot:cost-only', 'test-machine', 'proj', 'copilot',
+			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+		) VALUES (
+			'copilot:cost-only', 'shutdown', 'copilot', 0, 0,
+			0.0175, 'exact', 'copilot-reported',
+			'2026-03-12T10:01:00Z'::timestamptz, 'cost-only'
+		)`)
+	require.NoError(t, err)
+
+	u, err := store.GetSessionUsage(ctx, "copilot:cost-only", true)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	assert.True(t, u.HasCost)
+	assert.InDelta(t, 0.0175, u.CostUSD, 1e-12)
+	assert.False(t, u.HasTokenData,
+		"a cost-only reported row is not token data")
+	assert.Empty(t, u.Models,
+		"a cost-only carrier row must not surface a model")
+	assert.Zero(t, u.BreakdownCount)
+	assert.Empty(t, u.Breakdown)
+}
+
 func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_copilot_unpriced_test")
 

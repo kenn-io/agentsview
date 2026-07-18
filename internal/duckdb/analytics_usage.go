@@ -3993,8 +3993,8 @@ func (s *Store) sessionUsageAggregateRows(
 
 // sessionUsageRowCount counts the deduped usage rows that would
 // contribute breakdown entries, mirroring duckSessionUsageRowCost's
-// contributes rule (an explicit cost or any nonzero token counter)
-// without shipping the rows.
+// contributes rule (a non-copilot-reported explicit cost or any
+// nonzero token counter) without shipping the rows.
 func (s *Store) sessionUsageRowCount(
 	ctx context.Context, sessionID string,
 ) (int, error) {
@@ -4002,7 +4002,7 @@ func (s *Store) sessionUsageRowCount(
 	query := cte + `
 		SELECT COUNT(*)
 		FROM usage_localized
-		WHERE cost_usd IS NOT NULL
+		WHERE (cost_usd IS NOT NULL AND cost_source != 'copilot-reported')
 			OR input_tokens_norm != 0
 			OR output_tokens_norm != 0
 			OR cache_create_norm != 0
@@ -4276,8 +4276,6 @@ func (s *Store) GetSessionUsage(
 	var authoritativeCost *float64
 	hasRows := false
 	for _, r := range rows {
-		hasRows = true
-		models[r.model] = true
 		if r.authoritativeCostRows > 0 {
 			v := r.authoritativeCost
 			authoritativeCost = &v
@@ -4292,9 +4290,14 @@ func (s *Store) GetSessionUsage(
 			r.reportedCostRows > 0,
 			rateResolver,
 		)
+		// Cost-only copilot-reported carrier rows never contribute, so
+		// they must not surface as token data or a model, matching the
+		// SQLite and PostgreSQL session usage paths.
 		if !contributes {
 			continue
 		}
+		hasRows = true
+		models[r.model] = true
 		totalCost += cost
 		if !priced {
 			unpriced[r.model] = true
