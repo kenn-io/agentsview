@@ -799,6 +799,27 @@ func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
 	assert.Equal(t, copilotReportedCostSource, usage[1].CostSource)
 }
 
+func TestParseCopilotSession_MultiShutdown_MissingTotalPreservesReportedCost(
+	t *testing.T,
+) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"multi-shut-missing-total","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":200,"outputTokens":80}}}},"timestamp":"2026-06-15T10:03:00Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	require.Len(t, usage, 2)
+	require.NotNil(t, usage[0].CostUSD,
+		"shutdown without totalNanoAiu must preserve the last reported total")
+	assert.InDelta(t, 0.0125, *usage[0].CostUSD, 1e-12)
+	assert.Equal(t, copilotReportedCostSource, usage[0].CostSource)
+	assert.Nil(t, usage[1].CostUSD)
+	assert.Empty(t, usage[1].CostSource)
+}
+
 func TestParseCopilotSession_MultiShutdown_LastZeroIsAuthoritative(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"multi-shut-zero","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
