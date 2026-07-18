@@ -754,6 +754,56 @@ END;
 -- trigger body referencing sync_marker here would fail to create against a
 -- pre-migration sessions table that doesn't have the column yet.
 
+-- Session-deletion journal: a compact publication journal recording hard
+-- session deletions so mirror pushes can apply bounded tombstone deltas
+-- instead of enumerating the whole archive. Unlike sync_marker, this only
+-- references columns (sessions.id, sessions.project) that have existed
+-- forever, so it is safe to define directly here.
+CREATE TABLE IF NOT EXISTS session_deletion_changes (
+    session_id TEXT PRIMARY KEY,
+    project    TEXT NOT NULL,
+    revision   INTEGER NOT NULL,
+    deleted    INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_deletion_changes_revision
+    ON session_deletion_changes(revision);
+
+DROP TRIGGER IF EXISTS trg_sessions_deletion_journal_delete;
+CREATE TRIGGER trg_sessions_deletion_journal_delete
+AFTER DELETE ON sessions
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+        VALUES ('session_deletion_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
+        SELECT OLD.id, OLD.project,
+               CAST(value AS INTEGER), 1
+        FROM archive_metadata WHERE key = 'session_deletion_publication_revision'
+    ON CONFLICT(session_id) DO UPDATE SET
+        project = excluded.project, revision = excluded.revision, deleted = 1;
+END;
+
+DROP TRIGGER IF EXISTS trg_sessions_deletion_journal_insert;
+CREATE TRIGGER trg_sessions_deletion_journal_insert
+AFTER INSERT ON sessions
+WHEN EXISTS (SELECT 1 FROM session_deletion_changes WHERE session_id = NEW.id)
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+        VALUES ('session_deletion_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
+        SELECT NEW.id, NEW.project,
+               CAST(value AS INTEGER), 0
+        FROM archive_metadata WHERE key = 'session_deletion_publication_revision'
+    ON CONFLICT(session_id) DO UPDATE SET
+        project = excluded.project, revision = excluded.revision, deleted = 0;
+END;
+
 -- PG sync state: stores watermarks for push sync
 CREATE TABLE IF NOT EXISTS pg_sync_state (
     key   TEXT PRIMARY KEY,
