@@ -220,21 +220,23 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		_, cost, priced, contributes := duckActivityReportRowStatus(r, rateResolver)
+		cost, costSource, priced, contributes, authoritativeCost :=
+			duckActivityUsageCost(r, rateResolver)
 		out = append(out, activity.UsageRow{
-			SessionID:       r.sessionID,
-			Model:           r.model,
-			Timestamp:       r.ts,
-			OutputTokens:    r.outputTok,
-			Cost:            cost,
-			CostSource:      r.costSource,
-			Priced:          priced,
-			Contributes:     contributes,
-			Agent:           r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID,
-			UsageDedupKey:   r.usageDedupKey,
+			SessionID:         r.sessionID,
+			Model:             r.model,
+			Timestamp:         r.ts,
+			OutputTokens:      r.outputTok,
+			Cost:              cost,
+			CostSource:        costSource,
+			AuthoritativeCost: authoritativeCost,
+			Priced:            priced,
+			Contributes:       contributes,
+			Agent:             r.agent,
+			ClaudeMessageID:   r.claudeMessageID,
+			ClaudeRequestID:   r.claudeRequestID,
+			SourceUUID:        r.sourceUUID,
+			UsageDedupKey:     r.usageDedupKey,
 		})
 	}
 	return out, nil
@@ -543,10 +545,12 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, cost, priced, contributes := duckActivityReportRowStatus(o.scan, rateResolver)
+		cost, costSource, priced, contributes, authoritativeCost :=
+			duckActivityUsageCost(o.scan, rateResolver)
 		row := o.row
 		row.Cost = cost
-		row.CostSource = o.scan.costSource
+		row.CostSource = costSource
+		row.AuthoritativeCost = authoritativeCost
 		row.Priced = priced
 		row.Contributes = contributes
 		out = append(out, row)
@@ -696,6 +700,25 @@ func duckActivityReportRowStatus(
 		pricing,
 	)
 	return savings, cost, priced, contributes
+}
+
+func duckActivityUsageCost(
+	r duckActivityReportUsageRow, pricing *export.PricingResolver,
+) (cost float64, costSource export.CostSource, priced, contributes bool,
+	authoritativeCost *float64) {
+	costRow := r
+	if r.costSource == db.CopilotReportedCostSource && r.costUSD != nil {
+		v := *r.costUSD
+		authoritativeCost = &v
+		costRow.costUSD = nil
+		pricing.RecordUnattributedReported()
+	}
+	_, cost, priced, contributes = duckActivityReportRowStatus(costRow, pricing)
+	costSource = export.CostSourceComputed
+	if costRow.costUSD != nil {
+		costSource = export.CostSourceReported
+	}
+	return
 }
 
 // duckUsageOrdinal extracts a non-negative message ordinal from a

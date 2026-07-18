@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"time"
@@ -163,21 +164,34 @@ func (db *DB) GetSessionUsageRows(
 			seen[key] = struct{}{}
 		}
 		_, outputTok, _, _, _ := sqliteSessionUsageRowTokens(r)
-		cost, priced, contributes := sessionRowCost(r, rateResolver)
+		costRow := r
+		var authoritativeCost *float64
+		if r.costSource == CopilotReportedCostSource && r.costUSD.Valid {
+			v := r.costUSD.Float64
+			authoritativeCost = &v
+			costRow.costUSD = sql.NullFloat64{}
+			rateResolver.RecordUnattributedReported()
+		}
+		cost, priced, contributes := sessionRowCost(costRow, rateResolver)
+		costSource := export.CostSourceComputed
+		if costRow.costUSD.Valid {
+			costSource = export.CostSourceReported
+		}
 		out = append(out, activity.UsageRow{
-			SessionID:       r.sessionID,
-			Model:           r.model,
-			Timestamp:       r.ts,
-			OutputTokens:    outputTok,
-			Cost:            cost,
-			CostSource:      r.costSource,
-			Priced:          priced,
-			Contributes:     contributes,
-			Agent:           r.agent,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID,
-			UsageDedupKey:   r.usageDedupKey,
+			SessionID:         r.sessionID,
+			Model:             r.model,
+			Timestamp:         r.ts,
+			OutputTokens:      outputTok,
+			Cost:              cost,
+			CostSource:        costSource,
+			AuthoritativeCost: authoritativeCost,
+			Priced:            priced,
+			Contributes:       contributes,
+			Agent:             r.agent,
+			ClaudeMessageID:   r.claudeMessageID,
+			ClaudeRequestID:   r.claudeRequestID,
+			SourceUUID:        r.sourceUUID,
+			UsageDedupKey:     r.usageDedupKey,
 		})
 	}
 	return out, nil
@@ -472,11 +486,24 @@ func (db *DB) activityReportUsage(
 			continue
 		}
 		_, outputTok, _, _, _, _ := dailyUsageAmounts(o.scan, rateResolver)
-		cost, priced, contributes := sqliteActivityReportRowStatus(o.scan, rateResolver)
+		costRow := o.scan
+		var authoritativeCost *float64
+		if o.scan.costSource == CopilotReportedCostSource && o.scan.costUSD.Valid {
+			v := o.scan.costUSD.Float64
+			authoritativeCost = &v
+			costRow.costUSD = sql.NullFloat64{}
+			rateResolver.RecordUnattributedReported()
+		}
+		cost, priced, contributes := sqliteActivityReportRowStatus(costRow, rateResolver)
+		costSource := export.CostSourceComputed
+		if costRow.costUSD.Valid {
+			costSource = export.CostSourceReported
+		}
 		row := o.row
 		row.OutputTokens = outputTok
 		row.Cost = cost
-		row.CostSource = o.scan.costSource
+		row.CostSource = costSource
+		row.AuthoritativeCost = authoritativeCost
 		row.Priced = priced
 		row.Contributes = contributes
 		out = append(out, row)

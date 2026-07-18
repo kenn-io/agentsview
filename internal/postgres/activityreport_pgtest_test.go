@@ -206,6 +206,12 @@ func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testi
 	assert.InDelta(t, 0.03, r.Totals.Cost, 1e-12)
 	require.Len(t, r.BySession, 1)
 	assert.InDelta(t, 0.03, r.BySession[0].Cost, 1e-12)
+	modelCosts := make(map[string]float64, len(r.ByModel))
+	for _, model := range r.ByModel {
+		modelCosts[model.Key] = model.Cost
+	}
+	assert.InDelta(t, 10.0, modelCosts["copilot-model-a"], 1e-12)
+	assert.InDelta(t, 20.0, modelCosts["copilot-model-b"], 1e-12)
 }
 
 // TestPGGetActivityReportIncludesSubagentUsage mirrors the SQLite

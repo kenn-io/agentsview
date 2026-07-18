@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -285,8 +286,16 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	fmt.Fprintf(w, "%s %d\n", label("Peak ctx"), out.PeakContextTokens)
 	if out.HasCost {
 		models := strings.Join(out.Models, ", ")
-		fmt.Fprintf(w, "%s ~$%.2f (%s)\n", label("Cost"),
-			out.CostUSD, sanitizeTerminal(models))
+		prefix := "~"
+		if out.CostSource == export.CostSourceReported {
+			prefix = ""
+		}
+		suffix := ""
+		if models != "" {
+			suffix = " (" + sanitizeTerminal(models) + ")"
+		}
+		fmt.Fprintf(w, "%s %s$%.2f%s\n", label("Cost"),
+			prefix, out.CostUSD, suffix)
 	} else if len(out.UnpricedModels) > 0 {
 		fmt.Fprintf(w, "%s n/a (unpriced: %s)\n", label("Cost"),
 			sanitizeTerminal(strings.Join(out.UnpricedModels, ", ")))

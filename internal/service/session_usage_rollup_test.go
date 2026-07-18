@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -184,6 +185,44 @@ func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t
 	require.Equal(t, 1, got.SubagentCount)
 	require.True(t, got.HasCost)
 	require.Equal(t, 3.0, got.CostUSD)
+}
+
+func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
+	authoritativeRootCost := 1.0
+	store := &rollupStore{
+		usages: map[string]*db.SessionUsage{
+			"root": {
+				SessionID: "root", HasCost: true, CostUSD: authoritativeRootCost,
+				CostSource: export.CostSourceReported, BreakdownCount: 1,
+			},
+			"child": {
+				SessionID: "child", HasCost: true, CostUSD: 2,
+				CostSource: export.CostSourceComputed, BreakdownCount: 1,
+			},
+		},
+		children: map[string][]db.Session{
+			"root": {{ID: "child", RelationshipType: "subagent"}},
+		},
+		rows: []activity.UsageRow{
+			{
+				SessionID: "root", Cost: 10,
+				AuthoritativeCost: &authoritativeRootCost,
+				CostSource:        export.CostSourceComputed,
+				Priced:            true, Contributes: true,
+			},
+			{
+				SessionID: "child", Cost: 2,
+				CostSource: export.CostSourceComputed,
+				Priced:     true, Contributes: true,
+			},
+		},
+	}
+
+	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	require.NoError(t, err)
+	require.True(t, got.HasCost)
+	require.Equal(t, 3.0, got.CostUSD)
+	require.Equal(t, export.CostSourceMixed, got.CostSource)
 }
 
 func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {

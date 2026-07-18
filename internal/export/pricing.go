@@ -52,10 +52,11 @@ type PricingLookup struct {
 }
 
 type PricingResolver struct {
-	rows        []EffectivePricingRow
-	byModel     map[string]ModelRates
-	lookupCache map[string]PricingLookup
-	recorded    map[string]*pricingRecord
+	rows                 []EffectivePricingRow
+	byModel              map[string]ModelRates
+	lookupCache          map[string]PricingLookup
+	recorded             map[string]*pricingRecord
+	unattributedReported bool
 }
 
 type pricingRecord struct {
@@ -115,6 +116,14 @@ func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
 	rec.reported = true
 }
 
+// RecordUnattributedReported records an authoritative aggregate cost that
+// cannot be assigned to a model without inventing an allocation.
+func (r *PricingResolver) RecordUnattributedReported() {
+	if r != nil {
+		r.unattributedReported = true
+	}
+}
+
 func (r *PricingResolver) record(model string, lookup PricingLookup) *pricingRecord {
 	rec := r.recorded[model]
 	if rec == nil {
@@ -131,7 +140,8 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 	}
 	models := make(map[string]EffectiveModelRate, len(r.recorded))
 	fallbackSet := make(map[string]struct{})
-	var hasComputed, hasReported bool
+	var hasComputed bool
+	hasReported := r.unattributedReported
 	modelNames := make([]string, 0, len(r.recorded))
 	for model := range r.recorded {
 		modelNames = append(modelNames, model)
@@ -180,7 +190,7 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 		CustomOverrideCount: customPricingRowCount(r.rows),
 		EffectiveRowCount:   len(r.rows),
 		Digest:              digest,
-		CostSource:          combinedCostSource(hasComputed, hasReported),
+		CostSource:          CombinedCostSource(hasComputed, hasReported),
 		Fallback: PricingFallback{
 			Used:   len(fallbackModels) > 0,
 			Models: fallbackModels,
@@ -207,10 +217,11 @@ func pricingTableVersion(rows []EffectivePricingRow) string {
 }
 
 func recordCostSource(rec *pricingRecord) CostSource {
-	return combinedCostSource(rec.computed, rec.reported)
+	return CombinedCostSource(rec.computed, rec.reported)
 }
 
-func combinedCostSource(computed, reported bool) CostSource {
+// CombinedCostSource resolves normalized provenance flags into the wire enum.
+func CombinedCostSource(computed, reported bool) CostSource {
 	switch {
 	case computed && reported:
 		return CostSourceMixed

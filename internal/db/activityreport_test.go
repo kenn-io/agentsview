@@ -162,6 +162,12 @@ func TestGetActivityReport_CopilotReportedCostReplacesSessionEstimates(t *testin
 	assert.InDelta(t, reportedCost, r.Totals.Cost, 1e-12)
 	require.Len(t, r.BySession, 1)
 	assert.InDelta(t, reportedCost, r.BySession[0].Cost, 1e-12)
+	modelCosts := make(map[string]float64, len(r.ByModel))
+	for _, model := range r.ByModel {
+		modelCosts[model.Key] = model.Cost
+	}
+	assert.InDelta(t, 10.0, modelCosts["copilot-model-a"], 1e-12)
+	assert.InDelta(t, 20.0, modelCosts["copilot-model-b"], 1e-12)
 }
 
 func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {

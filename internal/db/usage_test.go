@@ -3669,7 +3669,7 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	require.NotNil(t, daily.Pricing)
 	assert.Equal(t, export.CostSourceMixed, daily.Pricing.CostSource,
 		"authoritative reported cost must surface in pricing provenance")
-	assert.Equal(t, export.CostSourceMixed,
+	assert.Equal(t, export.CostSourceComputed,
 		daily.Pricing.Models["claude-opus-4-6"].CostSource)
 
 	earlyDay, err := d.GetDailyUsage(ctx, UsageFilter{
