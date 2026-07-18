@@ -77,6 +77,10 @@
     });
   });
 
+  function fmtCredits(v: number): string {
+    return String(v.toFixed(0));
+  }
+
   interface Card {
     label: () => string;
     value: () => string;
@@ -92,6 +96,14 @@
         sub: () => vsPrior ?? "",
         featured: true,
       },
+      ...(usage.summary?.totals.copilotAICredits
+        ? [
+            {
+              label: () => m.usage_summary_copilot_ai_credits(),
+              value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
+            },
+          ]
+        : []),
       {
         label: () => m.usage_summary_input_tokens(),
         value: () => fmtTokens(inputTokens),

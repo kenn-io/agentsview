@@ -776,6 +776,7 @@
   "usage_models": "模型",
   "usage_refresh": "刷新用量數據",
   "usage_summary_total_cost": "總成本",
+  "usage_summary_copilot_ai_credits": "Copilot AI Credits",
   "usage_summary_input_tokens": "輸入 Token",
   "usage_summary_daily_burn": "每日消耗",
   "usage_summary_peak_day": "峰值日期",

@@ -3578,6 +3578,41 @@ func TestGetSessionUsage_NotFound(t *testing.T) {
 	assert.Nil(t, u, "usage")
 }
 
+func TestGetSessionUsage_AICreditsCapability(t *testing.T) {
+	parsertest.StubAgentDefs(t, parser.AgentDef{
+		Type:        parser.AgentType("ai-credit-agent"),
+		DisplayName: "AI Credit Agent",
+		Usage: parser.UsageCapabilities{
+			AICreditsDenominated: true,
+		},
+	})
+
+	d := testDB(t)
+	ctx := context.Background()
+	seedOpusPricing(t, d)
+
+	insertSession(t, d, "ai-credit-agent:s1", "proj", func(s *Session) {
+		s.Agent = "ai-credit-agent"
+		s.StartedAt = new("2026-05-20T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "ai-credit-agent:s1",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-20T10:30:00Z",
+		Model:     "claude-opus-4-6",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":1000,"output_tokens":500}`),
+	})
+
+	u, err := d.GetSessionUsage(ctx, "ai-credit-agent:s1", true)
+	requireNoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "usage is nil")
+	assert.True(t, u.HasCost, "HasCost = false, want true")
+	assert.InDelta(t, 0.0175, u.CostUSD, 1e-9, "CostUSD")
+	assert.InDelta(t, 1.75, u.AICredits, 1e-9, "AICredits")
+}
+
 func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -3615,6 +3650,7 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	require.NotNil(t, session)
 	assert.True(t, session.HasCost)
 	assert.InDelta(t, reportedCost, session.CostUSD, 1e-12)
+	assert.InDelta(t, reportedCost/0.01, session.AICredits, 1e-9)
 	require.Len(t, session.Breakdown, 2)
 	assert.InDelta(t, 0.0175, session.Breakdown[0].CostUSD, 1e-12)
 	assert.InDelta(t, 0.0175, session.Breakdown[1].CostUSD, 1e-12,

@@ -1265,6 +1265,9 @@ func (s *Store) GetSessionUsage(
 	} else if out.HasCost {
 		out.CostUSD = cost
 	}
+	if out.HasCost {
+		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
+	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedStringSetKeys(unpricedSet)
 	}

@@ -800,6 +800,7 @@
   "usage_models": "Models",
   "usage_refresh": "Refresh usage data",
   "usage_summary_total_cost": "Total Cost",
+  "usage_summary_copilot_ai_credits": "Copilot AI Credits",
   "usage_summary_unsupported_copilot_no_token_data": "Copilot sessions matched this range, but Copilot does not record per-message token usage.",
   "usage_summary_unsupported_generic": "Matching sessions do not expose token usage data.",
   "usage_summary_input_tokens": "Input Tokens",

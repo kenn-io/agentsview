@@ -57,7 +57,7 @@ func TestRenderSessionUsageHuman_NoCost(t *testing.T) {
 		"output should note unpriced model")
 }
 
-func TestRenderSessionUsageHuman_CopilotReportedCost(t *testing.T) {
+func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 	out := &sessionUsageOutput{
 		SessionUsage: db.SessionUsage{
 			SessionID:         "copilot:s1",
@@ -68,6 +68,7 @@ func TestRenderSessionUsageHuman_CopilotReportedCost(t *testing.T) {
 			HasTokenData:      true,
 			CostUSD:           10.00,
 			HasCost:           true,
+			AICredits:         1000.0,
 			Models:            []string{"gpt-4"},
 		},
 	}
@@ -75,8 +76,8 @@ func TestRenderSessionUsageHuman_CopilotReportedCost(t *testing.T) {
 	require.NoError(t, renderSessionUsageHuman(&b, out))
 	s := b.String()
 	assert.Contains(t, s, "~$10.00", "output missing cost")
-	assert.NotContains(t, s, "AI Credits",
-		"cost output must not include a credits line")
+	assert.Contains(t, s, "1000", "output missing AI Credits")
+	assert.Contains(t, s, "AI Credits", "output missing AI Credits label")
 }
 
 func TestRenderSessionUsageHuman_CopilotNoCost(t *testing.T) {

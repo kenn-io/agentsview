@@ -4340,5 +4340,8 @@ func (s *Store) GetSessionUsage(
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
 	}
+	if out.HasCost {
+		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
+	}
 	return out, nil
 }

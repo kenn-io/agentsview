@@ -2554,6 +2554,7 @@ type SessionUsage struct {
 	HasTokenData      bool                         `json:"has_token_data"`
 	CostUSD           float64                      `json:"cost_usd"`
 	HasCost           bool                         `json:"has_cost"`
+	AICredits         float64                      `json:"ai_credits,omitempty"`
 	Models            []string                     `json:"models"`
 	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
 	BreakdownCount    int                          `json:"breakdown_count"`
@@ -2772,6 +2773,9 @@ func (db *DB) GetSessionUsage(
 		out.CostUSD = *authoritativeCost
 	} else if out.HasCost {
 		out.CostUSD = cost
+	}
+	if out.HasCost {
+		out.AICredits = AICreditsFromCost(sess.Agent, out.CostUSD)
 	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedSetKeys(unpricedSet)

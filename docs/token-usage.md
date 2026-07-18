@@ -49,7 +49,7 @@ rows, AgentsView reports that as an unsupported usage state instead of silently
 showing an empty chart. Copilot-family filters (`copilot`, `vscode-copilot`, and
 `visualstudio-copilot`) keep Copilot-specific wording; any other no-token agent
 falls back to a generic "matching sessions do not expose token usage data"
-message. AI-credit cost denomination (surfaced as `copilotAICredits` for
+message. AI-credit cost denomination (surfaced as "Copilot AI Credits" for
 Copilot agents) is tracked as a separate capability from no-token-data, so
 future agents can opt into either behavior independently.
 
@@ -149,7 +149,9 @@ at a glance.
 
 Eight baseline cards at the top summarize the selected window. The Total Cost
 card is featured with a larger value; the rest show total tokens, daily burn,
-peak day, cache hit rate, project and model counts, and active days.
+peak day, cache hit rate, project and model counts, and active days. When
+Copilot-family sessions have priced usage, an additional **Copilot AI Credits**
+card shows the same spend converted at 100 credits per dollar.
 
 ![Usage summary cards](/assets/generated/screenshots/usage-summary-cards.png)
 
@@ -393,8 +395,11 @@ it.
 
 ### Copilot Reported Billing
 
-Copilot CLI `session.shutdown` events can report an authoritative
-`totalNanoAiu` billing total. AgentsView converts that cumulative amount
+Copilot CLI `session.shutdown` events can include a `totalNanoAiu` billing
+total. Copilot sessions starting on or after June 1,
+2026 can report an authoritative `totalNanoAiu` billing total. Older sessions
+remain catalog-priced because they were created under the premium-request
+pricing model. AgentsView converts that cumulative amount
 exactly (`totalNanoAiu / 1e11` USD) and stores the session-level value
 through the normal reported-cost fields, on one stable usage-event row.
 Later shutdowns supersede earlier totals, including an authoritative final
@@ -419,12 +424,15 @@ aggregate total.
 
 ### Copilot AI Credits
 
-Usage report totals include a `copilotAICredits` field for Copilot-family
-agents (`copilot`, `vscode-copilot`, and `visualstudio-copilot`) when their
-usage rows have a cost. The conversion is cost divided by `$0.01`, matching
-the unit AgentsView uses for Copilot credit reporting. When a session carries
-an authoritative Copilot-reported cost, the credits derive from that reported
-total; otherwise they derive from the catalog estimate.
+Usage reports compute **Copilot AI Credits** for Copilot-family agents
+(`copilot`, `vscode-copilot`, and `visualstudio-copilot`) when their usage rows
+have a complete cost. The conversion is cost divided by `$0.01`, matching the
+unit AgentsView uses for Copilot credit reporting. When a session carries an
+authoritative Copilot-reported cost, the credits derive from that reported
+total; otherwise they derive from the catalog estimate. The Usage dashboard
+shows this as an optional summary card, and `agentsview session usage` prints
+an `AI Credits` line for priced Copilot-family sessions. Usage report totals
+continue to expose the same `copilotAICredits` field.
 
 ### Claude Streaming & Codex Token Events
 
@@ -618,12 +626,8 @@ session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
 emitted the substantially revised project-evidence shape while still reporting
 version 1. Current builds correct all three markers to version 2; those two
 transitional releases must not be treated as v1-compatible. The commands do
-not provide a v1 output mode.
-
-Relative to the v1-era payloads, usage daily v2 totals substitute the
-authoritative Copilot-reported session cost for catalog estimates when one is
-present. Consumers should require the expected `schema_version` and ignore
-unknown additive fields.
+not provide a v1 output mode. Consumers should require the expected
+`schema_version` and ignore unknown additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |
@@ -638,8 +642,8 @@ unknown additive fields.
 | Project key derivation, remote normalization, or path fallback normalization changes  | Yes                             |
 | New closed-enum values for project resolution, session classification, or cost source | Yes                             |
 
-Additive fields may appear in future payloads without a bump. Consumers
-should ignore unknown keys.
+Additive fields may appear in future v1 payloads. Consumers should ignore
+unknown keys.
 
 ### Pricing Provenance
 
