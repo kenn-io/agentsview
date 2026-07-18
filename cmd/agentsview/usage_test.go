@@ -83,9 +83,9 @@ func TestUsageDailyGolden(t *testing.T) {
 	require.NoError(t, err, "usage daily json golden command")
 	var report db.DailyUsageResult
 	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
-	assert.Equal(t, 2, report.SchemaVersion)
+	assert.Equal(t, 3, report.SchemaVersion)
 
-	assertGoldenBytes(t, "usage_daily_v2.json", []byte(stdout))
+	assertGoldenBytes(t, "usage_daily_v3.json", []byte(stdout))
 }
 
 func TestUsageDailyBreakdownGolden(t *testing.T) {
@@ -115,7 +115,7 @@ func TestUsageDailyBreakdownGolden(t *testing.T) {
 		assert.Equal(t, "golden-host", daily.MachineBreakdowns[0].MachineName)
 	}
 
-	assertGoldenBytes(t, "usage_daily_breakdown_v2.json", []byte(stdout))
+	assertGoldenBytes(t, "usage_daily_breakdown_v3.json", []byte(stdout))
 }
 
 func setupExportGoldenDataDir(t *testing.T) string {

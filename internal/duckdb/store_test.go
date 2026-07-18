@@ -2587,6 +2587,59 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 	assert.Equal(t, want.Daily, got.Daily)
 }
 
+func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	reportedCost := 0.0175
+	sess := syncSession(
+		"copilot:cost-only", "alpha", "cost only",
+		"2026-01-18T00:00:00.000Z", 0)
+	sess.Agent = "copilot"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{{
+			Source: "shutdown", Model: "copilot",
+			CostUSD: &reportedCost, CostStatus: "exact",
+			CostSource: db.CopilotReportedCostSource,
+			OccurredAt: "2026-01-18T00:01:00.000Z",
+			DedupKey:   "cost-only",
+		}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	want, err := local.GetSessionUsage(ctx, sess.ID, true)
+	require.NoError(t, err)
+	require.NotNil(t, want)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetSessionUsage(ctx, sess.ID, true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.HasCost)
+	assert.InDelta(t, reportedCost, got.CostUSD, 1e-12)
+	assert.False(t, got.HasTokenData,
+		"a cost-only reported row is not token data")
+	assert.Empty(t, got.Models,
+		"a cost-only carrier row must not surface a model")
+	assert.Zero(t, got.BreakdownCount)
+	assert.Empty(t, got.Breakdown)
+	assert.Equal(t, want.HasTokenData, got.HasTokenData)
+	assert.Equal(t, want.Models, got.Models)
+	assert.Equal(t, want.BreakdownCount, got.BreakdownCount)
+	assert.InDelta(t, want.CostUSD, got.CostUSD, 1e-12)
+
+	gotNoBreakdown, err := store.GetSessionUsage(ctx, sess.ID, false)
+	require.NoError(t, err)
+	require.NotNil(t, gotNoBreakdown)
+	assert.Zero(t, gotNoBreakdown.BreakdownCount,
+		"the row-count path must exclude cost-only reported rows")
+}
+
 func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
