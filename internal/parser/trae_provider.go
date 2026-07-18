@@ -560,6 +560,7 @@ func traeSourceHash(path, manifest string) (string, error) {
 
 func traeProviderCapabilities() Capabilities {
 	caps := windsurfProviderCapabilities()
+	caps.Source.StoredSourceHints = CapabilityUnsupported
 	caps.Content.AggregateUsageEvents = CapabilityUnsupported
 	caps.Content.ToolCalls = CapabilityUnsupported
 	caps.Content.ToolResults = CapabilityUnsupported
