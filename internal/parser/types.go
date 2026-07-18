@@ -26,6 +26,7 @@ const (
 	AgentZencoder       AgentType = "zencoder"
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
 	AgentWindsurf       AgentType = "windsurf"
+	AgentTrae           AgentType = "trae"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
 	AgentOMP            AgentType = "omp"
@@ -314,6 +315,30 @@ var Registry = []AgentDef{
 			NoPerMessageTokenData: true,
 			AICreditsDenominated:  true,
 		},
+	},
+	{
+		Type:        AgentTrae,
+		DisplayName: "Trae",
+		EnvVar:      "TRAE_DIR",
+		ConfigKey:   "trae_dirs",
+		DefaultDirs: []string{
+			// Windows
+			"AppData/Roaming/Trae/User",
+			"AppData/Roaming/Trae CN/User",
+			"AppData/Roaming/TRAE SOLO CN/User",
+			// macOS
+			"Library/Application Support/Trae/User",
+			"Library/Application Support/Trae CN/User",
+			"Library/Application Support/TRAE SOLO CN/User",
+			// Linux
+			".config/Trae/User",
+			".config/Trae CN/User",
+			".config/TRAE SOLO CN/User",
+		},
+		IDPrefix:     "trae:",
+		WatchSubdirs: []string{"workspaceStorage", "globalStorage"},
+		FileBased:    true,
+		Usage:        UsageCapabilities{NoPerMessageTokenData: true},
 	},
 	{
 		Type:        AgentVSCopilot,

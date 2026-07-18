@@ -146,6 +146,17 @@ func newSessionExportCommand() *cobra.Command {
 				}
 				return err
 			}
+			if dbPath, sessionID, ok := parser.SplitTraeVirtualPath(storedPath); ok {
+				err := parser.WriteTraeSessionJSON(
+					cmd.OutOrStdout(), dbPath, sessionID,
+				)
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"source file not found: %s", dbPath,
+					)
+				}
+				return err
+			}
 			if session.Agent == string(parser.AgentHermes) &&
 				filepath.Base(parser.ResolveSourceFilePath(storedPath)) == "state.db" {
 				rawSessionID := session.SourceSessionID
