@@ -161,6 +161,23 @@
   "session_breadcrumb_copy_session_id_value": "세션 ID 복사: {id}",
   "session_breadcrumb_copied": "복사됨!",
   "session_breadcrumb_estimated_session_cost": "예상 세션 비용",
+  "session_breadcrumb_total_cost": "합계",
+  "session_breadcrumb_total_cost_title": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "하위 에이전트 {countLabel}개를 포함한 총 비용",
+        "countPlural=other": "하위 에이전트 {countLabel}개를 포함한 총 비용"
+      }
+    }
+  ],
   "session_breadcrumb_usage_breakdown_title": "세션 사용량 상세",
   "session_breadcrumb_usage_breakdown_loading": "사용량 불러오는 중...",
   "session_breadcrumb_usage_breakdown_steps": [

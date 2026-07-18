@@ -357,25 +357,29 @@ func (s *Server) humaSessionTiming(
 }
 
 type sessionUsageResponse struct {
-	SessionID         string                          `json:"session_id"`
-	Agent             string                          `json:"agent"`
-	Project           string                          `json:"project"`
-	TotalOutputTokens int                             `json:"total_output_tokens"`
-	PeakContextTokens int                             `json:"peak_context_tokens"`
-	HasTokenData      bool                            `json:"has_token_data"`
-	CostUSD           float64                         `json:"cost_usd"`
-	HasCost           bool                            `json:"has_cost"`
-	AICredits         float64                         `json:"ai_credits,omitempty"`
-	Models            []string                        `json:"models"`
-	UnpricedModels    []string                        `json:"unpriced_models"`
-	BreakdownCount    int                             `json:"breakdown_count"`
-	Breakdown         []sessionUsageBreakdownResponse `json:"breakdown"`
-	ServerRunning     bool                            `json:"server_running"`
+	SessionID           string                          `json:"session_id"`
+	Agent               string                          `json:"agent"`
+	Project             string                          `json:"project"`
+	TotalOutputTokens   int                             `json:"total_output_tokens"`
+	PeakContextTokens   int                             `json:"peak_context_tokens"`
+	HasTokenData        bool                            `json:"has_token_data"`
+	CostUSD             float64                         `json:"cost_usd"`
+	HasCost             bool                            `json:"has_cost"`
+	AICredits           float64                         `json:"ai_credits,omitempty"`
+	Models              []string                        `json:"models"`
+	UnpricedModels      []string                        `json:"unpriced_models"`
+	BreakdownCount      int                             `json:"breakdown_count"`
+	Breakdown           []sessionUsageBreakdownResponse `json:"breakdown"`
+	ServerRunning       bool                            `json:"server_running"`
+	RollupCostUSD       *float64                        `json:"rollup_cost_usd,omitempty"`
+	HasRollupCost       *bool                           `json:"has_rollup_cost,omitempty"`
+	RollupSubagentCount *int                            `json:"rollup_subagent_count,omitempty"`
 }
 
 type sessionUsageInput struct {
 	ID        string `path:"id" required:"true" doc:"Session ID"`
 	Breakdown bool   `query:"breakdown" doc:"Include per-step breakdown rows"`
+	Rollup    bool   `query:"rollup" doc:"Include explicit subagent descendant costs"`
 }
 
 type sessionUsageBreakdownResponse struct {
@@ -455,6 +459,25 @@ func (s *Server) humaSessionUsage(
 	ctx context.Context,
 	in *sessionUsageInput,
 ) (*jsonOutput[sessionUsageResponse], error) {
+	if in.Rollup {
+		rollup, err := service.GetSessionUsageRollup(ctx, s.db, in.ID, in.Breakdown)
+		if err != nil {
+			if handled := handleHumaContextError(err); handled != nil {
+				return nil, handled
+			}
+			return nil, &sessionUsageError{Status: http.StatusInternalServerError, Body: sessionUsageErrorBody{Code: "usage_query_failed", Message: "failed to query session usage"}}
+		}
+		if rollup == nil {
+			return nil, &sessionUsageError{Status: http.StatusNotFound, Body: sessionUsageErrorBody{Code: "session_not_found", Message: "session not found"}}
+		}
+		body := newSessionUsageHumaResponse(rollup.Usage)
+		if rollup.HasCost {
+			body.RollupCostUSD = &rollup.CostUSD
+		}
+		body.HasRollupCost = &rollup.HasCost
+		body.RollupSubagentCount = &rollup.SubagentCount
+		return &jsonOutput[sessionUsageResponse]{Body: body}, nil
+	}
 	usage, err := s.db.GetSessionUsage(ctx, in.ID, in.Breakdown)
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {

@@ -85,6 +85,100 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 	}, got["breakdown"], "breakdown rows with ?breakdown=true")
 }
 
+func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "root-rollup", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+	})
+	te.seedSession(t, "child-rollup", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+		parent := "root-rollup"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "root-rollup", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+	te.seedMessages(t, "child-rollup", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+
+	w := te.get(t, "/api/v1/sessions/root-rollup/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.Equal(t, true, got["has_rollup_cost"])
+	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
+}
+
+func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "root-rollup-breakdown", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+	})
+	te.seedSession(t, "child-rollup-breakdown", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+		parent := "root-rollup-breakdown"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "root-rollup-breakdown", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+	te.seedMessages(t, "child-rollup-breakdown", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+
+	w := te.get(t, "/api/v1/sessions/root-rollup-breakdown/usage?rollup=true&breakdown=true")
+	assertStatus(t, w, http.StatusOK)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.Equal(t, float64(1), got["breakdown_count"])
+	assert.Len(t, got["breakdown"], 1)
+}
+
+func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "root-rollup-incomplete", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+	})
+	te.seedSession(t, "child-rollup-incomplete", "project", 1, func(s *db.Session) {
+		s.Agent = "codex"
+		parent := "root-rollup-incomplete"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "root-rollup-incomplete", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "gpt-5.1"
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+	te.seedMessages(t, "child-rollup-incomplete", 1, func(_ int, m *db.Message) {
+		m.Role, m.Model = "assistant", "unknown-rollup-model"
+		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	})
+
+	w := te.get(t, "/api/v1/sessions/root-rollup-incomplete/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.Equal(t, false, got["has_rollup_cost"])
+	_, hasRollupCost := got["rollup_cost_usd"]
+	assert.False(t, hasRollupCost)
+	assert.InDelta(t, 0.0105, got["cost_usd"], 1e-9)
+}
+
 func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "codex:usage-empty", "quiet-project", 1,
@@ -187,11 +281,28 @@ func TestHandleSessionUsage_NotFound(t *testing.T) {
 	assertSessionUsageError(t, w, "session_not_found", "session not found")
 }
 
+func TestHandleSessionUsage_RollupNotFound(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/sessions/missing/usage?rollup=true")
+	assertStatus(t, w, http.StatusNotFound)
+	assertSessionUsageError(t, w, "session_not_found", "session not found")
+}
+
 func TestHandleSessionUsage_DBError(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.Close())
 
 	w := te.get(t, "/api/v1/sessions/codex:usage-error/usage")
+	assertStatus(t, w, http.StatusInternalServerError)
+	assertSessionUsageError(t, w, "usage_query_failed", "failed to query session usage")
+}
+
+func TestHandleSessionUsage_RollupDBError(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.Close())
+
+	w := te.get(t, "/api/v1/sessions/codex:usage-error/usage?rollup=true")
 	assertStatus(t, w, http.StatusInternalServerError)
 	assertSessionUsageError(t, w, "usage_query_failed", "failed to query session usage")
 }

@@ -164,6 +164,23 @@
   "session_breadcrumb_copy_session_id_value": "Copier l'ID de la session : {id}",
   "session_breadcrumb_copied": "Copié !",
   "session_breadcrumb_estimated_session_cost": "Coût estimé de la session",
+  "session_breadcrumb_total_cost": "Total",
+  "session_breadcrumb_total_cost_title": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "Coût total avec {countLabel} sous-agent",
+        "countPlural=other": "Coût total avec {countLabel} sous-agents"
+      }
+    }
+  ],
   "session_breadcrumb_usage_breakdown_title": "Détail de la consommation de la session",
   "session_breadcrumb_usage_breakdown_loading": "Chargement de la consommation...",
   "session_breadcrumb_usage_breakdown_steps": [

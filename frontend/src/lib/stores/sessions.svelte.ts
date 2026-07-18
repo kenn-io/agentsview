@@ -241,6 +241,7 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   activeSessionId: string | null = $state(null);
+  activeSessionUsageVersion: number = $state(0);
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
   total: number = $state(0);
@@ -710,6 +711,7 @@ class SessionsStore {
     this.refreshRead.cancel();
     this.childSessionsRead.cancel();
     this.activeSessionId = id;
+    this.activeSessionUsageVersion = 0;
     this.refreshVersion++;
     this.childSessionsVersion++;
   }
@@ -1299,10 +1301,14 @@ class SessionsStore {
   private handleLiveRefreshEvent(event: DataChangedEvent) {
     if (event.scope === "messages") {
       this.invalidateHydratedSessionDetails();
+      this.bumpActiveSessionUsageVersion();
+      this.refreshActiveChildSessions();
       return;
     }
     if (event.scope === "sessions" || event.scope === "sync") {
       this.scheduleIndexRefresh();
+      this.bumpActiveSessionUsageVersion();
+      this.refreshActiveChildSessions();
     }
   }
 
@@ -1315,6 +1321,17 @@ class SessionsStore {
       this.liveRefreshTimer = null;
       this.load();
     }, LIVE_REFRESH_DEBOUNCE_MS);
+  }
+
+  private refreshActiveChildSessions() {
+    const id = this.activeSessionId;
+    if (!id) return;
+    void this.loadChildSessions(id);
+  }
+
+  private bumpActiveSessionUsageVersion() {
+    if (!this.activeSessionId) return;
+    this.activeSessionUsageVersion++;
   }
 
   private routeSignal(): AbortSignal {

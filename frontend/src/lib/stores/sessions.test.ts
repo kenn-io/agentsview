@@ -13,6 +13,7 @@ import {
   filtersToParams,
   splitExcludeProjectParam,
 } from "./sessions.svelte.js";
+import { SessionsService } from "../api/generated/index";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
@@ -2900,6 +2901,51 @@ describe("SessionsStore live refresh", () => {
     expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
     expect(api.getSession).toHaveBeenCalledTimes(2);
     expect(sessions.sessions[0]!.first_message).toBe("second hydrate");
+
+    detach();
+    spy.mockRestore();
+  });
+
+  it("messages events refresh active child sessions", async () => {
+    const { events } = await import("./events.svelte.js");
+    let registered: ((e: { scope: string }) => void) | null = null;
+    const spy = vi
+      .spyOn(events, "subscribe")
+      .mockImplementation((fn) => {
+        registered = fn as (e: { scope: string }) => void;
+        return () => {};
+      });
+
+    vi.mocked(SessionsService.getApiV1SessionsIdChildren)
+      .mockResolvedValueOnce([
+        makeSession({
+          id: "child",
+          parent_session_id: "root",
+          transcript_revision: "child-rev-1",
+        }),
+      ] as Session[])
+      .mockResolvedValueOnce([
+        makeSession({
+          id: "child",
+          parent_session_id: "root",
+          transcript_revision: "child-rev-2",
+        }),
+      ] as Session[]);
+
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    sessions.activeSessionId = "root";
+    await sessions.loadChildSessions("root");
+    expect(sessions.childSessions.get("child")?.transcript_revision).toBe("child-rev-1");
+    expect(sessions.activeSessionUsageVersion).toBe(0);
+
+    registered!({ scope: "messages" });
+
+    await vi.waitFor(() => {
+      expect(sessions.childSessions.get("child")?.transcript_revision).toBe("child-rev-2");
+    });
+    expect(SessionsService.getApiV1SessionsIdChildren).toHaveBeenCalledTimes(2);
+    expect(sessions.activeSessionUsageVersion).toBe(1);
 
     detach();
     spy.mockRestore();

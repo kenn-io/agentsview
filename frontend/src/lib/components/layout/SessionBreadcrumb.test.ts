@@ -7,6 +7,7 @@ import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
 import type { Message, Session } from "../../api/types.js";
 import { OpenersService, SessionsService } from "../../api/generated/index";
 import { messages } from "../../stores/messages.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
@@ -94,6 +95,9 @@ interface SessionUsage {
   has_token_data: boolean;
   cost_usd: number;
   has_cost: boolean;
+  rollup_cost_usd?: number;
+  has_rollup_cost?: boolean;
+  rollup_subagent_count?: number;
   models: string[];
   unpriced_models: string[];
   breakdown_count: number;
@@ -187,6 +191,9 @@ beforeEach(() => {
   sessionsService.getApiV1SessionsIdDirectory.mockReset().mockResolvedValue({ path: "" });
   sessionsService.getApiV1SessionsIdUsage.mockReset().mockResolvedValue(makeUsage());
   sessionsService.postApiV1SessionsIdResume.mockReset();
+  sessions.activeSessionId = null;
+  sessions.activeSessionUsageVersion = 0;
+  sessions.childSessions = new Map();
 });
 
 afterEach(() => {
@@ -1140,6 +1147,58 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
+    it("renders a total badge for a complete subagent rollup", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({
+          has_cost: true,
+          cost_usd: 1,
+          has_rollup_cost: true,
+          rollup_cost_usd: 3,
+          rollup_subagent_count: 2,
+        }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")?.textContent).toContain("$3.00");
+      });
+      expect(document.querySelector(".cost-badge")?.getAttribute("title")).toBe(
+        "Total cost including 2 subagents",
+      );
+      expect(document.querySelector(".cost-badge")?.textContent).toContain("Total");
+      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledWith({
+        id: "run:123456789abcdef",
+        rollup: true,
+      });
+      unmount(component);
+    });
+
+    it("keeps the root cost when the rollup is incomplete", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({
+          has_cost: true,
+          cost_usd: 1,
+          has_rollup_cost: false,
+          rollup_subagent_count: 1,
+        }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")?.textContent?.trim()).toBe("$1.00");
+      });
+      expect(document.querySelector(".cost-badge")?.textContent).not.toContain("Total");
+      unmount(component);
+    });
+
     it("renders the cost badge between the token badges and the model badge", async () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
         makeUsage({ has_cost: true, cost_usd: 4.12 }),
@@ -1292,6 +1351,7 @@ describe("SessionBreadcrumb", () => {
       expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(1);
       expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledWith({
         id: "run:123456789abcdef",
+        rollup: true,
       });
 
       await openUsageBreakdown();
@@ -1665,6 +1725,78 @@ describe("SessionBreadcrumb", () => {
       expect(document.querySelector(".cost-badge")?.textContent?.trim()).toBe("$3.50");
 
       component.$destroy();
+    });
+
+    it("refetches rollup cost when active session usage freshness changes", async () => {
+      sessionsService.getApiV1SessionsIdUsage
+        .mockResolvedValueOnce(
+          makeUsage({
+            has_cost: true,
+            cost_usd: 1,
+            has_rollup_cost: true,
+            rollup_cost_usd: 3,
+            rollup_subagent_count: 1,
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeUsage({
+            has_cost: true,
+            cost_usd: 1,
+            has_rollup_cost: true,
+            rollup_cost_usd: 5,
+            rollup_subagent_count: 1,
+          }),
+        );
+
+      sessions.activeSessionId = "run:123456789abcdef";
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")?.textContent).toContain("$3.00");
+      });
+
+      sessions.activeSessionUsageVersion = 1;
+      await flushPromises();
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")?.textContent).toContain("$5.00");
+      });
+      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(2);
+
+      component.$destroy();
+    });
+
+    it("uses singular total-cost copy for one subagent", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({
+          has_cost: true,
+          cost_usd: 1,
+          has_rollup_cost: true,
+          rollup_cost_usd: 3,
+          rollup_subagent_count: 1,
+        }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")?.getAttribute("title")).toBe(
+          "Total cost including 1 subagent",
+        );
+      });
+
+      unmount(component);
     });
   });
 });

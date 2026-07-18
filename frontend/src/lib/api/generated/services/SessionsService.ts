@@ -1189,6 +1189,7 @@ export class SessionsService {
   public static getApiV1SessionsIdUsage({
     id,
     breakdown,
+    rollup,
   }: {
     /**
      * Session ID
@@ -1198,6 +1199,10 @@ export class SessionsService {
      * Include per-step breakdown rows
      */
     breakdown?: boolean,
+    /**
+     * Include explicit subagent descendant costs
+     */
+    rollup?: boolean,
   }): CancelablePromise<SessionUsageResponse> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -1207,6 +1212,7 @@ export class SessionsService {
       },
       query: {
         'breakdown': breakdown,
+        'rollup': rollup,
       },
       errors: {
         400: `Bad Request`,

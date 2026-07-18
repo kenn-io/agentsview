@@ -31,6 +31,61 @@ test.describe("Navigation", () => {
     await expect(sp.exportBtn).toContainText("Export CSV");
   });
 
+  test("subagent cost rollup", async ({ page }, testInfo) => {
+    await page.route("**/api/v1/sessions/*/usage**", async (route) => {
+      const rollup = new URL(route.request().url()).searchParams.get("rollup");
+      const complete = route.request().url().includes("test-session-mixed-content-7");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session_id: "test-session-mixed-content-7",
+          agent: "claude",
+          project: "project",
+          total_output_tokens: 0,
+          peak_context_tokens: 0,
+          has_token_data: false,
+          cost_usd: 1,
+          has_cost: true,
+          models: [],
+          unpriced_models: [],
+          breakdown_count: 0,
+          breakdown: [],
+          server_running: true,
+          ...(rollup === "true"
+            ? {
+                has_rollup_cost: complete,
+                ...(complete ? { rollup_cost_usd: 3 } : {}),
+                rollup_subagent_count: 1,
+              }
+            : {}),
+        }),
+      });
+    });
+
+    const selected = page.locator('.session-item[data-session-id="test-session-mixed-content-7"]');
+    await selected.click();
+    for (const width of [1280, 768, 400]) {
+      await page.setViewportSize({ width, height: 800 });
+      await expect(page.locator(".cost-badge")).toContainText("Total");
+      await expect(page.locator(".cost-badge")).toContainText("$3.00");
+      await expect(page.locator(".cost-badge")).toHaveAttribute(
+        "title",
+        "Total cost including 1 subagent",
+      );
+      await page.screenshot({
+        path: testInfo.outputPath(`subagent-cost-rollup-${width}.png`),
+      });
+    }
+
+    const fallback = page.locator(
+      '.session-item:not([data-session-id="test-session-mixed-content-7"])',
+    ).first();
+    await fallback.click();
+    await expect(page.locator(".cost-badge")).toContainText("$1.00");
+    await expect(page.locator(".cost-badge")).not.toContainText("Total");
+  });
+
   test("Shift+J and Shift+K navigate visible user prompts", async ({ page }, testInfo) => {
     const sessionId = "test-session-mixed-content-7";
     const session = page.locator(`.session-item[data-session-id="${sessionId}"]`);

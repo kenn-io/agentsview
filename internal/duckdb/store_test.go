@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/service"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2880,6 +2881,35 @@ func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {
 	assert.Equal(t,
 		[]string{"duck-child-early", "duck-child-late"},
 		duckSessionIDs(children))
+}
+
+func TestStoreSessionUsageRollupParity(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+	}}))
+	root := syncSession("duck-rollup-root", "alpha", "root", "2026-01-10T00:00:00.000Z", 1)
+	child := syncSession("duck-rollup-child", "alpha", "child", "2026-01-10T01:00:00.000Z", 1)
+	parentID := root.ID
+	child.ParentSessionID = &parentID
+	child.RelationshipType = "subagent"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{Session: root, Messages: []db.Message{syncMessage(root.ID, 0, "assistant", "root", *root.StartedAt)}, DataVersion: 1, ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{syncMessage(child.ID, 0, "assistant", "child", *child.StartedAt)}, DataVersion: 1, ReplaceMessages: true},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	rollup, err := service.GetSessionUsageRollup(
+		ctx, NewStoreFromDB(syncer.DB()), root.ID, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, rollup.SubagentCount)
+	require.True(t, rollup.HasCost)
+	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
 }
 
 // TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks exercises the SQL

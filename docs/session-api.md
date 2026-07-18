@@ -626,6 +626,13 @@ only honored on a localhost-bound daemon.
 Per-session token usage and cost estimate. Output shape is
 stable for the fields shown below; new fields may be added.
 
+The REST endpoint is `GET /api/v1/sessions/{id}/usage`. Add
+`?rollup=true` there to include the selected session's explicit
+`subagent` descendants recursively. `breakdown=true` remains scoped to
+the selected session; descendant usage is loaded as totals only. The CLI
+subcommand keeps its existing own-session output and does not expose the
+rollup fields below.
+
 ```bash
 agentsview session usage <id> [--format json]
 ```
@@ -675,6 +682,9 @@ agentsview session usage <id> [--format json]
 | `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
 | `breakdown`           | Per-step usage rows, in session order; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`      | `true` when the report came from an already-running daemon           |
+| `rollup_cost_usd`      | REST only, with `rollup=true`; present only when `has_rollup_cost` is true, then carries the complete cost across the root and explicit subagent descendants |
+| `has_rollup_cost`      | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced |
+| `rollup_subagent_count`| REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows |
 
 Each `breakdown` row carries the fields shown in the example:
 

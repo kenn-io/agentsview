@@ -165,6 +165,8 @@
   });
 
   let sessionCost = $state<number | null>(null);
+  let sessionCostIsRollup = $state(false);
+  let sessionRollupSubagentCount = $state(0);
   let sessionUsageBreakdownCount = $state(0);
   let sessionUsageBreakdown = $state<SessionUsageBreakdownEntry[]>([]);
   // Key of the last successful usage fetch. Cost depends on more
@@ -178,15 +180,36 @@
   let costSessionId: string | null = null;
   let breakdownFetchKey: string | null = null;
 
+  function childUsageFetchKey(parentId: string): string {
+    return Array.from(sessions.childSessions.values())
+      .filter((child) => child.parent_session_id === parentId)
+      .map((child) =>
+        [
+          child.id,
+          child.relationship_type ?? "",
+          child.transcript_revision ?? "",
+          child.message_count ?? 0,
+          child.total_output_tokens ?? 0,
+          child.peak_context_tokens ?? 0,
+          child.ended_at ?? "",
+        ].join("\t")
+      )
+      .sort()
+      .join("\n");
+  }
+
   function usageFetchKey(s: Session): string {
     return [
       s.id,
+      s.transcript_revision ?? "",
       s.total_output_tokens ?? 0,
       s.peak_context_tokens ?? 0,
       s.has_total_output_tokens ?? "",
       s.has_peak_context_tokens ?? "",
       s.message_count ?? 0,
       s.ended_at ?? "",
+      sessions.activeSessionUsageVersion,
+      childUsageFetchKey(s.id),
     ].join("\n");
   }
 
@@ -203,6 +226,8 @@
     if (!session) {
       costRead.cancel();
       sessionCost = null;
+      sessionCostIsRollup = false;
+      sessionRollupSubagentCount = 0;
       resetUsageBreakdown();
       costFetchKey = null;
       costSessionId = null;
@@ -216,6 +241,8 @@
       // the early return below while another session's request is
       // still in flight.
       sessionCost = null;
+      sessionCostIsRollup = false;
+      sessionRollupSubagentCount = 0;
       resetUsageBreakdown();
       costFetchKey = null;
     }
@@ -224,13 +251,20 @@
     costSessionId = id;
     configureGeneratedClient();
     callGenerated(
-      () => SessionsService.getApiV1SessionsIdUsage({ id }),
+      () => SessionsService.getApiV1SessionsIdUsage({ id, rollup: true }),
       signal,
     )
       .then((res) => {
         if (!costRead.isCurrent(signal)) return;
         costFetchKey = key;
-        sessionCost = res.has_cost ? res.cost_usd : null;
+        sessionRollupSubagentCount = res.rollup_subagent_count ?? 0;
+        sessionCostIsRollup =
+          sessionRollupSubagentCount > 0 && res.has_rollup_cost === true;
+        sessionCost = sessionCostIsRollup
+          ? (res.rollup_cost_usd ?? null)
+          : res.has_cost
+            ? res.cost_usd
+            : null;
         sessionUsageBreakdownCount = res.breakdown_count ?? 0;
       })
       .catch((e) => {
@@ -287,6 +321,14 @@
 
   let sessionCostLabel = $derived(
     sessionCost !== null ? formatCost(sessionCost) : null,
+  );
+  let sessionCostTitle = $derived(
+        sessionCostIsRollup
+      ? m.session_breadcrumb_total_cost_title({
+          count: sessionRollupSubagentCount,
+          countLabel: sessionRollupSubagentCount.toLocaleString(),
+        })
+      : m.session_breadcrumb_estimated_session_cost(),
   );
   // Menu rows render only while open, so the collapsed dropdown
   // stays DOM-free.
@@ -979,8 +1021,12 @@
         </details>
       {/if}
       {#if sessionCostLabel}
-        <span class="cost-badge" title={m.session_breadcrumb_estimated_session_cost()}>
-          {sessionCostLabel}
+        <span class="cost-badge" title={sessionCostTitle}>
+          {#if sessionCostIsRollup}
+            {m.session_breadcrumb_total_cost()}: {sessionCostLabel}
+          {:else}
+            {sessionCostLabel}
+          {/if}
         </span>
       {/if}
       {#if mainModel}

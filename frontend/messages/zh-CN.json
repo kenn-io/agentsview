@@ -161,6 +161,23 @@
   "session_breadcrumb_copy_session_id_value": "复制会话 ID：{id}",
   "session_breadcrumb_copied": "已复制！",
   "session_breadcrumb_estimated_session_cost": "预估会话成本",
+  "session_breadcrumb_total_cost": "总计",
+  "session_breadcrumb_total_cost_title": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "包含 {countLabel} 个子代理的总成本",
+        "countPlural=other": "包含 {countLabel} 个子代理的总成本"
+      }
+    }
+  ],
   "session_breadcrumb_usage_breakdown_title": "会话用量明细",
   "session_breadcrumb_usage_breakdown_loading": "正在加载用量数据...",
   "session_breadcrumb_usage_breakdown_steps": [

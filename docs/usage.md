@@ -800,6 +800,13 @@ two decimals, and larger costs as whole dollars. The badge is
 hidden when the session has no token data or its models have
 no pricing.
 
+When the selected session has explicit `subagent` descendants, the
+automatic header request adds `rollup=true`. A complete priced aggregate
+shows a localized total marker and the descendant count. If any contributing
+row is unpriced, the header keeps the root session's own cost when available
+and does not label it as a total. Sessions without explicit subagent
+descendants keep the existing badge.
+
 As of 0.37.1, sessions with per-step usage rows also show a
 **step count** next to the token summary. Click it to expand a
 per-step breakdown: each row lists the prompt or usage event,
