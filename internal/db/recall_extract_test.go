@@ -492,3 +492,33 @@ func TestMarkExtractProgressFailedRejectsAdvancedCursor(t *testing.T) {
 	assert.Equal(t, 2, progress.UnitCursor)
 	assert.Empty(t, progress.LastError)
 }
+
+func TestAdvanceExtractCursorReplayKeepsFailureState(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 2,
+		LastError:      "boom",
+	}))
+
+	// A delayed duplicate of the cursor-2 advance completed no new unit;
+	// it must be an accepted no-op, not resurrect the failed row.
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
+
+	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressFailed, progress.State)
+	assert.Equal(t, 2, progress.UnitCursor)
+	assert.Equal(t, "boom", progress.LastError)
+}

@@ -549,7 +549,20 @@ func isContextOverflowDetail(body string) bool {
 			strings.Contains(lower, "context size") ||
 			strings.Contains(lower, "context window")
 	}
-	subjects := []string{"context", "prompt", "input"}
+	// Length-specific input phrasings are unambiguous on their own.
+	lengthPhrases := []string{
+		"input is too long", "input too long",
+		"input is too large", "input too large",
+	}
+	if slices.ContainsFunc(lengthPhrases, func(phrase string) bool {
+		return strings.Contains(lower, phrase)
+	}) {
+		return true
+	}
+	// Bare "input" is deliberately not a subject: servers prefix arbitrary
+	// validation errors with "Input validation error:", which would pair
+	// with the overflow term of any out-of-range parameter.
+	subjects := []string{"context", "prompt"}
 	overflowTerms := []string{"exceed", "too long", "too large", "maximum"}
 	hasSubject := slices.ContainsFunc(subjects, func(subject string) bool {
 		return strings.Contains(lower, subject)

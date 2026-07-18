@@ -313,8 +313,11 @@ func (db *DB) UpsertExtractProgress(
 // AdvanceExtractCursor records that units before cursor are complete,
 // marking the row done when the cursor reaches the unit total. The update
 // only applies when expectedDigest still matches the row and the cursor
-// moves forward within bounds, so a worker that raced a digest reset gets
-// ErrStaleExtractProgress instead of overwriting fresh state.
+// strictly advances within bounds, so a worker that raced a digest reset
+// gets ErrStaleExtractProgress instead of overwriting fresh state. A
+// replay of an already-recorded cursor is an accepted no-op: it completed
+// nothing new, so it must not touch the row's state or error — in
+// particular it cannot resurrect a failed row.
 func (db *DB) AdvanceExtractCursor(
 	ctx context.Context,
 	sessionID, fingerprint, expectedDigest string,
@@ -336,7 +339,7 @@ func (db *DB) AdvanceExtractCursor(
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE session_id = ? AND generation_fingerprint = ?
 		  AND content_digest = ?
-		  AND unit_cursor <= ?
+		  AND unit_cursor < ?
 		  AND ? <= units_total`,
 		cursor, cursor, ExtractProgressDone, ExtractProgressPartial,
 		sessionID, fingerprint, expectedDigest, cursor, cursor,
@@ -380,6 +383,9 @@ func (db *DB) AdvanceExtractCursor(
 			"cursor %d exceeds %d units for session %s",
 			cursor, progress.UnitsTotal, sessionID,
 		)
+	}
+	if cursor == progress.UnitCursor {
+		return nil
 	}
 	return fmt.Errorf(
 		"advancing session %s past cursor regression: %w",
