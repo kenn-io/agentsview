@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 2,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -78,9 +78,37 @@
           "cost": 0.0042
         }
       ],
-      "projectBreakdowns": [],
-      "agentBreakdowns": [],
-      "machineBreakdowns": []
+      "projectBreakdowns": [
+        {
+          "project_key": "pl1:sha256:ba5a8fb68c3e3f1454c428f19fdfd2dff9b2c40ae6dc2fef3a19a7c761bd72a1",
+          "project": "unknown-project",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0042
+        }
+      ],
+      "agentBreakdowns": [
+        {
+          "agent": "cursor",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0042
+        }
+      ],
+      "machineBreakdowns": [
+        {
+          "machineName": "golden-host",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0042
+        }
+      ]
     },
     {
       "date": "2026-07-02",
@@ -102,9 +130,37 @@
           "cost": 0.00288
         }
       ],
-      "projectBreakdowns": [],
-      "agentBreakdowns": [],
-      "machineBreakdowns": []
+      "projectBreakdowns": [
+        {
+          "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
+          "project": "remote-project",
+          "inputTokens": 800,
+          "outputTokens": 160,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.00288
+        }
+      ],
+      "agentBreakdowns": [
+        {
+          "agent": "codex",
+          "inputTokens": 800,
+          "outputTokens": 160,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.00288
+        }
+      ],
+      "machineBreakdowns": [
+        {
+          "machineName": "golden-host",
+          "inputTokens": 800,
+          "outputTokens": 160,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.00288
+        }
+      ]
     },
     {
       "date": "2026-07-03",
@@ -135,9 +191,54 @@
           "cost": 0.00476
         }
       ],
-      "projectBreakdowns": [],
-      "agentBreakdowns": [],
-      "machineBreakdowns": []
+      "projectBreakdowns": [
+        {
+          "project_key": "pl1:sha256:a998e358fa5132eaf9ac2cb16ee752c99400d52800c8e5c43eb8905909a05106",
+          "project": "path-project",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0125
+        },
+        {
+          "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
+          "project": "remote-project",
+          "inputTokens": 1200,
+          "outputTokens": 240,
+          "cacheCreationTokens": 80,
+          "cacheReadTokens": 400,
+          "cost": 0.00476
+        }
+      ],
+      "agentBreakdowns": [
+        {
+          "agent": "claude",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0125
+        },
+        {
+          "agent": "codex",
+          "inputTokens": 1200,
+          "outputTokens": 240,
+          "cacheCreationTokens": 80,
+          "cacheReadTokens": 400,
+          "cost": 0.00476
+        }
+      ],
+      "machineBreakdowns": [
+        {
+          "machineName": "golden-host",
+          "inputTokens": 1500,
+          "outputTokens": 300,
+          "cacheCreationTokens": 80,
+          "cacheReadTokens": 400,
+          "cost": 0.01726
+        }
+      ]
     }
   ],
   "totals": {
