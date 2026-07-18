@@ -37,6 +37,12 @@ func traeFixtureValue(t *testing.T) string {
 			map[string]any{"role": "assistant", "content": "", "agentTaskContent": map[string]any{"content": "fallback", "guideline": map[string]any{"planItems": []any{map[string]any{"content": "ignored after direct"}}}}, "turnIndex": 1},
 		},
 	}}}
+	return traeStoreValue(t, value["list"].([]any))
+}
+
+func traeStoreValue(t *testing.T, list []any) string {
+	t.Helper()
+	value := map[string]any{"list": list}
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
 	return string(data)
@@ -144,6 +150,41 @@ func TestTraeUnsupportedKeyNegativeSpace(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.NotContains(t, sources[0].Key, "ignored")
+}
+
+func TestTraeMalformedSessionEntryDoesNotBlockSiblingDiscovery(t *testing.T) {
+	root := t.TempDir()
+	workspaceDB := filepath.Join(root, "workspaceStorage", "hash", traeStateDBName)
+	globalDB := filepath.Join(root, "globalStorage", traeStateDBName)
+	workspaceValue := traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "broken",
+			"createdAt": "not-a-time",
+			"messages":  []any{map[string]any{"role": "user", "content": "bad"}},
+		},
+		map[string]any{
+			"sessionId": "workspace-good",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "workspace"}},
+		},
+	})
+	globalValue := traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "global-good",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "global"}},
+		},
+	})
+	writeTraeDB(t, workspaceDB, workspaceValue, "memento/unrelated-chat-storage")
+	writeTraeDB(t, globalDB, globalValue, "memento/unrelated-chat-storage")
+
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.Contains(t, sources[0].Key, "#global-good")
+	assert.Contains(t, sources[1].Key, "#workspace-good")
 }
 
 func TestTraeAssistantFallbackVariants(t *testing.T) {

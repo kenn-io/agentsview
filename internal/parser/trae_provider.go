@@ -347,7 +347,11 @@ func listTraeSessionRecords(path string) ([]traeSessionRecord, error) {
 	}
 	records := make([]traeSessionRecord, 0, len(store.List))
 	seen := map[string]struct{}{}
-	for _, session := range store.List {
+	for _, rawSession := range store.List {
+		var session traeSession
+		if err := json.Unmarshal(rawSession, &session); err != nil {
+			continue
+		}
 		id := strings.TrimSpace(session.SessionID)
 		if id == "" || len(session.Messages) == 0 {
 			continue
@@ -355,12 +359,8 @@ func listTraeSessionRecords(path string) ([]traeSessionRecord, error) {
 		if _, ok := seen[id]; ok {
 			continue
 		}
-		data, err := json.Marshal(session)
-		if err != nil {
-			return nil, err
-		}
 		seen[id] = struct{}{}
-		records = append(records, traeSessionRecord{id, data})
+		records = append(records, traeSessionRecord{id, append([]byte(nil), rawSession...)})
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].SessionID < records[j].SessionID })
 	return records, nil
@@ -384,7 +384,7 @@ func readTraeValue(path string) (string, error) {
 }
 
 type traeStore struct {
-	List []traeSession `json:"list"`
+	List []json.RawMessage `json:"list"`
 }
 type traeSession struct {
 	SessionID string        `json:"sessionId"`
