@@ -78,6 +78,7 @@ test.describe("Navigation", () => {
       });
     }
 
+    await page.setViewportSize({ width: 1280, height: 800 });
     const fallback = page.locator(
       '.session-item:visible:not([data-session-id="test-session-mixed-content-7"])',
     ).first();
