@@ -964,6 +964,17 @@ func (s *Sync) replacePinnedMessages(
 	if err != nil {
 		return err
 	}
+	return insertPinnedMessages(ctx, exec, pins)
+}
+
+// insertPinnedMessages inserts pins already loaded from the local archive.
+// It is the shared write side for both the single-session push path
+// (replacePinnedMessages, one local query per pushed session) and the
+// bulk curation refresh (replaceAllPinnedMessages, one batched local query
+// for every in-scope session).
+func insertPinnedMessages(
+	ctx context.Context, exec duckMutationExecutor, pins []db.PinnedMessage,
+) error {
 	for _, p := range pins {
 		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO pinned_messages (
@@ -973,7 +984,7 @@ func (s *Sync) replacePinnedMessages(
 			p.Note, timeValue(p.CreatedAt),
 		); err != nil {
 			return fmt.Errorf("inserting duckdb pinned_message %s/%d: %w",
-				sessionID, p.MessageID, err)
+				p.SessionID, p.MessageID, err)
 		}
 	}
 	return nil
@@ -982,6 +993,13 @@ func (s *Sync) replacePinnedMessages(
 // replaceAllPinnedMessages rewrites pinned_messages for exactly the given
 // mirror-resident session IDs. See replaceStarredSessions for why this is
 // always the unfiltered machine-scoped replace under scope-as-mirror-property.
+//
+// Pins are loaded with one batched local query (PinnedMessagesBySession,
+// chunked at 900 IDs per round trip) instead of one local ListPinnedMessages
+// round trip per mirror session: a machine-wide curation refresh runs on
+// every incremental push, so a per-session local query here would scale
+// local round trips with total mirror size instead of with the small set of
+// starred/pinned rows curation actually touches.
 func (s *Sync) replaceAllPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionIDs []string,
 ) error {
@@ -992,8 +1010,12 @@ func (s *Sync) replaceAllPinnedMessages(
 		)`, s.machine); err != nil {
 		return fmt.Errorf("clearing duckdb pinned_messages: %w", err)
 	}
+	pinsBySession, err := s.local.PinnedMessagesBySession(ctx, sessionIDs)
+	if err != nil {
+		return fmt.Errorf("loading local pinned messages for curation refresh: %w", err)
+	}
 	for _, id := range sessionIDs {
-		if err := s.replacePinnedMessages(ctx, tx, id); err != nil {
+		if err := insertPinnedMessages(ctx, tx, pinsBySession[id]); err != nil {
 			return err
 		}
 	}
