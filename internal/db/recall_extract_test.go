@@ -1671,11 +1671,15 @@ func TestExtractCandidatesZeroFailedCutoffSkipsFailedRows(t *testing.T) {
 	assert.Empty(t, ids, "zero retry cutoff must never resurrect failures")
 }
 
-func TestDeleteExtractedRecallEntriesScopesToGenerationAndSession(t *testing.T) {
+func TestUpsertExtractProgressDigestChangeScopesDeletion(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	seedExtractSession(t, d, "sess-1")
 	seedExtractSession(t, d, "sess-2")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
 
 	entry := func(id, sessionID, fp, reviewState string) RecallEntry {
 		return RecallEntry{
@@ -1687,7 +1691,7 @@ func TestDeleteExtractedRecallEntriesScopesToGenerationAndSession(t *testing.T) 
 			}},
 		}
 	}
-	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		entry("e-del-1", "sess-1", "fp-a", "unreviewed_auto"),
 		entry("e-del-2", "sess-1", "fp-a", "unreviewed_auto"),
 		entry("e-reviewed", "sess-1", "fp-a", "human_reviewed"),
@@ -1695,10 +1699,19 @@ func TestDeleteExtractedRecallEntriesScopesToGenerationAndSession(t *testing.T) 
 		entry("e-other-sess", "sess-2", "fp-a", "unreviewed_auto"),
 	})
 	require.NoError(t, err)
-
-	deleted, err := d.DeleteExtractedRecallEntries(ctx, "fp-a", "sess-1")
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-1", UnitsTotal: 1, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, deleted)
+
+	// The digest-change delete reaches only this generation and session's
+	// machine entries.
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-2", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
 
 	for id, want := range map[string]bool{
 		"e-del-1": false, "e-del-2": false,
@@ -2449,4 +2462,134 @@ func TestActivateExtractGenerationRefusesUncoveredEligibleSessions(t *testing.T)
 	require.NoError(t, d.ActivateExtractGeneration(
 		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
+}
+
+// TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically pins the
+// rebuild reset as one transaction: a digest change deletes the session's
+// machine entries in the same write that resets the row, so no failure
+// window can leave a done row claiming coverage for entries that are gone.
+func TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	machineEntry := func(id, reviewState string) RecallEntry {
+		return RecallEntry{
+			ID: id, Type: "fact", ReviewState: reviewState,
+			Status: "archived", Title: "t", Body: "b",
+			SourceSessionID: "sess-1", SourceRunID: "fp-a",
+			ProvenanceOK: true,
+		}
+	}
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		machineEntry("e-1", "unreviewed_auto"),
+		machineEntry("e-human", "human_reviewed"),
+	})
+	require.NoError(t, err)
+
+	// The first visit stores the row; existing entries are untouched.
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-1", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	entry, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	require.NotNil(t, entry, "a first visit must not delete entries")
+
+	// A digest change deletes the machine entries and resets the row in
+	// one transaction. Human-touched entries stay.
+	progress, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-2", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressPending, progress.State)
+	assert.Zero(t, progress.UnitCursor)
+	entry, err = d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	assert.Nil(t, entry,
+		"a digest change must delete the previous derivation's entries")
+	human, err := d.GetRecallEntry(ctx, "e-human")
+	require.NoError(t, err)
+	require.NotNil(t, human, "human-touched entries are never machine-deleted")
+
+	// A refused progress write rolls the entry delete back with it.
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		machineEntry("e-2", "unreviewed_auto"),
+	})
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`CREATE TRIGGER block_progress_write
+		BEFORE UPDATE ON recall_extract_progress
+		BEGIN SELECT RAISE(ABORT, 'progress write blocked'); END`)
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-3", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.Error(t, err)
+	_, execErr := d.getWriter().Exec("DROP TRIGGER block_progress_write")
+	require.NoError(t, execErr)
+	entry, err = d.GetRecallEntry(ctx, "e-2")
+	require.NoError(t, err)
+	require.NotNil(t, entry,
+		"a failed progress reset must not leave the entries deleted")
+}
+
+// TestRebindExtractedEvidenceRestoresProvenance pins the revisit repair:
+// evidence digests cover rows the units digest ignores, so the reconciler
+// can revoke provenance without the extraction output changing — a rebind
+// against the current transcript must re-stamp the evidence and restore
+// the entry.
+func TestRebindExtractedEvidenceRestoresProvenance(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := seedCommitUnitSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	_, err = d.CommitExtractedUnit(ctx, ExtractUnitCommit{
+		SessionID: "sess-1", Fingerprint: "fp-a", Digest: "dg", Cursor: 0,
+		ScanVersions:       []string{"rules-v1"},
+		MessageCount:       session.MessageCount,
+		TranscriptRevision: session.TranscriptRevision,
+		LocalModifiedAt:    session.LocalModifiedAt,
+		EndedAt:            session.EndedAt,
+		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 0, 1)},
+	})
+	require.NoError(t, err)
+
+	// The reconciler revoked provenance after an ignored-row change made
+	// the stored evidence digest stale.
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_entries SET provenance_ok = 0 WHERE id = 'e-1'")
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_evidence SET content_digest = 'stale' " +
+			"WHERE entry_id = 'e-1'")
+	require.NoError(t, err)
+
+	restored, err := d.RebindExtractedEvidence(ctx, "fp-a", "sess-1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, restored)
+	entry, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.True(t, entry.ProvenanceOK,
+		"a rebind against the current transcript must restore provenance")
+	require.Len(t, entry.Evidence, 1)
+	evidence := entry.Evidence[0]
+	assert.NotEmpty(t, evidence.ContentDigest)
+	assert.NotEqual(t, "stale", evidence.ContentDigest)
+	assert.Equal(t, "sess-1-uuid-0", evidence.MessageStartSourceUUID)
+	assert.Equal(t, "sess-1-uuid-1", evidence.MessageEndSourceUUID)
 }

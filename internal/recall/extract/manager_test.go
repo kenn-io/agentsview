@@ -1835,3 +1835,69 @@ func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
 		t.Fatalf("result = %+v; full coverage must activate", result)
 	}
 }
+
+// TestManagerRevisitRestoresRevokedProvenance pins the same-digest repair:
+// evidence digests cover ignored rows the units digest does not, so the
+// reconciler can revoke provenance while the extraction output is
+// unchanged. A revisit must rebind the evidence against the current
+// transcript and restore the entry instead of settling the stamp over a
+// permanently dark corpus.
+func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	if _, err := side.Exec(
+		"UPDATE recall_entries SET provenance_ok = 0"); err != nil {
+		t.Fatalf("revoking provenance: %v", err)
+	}
+	if _, err := side.Exec(
+		"UPDATE recall_evidence SET content_digest = 'stale'"); err != nil {
+		t.Fatalf("staling evidence: %v", err)
+	}
+	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+
+	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected extracted entries")
+	}
+	for _, entry := range entries {
+		if !entry.ProvenanceOK {
+			t.Fatalf("entry %s provenance not restored by the revisit",
+				entry.ID)
+		}
+		if len(entry.Evidence) != 1 || entry.Evidence[0].ContentDigest == "" ||
+			entry.Evidence[0].ContentDigest == "stale" {
+			t.Fatalf("entry %s evidence was not rebound", entry.ID)
+		}
+	}
+}

@@ -508,20 +508,13 @@ func (m *Manager) extractSession(
 	// A digest change means previously extracted units may have different
 	// content now (an assistant run that grew re-packs into an existing
 	// unit). Entry ids are positional, so stale entries would both linger
-	// and block their replacements; rebuild the session's generated
-	// corpus instead.
+	// and block their replacements; the upsert below deletes them in the
+	// same transaction that resets the row.
 	previous, found, err := m.cfg.DB.ExtractProgress(
 		ctx, sessionID, m.fingerprint,
 	)
 	if err != nil {
 		return outcome, err
-	}
-	if found && previous.ContentDigest != digest {
-		if _, err := m.cfg.DB.DeleteExtractedRecallEntries(
-			ctx, m.fingerprint, sessionID,
-		); err != nil {
-			return outcome, err
-		}
 	}
 	if !countMismatch && found && previous.ContentDigest == digest {
 		// A same-digest revisit skips the model, but entries copied their
@@ -532,6 +525,16 @@ func (m *Manager) extractSession(
 		// re-openable instead of stamped covered with stale entries.
 		if _, err := m.cfg.DB.SyncExtractedEntryContext(
 			ctx, m.fingerprint, session,
+		); err != nil {
+			return outcome, err
+		}
+		// Evidence digests cover rows the units digest ignores, so the
+		// reconciler can revoke provenance while the extraction output is
+		// unchanged. Rebind against the current transcript — before the
+		// stamp settles, for the same re-openability — so revoked entries
+		// come back instead of staying dark forever.
+		if _, err := m.cfg.DB.RebindExtractedEvidence(
+			ctx, m.fingerprint, sessionID,
 		); err != nil {
 			return outcome, err
 		}

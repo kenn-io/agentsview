@@ -494,6 +494,33 @@ func (db *DB) UpsertExtractProgress(
 	if unitsTotal == 0 {
 		initialState = ExtractProgressDone
 	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return zero, fmt.Errorf(
+			"begin extract progress upsert for session %s: %w",
+			sessionID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A digest change means the previous derivation's entries are stale:
+	// they are deleted in the same transaction that resets the row, so no
+	// failure between the two can leave a done row claiming coverage for
+	// entries that no longer exist. Human-touched entries are never
+	// machine-deleted.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM recall_entries
+		WHERE review_state = 'unreviewed_auto'
+		  AND source_run_id = ?
+		  AND source_session_id = ?
+		  AND EXISTS (
+			SELECT 1 FROM recall_extract_progress p
+			WHERE p.session_id = ? AND p.generation_fingerprint = ?
+			  AND p.content_digest != ?
+		  )`,
+		fingerprint, sessionID, sessionID, fingerprint, contentDigest,
+	); err != nil {
+		return zero, fmt.Errorf(
+			"removing stale entries for session %s: %w", sessionID, err)
+	}
 	// content_stamped_at always takes the caller's pre-read cutoff — on
 	// insert, on digest reset, and on a same-digest revisit alike. A
 	// revisit re-verified the transcript as of its own read, so keeping an
@@ -506,7 +533,7 @@ func (db *DB) UpsertExtractProgress(
 	// keeps its state, error, and updated_at, because the retry's opening
 	// upsert must not reset the failure backoff clock a cancelled retry
 	// would then have to wait out again.
-	_, err := db.getWriter().ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO recall_extract_progress
 			(session_id, generation_fingerprint, unit_cursor, units_total,
 			 state, content_digest, content_stamped_at)
@@ -543,6 +570,11 @@ func (db *DB) UpsertExtractProgress(
 		return zero, fmt.Errorf(
 			"upserting extract progress for session %s: %w", sessionID, err,
 		)
+	}
+	if err := tx.Commit(); err != nil {
+		return zero, fmt.Errorf(
+			"commit extract progress upsert for session %s: %w",
+			sessionID, err)
 	}
 	progress, ok, err := db.ExtractProgress(ctx, sessionID, fingerprint)
 	if err != nil {
@@ -1486,41 +1518,6 @@ func (db *DB) DiscardExtractedSessionOutput(
 	return nil
 }
 
-// DeleteExtractedRecallEntries removes one session's machine-generated
-// entries under one generation, so a changed transcript can be re-extracted
-// without leaving stale entries behind or colliding with their ids. Entries
-// whose review state has been touched by a human are preserved. Evidence
-// rows cascade with their entries. Returns how many entries were deleted.
-func (db *DB) DeleteExtractedRecallEntries(
-	ctx context.Context, fingerprint, sessionID string,
-) (int, error) {
-	if err := db.requireWritable(); err != nil {
-		return 0, err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	result, err := db.getWriter().ExecContext(ctx, `
-		DELETE FROM recall_entries
-		WHERE source_run_id = ? AND source_session_id = ?
-			AND review_state = ?`,
-		fingerprint, sessionID, corerecall.ReviewStateUnreviewedAuto,
-	)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"deleting extracted entries for %s/%s: %w",
-			fingerprint, sessionID, err,
-		)
-	}
-	deleted, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("counting deleted extracted entries: %w", err)
-	}
-	return int(deleted), nil
-}
-
 // SyncExtractedEntryContext refreshes the session-derived context fields
 // (project, cwd, git branch, agent) on one session's generated entries under
 // one generation. Entries copy those fields from the session row at insert
@@ -1568,6 +1565,132 @@ func (db *DB) SyncExtractedEntryContext(
 		return 0, fmt.Errorf("counting synced extracted entries: %w", err)
 	}
 	return int(updated), nil
+}
+
+// RebindExtractedEvidence re-derives evidence provenance for one session's
+// machine entries against the current transcript: each evidence range is
+// rebuilt through the verifying window, its content digest and endpoint
+// UUIDs are re-stamped, and revoked provenance is restored. Evidence
+// digests cover rows the units digest ignores (system and empty messages),
+// so the reconciler can revoke an entry whose extraction output never
+// changed; a same-digest revisit calls this to repair such entries instead
+// of settling the coverage stamp over a permanently dark corpus. Returns
+// how many entries had provenance restored.
+func (db *DB) RebindExtractedEvidence(
+	ctx context.Context, fingerprint, sessionID string,
+) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin evidence rebind: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `
+		SELECT e.id, e.entry_id,
+		       e.message_start_ordinal, e.message_end_ordinal
+		FROM recall_evidence e
+		JOIN recall_entries r ON r.id = e.entry_id
+		WHERE r.source_run_id = ? AND r.source_session_id = ?
+		  AND r.review_state = 'unreviewed_auto'
+		  AND e.session_id = ?`,
+		fingerprint, sessionID, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"reading evidence for session %s: %w", sessionID, err)
+	}
+	type evidenceRow struct {
+		id         int64
+		entryID    string
+		start, end int
+	}
+	var evidence []evidenceRow
+	for rows.Next() {
+		var row evidenceRow
+		if err := rows.Scan(
+			&row.id, &row.entryID, &row.start, &row.end,
+		); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scanning evidence row: %w", err)
+		}
+		evidence = append(evidence, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf(
+			"reading evidence for session %s: %w", sessionID, err)
+	}
+	type ordinalRange struct{ start, end int }
+	bound := make(map[ordinalRange]RecallEvidenceSelectionMetadata)
+	entryIDs := make(map[string]bool)
+	for _, row := range evidence {
+		key := ordinalRange{row.start, row.end}
+		metadata, ok := bound[key]
+		if !ok {
+			window, err := buildRecallEvidenceWindow(
+				ctx, tx, sessionID, key.start, key.end)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"rebinding evidence %d-%d for session %s: %w",
+					key.start, key.end, sessionID, err)
+			}
+			metadata, err = window.BindSelection(RecallEvidenceSelection{
+				MessageStartOrdinal: key.start,
+				MessageEndOrdinal:   key.end,
+			})
+			if err != nil {
+				return 0, fmt.Errorf(
+					"rebinding evidence %d-%d for session %s: %w",
+					key.start, key.end, sessionID, err)
+			}
+			bound[key] = metadata
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE recall_evidence
+			SET content_digest = ?,
+			    message_start_source_uuid = ?,
+			    message_end_source_uuid = ?
+			WHERE id = ?`,
+			metadata.ContentDigest,
+			metadata.MessageStartSourceUUID,
+			metadata.MessageEndSourceUUID,
+			row.id,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"re-stamping evidence for entry %s: %w", row.entryID, err)
+		}
+		entryIDs[row.entryID] = true
+	}
+	restored := 0
+	for entryID := range entryIDs {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE recall_entries
+			SET provenance_ok = 1,
+			    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			WHERE id = ? AND provenance_ok = 0`,
+			entryID,
+		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"restoring provenance for entry %s: %w", entryID, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf(
+				"restoring provenance for entry %s: %w", entryID, err)
+		}
+		restored += int(affected)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit evidence rebind: %w", err)
+	}
+	return restored, nil
 }
 
 // ExtractProgressStats aggregates one generation's progress rows and its

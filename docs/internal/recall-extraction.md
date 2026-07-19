@@ -206,6 +206,20 @@ entries — so the corpus stops matching Recall filters for the old context
 without any model calls. Human-touched entries are left as they were, mirroring
 the delete path.
 
+The same revisit also rebinds evidence. Evidence digests cover every row in
+their range — system and empty messages included — while the units digest covers
+only distilled text, so an ignored-row edit lets the reconciler revoke
+provenance on an entry whose extraction output never changed, and that works in
+both orders (revisit-then-reconcile would strand the entry just the same). The
+rebind re-derives each range through the verifying window against the current
+transcript, re-stamps digests and endpoint UUIDs, and restores revoked
+provenance, again before the stamp settles.
+
+A digest change deletes the previous derivation's machine entries inside the
+same transaction that resets the progress row, so no failure between the two can
+leave a `done` row claiming coverage for entries that are gone — a window
+incremental passes, which never revisit done rows, would not repair.
+
 ## Model client recovery
 
 Each unit is sent as one chat-completion call with strict client-side schema
