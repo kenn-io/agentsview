@@ -716,3 +716,184 @@ func TestNewManagerValidatesConfig(t *testing.T) {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 }
+
+func TestManagerRefusesDefiniteOnlyScan(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// Only the fast inline sync scan ran: definite rules, no candidate
+	// detection. Candidate-confidence secrets could be present undetected.
+	seedSession(t, d, "sess-inline", turnMessages("a", "b"), nil)
+	if err := d.ReplaceSessionSecretFindings(
+		"sess-inline", nil, 0, secrets.DefiniteRulesVersion(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("definite-only scanned session reached the model: %+v, "+
+			"%d calls", result, log.count())
+	}
+
+	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-inline"})
+	if err == nil {
+		t.Fatal("explicit run on a definite-only scanned session must be refused")
+	}
+	if !strings.Contains(err.Error(), "--backfill") {
+		t.Fatalf("refusal must point at the full scan: %v", err)
+	}
+	if log.count() != 0 {
+		t.Fatal("refusal must happen before any model call")
+	}
+}
+
+func TestManagerRefusesSessionsWithCandidateFindings(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// A full scan found a candidate-confidence secret: the leak count stays
+	// zero, but the finding is recorded.
+	seedSession(t, d, "sess-candidate", turnMessages("a", "b"), nil)
+	if err := d.ReplaceSessionSecretFindings(
+		"sess-candidate",
+		[]db.SecretFinding{{
+			SessionID:     "sess-candidate",
+			RuleName:      "jwt",
+			Confidence:    "candidate",
+			LocationKind:  "message",
+			RedactedMatch: "eyJh…",
+		}},
+		0, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("session with a candidate finding reached the model: %+v, "+
+			"%d calls", result, log.count())
+	}
+
+	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-candidate"})
+	if err == nil {
+		t.Fatal("explicit run on a session with candidate findings must be refused")
+	}
+	if log.count() != 0 {
+		t.Fatal("refusal must happen before any model call")
+	}
+}
+
+func TestSessionSnapshotChanged(t *testing.T) {
+	ended := "2026-01-01T00:00:00.000Z"
+	revision := "rev-1"
+	base := func() *db.Session {
+		return &db.Session{
+			ID:                  "s",
+			MessageCount:        4,
+			EndedAt:             &ended,
+			TranscriptRevision:  &revision,
+			SecretsRulesVersion: secrets.RulesVersion(),
+			SecretLeakCount:     0,
+		}
+	}
+	if sessionSnapshotChanged(base(), base()) {
+		t.Fatal("identical snapshots must compare equal")
+	}
+	cases := []struct {
+		name   string
+		mutate func(*db.Session)
+	}{
+		{"message count", func(s *db.Session) { s.MessageCount = 5 }},
+		{"transcript revision", func(s *db.Session) {
+			other := "rev-2"
+			s.TranscriptRevision = &other
+		}},
+		{"revision cleared", func(s *db.Session) { s.TranscriptRevision = nil }},
+		{"scan version", func(s *db.Session) {
+			s.SecretsRulesVersion = secrets.DefiniteRulesVersion()
+		}},
+		{"leak count", func(s *db.Session) { s.SecretLeakCount = 1 }},
+		{"ended at", func(s *db.Session) {
+			other := "2026-01-01T00:00:01.000Z"
+			s.EndedAt = &other
+		}},
+		{"ended cleared", func(s *db.Session) { s.EndedAt = nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			after := base()
+			tc.mutate(after)
+			if !sessionSnapshotChanged(base(), after) {
+				t.Fatal("changed snapshot must be detected")
+			}
+		})
+	}
+}
+
+func TestManagerStagesEntriesUntilActivation(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	// One session done, one still in the backlog: the generation keeps
+	// building, so its entries must not serve yet.
+	result, err := m.RunPass(ctx, PassOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 1 || result.Activated {
+		t.Fatalf("result = %+v, want 1 session and no activation", result)
+	}
+	served, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(served) != 0 {
+		t.Fatalf("%d entries served while the generation is still building; "+
+			"want 0 (staged as archived)", len(served))
+	}
+	staged, err := d.ListRecallEntries(ctx,
+		db.RecallQuery{Status: "archived", Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries staged: %v", err)
+	}
+	if len(staged) != 2 {
+		t.Fatalf("staged entries = %d, want 2", len(staged))
+	}
+
+	// The backlog drains; activation promotes the staged corpus atomically.
+	result, err = m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if !result.Activated {
+		t.Fatalf("result = %+v, want activation once the backlog drained", result)
+	}
+	served, err = d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(served) != 4 {
+		t.Fatalf("served entries = %d, want all 4 after activation", len(served))
+	}
+	staged, err = d.ListRecallEntries(ctx,
+		db.RecallQuery{Status: "archived", Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries staged: %v", err)
+	}
+	if len(staged) != 0 {
+		t.Fatalf("staged entries = %d after activation, want 0", len(staged))
+	}
+}

@@ -46,25 +46,41 @@ model. A session is eligible only when all of the following hold:
 - it has ended, and ended before the configured quiet period cutoff (so a
   session that resumes shortly after ending is not extracted mid-way);
 - it is not automated, not trashed, and has messages;
-- it has zero secret findings **and** its last secret scan was performed under a
-  rules version the current binary considers fresh
-  (`secrets.ActiveRulesVersions()`). An unscanned session — leak count zero
-  but no recorded scan version — is excluded. The candidates query refuses to
-  run without scan versions at all: the boundary fails closed.
+- its last secret scan was the current **full** scan (`secrets.RulesVersion()`).
+  The definite-only inline sync scan does not qualify: it never looks for
+  candidate-confidence secrets, so a session it cleared may still carry them.
+  An unscanned session — leak count zero but no recorded scan version — is
+  excluded, and the candidates query refuses to run without scan versions at
+  all: the boundary fails closed. In practice this means sessions need
+  `secrets scan --backfill` before they become eligible;
+- it has zero recorded secret findings **of any confidence**. The leak count
+  only counts definite findings; a candidate finding (a JWT, a high-entropy
+  blob) is exactly the material that must not reach the model either, so the
+  `secret_findings` table is consulted directly.
 
 None of these predicates are configurable. The quiet period is a scheduling
 knob; the privacy predicates are not.
+
+The eligibility check is also bound to the transcript actually sent: the manager
+re-reads the session row after loading its messages and compares the two reads
+(message count, transcript revision, scan version, leak count, ended-at, last
+local write). Sync writes messages, scan stamps, and counts in one transaction,
+so a stable bracket means the loaded transcript is the one the check approved; a
+mismatch skips the session silently and the next pass retries against a settled
+view.
 
 ## Progress and resume
 
 `recall_extract_progress` records one row per (session, generation):
 `unit_cursor` counts completed units, `units_total` the derived unit count,
-`content_digest` a SHA-256 over the derived unit list, and a state machine
-`pending → partial → done | failed`. Mutations use optimistic concurrency —
-cursor advances and failure marks carry the digest and expected cursor, and a
-mismatch means another writer reset or took over the session; the caller
-re-reads instead of overwriting. Cursor advances are strictly monotonic and can
-never resurrect a failed or done row.
+`content_digest` a SHA-256 over the derived unit list, `content_stamped_at` the
+time that digest was derived (it moves only on insert and digest reset, never on
+cursor advances, so it marks the transcript snapshot the extraction covers), and
+a state machine `pending → partial → done | failed`. Mutations use optimistic
+concurrency — cursor advances and failure marks carry the digest and expected
+cursor, and a mismatch means another writer reset or took over the session; the
+caller re-reads instead of overwriting. Cursor advances are strictly monotonic
+and can never resurrect a failed or done row.
 
 A failed session waits out `failure_backoff` before the scan offers it again, so
 one poisoned transcript cannot monopolize passes. Cancellation (daemon shutdown)
@@ -110,9 +126,16 @@ The daemon scheduler mirrors the embedding scheduler's shape:
 - sync completions are debounced (30 s) into *incremental* passes, which scan
   for new eligible sessions and retryable failures;
 - a backstop ticker (`backstop_interval`, default 1 h) runs *full* passes, which
-  additionally revisit done sessions — but only those written to since
-  extraction finished (`local_modified_at > progress.updated_at`), so full
-  passes do not reload the whole archive;
+  additionally revisit done sessions — but only those written to since their
+  unit snapshot was derived
+  (`local_modified_at >= progress.content_stamped_at`; the stamp, not
+  `updated_at`, because a write that lands mid-extraction predates the row's
+  last touch but postdates what the model saw), so full passes do not reload the
+  whole archive;
+- when the backstop is disabled, a catchup ticker (paced by the quiet period,
+  never faster than once a minute) runs incremental passes instead: sessions
+  become eligible only after the quiet period, long after the last sync-driven
+  debounce fired, so sync signals alone cannot guarantee eventual extraction;
 - passes drop instead of queueing when one is already running, and a dropped
   backstop carries into the next debounced pass.
 
@@ -128,15 +151,24 @@ corpus up. An entryless generation never activates, manually or automatically:
 activation retires the previously active generation, and replacing a working
 corpus with an empty one must not happen silently.
 
+Generation state controls serving. While a generation is building, its entries
+are staged with the `archived` status so an unfinished corpus never serves;
+activation promotes them to `accepted` and archives the retired generation's
+still-automatic entries in the same transaction, so the served corpus switches
+atomically. Retiring a generation likewise archives its still-automatic entries.
+Entries a human has touched (any review state other than `unreviewed_auto`) are
+never moved by these flips.
+
 ## Entry mapping
 
-Extracted entries are stored `unreviewed_auto` / `accepted`, scoped to the
-project, with: title and body from the model (entity lists folded into the body
-as an `Entities:` line), an empty trigger, session context (project, cwd, git
-branch, agent), the source session id, the generation fingerprint as
-`source_run_id`, the segmenter name as `extractor_method`, and one evidence row
-spanning the unit's message-ordinal range. Generated entries remain outside
-trusted Recall until a separate promotion decision.
+Extracted entries are stored `unreviewed_auto` — `accepted` under an active
+generation, staged `archived` under a building one — scoped to the project,
+with: title and body from the model (entity lists folded into the body as an
+`Entities:` line), an empty trigger, session context (project, cwd, git branch,
+agent), the source session id, the generation fingerprint as `source_run_id`,
+the segmenter name as `extractor_method`, and one evidence row spanning the
+unit's message-ordinal range. Generated entries remain outside trusted Recall
+until a separate promotion decision.
 
 ## CLI and ownership
 

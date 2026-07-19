@@ -32,6 +32,7 @@ type extractScheduler struct {
 	mgr      extractPassManager
 	debounce time.Duration
 	backstop time.Duration
+	catchup  time.Duration
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -39,14 +40,20 @@ type extractScheduler struct {
 }
 
 // newExtractScheduler builds a scheduler over mgr. backstop <= 0 disables
-// the periodic full pass, leaving only the after-sync debounce path.
+// the periodic full pass; catchup then supplies the interval for periodic
+// *incremental* passes instead. Without one, a session that ends and sees no
+// further sync activity would never be scanned again once its quiet period
+// elapses — sync-driven debounce passes fire long before it becomes
+// eligible. catchup is ignored while the backstop is enabled, whose full
+// passes are a superset.
 func newExtractScheduler(
-	mgr extractPassManager, debounce, backstop time.Duration,
+	mgr extractPassManager, debounce, backstop, catchup time.Duration,
 ) *extractScheduler {
 	return &extractScheduler{
 		mgr:      mgr,
 		debounce: debounce,
 		backstop: backstop,
+		catchup:  catchup,
 		dirty:    make(chan struct{}, 1),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -80,11 +87,16 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	stopTimer(debounceTimer)
 	defer debounceTimer.Stop()
 
-	var backstopC <-chan time.Time
-	if s.backstop > 0 {
-		ticker := time.NewTicker(s.backstop)
+	var tickC <-chan time.Time
+	tickFull := s.backstop > 0
+	tickInterval := s.backstop
+	if !tickFull {
+		tickInterval = s.catchup
+	}
+	if tickInterval > 0 {
+		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
-		backstopC = ticker.C
+		tickC = ticker.C
 	}
 
 	// pendingFull remembers a backstop tick whose pass was dropped because
@@ -121,12 +133,17 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			if err == nil {
 				pendingFull = false
 			}
-		case <-backstopC:
-			started, _, err := s.mgr.TryPass(ctx, extract.PassOptions{Full: true})
+		case <-tickC:
+			started, _, err := s.mgr.TryPass(ctx,
+				extract.PassOptions{Full: tickFull})
 			if err != nil {
-				log.Printf("extract scheduler: backstop pass failed: %v", err)
+				log.Printf("extract scheduler: periodic pass failed: %v", err)
 			}
-			pendingFull = !started || err != nil
+			if tickFull {
+				// A dropped incremental catchup tick needs no carry: the
+				// next tick or debounced pass covers the same ground.
+				pendingFull = !started || err != nil
+			}
 		}
 	}
 }

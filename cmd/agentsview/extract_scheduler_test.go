@@ -58,7 +58,7 @@ func (f *fakePassManager) callsSnapshot() []extract.PassOptions {
 
 func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, 20*time.Millisecond, 0)
+	s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -76,7 +76,7 @@ func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 
 func TestExtractSchedulerBackstopTickRunsFullPass(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond)
+	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond, 0)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -93,7 +93,7 @@ func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 		{started: false}, // backstop tick collides with a running pass
 		{started: true},
 	}}
-	s := newExtractScheduler(mgr, 20*time.Millisecond, 30*time.Millisecond)
+	s := newExtractScheduler(mgr, 20*time.Millisecond, 30*time.Millisecond, 0)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -111,7 +111,7 @@ func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 
 func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 0)
+	s := newExtractScheduler(mgr, time.Hour, 0, 0)
 	go s.Run(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -126,7 +126,7 @@ func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
 }
 
 func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
-	s := newExtractScheduler(&fakePassManager{}, time.Hour, 0)
+	s := newExtractScheduler(&fakePassManager{}, time.Hour, 0, 0)
 	done := make(chan struct{})
 	go func() {
 		for range 100 {
@@ -143,7 +143,7 @@ func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
 
 func TestExtractTeeEmitterNotifiesScheduler(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, 10*time.Millisecond, 0)
+	s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0)
 	primary := &recordingEmitter{}
 	tee := extractTeeEmitter{primary: primary, scheduler: s}
 
@@ -156,4 +156,37 @@ func TestExtractTeeEmitterNotifiesScheduler(t *testing.T) {
 		"primary emitter must still receive the event")
 	waitForSchedulerCondition(t, func() bool { return mgr.callCount() == 1 },
 		"emit must schedule a pass")
+}
+
+func TestExtractSchedulerCatchupTicksWhenBackstopDisabled(t *testing.T) {
+	// With the backstop disabled, sync-driven passes alone would strand a
+	// session that ends and then sees no further sync activity: it only
+	// becomes eligible after the quiet period, long after the last debounce
+	// fired. The catchup ticker keeps scanning incrementally.
+	mgr := &fakePassManager{}
+	s := newExtractScheduler(mgr, time.Hour, 0, 20*time.Millisecond)
+	ctx := t.Context()
+	go s.Run(ctx)
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 2 },
+		"catchup passes never ran")
+	for _, call := range mgr.callsSnapshot() {
+		assert.False(t, call.Full, "catchup passes are incremental")
+	}
+}
+
+func TestExtractSchedulerBackstopSupersedesCatchup(t *testing.T) {
+	mgr := &fakePassManager{}
+	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond, time.Millisecond)
+	ctx := t.Context()
+	go s.Run(ctx)
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 2 },
+		"backstop passes never ran")
+	for _, call := range mgr.callsSnapshot() {
+		assert.True(t, call.Full,
+			"an enabled backstop replaces catchup ticks with full passes")
+	}
 }

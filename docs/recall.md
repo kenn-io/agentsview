@@ -72,9 +72,11 @@ table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
 `extra_body`).
 
 Sessions are only ever extracted when they are not automated, not trashed, and
-have a clean, current secret scan — a session with secret findings, or one never
-scanned under the current rules, never reaches the model. These filters are not
-configurable. Session content is sent only to the endpoints you configure.
+have a clean, current **full** secret scan — a session with secret findings of
+any confidence, one never scanned, or one covered only by the fast inline sync
+scan never reaches the model. Run `agentsview secrets scan --backfill` to make
+sessions eligible. These filters are not configurable. Session content is sent
+only to the endpoints you configure.
 
 Each distillation configuration (model, prompts, segmentation, request shape) is
 fingerprinted as a *generation*; changing the configuration builds a new corpus

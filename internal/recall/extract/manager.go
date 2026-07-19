@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -184,11 +183,24 @@ func (m *Manager) runPassLocked(
 	if err != nil {
 		return result, err
 	}
+	generation, ok, err := m.generation(ctx)
+	if err != nil {
+		return result, err
+	}
+	if !ok {
+		return result, fmt.Errorf(
+			"extract generation %s disappeared during pass", m.fingerprint,
+		)
+	}
+	// While the generation is still building, its entries are staged as
+	// archived so an unfinished corpus never serves; activation promotes
+	// them atomically.
+	staged := generation.State != db.ExtractGenerationActive
 	for _, sessionID := range sessionIDs {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		outcome, err := m.extractSession(ctx, sessionID)
+		outcome, err := m.extractSession(ctx, sessionID, staged)
 		result.Units += outcome.units
 		result.Entries += outcome.entries
 		if err != nil {
@@ -237,6 +249,9 @@ func (m *Manager) passSessions(
 		if err := extractableSession(opts.SessionID, session); err != nil {
 			return nil, err
 		}
+		if err := m.refuseSecretFindings(ctx, opts.SessionID); err != nil {
+			return nil, err
+		}
 		return []string{opts.SessionID}, nil
 	}
 	now := time.Now()
@@ -244,10 +259,30 @@ func (m *Manager) passSessions(
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
-		ScanVersions:      secrets.ActiveRulesVersions(),
+		ScanVersions:      []string{secrets.RulesVersion()},
 		IncludeDone:       opts.Full,
 		Limit:             opts.Limit,
 	})
+}
+
+// refuseSecretFindings excludes sessions with recorded secret findings of any
+// confidence. The leak count only counts definite findings; a candidate
+// finding (a JWT, a high-entropy blob) is exactly the material that must not
+// reach the model either.
+func (m *Manager) refuseSecretFindings(
+	ctx context.Context, sessionID string,
+) error {
+	findings, err := m.cfg.DB.SessionSecretFindings(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if len(findings) > 0 {
+		return fmt.Errorf(
+			"session %s has %d recorded secret findings and is excluded "+
+				"from extraction", sessionID, len(findings),
+		)
+	}
+	return nil
 }
 
 // extractableSession enforces the extraction privacy boundary for explicit
@@ -280,11 +315,35 @@ func extractableSession(id string, s *db.Session) error {
 	return nil
 }
 
-// currentScanVersion reports whether version is a secret-scan rules version
-// the current binary considers fresh. An unscanned session ("") never is:
-// the privacy boundary fails closed.
+// currentScanVersion reports whether version is the current *full* secret-scan
+// rules version. The definite-only inline sync scan does not qualify: it never
+// looks for candidate-confidence secrets, so a session it cleared may still
+// carry them. An unscanned session ("") never qualifies either: the privacy
+// boundary fails closed.
 func currentScanVersion(version string) bool {
-	return slices.Contains(secrets.ActiveRulesVersions(), version)
+	return version == secrets.RulesVersion()
+}
+
+// sessionSnapshotChanged reports whether two reads of a session row describe
+// different transcript or scan states. The manager brackets its message read
+// with session reads and discards the work when they differ, so eligibility
+// is always judged against the transcript actually sent to the model — sync
+// writes messages, scan stamps, and counts in one transaction, so a stable
+// bracket means a consistent view.
+func sessionSnapshotChanged(before, after *db.Session) bool {
+	return before.MessageCount != after.MessageCount ||
+		!stringPtrEqual(before.TranscriptRevision, after.TranscriptRevision) ||
+		before.SecretsRulesVersion != after.SecretsRulesVersion ||
+		before.SecretLeakCount != after.SecretLeakCount ||
+		!stringPtrEqual(before.EndedAt, after.EndedAt) ||
+		!stringPtrEqual(before.LocalModifiedAt, after.LocalModifiedAt)
+}
+
+func stringPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 type sessionOutcome struct {
@@ -295,7 +354,7 @@ type sessionOutcome struct {
 }
 
 func (m *Manager) extractSession(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, staged bool,
 ) (sessionOutcome, error) {
 	var outcome sessionOutcome
 	session, err := m.cfg.DB.GetSession(ctx, sessionID)
@@ -308,9 +367,23 @@ func (m *Manager) extractSession(
 	if err := extractableSession(sessionID, session); err != nil {
 		return outcome, err
 	}
+	if err := m.refuseSecretFindings(ctx, sessionID); err != nil {
+		return outcome, err
+	}
 	rows, err := m.cfg.DB.GetAllMessages(ctx, sessionID)
 	if err != nil {
 		return outcome, err
+	}
+	// Re-read the session and compare: if sync wrote to it between the
+	// eligibility check and the message read, the transcript just loaded may
+	// contain content the check never saw. Skip silently — the write bumped
+	// local_modified_at, so the next pass retries against a settled view.
+	recheck, err := m.cfg.DB.GetSession(ctx, sessionID)
+	if err != nil {
+		return outcome, err
+	}
+	if recheck == nil || sessionSnapshotChanged(session, recheck) {
+		return outcome, nil
 	}
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
@@ -375,7 +448,7 @@ func (m *Manager) extractSession(
 			return outcome, nil
 		}
 		inserted, err := m.cfg.DB.InsertExtractedRecallEntries(
-			ctx, m.extractedEntries(session, unit, i, entries),
+			ctx, m.extractedEntries(session, unit, i, entries, staged),
 		)
 		if err != nil {
 			return outcome, err
@@ -433,8 +506,14 @@ func (m *Manager) distillSplit(
 }
 
 func (m *Manager) extractedEntries(
-	session *db.Session, unit Unit, unitIndex int, entries []Entry,
+	session *db.Session, unit Unit, unitIndex int, entries []Entry, staged bool,
 ) []db.RecallEntry {
+	// Staged entries carry the archived status until activation promotes
+	// them: an unfinished generation must not serve a partial corpus.
+	status := recall.StatusAccepted
+	if staged {
+		status = recall.StatusArchived
+	}
 	rows := make([]db.RecallEntry, 0, len(entries))
 	for i, entry := range entries {
 		body := entry.Body
@@ -445,7 +524,7 @@ func (m *Manager) extractedEntries(
 			ID:              EntryID(m.fingerprint, session.ID, unitIndex, i),
 			Type:            entry.Type,
 			Scope:           recall.ScopeProject,
-			Status:          recall.StatusAccepted,
+			Status:          status,
 			ReviewState:     recall.ReviewStateUnreviewedAuto,
 			Title:           entry.Title,
 			Body:            body,
@@ -495,7 +574,7 @@ func (m *Manager) maybeActivate(ctx context.Context) (bool, error) {
 	backlog, err := m.cfg.DB.ExtractCandidates(ctx, db.ExtractCandidateQuery{
 		Fingerprint:  m.fingerprint,
 		QuietCutoff:  time.Now().Add(-m.cfg.QuietPeriod),
-		ScanVersions: secrets.ActiveRulesVersions(),
+		ScanVersions: []string{secrets.RulesVersion()},
 		Limit:        1,
 	})
 	if err != nil {
@@ -551,7 +630,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
-		ScanVersions:      secrets.ActiveRulesVersions(),
+		ScanVersions:      []string{secrets.RulesVersion()},
 	})
 	if err != nil {
 		return status, err

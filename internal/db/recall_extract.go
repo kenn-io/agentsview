@@ -177,6 +177,32 @@ func (db *DB) ActivateExtractGeneration(
 	); err != nil {
 		return fmt.Errorf("retiring previous active generation: %w", err)
 	}
+	// Switch which generation's machine entries are served, in the same
+	// transaction as the state flip: staged (archived) entries of the newly
+	// active generation are promoted, and other generations' still-automatic
+	// entries are archived. Human-touched entries are never moved.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE recall_entries
+		SET status = 'archived',
+		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE review_state = 'unreviewed_auto' AND status = 'accepted'
+		  AND source_run_id != ?
+		  AND source_run_id IN
+		      (SELECT fingerprint FROM recall_extract_generations)`,
+		fingerprint,
+	); err != nil {
+		return fmt.Errorf("archiving retired generation entries: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE recall_entries
+		SET status = 'accepted',
+		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
+		  AND source_run_id = ?`,
+		fingerprint,
+	); err != nil {
+		return fmt.Errorf("promoting activated generation entries: %w", err)
+	}
 	return tx.Commit()
 }
 
@@ -194,9 +220,14 @@ func (db *DB) RetireExtractGeneration(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning generation retirement: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	// One conditional statement so the active-state check and the state
 	// change cannot interleave with a concurrent activation.
-	result, err := db.getWriter().ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_extract_generations
 		SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE fingerprint = ? AND (? OR state != ?)`,
@@ -209,16 +240,28 @@ func (db *DB) RetireExtractGeneration(
 	if err != nil {
 		return fmt.Errorf("retiring generation %s: %w", fingerprint, err)
 	}
-	if affected > 0 {
-		return nil
+	if affected == 0 {
+		if _, err := db.extractGenerationByFingerprint(ctx, fingerprint); err != nil {
+			return err
+		}
+		return fmt.Errorf(
+			"generation %s is active; retiring it leaves no distilled corpus "+
+				"to serve (use force to retire anyway)", fingerprint,
+		)
 	}
-	if _, err := db.extractGenerationByFingerprint(ctx, fingerprint); err != nil {
-		return err
+	// A retired generation stops serving: its still-automatic entries are
+	// archived in the same transaction. Human-touched entries are kept.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE recall_entries
+		SET status = 'archived',
+		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE review_state = 'unreviewed_auto' AND status = 'accepted'
+		  AND source_run_id = ?`,
+		fingerprint,
+	); err != nil {
+		return fmt.Errorf("archiving retired generation entries: %w", err)
 	}
-	return fmt.Errorf(
-		"generation %s is active; retiring it leaves no distilled corpus "+
-			"to serve (use force to retire anyway)", fingerprint,
-	)
+	return tx.Commit()
 }
 
 func (db *DB) extractGenerationByFingerprint(
@@ -273,11 +316,19 @@ func (db *DB) UpsertExtractProgress(
 	if unitsTotal == 0 {
 		initialState = ExtractProgressDone
 	}
+	// content_stamped_at records when the current digest's unit snapshot
+	// was derived. It moves only on insert and digest reset — never on
+	// cursor advances — so the done-revisit gate can compare transcript
+	// writes against the snapshot time rather than the last row touch. An
+	// empty stamp (a row migrated or copied from a pre-stamp archive) is
+	// re-stamped even on a matching digest: the digest was just re-derived
+	// from the live transcript, so "now" correctly binds the snapshot, and
+	// the row stops matching every future full pass.
 	_, err := db.getWriter().ExecContext(ctx, `
 		INSERT INTO recall_extract_progress
 			(session_id, generation_fingerprint, unit_cursor, units_total,
-			 state, content_digest)
-		VALUES (?, ?, 0, ?, ?, ?)
+			 state, content_digest, content_stamped_at)
+		VALUES (?, ?, 0, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		ON CONFLICT(session_id, generation_fingerprint) DO UPDATE SET
 			unit_cursor = CASE
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
@@ -292,6 +343,11 @@ func (db *DB) UpsertExtractProgress(
 			last_error = CASE
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
 				THEN recall_extract_progress.last_error ELSE '' END,
+			content_stamped_at = CASE
+				WHEN recall_extract_progress.content_digest = excluded.content_digest
+				     AND recall_extract_progress.content_stamped_at != ''
+				THEN recall_extract_progress.content_stamped_at
+				ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now') END,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
 		sessionID, fingerprint, unitsTotal, initialState,
 		contentDigest, initialState,
@@ -632,6 +688,9 @@ func (db *DB) ExtractCandidates(
 			AND s.is_automated = 0
 			AND s.secret_leak_count = 0
 			AND s.secrets_rules_version IN (`+versionMarks+`)
+			AND NOT EXISTS (
+				SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id
+			)
 			AND s.message_count > 0
 			AND s.ended_at IS NOT NULL
 			AND s.ended_at != ''
@@ -642,7 +701,7 @@ func (db *DB) ExtractCandidates(
 				OR (p.state = ? AND p.updated_at <= ?)
 				OR (? AND p.state = ?
 					AND (s.local_modified_at IS NULL
-						OR s.local_modified_at > p.updated_at))
+						OR s.local_modified_at >= p.content_stamped_at))
 			)
 		ORDER BY s.ended_at ASC, s.id ASC
 		LIMIT ?`,

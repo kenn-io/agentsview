@@ -450,6 +450,9 @@ CREATE TABLE IF NOT EXISTS recall_extract_progress (
     state          TEXT NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'partial', 'done', 'failed')),
     content_digest TEXT NOT NULL DEFAULT '',
+    -- when content_digest was last derived; moves only on insert and digest
+    -- reset, so it marks the transcript snapshot the extraction covers
+    content_stamped_at TEXT NOT NULL DEFAULT '',
     last_error     TEXT NOT NULL DEFAULT '',
     updated_at     TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

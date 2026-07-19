@@ -593,6 +593,179 @@ func TestExtractCandidatesFiltersIneligibleSessions(t *testing.T) {
 		"unscanned and stale-scanned sessions must never be candidates")
 }
 
+func TestExtractCandidatesExcludeSessionsWithAnyFinding(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-clean", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-candidate", 2*time.Hour, nil)
+	// A candidate-confidence finding (e.g. a JWT or high-entropy match)
+	// is recorded but never counted in secret_leak_count. It must still
+	// disqualify the session: confidence tunes alerting, not what may be
+	// sent to a model.
+	require.NoError(t, d.ReplaceSessionSecretFindings(
+		"sess-candidate",
+		[]SecretFinding{{
+			SessionID:    "sess-candidate",
+			RuleName:     "high-entropy-assignment",
+			Confidence:   "candidate",
+			LocationKind: "message",
+		}},
+		0, "rules-v1",
+	))
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sess-clean"}, ids,
+		"candidate findings must exclude a session even with leak count 0")
+}
+
+func TestExtractCandidatesDoneRevisitUsesContentStamp(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-done", 2*time.Hour, nil)
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-done", "fp-a", "dg", 1)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-done", "fp-a", "dg", 1))
+
+	// A transcript write lands mid-extraction: after the unit list was
+	// derived (content stamp) but before the final cursor advance. The
+	// progress row's updated_at overtakes it, so a gate on updated_at
+	// would hide the change forever.
+	now := time.Now().UTC()
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET local_modified_at = ? WHERE id = 'sess-done'",
+		now.Add(2*time.Second).Format("2006-01-02T15:04:05.000Z"))
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_extract_progress SET updated_at = ? "+
+			"WHERE session_id = 'sess-done'",
+		now.Add(5*time.Second).Format("2006-01-02T15:04:05.000Z"))
+	require.NoError(t, err)
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
+		IncludeDone:  true,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-done",
+		"a write after the unit snapshot must re-open the session even "+
+			"when progress was updated later")
+}
+
+func TestUpsertExtractProgressHealsEmptyContentStamp(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-copied", 2*time.Hour, nil)
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-copied", "fp-a", "dg", 1)
+	require.NoError(t, err)
+	require.NoError(t,
+		d.AdvanceExtractCursor(ctx, "sess-copied", "fp-a", "dg", 1))
+
+	// A row copied from a pre-stamp archive has an empty content stamp,
+	// which matches every future full pass. A same-digest upsert must
+	// re-stamp it — the digest was just re-derived from the live
+	// transcript — so the row settles instead of being revisited forever.
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_extract_progress SET content_stamped_at = '' " +
+			"WHERE session_id = 'sess-copied'")
+	require.NoError(t, err)
+
+	progress, err := d.UpsertExtractProgress(ctx, "sess-copied", "fp-a", "dg", 1)
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, progress.State,
+		"a same-digest upsert must not reset completed progress")
+
+	var stamp string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT content_stamped_at FROM recall_extract_progress "+
+			"WHERE session_id = 'sess-copied'").Scan(&stamp))
+	assert.NotEmpty(t, stamp,
+		"an empty content stamp must heal on a same-digest upsert")
+}
+
+func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	for _, fp := range []string{"fp-old", "fp-new"} {
+		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-old"))
+
+	entry := func(id, fp, status, reviewState string) RecallEntry {
+		return RecallEntry{
+			ID: id, Type: "fact", Status: status, ReviewState: reviewState,
+			Title: "t", Body: "b",
+			SourceSessionID: "sess-1", SourceRunID: fp,
+		}
+	}
+	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		entry("e-old", "fp-old", "accepted", "unreviewed_auto"),
+		entry("e-new-staged", "fp-new", "archived", "unreviewed_auto"),
+		entry("e-reviewed", "fp-old", "accepted", "human_reviewed"),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-new"))
+
+	status := func(id string) string {
+		got, err := d.GetRecallEntry(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got, id)
+		return got.Status
+	}
+	assert.Equal(t, "accepted", status("e-new-staged"),
+		"activation must promote the new generation's staged entries")
+	assert.Equal(t, "archived", status("e-old"),
+		"activation must stop serving the retired generation's entries")
+	assert.Equal(t, "accepted", status("e-reviewed"),
+		"human-reviewed entries are not lifecycle-managed")
+}
+
+func TestRetireExtractGenerationArchivesServedEntries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a"))
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{{
+		ID: "e-1", Type: "fact", Status: "accepted",
+		ReviewState: "unreviewed_auto", Title: "t", Body: "b",
+		SourceSessionID: "sess-1", SourceRunID: "fp-a",
+	}})
+	require.NoError(t, err)
+
+	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
+	got, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "archived", got.Status,
+		"retiring a generation must stop serving its entries")
+}
+
 func TestExtractCandidatesRequireScanVersions(t *testing.T) {
 	d := testDB(t)
 	_, err := d.ExtractCandidates(context.Background(), ExtractCandidateQuery{

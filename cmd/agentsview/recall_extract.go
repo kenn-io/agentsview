@@ -147,7 +147,13 @@ func setupRecallExtraction(
 		return nil, err
 	}
 	backstop := max(dist.Backstop, 0)
-	return newExtractScheduler(mgr, extractDebounceInterval, backstop), nil
+	// With the backstop disabled, catchup ticks (paced by the quiet period,
+	// never faster than once a minute) keep scanning so a session whose
+	// quiet period elapses after the last sync still gets extracted.
+	catchup := max(dist.Quiet, time.Minute)
+	return newExtractScheduler(
+		mgr, extractDebounceInterval, backstop, catchup,
+	), nil
 }
 
 // openWritableExtractDB opens the archive read-write for manual extraction

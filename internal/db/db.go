@@ -1892,6 +1892,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"recall_extract_progress", "content_stamped_at",
+			"ALTER TABLE recall_extract_progress ADD COLUMN content_stamped_at TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"insights", "kind",
 			"ALTER TABLE insights ADD COLUMN kind TEXT NOT NULL DEFAULT ''",
 		},
