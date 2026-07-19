@@ -4,10 +4,12 @@ package duckdb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,6 +207,68 @@ func TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements(t *testing.T) {
 	require.NoError(t, store.Close())
 	assert.Equal(t, 0, countReopenAliasFiles(t, dir),
 		"no *.reopen-* hardlink files may remain once the store has settled and closed")
+}
+
+// TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements is the FINDING 4
+// regression: queryContext/queryRowContext used to snapshot the *sql.DB
+// under a read lock, release the lock, and only then start the query.
+// WatchMirrorReplacement's swapHandle could Close() the snapshotted handle
+// in that gap, so readers racing a mirror adoption intermittently failed
+// with "sql: database is closed". The read lock now spans the query start,
+// which makes that window impossible; this test hammers several concurrent
+// readers through a loop of rename-replacements (each adopted by the
+// watcher's swapHandle) and requires zero read errors.
+func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.duckdb")
+	buildMirrorFixture(t, path, "gen-0")
+
+	store, err := NewStore(path)
+	require.NoError(t, err)
+	defer store.Close()
+
+	store.WatchMirrorReplacement(t.Context(), time.Millisecond, nil)
+
+	readerCtx, cancelReaders := context.WithCancel(context.Background())
+	var readErrs atomic.Int32
+	var firstErr atomic.Pointer[string]
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for readerCtx.Err() == nil {
+				if _, err := store.GetStats(
+					context.Background(), false, false,
+				); err != nil {
+					readErrs.Add(1)
+					msg := err.Error()
+					firstErr.CompareAndSwap(nil, &msg)
+				}
+			}
+		})
+	}
+
+	for gen := 1; gen <= 5; gen++ {
+		sessionID := fmt.Sprintf("gen-%d", gen)
+		next := filepath.Join(dir, fmt.Sprintf("next-%d.duckdb", gen))
+		buildMirrorFixtureAt(t, next, sessionID)
+		require.NoError(t, os.Rename(next, path))
+		require.Eventually(t, func() bool {
+			ids := listMirrorSessionIDs(t, store)
+			return len(ids) == 1 && ids[0] == sessionID
+		}, 5*time.Second, 2*time.Millisecond,
+			"store must adopt replacement generation %d", gen)
+	}
+
+	cancelReaders()
+	wg.Wait()
+	errDetail := ""
+	if msg := firstErr.Load(); msg != nil {
+		errDetail = *msg
+	}
+	assert.Zero(t, readErrs.Load(),
+		"concurrent reads must never fail across mirror adoptions; first error: %s",
+		errDetail)
 }
 
 // TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement extends

@@ -84,28 +84,35 @@ func (s *Store) Close() error {
 	return err
 }
 
-// handle returns a consistent snapshot of the fields queryContext and
-// queryRowContext need, taken under a single read lock so a concurrent
-// mirror-replacement swap can never mix an old duck with a new quack (or
-// vice versa).
-func (s *Store) handle() (*sql.DB, duckDBConnectionKind, *quackClient) {
-	s.handleMu.RLock()
-	defer s.handleMu.RUnlock()
-	return s.duck, s.connectionKind, s.quack
-}
-
+// queryContext runs a read query against the current handle. The read
+// lock is held across the query START, not just a handle snapshot: a
+// snapshot taken under a released lock could be Close()d by
+// WatchMirrorReplacement's swapHandle before QueryContext begins,
+// surfacing as intermittent "sql: database is closed" errors during
+// mirror adoption. Once QueryContext returns, the *sql.Rows holds a
+// checked-out connection that database/sql keeps alive across DB.Close
+// (busy connections are only closed when returned to the pool), so
+// iterating the rows after the lock is released is safe. The quack-remote
+// path performs an HTTP round trip under this read lock; that is
+// acceptable because replacement swaps only occur for local mirrors.
 func (s *Store) queryContext(
 	ctx context.Context, query string, args ...any,
 ) (*sql.Rows, error) {
-	duck, connectionKind, quack := s.handle()
-	return queryDuckDBContext(ctx, duck, connectionKind, quack, query, args...)
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	return queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
 }
 
+// queryRowContext holds the read lock across the query start for the same
+// reason as queryContext. sql.DB.QueryRowContext executes the query
+// eagerly (the returned row only carries the already-fetched result), so
+// releasing the lock before Scan is safe.
 func (s *Store) queryRowContext(
 	ctx context.Context, query string, args ...any,
 ) interface{ Scan(...any) error } {
-	duck, connectionKind, quack := s.handle()
-	return queryDuckDBRowContext(ctx, duck, connectionKind, quack, query, args...)
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	return queryDuckDBRowContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
 }
 
 func queryDuckDBContext(
