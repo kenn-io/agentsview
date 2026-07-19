@@ -179,7 +179,7 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 				err := duckDBMirrorServeProbeError(tt.probe)
 				require.Error(t, err)
 				if tt.probe.LockConflict {
-					assert.Contains(t, err.Error(), "already open in another process")
+					assert.Contains(t, err.Error(), "holds the mirror read-write")
 					assert.NotContains(t, err.Error(), "push --full")
 				} else {
 					assert.Contains(t, err.Error(), "push --full")

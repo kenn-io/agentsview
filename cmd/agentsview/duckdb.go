@@ -29,11 +29,12 @@ type DuckDBPushConfig struct {
 	Watch           bool
 	Debounce        time.Duration
 	Interval        time.Duration
-	// Automatic is set by the watch loops' automatic pushes: a mirror held
-	// by a live serve process defers instead of rebuilding the whole
-	// archive on every changed batch, and archive-scale diagnostics are
-	// skipped (see duckdbsync.SyncOptions.Automatic). Explicit `duckdb
-	// push` runs leave it false and do neither.
+	// Automatic is set by the watch loops' automatic pushes: an
+	// incremental push blocked by read-only serve handles defers instead
+	// of rebuilding the whole archive on every changed batch, and
+	// archive-scale diagnostics are skipped (see
+	// duckdbsync.SyncOptions.Automatic). Explicit `duckdb push` runs leave
+	// it false and do neither.
 	Automatic bool
 }
 
@@ -459,8 +460,9 @@ func probeDuckDBMirrorForServe(ctx context.Context, path string) error {
 }
 
 // duckDBMirrorServeProbeError converts a failed serve-time probe into an
-// actionable error: a lock conflict means another process is serving the
-// file (not a damaged mirror), so the remedy differs from the rebuild case.
+// actionable error: a lock conflict means a writer holds the file (a push
+// in flight, or a serve process from a build that still opened the mirror
+// read-write), so the remedy differs from the rebuild case.
 func duckDBMirrorServeProbeError(probe duckdbsync.MirrorProbe) error {
 	reason := duckDBMirrorProbeFailureReason(probe)
 	if reason == "" {
@@ -468,8 +470,9 @@ func duckDBMirrorServeProbeError(probe duckdbsync.MirrorProbe) error {
 	}
 	if probe.LockConflict {
 		return fmt.Errorf(
-			"%s; the mirror is already open in another process (the error names "+
-				"its PID) - stop that process or serve a different path", reason,
+			"%s; another process holds the mirror read-write (the error names "+
+				"its PID) - wait for the running push to finish, or restart "+
+				"that process if it predates the read-only serve change", reason,
 		)
 	}
 	return fmt.Errorf("%s; rebuild with 'agentsview duckdb push --full'", reason)
@@ -615,7 +618,7 @@ func serveQuackOnce(
 		return quackServeSession{}, fmt.Errorf("statting duckdb mirror: %w", err)
 	}
 	duckdbsync.PrimeFileIdentity(info)
-	conn, err := duckdbsync.Open(duckCfg.Path)
+	conn, err := duckdbsync.OpenReadOnly(duckCfg.Path)
 	if err != nil {
 		return quackServeSession{}, err
 	}

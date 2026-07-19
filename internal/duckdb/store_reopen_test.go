@@ -382,8 +382,6 @@ func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
 		"a bare .reopen- name (empty suffix) is not a generated alias and must survive")
 	assert.DirExists(t, workDir, "sweep must never remove the work directory itself")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
-	assert.FileExists(t, MirrorMarkerPath(path),
-		"the sidecar ownership marker is a sibling and must never be swept")
 }
 
 // TestSweepStaleMirrorReopenAliasesMissingWorkDirIsNoOp: no work directory

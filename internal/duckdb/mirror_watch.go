@@ -121,22 +121,21 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 	s.swapHandle(conn, alias, info)
 }
 
-// openMirrorAlias opens path's *current* contents through a private
-// hardlink instead of path itself.
+// openMirrorAlias opens path's *current* contents read-only through a
+// private hardlink instead of path itself.
 //
 // This works around a DuckDB constraint verified empirically against the
-// duckdb-go driver: a process may not have two independent connections
-// open on the same literal path string at once. Opening path again while
-// the Store's original connection is still open either errors ("Can't
-// open a connection to same database file with a different configuration
-// than existing connections") when the DSN differs, or, when it matches,
-// silently returns the *already open, stale* database instance instead of
-// re-reading the file rebuildMirror just renamed into place. A hardlink
-// gives the identical bytes a distinct path string, so DuckDB treats it as
-// an unrelated database and genuinely reads the current file from disk,
-// while the Store's existing connection (opened on the literal path
-// before the rename) keeps serving whatever it already had open,
-// undisturbed.
+// duckdb-go driver: the driver caches instances per literal DSN, so opening
+// path again with the same read-only DSN while the Store's original
+// connection is still open silently returns the *already open, stale*
+// database instance instead of re-reading the file rebuildMirror just
+// renamed into place (and a differing DSN errors with "Can't open a
+// connection to same database file with a different configuration than
+// existing connections"). A hardlink gives the identical bytes a distinct
+// path string, so DuckDB treats it as an unrelated database and genuinely
+// reads the current file from disk, while the Store's existing connection
+// (opened on the literal path before the rename) keeps serving whatever it
+// already had open, undisturbed.
 //
 // The alias lives inside the mirror's work directory (created lazily here —
 // a reopen is real work on a mirror that necessarily exists), so it shares
@@ -155,7 +154,7 @@ func openMirrorAlias(path string) (conn *sql.DB, alias string, err error) {
 	if err := os.Link(path, alias); err != nil {
 		return nil, "", fmt.Errorf("hardlinking duckdb mirror for reopen: %w", err)
 	}
-	conn, err = Open(alias)
+	conn, err = OpenReadOnly(alias)
 	if err != nil {
 		_ = os.Remove(alias)
 		return nil, "", err

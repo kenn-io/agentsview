@@ -45,11 +45,11 @@ type SyncOptions struct {
 	Projects        []string
 	ExcludeProjects []string
 	// Automatic marks a watch-mode / daemon-driven push, keeping its cost
-	// bounded by the changed batch: automatic pushes defer locked rebuilds
-	// (a successful no-op with Diagnostics.Deferred set instead of an
-	// O(archive) rebuild when a live DuckDB process holds the mirror — the
-	// only rebuild trigger determinable under the lock) AND skip
-	// archive-scale diagnostics (the full scope COUNT behind
+	// bounded by the changed batch: when reader processes (serve holds the
+	// mirror read-only) block the incremental push's write open, automatic
+	// pushes defer (a successful no-op with Diagnostics.Deferred set)
+	// instead of running an O(archive) rebuild on every changed batch, AND
+	// they skip archive-scale diagnostics (the full scope COUNT behind
 	// Diagnostics.LocalSessionCount, which stays 0). Explicit pushes leave
 	// it unset and do neither.
 	Automatic bool
@@ -91,11 +91,11 @@ type PushDiagnostics struct {
 	// because the local in-scope curation state's fingerprint matched what
 	// was already recorded in the mirror (see refreshCurationIfChanged).
 	CurationRefreshed bool
-	// Deferred reports that the push touched nothing because the mirror is
-	// held by a live DuckDB process and the caller opted into
-	// SyncOptions.Automatic; DeferredReason carries the
-	// human-readable explanation. No cutoff, marker, or mirror state
-	// advances on a deferred push, so the next unlocked push catches up on
+	// Deferred reports that the push touched nothing because reader
+	// processes hold the mirror (blocking the incremental push's write
+	// open) and the caller opted into SyncOptions.Automatic; DeferredReason
+	// carries the human-readable explanation. No cutoff or mirror state
+	// advances on a deferred push, so the next unheld push catches up on
 	// everything that changed in the meantime.
 	Deferred       bool
 	DeferredReason string
@@ -184,16 +184,19 @@ func (s *Sync) isFiltered() bool {
 }
 
 // Push builds or updates the local DuckDB mirror. It probes the existing
-// file read-only, rebuilds from scratch when full is set or the probe
-// demands it (missing/damaged file, schema or data version drift, scope
-// change, cross-process lock conflict, or a deletion cursor the local
-// archive can no longer explain), and otherwise runs a bounded
-// session-replace incremental push. Every rebuild logs and records its
-// trigger in Diagnostics.RebuildReason, since a rebuild silently substituted
-// for a requested incremental push (for example because a live 'duckdb
-// serve' holds the mirror open) is otherwise invisible to the operator.
-// Automatic watch-mode callers can opt out of the rebuild-under-lock
-// behavior with SyncOptions.Automatic (see deferLockedRebuild).
+// file read-only (which coexists with read-only serve handles), rebuilds
+// from scratch when full is set or the probe demands it (missing/damaged
+// file, schema or data version drift, scope change, or a deletion cursor
+// the local archive can no longer explain), and otherwise runs a bounded
+// session-replace incremental push. A probe-time lock conflict means a
+// WRITER holds the file — another push in flight, or a serve process from a
+// build predating the read-only serve change — and fails closed. When the
+// incremental push's own write open is blocked by reader processes, the
+// push defers (SyncOptions.Automatic) or falls back to a rebuild, which
+// never write-opens the destination (temp file plus atomic rename). Every
+// rebuild logs and records its trigger in Diagnostics.RebuildReason, since
+// a rebuild silently substituted for a requested incremental push is
+// otherwise invisible to the operator.
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, full bool, onProgress func(PushProgress),
@@ -205,6 +208,14 @@ func Push(
 	probe, err := ProbeMirror(ctx, path)
 	if err != nil {
 		return PushResult{}, err
+	}
+	if probe.LockConflict {
+		return PushResult{}, fmt.Errorf(
+			"another process holds the mirror %s read-write (%s); wait for "+
+				"the running push to finish, or restart the serving process "+
+				"if it predates the read-only serve change",
+			path, probe.ShapeIssue,
+		)
 	}
 	localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
@@ -219,94 +230,59 @@ func Push(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
 		machine, localDatabaseID,
 	)
-	var result PushResult
-	if deferred, ok := deferLockedRebuild(opts, full, probe); ok {
-		return deferred, nil
-	}
 	if reason == "" {
-		result, err = incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
-	} else {
-		if err := ensureReplaceableMirror(path, probe); err != nil {
-			return PushResult{}, err
+		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+		switch {
+		case err == nil:
+			cleanUpLegacyDuckDBSyncState(local)
+			return result, nil
+		case !isMirrorHeldError(err):
+			return result, err
+		case opts.Automatic:
+			return deferredHeldMirrorPush(), nil
 		}
-		log.Printf("duckdbsync: rebuilding mirror: %s", reason)
-		result, err = rebuildMirror(ctx, path, local, machine, opts, onProgress)
-		result.Diagnostics.RebuildReason = reason
+		reason = "mirror is held open by reader processes; " +
+			"incremental write access unavailable"
+	} else if err := ensureReplaceableMirror(path, probe); err != nil {
+		return PushResult{}, err
 	}
+	log.Printf("duckdbsync: rebuilding mirror: %s", reason)
+	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
+	result.Diagnostics.RebuildReason = reason
 	if err == nil {
 		cleanUpLegacyDuckDBSyncState(local)
 	}
 	return result, err
 }
 
-// deferLockedRebuild decides whether a push should return a successful
-// no-op instead of rebuilding: the caller opted in
-// (SyncOptions.Automatic, set by automatic watch-mode pushes), the
-// push is not an explicit --full request, and the probe shows a
-// marker-recognized mirror that a live DuckDB process holds
-// (Uninspectable covers both a cross-process lock conflict and the
-// same-process double-open rejection). Under the lock NOTHING about the
-// mirror is inspectable, so a genuine schema/data-version/scope mismatch
-// cannot be distinguished anyway; the lock itself is the only actionable
-// signal, and it clears when the serve process releases the file or is
-// restarted, at which point the next push proceeds normally from the
-// mirror's unadvanced cutoff. An unrecognized locked file never defers: it
-// falls through to ensureReplaceableMirror's fail-closed error so a
-// misconfigured path keeps surfacing loudly even in watch mode.
-func deferLockedRebuild(
-	opts SyncOptions, full bool, probe MirrorProbe,
-) (PushResult, bool) {
-	if !opts.Automatic || full ||
-		!probe.Uninspectable || !probe.RecognizedMirror {
-		return PushResult{}, false
-	}
+// deferredHeldMirrorPush is the successful no-op an automatic push returns
+// when reader processes (a serve holding the mirror read-only) block the
+// incremental push's write open: rebuilding the whole archive on every
+// watcher-triggered batch would be unbounded work, and no cutoff or mirror
+// state advances here, so the next unheld push catches up on everything
+// that changed in the meantime.
+func deferredHeldMirrorPush() PushResult {
 	var result PushResult
 	result.Diagnostics.Deferred = true
 	result.Diagnostics.DeferredReason =
-		"mirror is locked by a serving process; deferring until it is released"
+		"mirror is held open by reader processes; deferring until write access is available"
 	log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
-	return result, true
+	return result
 }
 
 // ensureReplaceableMirror is the fail-closed overwrite guard for rebuilds:
 // before rebuildMirror renames a fresh file over an EXISTING destination,
 // that destination must be positively identified as an agentsview DuckDB
 // mirror (see MirrorProbe.RecognizedMirror). A missing file is always fine
-// (fresh create). A file held by a live DuckDB process (a lock conflict or
-// same-process double-open — the normal rebuild-under-serve case) is
-// recognized only via the identity-verified sidecar marker, since the file
-// itself cannot be inspected. Anything else — a SQLite database, an
-// arbitrary file, a foreign DuckDB database without the agentsview
-// sentinel, a locked file whose marker was written for a different file —
-// must never be replaced: the mirror path is caller-supplied configuration,
-// and pointing it at a real data file (for example the primary sessions.db)
-// must fail instead of destroying that file.
+// (fresh create). Anything else — a SQLite database, an arbitrary file, a
+// foreign DuckDB database without the agentsview sentinel — must never be
+// replaced: the mirror path is caller-supplied configuration, and pointing
+// it at a real data file (for example the primary sessions.db) must fail
+// instead of destroying that file. Served mirrors stay inspectable because
+// serve handles are read-only, so recognition never needs a side channel.
 func ensureReplaceableMirror(path string, probe MirrorProbe) error {
 	if !probe.FileExists || probe.RecognizedMirror {
 		return nil
-	}
-	if probe.MarkerIdentityMismatch {
-		return fmt.Errorf(
-			"refusing to replace %s: the file at %s is not the mirror this "+
-				"marker (%s) was written for — the mirror was replaced by a "+
-				"different file that a DuckDB process now holds open; if the "+
-				"file really is your mirror, stop the serving process and "+
-				"re-run the push (an unlocked push re-verifies and rewrites "+
-				"the marker); if it is not your mirror, point [duckdb].path "+
-				"at a different file",
-			path, path, MirrorMarkerPath(path),
-		)
-	}
-	if probe.Uninspectable {
-		return fmt.Errorf(
-			"refusing to replace %s: existing file is locked by a DuckDB "+
-				"process and has no agentsview marker (%s); if it is your "+
-				"mirror created by an agentsview version without markers, "+
-				"stop the serving process and re-run the push (an unlocked "+
-				"push writes the marker); if it is not your mirror, point "+
-				"[duckdb].path at a different file",
-			path, MirrorMarkerPath(path),
-		)
 	}
 	return fmt.Errorf(
 		"refusing to replace %s: existing file is not an agentsview duckdb "+
@@ -348,20 +324,7 @@ func incrementalPush(
 		return PushResult{}, err
 	}
 	defer func() { _ = s.Close() }()
-	result, err := s.runIncrementalPush(ctx, opts, probe, onProgress)
-	if err != nil {
-		return result, err
-	}
-	// Mirrors created before the sidecar marker existed heal here on their
-	// next unlocked push: without a marker verified against the file's
-	// identity, a later push while a serve process holds the file would
-	// fail closed (see recognizeUninspectableMirror). ensureMirrorMarker
-	// also rewrites a marker whose recorded identity no longer matches the
-	// file this push just updated, keeping the binding self-correcting.
-	if err := ensureMirrorMarker(path, machine); err != nil {
-		return result, err
-	}
-	return result, nil
+	return s.runIncrementalPush(ctx, opts, probe, onProgress)
 }
 
 // runIncrementalPush is incrementalPush's algorithm, split out as a *Sync

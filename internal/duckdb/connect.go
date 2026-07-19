@@ -17,7 +17,10 @@ import (
 
 const quackAttachmentName = "agentsview_remote"
 
-// Open opens a local DuckDB file for the agentsview mirror backend.
+// Open opens a local DuckDB file read-write for the agentsview mirror
+// backend. Only push paths use it: DuckDB's write lock is exclusive across
+// processes, so a read-write handle blocks every other open on the file.
+// Serve and probe paths use OpenReadOnly instead.
 func Open(path string) (*sql.DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("duckdb path is required")
@@ -26,9 +29,29 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening duckdb file: %w", err)
 	}
-	// DuckDB permits one writer per database file. Keeping a single
-	// pooled connection avoids surprising file-lock contention while
-	// the mirror sync path is still process-local.
+	return configureOpenedDuckDB(db)
+}
+
+// OpenReadOnly opens an existing local DuckDB file read-only. Read-only
+// handles coexist across processes (and, for the same literal DSN, share one
+// in-process instance), so serve processes and probes never take DuckDB's
+// exclusive write lock on the mirror and never create a missing file.
+func OpenReadOnly(path string) (*sql.DB, error) {
+	if path == "" {
+		return nil, fmt.Errorf("duckdb path is required")
+	}
+	db, err := openDuckDB(path + "?access_mode=read_only")
+	if err != nil {
+		return nil, fmt.Errorf("opening duckdb file %s read-only: %w", path, err)
+	}
+	return configureOpenedDuckDB(db)
+}
+
+// configureOpenedDuckDB applies the shared connection settings: a single
+// pooled connection (DuckDB permits one writer per database file, and a
+// single connection avoids surprising file-lock contention) and the thread
+// count.
+func configureOpenedDuckDB(db *sql.DB) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	if err := configureDuckDBThreads(db); err != nil {
@@ -85,13 +108,8 @@ func ReadStatusFromConfig(
 }
 
 // readLocalMirrorStatus reads status from a local mirror file without ever
-// creating it. NewStoreFromConfig opens a local path read-write, which
-// CREATES the database file when it is missing — and that fresh empty file
-// then lacks the agentsview sentinel, so the next push refuses to replace
-// it and mirror initialization stays blocked until the file is removed by
-// hand. A missing file instead reports SyncStatus.MirrorMissing; an
-// existing file is opened with openReadOnlyMirror, which can never create
-// or write.
+// creating it. A missing file reports SyncStatus.MirrorMissing; an existing
+// file is opened with OpenReadOnly, which can never create or write.
 func readLocalMirrorStatus(
 	ctx context.Context, cfg config.DuckDBConfig,
 ) (SyncStatus, error) {
@@ -105,7 +123,7 @@ func readLocalMirrorStatus(
 			"statting duckdb mirror %s: %w", cfg.Path, err,
 		)
 	}
-	conn, err := openReadOnlyMirror(cfg.Path)
+	conn, err := OpenReadOnly(cfg.Path)
 	if err != nil {
 		return SyncStatus{}, err
 	}

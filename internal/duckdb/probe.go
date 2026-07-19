@@ -18,62 +18,32 @@ type MirrorProbe struct {
 	FileExists bool
 	ShapeOK    bool   // tables+columns+metadata parse
 	ShapeIssue string // human-readable reason when !ShapeOK
-	// LockConflict is true when ShapeIssue is specifically a DuckDB
-	// cross-process lock conflict (another process, typically a running
-	// 'duckdb serve' or 'duckdb quack serve', already has the mirror file
-	// open) rather than a genuinely malformed or incompatible file. See
-	// isMirrorLockConflictError.
+	// LockConflict is true when ShapeIssue is specifically a conflicting
+	// hold on the file rather than a genuinely malformed or incompatible
+	// one: a cross-process DuckDB lock conflict (see
+	// isMirrorLockConflictError) or duckdb-go's same-process double-open
+	// rejection (see isMirrorOpenInSameProcessError). Serve processes hold
+	// the mirror read-only, and read-only handles coexist with the probe's
+	// own read-only open, so a probe-time conflict means a WRITER holds the
+	// file: another push in flight, or a serve process from a build that
+	// predates the read-only serve change. Push fails closed on it.
 	LockConflict bool
-	// Uninspectable is true when the file's contents could not be examined
-	// because a live DuckDB process holds the file: either a cross-process
-	// lock conflict (LockConflict) or duckdb-go's same-process double-open
-	// rejection (see isMirrorOpenInSameProcessError). Recognition then
-	// rests solely on the sidecar marker file (see RecognizedMirror and
-	// MirrorMarkerPath).
-	Uninspectable bool
 	// RecognizedMirror is true when the existing file is positively
-	// identified as an agentsview DuckDB mirror. An OPENABLE file is
-	// recognized only when it carries the agentsview sentinel: a
-	// sync_metadata(key, value) table containing the
+	// identified as an agentsview DuckDB mirror: it carries the agentsview
+	// sentinel, a sync_metadata(key, value) table containing the
 	// schemaVersionMetadataKey row, which every mirror generation writes at
 	// schema creation (see createSchema). Generic table names alone are not
 	// enough — a foreign DuckDB database that happens to have a table named
 	// "sessions" or "sync_metadata" must never be recognized, because
 	// recognition lets a rebuild atomically overwrite the file. A
 	// wrong-schema-version or shape-incompatible mirror still carries the
-	// sentinel and is still recognized.
-	//
-	// A file that cannot be inspected because a DuckDB process already
-	// holds it — a cross-process lock conflict (the normal state while a
-	// serve process has the mirror open) or a same-process double-open
-	// rejection — is recognized only when the sidecar ownership marker
-	// (see MirrorMarkerPath) exists next to it AND the marker's recorded
-	// file identity matches the locked file's current identity (see
-	// verifyMirrorMarker). The locked file's content is impossible to
-	// inspect (the DuckDB lock binds the inode, so even a hardlink alias
-	// hits the same lock), but its ATTRIBUTES can still be statted, and
-	// every successful push writes the marker bound to the exact file it
-	// produced; requiring a verified marker keeps the core push-under-serve
-	// flow working while making both a misconfigured path that points at a
-	// FOREIGN DuckDB database another process is serving and a stale marker
-	// left behind after the mirror was manually replaced by a different
-	// file fail closed instead of being atomically overwritten by a
-	// rebuild. The remaining assumption is only that nobody forges a marker
-	// recording the foreign file's identity, which already requires local
-	// write access next to the mirror. Push refuses to rebuild over an
+	// sentinel and is still recognized. Push refuses to rebuild over an
 	// existing unrecognized file so a misdirected path (for example the
 	// primary SQLite archive) is never silently replaced by a mirror
 	// rebuild.
 	RecognizedMirror bool
-	// MarkerIdentityMismatch is true when an uninspectable file has a
-	// parseable sidecar marker whose recorded file identity does NOT match
-	// the file currently at the path: the marker was written for a
-	// different file, so the file is not recognized. Reported separately so
-	// ensureReplaceableMirror can explain the mismatch instead of claiming
-	// the marker is missing.
-	MarkerIdentityMismatch bool
-	SchemaVersion          int
-	DataVersion            int
+	SchemaVersion    int
+	DataVersion      int
 	// SourceDatabaseID is the database_id of the SQLite archive generation
 	// the mirror was built from (see mirrorMetadata.SourceDatabaseID). "" on
 	// mirrors written before the id was recorded.
@@ -91,6 +61,9 @@ type MirrorProbe struct {
 // nil error; a present-but-unopenable or malformed file is reported with
 // ShapeOK false rather than an error, so callers can uniformly decide to
 // rebuild instead of threading a distinct error path through every caller.
+// The probe opens read-only, so it coexists with read-only serve handles on
+// the same file; only a writer's exclusive lock makes a file unopenable
+// (see MirrorProbe.LockConflict).
 func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return MirrorProbe{}, nil
@@ -98,70 +71,38 @@ func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 		return MirrorProbe{}, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
 
-	conn, err := openReadOnlyMirror(path)
+	conn, err := OpenReadOnly(path)
 	if err != nil {
-		probe := MirrorProbe{
-			FileExists:    true,
-			ShapeIssue:    err.Error(),
-			LockConflict:  isMirrorLockConflictError(err),
-			Uninspectable: isMirrorUninspectableError(err),
-		}
-		probe.RecognizedMirror, probe.MarkerIdentityMismatch =
-			recognizeUninspectableMirror(path, err)
-		return probe, nil
+		return MirrorProbe{
+			FileExists:   true,
+			ShapeIssue:   err.Error(),
+			LockConflict: isMirrorHeldError(err),
+		}, nil
 	}
 	defer func() { _ = conn.Close() }()
 
-	return probeOpenMirror(ctx, conn, path), nil
+	return probeOpenMirror(ctx, conn), nil
 }
 
-// isMirrorUninspectableError reports whether err means a live DuckDB
-// process holds the file, so its contents cannot be examined at all: a
-// cross-process lock conflict or duckdb-go's same-process double-open
-// rejection. Any other error means the file is simply not an openable
-// DuckDB database.
-func isMirrorUninspectableError(err error) bool {
+// isMirrorHeldError reports whether err means a live handle blocks opening
+// the file: a cross-process lock conflict or duckdb-go's same-process
+// double-open rejection. Any other error means the file is simply not an
+// openable DuckDB database.
+func isMirrorHeldError(err error) bool {
 	return isMirrorLockConflictError(err) || isMirrorOpenInSameProcessError(err)
 }
 
-// recognizeUninspectableMirror decides RecognizedMirror (and
-// MarkerIdentityMismatch) for a file a live DuckDB process is holding: the
-// open/query error proves a real DuckDB database sits at path, but not that
-// it is OURS, so recognition additionally requires the sidecar ownership
-// marker every successful push writes, verified against the locked file's
-// current filesystem identity (see verifyMirrorMarker and
-// MirrorProbe.RecognizedMirror). An error that is not a lock conflict or
-// same-process rejection never recognizes, marker or not.
-func recognizeUninspectableMirror(
-	path string, err error,
-) (recognized, identityMismatch bool) {
-	if !isMirrorUninspectableError(err) {
-		return false, false
-	}
-	switch verifyMirrorMarker(path) {
-	case markerVerified:
-		return true, false
-	case markerIdentityMismatch:
-		return false, true
-	case markerUnusable:
-		return false, false
-	default:
-		return false, false
-	}
-}
-
 // isMirrorLockConflictError reports whether err indicates DuckDB refused to
-// open the mirror because another process already holds it open — the
-// signature of a running 'duckdb serve' or 'duckdb quack serve'. DuckDB is
-// single-writer/exclusive across processes: even a read-only open cannot
-// coexist with another process's handle on the same file, so while the
-// mirror is served, incremental update is impossible and rebuild is the
-// only way to make progress. Rebuild-into-temp-then-rename still works
-// during this window because the lock the serving process holds binds the
-// inode it opened, not the path string: swapMirrorFile's rename replaces
-// what the path points at without touching that inode, so the serving
-// process keeps running against its (now unlinked but still open) old
-// handle until it notices the replacement and reopens.
+// open the mirror because another process holds a conflicting lock on it.
+// Serve processes hold the mirror read-only and coexist with other
+// read-only opens, so a read-only open (probe, serve) only hits this when a
+// WRITER holds the file, and a write open (incremental push) hits it while
+// any read-only holder exists. Rebuild-into-temp-then-rename still works
+// while readers hold the file because their locks bind the inode they
+// opened, not the path string: swapMirrorFile's rename replaces what the
+// path points at without touching that inode, so a serving process keeps
+// running against its (now unlinked but still open) old handle until it
+// notices the replacement and reopens.
 func isMirrorLockConflictError(err error) bool {
 	if err == nil {
 		return false
@@ -173,41 +114,23 @@ func isMirrorLockConflictError(err error) bool {
 
 // isMirrorOpenInSameProcessError reports whether err is duckdb-go's
 // same-process double-open rejection ("Can't open a connection to same
-// database file with a different configuration than existing
-// connections"): the probe opens read-only, so it hits this whenever the
-// SAME process already holds the mirror open read-write (a live Store
-// while a push runs in-process). Like a cross-process lock conflict, it
-// proves the path is a live DuckDB database that cannot be inspected right
-// now; whether the file counts as a recognized mirror then depends on the
-// sidecar marker (see recognizeUninspectableMirror).
+// database file with a different configuration than existing connections"):
+// duckdb-go caches instances per literal DSN, so opening the same path with
+// a DIFFERENT access mode than an existing in-process handle is rejected. A
+// read-only probe hits it when the same process holds the mirror read-write
+// (a push in flight), and a push's write open hits it when the same process
+// holds the mirror read-only (a serving Store). Same-DSN opens share the
+// cached instance instead and never hit this.
 func isMirrorOpenInSameProcessError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "same database file")
 }
 
-// openReadOnlyMirror opens an existing DuckDB file read-only so probing can
-// never create or write to it. DuckDB accepts "access_mode=read_only" as a
-// DSN query parameter, which the duckdb-go driver forwards to the native
-// config; a read-only connection rejects any writer that would otherwise
-// race the mirror's owner (a running push or serve process).
-func openReadOnlyMirror(path string) (*sql.DB, error) {
-	conn, err := openDuckDB(path + "?access_mode=read_only")
-	if err != nil {
-		return nil, fmt.Errorf("opening duckdb mirror %s read-only: %w", path, err)
-	}
-	conn.SetMaxOpenConns(1)
-	conn.SetMaxIdleConns(1)
-	return conn, nil
-}
-
-func probeOpenMirror(ctx context.Context, conn *sql.DB, path string) MirrorProbe {
+func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe := MirrorProbe{FileExists: true}
 
 	existing, err := loadColumns(ctx, conn)
 	if err != nil {
 		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
-		probe.Uninspectable = isMirrorUninspectableError(err)
-		probe.RecognizedMirror, probe.MarkerIdentityMismatch =
-			recognizeUninspectableMirror(path, err)
 		return probe
 	}
 	// Recognition is looser than shape validity (a mirror from another
@@ -217,9 +140,6 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB, path string) MirrorProbe
 	recognized, err := hasMirrorSentinel(ctx, conn, existing)
 	if err != nil {
 		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
-		probe.Uninspectable = isMirrorUninspectableError(err)
-		probe.RecognizedMirror, probe.MarkerIdentityMismatch =
-			recognizeUninspectableMirror(path, err)
 		return probe
 	}
 	probe.RecognizedMirror = recognized
@@ -276,17 +196,16 @@ func hasMirrorSentinel(
 // classifyProbeError converts an error encountered while querying an
 // already-open mirror connection (inside loadColumns or
 // readMirrorMetadata) into the ShapeIssue/LockConflict pair MirrorProbe
-// reports. duckdb-go opens connections lazily, so a cross-process lock
-// conflict often does not surface from openReadOnlyMirror itself but only
-// once the first real query runs against the connection; without routing
-// that error through isMirrorLockConflictError here as well, it would
-// degrade to a generic shape issue instead of being recognized as a lock
-// conflict (see isMirrorLockConflictError and rebuildReason).
+// reports. duckdb-go opens connections lazily, so a lock conflict often
+// does not surface from OpenReadOnly itself but only once the first real
+// query runs against the connection; without routing that error through
+// isMirrorHeldError here as well, it would degrade to a generic shape issue
+// instead of being recognized as a lock conflict.
 func classifyProbeError(err error) (shapeIssue string, lockConflict bool) {
 	if err == nil {
 		return "", false
 	}
-	return err.Error(), isMirrorLockConflictError(err)
+	return err.Error(), isMirrorHeldError(err)
 }
 
 // mirrorShapeIssueFromColumns reports the first missing table/column found
@@ -332,17 +251,16 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // can proceed. It is the diagnostic/logging counterpart to NeedsRebuild:
 // every condition NeedsRebuild's bool contract covers (missing/damaged
 // file, schema/data version drift, scope change) is reported here with the
-// specific "why", plus four conditions NeedsRebuild does not see: a
-// cross-process lock conflict (LockConflict), the mirror having been last
-// pushed by a different machine name than the one pushing now, the mirror
-// having been built from a different SQLite archive generation than the one
-// pushing now (see the source-database-id paragraph below), and the
-// mirror's deletion journal cursor sitting ahead of the local archive's own
-// counter, which happens when the local archive was rebuilt or replaced
-// (e.g. by a resync) and its deletion journal no longer covers the range
-// the mirror already advanced past — applying a delta in that state would
-// otherwise fail with an invalid publication window rather than just
-// rebuilding.
+// specific "why", plus three conditions NeedsRebuild does not see: the
+// mirror having been last pushed by a different machine name than the one
+// pushing now, the mirror having been built from a different SQLite archive
+// generation than the one pushing now (see the source-database-id paragraph
+// below), and the mirror's deletion journal cursor sitting ahead of the
+// local archive's own counter, which happens when the local archive was
+// rebuilt or replaced (e.g. by a resync) and its deletion journal no longer
+// covers the range the mirror already advanced past — applying a delta in
+// that state would otherwise fail with an invalid publication window rather
+// than just rebuilding.
 //
 // The source-database-id check exists because every incremental bookkeeping
 // token the mirror stores (push cutoff, deletion and identity revisions) is
@@ -355,8 +273,7 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // database_id for the fresh archive (internal/db/orphaned.go excludes the
 // key from the metadata it carries over), so the first push after ANY
 // resync is a full rebuild — paralleling the PostgreSQL push's
-// database_id-scoped cursors and superseding reliance on deletion-journal
-// continuity across a resync (the deletion-cursor check below remains as
+// database_id-scoped cursors (the deletion-cursor check below remains as
 // defense in depth for same-archive paths). A recorded EMPTY id also
 // rebuilds: identity-less mirrors only come from earlier builds of this
 // unreleased branch, so they simply rebuild once and record the id.
@@ -384,10 +301,6 @@ func rebuildReason(
 		return "--full requested"
 	case !probe.FileExists:
 		return "missing file"
-	case probe.LockConflict:
-		return "mirror locked by another process — likely a running serve; " +
-			"rebuilding from scratch because incremental update cannot " +
-			"proceed while it is served"
 	case !probe.ShapeOK:
 		return "shape issue: " + probe.ShapeIssue
 	case probe.SchemaVersion != SchemaVersion:

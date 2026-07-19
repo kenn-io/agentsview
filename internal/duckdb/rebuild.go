@@ -21,9 +21,7 @@ import (
 // SweepStaleMirrorReopenAliases) can safely run before the destination is
 // even probed or recognized as ours: they only ever delete inside this
 // directory and never touch SIBLINGS of the mirror, whose names a user's
-// own files could coincidentally match. The sidecar ownership marker
-// (MirrorMarkerPath) deliberately stays a sibling: it must remain readable
-// while the mirror is locked and is never a sweep target.
+// own files could coincidentally match.
 const mirrorWorkDirSuffix = ".agentsview-work"
 
 // mirrorWorkDirPath returns the path of the private work directory for the
@@ -87,14 +85,6 @@ func rebuildMirror(
 		return result, err
 	}
 	success = true
-	// The marker is written after the swap so it can never exist without a
-	// real mirror at path, and so it records the filesystem identity of
-	// the final, swapped-in file (writeMirrorMarker stats path itself). A
-	// failure here is reported as a push error (see writeMirrorMarker),
-	// but the freshly swapped mirror itself is intact.
-	if err := writeMirrorMarker(path, machine); err != nil {
-		return result, err
-	}
 	result.Diagnostics.Full = true
 	return result, nil
 }
@@ -443,7 +433,7 @@ func validateBuiltMirror(ctx context.Context, tmpPath string, wantSessions int) 
 			probe.SchemaVersion, SchemaVersion,
 		)
 	}
-	conn, err := openReadOnlyMirror(tmpPath)
+	conn, err := OpenReadOnly(tmpPath)
 	if err != nil {
 		return fmt.Errorf("validating rebuilt duckdb mirror: %w", err)
 	}

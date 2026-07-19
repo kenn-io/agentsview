@@ -208,38 +208,27 @@ Environment variables override the config file:
   stops serving during the switch and, if the replacement is incompatible,
   stays down (retrying with backoff) until a good file shows up. Run pushes
   before or between serve sessions when that timing matters.
-- **A manual push rebuilds while a serve process holds the mirror open;
-  watch-mode pushes defer instead** — DuckDB is single-writer/exclusive
-  across processes, so a second process (including a read-only probe)
-  cannot open a mirror file that `duckdb serve` or `duckdb quack serve`
-  already has open. An explicit `duckdb push` detects this lock conflict
-  and rebuilds the mirror from scratch instead of failing; incremental
-  update is not possible while the mirror is served. The automatic pushes
-  of `duckdb push --watch` instead skip the locked mirror entirely
-  (logging the deferral) so a long-running serve does not turn every
-  changed batch into a full-archive rebuild; the mirror's push cutoff is
-  not advanced by a deferred push, so once the serve process releases the
-  file or is restarted, the next push catches up on everything that
-  changed in the meantime. Because a locked file's content cannot be
-  inspected at all, push
-  only rebuilds over it when the sidecar ownership marker
-  (`<mirror-path>.agentsview-mirror`, written next to the mirror by every
-  successful push) is present and records the filesystem identity of the
-  exact file currently at the path; a locked file without a matching
-  marker makes the push fail with an error instead of overwriting what
-  might not be an agentsview mirror at all — including when a leftover
-  marker still sits next to a path whose mirror was manually replaced by
-  a different database. Mirrors created by versions that predate the
-  marker (or its identity fields) gain a verified marker automatically on
-  their next unlocked push — if such a mirror is served continuously, stop
-  the serve process once, run `duckdb push`, and restart serve; every
-  later push-under-serve then works again. On POSIX platforms, where
-  rename is atomic even against an open
-  destination handle, the running serve process picks up the rebuilt file
-  automatically (see the reopen behavior above) without needing a restart.
-  On Windows, the serve process's open handle on the destination file can
-  block the rename outright; `duckdb push` retries briefly and then fails
-  with an error asking you to stop the serving process and re-run the push.
-  If the cost of rebuilding on every push matters, stop
-  `duckdb serve`/`duckdb quack serve` before pushing and restart it
-  afterward.
+- **Serve holds the mirror read-only; pushes probe freely** — `duckdb
+  serve` and `duckdb quack serve` open the mirror with DuckDB's read-only
+  access mode, and read-only handles coexist across processes. A push can
+  therefore always inspect a served mirror; only DuckDB's exclusive WRITE
+  lock conflicts. While serve processes hold the file, an incremental
+  push cannot acquire write access: an explicit `duckdb push` falls back
+  to a full rebuild (temp file plus atomic rename, which never opens the
+  destination for writing), while the automatic pushes of `duckdb push
+  --watch` defer instead (logging the deferral) so a long-running serve
+  does not turn every changed batch into a full-archive rebuild. A
+  deferred push does not advance the mirror's push cutoff, so once the
+  serve process releases the file the next push catches up on everything
+  that changed in the meantime. A push that finds the mirror held
+  READ-WRITE fails with an error naming the holder: that is either
+  another push in flight or a serve process built before serve went
+  read-only — upgrading such a serve process needs a one-time restart.
+  Leftover `<mirror-path>.agentsview-mirror` sidecar files from older
+  development builds are inert and can be deleted. On POSIX platforms,
+  where rename is atomic even against an open destination handle, a
+  running serve process picks up a rebuilt file automatically (see the
+  reopen behavior above) without needing a restart. On Windows, the serve
+  process's open handle on the destination file can block the rename
+  outright; `duckdb push` retries briefly and then fails with an error
+  asking you to stop the serving process and re-run the push.

@@ -507,13 +507,7 @@ func TestSweepStaleTempFilesRemovesOnlyOldFilesInsideWorkDir(t *testing.T) {
 	userNotes := writeOldFile(filepath.Join(workDir, "mirror.duckdb.tmp-notes.txt"))
 	emptySuffix := writeOldFile(filepath.Join(workDir, "mirror.duckdb.tmp-"))
 
-	// writeMirrorMarker binds the marker to the mirror file's identity, so
-	// the mirror file itself must exist first. The marker stays a SIBLING of
-	// the mirror and must never be swept.
 	require.NoError(t, os.WriteFile(path, []byte("mirror"), 0o644))
-	marker := MirrorMarkerPath(path)
-	require.NoError(t, writeMirrorMarker(path, "m"))
-	require.NoError(t, os.Chtimes(marker, oldTime, oldTime))
 
 	require.NoError(t, sweepStaleTempFiles(path))
 
@@ -530,8 +524,7 @@ func TestSweepStaleTempFilesRemovesOnlyOldFilesInsideWorkDir(t *testing.T) {
 	assert.FileExists(t, emptySuffix,
 		"a bare .tmp- name (empty suffix) is not a generated temp file and must survive")
 	assert.DirExists(t, workDir, "the sweep must never remove the work directory itself")
-	assert.FileExists(t, marker,
-		"the sidecar ownership marker is a sibling and must never be swept")
+	assert.FileExists(t, path, "the mirror file itself must never be swept")
 }
 
 // TestSweepStaleTempFilesMissingWorkDirIsNoOp guards the common case: no

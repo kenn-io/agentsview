@@ -277,20 +277,6 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 			},
 		},
 		{
-			// A stale sidecar marker must not weaken openable-file
-			// recognition: for a file the probe can actually inspect, the
-			// in-database sentinel is the only recognition signal.
-			name: "foreign duckdb database with stale marker",
-			write: func(t *testing.T, path string) {
-				conn, err := Open(path)
-				require.NoError(t, err)
-				defer conn.Close()
-				_, err = conn.Exec(`CREATE TABLE unrelated (x INTEGER)`)
-				require.NoError(t, err)
-				require.NoError(t, writeMirrorMarker(path, "m"))
-			},
-		},
-		{
 			name: "foreign duckdb database with sync_metadata but no agentsview key",
 			write: func(t *testing.T, path string) {
 				conn, err := Open(path)
@@ -331,216 +317,64 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 	}
 }
 
-// TestPushWritesMirrorMarkerAfterRebuild verifies a successful rebuild
-// leaves the sidecar ownership marker next to the mirror (one JSON line;
-// existence is the recognition signal, content is informational).
-func TestPushWritesMirrorMarkerAfterRebuild(t *testing.T) {
-	ctx := context.Background()
-	local, path := newPushFixture(t, 1)
-
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(MirrorMarkerPath(path))
-	require.NoError(t, err)
-	var content map[string]any
-	require.NoError(t, json.Unmarshal(data, &content))
-	assert.Equal(t, float64(SchemaVersion), content["schema_version"])
-	assert.Equal(t, "m", content["machine"])
-	assert.NotEmpty(t, content["written_at"])
-}
-
-// TestPushHealsMissingMirrorMarkerOnIncrementalPush covers the pre-marker
-// upgrade path: a mirror created by an agentsview version without the
-// sidecar marker regains one at the end of its next unlocked incremental
-// push, so later locked probes recognize it again.
-func TestPushHealsMissingMirrorMarkerOnIncrementalPush(t *testing.T) {
+// TestPushFailsClosedWhenWriterHoldsMirror pins the probe-time fail-closed
+// rule: a read-only probe only fails to open a file another handle holds
+// when that handle is a WRITER (read-only handles coexist). A writer means
+// another push in flight — or a serve process from a build that still
+// opened the mirror read-write — and the push must fail with an actionable
+// error, file untouched, rather than defer or rebuild over it. The
+// same-process double-open rejection (a read-write handle held in this
+// process) is the in-process-reproducible stand-in for a cross-process
+// writer's lock conflict; both classify identically (see isMirrorHeldError).
+func TestPushFailsClosedWhenWriterHoldsMirror(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(MirrorMarkerPath(path)))
-
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.False(t, res.Diagnostics.Full)
-	assert.FileExists(t, MirrorMarkerPath(path))
-}
-
-// TestPushFailsClosedWhenLiveMirrorHasNoMarker is the FINDING 1 regression:
-// a file some DuckDB process is holding open cannot be inspected, so before
-// the sidecar marker existed it was recognized on faith and a rebuild would
-// atomically overwrite it — even when the path was misconfigured to point at
-// a foreign served database. The same-process double-open rejection (a live
-// handle in this process, exactly what a serving Store looks like) is the
-// in-process-reproducible stand-in for a cross-process lock conflict: both
-// probe as Uninspectable and both must fail closed, file untouched, when no
-// marker exists next to the file.
-// Byte reads bracket the live-handle window instead of overlapping it: the
-// "before" bytes are captured before Open and the "after" bytes only after
-// Close, because Windows sharing semantics reject reading a file another
-// DuckDB handle has open (POSIX allows it). The push under test runs while
-// the handle is held either way, which is the scenario being pinned.
-func TestPushFailsClosedWhenLiveMirrorHasNoMarker(t *testing.T) {
-	ctx := context.Background()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(MirrorMarkerPath(path)))
-	before, err := os.ReadFile(path)
 	require.NoError(t, err)
 
 	held, err := Open(path)
 	require.NoError(t, err)
 
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no agentsview marker")
-	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
+	for _, full := range []bool{false, true} {
+		_, err = Push(ctx, path, local, "m", SyncOptions{}, full, nil)
+		require.Error(t, err, "full=%v", full)
+		assert.Contains(t, err.Error(), "read-write", "full=%v", full)
+	}
+	_, err = Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
+	require.Error(t, err,
+		"an automatic push must also fail closed on a probe-time writer lock")
 
 	require.NoError(t, held.Close())
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, before, after,
-		"a refused push must leave the existing file byte-identical")
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
-// TestPushFailsClosedWhenLiveMirrorMarkerIdentityMismatches closes the
-// stale-marker residual edge of FINDING 1: after the mirror is manually
-// replaced by an unrelated DuckDB database that a live process then holds
-// open, the leftover marker still sits next to the path but records the
-// OLD mirror's filesystem identity. The push must fail closed with the
-// identity-mismatch error and leave the foreign file byte-identical, not
-// atomically overwrite it. Byte reads bracket the live-handle window for
-// Windows sharing semantics (see TestPushFailsClosedWhenLiveMirrorHasNoMarker).
-func TestPushFailsClosedWhenLiveMirrorMarkerIdentityMismatches(t *testing.T) {
-	ctx := context.Background()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	require.FileExists(t, MirrorMarkerPath(path))
-
-	// Manually swap a foreign DuckDB database into the exact mirror path.
-	// It is created next to the still-live mirror, so the two files have
-	// distinct filesystem identities even on inode-recycling filesystems.
-	foreignPath := filepath.Join(filepath.Dir(path), "foreign.duckdb")
-	foreign, err := Open(foreignPath)
-	require.NoError(t, err)
-	_, err = foreign.Exec(`CREATE TABLE unrelated (x INTEGER)`)
-	require.NoError(t, err)
-	require.NoError(t, foreign.Close())
-	require.NoError(t, os.Rename(foreignPath, path))
-	before, err := os.ReadFile(path)
-	require.NoError(t, err)
-
-	held, err := Open(path)
-	require.NoError(t, err)
-
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not the mirror this marker")
-	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
-
-	require.NoError(t, held.Close())
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, before, after,
-		"a refused push must leave the foreign file byte-identical")
-}
-
-// TestPushRebuildRebindsMarkerToSwappedFile pins the marker's identity
-// binding across a rebuild: the swap renames a brand-new file over the
-// mirror path, so the recorded identity from the previous push no longer
-// describes the file at the path, and the freshly written marker must
-// record the post-swap file's identity instead.
-func TestPushRebuildRebindsMarkerToSwappedFile(t *testing.T) {
-	ctx := context.Background()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	first := readMarkerIdentity(t, path)
-
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, true, nil)
-	require.NoError(t, err)
-
-	second := readMarkerIdentity(t, path)
-	current, err := fileIdentityForPath(path)
-	require.NoError(t, err)
-	assert.Equal(t, current, second,
-		"the marker must record the post-swap file's identity")
-	assert.NotEqual(t, first, second,
-		"a rebuild swaps in a new file, so the recorded identity must change")
-}
-
-// TestPushRewritesStaleMarkerIdentityOnIncrementalPush pins the
-// self-healing side of the identity binding: a successful unlocked push
-// proves the file at the path is the mirror it just wrote, so a marker
-// whose recorded identity disagrees (or records none) is rewritten to
-// match instead of being left to fail the next locked probe.
-func TestPushRewritesStaleMarkerIdentityOnIncrementalPush(t *testing.T) {
-	ctx := context.Background()
-	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-
-	stale := readMarker(t, path)
-	stale.FileIdentity = fileIdentity{A: 1, B: 2, C: 3}
-	data, err := json.Marshal(stale)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(MirrorMarkerPath(path), data, 0o644))
-
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.False(t, res.Diagnostics.Full)
-
-	current, err := fileIdentityForPath(path)
-	require.NoError(t, err)
-	assert.Equal(t, current, readMarkerIdentity(t, path),
-		"an unlocked push must rewrite a marker whose identity went stale")
-}
-
-func readMarker(t *testing.T, path string) mirrorMarkerContent {
-	t.Helper()
-	data, err := os.ReadFile(MirrorMarkerPath(path))
-	require.NoError(t, err)
-	var content mirrorMarkerContent
-	require.NoError(t, json.Unmarshal(data, &content))
-	return content
-}
-
-func readMarkerIdentity(t *testing.T, path string) fileIdentity {
-	t.Helper()
-	identity := readMarker(t, path).FileIdentity
-	require.False(t, identity.isZero(),
-		"every push-written marker must record a file identity")
-	return identity
-}
-
-// TestPushRebuildsOverLiveMirrorWithMarker is the recognized side of the
-// FINDING 1 boundary: with the sidecar marker present, a mirror held open by
-// a live DuckDB handle (the push-under-serve case) still rebuilds via
-// temp-file-plus-rename exactly as before the marker gate existed, and the
-// rebuild refreshes the marker.
-func TestPushRebuildsOverLiveMirrorWithMarker(t *testing.T) {
+// TestPushExplicitRebuildsWhileMirrorHeldByReaders covers the explicit-push
+// side of the push-under-serve flow: a serving process holds the mirror
+// read-only, so the probe still inspects it (same-DSN read-only opens share
+// the in-process instance; across processes read-only locks coexist), the
+// incremental path is chosen, and only the incremental write open fails.
+// An explicit push then falls back to a full rebuild — which never
+// write-opens the destination (temp file plus atomic rename) — and records
+// the reader-hold reason.
+func TestPushExplicitRebuildsWhileMirrorHeldByReaders(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
-	require.FileExists(t, MirrorMarkerPath(path))
 
-	held, err := Open(path)
+	held, err := OpenReadOnly(path)
 	require.NoError(t, err)
 
+	appendMessage(t, local, "sess-1")
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full,
-		"a held mirror cannot be updated incrementally; push must rebuild")
-	assert.FileExists(t, MirrorMarkerPath(path))
+		"a reader-held mirror cannot be updated incrementally; an explicit push must rebuild")
+	assert.Contains(t, res.Diagnostics.RebuildReason, "held open by reader processes")
 
 	require.NoError(t, held.Close())
-	assertMirrorMessageCount(t, path, "sess-1", 2)
+	assertMirrorMessageCount(t, path, "sess-1", 3)
 }
 
 // TestPushIncrementalMirrorsSubagentLinkBackfill is the FINDING 4
@@ -613,13 +447,15 @@ func assertMirrorSessionRelationship(
 	assert.Equal(t, wantRelationship, relationship, "mirror relationship_type")
 }
 
-// TestPushDefersLockedRebuildForAutomaticPushes is the FINDING 3
-// regression: a watch-mode (automatic) push that hits a recognized mirror
-// held by a live DuckDB process must return a successful deferred no-op —
-// not rebuild the whole archive on every changed batch — and must not
-// advance the mirror's push cutoff, so the next unlocked push catches up
-// on everything that changed while the mirror was held.
-func TestPushDefersLockedRebuildForAutomaticPushes(t *testing.T) {
+// TestPushDefersHeldMirrorForAutomaticPushes is the bounded-watch-cost
+// contract: a watch-mode (automatic) incremental push whose write open is
+// blocked by a read-only serve handle must return a successful deferred
+// no-op — not rebuild the whole archive on every changed batch — and must
+// not advance the mirror's push cutoff, so the next unheld push catches up
+// on everything that changed while the mirror was held. The probe itself
+// still succeeds while the reader holds the file (read-only opens coexist),
+// which is also asserted here via the mid-hold ProbeMirror call.
+func TestPushDefersHeldMirrorForAutomaticPushes(t *testing.T) {
 	ctx := context.Background()
 	watchOpts := SyncOptions{Automatic: true}
 	local, path := newPushFixture(t, 1)
@@ -630,77 +466,34 @@ func TestPushDefersLockedRebuildForAutomaticPushes(t *testing.T) {
 	require.True(t, baseline.ShapeOK)
 
 	appendMessage(t, local, "sess-1")
-	held, err := Open(path)
+	held, err := OpenReadOnly(path)
 	require.NoError(t, err)
 
 	res, err := Push(ctx, path, local, "m", watchOpts, false, nil)
 	require.NoError(t, err)
-	assert.True(t, res.Diagnostics.Deferred, "the locked push must defer")
-	assert.Contains(t, res.Diagnostics.DeferredReason, "locked by a serving process")
+	assert.True(t, res.Diagnostics.Deferred, "the held push must defer")
+	assert.Contains(t, res.Diagnostics.DeferredReason, "held open by reader processes")
 	assert.False(t, res.Diagnostics.Full, "a deferred push must not rebuild")
 	assert.Zero(t, res.SessionsPushed, "a deferred push must not write sessions")
 
-	require.NoError(t, held.Close())
-	after, err := ProbeMirror(ctx, path)
+	midHold, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
-	assert.Equal(t, baseline.LastPushCutoff, after.LastPushCutoff,
+	assert.True(t, midHold.ShapeOK,
+		"a probe must still inspect a mirror held read-only by a serve handle")
+	assert.Equal(t, baseline.LastPushCutoff, midHold.LastPushCutoff,
 		"a deferred push must not advance the mirror's push cutoff")
+
+	require.NoError(t, held.Close())
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 
 	catchUp, err := Push(ctx, path, local, "m", watchOpts, false, nil)
 	require.NoError(t, err)
 	assert.False(t, catchUp.Diagnostics.Deferred)
 	assert.False(t, catchUp.Diagnostics.Full,
-		"the unlocked catch-up push must be incremental, not a rebuild")
+		"the unheld catch-up push must be incremental, not a rebuild")
 	assert.Equal(t, 1, catchUp.SessionsPushed,
 		"the catch-up push must pick up the change made while the mirror was held")
 	assertMirrorMessageCount(t, path, "sess-1", 3)
-}
-
-// TestDeferLockedRebuildConditions pins exactly when an automatic push may
-// defer: only with the opt-in set, no --full request, and a
-// marker-recognized mirror held by a live DuckDB process. Everything else
-// keeps today's behavior — full rebuilds still rebuild, an unrecognized
-// locked file still falls through to the fail-closed overwrite guard, and
-// an inspectable mirror never defers.
-func TestDeferLockedRebuildConditions(t *testing.T) {
-	heldRecognized := MirrorProbe{
-		FileExists: true, Uninspectable: true, LockConflict: true,
-		RecognizedMirror: true,
-	}
-	tests := []struct {
-		name  string
-		opts  SyncOptions
-		full  bool
-		probe MirrorProbe
-		want  bool
-	}{
-		{"opted-in locked recognized", SyncOptions{Automatic: true},
-			false, heldRecognized, true},
-		{"opted-in same-process hold", SyncOptions{Automatic: true},
-			false, MirrorProbe{
-				FileExists: true, Uninspectable: true, RecognizedMirror: true,
-			}, true},
-		{"no opt-in", SyncOptions{}, false, heldRecognized, false},
-		{"full requested", SyncOptions{Automatic: true},
-			true, heldRecognized, false},
-		{"unrecognized locked file", SyncOptions{Automatic: true},
-			false, MirrorProbe{FileExists: true, Uninspectable: true}, false},
-		{"inspectable mirror", SyncOptions{Automatic: true},
-			false, MirrorProbe{
-				FileExists: true, ShapeOK: true, RecognizedMirror: true,
-			}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, deferred := deferLockedRebuild(tt.opts, tt.full, tt.probe)
-			assert.Equal(t, tt.want, deferred)
-			assert.Equal(t, tt.want, result.Diagnostics.Deferred)
-			if tt.want {
-				assert.NotEmpty(t, result.Diagnostics.DeferredReason)
-			}
-		})
-	}
 }
 
 // TestAutomaticIncrementalPushSkipsScopeCount pins the bounded-cost side of

@@ -50,9 +50,12 @@ type Store struct {
 	customPricing  map[string]config.CustomModelRate
 }
 
-// NewStore opens a local DuckDB mirror file as a db.Store.
+// NewStore opens a local DuckDB mirror file as a db.Store. The handle is
+// read-only, so a serving Store coexists with other read-only opens (other
+// serve processes, push probes) and never blocks a push's probe; the Store's
+// db.Store surface is read-only anyway (see ReadOnly).
 func NewStore(path string) (*Store, error) {
-	conn, err := Open(path)
+	conn, err := OpenReadOnly(path)
 	if err != nil {
 		return nil, err
 	}
