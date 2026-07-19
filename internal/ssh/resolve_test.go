@@ -75,13 +75,10 @@ func TestResolveScriptTreatsEnvValuesAsData(t *testing.T) {
 
 	script := buildResolveScript()
 	require.NotContains(t, script, "eval")
-	cmd := exec.Command("sh", "-c", script)
-	cmd.Env = []string{
-		"HOME=" + home,
-		"CLAUDE_PROJECTS_DIR=" + projectsDir,
-	}
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "resolve script failed: output: %s", out)
+	out := runResolveScriptForTest(t,
+		"HOME="+home,
+		"CLAUDE_PROJECTS_DIR="+projectsDir,
+	)
 
 	dirs, _ := parseResolvedDirs(string(out))
 	assert.Contains(t, dirs[parser.AgentClaude], projectsDir)
