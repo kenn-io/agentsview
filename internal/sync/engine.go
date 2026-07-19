@@ -921,6 +921,23 @@ func providerVirtualSourceBackedByEvent(sourcePath, eventPath string) bool {
 			eventPath == filepath.Join(filepath.Dir(dbPath), "workspace.json"))
 }
 
+func providerChangedPathStoredHintRoots(
+	agent parser.AgentType,
+	watchRoot string,
+	path string,
+) []string {
+	watchRoot = filepath.Clean(watchRoot)
+	if agent != parser.AgentTrae {
+		return []string{watchRoot}
+	}
+	root := filepath.Dir(watchRoot)
+	dbPath, ok := parser.TraeDBPathForEvent(root, path)
+	if !ok {
+		return []string{watchRoot}
+	}
+	return []string{dbPath}
+}
+
 func providerChangedPathEventKind(path string) string {
 	if path == "" {
 		return ""

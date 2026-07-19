@@ -3,9 +3,7 @@
 package sync
 
 import (
-	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -33,8 +31,6 @@ var openCodeFamilySQLiteAgents = []parser.AgentType{
 	parser.AgentIcodemate,
 }
 
-const sqliteContainerWholeSourceID = "\x00container"
-
 var statSQLiteContainerState = parser.StatSQLiteContainerState
 
 // sqliteContainerSourceForFile maps a discovered file to its shared SQLite
@@ -43,15 +39,6 @@ var statSQLiteContainerState = parser.StatSQLiteContainerState
 func sqliteContainerSourceForFile(
 	file parser.DiscoveredFile,
 ) (dbPath, sessionID string, ok bool) {
-	if file.Agent == parser.AgentTrae {
-		if dbPath, sessionID, ok := parser.SplitTraeVirtualPath(file.Path); ok {
-			return dbPath, sessionID, true
-		}
-		if filepath.Base(file.Path) == parser.WindsurfStateDBName {
-			return file.Path, sqliteContainerWholeSourceID, true
-		}
-		return "", "", false
-	}
 	dbName := openCodeFormatDBName(file.Agent)
 	if dbName == "" {
 		return "", "", false
@@ -61,7 +48,7 @@ func sqliteContainerSourceForFile(
 
 // sqliteContainerPathForResultPath maps a processed result path back to its
 // container. Result paths arrive without an agent, so every family DB name is
-// tried before the Trae forms.
+// tried.
 func sqliteContainerPathForResultPath(path string) string {
 	for _, agent := range openCodeFamilySQLiteAgents {
 		dbPath, _, ok := parser.ParseVirtualSourcePathForBase(
@@ -70,12 +57,6 @@ func sqliteContainerPathForResultPath(path string) string {
 		if ok {
 			return dbPath
 		}
-	}
-	if dbPath, _, ok := parser.SplitTraeVirtualPath(path); ok {
-		return dbPath
-	}
-	if filepath.Base(path) == parser.WindsurfStateDBName {
-		return path
 	}
 	return ""
 }
@@ -89,14 +70,8 @@ func sqliteContainerPathForResultPath(path string) string {
 // source may therefore gate-skip only when its session ID was part of the
 // verified set; a newly exposed row misses the set and parses.
 type trustedSQLiteContainer struct {
-	state    sqliteContainerGateState
+	state    parser.SQLiteContainerState
 	sessions map[string]struct{}
-}
-
-type sqliteContainerGateState struct {
-	sqlite           parser.SQLiteContainerState
-	manifestSize     int64
-	manifestMtimeSec int64
 }
 
 // sqliteContainerPass tracks one sync pass's view of every OpenCode-family
@@ -105,7 +80,7 @@ type sqliteContainerGateState struct {
 // are touched only by the single collectAndBatch goroutine, so no locking
 // is needed during the pass.
 type sqliteContainerPass struct {
-	captured   map[string]sqliteContainerGateState
+	captured   map[string]parser.SQLiteContainerState
 	discovered map[string]int
 	sessions   map[string]map[string]struct{}
 	completed  map[string]int
@@ -122,11 +97,11 @@ type sqliteContainerPass struct {
 // from the map and never promoted.
 func (e *Engine) captureSQLiteContainerStates(
 	changedPaths []string,
-) map[string]sqliteContainerGateState {
+) map[string]parser.SQLiteContainerState {
 	if e.forceParse {
 		return nil
 	}
-	states := make(map[string]sqliteContainerGateState)
+	states := make(map[string]parser.SQLiteContainerState)
 	addState := func(agent parser.AgentType, dbPath string) {
 		if dbPath == "" {
 			return
@@ -134,7 +109,7 @@ func (e *Engine) captureSQLiteContainerStates(
 		if _, seen := states[dbPath]; seen {
 			return
 		}
-		state, ok := sqliteContainerGateStateForAgent(agent, dbPath)
+		state, ok := statSQLiteContainerState(dbPath)
 		if !ok {
 			return
 		}
@@ -150,14 +125,6 @@ func (e *Engine) captureSQLiteContainerStates(
 				addState(agent, src.DBPath)
 			}
 		}
-		for _, dir := range e.agentDirs[parser.AgentTrae] {
-			if dir == "" || strings.HasPrefix(dir, "s3://") {
-				continue
-			}
-			for _, dbPath := range traeContainerPaths(filepath.Clean(dir)) {
-				addState(parser.AgentTrae, dbPath)
-			}
-		}
 		return states
 	}
 	for _, rawPath := range changedPaths {
@@ -170,39 +137,8 @@ func (e *Engine) captureSQLiteContainerStates(
 				addState(agent, openCodeContainerPathForEvent(agent, dir, path))
 			}
 		}
-		for _, dir := range e.agentDirs[parser.AgentTrae] {
-			if dir == "" || strings.HasPrefix(dir, "s3://") {
-				continue
-			}
-			if dbPath, ok := parser.TraeDBPathForEvent(
-				filepath.Clean(dir), path,
-			); ok {
-				addState(parser.AgentTrae, dbPath)
-			}
-		}
 	}
 	return states
-}
-
-func sqliteContainerGateStateForAgent(
-	agent parser.AgentType,
-	dbPath string,
-) (sqliteContainerGateState, bool) {
-	sqliteState, ok := statSQLiteContainerState(dbPath)
-	if !ok {
-		return sqliteContainerGateState{}, false
-	}
-	state := sqliteContainerGateState{sqlite: sqliteState}
-	if agent != parser.AgentTrae {
-		return state, true
-	}
-	manifestPath := filepath.Join(filepath.Dir(dbPath), "workspace.json")
-	info, err := os.Stat(manifestPath)
-	if err == nil && !info.IsDir() {
-		state.manifestSize = info.Size()
-		state.manifestMtimeSec = info.ModTime().Unix()
-	}
-	return state, true
 }
 
 func openCodeContainerPathForEvent(
@@ -223,63 +159,6 @@ func openCodeContainerPathForEvent(
 	return ""
 }
 
-func providerChangedPathStoredHintRoots(
-	agent parser.AgentType,
-	watchRoot string,
-	path string,
-) []string {
-	watchRoot = filepath.Clean(watchRoot)
-	if agent != parser.AgentTrae {
-		return []string{watchRoot}
-	}
-	root := filepath.Dir(watchRoot)
-	dbPath, ok := parser.TraeDBPathForEvent(root, path)
-	if !ok {
-		return []string{watchRoot}
-	}
-	return []string{dbPath}
-}
-
-func uniqueContainerPaths(paths []string) []string {
-	if len(paths) < 2 {
-		return paths
-	}
-	seen := make(map[string]struct{}, len(paths))
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		out = append(out, path)
-	}
-	slices.Sort(out)
-	return out
-}
-
-func traeContainerPaths(root string) []string {
-	var paths []string
-	global := filepath.Join(root, "globalStorage", parser.WindsurfStateDBName)
-	if info, err := os.Stat(global); err == nil && !info.IsDir() {
-		paths = append(paths, global)
-	}
-	workspace := filepath.Join(root, "workspaceStorage")
-	if entries, err := os.ReadDir(workspace); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			path := filepath.Join(
-				workspace, entry.Name(), parser.WindsurfStateDBName,
-			)
-			if info, err := os.Stat(path); err == nil && !info.IsDir() {
-				paths = append(paths, path)
-			}
-		}
-	}
-	return uniqueContainerPaths(paths)
-}
-
 // beginSQLiteContainerPass starts a pass's gate bookkeeping from the
 // discovered files and the pre-discovery container captures. files must be
 // the pre-filter discovery set: promotion requires seeing a completion for
@@ -297,7 +176,7 @@ func traeContainerPaths(root string) []string {
 // — and the next pass re-verifies them by content.
 func (e *Engine) beginSQLiteContainerPass(
 	files []parser.DiscoveredFile,
-	preStates map[string]sqliteContainerGateState,
+	preStates map[string]parser.SQLiteContainerState,
 ) {
 	if e.forceParse {
 		e.containerMu.Lock()
@@ -313,7 +192,7 @@ func (e *Engine) beginSQLiteContainerPass(
 		}
 		if pass == nil {
 			pass = &sqliteContainerPass{
-				captured:   make(map[string]sqliteContainerGateState),
+				captured:   make(map[string]parser.SQLiteContainerState),
 				discovered: make(map[string]int),
 				sessions:   make(map[string]map[string]struct{}),
 				completed:  make(map[string]int),
@@ -336,9 +215,7 @@ func (e *Engine) beginSQLiteContainerPass(
 	}
 	if pass != nil {
 		for dbPath, pre := range pass.captured {
-			if post, ok := sqliteContainerGateStateForAgent(
-				sqliteContainerAgentForPath(dbPath), dbPath,
-			); ok &&
+			if post, ok := statSQLiteContainerState(dbPath); ok &&
 				post == pre {
 				continue
 			}
@@ -403,18 +280,6 @@ func (e *Engine) noteSQLiteContainerResult(path string, ok bool) {
 	} else {
 		pass.failed[dbPath] = true
 	}
-}
-
-func sqliteContainerAgentForPath(dbPath string) parser.AgentType {
-	if filepath.Base(dbPath) == parser.WindsurfStateDBName {
-		return parser.AgentTrae
-	}
-	for _, agent := range openCodeFamilySQLiteAgents {
-		if filepath.Base(dbPath) == openCodeFormatDBName(agent) {
-			return agent
-		}
-	}
-	return ""
 }
 
 // poisonSQLiteContainerPass blocks every promotion for the current pass.

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"database/sql"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -25,10 +24,6 @@ func newContainerTestDB(t *testing.T) (string, *sql.DB) {
 	return path, conn
 }
 
-func testGateState(state parser.SQLiteContainerState) sqliteContainerGateState {
-	return sqliteContainerGateState{sqlite: state}
-}
-
 // TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures pins the gate's
 // ordering invariant: the state promoted to trusted must have been captured
 // BEFORE discovery listed the container's sessions. Discovery reads the
@@ -45,7 +40,7 @@ func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
 			{Agent: parser.AgentOpenCode, Path: "/data/opencode.db#ses-2"},
 		}
 		e.beginSQLiteContainerPass(
-			files, map[string]sqliteContainerGateState{},
+			files, map[string]parser.SQLiteContainerState{},
 		)
 		e.noteSQLiteContainerResult("/data/opencode.db#ses-1", true)
 		e.noteSQLiteContainerResult("/data/opencode.db#ses-2", true)
@@ -65,68 +60,20 @@ func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
 		}
 		e.beginSQLiteContainerPass(
 			files,
-			map[string]sqliteContainerGateState{dbPath: testGateState(pre)},
+			map[string]parser.SQLiteContainerState{dbPath: pre},
 		)
 		e.noteSQLiteContainerResult(dbPath+"#ses-1", true)
 		e.noteSQLiteContainerResult(dbPath+"#ses-2", true)
 		e.finishSQLiteContainerPass(false, true)
 		require.Contains(t, e.trustedSQLiteContainers, dbPath)
 		trusted := e.trustedSQLiteContainers[dbPath]
-		assert.Equal(t, testGateState(pre), trusted.state,
+		assert.Equal(t, pre, trusted.state,
 			"trusted state must be exactly the pre-discovery capture")
 		assert.Equal(t,
 			map[string]struct{}{"ses-1": {}, "ses-2": {}},
 			trusted.sessions,
 			"trusted set must be exactly the verified session IDs")
 	})
-}
-
-func TestProviderChangedPathStoredHintRootsTraeScopesToContainer(t *testing.T) {
-	root := t.TempDir()
-	workspaceWatchRoot := filepath.Join(root, "workspaceStorage")
-	globalWatchRoot := filepath.Join(root, "globalStorage")
-
-	workspaceManifest := filepath.Join(
-		workspaceWatchRoot, "hash-a", "workspace.json",
-	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(workspaceManifest), 0o755))
-	assert.Equal(
-		t,
-		[]string{filepath.Join(workspaceWatchRoot, "hash-a", "state.vscdb")},
-		providerChangedPathStoredHintRoots(
-			parser.AgentTrae, workspaceWatchRoot, workspaceManifest,
-		),
-	)
-
-	globalDB := filepath.Join(globalWatchRoot, "state.vscdb")
-	require.NoError(t, os.MkdirAll(filepath.Dir(globalDB), 0o755))
-	assert.Equal(
-		t,
-		[]string{globalDB},
-		providerChangedPathStoredHintRoots(
-			parser.AgentTrae, globalWatchRoot, globalDB+"-wal",
-		),
-	)
-}
-
-func TestSQLiteContainerSourceForFileUsesTraeMemberID(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "state.vscdb")
-	virtual := dbPath + "#session-1"
-	gotDB, gotID, ok := sqliteContainerSourceForFile(parser.DiscoveredFile{
-		Agent: parser.AgentTrae,
-		Path:  virtual,
-	})
-	require.True(t, ok)
-	assert.Equal(t, dbPath, gotDB)
-	assert.Equal(t, "session-1", gotID)
-
-	gotDB, gotID, ok = sqliteContainerSourceForFile(parser.DiscoveredFile{
-		Agent: parser.AgentTrae,
-		Path:  dbPath,
-	})
-	require.True(t, ok)
-	assert.Equal(t, dbPath, gotDB)
-	assert.Equal(t, sqliteContainerWholeSourceID, gotID)
 }
 
 func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *testing.T) {
@@ -152,7 +99,7 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 	states := engine.captureSQLiteContainerStates([]string{firstDB + "-wal"})
 	require.Contains(t, states, firstDB)
 	require.NotContains(t, states, secondDB)
-	assert.Equal(t, []string{filepath.Clean(firstDB)}, uniqueContainerPaths(statPaths))
+	assert.Equal(t, []string{filepath.Clean(firstDB)}, statPaths)
 }
 
 // TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch pins the pass's
@@ -169,7 +116,7 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	// The container is trusted at the pre-discovery state, as after a
 	// fully verified idle pass.
 	e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
-		dbPath: {state: testGateState(pre), sessions: map[string]struct{}{"ses-1": {}}},
+		dbPath: {state: pre, sessions: map[string]struct{}{"ses-1": {}}},
 	}
 
 	// The container changes inside the capture-discovery window.
@@ -181,7 +128,7 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	}
 	e.beginSQLiteContainerPass(
 		[]parser.DiscoveredFile{file},
-		map[string]sqliteContainerGateState{dbPath: testGateState(pre)},
+		map[string]parser.SQLiteContainerState{dbPath: pre},
 	)
 
 	assert.False(t, e.sqliteContainerSourceFresh(file),
@@ -189,7 +136,7 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 
 	e.noteSQLiteContainerResult(file.Path, true)
 	e.finishSQLiteContainerPass(false, true)
-	assert.Equal(t, testGateState(pre), e.trustedSQLiteContainers[dbPath].state,
+	assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath].state,
 		"a mismatched container must not be promoted past its trusted state")
 }
 
@@ -213,7 +160,7 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 	}
 	e.beginSQLiteContainerPass(
 		[]parser.DiscoveredFile{verified},
-		map[string]sqliteContainerGateState{dbPath: testGateState(state)},
+		map[string]parser.SQLiteContainerState{dbPath: state},
 	)
 	e.noteSQLiteContainerResult(verified.Path, true)
 	e.finishSQLiteContainerPass(false, true)
@@ -226,7 +173,7 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 	}
 	e.beginSQLiteContainerPass(
 		[]parser.DiscoveredFile{verified, exposed},
-		map[string]sqliteContainerGateState{dbPath: testGateState(state)},
+		map[string]parser.SQLiteContainerState{dbPath: state},
 	)
 	assert.True(t, e.sqliteContainerSourceFresh(verified),
 		"the verified session must still gate-skip")

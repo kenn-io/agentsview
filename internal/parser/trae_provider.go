@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -19,20 +18,16 @@ const traeStateDBName = "state.vscdb"
 const traeStorageKey = "memento/icube-ai-agent-storage"
 
 func newTraeProviderFactory(def AgentDef) ProviderFactory {
-	memberships := newTraeMembershipCache()
-	memberPresent := newTraeMemberPresence(memberships)
 	return NewMultiSessionProviderFactory(def, traeProviderCapabilities(), func(cfg ProviderConfig) multiSessionContainerSourceSet {
 		return NewMultiSessionContainerSourceSet(AgentTrae, cfg.Roots,
 			WithContainerDiscovery(traeDiscoverContainers),
 			WithWatchRoots(traeWatchRoots),
 			WithChangedPathClassifier(traeClassifyPath),
-			WithMemberLookup(func(root, rawID string) (multiSessionMatch, bool) {
-				return traeFindMember(root, rawID, memberships)
-			}),
+			WithMemberLookup(traeFindMember),
 			WithFingerprint(traeFingerprintSource),
 			WithContainerParseOutcome(traeParseContainerOutcome),
 			WithMemberParse(traeParseMember),
-			WithMemberPresence(memberPresent),
+			WithMemberPresence(traeMemberPresent),
 		)
 	})
 }
@@ -117,12 +112,9 @@ func traeMatch(dbPath, id string) multiSessionMatch {
 	return multiSessionMatch{Path: path, Container: dbPath, MemberID: id, ProjectHint: project}
 }
 
-func traeFindMember(
-	root, rawID string,
-	memberships *traeMembershipCache,
-) (multiSessionMatch, bool) {
+func traeFindMember(root, rawID string) (multiSessionMatch, bool) {
 	for _, db := range traeDBs(root) {
-		snapshot, err := memberships.load(db.path)
+		snapshot, err := loadTraeSessionSnapshot(db.path)
 		if err != nil {
 			continue
 		}
@@ -233,73 +225,22 @@ func traeParseRecord(src multiSessionSource, record traeSessionRecord, req Parse
 	return &ParseResult{Session: *sess, Messages: msgs}, nil
 }
 
-func newTraeMemberPresence(memberships *traeMembershipCache) func(src multiSessionSource) bool {
-	return func(src multiSessionSource) bool {
-		if src.MemberID == "" {
-			return IsRegularFile(src.Container)
-		}
-		if !IsRegularFile(src.Container) {
-			memberships.delete(src.Container)
-			return false
-		}
-		snapshot, err := memberships.load(src.Container)
-		if err != nil {
-			return true
-		}
-		if !snapshot.authoritative || !snapshot.complete {
-			return true
-		}
-		_, ok := snapshot.ids[strings.TrimPrefix(src.MemberID, "trae:")]
-		return ok
+func traeMemberPresent(src multiSessionSource) bool {
+	if src.MemberID == "" {
+		return IsRegularFile(src.Container)
 	}
-}
-
-type traeMembershipCacheEntry struct {
-	state SQLiteContainerState
-	data  traeSessionMembership
-}
-
-type traeMembershipCache struct {
-	mu     sync.RWMutex
-	byPath map[string]traeMembershipCacheEntry
-}
-
-func newTraeMembershipCache() *traeMembershipCache {
-	return &traeMembershipCache{
-		byPath: make(map[string]traeMembershipCacheEntry),
+	if !IsRegularFile(src.Container) {
+		return false
 	}
-}
-
-func (c *traeMembershipCache) load(path string) (traeSessionMembership, error) {
-	state, stateOK := StatSQLiteContainerState(path)
-	if stateOK {
-		c.mu.RLock()
-		entry, ok := c.byPath[path]
-		c.mu.RUnlock()
-		if ok && entry.state == state {
-			return entry.data, nil
-		}
-	}
-
-	snapshot, err := loadTraeSessionMembership(path)
+	snapshot, err := loadTraeSessionSnapshot(src.Container)
 	if err != nil {
-		c.delete(path)
-		return traeSessionMembership{}, err
+		return true
 	}
-	if !stateOK {
-		c.delete(path)
-		return snapshot, nil
+	if !snapshot.authoritative || !snapshot.complete {
+		return true
 	}
-	c.mu.Lock()
-	c.byPath[path] = traeMembershipCacheEntry{state: state, data: snapshot}
-	c.mu.Unlock()
-	return snapshot, nil
-}
-
-func (c *traeMembershipCache) delete(path string) {
-	c.mu.Lock()
-	delete(c.byPath, path)
-	c.mu.Unlock()
+	_, ok := snapshot.ids[strings.TrimPrefix(src.MemberID, "trae:")]
+	return ok
 }
 
 func traeDBPathForEvent(root, path string) (string, bool) {
@@ -348,12 +289,6 @@ type traeSessionSnapshot struct {
 	complete      bool
 }
 
-type traeSessionMembership struct {
-	ids           map[string]struct{}
-	authoritative bool
-	complete      bool
-}
-
 func (s traeSessionSnapshot) record(id string) (traeSessionRecord, bool) {
 	for _, record := range s.records {
 		if record.SessionID == id {
@@ -369,26 +304,6 @@ func loadTraeSessionSnapshot(path string) (traeSessionSnapshot, error) {
 		return traeSessionSnapshot{}, err
 	}
 	return decodeTraeSessionSnapshot(value)
-}
-
-func loadTraeSessionMembership(path string) (traeSessionMembership, error) {
-	snapshot, err := loadTraeSessionSnapshot(path)
-	if err != nil {
-		return traeSessionMembership{}, err
-	}
-	return snapshot.membership(), nil
-}
-
-func (s traeSessionSnapshot) membership() traeSessionMembership {
-	ids := make(map[string]struct{}, len(s.ids))
-	for id := range s.ids {
-		ids[id] = struct{}{}
-	}
-	return traeSessionMembership{
-		ids:           ids,
-		authoritative: s.authoritative,
-		complete:      s.complete,
-	}
 }
 
 func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {

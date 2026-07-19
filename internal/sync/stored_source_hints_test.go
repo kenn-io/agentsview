@@ -107,6 +107,34 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 	}
 }
 
+func TestProviderChangedPathStoredHintRootsTraeScopesToContainer(t *testing.T) {
+	root := t.TempDir()
+	workspaceWatchRoot := filepath.Join(root, "workspaceStorage")
+	globalWatchRoot := filepath.Join(root, "globalStorage")
+
+	workspaceManifest := filepath.Join(
+		workspaceWatchRoot, "hash-a", "workspace.json",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(workspaceManifest), 0o755))
+	assert.Equal(
+		t,
+		[]string{filepath.Join(workspaceWatchRoot, "hash-a", "state.vscdb")},
+		providerChangedPathStoredHintRoots(
+			parser.AgentTrae, workspaceWatchRoot, workspaceManifest,
+		),
+	)
+
+	globalDB := filepath.Join(globalWatchRoot, "state.vscdb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(globalDB), 0o755))
+	assert.Equal(
+		t,
+		[]string{globalDB},
+		providerChangedPathStoredHintRoots(
+			parser.AgentTrae, globalWatchRoot, globalDB+"-wal",
+		),
+	)
+}
+
 func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {
 	measure := func(t *testing.T, hintCount int) float64 {
 		t.Helper()
