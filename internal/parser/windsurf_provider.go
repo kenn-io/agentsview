@@ -628,12 +628,23 @@ func loadWindsurfSessionRecord(
 }
 
 func openWindsurfDB(dbPath string) (*sql.DB, error) {
+	if windsurfDBOpenHook != nil {
+		windsurfDBOpenHook(dbPath)
+	}
 	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=0&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open windsurf db %s: %w", dbPath, err)
 	}
 	return db, nil
+}
+
+var windsurfDBOpenHook func(string)
+
+func SetWindsurfDBOpenHookForTest(fn func(string)) func() {
+	prev := windsurfDBOpenHook
+	windsurfDBOpenHook = fn
+	return func() { windsurfDBOpenHook = prev }
 }
 
 func windsurfRecordsFromValue(

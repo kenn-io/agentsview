@@ -650,6 +650,7 @@ func traeAssistantFallback(raw json.RawMessage) string {
 
 func traeVirtualPath(path, id string) string                  { return path + "#" + id }
 func SplitTraeVirtualPath(path string) (string, string, bool) { return splitTraeVirtualPath(path) }
+func TraeDBPathForEvent(root, path string) (string, bool)     { return traeDBPathForEvent(root, path) }
 func splitTraeVirtualPath(path string) (string, string, bool) {
 	return ParseVirtualSourcePathForBase(path, traeStateDBName)
 }

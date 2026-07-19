@@ -359,7 +359,7 @@ func TestSyncEngineTraeWorkspaceManifestChangesBypassWarmGate(t *testing.T) {
 	classified := engine.classifyPaths([]string{manifestPath})
 	require.Len(t, classified, 1)
 	assert.Equal(t, path, classified[0].Path)
-	assert.True(t, classified[0].ForceParse)
+	assert.False(t, classified[0].ForceParse)
 
 	engine.SyncPathsContext(context.Background(), []string{manifestPath})
 	stats := engine.LastSyncStats()
@@ -375,7 +375,7 @@ func TestSyncEngineTraeWorkspaceManifestChangesBypassWarmGate(t *testing.T) {
 	classified = engine.classifyPaths([]string{manifestPath})
 	require.Len(t, classified, 1)
 	assert.Equal(t, path, classified[0].Path)
-	assert.True(t, classified[0].ForceParse)
+	assert.False(t, classified[0].ForceParse)
 
 	engine.SyncPathsContext(context.Background(), []string{manifestPath})
 	stats = engine.LastSyncStats()
@@ -386,4 +386,101 @@ func TestSyncEngineTraeWorkspaceManifestChangesBypassWarmGate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "unknown", session.Project)
+}
+
+func TestSyncEngineTraeWorkspaceManifestChangeAcrossSyncAllReparses(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	writeTraeSyncDB(t, path, "steady reply")
+	manifestPath := writeTraeWorkspaceManifest(t, path, "alpha")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	first := engine.SyncAll(context.Background(), nil)
+	require.False(t, first.Aborted)
+	assert.Equal(t, 1, first.Synced)
+
+	require.NoError(
+		t,
+		os.WriteFile(
+			manifestPath,
+			[]byte(`{"folder":"file:///Users/alice/code/beta"}`),
+			0o644,
+		),
+	)
+
+	second := engine.SyncAll(context.Background(), nil)
+	require.False(t, second.Aborted)
+	assert.Equal(t, 1, second.Synced)
+	assert.Equal(t, 0, second.Failed)
+
+	session, err := database.GetSession(context.Background(), "trae:rewrite")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "beta", session.Project)
+}
+
+func TestSyncPathsTraeChangedContainerScopesGateCaptureAndLoad(t *testing.T) {
+	root := t.TempDir()
+	changedDB := filepath.Join(
+		root, "workspaceStorage", "hash-a", "state.vscdb",
+	)
+	otherDB := filepath.Join(
+		root, "workspaceStorage", "hash-b", "state.vscdb",
+	)
+	writeTraeSyncDB(t, changedDB, "reply a")
+	writeTraeSyncDB(t, otherDB, "reply b")
+	changedManifest := writeTraeWorkspaceManifest(t, changedDB, "alpha")
+	writeTraeWorkspaceManifest(t, otherDB, "bravo")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	first := engine.SyncAll(context.Background(), nil)
+	require.False(t, first.Aborted)
+	assert.Equal(t, 2, first.Synced)
+
+	require.NoError(
+		t,
+		os.WriteFile(
+			changedManifest,
+			[]byte(`{"folder":"file:///Users/alice/code/beta"}`),
+			0o644,
+		),
+	)
+
+	origStat := statSQLiteContainerState
+	t.Cleanup(func() { statSQLiteContainerState = origStat })
+	var statPaths []string
+	statSQLiteContainerState = func(dbPath string) (parser.SQLiteContainerState, bool) {
+		statPaths = append(statPaths, filepath.Clean(dbPath))
+		return parser.StatSQLiteContainerState(dbPath)
+	}
+
+	var openPaths []string
+	restoreOpenHook := parser.SetWindsurfDBOpenHookForTest(func(path string) {
+		openPaths = append(openPaths, filepath.Clean(path))
+	})
+	t.Cleanup(restoreOpenHook)
+
+	engine.SyncPathsContext(context.Background(), []string{changedManifest})
+	stats := engine.LastSyncStats()
+	assert.Equal(t, 1, stats.Synced)
+	assert.Equal(t, 0, stats.Failed)
+
+	assert.Equal(
+		t,
+		[]string{filepath.Clean(changedDB)},
+		uniqueContainerPaths(statPaths),
+	)
+	assert.Equal(
+		t,
+		[]string{filepath.Clean(changedDB)},
+		uniqueContainerPaths(openPaths),
+	)
 }

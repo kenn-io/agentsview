@@ -600,7 +600,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) {
 	}
 	// Capture container states before classifyPaths lists any session rows,
 	// matching the capture-before-discovery ordering of full syncs.
-	preContainerStates := e.captureSQLiteContainerStates()
+	preContainerStates := e.captureSQLiteContainerStates(paths)
 	files := e.classifyPaths(paths)
 	if len(files) == 0 {
 		return
@@ -764,7 +764,9 @@ func (e *Engine) classifyProviderChangedPath(
 				var err error
 				storedSourcePaths, err = e.db.ListStoredSourcePathHints(
 					string(def.Type),
-					[]string{watchRoot},
+					providerChangedPathStoredHintRoots(
+						agentType, watchRoot, path,
+					),
 				)
 				if err != nil {
 					log.Printf(
@@ -885,10 +887,6 @@ func providerChangedPathForceParse(
 	}
 	if filepath.Clean(sourcePath) != filepath.Clean(eventPath) &&
 		!providerVirtualSourceBackedByEvent(sourcePath, eventPath) {
-		if agent == parser.AgentTrae &&
-			filepath.Base(sourcePath) == parser.WindsurfStateDBName {
-			return filepath.Base(eventPath) == "workspace.json"
-		}
 		// OpenCode-family storage sessions resolve message/part events
 		// to their session JSON, whose fingerprint and stat signature
 		// span those same child files, and the classifier invalidates
@@ -910,15 +908,17 @@ func providerChangedPathForceParse(
 }
 
 func providerVirtualSourceBackedByEvent(sourcePath, eventPath string) bool {
-	idx := strings.LastIndex(sourcePath, "#")
-	if idx < 0 {
-		return false
+	sourcePath = filepath.Clean(sourcePath)
+	dbPath := sourcePath
+	if idx := strings.LastIndex(sourcePath, "#"); idx >= 0 {
+		dbPath = filepath.Clean(sourcePath[:idx])
 	}
-	dbPath := filepath.Clean(sourcePath[:idx])
 	eventPath = filepath.Clean(eventPath)
 	return eventPath == dbPath ||
 		eventPath == dbPath+"-wal" ||
-		eventPath == dbPath+"-shm"
+		eventPath == dbPath+"-shm" ||
+		(filepath.Base(dbPath) == parser.WindsurfStateDBName &&
+			eventPath == filepath.Join(filepath.Dir(dbPath), "workspace.json"))
 }
 
 func providerChangedPathEventKind(path string) string {
@@ -2472,7 +2472,7 @@ func (e *Engine) syncAllLocked(
 	// Container states must be captured BEFORE discovery lists any session
 	// rows, so a promoted state can never be newer than the discovered
 	// session set (see captureSQLiteContainerStates).
-	preContainerStates := e.captureSQLiteContainerStates()
+	preContainerStates := e.captureSQLiteContainerStates(nil)
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
