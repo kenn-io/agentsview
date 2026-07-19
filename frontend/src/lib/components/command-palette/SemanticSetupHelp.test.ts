@@ -34,7 +34,9 @@ vi.mock("../../utils/clipboard.js", () => ({
 }));
 
 // @ts-ignore
-import SemanticSetupHelp from "./SemanticSetupHelp.svelte";
+import SemanticSetupHelp, {
+  __resetResolvedBuildIds,
+} from "./SemanticSetupHelp.svelte";
 
 const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
@@ -66,9 +68,29 @@ function runningStatus(
   };
 }
 
+function completedResult(): VectorBuildStatus["last_result"] {
+  return {
+    Fingerprint: "fp-1",
+    Activated: true,
+    Refresh: { Upserted: 1, Deleted: 0, Unchanged: 0 },
+    Repair: {
+      scanned: false,
+      scan_complete: false,
+      documents: 0,
+      chunks: 0,
+      failed: 0,
+      remaining: 0,
+      remaining_known: false,
+    },
+    Fill: { Documents: 1, Chunks: 2, Skipped: 0, Stale: 0 },
+  };
+}
+
 describe("SemanticSetupHelp", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // The one-auto-retry-per-build ledger is module-level, so isolate it.
+    __resetResolvedBuildIds();
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     mockCopyToClipboard.mockReset();
@@ -353,6 +375,118 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain("Embeddings build failed");
     expect(text()).toContain("embeddings endpoint refused the connection");
     expect(onResolved).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("auto-resolves a historical build only once across remounts of the same build", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      idleStatus({ build_id: 1, last_result: completedResult() }),
+    );
+
+    const onResolved = vi.fn();
+    const first = mountHelp(onResolved);
+    await settle();
+    expect(onResolved).toHaveBeenCalledOnce();
+
+    unmount(first.component);
+    document.body.innerHTML = "";
+
+    // The command palette remounts a fresh component when the retried search
+    // 501s again. The same build_id must not trigger another auto-resolve;
+    // the panel shows setup controls instead of looping.
+    const second = mountHelp(onResolved);
+    await settle();
+    expect(onResolved).toHaveBeenCalledOnce();
+    expect(text()).toContain("Semantic index not built yet");
+    const build = [...document.body.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Build embeddings"),
+    );
+    expect(build).toBeDefined();
+
+    unmount(second.component);
+  });
+
+  it("auto-resolves again when a later build_id appears after remount", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({ build_id: 1, last_result: completedResult() }),
+    );
+
+    const onResolved = vi.fn();
+    const first = mountHelp(onResolved);
+    await settle();
+    expect(onResolved).toHaveBeenCalledOnce();
+
+    unmount(first.component);
+    document.body.innerHTML = "";
+
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({ build_id: 2, last_result: completedResult() }),
+    );
+    const second = mountHelp(onResolved);
+    await settle();
+    expect(onResolved).toHaveBeenCalledTimes(2);
+
+    unmount(second.component);
+  });
+
+  it("recovers from a persisted build error by starting a new build on retry", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({ last_error: "background build failed" }),
+    );
+
+    const { component, onResolved } = mountHelp();
+    await settle();
+    expect(text()).toContain("Embeddings build failed");
+
+    const retry = [...document.body.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Retry"),
+    );
+    expect(retry).toBeDefined();
+
+    embeddingsService.postApiV1EmbeddingsBuild.mockResolvedValueOnce({
+      started: true,
+    });
+    retry!.click();
+    await settle();
+    // Retry starts a build even though the daemon still reports the old
+    // last_error; re-probing alone could never clear it.
+    expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({
+      requestBody: {},
+    });
+    expect(text()).toContain("Building embeddings index...");
+
+    // The new build finishes cleanly (a later build_id, no last_error), which
+    // resolves despite the stale last_error that first put us in "failed".
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({ build_id: 5 }),
+    );
+    await settle(2000);
+    expect(onResolved).toHaveBeenCalledOnce();
+
+    unmount(component);
+  });
+
+  it("re-probes rather than building when the failure came from the status call", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(
+      new Error("network down"),
+    );
+
+    const { component } = mountHelp();
+    await settle();
+    expect(text()).toContain("Embeddings build failed");
+
+    const retry = [...document.body.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Retry"),
+    );
+    expect(retry).toBeDefined();
+
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
+    retry!.click();
+    await settle();
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    expect(embeddingsService.postApiV1EmbeddingsBuild).not.toHaveBeenCalled();
+    expect(text()).toContain("Semantic index not built yet");
 
     unmount(component);
   });

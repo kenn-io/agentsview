@@ -1,3 +1,19 @@
+<script module lang="ts">
+  // build_ids whose completed last_result has already driven one automatic
+  // search retry. Module-level so it survives the remounts the command palette
+  // performs each time the underlying search 501s again: a retired generation
+  // whose daemon still reports the old last_result would otherwise loop
+  // search + status forever. One auto-retry per observed build, then the panel
+  // shows setup controls instead.
+  const resolvedBuildIds = new Set<number>();
+
+  // Testing-only: clear the module-level retry ledger between cases so remount
+  // behavior can be exercised in isolation.
+  export function __resetResolvedBuildIds(): void {
+    resolvedBuildIds.clear();
+  }
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import { Button, CopyButton, Spinner } from "@kenn-io/kit-ui";
@@ -65,6 +81,11 @@ endpoint = "http://localhost:11434/v1"`;
   // Server-provided reason shown verbatim in the "disabled" and "failed"
   // phases.
   let detail = $state<string | null>(null);
+  // What the "failed" phase's Retry button should do. A failure that came from
+  // a build (persisted last_error, or a failed build POST) can only be cleared
+  // by starting a new build; re-probing would just re-read the same persisted
+  // last_error. Transport/API failures from the status calls retry by probing.
+  let retryAction = $state<"probe" | "build">("probe");
   let buildDone = $state(0);
   let buildTotal = $state(0);
   let scanning = $state(true);
@@ -103,9 +124,18 @@ endpoint = "http://localhost:11434/v1"`;
         schedulePoll();
       } else if (status.last_error) {
         detail = status.last_error;
+        retryAction = "build";
         phase = "failed";
       } else if (status.last_result) {
-        onResolved();
+        const buildId = status.build_id ?? 0;
+        if (resolvedBuildIds.has(buildId)) {
+          // Already auto-retried this build once and the search still 501s, so
+          // stop looping and offer the setup controls instead.
+          phase = "ready";
+        } else {
+          resolvedBuildIds.add(buildId);
+          onResolved();
+        }
       } else {
         phase = "ready";
       }
@@ -124,6 +154,7 @@ endpoint = "http://localhost:11434/v1"`;
         return;
       }
       detail = e instanceof Error ? e.message : null;
+      retryAction = "probe";
       phase = "failed";
     }
   }
@@ -143,6 +174,7 @@ endpoint = "http://localhost:11434/v1"`;
       // scheduler); watching it is exactly what the user wants.
       if (!(e instanceof ApiError && e.status === 409)) {
         detail = e instanceof Error ? e.message : null;
+        retryAction = "build";
         phase = "failed";
         return;
       }
@@ -169,13 +201,16 @@ endpoint = "http://localhost:11434/v1"`;
       }
       if (status.last_error) {
         detail = status.last_error;
+        retryAction = "build";
         phase = "failed";
         return;
       }
+      resolvedBuildIds.add(status.build_id ?? 0);
       onResolved();
     } catch (e) {
       if (disposed || isAbortError(e)) return;
       detail = e instanceof Error ? e.message : null;
+      retryAction = "probe";
       phase = "failed";
     }
   }
@@ -286,8 +321,12 @@ endpoint = "http://localhost:11434/v1"`;
         label={m.shared_retry()}
         onclick={() => {
           detail = null;
-          phase = "probing";
-          void probe();
+          if (retryAction === "build") {
+            void startBuild();
+          } else {
+            phase = "probing";
+            void probe();
+          }
         }}
       />
     </div>
