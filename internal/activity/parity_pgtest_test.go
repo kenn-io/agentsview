@@ -344,24 +344,25 @@ func dropParitySchema(t *testing.T, pgURL string) {
 }
 
 // pushParityDuckDB pushes the SQLite fixture to a DuckDB mirror via the
-// production Sync and returns a read-only DuckDB store over the same
-// connection.
+// production Push entry point and returns a read-only DuckDB store over
+// the built mirror file.
 func pushParityDuckDB(
 	t *testing.T, ctx context.Context, local *db.DB,
 ) *duckdbstore.Store {
 	t.Helper()
 	target := filepath.Join(t.TempDir(), "parity.duckdb")
-	syncer, err := duckdbstore.New(
-		target, local, "parity-machine", duckdbstore.SyncOptions{})
-	require.NoError(t, err, "creating duckdb sync")
-	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-
-	res, err := syncer.Push(ctx, true, nil)
+	res, err := duckdbstore.Push(
+		ctx, target, local, "parity-machine",
+		duckdbstore.SyncOptions{}, true, nil,
+	)
 	require.NoError(t, err, "pushing to duckdb")
 	require.Equal(t, len(parityFixture()), res.SessionsPushed,
 		"duckdb sessions pushed")
 
-	return duckdbstore.NewStoreFromDB(syncer.DB())
+	store, err := duckdbstore.NewStore(target)
+	require.NoError(t, err, "opening duckdb store")
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
 }
 
 // canonicalizeReport sorts the report's order-unspecified slices by a stable
