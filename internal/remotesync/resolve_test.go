@@ -1,6 +1,9 @@
 package remotesync_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -382,4 +385,101 @@ func TestSelectAllowedFilesRejectsFileScopedAgentDirs(t *testing.T) {
 	})
 	require.True(t, ok)
 	assert.Equal(t, []string{"/home/u/.claude/projects/p/s.jsonl"}, selected)
+}
+
+func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
+	root := t.TempDir()
+	rooRoot := filepath.Join(root, "globalStorage", "rooveterinaryinc.roo-cline")
+	task1 := filepath.Join(rooRoot, "tasks", "task-1")
+	task2 := filepath.Join(rooRoot, "tasks", "task-2")
+	settingsDir := filepath.Join(rooRoot, "settings")
+	checkpoints := filepath.Join(task1, "checkpoints")
+	cacheDir := filepath.Join(rooRoot, "cache")
+	require.NoError(t, os.MkdirAll(task1, 0o755))
+	require.NoError(t, os.MkdirAll(task2, 0o755))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.MkdirAll(checkpoints, 0o755))
+	require.NoError(t, os.MkdirAll(cacheDir, 0o755))
+
+	task1History := filepath.Join(task1, "history_item.json")
+	task1Messages := filepath.Join(task1, "ui_messages.json")
+	task2History := filepath.Join(task2, "history_item.json")
+	mcpSettings := filepath.Join(settingsDir, "mcp_settings.json")
+	checkpointBlob := filepath.Join(checkpoints, "checkpoint.bin")
+	cacheBlob := filepath.Join(cacheDir, "models.json")
+	require.NoError(t, os.WriteFile(task1History,
+		[]byte(`{"id":"task-1","ts":1,"task":"t"}`), 0o644))
+	require.NoError(t, os.WriteFile(task1Messages, []byte(`[]`), 0o644))
+	require.NoError(t, os.WriteFile(task2History,
+		[]byte(`{"id":"task-2","ts":2,"task":"t"}`), 0o644))
+	require.NoError(t, os.WriteFile(mcpSettings,
+		[]byte(`{"mcpServers":{"s":{"env":{"API_KEY":"sk-secret"}}}}`), 0o644))
+	require.NoError(t, os.WriteFile(checkpointBlob, []byte("checkpoint"), 0o644))
+	require.NoError(t, os.WriteFile(cacheBlob, []byte("cache"), 0o644))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentRooCode: {rooRoot},
+		},
+	})
+
+	// The root stays in Dirs for target bookkeeping, but the export
+	// is file-scoped to the discovered session files only.
+	assert.Equal(t, []string{rooRoot}, targets.Dirs[parser.AgentRooCode])
+	assert.ElementsMatch(t, []string{
+		task1History,
+		task1Messages,
+		task2History,
+	}, targets.Files[parser.AgentRooCode])
+
+	// Full transfer: the archive must contain the session files and
+	// nothing else from the RooCode tree.
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "task-1/history_item.json")
+	assert.Contains(t, joined, "task-1/ui_messages.json")
+	assert.Contains(t, joined, "task-2/history_item.json")
+	assert.NotContains(t, joined, "mcp_settings.json")
+	assert.NotContains(t, joined, "checkpoint")
+	assert.NotContains(t, joined, "cache")
+
+	// Delta transfer: raw files under the RooCode root must not
+	// validate as delta requests, and the root is not a delta root.
+	_, ok := remotesync.SelectAllowedFiles(targets, []string{mcpSettings})
+	assert.False(t, ok, "settings under the RooCode root must be rejected")
+	_, ok = remotesync.SelectAllowedFiles(targets, []string{checkpointBlob})
+	assert.False(t, ok, "checkpoint data under the RooCode root must be rejected")
+	assert.NotContains(t, targets.DeltaAllowedRoots(), rooRoot)
+}
+
+func TestRooCodeRemoteSyncSkipsRootWithoutSessions(t *testing.T) {
+	root := t.TempDir()
+	rooRoot := filepath.Join(root, "globalStorage", "rooveterinaryinc.roo-cline")
+	settingsDir := filepath.Join(rooRoot, "settings")
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(settingsDir, "mcp_settings.json"),
+		[]byte(`{"mcpServers":{}}`), 0o644))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentRooCode: {rooRoot},
+		},
+	})
+
+	// With no discovered sessions there is nothing to export — the
+	// root must not fall back to a recursive directory target.
+	assert.NotContains(t, targets.Dirs, parser.AgentRooCode)
+	assert.NotContains(t, targets.Files, parser.AgentRooCode)
 }

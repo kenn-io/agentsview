@@ -36,6 +36,14 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				}
 				continue
 			}
+			if def.Type == parser.AgentRooCode {
+				root, targetFiles := resolveRooCodeTarget(dir)
+				if root != "" && len(targetFiles) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					files[def.Type] = append(files[def.Type], targetFiles...)
+				}
+				continue
+			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
 			}
@@ -97,6 +105,46 @@ func resolveWindsurfTarget(root string) (string, []string) {
 		return "", nil
 	}
 	files := resolveWindsurfFiles(workspaceRoot)
+	if len(files) == 0 {
+		return "", nil
+	}
+	return targetRoot, files
+}
+
+// resolveRooCodeTarget curates a file-scoped target for a RooCode
+// root. The configured directory is VSCode's whole
+// globalStorage/rooveterinaryinc.roo-cline tree, which also holds
+// settings/mcp_settings.json (MCP env vars, API keys, auth headers),
+// caches, and checkpoints — none of which may be archived. Only the
+// discovered tasks/<id>/history_item.json files and their
+// ui_messages.json siblings are exported.
+func resolveRooCodeTarget(root string) (string, []string) {
+	targetRoot := filepath.Clean(root)
+	if info, err := os.Stat(targetRoot); err != nil || !info.IsDir() {
+		return "", nil
+	}
+	provider, ok := parser.NewProvider(parser.AgentRooCode, parser.ProviderConfig{
+		Roots: []string{targetRoot},
+	})
+	if !ok {
+		return "", nil
+	}
+	sources, err := provider.Discover(context.Background())
+	if err != nil {
+		return "", nil
+	}
+	var files []string
+	for _, source := range sources {
+		historyPath := providerDiscoveredPath(source)
+		if historyPath == "" || !regularRemoteSyncFile(historyPath) {
+			continue
+		}
+		files = append(files, historyPath)
+		msgPath := filepath.Join(filepath.Dir(historyPath), "ui_messages.json")
+		if regularRemoteSyncFile(msgPath) {
+			files = append(files, msgPath)
+		}
+	}
 	if len(files) == 0 {
 		return "", nil
 	}
