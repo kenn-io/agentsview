@@ -114,19 +114,6 @@ func TestPushRebuildTriggers(t *testing.T) {
 			wantReasonHas: "scope changed",
 		},
 		{
-			name: "deleted sync_metadata row",
-			mangle: func(t *testing.T, path string) {
-				conn, err := Open(path)
-				require.NoError(t, err)
-				defer conn.Close()
-				_, err = conn.Exec(
-					`DELETE FROM sync_metadata WHERE key = ?`, schemaVersionMetadataKey,
-				)
-				require.NoError(t, err)
-			},
-			wantReasonHas: "schema version",
-		},
-		{
 			name: "deleted mirror file",
 			mangle: func(t *testing.T, path string) {
 				require.NoError(t, os.Remove(path))
@@ -134,12 +121,12 @@ func TestPushRebuildTriggers(t *testing.T) {
 			wantReasonHas: "missing file",
 		},
 		{
-			name: "dropped sync_metadata table",
+			name: "dropped mirror table with sentinel intact",
 			mangle: func(t *testing.T, path string) {
 				conn, err := Open(path)
 				require.NoError(t, err)
 				defer conn.Close()
-				_, err = conn.Exec(`DROP TABLE sync_metadata`)
+				_, err = conn.Exec(`DROP TABLE tool_result_events`)
 				require.NoError(t, err)
 			},
 			wantReasonHas: "shape issue",
@@ -194,6 +181,32 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 				require.NoError(t, err)
 			},
 		},
+		{
+			name: "foreign duckdb database with generic sessions table",
+			write: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(`CREATE TABLE sessions (id TEXT)`)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "foreign duckdb database with sync_metadata but no agentsview key",
+			write: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(
+					`CREATE TABLE sync_metadata (key TEXT PRIMARY KEY, value TEXT)`,
+				)
+				require.NoError(t, err)
+				_, err = conn.Exec(
+					`INSERT INTO sync_metadata (key, value) VALUES ('other_tool', '1')`,
+				)
+				require.NoError(t, err)
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,10 +232,69 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 	}
 }
 
+// TestPushFailsClosedWhenMirrorLosesSentinel pins the strict side of the
+// recognition boundary: recognition requires the agentsview sentinel (the
+// agentsview_schema_version row in sync_metadata), not just familiar table
+// names. A once-valid mirror that lost its sentinel row, or its whole
+// sync_metadata table, is indistinguishable from a foreign DuckDB database
+// and must fail closed with the file untouched instead of being rebuilt
+// over.
+func TestPushFailsClosedWhenMirrorLosesSentinel(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name   string
+		mangle func(t *testing.T, path string)
+	}{
+		{
+			name: "deleted schema version sentinel row",
+			mangle: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(
+					`DELETE FROM sync_metadata WHERE key = ?`, schemaVersionMetadataKey,
+				)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "dropped sync_metadata table",
+			mangle: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(`DROP TABLE sync_metadata`)
+				require.NoError(t, err)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			local, path := newPushFixture(t, 1)
+			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			require.NoError(t, err)
+
+			tt.mangle(t, path)
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+
+			_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not an agentsview duckdb mirror")
+
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after,
+				"a refused push must leave the existing file byte-identical")
+		})
+	}
+}
+
 // TestPushRebuildsOverOldSchemaVersionMirror pins the recognition boundary
 // from the other side: a real agentsview mirror whose recorded schema
-// version predates this build is still recognized (it carries our tables)
-// and must rebuild normally rather than fail the overwrite guard.
+// version predates this build is still recognized (it carries the
+// agentsview sentinel) and must rebuild normally rather than fail the
+// overwrite guard.
 func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)

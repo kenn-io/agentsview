@@ -25,16 +25,29 @@ type MirrorProbe struct {
 	// isMirrorLockConflictError.
 	LockConflict bool
 	// RecognizedMirror is true when the existing file is positively
-	// identified as an agentsview DuckDB mirror: it opens as a DuckDB
-	// database and contains at least one of our schema artifacts (the
-	// sync_metadata or sessions table), or another process holds a DuckDB
-	// lock on it (which proves it is a DuckDB database — the normal state
-	// while a serve process has the mirror open). A wrong-schema-version
-	// or shape-incompatible mirror is still recognized; a file that cannot
-	// be opened as DuckDB at all, or opens but contains none of our
-	// artifacts, is not. Push refuses to rebuild over an existing
-	// unrecognized file so a misdirected path (for example the primary
-	// SQLite archive) is never silently replaced by a mirror rebuild.
+	// identified as an agentsview DuckDB mirror. An OPENABLE file is
+	// recognized only when it carries the agentsview sentinel: a
+	// sync_metadata(key, value) table containing the
+	// schemaVersionMetadataKey row, which every mirror generation writes at
+	// schema creation (see createSchema). Generic table names alone are not
+	// enough — a foreign DuckDB database that happens to have a table named
+	// "sessions" or "sync_metadata" must never be recognized, because
+	// recognition lets a rebuild atomically overwrite the file. A
+	// wrong-schema-version or shape-incompatible mirror still carries the
+	// sentinel and is still recognized.
+	//
+	// A file that cannot be inspected because a DuckDB process already
+	// holds it — a cross-process lock conflict (the normal state while a
+	// serve process has the mirror open) or a same-process double-open
+	// rejection — is also recognized: failing closed there would break the
+	// core push-under-serve policy, since a serve process always holds the
+	// mirror and push must still be able to rebuild it. That is a
+	// deliberate residual risk: a locked file is presumed ours because the
+	// path comes from the caller's own mirror configuration, and daemon
+	// pushes pin it to the server config. Push refuses to rebuild over an
+	// existing unrecognized file so a misdirected path (for example the
+	// primary SQLite archive) is never silently replaced by a mirror
+	// rebuild.
 	RecognizedMirror bool
 	SchemaVersion    int
 	DataVersion      int
@@ -135,13 +148,18 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 			isMirrorOpenInSameProcessError(err)
 		return probe
 	}
-	// Recognition is deliberately looser than shape validity: any DuckDB
-	// file carrying one of our tables is one of our mirrors (possibly from
-	// another schema version) and safe to rebuild over, while a DuckDB file
-	// with none of our artifacts belongs to someone else and must not be
-	// replaced. See MirrorProbe.RecognizedMirror.
-	probe.RecognizedMirror = len(existing["sync_metadata"]) > 0 ||
-		len(existing["sessions"]) > 0
+	// Recognition is looser than shape validity (a mirror from another
+	// schema version is still ours and safe to rebuild over) but stricter
+	// than generic table names: it requires the agentsview sentinel row.
+	// See MirrorProbe.RecognizedMirror and hasMirrorSentinel.
+	recognized, err := hasMirrorSentinel(ctx, conn, existing)
+	if err != nil {
+		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
+		probe.RecognizedMirror = probe.LockConflict ||
+			isMirrorOpenInSameProcessError(err)
+		return probe
+	}
+	probe.RecognizedMirror = recognized
 
 	if shapeIssue := mirrorShapeIssueFromColumns(existing); shapeIssue != "" {
 		probe.ShapeIssue = shapeIssue
@@ -164,6 +182,31 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.DeletionRevision = meta.DeletionRevision
 	probe.IdentityRevision = meta.IdentityRevision
 	return probe
+}
+
+// hasMirrorSentinel reports whether the open database carries the
+// agentsview mirror sentinel: a sync_metadata table with key and value
+// columns that contains the schemaVersionMetadataKey row. createSchema has
+// always written that row as part of creating a mirror, so every mirror —
+// current or from an older schema generation — carries it, while a foreign
+// DuckDB database with generically named tables does not. existing is the
+// column map loadColumns already produced, so a database without a
+// sync_metadata(key, value) table is rejected without running any query.
+func hasMirrorSentinel(
+	ctx context.Context, conn *sql.DB, existing map[string]map[string]bool,
+) (bool, error) {
+	meta := existing["sync_metadata"]
+	if !meta["key"] || !meta["value"] {
+		return false, nil
+	}
+	var found bool
+	if err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) > 0 FROM sync_metadata WHERE key = ?`,
+		schemaVersionMetadataKey,
+	).Scan(&found); err != nil {
+		return false, fmt.Errorf("checking duckdb mirror sentinel: %w", err)
+	}
+	return found, nil
 }
 
 // classifyProbeError converts an error encountered while querying an

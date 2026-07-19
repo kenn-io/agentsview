@@ -133,6 +133,88 @@ func TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues(t *testing.T) {
 	assert.True(t, p.NeedsRebuild("", 68), "zero data version must not match a real source version")
 }
 
+// TestProbeMirrorRecognitionRequiresSentinel pins RecognizedMirror to the
+// agentsview sentinel (the agentsview_schema_version row in sync_metadata)
+// rather than generic table names: a foreign DuckDB database that happens to
+// carry a table named sessions or sync_metadata must never be recognized,
+// because recognition authorizes a rebuild to atomically overwrite the file
+// (see ensureReplaceableMirror). A real mirror keeps its sentinel — and its
+// recognition — even when its shape is otherwise incompatible.
+func TestProbeMirrorRecognitionRequiresSentinel(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name           string
+		setup          func(t *testing.T, conn *sql.DB)
+		wantRecognized bool
+	}{
+		{
+			name: "generic sessions table only",
+			setup: func(t *testing.T, conn *sql.DB) {
+				_, err := conn.ExecContext(ctx, `CREATE TABLE sessions (id TEXT)`)
+				require.NoError(t, err)
+			},
+			wantRecognized: false,
+		},
+		{
+			name: "sync_metadata table without agentsview key",
+			setup: func(t *testing.T, conn *sql.DB) {
+				_, err := conn.ExecContext(ctx,
+					`CREATE TABLE sync_metadata (key TEXT PRIMARY KEY, value TEXT)`)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx,
+					`INSERT INTO sync_metadata (key, value) VALUES ('other_tool', '1')`)
+				require.NoError(t, err)
+			},
+			wantRecognized: false,
+		},
+		{
+			name: "sync_metadata without key/value columns",
+			setup: func(t *testing.T, conn *sql.DB) {
+				_, err := conn.ExecContext(ctx,
+					`CREATE TABLE sync_metadata (id INTEGER)`)
+				require.NoError(t, err)
+			},
+			wantRecognized: false,
+		},
+		{
+			name: "sentinel present with incompatible shape",
+			setup: func(t *testing.T, conn *sql.DB) {
+				require.NoError(t, createSchema(ctx, conn))
+				_, err := conn.ExecContext(ctx, `DROP TABLE messages`)
+				require.NoError(t, err)
+			},
+			wantRecognized: true,
+		},
+		{
+			name: "sentinel present with old schema version",
+			setup: func(t *testing.T, conn *sql.DB) {
+				require.NoError(t, createSchema(ctx, conn))
+				_, err := conn.ExecContext(ctx, `
+					INSERT INTO sync_metadata (key, value) VALUES (?, '1')
+					ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+					schemaVersionMetadataKey)
+				require.NoError(t, err)
+			},
+			wantRecognized: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "recognition.duckdb")
+			conn, err := Open(path)
+			require.NoError(t, err)
+			tt.setup(t, conn)
+			require.NoError(t, conn.Close())
+
+			p, err := ProbeMirror(ctx, path)
+
+			require.NoError(t, err)
+			assert.True(t, p.FileExists)
+			assert.Equal(t, tt.wantRecognized, p.RecognizedMirror)
+		})
+	}
+}
+
 func TestCanonicalPushScopeIsDeterministicAndSorted(t *testing.T) {
 	assert.Equal(t, "", canonicalPushScope(nil, nil))
 	assert.Equal(t, "", canonicalPushScope([]string{}, []string{}))

@@ -209,7 +209,7 @@ func Push(
 // (fresh create), and a lock conflict is recognized (it proves a DuckDB
 // database another process holds open — the normal rebuild-under-serve
 // case). Anything else — a SQLite database, an arbitrary file, a foreign
-// DuckDB database with none of our tables — must never be replaced: the
+// DuckDB database without the agentsview sentinel — must never be replaced: the
 // mirror path is caller-supplied configuration, and pointing it at a real
 // data file (for example the primary sessions.db) must fail instead of
 // destroying that file.
