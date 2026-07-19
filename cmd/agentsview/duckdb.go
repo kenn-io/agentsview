@@ -29,12 +29,12 @@ type DuckDBPushConfig struct {
 	Watch           bool
 	Debounce        time.Duration
 	Interval        time.Duration
-	// DeferLockedRebuild is set by the watch loops' automatic pushes so a
-	// mirror held by a live serve process defers instead of rebuilding the
-	// whole archive on every changed batch (see
-	// duckdbsync.SyncOptions.DeferLockedRebuild). Explicit `duckdb push`
-	// runs leave it false and keep today's rebuild-under-lock behavior.
-	DeferLockedRebuild bool
+	// Automatic is set by the watch loops' automatic pushes: a mirror held
+	// by a live serve process defers instead of rebuilding the whole
+	// archive on every changed batch, and archive-scale diagnostics are
+	// skipped (see duckdbsync.SyncOptions.Automatic). Explicit `duckdb
+	// push` runs leave it false and do neither.
+	Automatic bool
 }
 
 type DuckDBQuackServeConfig struct {
@@ -173,17 +173,32 @@ func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
 	}
 	fmt.Fprintf(
 		w,
-		"DuckDB push source: local %d; candidates %s; skipped unchanged %s; stale deleted %d\n",
-		result.Diagnostics.LocalSessionCount,
-		formatDuckDBPushSessionCounts(result.Diagnostics.CandidateSessions),
-		formatDuckDBPushSessionCounts(result.Diagnostics.SkippedUnchangedSessions),
-		result.Diagnostics.DeletedStaleSessions,
+		"DuckDB push source: %s\n",
+		formatDuckDBPushSource(result.Diagnostics),
 	)
 	fmt.Fprintf(
 		w,
 		"DuckDB push wrote: sessions %s, messages %d\n",
 		formatDuckDBPushSessionCounts(result.Diagnostics.PushedSessions),
 		result.MessagesPushed,
+	)
+}
+
+// formatDuckDBPushSource renders an incremental push's source counters.
+// The "local N" figure is omitted when LocalSessionCount is 0: automatic
+// pushes skip the archive-scale scope count entirely (see
+// duckdbsync.SyncOptions.Automatic), so 0 means "not counted", not an
+// empty archive.
+func formatDuckDBPushSource(d duckdbsync.PushDiagnostics) string {
+	source := ""
+	if d.LocalSessionCount > 0 {
+		source = fmt.Sprintf("local %d; ", d.LocalSessionCount)
+	}
+	return source + fmt.Sprintf(
+		"candidates %s; skipped unchanged %s; stale deleted %d",
+		formatDuckDBPushSessionCounts(d.CandidateSessions),
+		formatDuckDBPushSessionCounts(d.SkippedUnchangedSessions),
+		d.DeletedStaleSessions,
 	)
 }
 

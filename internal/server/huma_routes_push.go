@@ -151,12 +151,12 @@ type daemonPushRequest struct {
 	// NoVectors carries the CLI --no-vectors flag, which has no daemon-side
 	// flag of its own, into the push handler's vector-source gate.
 	NoVectors bool `json:"no_vectors,omitempty"`
-	// DeferLockedRebuild is set by the CLI's automatic watch-mode DuckDB
-	// pushes: a mirror held by a live serve process defers instead of
-	// rebuilding the whole archive on every changed batch (see
-	// duckdbsync.SyncOptions.DeferLockedRebuild). Explicit pushes leave it
-	// unset and keep the rebuild-under-lock behavior.
-	DeferLockedRebuild bool `json:"defer_locked_rebuild,omitempty"`
+	// Automatic is set by the CLI's watch-mode DuckDB pushes: a mirror
+	// held by a live serve process defers instead of rebuilding the whole
+	// archive on every changed batch, and archive-scale diagnostics are
+	// skipped (see duckdbsync.SyncOptions.Automatic). Explicit pushes
+	// leave it unset and do neither.
+	Automatic bool `json:"automatic,omitempty"`
 }
 
 // WithVectorPushSource wires the local vectors.db push source used by the
@@ -252,9 +252,9 @@ func normalizeDuckDBMirrorPath(path string) string {
 
 func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
 	return duckdbsync.SyncOptions{
-		Projects:           req.Projects,
-		ExcludeProjects:    req.ExcludeProjects,
-		DeferLockedRebuild: req.DeferLockedRebuild,
+		Projects:        req.Projects,
+		ExcludeProjects: req.ExcludeProjects,
+		Automatic:       req.Automatic,
 	}
 }
 

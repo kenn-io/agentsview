@@ -621,7 +621,7 @@ func assertMirrorSessionRelationship(
 // on everything that changed while the mirror was held.
 func TestPushDefersLockedRebuildForAutomaticPushes(t *testing.T) {
 	ctx := context.Background()
-	watchOpts := SyncOptions{DeferLockedRebuild: true}
+	watchOpts := SyncOptions{Automatic: true}
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", watchOpts, false, nil)
 	require.NoError(t, err)
@@ -675,18 +675,18 @@ func TestDeferLockedRebuildConditions(t *testing.T) {
 		probe MirrorProbe
 		want  bool
 	}{
-		{"opted-in locked recognized", SyncOptions{DeferLockedRebuild: true},
+		{"opted-in locked recognized", SyncOptions{Automatic: true},
 			false, heldRecognized, true},
-		{"opted-in same-process hold", SyncOptions{DeferLockedRebuild: true},
+		{"opted-in same-process hold", SyncOptions{Automatic: true},
 			false, MirrorProbe{
 				FileExists: true, Uninspectable: true, RecognizedMirror: true,
 			}, true},
 		{"no opt-in", SyncOptions{}, false, heldRecognized, false},
-		{"full requested", SyncOptions{DeferLockedRebuild: true},
+		{"full requested", SyncOptions{Automatic: true},
 			true, heldRecognized, false},
-		{"unrecognized locked file", SyncOptions{DeferLockedRebuild: true},
+		{"unrecognized locked file", SyncOptions{Automatic: true},
 			false, MirrorProbe{FileExists: true, Uninspectable: true}, false},
-		{"inspectable mirror", SyncOptions{DeferLockedRebuild: true},
+		{"inspectable mirror", SyncOptions{Automatic: true},
 			false, MirrorProbe{
 				FileExists: true, ShapeOK: true, RecognizedMirror: true,
 			}, false},
@@ -701,6 +701,38 @@ func TestDeferLockedRebuildConditions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAutomaticIncrementalPushSkipsScopeCount pins the bounded-cost side of
+// SyncOptions.Automatic: an automatic incremental push must not run the
+// archive-scale CountSessionsForMirrorScope diagnostics COUNT, so
+// Diagnostics.LocalSessionCount stays 0 while the same archive reports 1 on
+// an explicit incremental push. The local *db.DB offers no query
+// interception, so the zero assertion plus the !opts.Automatic gate in
+// runIncrementalPush pins the contract.
+func TestAutomaticIncrementalPushSkipsScopeCount(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	appendMessage(t, local, "sess-1")
+	auto, err := Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
+	require.NoError(t, err)
+	require.False(t, auto.Diagnostics.Full,
+		"fixture must exercise the incremental path")
+	assert.Equal(t, 1, auto.SessionsPushed,
+		"the automatic push must still push the changed session")
+	assert.Zero(t, auto.Diagnostics.LocalSessionCount,
+		"an automatic push must skip the archive-scale scope count")
+
+	appendMessage(t, local, "sess-1")
+	explicit, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.False(t, explicit.Diagnostics.Full,
+		"fixture must exercise the incremental path")
+	assert.Equal(t, 1, explicit.Diagnostics.LocalSessionCount,
+		"an explicit incremental push still reports the scope count")
 }
 
 // TestPushFailsClosedWhenMirrorLosesSentinel pins the strict side of the

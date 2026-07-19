@@ -177,8 +177,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		require.NotNil(t, req.DuckDB)
 		assert.Empty(t, req.DuckDB.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.True(t, req.DeferLockedRebuild,
-			"watch-mode daemon pushes must ask the daemon to defer locked rebuilds")
+		assert.True(t, req.Automatic,
+			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
@@ -193,8 +193,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		require.NotNil(t, req.DuckDB)
 		assert.Empty(t, req.DuckDB.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.True(t, req.DeferLockedRebuild,
-			"watch-mode daemon pushes must ask the daemon to defer locked rebuilds")
+		assert.True(t, req.Automatic,
+			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
@@ -274,6 +274,37 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 	assert.Contains(t, got, "DuckDB push wrote: sessions 3 (claude=2, codex=1), messages 7")
 }
 
+// TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount verifies the "local N"
+// figure is omitted when LocalSessionCount is 0: automatic pushes skip the
+// archive-scale scope count (see duckdbsync.SyncOptions.Automatic), so 0
+// means "not counted" and printing "local 0" would misreport the archive as
+// empty.
+func TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount(t *testing.T) {
+	var out bytes.Buffer
+
+	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+		SessionsPushed: 1,
+		MessagesPushed: 2,
+		Diagnostics: duckdbsync.PushDiagnostics{
+			Cutoff:            "2026-07-01T12:00:00.000Z",
+			LocalSessionCount: 0,
+			CandidateSessions: duckdbsync.PushSessionCounts{
+				Total:   1,
+				ByAgent: map[string]int{"claude": 1},
+			},
+			PushedSessions: duckdbsync.PushSessionCounts{
+				Total:   1,
+				ByAgent: map[string]int{"claude": 1},
+			},
+		},
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "DuckDB push source: candidates 1 (claude=1); skipped unchanged 0; stale deleted 0")
+	assert.NotContains(t, got, "local",
+		"a skipped scope count must not print a misleading local 0")
+}
+
 // TestWriteDuckDBPushDiagnosticsReportsRebuildMode verifies that a rebuild
 // (Diagnostics.Full) always prints its mode and reason, even though a
 // rebuild leaves Diagnostics.Cutoff empty (only pushChangedSessions, the
@@ -304,7 +335,7 @@ func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 
 // TestWriteDuckDBPushDiagnosticsReportsDeferredMode verifies a deferred
 // watch-mode push (mirror held by a live serve; see
-// duckdbsync.SyncOptions.DeferLockedRebuild) prints its mode and reason
+// duckdbsync.SyncOptions.Automatic) prints its mode and reason
 // instead of the incremental or rebuild counters, none of which exist for
 // a push that touched nothing.
 func TestWriteDuckDBPushDiagnosticsReportsDeferredMode(t *testing.T) {

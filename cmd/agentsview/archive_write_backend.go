@@ -219,8 +219,9 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		pushCfg.Full = full
 		// Watch pushes are automatic: a mirror held by a live serve
 		// process defers instead of rebuilding the whole archive on
-		// every changed batch. Push ignores the flag when full is set.
-		pushCfg.DeferLockedRebuild = true
+		// every changed batch, and archive-scale diagnostics are
+		// skipped. Push ignores the defer behavior when full is set.
+		pushCfg.Automatic = true
 		backend := archiveWriteBackend(b)
 		cleanup := func() {}
 		if reason != reasonStartup {
@@ -300,11 +301,11 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	return postDaemonPush[duckdbsync.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/duckdb",
 		daemonPushRequest{
-			Full:               cfg.Full,
-			Projects:           projects,
-			ExcludeProjects:    excludeProjects,
-			DuckDB:             &duckCfg,
-			DeferLockedRebuild: cfg.DeferLockedRebuild,
+			Full:            cfg.Full,
+			Projects:        projects,
+			ExcludeProjects: excludeProjects,
+			DuckDB:          &duckCfg,
+			Automatic:       cfg.Automatic,
 		},
 		onProgress,
 	)
@@ -490,9 +491,9 @@ func (b *localArchiveWriteBackend) duckDBPush(
 
 	fmt.Println("Starting DuckDB push...")
 	opts := duckdbsync.SyncOptions{
-		Projects:           projects,
-		ExcludeProjects:    excludeProjects,
-		DeferLockedRebuild: cfg.DeferLockedRebuild,
+		Projects:        projects,
+		ExcludeProjects: excludeProjects,
+		Automatic:       cfg.Automatic,
 	}
 	result, err := duckdbsync.Push(
 		ctx, duckCfg.Path, b.database, duckCfg.MachineName, opts, forceFull,
@@ -530,8 +531,9 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		pushCfg.Full = full
 		// Watch pushes are automatic: a mirror held by a live serve
 		// process defers instead of rebuilding the whole archive on
-		// every changed batch. Push ignores the flag when full is set.
-		pushCfg.DeferLockedRebuild = true
+		// every changed batch, and archive-scale diagnostics are
+		// skipped. Push ignores the defer behavior when full is set.
+		pushCfg.Automatic = true
 		res, err := b.DuckDBPush(pctx, duckCfg, pushCfg, projects, exclude)
 		if err != nil {
 			return err
@@ -578,11 +580,8 @@ func logDuckDBWatchPushResult(res duckdbsync.PushResult, reason pushReason) {
 	}
 	if res.Diagnostics.Cutoff != "" {
 		log.Printf(
-			"duckdb watch: source local %d; candidates %s; skipped unchanged %s; stale deleted %d; wrote sessions %s, messages %d (%s)",
-			res.Diagnostics.LocalSessionCount,
-			formatDuckDBPushSessionCounts(res.Diagnostics.CandidateSessions),
-			formatDuckDBPushSessionCounts(res.Diagnostics.SkippedUnchangedSessions),
-			res.Diagnostics.DeletedStaleSessions,
+			"duckdb watch: source %s; wrote sessions %s, messages %d (%s)",
+			formatDuckDBPushSource(res.Diagnostics),
 			formatDuckDBPushSessionCounts(res.Diagnostics.PushedSessions),
 			res.MessagesPushed,
 			reason,

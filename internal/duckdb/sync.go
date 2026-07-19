@@ -44,15 +44,15 @@ const (
 type SyncOptions struct {
 	Projects        []string
 	ExcludeProjects []string
-	// DeferLockedRebuild makes Push return a successful no-op (with
-	// Diagnostics.Deferred set) instead of rebuilding when the ONLY thing
-	// standing in the way of an incremental push is that a live DuckDB
-	// process holds the mirror (nothing is inspectable under the lock, so
-	// no other rebuild trigger can even be determined). Watch-mode /
-	// daemon-driven automatic pushes set it so a long-running serve does
-	// not turn every changed batch into an O(archive) rebuild; explicit
-	// pushes leave it unset and keep rebuilding under a lock.
-	DeferLockedRebuild bool
+	// Automatic marks a watch-mode / daemon-driven push, keeping its cost
+	// bounded by the changed batch: automatic pushes defer locked rebuilds
+	// (a successful no-op with Diagnostics.Deferred set instead of an
+	// O(archive) rebuild when a live DuckDB process holds the mirror — the
+	// only rebuild trigger determinable under the lock) AND skip
+	// archive-scale diagnostics (the full scope COUNT behind
+	// Diagnostics.LocalSessionCount, which stays 0). Explicit pushes leave
+	// it unset and do neither.
+	Automatic bool
 }
 
 // PushResult summarizes a DuckDB push operation.
@@ -70,8 +70,12 @@ type PushDiagnostics struct {
 	// RebuildReason is the human-readable reason a rebuild was chosen
 	// instead of an incremental push (see rebuildReason); empty for an
 	// incremental push (Full is false).
-	RebuildReason            string
-	Cutoff                   string
+	RebuildReason string
+	Cutoff        string
+	// LocalSessionCount is the number of local sessions in the push scope.
+	// Automatic incremental pushes skip the archive-scale COUNT that
+	// produces it and leave it 0 (see SyncOptions.Automatic); the CLI
+	// omits the figure when it is 0.
 	LocalSessionCount        int
 	CandidateSessions        PushSessionCounts
 	SkippedUnchangedSessions PushSessionCounts
@@ -89,7 +93,7 @@ type PushDiagnostics struct {
 	CurationRefreshed bool
 	// Deferred reports that the push touched nothing because the mirror is
 	// held by a live DuckDB process and the caller opted into
-	// SyncOptions.DeferLockedRebuild; DeferredReason carries the
+	// SyncOptions.Automatic; DeferredReason carries the
 	// human-readable explanation. No cutoff, marker, or mirror state
 	// advances on a deferred push, so the next unlocked push catches up on
 	// everything that changed in the meantime.
@@ -189,7 +193,7 @@ func (s *Sync) isFiltered() bool {
 // for a requested incremental push (for example because a live 'duckdb
 // serve' holds the mirror open) is otherwise invisible to the operator.
 // Automatic watch-mode callers can opt out of the rebuild-under-lock
-// behavior with SyncOptions.DeferLockedRebuild (see deferLockedRebuild).
+// behavior with SyncOptions.Automatic (see deferLockedRebuild).
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, full bool, onProgress func(PushProgress),
@@ -232,7 +236,7 @@ func Push(
 
 // deferLockedRebuild decides whether a push should return a successful
 // no-op instead of rebuilding: the caller opted in
-// (SyncOptions.DeferLockedRebuild, set by automatic watch-mode pushes), the
+// (SyncOptions.Automatic, set by automatic watch-mode pushes), the
 // push is not an explicit --full request, and the probe shows a
 // marker-recognized mirror that a live DuckDB process holds
 // (Uninspectable covers both a cross-process lock conflict and the
@@ -247,7 +251,7 @@ func Push(
 func deferLockedRebuild(
 	opts SyncOptions, full bool, probe MirrorProbe,
 ) (PushResult, bool) {
-	if !opts.DeferLockedRebuild || full ||
+	if !opts.Automatic || full ||
 		!probe.Uninspectable || !probe.RecognizedMirror {
 		return PushResult{}, false
 	}
@@ -381,11 +385,17 @@ func (s *Sync) runIncrementalPush(
 		return result, err
 	}
 
-	result.Diagnostics.LocalSessionCount, err = s.local.CountSessionsForMirrorScope(
-		ctx, s.projects, s.excludeProjects,
-	)
-	if err != nil {
-		return result, err
+	// Automatic pushes skip this archive-scale COUNT: a full scope count on
+	// every watcher-triggered push would scale with total archive size
+	// rather than the changed batch. LocalSessionCount stays 0 and the CLI
+	// omits the figure.
+	if !opts.Automatic {
+		result.Diagnostics.LocalSessionCount, err = s.local.CountSessionsForMirrorScope(
+			ctx, s.projects, s.excludeProjects,
+		)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	pushed, err := s.pushChangedSessions(ctx, probe, onProgress, &result)
