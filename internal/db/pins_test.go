@@ -22,37 +22,6 @@ func pinFirstMessage(t *testing.T, d *DB, sessionID string) int64 {
 	return msgs[0].ID
 }
 
-func TestListPinCurationForScope(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	insertSession(t, d, "s1", "alpha")
-	insertSession(t, d, "s2", "beta")
-	insertMessages(t, d, userMsg("s1", 0, "hello from alpha"))
-	insertMessages(t, d, userMsg("s2", 0, "hello from beta"))
-	alphaMsgID := pinFirstMessage(t, d, "s1")
-	betaMsgID := pinFirstMessage(t, d, "s2")
-	note := "beta note"
-	_, err := d.PinMessage("s2", betaMsgID, &note)
-	require.NoError(t, err, "PinMessage note update")
-
-	all, err := d.ListPinCurationForScope(ctx, nil, nil)
-	require.NoError(t, err, "unfiltered scope")
-	require.Len(t, all, 2)
-
-	alphaOnly, err := d.ListPinCurationForScope(ctx, []string{"alpha"}, nil)
-	require.NoError(t, err, "include alpha")
-	require.Len(t, alphaOnly, 1)
-	assert.Equal(t, alphaMsgID, alphaOnly[0].MessageID)
-	assert.Equal(t, "", alphaOnly[0].Note)
-
-	excludeAlpha, err := d.ListPinCurationForScope(ctx, nil, []string{"alpha"})
-	require.NoError(t, err, "exclude alpha")
-	require.Len(t, excludeAlpha, 1)
-	assert.Equal(t, betaMsgID, excludeAlpha[0].MessageID)
-	assert.Equal(t, note, excludeAlpha[0].Note)
-}
-
 func TestListPinnedSessionIDsForScope(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -85,70 +54,6 @@ func TestListPinnedSessionIDsForScope(t *testing.T) {
 	excludeAlpha, err := d.ListPinnedSessionIDsForScope(ctx, nil, []string{"alpha"})
 	require.NoError(t, err, "exclude alpha")
 	assert.Equal(t, []string{"s2"}, excludeAlpha)
-}
-
-// TestListPinCurationForScopeCapturesIdentityAndNoteNullability is the
-// FIX6 regression: a curation fingerprint entry built only from
-// (message_id, note-COALESCE'd-to-empty-string) is unchanged by an unpin followed by a
-// repin of the same message with the same note, and conflates an explicit
-// empty-string note with no note at all. PinCurationEntry must carry the
-// pin's own row id, created_at, and note-presence separately from note
-// content so both cases are distinguishable.
-//
-// A second, untouched pin (s2) is kept present throughout so
-// pinned_messages is never fully empty: SQLite recycles the highest unused
-// rowid for a plain INTEGER PRIMARY KEY once a table has no rows at all, so
-// deleting the sole row and reinserting one could otherwise reuse the same
-// id purely as an artifact of the table being momentarily empty, rather
-// than demonstrating anything about the fix.
-func TestListPinCurationForScopeCapturesIdentityAndNoteNullability(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	insertSession(t, d, "s1", "alpha")
-	insertSession(t, d, "s2", "alpha")
-	insertMessages(t, d, userMsg("s1", 0, "hello"))
-	insertMessages(t, d, userMsg("s2", 0, "world"))
-	msgID := pinFirstMessage(t, d, "s1") // pinned with a nil note
-	pinFirstMessage(t, d, "s2")
-
-	entries, err := d.ListPinCurationForScope(ctx, nil, nil)
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
-	before := findPinCurationEntry(t, entries, msgID)
-	require.NotZero(t, before.ID)
-	assert.False(t, before.HasNote,
-		"a pin created without a note must not read back as an empty-string note")
-	assert.Equal(t, "", before.Note)
-	assert.NotEmpty(t, before.CreatedAt)
-
-	require.NoError(t, d.UnpinMessage("s1", msgID))
-	emptyNote := ""
-	_, err = d.PinMessage("s1", msgID, &emptyNote)
-	require.NoError(t, err)
-
-	entries, err = d.ListPinCurationForScope(ctx, nil, nil)
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
-	after := findPinCurationEntry(t, entries, msgID)
-	assert.NotEqual(t, before.ID, after.ID,
-		"unpin+repin must produce a new pin row id even though message_id is unchanged")
-	assert.True(t, after.HasNote,
-		"an explicit empty-string note is a different state than no note at all")
-	assert.Equal(t, "", after.Note)
-}
-
-func findPinCurationEntry(
-	t *testing.T, entries []PinCurationEntry, messageID int64,
-) PinCurationEntry {
-	t.Helper()
-	for _, e := range entries {
-		if e.MessageID == messageID {
-			return e
-		}
-	}
-	t.Fatalf("no pin curation entry for message %d", messageID)
-	return PinCurationEntry{}
 }
 
 func TestListPinnedMessages_NoFilter(t *testing.T) {

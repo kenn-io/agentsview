@@ -492,7 +492,9 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 	_, err = local.PinMessage("sess-2", msgs[0].ID, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, syncer.replaceCuration(ctx))
+	snap, err := syncer.loadCurationSnapshot(ctx)
+	require.NoError(t, err)
+	require.NoError(t, syncer.replaceCuration(ctx, snap))
 
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"starred_sessions", "session_id = ?", "sess-1", 1)
@@ -547,9 +549,11 @@ func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
 // identical note, so it would treat the cycle as a no-op and skip the
 // mirror refresh even though it is a genuine curation event (a distinct pin
 // row, with a new id and created_at). A second, untouched pin (sess-2) is
-// kept present throughout so pinned_messages is never fully empty locally,
-// avoiding SQLite's empty-table rowid reuse for a plain INTEGER PRIMARY KEY
-// (see the analogous comment in internal/db/pins_test.go).
+// kept present throughout so pinned_messages is never fully empty locally:
+// SQLite recycles the highest unused rowid for a plain INTEGER PRIMARY KEY
+// once a table has no rows at all, so unpinning the sole row and repinning
+// could otherwise reuse the same pin id purely as an artifact of the table
+// being momentarily empty.
 func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 2)
@@ -578,6 +582,42 @@ func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.CurationRefreshed,
 		"an unpin+repin with the same note must still be detected as a curation change")
+}
+
+// TestCurationFingerprintDistinguishesNilNoteFromEmptyNote is the
+// nullability half of the FIX6 regression, previously pinned at the db
+// layer against the deleted ListPinCurationForScope: an explicit
+// empty-string note is a different curation state than never having set a
+// note, so the fingerprint's HasNote field must keep them apart instead of
+// collapsing both to "".
+func TestCurationFingerprintDistinguishesNilNoteFromEmptyNote(t *testing.T) {
+	ctx := context.Background()
+	local, _ := newPushFixture(t, 1)
+	s := newInMemoryTestSync(t, local, SyncOptions{})
+
+	msgs, err := local.GetAllMessages(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	_, err = local.PinMessage("sess-1", msgs[0].ID, nil)
+	require.NoError(t, err)
+
+	snap, err := s.loadCurationSnapshot(ctx)
+	require.NoError(t, err)
+	withoutNote, err := snap.fingerprint()
+	require.NoError(t, err)
+
+	// Updating the note in place keeps the pin's id and created_at, so
+	// note presence is the only field that can distinguish the states.
+	empty := ""
+	_, err = local.PinMessage("sess-1", msgs[0].ID, &empty)
+	require.NoError(t, err)
+
+	snap, err = s.loadCurationSnapshot(ctx)
+	require.NoError(t, err)
+	withEmptyNote, err := snap.fingerprint()
+	require.NoError(t, err)
+	assert.NotEqual(t, withoutNote, withEmptyNote,
+		"an explicit empty-string note is a different state than no note at all")
 }
 
 // assertMirrorTableCount opens path, asserts table's total row count, and

@@ -173,39 +173,6 @@ type PinCurationEntry struct {
 	HasNote   bool
 }
 
-// ListPinCurationForScope returns pinned-message curation state restricted
-// to the given project scope, sorted by message id for deterministic
-// output. Like ListStarredSessionIDsForScope, cost is bounded by the number
-// of pinned rows (one join lookup each), not archive size.
-func (db *DB) ListPinCurationForScope(
-	ctx context.Context, projects, excludeProjects []string,
-) ([]PinCurationEntry, error) {
-	where, args := curationScopeWhere("s", projects, excludeProjects)
-	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT pm.id, pm.message_id, pm.created_at, pm.note FROM pinned_messages pm
-		 JOIN sessions s ON s.id = pm.session_id`+where+
-			` ORDER BY pm.message_id`,
-		args...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing scoped pinned messages: %w", err)
-	}
-	defer rows.Close()
-
-	var entries []PinCurationEntry
-	for rows.Next() {
-		var e PinCurationEntry
-		var note sql.NullString
-		if err := rows.Scan(&e.ID, &e.MessageID, &e.CreatedAt, &note); err != nil {
-			return nil, fmt.Errorf("scanning scoped pinned message: %w", err)
-		}
-		e.HasNote = note.Valid
-		e.Note = note.String
-		entries = append(entries, e)
-	}
-	return entries, rows.Err()
-}
-
 // ListPinnedSessionIDsForScope returns the distinct session IDs that have
 // at least one pinned message, restricted to the given project scope and
 // sorted for deterministic output. Like ListStarredSessionIDsForScope,

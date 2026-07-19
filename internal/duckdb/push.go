@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -457,30 +458,110 @@ func (s *Sync) selectTombstonesToApply(
 	return apply, nil
 }
 
-// replaceCuration rewrites starred_sessions and pinned_messages from the
-// local in-scope curation state. All work is bounded by curation size, not
-// mirror size: the starred/pinned session ID lists are curation-bounded
-// local queries, mirror membership is validated for exactly those IDs (one
-// batched lookup, see mirrorResidentSessionIDs), and the pin rows are
-// loaded with one batched local query (PinnedMessagesBySession, chunked at
-// 900 IDs). Only curation rows whose sessions actually exist in the mirror
-// are inserted — a star or pin for a session that was never mirrored (out
-// of scope, not yet pushed) is skipped, and pin notes are preserved. The
-// delete side stays the machine-scoped clear of both tables, so removed
-// stars/pins disappear without enumerating them.
-func (s *Sync) replaceCuration(ctx context.Context) error {
+// curationSnapshot is one point-in-time read of the local in-scope
+// curation state. Its fingerprint is computed from this in-memory data and
+// replaceCuration writes this same data, so the fingerprint recorded in
+// mirror sync_metadata always describes exactly what the mirror holds.
+// Splitting those into separate SQLite reads (the previous shape) allowed
+// an ABA race: a star or pin-note toggled and reverted between the
+// fingerprint read and the copy read left the mirror holding the
+// intermediate state behind a fingerprint that matched the reverted local
+// state, so refreshCurationIfChanged skipped forever.
+type curationSnapshot struct {
+	starred       []string
+	pinsBySession map[string][]db.PinnedMessage
+}
+
+// loadCurationSnapshot reads the scoped starred session IDs and every
+// scoped pin row. Both queries are bounded by curation size, not mirror or
+// archive size. Pins are loaded unfiltered by mirror residency: residency
+// is a mirror-side property applied at write time (replaceCuration), while
+// the fingerprint must track the LOCAL state so a pin for a
+// not-yet-mirrored session still forces a refresh once its session lands.
+func (s *Sync) loadCurationSnapshot(ctx context.Context) (curationSnapshot, error) {
 	starred, err := s.local.ListStarredSessionIDsForScope(
 		ctx, s.projects, s.excludeProjects,
 	)
 	if err != nil {
-		return fmt.Errorf("loading starred sessions for curation refresh: %w", err)
+		return curationSnapshot{}, fmt.Errorf(
+			"loading starred sessions for curation snapshot: %w", err)
 	}
 	pinnedSessions, err := s.local.ListPinnedSessionIDsForScope(
 		ctx, s.projects, s.excludeProjects,
 	)
 	if err != nil {
-		return fmt.Errorf("loading pinned session ids for curation refresh: %w", err)
+		return curationSnapshot{}, fmt.Errorf(
+			"loading pinned session ids for curation snapshot: %w", err)
 	}
+	pinsBySession, err := s.local.PinnedMessagesBySession(ctx, pinnedSessions)
+	if err != nil {
+		return curationSnapshot{}, fmt.Errorf(
+			"loading pinned messages for curation snapshot: %w", err)
+	}
+	return curationSnapshot{starred: starred, pinsBySession: pinsBySession}, nil
+}
+
+// fingerprint hashes the snapshot's starred session ids and pinned
+// message id/note state. Pin notes are included, not just membership:
+// PinMessage on an already-pinned message updates its note in place
+// without changing the pinned message id set, so a fingerprint over ids
+// alone would miss a note-only edit. HasNote keeps a NULL note distinct
+// from an explicit empty note. The payload reproduces the shape the
+// previous separate-read fingerprint hashed ({ID, MessageID, CreatedAt,
+// Note, HasNote} sorted by message id), so upgrading does not force a
+// spurious refresh.
+func (snap curationSnapshot) fingerprint() (string, error) {
+	pinned := make([]db.PinCurationEntry, 0, len(snap.pinsBySession))
+	for _, pins := range snap.pinsBySession {
+		for _, p := range pins {
+			entry := db.PinCurationEntry{
+				ID:        p.ID,
+				MessageID: p.MessageID,
+				CreatedAt: p.CreatedAt,
+			}
+			if p.Note != nil {
+				entry.Note = *p.Note
+				entry.HasNote = true
+			}
+			pinned = append(pinned, entry)
+		}
+	}
+	slices.SortFunc(pinned, func(a, b db.PinCurationEntry) int {
+		if c := cmp.Compare(a.MessageID, b.MessageID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
+	payload := struct {
+		Starred []string
+		Pinned  []db.PinCurationEntry
+	}{Starred: snap.starred, Pinned: pinned}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encoding curation fingerprint: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// replaceCuration rewrites starred_sessions and pinned_messages from the
+// given snapshot — never from a fresh local read, so the caller's recorded
+// fingerprint (computed from the same snapshot) always matches what lands
+// in the mirror. All work is bounded by curation size, not mirror size:
+// mirror membership is validated for exactly the snapshot's session IDs
+// (one batched lookup, see mirrorResidentSessionIDs). Only curation rows
+// whose sessions actually exist in the mirror are inserted — a star or pin
+// for a session that was never mirrored (out of scope, not yet pushed) is
+// skipped, and pin notes are preserved. The delete side stays the
+// machine-scoped clear of both tables, so removed stars/pins disappear
+// without enumerating them.
+func (s *Sync) replaceCuration(ctx context.Context, snap curationSnapshot) error {
+	starred := snap.starred
+	pinnedSessions := make([]string, 0, len(snap.pinsBySession))
+	for id := range snap.pinsBySession {
+		pinnedSessions = append(pinnedSessions, id)
+	}
+	slices.Sort(pinnedSessions)
 	resident, err := s.mirrorResidentSessionIDs(
 		ctx, append(append([]string(nil), starred...), pinnedSessions...),
 	)
@@ -493,10 +574,7 @@ func (s *Sync) replaceCuration(ctx context.Context) error {
 			residentPinned = append(residentPinned, id)
 		}
 	}
-	pinsBySession, err := s.local.PinnedMessagesBySession(ctx, residentPinned)
-	if err != nil {
-		return fmt.Errorf("loading local pinned messages for curation refresh: %w", err)
-	}
+	pinsBySession := snap.pinsBySession
 
 	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
 		for _, table := range []string{"pinned_messages", "starred_sessions"} {
@@ -541,7 +619,11 @@ func (s *Sync) replaceCuration(ctx context.Context) error {
 // even a refresh that does run is curation-bounded (see replaceCuration).
 // It reports whether it actually refreshed.
 func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
-	fingerprint, err := s.curationFingerprint(ctx)
+	snap, err := s.loadCurationSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	fingerprint, err := snap.fingerprint()
 	if err != nil {
 		return false, err
 	}
@@ -552,7 +634,7 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 	if fingerprint == stored {
 		return false, nil
 	}
-	if err := s.replaceCuration(ctx); err != nil {
+	if err := s.replaceCuration(ctx, snap); err != nil {
 		return false, err
 	}
 	if err := recordMetadataKey(
@@ -561,35 +643,6 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// curationFingerprint hashes the local in-scope curation state (sorted
-// starred session ids and pinned message id/note pairs) so
-// refreshCurationIfChanged can detect whether curation changed since the
-// last refresh. Pin notes are included, not just membership: PinMessage on
-// an already-pinned message updates its note in place without changing the
-// pinned message id set, so a fingerprint over ids alone would miss a
-// note-only edit. Both source queries are bounded by curation size, not
-// mirror or archive size.
-func (s *Sync) curationFingerprint(ctx context.Context) (string, error) {
-	starred, err := s.local.ListStarredSessionIDsForScope(ctx, s.projects, s.excludeProjects)
-	if err != nil {
-		return "", fmt.Errorf("loading starred sessions for curation fingerprint: %w", err)
-	}
-	pinned, err := s.local.ListPinCurationForScope(ctx, s.projects, s.excludeProjects)
-	if err != nil {
-		return "", fmt.Errorf("loading pinned messages for curation fingerprint: %w", err)
-	}
-	payload := struct {
-		Starred []string
-		Pinned  []db.PinCurationEntry
-	}{Starred: starred, Pinned: pinned}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("encoding curation fingerprint: %w", err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 // pushSession fully replaces one mirror session row and all of its

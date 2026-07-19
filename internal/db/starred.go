@@ -112,9 +112,9 @@ func (db *DB) ListStarredSessionIDsForScope(
 
 // curationScopeWhere builds a " WHERE ..." clause (with a leading space, ""
 // when unfiltered) restricting alias.project to projects/excludeProjects.
-// Shared by ListStarredSessionIDsForScope and ListPinCurationForScope, which
-// both join a curation table to sessions under the same alias convention to
-// compute a project-scoped curation fingerprint.
+// Shared by ListStarredSessionIDsForScope and ListPinnedSessionIDsForScope,
+// which both join a curation table to sessions under the same alias
+// convention to compute a project-scoped curation fingerprint.
 func curationScopeWhere(alias string, projects, excludeProjects []string) (string, []any) {
 	var args []any
 	var where []string

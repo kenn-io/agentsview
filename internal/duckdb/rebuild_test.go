@@ -6,7 +6,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
@@ -389,82 +388,129 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 		"session hard-deleted during rebuild must still be reconciled by the next incremental push")
 }
 
-// TestRebuildCurationFingerprintCapturedBeforeCurationCopy is the FIX5
-// regression, mirroring TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration's
-// approach: the curation fingerprint a rebuild stores must be captured
-// BEFORE replaceCuration copies curation into the mirror, the same
-// pre-capture principle rebuildSnapshot documents for the cutoff/deletion
-// revision. Capturing it AFTER the copy instead (as the code previously
-// did) can permanently strand a curation edit that races the copy: the
-// edit is fingerprinted (a late read already reflects it) but was never
-// mirrored (the copy already ran), so the stored fingerprint then matches
-// all future local state and refreshCurationIfChanged skips the mirror
-// refresh forever, until some other curation edit happens to shake it
-// loose.
-//
-// There is no hook into the middle of a running rebuild here, so — exactly
-// like the session-enumeration regression test — the race is reproduced by
-// calling the same building blocks pushEverything composes
-// (curationFingerprint, replaceCuration, recordMetadataKey) directly
-// in the fixed order, with a curation mutation landing between the
-// fingerprint capture and the copy.
-func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
+// pushCurationSnapshotFixture seeds the rebuild fixture and mirrors every
+// session, returning the open Sync and the fixture session ids. Callers
+// drive the curation building blocks pushEverything composes
+// (loadCurationSnapshot, fingerprint, replaceCuration, recordMetadataKey)
+// directly — there is no hook into the middle of a running rebuild — then
+// finish with finishCurationSnapshotRebuild so the next Push over the
+// mirror runs incrementally.
+func pushCurationSnapshotFixture(t *testing.T, local *db.DB, path string) (*Sync, []string) {
+	t.Helper()
 	ctx := context.Background()
-	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-
 	s := newTestSync(t, path, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, s.DB()))
 
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
-	sort.Slice(sessions, func(i, j int) bool { return sessions[i].ID < sessions[j].ID })
 	fingerprints, err := s.sessionFingerprints(ctx, sessions)
 	require.NoError(t, err)
 	for _, sess := range sessions {
 		_, err := s.pushSingleSession(ctx, sess, fingerprints[sess.ID])
 		require.NoError(t, err)
 	}
+	return s, ids
+}
 
-	// Capture the curation fingerprint BEFORE the curation copy, exactly as
-	// the fixed pushEverything now does.
-	fingerprint, err := s.curationFingerprint(ctx)
-	require.NoError(t, err)
-
-	// A star lands after the fingerprint capture but before the curation
-	// copy below runs — standing in for a curation edit racing an
-	// in-flight rebuild's replaceCuration call.
-	ok, err := local.StarSession(ids[1])
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	require.NoError(t, s.replaceCuration(ctx))
-	require.NoError(t, recordMetadataKey(
-		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
-	))
-
+// finishCurationSnapshotRebuild writes the rebuild metadata a valid mirror
+// needs and closes the Sync, so the assertions and Push that follow see the
+// mirror exactly as a completed rebuild leaves it.
+func finishCurationSnapshotRebuild(t *testing.T, s *Sync, local *db.DB) {
+	t.Helper()
+	ctx := context.Background()
 	snapshot, err := captureRebuildSnapshot(ctx, local)
 	require.NoError(t, err)
 	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
 	require.NoError(t, err)
 	require.NoError(t, s.writeRebuildMetadata(ctx, "", snapshot, identityRevision))
 	require.NoError(t, s.Close())
+}
 
-	// The star already made it into this "rebuild" because
-	// pushEverythingCuration re-reads local state fresh — no data was lost —
-	// but the fingerprint stored above predates it, so the next incremental
-	// push must still detect the mismatch and refresh curation rather than
-	// treating the mirror's (already correct) state as unchanged forever.
-	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 1)
+// TestReplaceCurationWritesTheFingerprintedSnapshot pins the
+// single-snapshot contract: replaceCuration writes the snapshot it was
+// handed, never a fresh local read, so the recorded fingerprint always
+// describes exactly what the mirror holds. A star lands between the
+// snapshot load and the copy — under the previous shape (fingerprint and
+// copy as two separate SQLite reads) the copy would have picked it up
+// while the fingerprint did not; now the copy must NOT include it, and
+// the next incremental push must detect the mismatch and refresh.
+func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	s, ids := pushCurationSnapshotFixture(t, local, path)
+
+	snap, err := s.loadCurationSnapshot(ctx)
+	require.NoError(t, err)
+	fingerprint, err := snap.fingerprint()
+	require.NoError(t, err)
+
+	// A curation edit races the in-flight copy: it lands after the
+	// snapshot was taken but before replaceCuration runs.
+	ok, err := local.StarSession(ids[1])
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, s.replaceCuration(ctx, snap))
+	require.NoError(t, recordMetadataKey(
+		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
+	))
+	finishCurationSnapshotRebuild(t, s, local)
+
+	// The copy wrote the snapshot, not a fresh read: the racing star is
+	// not mirrored yet, but the stored fingerprint predates it too, so
+	// the next push must refresh and deliver it.
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 0)
 
 	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full,
 		"a valid mirror with fresh metadata must not force a rebuild")
 	assert.True(t, res.Diagnostics.CurationRefreshed,
-		"a curation change racing the rebuild's fingerprint capture must still trigger a refresh")
+		"a curation edit racing the snapshot copy must trigger a refresh on the next push")
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 1)
+}
+
+// TestCurationToggleRevertRaceLeavesMirrorConsistent is the ABA
+// regression: a star toggled on and back off between the snapshot load
+// and the copy. Under the previous two-read shape the copy could persist
+// the intermediate state while the fingerprint matched the reverted local
+// state, leaving the mirror stale behind a matching fingerprint until
+// some unrelated curation edit shook it loose. With one snapshot feeding
+// both, a matching fingerprint always means the mirror content matches
+// too: the next push may skip the refresh, and the mirror must hold the
+// reverted (snapshot) state.
+func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	s, ids := pushCurationSnapshotFixture(t, local, path)
+
+	snap, err := s.loadCurationSnapshot(ctx)
+	require.NoError(t, err)
+	fingerprint, err := snap.fingerprint()
+	require.NoError(t, err)
+
+	// The racing edit toggles and reverts before the copy runs.
+	ok, err := local.StarSession(ids[1])
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, local.UnstarSession(ids[1]))
+
+	require.NoError(t, s.replaceCuration(ctx, snap))
+	require.NoError(t, recordMetadataKey(
+		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
+	))
+	finishCurationSnapshotRebuild(t, s, local)
+
+	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"a valid mirror with fresh metadata must not force a rebuild")
+	assert.False(t, res.Diagnostics.CurationRefreshed,
+		"a reverted curation edit matches the stored fingerprint and needs no refresh")
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 0)
 }
 
 // TestSweepStaleTempFilesRemovesOnlyOldFilesInsideWorkDir covers

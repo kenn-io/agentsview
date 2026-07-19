@@ -349,31 +349,27 @@ func (s *Sync) pushEverything(
 	result.Diagnostics.PushedSessions = countPushSessions(pushed)
 
 	if result.Errors == 0 {
-		// The fingerprint is captured BEFORE replaceCuration copies
-		// curation into the mirror, mirroring rebuildSnapshot's pre-capture
-		// principle (see the comment there): a star/pin change that lands
-		// after this read is either already reflected by the copy below
-		// (which re-reads local state fresh, so no data is lost) or lands
-		// after the copy entirely, in which case it simply belongs to the
-		// next push. Either way the stored fingerprint predates the
-		// mutation, so the next push's fingerprint comparison mismatches and
-		// refreshes curation again — a redundant but harmless extra refresh.
-		// Capturing the fingerprint AFTER the copy instead (the previous
-		// order) can permanently strand a change: a mutation landing between
-		// the copy and the late fingerprint read is fingerprinted but never
-		// mirrored, and the stored fingerprint then matches all future local
-		// state until another curation edit happens, so refreshCurationIfChanged
-		// skips forever.
+		// One snapshot feeds both the fingerprint and the copy (see
+		// curationSnapshot): the recorded fingerprint always describes
+		// exactly what replaceCuration wrote, so a star/pin change landing
+		// during the rebuild either made it into the snapshot (and is both
+		// mirrored and fingerprinted) or lands after it (and mismatches the
+		// stored fingerprint on the next push, refreshing again). No
+		// interleaving can strand the mirror behind a matching fingerprint.
 		//
 		// replaceCuration validates curation session IDs against the mirror's
 		// own sessions table, which at this point holds exactly the batches
 		// the loop above committed, so rebuilds and incremental pushes share
 		// one curation write path.
-		fingerprint, err := s.curationFingerprint(ctx)
+		snap, err := s.loadCurationSnapshot(ctx)
 		if err != nil {
 			return result, err
 		}
-		if err := s.replaceCuration(ctx); err != nil {
+		fingerprint, err := snap.fingerprint()
+		if err != nil {
+			return result, err
+		}
+		if err := s.replaceCuration(ctx, snap); err != nil {
 			return result, err
 		}
 		if err := recordMetadataKey(
