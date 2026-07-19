@@ -499,9 +499,15 @@ func wrapSemanticUnavailable(message string) error {
 	if cause, ok := strings.CutPrefix(message, sentinel); ok {
 		return fmt.Errorf("%w%s", ErrSemanticUnavailable, cause)
 	}
-	// An unexpected body shape (e.g. a differently worded 501); still wrap
-	// the sentinel so errors.Is holds, and keep the server's text.
-	return fmt.Errorf("%w: %s", ErrSemanticUnavailable, message)
+	if reason, ok := strings.CutPrefix(
+		message, "semantic search not available: ",
+	); ok {
+		return db.NewSemanticUnavailableError(reason)
+	}
+	// An unexpected body shape (e.g. a differently worded 501) is still a
+	// reasoned semantic-unavailable error: errors.Is holds without injecting
+	// the sentinel's local-only setup guidance into the server's text.
+	return db.NewSemanticUnavailableError(message)
 }
 
 func (b *httpBackend) UsageSummary(

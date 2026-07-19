@@ -956,6 +956,48 @@ func TestHTTPSearchContent_501PreservesCauseDetail(t *testing.T) {
 	assert.Contains(t, err.Error(), "index is building: 40% complete")
 }
 
+func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "DuckDB unsupported",
+			body: "semantic search not available: semantic search is not " +
+				"supported by the DuckDB backend",
+		},
+		{
+			name: "PostgreSQL vector disabled",
+			body: "semantic search not available: semantic search: PostgreSQL " +
+				"requires [vector] enabled with a matching [vector.embeddings] " +
+				"config and a generation pushed by 'agentsview pg push'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusNotImplemented)
+					assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{
+						"error": tt.body,
+					}))
+				}))
+			defer srv.Close()
+
+			be := service.NewHTTPBackend(srv.URL, "", true)
+			_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+				Pattern: "needle", Mode: "semantic",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+			assert.Equal(t, tt.body, err.Error())
+			assert.NotContains(t, err.Error(), "agentsview embeddings build")
+		})
+	}
+}
+
 // TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate asserts that
 // when the 501 body's message is exactly the sentinel's own text (no extra
 // cause — e.g. ErrNoActiveGeneration's case), the client returns the bare
