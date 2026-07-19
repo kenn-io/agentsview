@@ -181,3 +181,102 @@ func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
 	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", "rebuild-scope-alpha", 1)
 	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", "rebuild-scope-beta", 0)
 }
+
+func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name         string
+		setupMirror  func(t *testing.T, path string) int // returns wantSessions
+		wantSessions int
+		expectError  bool
+		errorPattern string
+	}{
+		{
+			name: "session count mismatch",
+			setupMirror: func(t *testing.T, path string) int {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				require.NoError(t, createSchema(ctx, conn))
+				require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
+					SchemaVersion:  SchemaVersion,
+					DataVersion:    1,
+					Scope:          "",
+					LastPushCutoff: "2026-07-18T00:00:00.000Z",
+				}))
+				// Insert 2 sessions
+				_, err = conn.ExecContext(ctx, `
+					INSERT INTO sessions (id, project, machine, agent, created_at)
+					VALUES ('sess-1', 'alpha', 'test-machine', 'claude', current_timestamp),
+					       ('sess-2', 'alpha', 'test-machine', 'claude', current_timestamp)`)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				return 2 // actual sessions in mirror
+			},
+			wantSessions: 3, // but we claim to want 3
+			expectError:  true,
+			errorPattern: "has 2 sessions, want 3",
+		},
+		{
+			name: "missing metadata table",
+			setupMirror: func(t *testing.T, path string) int {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				require.NoError(t, createSchema(ctx, conn))
+				_, err = conn.ExecContext(ctx, `DROP TABLE sync_metadata`)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				return 0
+			},
+			wantSessions: 0,
+			expectError:  true,
+			errorPattern: "shape incompatible",
+		},
+		{
+			name: "wrong schema version",
+			setupMirror: func(t *testing.T, path string) int {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				require.NoError(t, createSchema(ctx, conn))
+				require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
+					SchemaVersion:  2, // wrong version
+					DataVersion:    1,
+					Scope:          "",
+					LastPushCutoff: "2026-07-18T00:00:00.000Z",
+				}))
+				require.NoError(t, conn.Close())
+				return 0
+			},
+			wantSessions: 0,
+			expectError:  true,
+			errorPattern: "schema version 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test.duckdb")
+			actSessions := tt.setupMirror(t, path)
+
+			err := validateBuiltMirror(ctx, path, tt.wantSessions)
+
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorPattern)
+			} else {
+				require.NoError(t, err)
+			}
+
+			// Verify file still exists after validation (read-only check)
+			_, statErr := os.Stat(path)
+			require.NoError(t, statErr, "mirror file must exist after validation")
+
+			// For count mismatch case, verify file content unchanged
+			if tt.name == "session count mismatch" {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				assertDuckDBCount(t, conn, "sessions", actSessions)
+				require.NoError(t, conn.Close())
+			}
+		})
+	}
+}
