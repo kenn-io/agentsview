@@ -484,3 +484,58 @@ func TestSyncPathsTraeChangedContainerScopesGateCaptureAndLoad(t *testing.T) {
 		uniqueContainerPaths(openPaths),
 	)
 }
+
+func TestSyncEngineTraeQueuedTombstoneStillForceReplacesAfterFullSyncTrust(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "globalStorage", "state.vscdb")
+	writeTraeSyncDB(t, path, "seed reply")
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	setTraeSyncDBSessions(t, path, []any{
+		traeSyncSession("keep", "keep reply"),
+		traeSyncSession("gone", "gone reply"),
+	}, info.ModTime())
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	first := engine.SyncAll(context.Background(), nil)
+	require.False(t, first.Aborted)
+	assert.Equal(t, 2, first.Synced)
+
+	info, err = os.Stat(path)
+	require.NoError(t, err)
+	setTraeSyncDBSessions(t, path, []any{
+		traeSyncSession("keep", "keep reply"),
+	}, info.ModTime())
+
+	queued := engine.classifyProviderChangedPath(path)
+	var tombstone parser.DiscoveredFile
+	for _, file := range queued {
+		if file.Path == path+"#gone" {
+			tombstone = file
+			break
+		}
+	}
+	require.Equal(t, path+"#gone", tombstone.Path)
+	assert.Equal(t, parser.AgentTrae, tombstone.Agent)
+
+	second := engine.SyncAll(context.Background(), nil)
+	require.False(t, second.Aborted)
+	assert.Equal(t, 0, second.Failed)
+	require.Contains(t, engine.trustedSQLiteContainers, path)
+	assert.NotContains(t, engine.trustedSQLiteContainers[path].sessions, "gone")
+
+	archived, err := database.GetSession(context.Background(), "trae:gone")
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+
+	result := engine.processFile(context.Background(), tombstone)
+	require.NoError(t, result.err)
+	assert.False(t, result.skip)
+	assert.True(t, result.forceReplace)
+	assert.Empty(t, result.results)
+	assert.Contains(t, result.excludedSessionIDs, "trae:gone")
+}

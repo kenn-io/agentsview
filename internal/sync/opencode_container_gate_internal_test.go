@@ -109,6 +109,26 @@ func TestProviderChangedPathStoredHintRootsTraeScopesToContainer(t *testing.T) {
 	)
 }
 
+func TestSQLiteContainerSourceForFileUsesTraeMemberID(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.vscdb")
+	virtual := dbPath + "#session-1"
+	gotDB, gotID, ok := sqliteContainerSourceForFile(parser.DiscoveredFile{
+		Agent: parser.AgentTrae,
+		Path:  virtual,
+	})
+	require.True(t, ok)
+	assert.Equal(t, dbPath, gotDB)
+	assert.Equal(t, "session-1", gotID)
+
+	gotDB, gotID, ok = sqliteContainerSourceForFile(parser.DiscoveredFile{
+		Agent: parser.AgentTrae,
+		Path:  dbPath,
+	})
+	require.True(t, ok)
+	assert.Equal(t, dbPath, gotDB)
+	assert.Equal(t, sqliteContainerWholeSourceID, gotID)
+}
+
 func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *testing.T) {
 	firstDB, _ := newContainerTestDB(t)
 	secondDB, _ := newContainerTestDB(t)

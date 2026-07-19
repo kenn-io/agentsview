@@ -44,8 +44,8 @@ func sqliteContainerSourceForFile(
 	file parser.DiscoveredFile,
 ) (dbPath, sessionID string, ok bool) {
 	if file.Agent == parser.AgentTrae {
-		if dbPath, _, ok := parser.SplitTraeVirtualPath(file.Path); ok {
-			return dbPath, sqliteContainerWholeSourceID, true
+		if dbPath, sessionID, ok := parser.SplitTraeVirtualPath(file.Path); ok {
+			return dbPath, sessionID, true
 		}
 		if filepath.Base(file.Path) == parser.WindsurfStateDBName {
 			return file.Path, sqliteContainerWholeSourceID, true

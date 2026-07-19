@@ -17,26 +17,21 @@ import (
 
 const traeStateDBName = "state.vscdb"
 const traeStorageKey = "memento/icube-ai-agent-storage"
-const traeSnapshotCacheMaxBytes int64 = 32 << 20
 
 func newTraeProviderFactory(def AgentDef) ProviderFactory {
-	snapshots := newTraeSnapshotCache()
-	memberPresent := newTraeMemberPresence(snapshots)
+	memberships := newTraeMembershipCache()
+	memberPresent := newTraeMemberPresence(memberships)
 	return NewMultiSessionProviderFactory(def, traeProviderCapabilities(), func(cfg ProviderConfig) multiSessionContainerSourceSet {
 		return NewMultiSessionContainerSourceSet(AgentTrae, cfg.Roots,
 			WithContainerDiscovery(traeDiscoverContainers),
 			WithWatchRoots(traeWatchRoots),
 			WithChangedPathClassifier(traeClassifyPath),
 			WithMemberLookup(func(root, rawID string) (multiSessionMatch, bool) {
-				return traeFindMember(root, rawID, snapshots)
+				return traeFindMember(root, rawID, memberships)
 			}),
 			WithFingerprint(traeFingerprintSource),
-			WithContainerParseOutcome(func(src multiSessionSource, req ParseRequest) (ParseOutcome, error) {
-				return traeParseContainerOutcome(snapshots, src, req)
-			}),
-			WithMemberParse(func(src multiSessionSource, req ParseRequest) (*ParseResult, error) {
-				return traeParseMember(snapshots, src, req)
-			}),
+			WithContainerParseOutcome(traeParseContainerOutcome),
+			WithMemberParse(traeParseMember),
 			WithMemberPresence(memberPresent),
 		)
 	})
@@ -124,17 +119,15 @@ func traeMatch(dbPath, id string) multiSessionMatch {
 
 func traeFindMember(
 	root, rawID string,
-	snapshots *traeSnapshotCache,
+	memberships *traeMembershipCache,
 ) (multiSessionMatch, bool) {
 	for _, db := range traeDBs(root) {
-		snapshot, err := snapshots.load(db.path)
+		snapshot, err := memberships.load(db.path)
 		if err != nil {
 			continue
 		}
-		for _, record := range snapshot.records {
-			if record.SessionID == rawID {
-				return traeMatch(db.path, rawID), true
-			}
+		if _, ok := snapshot.ids[rawID]; ok {
+			return traeMatch(db.path, rawID), true
 		}
 	}
 	return multiSessionMatch{}, false
@@ -161,11 +154,10 @@ func traeFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
 }
 
 func traeParseContainerOutcome(
-	snapshots *traeSnapshotCache,
 	src multiSessionSource,
 	req ParseRequest,
 ) (ParseOutcome, error) {
-	snapshot, err := snapshots.load(src.Container)
+	snapshot, err := loadTraeSessionSnapshot(src.Container)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -203,11 +195,10 @@ func traeParseContainerOutcome(
 }
 
 func traeParseMember(
-	snapshots *traeSnapshotCache,
 	src multiSessionSource,
 	req ParseRequest,
 ) (*ParseResult, error) {
-	snapshot, err := snapshots.load(src.Container)
+	snapshot, err := loadTraeSessionSnapshot(src.Container)
 	if err != nil {
 		return nil, err
 	}
@@ -242,16 +233,16 @@ func traeParseRecord(src multiSessionSource, record traeSessionRecord, req Parse
 	return &ParseResult{Session: *sess, Messages: msgs}, nil
 }
 
-func newTraeMemberPresence(snapshots *traeSnapshotCache) func(src multiSessionSource) bool {
+func newTraeMemberPresence(memberships *traeMembershipCache) func(src multiSessionSource) bool {
 	return func(src multiSessionSource) bool {
 		if src.MemberID == "" {
 			return IsRegularFile(src.Container)
 		}
 		if !IsRegularFile(src.Container) {
-			snapshots.delete(src.Container)
+			memberships.delete(src.Container)
 			return false
 		}
-		snapshot, err := snapshots.load(src.Container)
+		snapshot, err := memberships.load(src.Container)
 		if err != nil {
 			return true
 		}
@@ -263,22 +254,23 @@ func newTraeMemberPresence(snapshots *traeSnapshotCache) func(src multiSessionSo
 	}
 }
 
-type traeSnapshotCacheEntry struct {
+type traeMembershipCacheEntry struct {
 	state SQLiteContainerState
-	data  traeSessionSnapshot
+	data  traeSessionMembership
 }
 
-type traeSnapshotCache struct {
+type traeMembershipCache struct {
 	mu     sync.RWMutex
-	byPath map[string]traeSnapshotCacheEntry
-	bytes  int64
+	byPath map[string]traeMembershipCacheEntry
 }
 
-func newTraeSnapshotCache() *traeSnapshotCache {
-	return &traeSnapshotCache{byPath: make(map[string]traeSnapshotCacheEntry)}
+func newTraeMembershipCache() *traeMembershipCache {
+	return &traeMembershipCache{
+		byPath: make(map[string]traeMembershipCacheEntry),
+	}
 }
 
-func (c *traeSnapshotCache) load(path string) (traeSessionSnapshot, error) {
+func (c *traeMembershipCache) load(path string) (traeSessionMembership, error) {
 	state, stateOK := StatSQLiteContainerState(path)
 	if stateOK {
 		c.mu.RLock()
@@ -289,38 +281,23 @@ func (c *traeSnapshotCache) load(path string) (traeSessionSnapshot, error) {
 		}
 	}
 
-	snapshot, err := loadTraeSessionSnapshot(path)
+	snapshot, err := loadTraeSessionMembership(path)
 	if err != nil {
 		c.delete(path)
-		return traeSessionSnapshot{}, err
+		return traeSessionMembership{}, err
 	}
 	if !stateOK {
 		c.delete(path)
 		return snapshot, nil
 	}
 	c.mu.Lock()
-	if existing, ok := c.byPath[path]; ok {
-		c.bytes -= existing.data.bytes
-	}
-	if c.bytes+snapshot.bytes > traeSnapshotCacheMaxBytes {
-		clear(c.byPath)
-		c.bytes = 0
-	}
-	if snapshot.bytes > traeSnapshotCacheMaxBytes {
-		c.mu.Unlock()
-		return snapshot, nil
-	}
-	c.byPath[path] = traeSnapshotCacheEntry{state: state, data: snapshot}
-	c.bytes += snapshot.bytes
+	c.byPath[path] = traeMembershipCacheEntry{state: state, data: snapshot}
 	c.mu.Unlock()
 	return snapshot, nil
 }
 
-func (c *traeSnapshotCache) delete(path string) {
+func (c *traeMembershipCache) delete(path string) {
 	c.mu.Lock()
-	if existing, ok := c.byPath[path]; ok {
-		c.bytes -= existing.data.bytes
-	}
 	delete(c.byPath, path)
 	c.mu.Unlock()
 }
@@ -369,7 +346,12 @@ type traeSessionSnapshot struct {
 	ids           map[string]struct{}
 	authoritative bool
 	complete      bool
-	bytes         int64
+}
+
+type traeSessionMembership struct {
+	ids           map[string]struct{}
+	authoritative bool
+	complete      bool
 }
 
 func (s traeSessionSnapshot) record(id string) (traeSessionRecord, bool) {
@@ -387,6 +369,26 @@ func loadTraeSessionSnapshot(path string) (traeSessionSnapshot, error) {
 		return traeSessionSnapshot{}, err
 	}
 	return decodeTraeSessionSnapshot(value)
+}
+
+func loadTraeSessionMembership(path string) (traeSessionMembership, error) {
+	snapshot, err := loadTraeSessionSnapshot(path)
+	if err != nil {
+		return traeSessionMembership{}, err
+	}
+	return snapshot.membership(), nil
+}
+
+func (s traeSessionSnapshot) membership() traeSessionMembership {
+	ids := make(map[string]struct{}, len(s.ids))
+	for id := range s.ids {
+		ids[id] = struct{}{}
+	}
+	return traeSessionMembership{
+		ids:           ids,
+		authoritative: s.authoritative,
+		complete:      s.complete,
+	}
 }
 
 func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
@@ -415,9 +417,6 @@ func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
 	snapshot.records = make([]traeSessionRecord, 0, len(list))
 	seen := map[string]struct{}{}
 	for _, raw := range list {
-		if id := traeSessionIDHint(raw); id != "" {
-			snapshot.ids[id] = struct{}{}
-		}
 		var session traeSession
 		if err := json.Unmarshal(raw, &session); err != nil {
 			snapshot.complete = false
@@ -437,12 +436,12 @@ func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
 			continue
 		}
 		seen[id] = struct{}{}
+		snapshot.ids[id] = struct{}{}
 		snapshot.records = append(snapshot.records, traeSessionRecord{
 			SessionID: id,
 			Session:   session,
 			Hash:      traeRecordHash(string(raw), ""),
 		})
-		snapshot.bytes += traeSessionApproxBytes(session)
 	}
 	sort.Slice(snapshot.records, func(i, j int) bool { return snapshot.records[i].SessionID < snapshot.records[j].SessionID })
 	return snapshot, nil
@@ -478,19 +477,6 @@ func traeSessionProducesMessages(session traeSession) bool {
 		}
 	}
 	return false
-}
-
-func traeSessionApproxBytes(session traeSession) int64 {
-	size := int64(len(session.SessionID) + len(session.Model))
-	for _, msg := range session.Messages {
-		size += int64(
-			len(msg.Role) +
-				len(msg.Content) +
-				len(msg.AgentTaskContent) +
-				len(msg.Model),
-		)
-	}
-	return size
 }
 
 func traeSelectRawRecord(path, id string) (json.RawMessage, bool, error) {
