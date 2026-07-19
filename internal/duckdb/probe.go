@@ -23,7 +23,19 @@ type MirrorProbe struct {
 	// 'duckdb serve' or 'duckdb quack serve', already has the mirror file
 	// open) rather than a genuinely malformed or incompatible file. See
 	// isMirrorLockConflictError.
-	LockConflict     bool
+	LockConflict bool
+	// RecognizedMirror is true when the existing file is positively
+	// identified as an agentsview DuckDB mirror: it opens as a DuckDB
+	// database and contains at least one of our schema artifacts (the
+	// sync_metadata or sessions table), or another process holds a DuckDB
+	// lock on it (which proves it is a DuckDB database — the normal state
+	// while a serve process has the mirror open). A wrong-schema-version
+	// or shape-incompatible mirror is still recognized; a file that cannot
+	// be opened as DuckDB at all, or opens but contains none of our
+	// artifacts, is not. Push refuses to rebuild over an existing
+	// unrecognized file so a misdirected path (for example the primary
+	// SQLite archive) is never silently replaced by a mirror rebuild.
+	RecognizedMirror bool
 	SchemaVersion    int
 	DataVersion      int
 	Scope            string // canonical scope string, see canonicalPushScope
@@ -48,10 +60,15 @@ func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 
 	conn, err := openReadOnlyMirror(path)
 	if err != nil {
+		lockConflict := isMirrorLockConflictError(err)
 		return MirrorProbe{
 			FileExists:   true,
 			ShapeIssue:   err.Error(),
-			LockConflict: isMirrorLockConflictError(err),
+			LockConflict: lockConflict,
+			// A lock conflict proves the file is a DuckDB database another
+			// process has open; any other open failure means the file is not
+			// a DuckDB database at all, so it is not a recognized mirror.
+			RecognizedMirror: lockConflict,
 		}, nil
 	}
 	defer func() { _ = conn.Close() }()
@@ -98,12 +115,21 @@ func openReadOnlyMirror(path string) (*sql.DB, error) {
 func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe := MirrorProbe{FileExists: true}
 
-	shapeIssue, err := mirrorShapeIssue(ctx, conn)
+	existing, err := loadColumns(ctx, conn)
 	if err != nil {
 		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
+		probe.RecognizedMirror = probe.LockConflict
 		return probe
 	}
-	if shapeIssue != "" {
+	// Recognition is deliberately looser than shape validity: any DuckDB
+	// file carrying one of our tables is one of our mirrors (possibly from
+	// another schema version) and safe to rebuild over, while a DuckDB file
+	// with none of our artifacts belongs to someone else and must not be
+	// replaced. See MirrorProbe.RecognizedMirror.
+	probe.RecognizedMirror = len(existing["sync_metadata"]) > 0 ||
+		len(existing["sessions"]) > 0
+
+	if shapeIssue := mirrorShapeIssueFromColumns(existing); shapeIssue != "" {
 		probe.ShapeIssue = shapeIssue
 		return probe
 	}
@@ -127,7 +153,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 }
 
 // classifyProbeError converts an error encountered while querying an
-// already-open mirror connection (inside mirrorShapeIssue or
+// already-open mirror connection (inside loadColumns or
 // readMirrorMetadata) into the ShapeIssue/LockConflict pair MirrorProbe
 // reports. duckdb-go opens connections lazily, so a cross-process lock
 // conflict often does not surface from openReadOnlyMirror itself but only
@@ -142,13 +168,10 @@ func classifyProbeError(err error) (shapeIssue string, lockConflict bool) {
 	return err.Error(), isMirrorLockConflictError(err)
 }
 
-// mirrorShapeIssue reports the first missing table/column found, or "" when
-// the mirror has every table and column mirrorTables declares.
-func mirrorShapeIssue(ctx context.Context, conn *sql.DB) (string, error) {
-	existing, err := loadColumns(ctx, conn)
-	if err != nil {
-		return "", err
-	}
+// mirrorShapeIssueFromColumns reports the first missing table/column found
+// in an already-loaded column map, or "" when the mirror has every table
+// and column mirrorTables declares.
+func mirrorShapeIssueFromColumns(existing map[string]map[string]bool) string {
 	var missing []string
 	for _, table := range mirrorTables {
 		have, ok := existing[table.name]
@@ -163,10 +186,10 @@ func mirrorShapeIssue(ctx context.Context, conn *sql.DB) (string, error) {
 		}
 	}
 	if len(missing) == 0 {
-		return "", nil
+		return ""
 	}
 	sort.Strings(missing)
-	return "duckdb mirror shape incompatible: " + missing[0], nil
+	return "duckdb mirror shape incompatible: " + missing[0]
 }
 
 // NeedsRebuild reports whether the probed mirror can serve scope/

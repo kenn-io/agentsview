@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -189,13 +191,51 @@ func (s *Server) pgPushConfig(req daemonPushRequest) (config.PGConfig, error) {
 	return s.cfg.ResolvePG()
 }
 
+// duckDBPushConfig resolves the DuckDB config a daemon push writes to. The
+// mirror PATH is always the server's own resolved configuration: the request
+// body is attacker-reachable for any authenticated API caller, and honoring a
+// caller-supplied path verbatim would let a push's rebuild rename a DuckDB
+// mirror over any file the daemon can write (including the primary
+// sessions.db). Non-path fields from a request-supplied config (machine
+// name, filters, url — the latter still rejected by ValidatePushTarget)
+// keep applying as before; a request that names a different path than the
+// server's is rejected instead of redirected.
 func (s *Server) duckDBPushConfig(
 	req daemonPushRequest,
 ) (config.DuckDBConfig, error) {
-	if req.DuckDB != nil {
-		return *req.DuckDB, nil
+	resolved, err := s.cfg.ResolveDuckDB()
+	if err != nil {
+		return config.DuckDBConfig{}, err
 	}
-	return s.cfg.ResolveDuckDB()
+	if req.DuckDB == nil {
+		return resolved, nil
+	}
+	duckCfg := *req.DuckDB
+	requested := normalizeDuckDBMirrorPath(duckCfg.Path)
+	if requested != "" && requested != normalizeDuckDBMirrorPath(resolved.Path) {
+		return config.DuckDBConfig{}, fmt.Errorf(
+			"daemon duckdb pushes write only the server-configured mirror path %s; "+
+				"requested path %s is not allowed — change the server's "+
+				"[duckdb].path (or AGENTSVIEW_DUCKDB_PATH) to push to a "+
+				"different file", resolved.Path, duckCfg.Path,
+		)
+	}
+	duckCfg.Path = resolved.Path
+	return duckCfg, nil
+}
+
+// normalizeDuckDBMirrorPath canonicalizes a mirror path for the equality
+// check above; "" stays "" so an unset request path always defers to the
+// server's own path.
+func normalizeDuckDBMirrorPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return abs
 }
 
 func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {

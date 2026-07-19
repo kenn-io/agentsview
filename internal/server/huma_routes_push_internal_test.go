@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -290,22 +291,94 @@ func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
 	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
 }
 
-func TestDuckDBPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
-	const envName = "AGENTSVIEW_TEST_MISSING_DUCKDB_PATH_25053"
+// TestDuckDBPushConfigPinsServerMirrorPath pins the daemon-side path
+// guard: the mirror path a push writes is always the server's own resolved
+// configuration. A request-supplied config may still carry non-path fields
+// (machine name), but a request naming a DIFFERENT path is rejected — an
+// authenticated API caller must not be able to aim the rebuild's atomic
+// file replacement at an arbitrary daemon-writable file such as the
+// primary sessions.db.
+func TestDuckDBPushConfigPinsServerMirrorPath(t *testing.T) {
+	serverPath := filepath.Join(t.TempDir(), "server.duckdb")
 	s := testServerWithConfig(config.Config{
-		DuckDB: config.DuckDBConfig{Path: missingEnvRef(t, envName)},
+		DuckDB: config.DuckDBConfig{Path: serverPath, MachineName: "daemon"},
 	})
-	req := daemonPushRequest{
-		DuckDB: &config.DuckDBConfig{
-			Path:        "/tmp/agentsview.duckdb",
-			MachineName: "workstation",
+
+	tests := []struct {
+		name        string
+		req         *config.DuckDBConfig
+		wantMachine string
+		wantErrHas  string
+	}{
+		{
+			name:        "nil request config uses server config",
+			req:         nil,
+			wantMachine: "daemon",
+		},
+		{
+			name:        "empty request path defers to server path",
+			req:         &config.DuckDBConfig{MachineName: "workstation"},
+			wantMachine: "workstation",
+		},
+		{
+			name: "equal path in unclean form is accepted",
+			req: &config.DuckDBConfig{
+				Path: filepath.Join(
+					filepath.Dir(serverPath), ".", filepath.Base(serverPath),
+				),
+				MachineName: "workstation",
+			},
+			wantMachine: "workstation",
+		},
+		{
+			name: "different path is rejected",
+			req: &config.DuckDBConfig{
+				Path:        filepath.Join(t.TempDir(), "sessions.db"),
+				MachineName: "workstation",
+			},
+			wantErrHas: "server-configured mirror path",
 		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s.duckDBPushConfig(daemonPushRequest{DuckDB: tt.req})
+			if tt.wantErrHas != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrHas)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, serverPath, got.Path,
+				"pushes must always write the server-resolved mirror path")
+			assert.Equal(t, tt.wantMachine, got.MachineName)
+		})
+	}
+}
 
-	got, err := s.duckDBPushConfig(req)
-	require.NoError(t, err)
-	assert.Equal(t, "/tmp/agentsview.duckdb", got.Path)
-	assert.Equal(t, "workstation", got.MachineName)
+// TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest is the handler-level
+// twin of TestDuckDBPushConfigPinsServerMirrorPath: the route surfaces the
+// path mismatch as a 400 instead of writing anywhere.
+func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
+	s := testServer(t, 30)
+	s.cfg.DuckDB = config.DuckDBConfig{
+		Path:        filepath.Join(t.TempDir(), "server.duckdb"),
+		MachineName: "daemon",
+	}
+
+	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+		Body: daemonPushRequest{
+			DuckDB: &config.DuckDBConfig{
+				Path:        filepath.Join(t.TempDir(), "sessions.db"),
+				MachineName: "workstation",
+			},
+		},
+	})
+	require.Error(t, err)
+
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(t, err.Error(), "server-configured mirror path")
 }
 
 func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {

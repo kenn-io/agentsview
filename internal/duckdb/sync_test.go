@@ -162,6 +162,82 @@ func TestPushRebuildTriggers(t *testing.T) {
 	}
 }
 
+// TestPushRefusesToReplaceUnrecognizedExistingFile is the fail-closed
+// overwrite guard (see ensureReplaceableMirror): a rebuild may only replace
+// an existing file positively identified as an agentsview DuckDB mirror. A
+// SQLite database (what [duckdb].path pointed at the primary sessions.db
+// would look like), an arbitrary file, or a foreign DuckDB database with
+// none of our tables must make the push fail with the file left untouched,
+// for both an incremental request that degrades to a rebuild and an
+// explicit --full push.
+func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		write func(t *testing.T, path string)
+	}{
+		{
+			name: "sqlite database file",
+			write: func(t *testing.T, path string) {
+				require.NoError(t, os.WriteFile(
+					path, []byte("SQLite format 3\x00not a duckdb mirror"), 0o644,
+				))
+			},
+		},
+		{
+			name: "foreign duckdb database",
+			write: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(`CREATE TABLE unrelated (x INTEGER)`)
+				require.NoError(t, err)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, full := range []bool{false, true} {
+				t.Run(fmt.Sprintf("full_%v", full), func(t *testing.T) {
+					local, path := newPushFixture(t, 1)
+					tt.write(t, path)
+					before, err := os.ReadFile(path)
+					require.NoError(t, err)
+
+					_, err = Push(ctx, path, local, "m", SyncOptions{}, full, nil)
+					require.Error(t, err)
+					assert.Contains(t, err.Error(),
+						"not an agentsview duckdb mirror")
+
+					after, err := os.ReadFile(path)
+					require.NoError(t, err)
+					assert.Equal(t, before, after,
+						"a refused push must leave the existing file byte-identical")
+				})
+			}
+		})
+	}
+}
+
+// TestPushRebuildsOverOldSchemaVersionMirror pins the recognition boundary
+// from the other side: a real agentsview mirror whose recorded schema
+// version predates this build is still recognized (it carries our tables)
+// and must rebuild normally rather than fail the overwrite guard.
+func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "1")
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full)
+	assert.Contains(t, res.Diagnostics.RebuildReason, "schema version")
+	assertMirrorMessageCount(t, path, "sess-1", 2)
+}
+
 // TestPushRebuildReasonReportsFullFlag verifies an explicitly requested
 // --full push records that as its RebuildReason even though the existing
 // mirror would otherwise be valid for an incremental push.

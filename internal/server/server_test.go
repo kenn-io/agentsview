@@ -2551,14 +2551,17 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 	}
 
 	te := setupNoSyncMode(t)
-	target := filepath.Join(t.TempDir(), "agentsview.duckdb")
+	// The daemon writes only its own resolved mirror path (the server-side
+	// path guard rejects any other request path), which defaults to
+	// sessions.duckdb in the data dir; the request carries non-path config
+	// like the machine name.
+	target := filepath.Join(te.dataDir, "sessions.duckdb")
 	body, err := json.Marshal(struct {
 		Full   bool                `json:"full"`
 		DuckDB config.DuckDBConfig `json:"duckdb"`
 	}{
 		Full: true,
 		DuckDB: config.DuckDBConfig{
-			Path:        target,
 			MachineName: "workstation",
 		},
 	})
@@ -2580,14 +2583,15 @@ func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
 	}
 
 	te := setupNoSyncMode(t)
-	target := filepath.Join(t.TempDir(), "agentsview.duckdb")
+	// As above, the daemon-side path guard pins writes to the server's own
+	// resolved mirror path (DataDir/sessions.duckdb by default).
+	target := filepath.Join(te.dataDir, "sessions.duckdb")
 	body, err := json.Marshal(struct {
 		Full   bool                `json:"full"`
 		DuckDB config.DuckDBConfig `json:"duckdb"`
 	}{
 		Full: true,
 		DuckDB: config.DuckDBConfig{
-			Path:        target,
 			MachineName: "workstation",
 		},
 	})

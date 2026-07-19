@@ -184,6 +184,9 @@ func Push(
 	if reason == "" {
 		result, err = incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
 	} else {
+		if err := ensureReplaceableMirror(path, probe); err != nil {
+			return PushResult{}, err
+		}
 		log.Printf("duckdbsync: rebuilding mirror: %s", reason)
 		result, err = rebuildMirror(ctx, path, local, machine, opts, onProgress)
 		result.Diagnostics.RebuildReason = reason
@@ -192,6 +195,28 @@ func Push(
 		cleanUpLegacyDuckDBSyncState(local)
 	}
 	return result, err
+}
+
+// ensureReplaceableMirror is the fail-closed overwrite guard for rebuilds:
+// before rebuildMirror renames a fresh file over an EXISTING destination,
+// that destination must be positively identified as an agentsview DuckDB
+// mirror (see MirrorProbe.RecognizedMirror). A missing file is always fine
+// (fresh create), and a lock conflict is recognized (it proves a DuckDB
+// database another process holds open — the normal rebuild-under-serve
+// case). Anything else — a SQLite database, an arbitrary file, a foreign
+// DuckDB database with none of our tables — must never be replaced: the
+// mirror path is caller-supplied configuration, and pointing it at a real
+// data file (for example the primary sessions.db) must fail instead of
+// destroying that file.
+func ensureReplaceableMirror(path string, probe MirrorProbe) error {
+	if !probe.FileExists || probe.RecognizedMirror {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to replace %s: existing file is not an agentsview duckdb "+
+			"mirror; delete or move it first, or point [duckdb].path at a "+
+			"different file", path,
+	)
 }
 
 // legacyDuckDBSyncStateKeyPrefix matches the local pg_sync_state keys the
