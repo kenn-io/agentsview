@@ -29,6 +29,7 @@ type MirrorProbe struct {
 	Scope            string // canonical scope string, see canonicalPushScope
 	LastPushCutoff   string
 	LastPushAt       string
+	LastPushMachine  string
 	DeletionRevision int64
 	IdentityRevision int64
 }
@@ -99,7 +100,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 
 	shapeIssue, err := mirrorShapeIssue(ctx, conn)
 	if err != nil {
-		probe.ShapeIssue = err.Error()
+		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
 		return probe
 	}
 	if shapeIssue != "" {
@@ -109,7 +110,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 
 	meta, err := readMirrorMetadata(ctx, conn)
 	if err != nil {
-		probe.ShapeIssue = err.Error()
+		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
 		return probe
 	}
 
@@ -119,9 +120,26 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.Scope = meta.Scope
 	probe.LastPushCutoff = meta.LastPushCutoff
 	probe.LastPushAt = meta.LastPushAt
+	probe.LastPushMachine = meta.LastPushMachine
 	probe.DeletionRevision = meta.DeletionRevision
 	probe.IdentityRevision = meta.IdentityRevision
 	return probe
+}
+
+// classifyProbeError converts an error encountered while querying an
+// already-open mirror connection (inside mirrorShapeIssue or
+// readMirrorMetadata) into the ShapeIssue/LockConflict pair MirrorProbe
+// reports. duckdb-go opens connections lazily, so a cross-process lock
+// conflict often does not surface from openReadOnlyMirror itself but only
+// once the first real query runs against the connection; without routing
+// that error through isMirrorLockConflictError here as well, it would
+// degrade to a generic shape issue instead of being recognized as a lock
+// conflict (see isMirrorLockConflictError and rebuildReason).
+func classifyProbeError(err error) (shapeIssue string, lockConflict bool) {
+	if err == nil {
+		return "", false
+	}
+	return err.Error(), isMirrorLockConflictError(err)
 }
 
 // mirrorShapeIssue reports the first missing table/column found, or "" when
@@ -170,19 +188,32 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // can proceed. It is the diagnostic/logging counterpart to NeedsRebuild:
 // every condition NeedsRebuild's bool contract covers (missing/damaged
 // file, schema/data version drift, scope change) is reported here with the
-// specific "why", plus two conditions NeedsRebuild does not see: a
-// cross-process lock conflict (LockConflict) and the mirror's deletion
-// journal cursor sitting ahead of the local archive's own counter, which
-// happens when the local archive was rebuilt or replaced (e.g. by a resync)
-// and its deletion journal no longer covers the range the mirror already
-// advanced past — applying a delta in that state would otherwise fail with
-// an invalid publication window rather than just rebuilding.
+// specific "why", plus three conditions NeedsRebuild does not see: a
+// cross-process lock conflict (LockConflict), the mirror having been last
+// pushed by a different machine name than the one pushing now, and the
+// mirror's deletion journal cursor sitting ahead of the local archive's own
+// counter, which happens when the local archive was rebuilt or replaced
+// (e.g. by a resync) and its deletion journal no longer covers the range
+// the mirror already advanced past — applying a delta in that state would
+// otherwise fail with an invalid publication window rather than just
+// rebuilding.
+//
+// The machine-change check exists because mirror rows are machine-stamped
+// (see the sessions.machine column and duckSessionFingerprintFields): an
+// incremental push only rewrites sessions whose LOCAL content changed
+// within the current mirror window, so a session that has not changed
+// since the mirror's last push stays permanently labeled with the OLD
+// machine name even after the push metadata's LastPushMachine flips to the
+// new one — silently stranding it under a machine filter (see
+// readMachineStatus) that will never again select it. A full rebuild
+// re-pushes every session under the new machine name instead.
+//
 // localDeletionRevision is the caller's local.SessionDeletionPublicationRevision
 // read, passed in rather than threaded through NeedsRebuild's pure
 // scope/version signature.
 func rebuildReason(
 	probe MirrorProbe, scope string, sourceDataVersion int, full bool,
-	localDeletionRevision int64,
+	localDeletionRevision int64, machine string,
 ) string {
 	switch {
 	case full:
@@ -205,6 +236,10 @@ func rebuildReason(
 		)
 	case probe.Scope != scope:
 		return "scope changed"
+	case probe.LastPushMachine != "" && probe.LastPushMachine != machine:
+		return fmt.Sprintf(
+			"machine name changed from %s to %s", probe.LastPushMachine, machine,
+		)
 	case probe.DeletionRevision > localDeletionRevision:
 		return "mirror deletion cursor ahead of archive; archive was rebuilt"
 	default:

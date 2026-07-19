@@ -4,10 +4,13 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +36,7 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	require.NoError(t, createSchema(context.Background(), conn))
 	require.NoError(t, writeMirrorMetadata(context.Background(), conn, mirrorMetadata{
 		SchemaVersion: SchemaVersion, DataVersion: 68, Scope: "",
-		LastPushCutoff: "2026-07-18T00:00:00.000Z"}))
+		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a"}))
 	require.NoError(t, conn.Close())
 
 	p, err := ProbeMirror(context.Background(), path)
@@ -43,6 +46,7 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	assert.Equal(t, SchemaVersion, p.SchemaVersion)
 	assert.Equal(t, 68, p.DataVersion)
 	assert.Equal(t, "2026-07-18T00:00:00.000Z", p.LastPushCutoff)
+	assert.Equal(t, "machine-a", p.LastPushMachine)
 
 	// NeedsRebuild triggers: version drift either direction, scope drift.
 	assert.False(t, p.NeedsRebuild("", 68))
@@ -210,6 +214,7 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 		dataVer int
 		full    bool
 		localDR int64
+		machine string
 		want    string
 	}{
 		{
@@ -250,6 +255,26 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 			want:    "mirror locked by another process — likely a running serve; rebuilding from scratch because incremental update cannot proceed while it is served",
 		},
 		{
+			name: "machine name changed",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.LastPushMachine = "machine-a"
+				return p
+			}(),
+			dataVer: 1, machine: "machine-b",
+			want: "machine name changed from machine-a to machine-b",
+		},
+		{
+			name: "no prior recorded machine does not force a rebuild",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.LastPushMachine = ""
+				return p
+			}(),
+			dataVer: 1, machine: "machine-b",
+			want: "",
+		},
+		{
 			name: "deletion cursor ahead of local archive",
 			probe: func() MirrorProbe {
 				p := baseProbe()
@@ -266,7 +291,9 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := rebuildReason(tt.probe, tt.scope, tt.dataVer, tt.full, tt.localDR)
+			got := rebuildReason(
+				tt.probe, tt.scope, tt.dataVer, tt.full, tt.localDR, tt.machine,
+			)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -289,4 +316,107 @@ func TestProbeMirrorOpensReadOnlyAndNeverMutates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before.Size(), after.Size(),
 		"probing a mirror must not write to it")
+}
+
+// TestClassifyProbeErrorClassifiesLockConflicts tests the pure
+// shapeIssue/lockConflict classifier in isolation against fabricated
+// errors, mirroring TestIsMirrorLockConflictErrorClassifiesLockMessages but
+// asserting classifyProbeError's full (string, bool) return pair, which is
+// what probeOpenMirror's mirrorShapeIssue/readMirrorMetadata error branches
+// now route through (see TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier
+// for the code-path routing itself).
+func TestClassifyProbeErrorClassifiesLockConflicts(t *testing.T) {
+	tests := []struct {
+		name             string
+		err              error
+		wantShapeIssue   string
+		wantLockConflict bool
+	}{
+		{"nil error", nil, "", false},
+		{
+			name: "could not set lock",
+			err: errors.New(
+				"IO Error: Could not set lock on file " +
+					`"/tmp/agentsview.duckdb": Conflicting lock is held in ` +
+					`process 12345`,
+			),
+			wantShapeIssue: "IO Error: Could not set lock on file " +
+				`"/tmp/agentsview.duckdb": Conflicting lock is held in ` +
+				`process 12345`,
+			wantLockConflict: true,
+		},
+		{
+			name:             "unrelated error preserves message but is not a lock conflict",
+			err:              errors.New("no such file or directory"),
+			wantShapeIssue:   "no such file or directory",
+			wantLockConflict: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shapeIssue, lockConflict := classifyProbeError(tt.err)
+			assert.Equal(t, tt.wantShapeIssue, shapeIssue)
+			assert.Equal(t, tt.wantLockConflict, lockConflict)
+		})
+	}
+}
+
+// lockConflictProbeDriver and lockConflictProbeConn simulate the lazy-open
+// lock conflict duckdb-go can surface: Open succeeds (as it does for a lazy
+// driver), but the first real query fails with a DuckDB lock-conflict
+// message. This is used to prove ProbeMirror routes that failure through
+// classifyProbeError from inside mirrorShapeIssue's query (loadColumns),
+// not just that the classifier is correct in isolation.
+type lockConflictProbeDriver struct{}
+
+type lockConflictProbeConn struct{}
+
+var lockConflictProbeRegisterOnce sync.Once
+
+func (lockConflictProbeDriver) Open(string) (driver.Conn, error) {
+	return lockConflictProbeConn{}, nil
+}
+
+func (lockConflictProbeConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (lockConflictProbeConn) Close() error { return nil }
+
+func (lockConflictProbeConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("begin not implemented")
+}
+
+func (lockConflictProbeConn) QueryContext(
+	context.Context, string, []driver.NamedValue,
+) (driver.Rows, error) {
+	return nil, errors.New(
+		`IO Error: Could not set lock on file "mirror.duckdb": ` +
+			"Conflicting lock is held in process 999",
+	)
+}
+
+// TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier is the FIX3
+// regression: duckdb-go opens connections lazily, so a cross-process lock
+// conflict often does not surface from openReadOnlyMirror's Open call at
+// all but only once the first real query runs — inside mirrorShapeIssue's
+// loadColumns call, in production. Before routing that error through
+// classifyProbeError, probeOpenMirror only ever set LockConflict from the
+// openReadOnlyMirror error path, so a lock conflict surfacing here would
+// silently degrade to a generic, unclassified shape issue instead.
+func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
+	lockConflictProbeRegisterOnce.Do(func() {
+		sql.Register("agentsview_lock_conflict_probe", lockConflictProbeDriver{})
+	})
+	conn, err := sql.Open("agentsview_lock_conflict_probe", t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+
+	probe := probeOpenMirror(context.Background(), conn)
+
+	assert.True(t, probe.FileExists)
+	assert.False(t, probe.ShapeOK)
+	assert.True(t, probe.LockConflict,
+		"a lock conflict surfacing from the first lazy query must still be classified")
+	assert.Contains(t, probe.ShapeIssue, "Could not set lock")
 }

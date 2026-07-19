@@ -178,7 +178,7 @@ func Push(
 	}
 
 	reason := rebuildReason(
-		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
+		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision, machine,
 	)
 	var result PushResult
 	if reason == "" {

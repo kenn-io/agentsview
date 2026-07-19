@@ -201,6 +201,35 @@ func TestPushRebuildsWhenMirrorDeletionCursorAheadOfLocal(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+// TestPushRebuildsWhenMachineNameChanges is the FIX1 regression: mirror rows
+// are machine-stamped, and an incremental push only re-pushes sessions whose
+// LOCAL content changed within the current window. A session that has not
+// changed locally since the mirror's last push would otherwise stay
+// permanently labeled with the OLD machine name even after the client's
+// configured machine name (and so the mirror's LastPushMachine metadata)
+// changes, stranding it under a machine filter that will never select it
+// again (see readMachineStatus). The mirror's recorded LastPushMachine
+// differing from the currently configured machine name must force a
+// rebuild instead, so every session is re-pushed and relabeled.
+func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "machine-a", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	res, err := Push(ctx, path, local, "machine-b", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full)
+	assert.Contains(t, res.Diagnostics.RebuildReason, "machine")
+	assertMirrorMessageCount(t, path, "sess-1", 2)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	assertDuckDBCountWhere(t, conn, "sessions", "machine = ?", "machine-b", 1)
+	assertDuckDBCountWhere(t, conn, "sessions", "machine = ?", "machine-a", 0)
+}
+
 // TestPushDoesNotAdvanceStateOnError injects a session that fails to push
 // and verifies the mirror's cutoff/last-push-at metadata are left exactly
 // as they were: a partially failed incremental push must not let the
@@ -1033,6 +1062,37 @@ func TestReadStatusFromConfigReportsScopeAndDegradesOnMissingMetadata(t *testing
 	assert.Empty(t, blankStatus.Scope)
 	assert.Equal(t, 1, blankStatus.DuckDBSessions,
 		"row counts still read even with metadata gone")
+}
+
+// TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine is the
+// FIX2 regression: readMachineStatus previously filtered its row counts by
+// the CLIENT's configured machine name, while the LastPushMachine it
+// displays comes from the target's own metadata. A remote Quack client is
+// normally configured under its own hostname, which almost never matches
+// whatever machine actually pushed the mirror it is reading, so filtering
+// counts by the configured name reports zero rows even though the mirror
+// plainly has data and the display line already shows a real
+// LastPushMachine. Counts must be keyed off the target's recorded
+// LastPushMachine when it is set.
+func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	target := filepath.Join(t.TempDir(), "status.duckdb")
+
+	_, err := Push(ctx, target, local, "actual-pusher", SyncOptions{}, true, nil)
+	require.NoError(t, err)
+
+	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
+		Path:        target,
+		MachineName: "remote-client-hostname",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "remote-client-hostname", status.Machine)
+	assert.Equal(t, "actual-pusher", status.LastPushMachine)
+	assert.Equal(t, 2, status.DuckDBSessions,
+		"counts must key off the target's LastPushMachine, not the client's configured name")
+	assert.Equal(t, 3, status.DuckDBMessages)
 }
 
 type syncFixture struct {

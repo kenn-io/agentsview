@@ -84,6 +84,16 @@ func ReadStatusFromConfig(
 // counts. It tolerates a mirror with no sync_metadata rows yet, or missing
 // tables entirely (a fresh, foreign, or pre-v3 file): both degrade to zero
 // values instead of erroring, since status must not crash on an old mirror.
+//
+// The row counts are filtered by the TARGET's own recorded LastPushMachine
+// when it is set, not by the caller's configured machine name: a remote
+// Quack client's configured machine name is normally its own hostname,
+// which almost never matches the hostname of whatever machine actually
+// pushed the mirror it is reading, so filtering by the configured name
+// there would report zero rows even though the display line above already
+// shows a real LastPushMachine and non-zero mirror content. The configured
+// machine name is used only as the fallback for a mirror with no recorded
+// push yet (LastPushMachine == ""), where it is the best available guess.
 func readMachineStatus(
 	ctx context.Context,
 	duck *sql.DB,
@@ -102,9 +112,14 @@ func readMachineStatus(
 	status.DataVersion = meta.DataVersion
 	status.Scope = meta.Scope
 
+	countMachine := meta.LastPushMachine
+	if countMachine == "" {
+		countMachine = machine
+	}
+
 	if err := queryDuckDBRowContext(ctx, duck, connectionKind, quack,
 		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
-		machine,
+		countMachine,
 	).Scan(&status.DuckDBSessions); err != nil {
 		if isMissingDuckDBTable(err) {
 			return status, nil
@@ -117,7 +132,7 @@ func readMachineStatus(
 		 WHERE session_id IN (
 			SELECT id FROM sessions WHERE machine = ?
 		 )`,
-		machine,
+		countMachine,
 	).Scan(&status.DuckDBMessages); err != nil {
 		if isMissingDuckDBTable(err) {
 			return status, nil
