@@ -93,6 +93,7 @@
       e.target.closest(
         "button, a[href], input, select, textarea, [contenteditable='true'], " +
           "[role='button'], [role='checkbox'], [role='combobox'], " +
+          // kit-ui-check-ignore: selector list for interactive event targets, not toggle markup
           "[role='menuitem'], [role='radio'], [role='switch'], [role='tab']",
       );
     if (e.key !== "Escape" && interactiveTarget) return;
