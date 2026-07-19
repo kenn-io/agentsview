@@ -74,6 +74,11 @@ func TestResolveDuckDBPushProjects(t *testing.T) {
 	)
 }
 
+// TestArchiveWriteBackendDuckDBPushPostsToDaemon also pins the omitted
+// mirror path: the daemon pins pushes to its own resolved path, and a
+// configured relative path would absolutize against each process's cwd,
+// so the CLI never sends one (want.path is empty despite the local config
+// naming a path).
 func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 	absPath := filepath.Join(t.TempDir(), "agentsview.duckdb")
 	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
@@ -81,7 +86,7 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 		full:            true,
 		projects:        []string{"a"},
 		excludeProjects: []string{"b"},
-		path:            absPath,
+		path:            "",
 		machineName:     "workstation",
 	}, duckdbsync.PushResult{
 		SessionsPushed: 2,
@@ -107,15 +112,17 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 	assert.Equal(t, 3, result.MessagesPushed)
 }
 
-func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T) {
-	wantPath, err := filepath.Abs("relative.duckdb")
-	require.NoError(t, err)
+// TestArchiveWriteBackendDuckDBPushOmitsRelativeMirrorPath is the relative
+// twin of the omission check above: a relative configured path used to be
+// absolutized against the CLI's cwd and sent, which the daemon — resolving
+// the same configured path against ITS cwd — could spuriously reject.
+func TestArchiveWriteBackendDuckDBPushOmitsRelativeMirrorPath(t *testing.T) {
 	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
-		path: wantPath,
+		path: "",
 	}, duckdbsync.PushResult{})
 
 	backend := newDaemonArchiveWriteBackendForTest(config.Config{}, ts.URL)
-	_, err = backend.DuckDBPush(
+	_, err := backend.DuckDBPush(
 		context.Background(),
 		config.DuckDBConfig{Path: "relative.duckdb"},
 		DuckDBPushConfig{},
@@ -168,7 +175,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, mirrorPath, req.DuckDB.Path)
+		assert.Empty(t, req.DuckDB.Path,
+			"the CLI defers to the daemon's pinned mirror path")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
@@ -181,7 +189,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, mirrorPath, req.DuckDB.Path)
+		assert.Empty(t, req.DuckDB.Path,
+			"the CLI defers to the daemon's pinned mirror path")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)

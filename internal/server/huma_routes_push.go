@@ -200,6 +200,12 @@ func (s *Server) pgPushConfig(req daemonPushRequest) (config.PGConfig, error) {
 // name, filters, url — the latter still rejected by ValidatePushTarget)
 // keep applying as before; a request that names a different path than the
 // server's is rejected instead of redirected.
+//
+// The CLI never sends a path (it defers to the server's pinned path): the
+// normalization below absolutizes relative paths against THIS process's
+// cwd, so a configured relative path could absolutize differently in the
+// CLI and the daemon and spuriously fail the equality check. The mismatch
+// rejection stays for third-party API callers.
 func (s *Server) duckDBPushConfig(
 	req daemonPushRequest,
 ) (config.DuckDBConfig, error) {

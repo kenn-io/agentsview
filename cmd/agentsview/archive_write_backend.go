@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	stdsync "sync"
 	"time"
 
@@ -278,10 +277,13 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
 		return duckdbsync.PushResult{}, err
 	}
-	duckCfg, err := absolutizeDuckDBPath(duckCfg)
-	if err != nil {
-		return duckdbsync.PushResult{}, err
-	}
+	// Never send a mirror path to the daemon: the daemon pins pushes to its
+	// own resolved path and rejects any request naming a different one, and
+	// a configured RELATIVE path absolutizes against each process's cwd, so
+	// the CLI and daemon can disagree on the absolute form of the same
+	// configured path. An empty path defers to the server's pinned path;
+	// non-path fields (machine name, filters) still apply.
+	duckCfg.Path = ""
 	onProgress, finish := daemonPushProgress(
 		"DuckDB", func(p duckdbsync.PushProgress) {
 			fmt.Printf(
@@ -301,20 +303,6 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 		},
 		onProgress,
 	)
-}
-
-func absolutizeDuckDBPath(
-	duckCfg config.DuckDBConfig,
-) (config.DuckDBConfig, error) {
-	if duckCfg.Path == "" || filepath.IsAbs(duckCfg.Path) {
-		return duckCfg, nil
-	}
-	abs, err := filepath.Abs(duckCfg.Path)
-	if err != nil {
-		return duckCfg, fmt.Errorf("resolving duckdb path: %w", err)
-	}
-	duckCfg.Path = abs
-	return duckCfg, nil
 }
 
 func (b daemonArchiveWriteBackend) PGPushWatch(
