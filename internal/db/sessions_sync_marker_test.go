@@ -48,13 +48,17 @@ func TestSyncMarkerMaintainedByTriggers(t *testing.T) {
 	assert.Equal(t, "2026-07-03T09:00:00.500Z", marker)
 }
 
-func TestListSessionsForMirrorWindowInclusiveBounds(t *testing.T) {
+func TestListSessionsForMirrorWindowInclusiveLowerBoundUnboundedAbove(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()
 	sessions := []Session{
 		{ID: "w-1", Project: "p", Machine: "m", Agent: "a", CreatedAt: "2026-07-01T10:00:00.000Z"},
 		{ID: "w-2", Project: "p", Machine: "m", Agent: "a", CreatedAt: "2026-07-01T10:00:00.001Z"},
 		{ID: "w-3", Project: "p", Machine: "m", Agent: "a", CreatedAt: "2026-07-01T09:59:59.999Z"},
+		// w-future simulates a clock-skewed signal: its marker sits far past
+		// any realistic wall-clock cutoff and must still be selected, since
+		// the window is [since, +inf) with no upper bound.
+		{ID: "w-future", Project: "p", Machine: "m", Agent: "a", CreatedAt: "2099-01-01T00:00:00.000Z"},
 	}
 	for _, s := range sessions {
 		require.NoError(t, database.UpsertSession(s))
@@ -68,21 +72,22 @@ func TestListSessionsForMirrorWindowInclusiveBounds(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Inclusive lower bound: a session whose marker EQUALS since must be selected.
+	// Inclusive lower bound: a session whose marker EQUALS since must be
+	// selected, and there is no upper bound to exclude the far-future marker.
 	got, err := database.ListSessionsForMirrorWindow(ctx,
-		"2026-07-01T10:00:00.000Z", "2026-07-01T10:00:00.001Z", nil, nil)
+		"2026-07-01T10:00:00.000Z", nil, nil)
 	require.NoError(t, err)
 	ids := make([]string, 0, len(got))
 	for _, s := range got {
 		ids = append(ids, s.ID)
 	}
-	assert.ElementsMatch(t, []string{"w-1", "w-2"}, ids)
+	assert.ElementsMatch(t, []string{"w-1", "w-2", "w-future"}, ids)
 
-	// Empty bounds list everything; project filters apply.
-	all, err := database.ListSessionsForMirrorWindow(ctx, "", "", nil, nil)
+	// An empty since lists everything; project filters apply.
+	all, err := database.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
-	assert.Len(t, all, 3)
-	none, err := database.ListSessionsForMirrorWindow(ctx, "", "", []string{"other"}, nil)
+	assert.Len(t, all, 4)
+	none, err := database.ListSessionsForMirrorWindow(ctx, "", []string{"other"}, nil)
 	require.NoError(t, err)
 	assert.Empty(t, none)
 }

@@ -415,7 +415,7 @@ func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
 	s := newTestSync(t, path, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, s.DB()))
 
-	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", "", nil, nil)
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].ID < sessions[j].ID })
 	fingerprints, err := s.sessionFingerprints(ctx, sessions)

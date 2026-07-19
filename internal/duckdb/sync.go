@@ -250,7 +250,7 @@ func cleanUpLegacyDuckDBSyncState(local *db.DB) {
 
 // incrementalPush applies a bounded session-replace update against an
 // already-valid mirror: apply the deletion journal delta, push sessions
-// whose fingerprint changed within [probe.LastPushCutoff, cutoff], refresh
+// whose fingerprint changed within [probe.LastPushCutoff, +inf), refresh
 // curation and identity publication, then advance mirror metadata only if
 // nothing failed.
 func incrementalPush(
@@ -341,9 +341,13 @@ func (s *Sync) runIncrementalPush(
 	return result, nil
 }
 
-// pushChangedSessions selects candidates in [probe.LastPushCutoff, cutoff],
+// pushChangedSessions selects candidates in [probe.LastPushCutoff, +inf),
 // splits them into changed/unchanged by comparing local and mirror
-// fingerprints, and pushes the changed ones in batches.
+// fingerprints, and pushes the changed ones in batches. The window has no
+// upper bound (see ListSessionsForMirrorWindow): a future-dated sync_marker
+// must not exclude a session whose real content keeps changing. The
+// wall-clock cutoff is still captured up front and recorded in
+// Diagnostics.Cutoff / mirror metadata as the next push's lower bound.
 //
 // The window is listed WITHOUT project filters and partitioned in Go
 // instead: a session whose project moved OUT of this mirror's scope since
@@ -359,7 +363,7 @@ func (s *Sync) pushChangedSessions(
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
 	result.Diagnostics.Cutoff = cutoff
 	candidates, err := s.local.ListSessionsForMirrorWindow(
-		ctx, probe.LastPushCutoff, cutoff, nil, nil,
+		ctx, probe.LastPushCutoff, nil, nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions for duckdb incremental push: %w", err)

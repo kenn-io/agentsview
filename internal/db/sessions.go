@@ -3251,14 +3251,22 @@ func (db *DB) ListSessionsModifiedBetween(
 }
 
 // ListSessionsForMirrorWindow returns sessions whose sync_marker lies in
-// [since, until], both bounds inclusive. Empty bounds are unbounded. The
-// marker is the trigger-maintained max of the four sync signals, so
-// "marker >= since" is equivalent to "any signal >= since" and
-// "marker <= until" to "all signals <= until". Inclusive selection is
-// required for mirror pushes: a boundary-equal update must be re-selected
-// (the caller dedupes with fingerprints).
+// [since, +inf); the lower bound is inclusive and an empty since is
+// unbounded. The marker is the trigger-maintained max of the four sync
+// signals, so "marker >= since" is equivalent to "any signal >= since".
+// Inclusive selection is required for mirror pushes: a boundary-equal
+// update must be re-selected (the caller dedupes with fingerprints).
+//
+// The window deliberately has no upper bound. The marker is a MAX over
+// timestamp signals, so one future-dated signal (for example a
+// clock-skewed file_mtime) pushes it past any wall-clock cutoff; an upper
+// bound would then exclude the session from every incremental window
+// until wall time caught up, leaving later real changes (content,
+// local_modified_at) unmirrored. Without the bound such a session is
+// merely a perpetual candidate whose unchanged fingerprint is cheaply
+// skipped on each push.
 func (db *DB) ListSessionsForMirrorWindow(
-	ctx context.Context, since, until string,
+	ctx context.Context, since string,
 	projects, excludeProjects []string,
 ) ([]Session, error) {
 	query := "SELECT " + sessionFullCols + " FROM sessions"
@@ -3272,14 +3280,6 @@ func (db *DB) ListSessionsForMirrorWindow(
 			return nil, err
 		}
 		where = append(where, "sync_marker >= ?")
-		args = append(args, normalized)
-	}
-	if until != "" {
-		normalized, err := normalizeMirrorWindowBound(until)
-		if err != nil {
-			return nil, err
-		}
-		where = append(where, "sync_marker <= ?")
 		args = append(args, normalized)
 	}
 	if len(projects) > 0 {
@@ -3306,8 +3306,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"listing sessions for mirror window %s to %s: %w",
-			since, until, err,
+			"listing sessions for mirror window since %s: %w", since, err,
 		)
 	}
 	defer rows.Close()

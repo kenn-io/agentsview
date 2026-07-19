@@ -469,7 +469,7 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	// Mirror only sess-1; sess-2 stays local-only.
-	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", "", nil, nil)
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 	require.NoError(t, err)
 	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
 	require.NoError(t, err)

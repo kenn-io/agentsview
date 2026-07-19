@@ -62,6 +62,48 @@ func TestPushBoundaryEqualSessionIsNotLost(t *testing.T) {
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
 }
 
+// TestPushFutureMarkerSessionStillReceivesLaterChanges is the FINDING 3
+// regression: sync_marker is the MAX of all timestamp signals, so one
+// future-dated signal (a clock-skewed file_mtime here) pushes the marker
+// past any wall-clock cutoff. With the old upper-bounded window
+// [cutoff, now], such a session fell outside every incremental window
+// until wall time caught up, so later real content changes stayed
+// unmirrored. The window is now [cutoff, +inf): the session is a perpetual
+// candidate whose changes propagate immediately (and whose unchanged
+// pushes are cheaply fingerprint-skipped).
+func TestPushFutureMarkerSessionStillReceivesLaterChanges(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	futureMtime := time.Now().Add(90 * 24 * time.Hour).UnixNano()
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`UPDATE sessions SET file_mtime = ? WHERE id = ?`,
+			futureMtime, "sess-1",
+		)
+		return err
+	}))
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	mutateSessionContent(t, local, "sess-1")
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
+		"a future-dated sync_marker must not mask later content changes")
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var content string
+	require.NoError(t, conn.QueryRow(
+		`SELECT content FROM messages WHERE session_id = ? AND ordinal = 0`,
+		"sess-1",
+	).Scan(&content))
+	assert.Equal(t, "mutated content", content)
+}
+
 func TestPushAppliesDeletionJournalDelta(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 2)

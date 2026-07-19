@@ -236,7 +236,7 @@ func (s *Sync) pushEverything(
 	}
 
 	sessions, err := s.local.ListSessionsForMirrorWindow(
-		ctx, "", "", s.projects, s.excludeProjects,
+		ctx, "", s.projects, s.excludeProjects,
 	)
 	if err != nil {
 		return result, fmt.Errorf("listing sessions for duckdb rebuild: %w", err)
