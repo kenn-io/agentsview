@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -168,15 +169,31 @@ func reportMirrorReplacementEvent(onEvent func(err error), err error) {
 // This is meant to be called once, before a serve process opens its own
 // first handle on path — not from a running Store, which already sweeps its
 // own alias in Close and in the mirror-replacement swap.
+//
+// This walks the parent directory with os.ReadDir and matches names by
+// literal prefix instead of filepath.Glob(path+".reopen-*"): path is
+// interpolated into the pattern, and glob metacharacters ([, ?, *) in a
+// project or archive directory name would otherwise be interpreted as glob
+// syntax instead of literal characters, silently breaking or over-matching
+// the sweep.
 func SweepStaleMirrorReopenAliases(path string) error {
 	if path == "" {
 		return nil
 	}
-	matches, err := filepath.Glob(path + ".reopen-*")
+	dir := filepath.Dir(path)
+	prefix := filepath.Base(path) + ".reopen-"
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("globbing duckdb mirror reopen aliases: %w", err)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading duckdb mirror directory %s: %w", dir, err)
 	}
-	for _, m := range matches {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		m := filepath.Join(dir, entry.Name())
 		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("removing stale duckdb mirror reopen alias %s: %w", m, err)
 		}

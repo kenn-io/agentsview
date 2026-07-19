@@ -55,8 +55,9 @@ watcher cleanly.
 pushes to a remote Quack endpoint. If `[duckdb].url` or
 `AGENTSVIEW_DUCKDB_URL` is configured, push fails immediately with an error
 telling you to unset it for pushes and expose the mirror remotely with
-`agentsview duckdb quack serve` instead. `url`, `token`, and `allow_insecure`
-apply only to `duckdb status` and `duckdb serve`, the read side.
+`agentsview duckdb quack serve` instead. `url` is read-side only, configuring
+`duckdb status` and `duckdb serve`; `token` and `allow_insecure` also
+configure `duckdb quack serve`.
 
 When `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is configured, all local
 DuckDB commands use that same mirror file by default, including
@@ -191,7 +192,12 @@ Environment variables override the config file:
   `duckdb serve` or `duckdb quack serve` already has open. `duckdb push`
   detects this lock conflict and rebuilds the mirror from scratch instead
   of failing; incremental update is not possible while the mirror is
-  served. The running serve process picks up the rebuilt file automatically
-  (see the reopen behavior above) without needing a restart. If the cost of
-  rebuilding on every push matters, stop `duckdb serve`/`duckdb quack serve`
-  before pushing and restart it afterward.
+  served. On POSIX platforms, where rename is atomic even against an open
+  destination handle, the running serve process picks up the rebuilt file
+  automatically (see the reopen behavior above) without needing a restart.
+  On Windows, the serve process's open handle on the destination file can
+  block the rename outright; `duckdb push` retries briefly and then fails
+  with an error asking you to stop the serving process and re-run the push.
+  If the cost of rebuilding on every push matters, stop
+  `duckdb serve`/`duckdb quack serve` before pushing and restart it
+  afterward.

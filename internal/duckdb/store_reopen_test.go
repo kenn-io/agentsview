@@ -292,3 +292,27 @@ func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
 func TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp(t *testing.T) {
 	require.NoError(t, SweepStaleMirrorReopenAliases(""))
 }
+
+// TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory is
+// the FIX7 regression: SweepStaleMirrorReopenAliases used to build its
+// match pattern with filepath.Glob(path+".reopen-*"), so a project or
+// archive directory name containing glob metacharacters ([, ?, *) would be
+// interpreted as glob syntax instead of literal characters, breaking or
+// over-matching the sweep. A literal os.ReadDir + prefix-match sweep must
+// work the same way regardless of what characters appear in the directory
+// name.
+func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := filepath.Join(t.TempDir(), "proj[1]")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	path := filepath.Join(dir, "m.duckdb")
+	buildMirrorFixture(t, path, "session-1")
+
+	require.NoError(t, os.Link(path, path+".reopen-1"))
+
+	require.NoError(t, SweepStaleMirrorReopenAliases(path))
+
+	assert.NoFileExists(t, path+".reopen-1",
+		"a reopen alias in a glob-metacharacter directory must still be swept")
+	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
+}
