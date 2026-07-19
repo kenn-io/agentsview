@@ -29,6 +29,28 @@ func newGrokTestProvider(t *testing.T, root string) Provider {
 	return provider
 }
 
+func parseGrokGolden(t *testing.T, generation string) ParseResult {
+	t.Helper()
+	root := t.TempDir()
+	fixtureRoot := filepath.Join("testdata", "grok-build", generation)
+	require.NoError(t, os.CopyFS(root, os.DirFS(fixtureRoot)))
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: sources[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	return outcome.Results[0].Result
+}
+
+func TestGrokProviderGoldenCurrentPrefersGeneratedTitle(t *testing.T) {
+	result := parseGrokGolden(t, "current")
+	assert.Equal(t, "Audit Grok compatibility", result.Session.SessionName)
+}
+
 func TestGrokProviderSummarySource(t *testing.T) {
 	root := t.TempDir()
 	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", "sess-1"), `{

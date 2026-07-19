@@ -1,0 +1,6 @@
+{"type":"system","content":"You are Grok"}
+{"type":"user","content":[{"type":"text","text":"Review parser compatibility"}],"prompt_index":0}
+{"type":"reasoning","id":"rs_v0","summary":[{"type":"summary_text","text":"Check the old format"}]}
+{"type":"assistant","content":"Reading the implementation.","tool_calls":[{"id":"call_1","name":"read_file","arguments":"{\"target_file\":\"src/session/persistence.rs\"}"}],"model_id":"grok-4.5"}
+{"type":"tool_result","tool_call_id":"call_1","content":"source body"}
+{"type":"assistant","content":"Compatibility checked.","model_id":"grok-4.5"}

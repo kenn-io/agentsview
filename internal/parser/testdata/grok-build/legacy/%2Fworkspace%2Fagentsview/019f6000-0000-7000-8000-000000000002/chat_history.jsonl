@@ -1,0 +1,5 @@
+{"role":"system","content":"You are Grok"}
+{"role":"user","content":"Review parser compatibility"}
+{"role":"assistant","content":"Reading the implementation.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"target_file\":\"src/session/persistence.rs\"}"}}],"model_id":"grok-4.5","reasoning_content":"Check the old format"}
+{"role":"tool","content":"source body","tool_call_id":"call_1"}
+{"role":"assistant","content":"Compatibility checked.","model_id":"grok-4.5"}

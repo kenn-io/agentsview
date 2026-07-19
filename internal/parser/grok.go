@@ -472,8 +472,8 @@ func decodeGrokSummary(data []byte) grokSummaryFields {
 	root := gjson.ParseBytes(data)
 	return grokSummaryFields{
 		Summary: firstNonEmptyJSONLString(
-			strings.TrimSpace(root.Get("session_summary").String()),
 			strings.TrimSpace(root.Get("generated_title").String()),
+			strings.TrimSpace(root.Get("session_summary").String()),
 			strings.TrimSpace(root.Get("summary").String()),
 		),
 		FirstPrompt: firstNonEmptyJSONLString(

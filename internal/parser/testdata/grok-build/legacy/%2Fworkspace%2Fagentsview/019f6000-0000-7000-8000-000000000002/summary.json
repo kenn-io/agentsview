@@ -1,0 +1,21 @@
+{
+  "info": {
+    "id": "019f6000-0000-7000-8000-000000000002",
+    "cwd": "/workspace/agentsview"
+  },
+  "session_summary": "Inspect parser compatibility",
+  "created_at": "2026-07-18T10:00:00Z",
+  "updated_at": "2026-07-18T10:30:00Z",
+  "num_messages": 12,
+  "num_chat_messages": 8,
+  "current_model_id": "grok-4.5",
+  "parent_session_id": "019f5000-0000-7000-8000-000000000000",
+  "next_trace_turn": 0,
+  "chat_format_version": 0,
+  "source_workspace_dir": "/workspace/agentsview",
+  "git_root_dir": "/workspace/agentsview",
+  "head_branch": "feature/parser-audit",
+  "last_active_at": "2026-07-18T10:29:00Z",
+  "generated_title": "Audit Grok compatibility",
+  "agent_name": "grok-build"
+}
