@@ -79,6 +79,16 @@ watch. An unstable bracket skips the session silently: a concurrent write bumped
 `local_modified_at`, so the next pass retries against a settled view, and a
 newly ineligible session must simply not be extracted.
 
+The bracket does not end when distillation starts. Eligibility is re-validated —
+snapshot comparison, eligibility predicates, and a fresh secret-findings read (a
+scan under an unchanged rules version can land candidate findings without
+touching any snapshot field) — before every model call and again before
+persisting each call's output. A concurrent write stops the pass silently as
+above. Losing eligibility mid-extraction fails closed: the session's generated
+entries are deleted and its progress row is reopened at cursor zero as a
+retryable failure, so nothing extracted under the lost eligibility persists and
+a session that becomes eligible again re-extracts from scratch.
+
 A stable bracket whose loaded message count differs from the row's is a
 different case — the sync loop writes the session row before the transcript, so
 the row can durably claim more or fewer messages than are stored, and no future
@@ -89,9 +99,9 @@ watermarks advance past the session's writes and exclude it forever. The rule
 holds for completed rows too — it is applied before the done short-circuit,
 because a same-digest revisit would otherwise preserve `done` and settle the
 coverage stamp, claiming the inconsistent state as covered. The failure mark
-demotes such a row (`ReopenDone`) and resets its cursor to zero: its
-completed-units claim was judged against the inconsistent session, and the
-strictly monotonic cursor could otherwise never reach `done` again.
+demotes such a row (`Reopen`) and resets its cursor to zero: its completed-units
+claim was judged against the inconsistent session, and the strictly monotonic
+cursor could otherwise never reach `done` again.
 
 ## Progress and resume
 
@@ -110,7 +120,12 @@ advances are strictly monotonic and can never resurrect a failed or done row.
 
 A failed session waits out `failure_backoff` before the scan offers it again, so
 one poisoned transcript cannot monopolize passes. Cancellation (daemon shutdown)
-leaves the row resumable instead of burning the backoff.
+leaves the row resumable instead of burning the backoff — which is also why a
+same-digest upsert on a failed row preserves `updated_at`: the retry's opening
+upsert must not reset the backoff clock a cancelled retry would then wait out
+again. A same-digest upsert completes a zero-unit row (`done`) whatever state it
+held: the extraction loop runs zero iterations for it, so no cursor advance
+would ever promote a reopened zero-unit failure otherwise.
 
 A full resync carries progress rows into the rebuilt database with
 `content_stamped_at` intact — an empty stamp reads as "changed since coverage"
@@ -136,9 +151,11 @@ blocking their replacements.
 Entries also copy session context — project, cwd, git branch, agent — at insert
 time, and a metadata-only session update keeps the unit digest unchanged. A
 same-digest revisit therefore synchronizes those fields on the session's
-generated entries before settling the coverage stamp, so the corpus stops
-matching Recall filters for the old context without any model calls.
-Human-touched entries are left as they were, mirroring the delete path.
+generated entries *before* the upsert that settles the coverage stamp — a failed
+sync leaves the session re-openable instead of stamped covered with stale
+entries — so the corpus stops matching Recall filters for the old context
+without any model calls. Human-touched entries are left as they were, mirroring
+the delete path.
 
 ## Model client recovery
 
@@ -185,13 +202,16 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   a second watermark bounds it the way the discovery watermark bounds
   discovery: only done sessions written since the last completed unlimited
   full pass are rechecked, so the hourly backstop walks recent writes instead
-  of every completed progress row. The full watermark ratchets to the pass
-  *start* with no quiet-period lag — a write landing during pass N carries a
-  `local_modified_at` at or after N's start, so pass N+1 still sees it. Full
-  passes bound their discovery by the same watermark incremental passes use.
-  Unbounded reconciliation is the fresh-manager path: a daemon restart or a
-  manual `recall extract run` starts with zero watermarks and scans everything
-  once;
+  of every completed progress row. A done session with no recorded local write
+  (a legacy row predating the column) revisits only while its coverage stamp
+  is empty: every write path records a local write, so a stamped legacy row
+  cannot have changed, and pre-stamp archives re-open once and settle. The
+  full watermark ratchets to the pass *start* with no quiet-period lag — a
+  write landing during pass N carries a `local_modified_at` at or after N's
+  start, so pass N+1 still sees it. Full passes bound their discovery by the
+  same watermark incremental passes use. Unbounded reconciliation is the
+  fresh-manager path: a daemon restart or a manual `recall extract run` starts
+  with zero watermarks and scans everything once;
 - when the backstop is disabled, a catchup ticker (paced by the quiet period,
   never faster than once a minute) runs incremental passes instead: sessions
   become eligible only after the quiet period, long after the last sync-driven

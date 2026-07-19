@@ -406,7 +406,7 @@ func TestMarkExtractProgressFailedReopensDoneOnRequest(t *testing.T) {
 		ExpectedDigest: "digest-1",
 		ExpectedCursor: 1,
 		LastError:      "count mismatch",
-		ReopenDone:     true,
+		Reopen:         true,
 	})
 	require.ErrorIs(t, err, ErrStaleExtractProgress)
 
@@ -416,7 +416,7 @@ func TestMarkExtractProgressFailedReopensDoneOnRequest(t *testing.T) {
 		ExpectedDigest: "digest-1",
 		ExpectedCursor: 2,
 		LastError:      "count mismatch",
-		ReopenDone:     true,
+		Reopen:         true,
 	}))
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
 	require.NoError(t, err)
@@ -427,6 +427,161 @@ func TestMarkExtractProgressFailedReopensDoneOnRequest(t *testing.T) {
 			"judged against an inconsistent session, and the strictly "+
 			"monotonic cursor could otherwise never reach done again")
 	assert.Equal(t, "count mismatch", progress.LastError)
+}
+
+func TestMarkExtractProgressFailedReopenRestartsPartialRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 1))
+
+	// Reopen restarts non-done rows too: callers use it after discarding
+	// the session's generated entries, so a preserved cursor would skip
+	// re-extracting units whose entries no longer exist.
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 1,
+		LastError:      "session became ineligible during extraction",
+		Reopen:         true,
+	}))
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ExtractProgressFailed, progress.State)
+	assert.Zero(t, progress.UnitCursor)
+}
+
+func TestUpsertExtractProgressPreservesFailedBackoff(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0, LastError: "boom",
+	}))
+	failed, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+
+	// A retry begins by re-upserting the same digest. If that refreshed
+	// updated_at, a retry cancelled before finishing would restart the
+	// whole failure backoff instead of staying due.
+	time.Sleep(3 * time.Millisecond)
+	after, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressFailed, after.State)
+	assert.Equal(t, failed.UpdatedAt, after.UpdatedAt,
+		"a same-digest upsert on a failed row must not reset the backoff "+
+			"clock")
+
+	// A digest change is genuinely new work: it resets to pending and
+	// takes a fresh clock.
+	reset, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-2", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressPending, reset.State)
+}
+
+func TestUpsertExtractProgressCompletesZeroUnitRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	first, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-empty", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, ExtractProgressDone, first.State)
+
+	// A reopened zero-unit row must converge back to done on the next
+	// stable upsert: the extraction loop runs zero iterations for it, so
+	// no cursor advance will ever promote it.
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ExpectedDigest: "dg-empty", ExpectedCursor: 0,
+		LastError: "count mismatch", Reopen: true,
+	}))
+	retried, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg-empty", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, retried.State,
+		"a zero-unit row is done by construction whatever state it held")
+	assert.Empty(t, retried.LastError)
+}
+
+func TestExtractCandidatesLegacyNullRowsSettleAfterStamp(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractCandidate(t, d, "sess-legacy", 2*time.Hour, nil)
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-legacy", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-legacy", "fp-a", "dg", 1))
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET local_modified_at = NULL WHERE id = 'sess-legacy'")
+	require.NoError(t, err)
+
+	q := ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
+		IncludeDone:  true,
+	}
+	// A legacy row with no recorded local write cannot have changed since
+	// its stamp was taken — every write path records one. Revisiting it on
+	// every full pass would reload the archive's oldest transcripts
+	// forever.
+	ids, err := d.ExtractCandidates(ctx, q)
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "sess-legacy",
+		"a stamped legacy row must settle, not revisit every full pass")
+
+	// Archives copied from before the stamp column carry an empty stamp:
+	// those must re-open once and settle on their first revisit.
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_extract_progress SET content_stamped_at = '' " +
+			"WHERE session_id = 'sess-legacy'")
+	require.NoError(t, err)
+	ids, err = d.ExtractCandidates(ctx, q)
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-legacy",
+		"an unstamped legacy row must re-open for its settling revisit")
 }
 
 func TestSyncExtractedEntryContextRefreshesGeneratedEntries(t *testing.T) {

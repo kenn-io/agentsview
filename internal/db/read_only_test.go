@@ -296,6 +296,9 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"secret finding", "secret_findings", "rules_version"},
 		{"recall entry", "recall_entries", "review_state"},
 		{"recall evidence", "recall_evidence", "snippet"},
+		{"extract generation", "recall_extract_generations", "state"},
+		{"extract progress stamp", "recall_extract_progress",
+			"content_stamped_at"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -323,6 +326,8 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"model_pricing", "model_pattern"},
 		{"recall_query_events", "id"},
 		{"recall_query_exposures", "query_id"},
+		{"recall_extract_generations", "fingerprint"},
+		{"recall_extract_progress", "session_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {

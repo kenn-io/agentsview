@@ -294,7 +294,7 @@ func TestRecallExtractRunRefusesWhileOfflineWriterHoldsLock(t *testing.T) {
 	assert.Contains(t, err.Error(), "lock")
 }
 
-func TestResolveExtractDistillationRejectsDowngradeRedirects(t *testing.T) {
+func TestResolveExtractDistillationRestrictsRedirectsToOrigin(t *testing.T) {
 	cfg := config.RecallExtractConfig{
 		Enabled:          true,
 		Model:            "m",
@@ -311,16 +311,29 @@ func TestResolveExtractDistillationRejectsDowngradeRedirects(t *testing.T) {
 	redirect := dist.Client.HTTPClient.CheckRedirect
 	require.NotNil(t, redirect,
 		"the model client must police redirect targets: a compliant "+
-			"endpoint must not be downgraded to plaintext mid-request")
+			"endpoint must not steer the extraction POST elsewhere")
 
+	// Redirects may only stay on the configured origin: a 307/308 replays
+	// the POST — transcript content included — to whatever destination the
+	// endpoint names, including loopback services that trust local callers.
+	samePath := &http.Request{
+		URL: mustParseURL(t, "https://build-box:30000/v1/chat/completions"),
+	}
+	require.NoError(t, redirect(samePath, nil),
+		"a same-origin redirect stays on the configured endpoint")
 	insecure := &http.Request{URL: mustParseURL(t, "http://build-box:30000/v1/x")}
 	require.Error(t, redirect(insecure, nil),
-		"redirecting to non-loopback plaintext http must be refused")
-	secure := &http.Request{URL: mustParseURL(t, "https://other-box/v1/x")}
-	require.NoError(t, redirect(secure, nil))
+		"a downgrade to plaintext must be refused even on the same host")
+	crossOrigin := &http.Request{URL: mustParseURL(t, "https://other-box/v1/x")}
+	require.Error(t, redirect(crossOrigin, nil),
+		"a cross-origin https redirect must be refused")
+	otherPort := &http.Request{URL: mustParseURL(t, "https://build-box:30001/v1/x")}
+	require.Error(t, redirect(otherPort, nil),
+		"a different port is a different origin")
 	loopback := &http.Request{URL: mustParseURL(t, "http://127.0.0.1:9/v1/x")}
-	require.NoError(t, redirect(loopback, nil),
-		"loopback plaintext stays within the transport policy")
+	require.Error(t, redirect(loopback, nil),
+		"a redirect into loopback must be refused: local services often "+
+			"trust local callers")
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

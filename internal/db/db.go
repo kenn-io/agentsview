@@ -1324,6 +1324,8 @@ var readOnlyRequiredTables = []string{
 	"recall_evidence",
 	"recall_query_events",
 	"recall_query_exposures",
+	"recall_extract_generations",
+	"recall_extract_progress",
 }
 
 var (

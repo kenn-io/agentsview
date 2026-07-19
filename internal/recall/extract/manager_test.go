@@ -2,6 +2,7 @@ package extract
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1325,6 +1326,181 @@ func TestManagerRevisitSyncsEntryContext(t *testing.T) {
 		if entry.Project != "proj-2" || entry.GitBranch != "feature" {
 			t.Fatalf("entry %s context = %s/%s, want proj-2/feature",
 				entry.ID, entry.Project, entry.GitBranch)
+		}
+	}
+}
+
+func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, func(_ string, call int) (int, string) {
+		if call == 2 {
+			// The session is trashed while its second unit is at the
+			// model: units after this must never be sent.
+			if err := d.SoftDeleteSession("sess-1"); err != nil {
+				t.Errorf("trashing mid-extraction: %v", err)
+			}
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-1", turnMessages("a", "b", "c", "d"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 2 {
+		t.Fatalf("model calls = %d, want 2: units after the trash must not "+
+			"reach the model", log.count())
+	}
+	if result.Failed != 1 || result.Sessions != 0 {
+		t.Fatalf("result = %+v, want the trashed session recorded as a "+
+			"failure with discarded output", result)
+	}
+	for _, status := range []string{"", "archived"} {
+		entries, err := d.ListRecallEntries(ctx,
+			db.RecallQuery{Status: status, Limit: 50})
+		if err != nil {
+			t.Fatalf("ListRecallEntries(%q): %v", status, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("%d %q entries persisted from a session trashed "+
+				"mid-extraction; want none", len(entries), status)
+		}
+	}
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressFailed || progress.UnitCursor != 0 {
+		t.Fatalf("progress = %s at cursor %d, want failed at 0 so a "+
+			"restored session re-extracts from scratch",
+			progress.State, progress.UnitCursor)
+	}
+}
+
+func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, func(_ string, call int) (int, string) {
+		if call == 2 {
+			// A candidate-confidence finding lands mid-extraction under
+			// the same rules version: no snapshot field changes except
+			// the local write stamp, but the material must not reach the
+			// model and already-extracted output must not persist.
+			finding := db.SecretFinding{
+				SessionID: "sess-1", RuleName: "jwt",
+				Confidence: "candidate", LocationKind: "message",
+				RedactedMatch: "eyJ…", RulesVersion: secrets.RulesVersion(),
+			}
+			if err := d.ReplaceSessionSecretFindings(
+				"sess-1", []db.SecretFinding{finding}, 0,
+				secrets.RulesVersion(),
+			); err != nil {
+				t.Errorf("recording finding mid-extraction: %v", err)
+			}
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-1", turnMessages("a", "b", "c", "d"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 2 {
+		t.Fatalf("model calls = %d, want 2: units after the finding must "+
+			"not reach the model", log.count())
+	}
+	if result.Failed != 1 {
+		t.Fatalf("result = %+v, want the session recorded as a failure "+
+			"with discarded output", result)
+	}
+	for _, status := range []string{"", "archived"} {
+		entries, err := d.ListRecallEntries(ctx,
+			db.RecallQuery{Status: status, Limit: 50})
+		if err != nil {
+			t.Fatalf("ListRecallEntries(%q): %v", status, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("%d %q entries persisted after a secret finding "+
+				"appeared mid-extraction; want none", len(entries), status)
+		}
+	}
+}
+
+func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	if err != nil || session == nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	session.Project = "proj-2"
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+
+	// A raw side connection installs a trigger that makes the context sync
+	// fail, standing in for any transient write failure at that point.
+	raw, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	if _, err := raw.Exec(`CREATE TRIGGER block_context_sync
+		BEFORE UPDATE OF project ON recall_entries
+		BEGIN SELECT RAISE(ABORT, 'sync blocked'); END`); err != nil {
+		t.Fatalf("installing trigger: %v", err)
+	}
+	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err == nil {
+		t.Fatal("the pass must surface the failed context sync")
+	}
+	if _, err := raw.Exec(
+		"DROP TRIGGER block_context_sync"); err != nil {
+		t.Fatalf("dropping trigger: %v", err)
+	}
+
+	// The failed sync must not have settled the coverage stamp: the next
+	// full pass has to revisit and repair the entries' context.
+	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
+		t.Fatalf("RunPass after repair: %v", err)
+	}
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected extracted entries")
+	}
+	for _, entry := range entries {
+		if entry.Project != "proj-2" {
+			t.Fatalf("entry %s project = %s, want proj-2: a failed sync "+
+				"settled the stamp and was never retried", entry.ID,
+				entry.Project)
 		}
 	}
 }

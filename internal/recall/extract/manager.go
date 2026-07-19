@@ -496,6 +496,19 @@ func (m *Manager) extractSession(
 			return outcome, err
 		}
 	}
+	if !countMismatch && found && previous.ContentDigest == digest {
+		// A same-digest revisit skips the model, but entries copied their
+		// project, cwd, branch, and agent from the session row at insert
+		// time — a metadata-only update would leave them matching filters
+		// for the old context. Synchronized before the upsert below settles
+		// the coverage stamp, so a failed sync leaves the session
+		// re-openable instead of stamped covered with stale entries.
+		if _, err := m.cfg.DB.SyncExtractedEntryContext(
+			ctx, m.fingerprint, session,
+		); err != nil {
+			return outcome, err
+		}
+	}
 	progress, err := m.cfg.DB.UpsertExtractProgress(
 		ctx, db.ExtractProgressUpsert{
 			SessionID:     sessionID,
@@ -511,7 +524,7 @@ func (m *Manager) extractSession(
 	if countMismatch {
 		// Checked before the done short-circuit: a same-digest upsert
 		// preserves done and settles the stamp, which would claim the
-		// inconsistent state as covered forever. ReopenDone demotes such a
+		// inconsistent state as covered forever. Reopen demotes such a
 		// row back into the retry queue.
 		if markErr := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
 			SessionID:      sessionID,
@@ -522,23 +535,12 @@ func (m *Manager) extractSession(
 				"transcript has %d messages but the session row claims %d",
 				len(rows), session.MessageCount,
 			),
-			ReopenDone: true,
+			Reopen: true,
 		}); markErr != nil && !errors.Is(markErr, db.ErrStaleExtractProgress) {
 			return outcome, markErr
 		}
 		outcome.failed = true
 		return outcome, nil
-	}
-	if found && previous.ContentDigest == digest {
-		// A same-digest revisit skips the model, but entries copied their
-		// project, cwd, branch, and agent from the session row at insert
-		// time — a metadata-only update would otherwise settle the stamp
-		// while the corpus kept matching filters for the old context.
-		if _, err := m.cfg.DB.SyncExtractedEntryContext(
-			ctx, m.fingerprint, session,
-		); err != nil {
-			return outcome, err
-		}
 	}
 	if progress.State == db.ExtractProgressDone {
 		return outcome, nil
@@ -546,6 +548,28 @@ func (m *Manager) extractSession(
 	for i := progress.UnitCursor; i < len(units); i++ {
 		if err := ctx.Err(); err != nil {
 			return outcome, err
+		}
+		// Eligibility can be lost while earlier units distill — a trash, an
+		// automation flag, a secret scan landing findings — so it is
+		// re-validated before every model call and again before persisting
+		// the call's output. Losing it fails closed: this pass's generated
+		// entries are discarded and coverage restarts from scratch if the
+		// session ever becomes eligible again.
+		eligible, unchanged, err := m.recheckExtraction(ctx, sessionID, session)
+		if err != nil {
+			return outcome, err
+		}
+		if !eligible {
+			if err := m.discardIneligibleSession(
+				ctx, sessionID, digest, i,
+			); err != nil {
+				return outcome, err
+			}
+			outcome.failed = true
+			return outcome, nil
+		}
+		if !unchanged {
+			return outcome, nil
 		}
 		unit := units[i]
 		entries, err := m.distillSplit(ctx, m.cfg.Prompts[unit.Role], unit.Text)
@@ -565,6 +589,22 @@ func (m *Manager) extractSession(
 				return outcome, markErr
 			}
 			outcome.failed = true
+			return outcome, nil
+		}
+		eligible, unchanged, err = m.recheckExtraction(ctx, sessionID, session)
+		if err != nil {
+			return outcome, err
+		}
+		if !eligible {
+			if err := m.discardIneligibleSession(
+				ctx, sessionID, digest, i,
+			); err != nil {
+				return outcome, err
+			}
+			outcome.failed = true
+			return outcome, nil
+		}
+		if !unchanged {
 			return outcome, nil
 		}
 		inserted, err := m.cfg.DB.InsertExtractedRecallEntries(
@@ -589,6 +629,58 @@ func (m *Manager) extractSession(
 	}
 	outcome.done = true
 	return outcome, nil
+}
+
+// recheckExtraction re-reads the session mid-extraction and reports whether
+// it is still eligible (present, extractable, and free of secret findings of
+// any confidence) and whether its snapshot still matches the bracket's first
+// read. The findings query is separate because a scan under an unchanged
+// rules version can land candidate findings without touching any snapshot
+// field.
+func (m *Manager) recheckExtraction(
+	ctx context.Context, sessionID string, before *db.Session,
+) (eligible, unchanged bool, err error) {
+	recheck, err := m.sessionSnapshot(ctx, sessionID)
+	if err != nil {
+		return false, false, err
+	}
+	if recheck == nil || extractableSession(sessionID, recheck) != nil {
+		return false, false, nil
+	}
+	findings, err := m.cfg.DB.SessionSecretFindings(ctx, sessionID)
+	if err != nil {
+		return false, false, err
+	}
+	if len(findings) > 0 {
+		return false, false, nil
+	}
+	return true, !sessionSnapshotChanged(before, recheck), nil
+}
+
+// discardIneligibleSession fails a session closed mid-extraction: its
+// generated entries are deleted and its progress row is reopened at cursor
+// zero, so nothing extracted under the lost eligibility persists and a
+// session that becomes eligible again re-extracts from scratch.
+func (m *Manager) discardIneligibleSession(
+	ctx context.Context, sessionID, digest string, cursor int,
+) error {
+	if _, err := m.cfg.DB.DeleteExtractedRecallEntries(
+		ctx, m.fingerprint, sessionID,
+	); err != nil {
+		return err
+	}
+	err := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
+		SessionID:      sessionID,
+		Fingerprint:    m.fingerprint,
+		ExpectedDigest: digest,
+		ExpectedCursor: cursor,
+		LastError:      "session became ineligible during extraction",
+		Reopen:         true,
+	})
+	if err != nil && !errors.Is(err, db.ErrStaleExtractProgress) {
+		return err
+	}
+	return nil
 }
 
 // distillSplit distills one text, halving it recursively when the model

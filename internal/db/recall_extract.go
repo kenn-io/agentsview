@@ -343,6 +343,12 @@ func (db *DB) UpsertExtractProgress(
 	// older stamp would leave later metadata writes re-opening the session
 	// on every full pass; taking the row's write time instead would claim
 	// coverage of writes that landed after the caller read the transcript.
+	// Same-digest conflict rules: a zero-unit row is done by construction
+	// whatever state it held — the extraction loop runs zero iterations for
+	// it, so no cursor advance would ever promote it — and a failed row
+	// keeps its state, error, and updated_at, because the retry's opening
+	// upsert must not reset the failure backoff clock a cancelled retry
+	// would then have to wait out again.
 	_, err := db.getWriter().ExecContext(ctx, `
 		INSERT INTO recall_extract_progress
 			(session_id, generation_fingerprint, unit_cursor, units_total,
@@ -356,17 +362,25 @@ func (db *DB) UpsertExtractProgress(
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
 				THEN recall_extract_progress.units_total ELSE excluded.units_total END,
 			state = CASE
-				WHEN recall_extract_progress.content_digest = excluded.content_digest
-				THEN recall_extract_progress.state ELSE ? END,
+				WHEN recall_extract_progress.content_digest != excluded.content_digest
+				THEN ?
+				WHEN excluded.units_total = 0 THEN ?
+				ELSE recall_extract_progress.state END,
 			content_digest = excluded.content_digest,
 			last_error = CASE
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
+					AND excluded.units_total != 0
 				THEN recall_extract_progress.last_error ELSE '' END,
 			content_stamped_at = excluded.content_stamped_at,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+			updated_at = CASE
+				WHEN recall_extract_progress.content_digest = excluded.content_digest
+					AND recall_extract_progress.state = ?
+					AND excluded.units_total != 0
+				THEN recall_extract_progress.updated_at
+				ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now') END`,
 		sessionID, fingerprint, unitsTotal, initialState,
 		contentDigest, u.StampedAt.UTC().Format(extractTimeLayout),
-		initialState,
+		initialState, ExtractProgressDone, ExtractProgressFailed,
 	)
 	if err != nil {
 		return zero, fmt.Errorf(
@@ -476,15 +490,16 @@ type ExtractFailure struct {
 	ExpectedDigest string
 	ExpectedCursor int
 	LastError      string
-	// ReopenDone lets the mark demote a completed row. Normally done rows
-	// refuse failure marks — a late worker must not clobber finished work —
-	// but a caller that has verified the session's stored state is
-	// inconsistent (its row and transcript disagree) needs the row back in
-	// a retryable state. A reopened row restarts from cursor zero: its
-	// completed-units claim was judged against the inconsistent session,
-	// and the strictly monotonic cursor could otherwise never reach done
-	// again.
-	ReopenDone bool
+	// Reopen restarts the row's coverage from scratch: the mark may demote
+	// a completed row (normally done rows refuse failure marks — a late
+	// worker must not clobber finished work) and the cursor resets to
+	// zero. Callers set it when the stored coverage claim is invalid: the
+	// session's row and transcript disagree, or eligibility was lost
+	// mid-extraction and the generated entries were discarded. The cursor
+	// reset is what lets the retry converge — the strictly monotonic
+	// cursor could never reach done again from a reopened completed row,
+	// and a preserved cursor would skip units whose entries were deleted.
+	Reopen bool
 }
 
 // MarkExtractProgressFailed records a failure without losing the resume
@@ -492,9 +507,9 @@ type ExtractFailure struct {
 // The update applies only when the stored digest, cursor, and non-done
 // state all match what the failing worker observed; anything else means
 // another worker moved the row on, and the failure is reported as
-// ErrStaleExtractProgress instead of demoting newer progress. ReopenDone
-// waives only the non-done condition — the digest and cursor guards still
-// apply — and resets a reopened row's cursor to zero.
+// ErrStaleExtractProgress instead of demoting newer progress. Reopen waives
+// only the non-done condition — the digest and cursor guards still apply —
+// and resets the row's cursor to zero.
 func (db *DB) MarkExtractProgressFailed(
 	ctx context.Context, failure ExtractFailure,
 ) error {
@@ -509,17 +524,17 @@ func (db *DB) MarkExtractProgressFailed(
 	result, err := db.getWriter().ExecContext(ctx, `
 		UPDATE recall_extract_progress
 		SET last_error = ?,
-			unit_cursor = CASE WHEN state = ? THEN 0 ELSE unit_cursor END,
+			unit_cursor = CASE WHEN ? THEN 0 ELSE unit_cursor END,
 			state = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE session_id = ? AND generation_fingerprint = ?
 		  AND content_digest = ?
 		  AND unit_cursor = ?
 		  AND (? OR state != ?)`,
-		failure.LastError, ExtractProgressDone, ExtractProgressFailed,
+		failure.LastError, failure.Reopen, ExtractProgressFailed,
 		failure.SessionID, failure.Fingerprint,
 		failure.ExpectedDigest, failure.ExpectedCursor,
-		failure.ReopenDone, ExtractProgressDone,
+		failure.Reopen, ExtractProgressDone,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -809,7 +824,12 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 	if q.IncludeDone {
 		// Done revisits drive from the sessions side so the planner can
 		// bound them with idx_sessions_local_modified; walking done progress
-		// rows instead would scan every completed session each pass.
+		// rows instead would scan every completed session each pass. A NULL
+		// local_modified_at (legacy row, no write recorded since the column
+		// existed — every write path records one) revisits only while its
+		// stamp is empty: pre-stamp archives re-open once and settle, but a
+		// stamped legacy row cannot have changed and must not reload on
+		// every full pass.
 		sb.WriteString(`
 		UNION
 		SELECT s.id AS id, s.ended_at AS ended_at
@@ -817,7 +837,7 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 		JOIN recall_extract_progress p ON p.session_id = s.id
 			AND p.generation_fingerprint = ?
 		WHERE p.state = ?
-			AND (s.local_modified_at IS NULL
+			AND ((s.local_modified_at IS NULL AND p.content_stamped_at = '')
 				OR s.local_modified_at >= p.content_stamped_at)
 			AND ` + eligible)
 		args = append(args, q.Fingerprint, ExtractProgressDone)

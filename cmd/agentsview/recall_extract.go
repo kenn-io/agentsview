@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -90,14 +91,28 @@ func resolveExtractDistillation(
 	if err != nil {
 		return dist, fmt.Errorf("parsing backstop_interval: %w", err)
 	}
-	// Redirect targets obey the same transport policy as the configured
-	// endpoint, so a compliant endpoint cannot be downgraded to
-	// non-loopback plaintext mid-request.
-	allowHTTP := server.AllowHTTP
+	// Redirects may only stay on the configured origin (scheme, host,
+	// port). A 307/308 replays the extraction POST — transcript content
+	// included — to whatever destination the endpoint names, so following
+	// one anywhere else would let a compromised endpoint exfiltrate the
+	// request to another server or aim it at loopback services that trust
+	// local callers. Same-origin also keeps the transport policy already
+	// validated for the endpoint itself.
+	origin, err := url.Parse(server.Endpoint)
+	if err != nil {
+		return dist, fmt.Errorf(
+			"parsing endpoint for server %q: %w", serverName, err)
+	}
 	httpClient := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			return config.ValidateExtractTransport(req.URL, allowHTTP)
+			if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
+				return fmt.Errorf(
+					"refusing redirect to %q: extraction requests may only "+
+						"follow redirects on the configured endpoint origin "+
+						"%s://%s", req.URL.String(), origin.Scheme, origin.Host)
+			}
+			return nil
 		},
 	}
 	return extractDistillation{
