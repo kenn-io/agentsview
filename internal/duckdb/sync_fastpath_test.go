@@ -285,7 +285,7 @@ func TestPushSessionSkipFastPathRefreshesPinnedMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	pushedMessages, err := syncer.pushSingleSession(ctx, *sess, false)
+	pushedMessages, err := syncer.pushSingleSession(ctx, *sess, "", false)
 	require.NoError(t, err)
 
 	assert.Zero(t, pushedMessages)
@@ -317,7 +317,7 @@ func TestPushSessionAppendFastPathRefreshesPinnedMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	pushedMessages, err := syncer.pushSingleSession(ctx, *sess, false)
+	pushedMessages, err := syncer.pushSingleSession(ctx, *sess, "", false)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, pushedMessages)

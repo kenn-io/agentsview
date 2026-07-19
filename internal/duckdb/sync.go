@@ -194,14 +194,17 @@ func localDuckDBBackfillTargetScope(path string) string {
 	return "path-" + hex.EncodeToString(sum[:8])
 }
 
-// EnsureSchema creates or additively migrates the DuckDB mirror schema.
+// EnsureSchema creates the DuckDB mirror schema if it does not already
+// exist. Deprecated: mirror schema v3 is create-only; Task 5/6 remove this
+// method once Sync.Push and cmd callers stop invoking schema creation
+// directly on a possibly-existing file.
 func (s *Sync) EnsureSchema(ctx context.Context) error {
 	s.schemaMu.Lock()
 	defer s.schemaMu.Unlock()
 	if s.schemaOK {
 		return nil
 	}
-	if err := ensureSchema(ctx, s.duck); err != nil {
+	if err := createSchema(ctx, s.duck); err != nil {
 		return err
 	}
 	s.schemaOK = true
@@ -382,7 +385,7 @@ func (s *Sync) Push(
 		end := min(start+duckSessionPushBatchSize, len(sessions))
 		if err := s.pushSessionBatchForMode(
 			ctx, sessions[start:end], start, len(sessions),
-			&result, &pushed, onProgress, full,
+			&result, &pushed, onProgress, full, sessionFingerprints,
 		); err != nil {
 			return result, err
 		}
@@ -490,7 +493,7 @@ func (s *Sync) pushSessionBatch(
 	onProgress func(PushProgress),
 ) error {
 	return s.pushSessionBatchForMode(
-		ctx, sessions, offset, total, result, pushed, onProgress, false,
+		ctx, sessions, offset, total, result, pushed, onProgress, false, nil,
 	)
 }
 
@@ -503,14 +506,15 @@ func (s *Sync) pushSessionBatchForMode(
 	pushed *[]db.Session,
 	onProgress func(PushProgress),
 	full bool,
+	fingerprints map[string]string,
 ) error {
 	return pushSessionBatchWith(
 		ctx, sessions, offset, total, result, pushed, onProgress,
 		func(ctx context.Context, sessions []db.Session) ([]int, error) {
-			return s.tryPushSessionBatch(ctx, sessions, full)
+			return s.tryPushSessionBatch(ctx, sessions, fingerprints, full)
 		},
 		func(ctx context.Context, sess db.Session) (int, error) {
-			return s.pushSingleSession(ctx, sess, full)
+			return s.pushSingleSession(ctx, sess, fingerprints[sess.ID], full)
 		},
 	)
 }
@@ -623,7 +627,7 @@ func reportDuckPushProgress(
 }
 
 func (s *Sync) tryPushSessionBatch(
-	ctx context.Context, sessions []db.Session, full bool,
+	ctx context.Context, sessions []db.Session, fingerprints map[string]string, full bool,
 ) ([]int, error) {
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
@@ -633,7 +637,7 @@ func (s *Sync) tryPushSessionBatch(
 	messagesBySession := make([]int, len(sessions))
 
 	for i, sess := range sessions {
-		messages, err := s.pushSession(ctx, tx, tx, sess, full)
+		messages, err := s.pushSession(ctx, tx, tx, sess, fingerprints[sess.ID], full)
 		if err != nil {
 			return nil, fmt.Errorf("pushing duckdb session %s: %w", sess.ID, err)
 		}
@@ -646,14 +650,14 @@ func (s *Sync) tryPushSessionBatch(
 }
 
 func (s *Sync) pushSingleSession(
-	ctx context.Context, sess db.Session, full bool,
+	ctx context.Context, sess db.Session, fingerprint string, full bool,
 ) (int, error) {
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	messages, err := s.pushSession(ctx, tx, tx, sess, full)
+	messages, err := s.pushSession(ctx, tx, tx, sess, fingerprint, full)
 	if err != nil {
 		return 0, err
 	}
