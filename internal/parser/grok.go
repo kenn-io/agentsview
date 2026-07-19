@@ -223,7 +223,12 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			continue
 
 		case "user":
-			flushThinking()
+			pendingThink = ""
+			hasPending = false
+			reason := strings.TrimSpace(root.Get("synthetic_reason").Str)
+			if reason != "" && reason != "interjection" {
+				continue
+			}
 			content := grokUserContent(root.Get("content"))
 			if content == "" {
 				// Meta-only injections (user_info / system-reminder /
@@ -249,6 +254,14 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 				pendingThink = text
 				hasPending = true
 			}
+
+		case "backend_tool_call":
+			msg, ok := grokBackendToolMessage(root, ordinal)
+			if !ok {
+				continue
+			}
+			messages = append(messages, msg)
+			ordinal++
 
 		case "assistant":
 			content := strings.TrimSpace(root.Get("content").Str)
@@ -314,6 +327,83 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 	}
 	flushThinking()
 	return messages, malformed, nil
+}
+
+func grokBackendToolMessage(
+	root gjson.Result, ordinal int,
+) (ParsedMessage, bool) {
+	payload := root.Get("kind")
+	rowType := strings.TrimSpace(root.Get("type").Str)
+	if !payload.Exists() {
+		payload = root
+	}
+	toolName := strings.TrimSpace(payload.Get("tool_type").Str)
+	if toolName == "" {
+		switch rowType {
+		case "web_search_call":
+			toolName = "web_search"
+		case "custom_tool_call":
+			toolName = "x_search"
+		case "code_interpreter_call":
+			toolName = "code_interpreter"
+		}
+	}
+	if toolName == "" {
+		return ParsedMessage{}, false
+	}
+	id := strings.TrimSpace(payload.Get("id").Str)
+	action := payload.Get("action")
+	inputJSON := action.Raw
+	if inputJSON == "" {
+		if input := payload.Get("input"); input.Type == gjson.String {
+			inputJSON = input.Str
+		} else {
+			inputJSON = input.Raw
+		}
+	}
+	content := grokBackendToolSummary(toolName, payload)
+	call := ParsedToolCall{
+		ToolUseID: id,
+		ToolName:  toolName,
+		Category:  NormalizeToolCategory(toolName),
+		InputJSON: inputJSON,
+	}
+	return ParsedMessage{
+		Ordinal:       ordinal,
+		Role:          RoleAssistant,
+		Content:       content,
+		ContentLength: len(content),
+		HasToolUse:    true,
+		ToolCalls:     []ParsedToolCall{call},
+	}, true
+}
+
+func grokBackendToolSummary(toolName string, payload gjson.Result) string {
+	action := payload.Get("action")
+	switch toolName {
+	case "web_search":
+		switch action.Get("type").Str {
+		case "search":
+			return "[backend web_search] search: " +
+				truncate(strings.TrimSpace(action.Get("query").Str), 300)
+		case "open", "open_page":
+			return "[backend web_search] open: " +
+				truncate(strings.TrimSpace(action.Get("url").Str), 300)
+		case "find", "find_in_page":
+			return "[backend web_search] find: " +
+				truncate(strings.TrimSpace(action.Get("pattern").Str), 300)
+		default:
+			return "[backend web_search]"
+		}
+	case "x_search":
+		return "[backend x_search] " +
+			truncate(strings.TrimSpace(payload.Get("input").Str), 300)
+	case "code_interpreter":
+		return "[backend code_interpreter] " +
+			truncate(strings.TrimSpace(payload.Get("code").Str), 300)
+	default:
+		return "[backend " + toolName + "]"
+	}
 }
 
 func grokUserContent(content gjson.Result) string {

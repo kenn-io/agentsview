@@ -51,6 +51,22 @@ func TestGrokProviderGoldenCurrentPrefersGeneratedTitle(t *testing.T) {
 	assert.Equal(t, "Audit Grok compatibility", result.Session.SessionName)
 }
 
+func TestGrokProviderGoldenCurrentTranscriptSemantics(t *testing.T) {
+	result := parseGrokGolden(t, "current")
+	assert.Equal(t, "Review parser compatibility", result.Session.FirstMessage)
+	assert.Equal(t, 2, result.Session.UserMessageCount)
+	require.Len(t, result.Messages, 6)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "Review parser compatibility", result.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Contains(t, result.Messages[1].Content, "Grok Build persistence")
+	require.Len(t, result.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "ws_1", result.Messages[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "web_search", result.Messages[1].ToolCalls[0].ToolName)
+	assert.Equal(t, RoleUser, result.Messages[4].Role)
+	assert.Equal(t, "also keep interjections", result.Messages[4].Content)
+}
+
 func TestGrokProviderSummarySource(t *testing.T) {
 	root := t.TempDir()
 	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", "sess-1"), `{
