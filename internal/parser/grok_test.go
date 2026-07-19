@@ -63,6 +63,7 @@ func TestGrokProviderGoldenCurrentTranscriptSemantics(t *testing.T) {
 	require.Len(t, result.Messages[1].ToolCalls, 1)
 	assert.Equal(t, "ws_1", result.Messages[1].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "web_search", result.Messages[1].ToolCalls[0].ToolName)
+	assert.Equal(t, "Inspect both formats", result.Messages[2].ThinkingText)
 	assert.Equal(t, RoleUser, result.Messages[4].Role)
 	assert.Equal(t, "also keep interjections", result.Messages[4].Content)
 }
@@ -77,6 +78,7 @@ func TestGrokProviderGoldenLegacyTranscript(t *testing.T) {
 	require.Len(t, result.Messages[1].ToolCalls, 1)
 	assert.Equal(t, "call_1", result.Messages[1].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "grok-4.5", result.Messages[1].Model)
+	assert.Equal(t, "Check the old format", result.Messages[1].ThinkingText)
 	require.Len(t, result.Messages[2].ToolResults, 1)
 	assert.Equal(t, "call_1", result.Messages[2].ToolResults[0].ToolUseID)
 }
@@ -110,6 +112,139 @@ func TestGrokProviderParsesMixedTranscriptFormats(t *testing.T) {
 	require.Len(t, messages, 2)
 	assert.Equal(t, "legacy question", messages[0].Content)
 	assert.Equal(t, "current answer", messages[1].Content)
+}
+
+func TestParseGrokChatHistoryReasoningShapes(t *testing.T) {
+	tests := []struct {
+		name      string
+		history   []string
+		wantThink string
+		wantCount int
+	}{
+		{
+			name: "standalone content array",
+			history: []string{
+				`{"type":"reasoning","id":"r1","content":[{"type":"reasoning_text","text":"content thought"}]}`,
+				`{"type":"assistant","content":"answer"}`,
+			},
+			wantThink: "content thought",
+			wantCount: 1,
+		},
+		{
+			name: "legacy inline reasoning",
+			history: []string{
+				`{"type":"assistant","content":"answer","reasoning":{"text":"inline thought"}}`,
+			},
+			wantThink: "inline thought",
+			wantCount: 1,
+		},
+		{
+			name: "legacy raw output reasoning",
+			history: []string{
+				`{"type":"assistant","content":"answer","raw_output":[{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"raw thought"}]},{"type":"web_search_call","id":"ws_raw","status":"completed","action":{"type":"search","query":"raw query","sources":[]}}]}`,
+			},
+			wantThink: "raw thought",
+			wantCount: 2,
+		},
+		{
+			name: "format zero reasoning content",
+			history: []string{
+				`{"role":"assistant","content":"answer","reasoning_content":"v0 thought"}`,
+			},
+			wantThink: "v0 thought",
+			wantCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "chat_history.jsonl")
+			writeGrokFixtureFile(t, path, strings.Join(tt.history, "\n")+"\n")
+			messages, malformed, err := parseGrokChatHistory(path)
+			require.NoError(t, err)
+			assert.Zero(t, malformed)
+			require.Len(t, messages, tt.wantCount)
+			assistant := messages[len(messages)-1]
+			assert.Equal(t, RoleAssistant, assistant.Role)
+			assert.Equal(t, tt.wantThink, assistant.ThinkingText)
+			assert.True(t, assistant.HasThinking)
+			if tt.name == "legacy raw output reasoning" {
+				require.Len(t, messages[0].ToolCalls, 1)
+				assert.Equal(t, "ws_raw", messages[0].ToolCalls[0].ToolUseID)
+				assert.Contains(t, messages[0].Content, "raw query")
+			}
+		})
+	}
+}
+
+func TestParseGrokChatHistoryInlineReasoningOverridesPending(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat_history.jsonl")
+	writeGrokFixtureFile(t, path, strings.Join([]string{
+		`{"type":"reasoning","summary":[{"type":"summary_text","text":"pending"}]}`,
+		`{"type":"assistant","content":"answer","reasoning":{"text":"inline"}}`,
+	}, "\n")+"\n")
+	messages, malformed, err := parseGrokChatHistory(path)
+	require.NoError(t, err)
+	assert.Zero(t, malformed)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "inline", messages[0].ThinkingText)
+}
+
+func TestParseGrokChatHistoryDeduplicatesRawBackendToolCalls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat_history.jsonl")
+	writeGrokFixtureFile(t, path, strings.Join([]string{
+		`{"type":"backend_tool_call","kind":{"tool_type":"web_search","id":"ws_same","status":"completed","action":{"type":"search","query":"same query","sources":[]}}}`,
+		`{"type":"assistant","content":"answer","raw_output":[{"type":"web_search_call","id":"ws_same","status":"completed","action":{"type":"search","query":"same query","sources":[]}}]}`,
+	}, "\n")+"\n")
+	messages, malformed, err := parseGrokChatHistory(path)
+	require.NoError(t, err)
+	assert.Zero(t, malformed)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, "ws_same", messages[0].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "answer", messages[1].Content)
+}
+
+func TestParseGrokChatHistoryDropsOrphanReasoning(t *testing.T) {
+	tests := []struct {
+		name      string
+		trailing  []string
+		wantCount int
+	}{
+		{name: "at eof", wantCount: 0},
+		{
+			name: "before user",
+			trailing: []string{
+				`{"type":"user","content":"new question"}`,
+				`{"type":"assistant","content":"answer"}`,
+			},
+			wantCount: 2,
+		},
+		{
+			name: "before tool result",
+			trailing: []string{
+				`{"type":"tool_result","tool_call_id":"call_1","content":"result"}`,
+				`{"type":"assistant","content":"answer"}`,
+			},
+			wantCount: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := append([]string{
+				`{"type":"reasoning","summary":[{"type":"summary_text","text":"orphan"}]}`,
+			}, tt.trailing...)
+			path := filepath.Join(t.TempDir(), "chat_history.jsonl")
+			writeGrokFixtureFile(t, path, strings.Join(rows, "\n")+"\n")
+			messages, malformed, err := parseGrokChatHistory(path)
+			require.NoError(t, err)
+			assert.Zero(t, malformed)
+			require.Len(t, messages, tt.wantCount)
+			for _, message := range messages {
+				assert.False(t, message.HasThinking)
+				assert.NotContains(t, message.Content, "orphan")
+			}
+		})
+	}
 }
 
 func TestGrokProviderSummarySource(t *testing.T) {

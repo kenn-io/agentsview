@@ -179,29 +179,13 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 	defer releaseLineReader(lr)
 
 	var (
-		messages     []ParsedMessage
-		malformed    int
-		pendingThink string
-		hasPending   bool
-		ordinal      int
+		messages         []ParsedMessage
+		malformed        int
+		pendingThink     string
+		hasPending       bool
+		ordinal          int
+		seenBackendTools = make(map[string]struct{})
 	)
-
-	flushThinking := func() {
-		if !hasPending {
-			return
-		}
-		messages = append(messages, ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleAssistant,
-			Content:       "[Thinking]\n" + pendingThink + "\n[/Thinking]",
-			ThinkingText:  pendingThink,
-			HasThinking:   true,
-			ContentLength: len(pendingThink),
-		})
-		ordinal++
-		pendingThink = ""
-		hasPending = false
-	}
 
 	for {
 		line, ok := lr.next()
@@ -262,11 +246,30 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			}
 			messages = append(messages, msg)
 			ordinal++
+			if len(msg.ToolCalls) > 0 {
+				id := strings.TrimSpace(msg.ToolCalls[0].ToolUseID)
+				if id != "" {
+					seenBackendTools[id] = struct{}{}
+				}
+			}
 
 		case "assistant":
+			for _, backendMsg := range grokRawOutputBackendTools(
+				root, seenBackendTools,
+			) {
+				backendMsg.Ordinal = ordinal
+				messages = append(messages, backendMsg)
+				ordinal++
+			}
 			content := strings.TrimSpace(root.Get("content").Str)
 			toolCalls := grokToolCalls(root.Get("tool_calls"))
-			if content == "" && len(toolCalls) == 0 && !hasPending {
+			thinking := pendingThink
+			if inline := grokAssistantReasoning(root); inline != "" {
+				thinking = inline
+			}
+			pendingThink = ""
+			hasPending = false
+			if content == "" && len(toolCalls) == 0 && thinking == "" {
 				continue
 			}
 			msg := ParsedMessage{
@@ -278,19 +281,18 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 				ToolCalls:     toolCalls,
 				HasToolUse:    len(toolCalls) > 0,
 			}
-			if hasPending {
+			if thinking != "" {
 				msg.HasThinking = true
-				msg.ThinkingText = pendingThink
-				msg.Content = "[Thinking]\n" + pendingThink + "\n[/Thinking]\n" + content
-				msg.ContentLength = len(pendingThink) + len(content)
-				pendingThink = ""
-				hasPending = false
+				msg.ThinkingText = thinking
+				msg.Content = "[Thinking]\n" + thinking + "\n[/Thinking]\n" + content
+				msg.ContentLength = len(thinking) + len(content)
 			}
 			messages = append(messages, msg)
 			ordinal++
 
 		case "tool_result":
-			flushThinking()
+			pendingThink = ""
+			hasPending = false
 			toolCallID := strings.TrimSpace(root.Get("tool_call_id").Str)
 			if toolCallID == "" {
 				continue
@@ -325,7 +327,6 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 	if err := lr.Err(); err != nil {
 		return nil, malformed, fmt.Errorf("reading %s: %w", path, err)
 	}
-	flushThinking()
 	return messages, malformed, nil
 }
 
@@ -394,6 +395,37 @@ func grokBackendToolMessage(
 		HasToolUse:    true,
 		ToolCalls:     []ParsedToolCall{call},
 	}, true
+}
+
+func grokRawOutputBackendTools(
+	root gjson.Result, seen map[string]struct{},
+) []ParsedMessage {
+	var messages []ParsedMessage
+	rawOutput := root.Get("raw_output")
+	if !rawOutput.IsArray() {
+		return nil
+	}
+	rawOutput.ForEach(func(_, item gjson.Result) bool {
+		switch item.Get("type").Str {
+		case "web_search_call", "custom_tool_call", "code_interpreter_call":
+		default:
+			return true
+		}
+		id := strings.TrimSpace(item.Get("id").Str)
+		if _, exists := seen[id]; id != "" && exists {
+			return true
+		}
+		message, ok := grokBackendToolMessage(item, 0)
+		if !ok {
+			return true
+		}
+		messages = append(messages, message)
+		if id != "" {
+			seen[id] = struct{}{}
+		}
+		return true
+	})
+	return messages
 }
 
 func grokBackendToolSummary(toolName string, payload gjson.Result) string {
@@ -497,20 +529,46 @@ func grokStripXMLTagBlock(text, tag string) string {
 }
 
 func grokReasoningText(root gjson.Result) string {
-	summary := root.Get("summary")
-	if summary.IsArray() {
-		var parts []string
-		summary.ForEach(func(_, part gjson.Result) bool {
-			if part.Get("type").Str == "summary_text" {
-				if t := strings.TrimSpace(part.Get("text").Str); t != "" {
-					parts = append(parts, t)
-				}
+	var parts []string
+	for _, path := range []string{"summary", "content"} {
+		content := root.Get(path)
+		if !content.IsArray() {
+			continue
+		}
+		content.ForEach(func(_, part gjson.Result) bool {
+			if text := strings.TrimSpace(part.Get("text").Str); text != "" {
+				parts = append(parts, text)
 			}
 			return true
 		})
+	}
+	if len(parts) > 0 {
 		return strings.Join(parts, "\n\n")
 	}
 	return strings.TrimSpace(root.Get("content").Str)
+}
+
+func grokAssistantReasoning(root gjson.Result) string {
+	if text := strings.TrimSpace(root.Get("reasoning.text").Str); text != "" {
+		return text
+	}
+	var parts []string
+	rawOutput := root.Get("raw_output")
+	if rawOutput.IsArray() {
+		rawOutput.ForEach(func(_, item gjson.Result) bool {
+			if item.Get("type").Str != "reasoning" {
+				return true
+			}
+			if text := grokReasoningText(item); text != "" {
+				parts = append(parts, text)
+			}
+			return true
+		})
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, "\n\n")
+	}
+	return strings.TrimSpace(root.Get("reasoning_content").Str)
 }
 
 func grokToolCalls(arr gjson.Result) []ParsedToolCall {
