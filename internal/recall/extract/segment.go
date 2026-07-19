@@ -51,6 +51,16 @@ type Unit struct {
 // identify the strategy and its knobs; both become part of the extraction
 // configuration's identity. PromptRoles declares which prompt kinds the
 // strategy emits so prompt resolution can be validated up front.
+//
+// Versioning contract: any change that alters the derived units for a
+// transcript whose units could previously commit MUST change Name or
+// Params, so the generation fingerprint changes and the corpus rebuilds
+// under a new identity instead of mixing derivations. A change confined to
+// units that could never commit (for example ranges the evidence window
+// refuses) keeps committed output derivation-identical: the sequential
+// cursor cannot pass an uncommittable unit, so affected sessions hold no
+// entries, and their next visit re-derives a different units digest and
+// rebuilds from scratch.
 type Segmenter interface {
 	Name() string
 	Params() map[string]any
@@ -92,7 +102,9 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 		// requires gap-free ranges, so no unit may span a missing row:
 		// flush the current run at every discontinuity. Skipped system and
 		// empty rows below still occupy their ordinals, so they keep a run
-		// contiguous.
+		// contiguous. This split stays within the versioning contract
+		// above: it only changes units that spanned a missing ordinal,
+		// which the evidence window always refused to commit.
 		if prevOrdinal >= 0 && message.Ordinal != prevOrdinal+1 {
 			units = packRun(run, s.MaxWindowChars, units)
 			run = nil
