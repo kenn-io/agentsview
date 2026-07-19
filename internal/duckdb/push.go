@@ -519,10 +519,11 @@ func (s *Sync) pushSession(
 func (s *Sync) replaceSessionDependents(
 	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
+	// usage_events is deliberately absent here: replaceUsageEvents owns that
+	// delete+reinsert so the row is cleared exactly once per push.
 	for _, stmt := range []string{
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM secret_findings WHERE session_id = ?`,
-		`DELETE FROM usage_events WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
 	} {
 		if err := s.execMutation(ctx, exec, stmt, sessionID); err != nil {

@@ -75,6 +75,39 @@ func createMirrorTempPath(path string) (string, error) {
 	return tmpPath, nil
 }
 
+// rebuildSnapshot captures the mirror metadata state tokens that must be
+// read BEFORE pushEverything enumerates sessions. A session mutated or
+// hard-deleted while the rebuild's session push loop is still running must
+// produce a sync_marker (or deletion journal revision) strictly greater
+// than these captured values, or the very next incremental push would never
+// select it: the mirror would silently keep stale or deleted data until the
+// next --full rebuild.
+//
+// The project identity revision does not need pre-capture here:
+// syncProjectIdentityObservations reads ProjectIdentityPublicationRevision
+// as the first thing it does and returns that same revision, so its return
+// value already reflects the state as of that read, before its own
+// publication writes happen. Callers just need to use that return value
+// instead of re-reading the revision after the fact.
+type rebuildSnapshot struct {
+	cutoff           string
+	deletionRevision int64
+}
+
+// captureRebuildSnapshot reads the state tokens rebuildMirror needs to seed
+// post-rebuild mirror metadata. It must be called before the rebuild lists
+// sessions to push; see rebuildSnapshot for why.
+func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot, error) {
+	deletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
+	if err != nil {
+		return rebuildSnapshot{}, err
+	}
+	return rebuildSnapshot{
+		cutoff:           time.Now().UTC().Format(localSyncTimestampLayout),
+		deletionRevision: deletionRevision,
+	}, nil
+}
+
 // buildMirrorInto creates schema v3 on a fresh Sync's DuckDB file, pushes
 // every in-scope session plus the mirror's global tables, records mirror
 // metadata, and checkpoints so the on-disk file reflects every write.
@@ -82,6 +115,10 @@ func buildMirrorInto(
 	ctx context.Context, s *Sync, opts SyncOptions, onProgress func(PushProgress),
 ) (PushResult, error) {
 	if err := createSchema(ctx, s.duck); err != nil {
+		return PushResult{}, err
+	}
+	snapshot, err := captureRebuildSnapshot(ctx, s.local)
+	if err != nil {
 		return PushResult{}, err
 	}
 	result, err := s.pushEverything(ctx, onProgress)
@@ -93,8 +130,12 @@ func buildMirrorInto(
 			"rebuild failed with %d session push errors", result.Errors,
 		)
 	}
+	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
+	if err != nil {
+		return result, err
+	}
 	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
-	if err := s.writeRebuildMetadata(ctx, scope); err != nil {
+	if err := s.writeRebuildMetadata(ctx, scope, snapshot, identityRevision); err != nil {
 		return result, err
 	}
 	if _, err := s.duck.ExecContext(ctx, "CHECKPOINT"); err != nil {
@@ -104,10 +145,13 @@ func buildMirrorInto(
 }
 
 // pushEverything performs a full-only push of every session in scope plus
-// the mirror's global tables (pricing, cursor usage, curation rows, project
-// identity). Unlike Sync.Push it never computes incremental fingerprint
-// diffs or reads/writes push watermarks: rebuildMirror is the only caller,
-// and it always starts from an empty freshly created file.
+// the mirror's global tables (pricing, cursor usage, curation rows). Unlike
+// Sync.Push it never computes incremental fingerprint diffs or reads/writes
+// push watermarks: rebuildMirror is the only caller, and it always starts
+// from an empty freshly created file. Project identity publication is not
+// done here: buildMirrorInto runs it separately, after pushEverything
+// succeeds, so it can capture the revision syncProjectIdentityObservations
+// returns without changing this function's signature.
 func (s *Sync) pushEverything(
 	ctx context.Context, onProgress func(PushProgress),
 ) (PushResult, error) {
@@ -153,9 +197,6 @@ func (s *Sync) pushEverything(
 		if err := s.pushEverythingCuration(ctx, sessions); err != nil {
 			return result, err
 		}
-		if _, err := s.syncProjectIdentityObservations(ctx, 0, true); err != nil {
-			return result, err
-		}
 	}
 
 	result.Duration = time.Since(start)
@@ -175,25 +216,25 @@ func (s *Sync) pushEverythingCuration(ctx context.Context, sessions []db.Session
 // writeRebuildMetadata records the mirrorMetadata a probe reads back:
 // schema/data version, push scope, cutoff/machine bookkeeping, and the
 // source revisions needed to detect deletions and identity changes that
-// happen after this rebuild.
-func (s *Sync) writeRebuildMetadata(ctx context.Context, scope string) error {
-	identityRevision, err := s.local.ProjectIdentityPublicationRevision(ctx)
-	if err != nil {
-		return err
-	}
-	deletionRevision, err := s.local.SessionDeletionPublicationRevision(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
+// happen after this rebuild. cutoff and deletionRevision come from
+// snapshot, captured before pushEverything enumerated sessions (see
+// rebuildSnapshot); identityRevision comes from
+// syncProjectIdentityObservations's return value, which is already
+// as-of-its-own-read and needs no pre-capture. Re-reading either token
+// here, after the push loop has run, would let a session mutated or
+// hard-deleted during the rebuild fall permanently outside the next
+// incremental push's window.
+func (s *Sync) writeRebuildMetadata(
+	ctx context.Context, scope string, snapshot rebuildSnapshot, identityRevision int64,
+) error {
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
 		Scope:            scope,
-		LastPushCutoff:   now.Format(localSyncTimestampLayout),
-		LastPushAt:       now.Format(time.RFC3339),
+		LastPushCutoff:   snapshot.cutoff,
+		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
 		LastPushMachine:  s.machine,
-		DeletionRevision: deletionRevision,
+		DeletionRevision: snapshot.deletionRevision,
 		IdentityRevision: identityRevision,
 	})
 }

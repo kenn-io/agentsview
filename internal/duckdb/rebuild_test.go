@@ -280,3 +280,83 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 		})
 	}
 }
+
+// TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration is a regression
+// test for the rebuild-to-incremental handoff: the cutoff and deletion
+// revision written to mirror metadata must reflect state as of BEFORE
+// pushEverything enumerates sessions, not state re-read after the push loop
+// finishes. A session mutated or hard-deleted while a real rebuild's push
+// loop is still running produces a sync_marker (or deletion journal
+// revision) that would already be <= a cutoff/revision captured at the end,
+// so the very next incremental push would never select it: the mirror
+// would silently keep stale or deleted data until the next --full rebuild.
+//
+// There is no hook into the middle of a running rebuild here, so the race
+// is reproduced deterministically instead: capture the snapshot the fixed
+// buildMirrorInto captures before pushEverything runs, apply mutations that
+// stand in for changes racing an in-flight rebuild, then finish the
+// "rebuild" (pushEverything + syncProjectIdentityObservations +
+// writeRebuildMetadata) using that pre-mutation snapshot, exactly as
+// production code now does. A further content-only edit that never moves
+// the mutated session's sync_marker forward again is applied after the
+// rebuild "completes", then a real incremental Push must still catch it.
+//
+// Under the old end-of-rebuild capture semantics, writeRebuildMetadata
+// would have re-read the cutoff and deletion revision after pushEverything
+// ran, i.e. after both mutations below. The appended session's sync_marker
+// would then sit strictly before that late-captured cutoff, permanently
+// excluding it from every future incremental window regardless of later
+// content changes, and the hard delete's journal revision would already be
+// <= the late-captured DeletionRevision, so LoadSessionDeletionDelta's
+// (after, through] window would never include its tombstone. Both
+// assertions below would fail under that ordering: PushedSessions.Total
+// would be 0 instead of 1, and DeletedStaleSessions would be 0 instead of 1.
+func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ids := seedRebuildFixture(t, local)
+	mutatedID, deletedID := ids[0], ids[1]
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+
+	s := newTestSync(t, path, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, s.DB()))
+
+	// Capture the snapshot BEFORE any mutation, exactly as buildMirrorInto
+	// now does before calling pushEverything.
+	snapshot, err := captureRebuildSnapshot(ctx, local)
+	require.NoError(t, err)
+
+	// Mutations that stand in for changes racing an in-flight rebuild's
+	// push loop: one session gets a new message (bumping its sync_marker),
+	// another gets hard-deleted (bumping the deletion journal revision).
+	// Both happen strictly after the snapshot was captured.
+	appendMessage(t, local, mutatedID)
+	require.NoError(t, local.DeleteSession(deletedID))
+
+	// The rebuild's full push runs after the mutations, as it would once
+	// they land mid-enumeration in a real race, and since it reads local
+	// state fresh it already reflects them: mutatedID is pushed with its
+	// appended message, deletedID is simply absent from the fresh mirror.
+	result, err := s.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Errors)
+	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
+	require.NoError(t, err)
+	require.NoError(t, s.writeRebuildMetadata(ctx, "", snapshot, identityRevision))
+	require.NoError(t, s.Close())
+
+	// A further content-only change to mutatedID, applied after the
+	// rebuild "completes": a raw UPDATE that never touches the sessions
+	// table, so sync_marker is left exactly where the append put it. Only
+	// a correctly pre-captured LastPushCutoff can still catch this.
+	mutateSessionContent(t, local, mutatedID)
+
+	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"a valid mirror with fresh metadata must not force a rebuild")
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
+		"session mutated during rebuild must still be caught by the next incremental push")
+	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
+		"session hard-deleted during rebuild must still be reconciled by the next incremental push")
+}
