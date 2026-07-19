@@ -396,6 +396,7 @@
         label={m.activity_filter_by_branch()}
         allLabel={m.activity_all_branches()}
         placeholder={m.activity_filter_branches_placeholder()}
+        clearSearchLabel={m.shared_branch_clear_search()}
         loadingLabel={m.shared_branch_loading()}
         emptyLabel={m.shared_branch_no_match()}
         refineLabel={m.shared_branch_refine()}

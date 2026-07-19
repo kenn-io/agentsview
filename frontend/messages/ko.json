@@ -1832,6 +1832,7 @@
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
   "appearance_text_size": "텍스트 크기",
+  "shared_branch_clear_search": "브랜치 검색 지우기",
   "shared_branch_loading": "브랜치를 불러오는 중…",
   "shared_branch_no_match": "일치하는 브랜치가 없습니다",
   "shared_branch_refine": "더 많은 브랜치가 있습니다. 검색어를 구체화하세요."

@@ -1861,6 +1861,7 @@
   "activity_no_matching_branches": "Aucune branche correspondante",
   "activity_no_automation_filters": "Aucun filtre d'automatisation",
   "activity_loading_report": "Chargement du rapport d'activité...",
+  "shared_branch_clear_search": "Effacer la recherche de branches",
   "shared_branch_loading": "Chargement des branches…",
   "shared_branch_no_match": "Aucune branche correspondante",
   "shared_branch_refine": "D'autres branches existent. Affinez votre recherche.",

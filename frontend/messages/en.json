@@ -1866,6 +1866,7 @@
   "appearance_on": "On",
   "appearance_off": "Off",
   "appearance_text_size": "Text size",
+  "shared_branch_clear_search": "Clear branch search",
   "shared_branch_loading": "Loading branches…",
   "shared_branch_no_match": "No matching branches",
   "shared_branch_refine": "More branches exist. Refine your search."

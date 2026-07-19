@@ -3,6 +3,7 @@
   import {
     autoReposition,
     floatingPopoverStyle,
+    SearchInput,
   } from "@kenn-io/kit-ui";
   import { CheckIcon, ChevronDownIcon } from "../../icons.js";
   import { NO_BRANCH_FILTER_TOKEN } from "../../branchFilters.js";
@@ -26,6 +27,7 @@
     label: string;
     allLabel: string;
     placeholder: string;
+    clearSearchLabel: string;
     loadingLabel: string;
     emptyLabel: string;
     refineLabel: string;
@@ -41,6 +43,7 @@
     label,
     allLabel,
     placeholder,
+    clearSearchLabel,
     loadingLabel,
     emptyLabel,
     refineLabel,
@@ -249,15 +252,19 @@
       style={panelStyle}
       onkeydown={onPanelKeydown}
     >
-      <input
-        bind:this={input}
-        class="branch-picker-search"
-        type="search"
-        bind:value={query}
-        oninput={queueSearch}
-        {placeholder}
-        aria-label={placeholder}
-      />
+      <div class="branch-picker-search">
+        <SearchInput
+          bind:inputEl={input}
+          bind:value={query}
+          size="sm"
+          block
+          {placeholder}
+          ariaLabel={placeholder}
+          clearLabel={clearSearchLabel}
+          oninput={() => queueSearch()}
+        />
+      </div>
+      <!-- kit-ui-check-ignore: kit-ui has no remote multi-select with pinned selected rows. -->
       <div class="branch-picker-list" role="listbox" aria-multiselectable={mode === "multi"}>
         <button
           class="branch-picker-row all"
@@ -338,20 +345,7 @@
   }
 
   .branch-picker-search {
-    width: 100%;
-    height: 28px;
-    padding: 0 8px;
-    margin-bottom: 6px;
-    font-size: 11px;
-    color: var(--text-primary);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    outline: none;
-  }
-
-  .branch-picker-search:focus {
-    border-color: var(--accent-blue);
+    margin-bottom: var(--space-3);
   }
 
   .branch-picker-list {
@@ -364,7 +358,7 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--space-3);
     padding: 5px 7px;
     color: var(--text-secondary);
     font-size: 11px;

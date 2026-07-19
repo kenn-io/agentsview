@@ -1828,6 +1828,7 @@
   "appearance_on": "开",
   "appearance_off": "关",
   "appearance_text_size": "文字大小",
+  "shared_branch_clear_search": "清除分支搜索",
   "shared_branch_loading": "正在加载分支…",
   "shared_branch_no_match": "没有匹配的分支",
   "shared_branch_refine": "还有更多分支，请缩小搜索范围。"
