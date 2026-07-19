@@ -61,6 +61,8 @@ const (
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
 	AgentIcodemate      AgentType = "icodemate"
+	AgentCodebuff       AgentType = "codebuff"
+	AgentFreebuff       AgentType = "freebuff"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -711,6 +713,23 @@ var Registry = []AgentDef{
 		WatchSubdirs:   []string{"storage/session_diff"},
 		FileBased:      true,
 		WatchRootsFunc: ResolveIcodemateWatchRoots,
+	},
+	{
+		// Codebuff and Freebuff share the same on-disk layout under
+		// ~/.config/manicode/projects/<project>/chats/<timestamp>/. Each
+		// session directory holds chat-messages.json (primary),
+		// run-state.json (model/token metadata), and chat-meta.json.
+		// Freebuff sessions are distinguished from codebuff sessions
+		// via the AgentLabel field (set to "Freebuff" when run-state.json
+		// agentType contains "free"), not via separate agent types, to
+		// avoid double-discovery and skip-cache contention issues.
+		Type:        AgentCodebuff,
+		DisplayName: "Codebuff",
+		EnvVar:      "CODEBUFF_DIR",
+		ConfigKey:   "codebuff_dirs",
+		DefaultDirs: []string{".config/manicode/projects"},
+		IDPrefix:    "codebuff:",
+		FileBased:   true,
 	},
 }
 
