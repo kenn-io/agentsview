@@ -18,7 +18,8 @@ import (
 // logic is unit-testable without a PostgreSQL connection.
 //
 // Cases:
-//   - vector disabled: (false, "") — a plain 501 with no custom reason.
+//   - vector disabled: (false, <reason>) — the caller records the PostgreSQL
+//     setup and push workflow.
 //   - enabled and the local config's fingerprint matches a PG generation:
 //     (true, "") — the caller wires the searcher.
 //   - enabled but no PG generation matches: (false, <reason>) — the caller
@@ -30,7 +31,10 @@ func resolvePGServeVectorState(
 	vectorEnabled, genFound bool, wantFP, foundFPs string,
 ) (bool, string) {
 	if !vectorEnabled {
-		return false, ""
+		return false,
+			"semantic search: PostgreSQL requires [vector] enabled with a " +
+				"matching [vector.embeddings] config and a generation pushed " +
+				"by 'agentsview pg push'"
 	}
 	if genFound {
 		return true, ""
@@ -66,6 +70,8 @@ func wirePGVectorSearch(
 	ctx context.Context, appCfg config.Config, store *postgres.Store, label string,
 ) error {
 	if !appCfg.Vector.Enabled {
+		_, reason := resolvePGServeVectorState(false, false, "", "")
+		store.SetSemanticUnavailableReason(reason)
 		return nil
 	}
 	gen := vectorGeneration(appCfg.Vector.Embeddings)

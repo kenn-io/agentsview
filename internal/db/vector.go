@@ -8,9 +8,31 @@ import (
 // ErrSemanticUnavailable is returned by SearchContent for modes "semantic"
 // and "hybrid" when no VectorSearcher has been wired in (SetVectorSearcher
 // was never called, or the concrete backend doesn't support semantic search
-// at all — PostgreSQL and DuckDB always return it for these modes).
+// at all). Backends with more specific context wrap this classification with
+// SemanticUnavailableError.
 var ErrSemanticUnavailable = errors.New(
 	"semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'")
+
+// SemanticUnavailableError carries a backend-specific reason while retaining
+// ErrSemanticUnavailable as its machine-readable classification. Its rendered
+// message deliberately omits the sentinel's local setup guidance, which is not
+// valid for every storage backend.
+type SemanticUnavailableError struct {
+	Reason string
+}
+
+func (e *SemanticUnavailableError) Error() string {
+	return "semantic search not available: " + e.Reason
+}
+
+func (e *SemanticUnavailableError) Unwrap() error {
+	return ErrSemanticUnavailable
+}
+
+// NewSemanticUnavailableError returns a reasoned semantic capability error.
+func NewSemanticUnavailableError(reason string) error {
+	return &SemanticUnavailableError{Reason: reason}
+}
 
 // ErrSemanticTransient is returned by SearchContent's semantic/hybrid modes
 // when the wired VectorSearcher's query-time embed call itself failed (the

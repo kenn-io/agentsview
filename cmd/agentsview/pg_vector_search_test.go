@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/postgres"
 )
 
 func TestResolvePGServeVectorState(t *testing.T) {
@@ -23,13 +25,15 @@ func TestResolvePGServeVectorState(t *testing.T) {
 		expectReason string
 	}{
 		{
-			name:         "vector disabled yields plain unavailable",
-			enabled:      false,
-			found:        false,
-			wantFP:       "abc123",
-			foundFPs:     "def456",
-			expectWire:   false,
-			expectReason: "",
+			name:       "vector disabled explains PostgreSQL setup",
+			enabled:    false,
+			found:      false,
+			wantFP:     "abc123",
+			foundFPs:   "def456",
+			expectWire: false,
+			expectReason: "semantic search: PostgreSQL requires [vector] enabled " +
+				"with a matching [vector.embeddings] config and a generation pushed " +
+				"by 'agentsview pg push'",
 		},
 		{
 			name:         "enabled and generation found wires searcher",
@@ -71,6 +75,21 @@ func TestResolvePGServeVectorState(t *testing.T) {
 			assert.Equal(t, tt.expectReason, reason)
 		})
 	}
+}
+
+func TestWirePGVectorSearchRecordsVectorDisabledReason(t *testing.T) {
+	store := &postgres.Store{}
+	require.NoError(t, wirePGVectorSearch(
+		context.Background(), config.Config{}, store, "pg serve"))
+
+	_, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "hello", Mode: "semantic",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "PostgreSQL requires [vector] enabled")
+	assert.Contains(t, err.Error(), "agentsview pg push")
+	assert.NotContains(t, err.Error(), "agentsview embeddings build")
 }
 
 // TestNewPGReadServiceRunsVectorWiring proves the CLI direct-read constructor

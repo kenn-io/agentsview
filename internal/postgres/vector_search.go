@@ -425,5 +425,5 @@ func (s *Store) semanticUnavailableError() error {
 	if reason == "" {
 		return db.ErrSemanticUnavailable
 	}
-	return fmt.Errorf("%w: %s", db.ErrSemanticUnavailable, reason)
+	return db.NewSemanticUnavailableError(reason)
 }
