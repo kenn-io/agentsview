@@ -622,8 +622,11 @@ func serveQuackOnce(
 // waitForReplacementOrShutdown polls path every interval until either ctx
 // is done (returns false: caller should stop serving) or the file's
 // identity no longer matches currentInfo (returns true: caller should
-// reopen). A stat error (the file briefly missing mid-rename) is treated
-// as no change yet.
+// reopen). Identity is compared with duckdbsync.SameMirrorFile rather than
+// os.SameFile alone because Windows loads a FileInfo's file identity
+// lazily, which makes a bare os.SameFile miss an already-completed rename
+// replacement (see SameMirrorFile). A stat error (the file briefly missing
+// mid-rename) is treated as no change yet.
 func waitForReplacementOrShutdown(
 	ctx context.Context, path string, currentInfo os.FileInfo, interval time.Duration,
 ) bool {
@@ -638,7 +641,7 @@ func waitForReplacementOrShutdown(
 			if err != nil {
 				continue
 			}
-			if !os.SameFile(currentInfo, info) {
+			if !duckdbsync.SameMirrorFile(currentInfo, info) {
 				return true
 			}
 		}

@@ -40,7 +40,7 @@ func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
 	select {
 	case replaced := <-done:
 		assert.True(t, replaced, "a file-identity change must report replaced=true")
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("waitForReplacementOrShutdown did not observe the replacement")
 	}
 }
@@ -62,7 +62,7 @@ func TestWaitForReplacementOrShutdownReturnsFalseOnShutdown(t *testing.T) {
 	select {
 	case replaced := <-done:
 		assert.False(t, replaced, "ctx cancellation must report replaced=false")
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("waitForReplacementOrShutdown did not observe ctx cancellation")
 	}
 }

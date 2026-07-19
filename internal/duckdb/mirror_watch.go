@@ -48,12 +48,32 @@ func (s *Store) watchMirrorReplacementLoop(
 	}
 }
 
-// checkMirrorReplacement stats the mirror path once and, if the inode
-// changed since the currently open handle was opened, tries to open and
-// validate the new file, then adopt it. A stat error (the file is briefly
-// missing mid-rename) is treated as "no change yet" rather than an error:
-// the watcher keeps serving the old handle and checks again on the next
-// tick.
+// SameMirrorFile reports whether two Stat results describe the same
+// unchanged mirror file. It is deliberately stricter than os.SameFile
+// alone: on Windows, a FileInfo returned by os.Stat loads its underlying
+// file identity LAZILY, at the first os.SameFile call. If the file at the
+// path was already rename-replaced before that first call, the "old"
+// FileInfo resolves the NEW file's identity and os.SameFile reports the
+// two as equal forever, so a replacement watcher polling with os.SameFile
+// alone can never observe the swap. ModTime and Size are captured eagerly
+// by Stat on every platform, so also requiring them to match detects a
+// swapped-in rebuilt mirror (different mtime) even when the lazily loaded
+// identity lies.
+func SameMirrorFile(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return os.SameFile(a, b) &&
+		a.ModTime().Equal(b.ModTime()) &&
+		a.Size() == b.Size()
+}
+
+// checkMirrorReplacement stats the mirror path once and, if the file's
+// identity changed since the currently open handle was opened (see
+// SameMirrorFile), tries to open and validate the new file, then adopt it.
+// A stat error (the file is briefly missing mid-rename) is treated as "no
+// change yet" rather than an error: the watcher keeps serving the old
+// handle and checks again on the next tick.
 func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err error)) {
 	info, err := os.Stat(s.path)
 	if err != nil {
@@ -63,7 +83,7 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 	s.handleMu.RLock()
 	prev := s.fileInfo
 	s.handleMu.RUnlock()
-	if prev != nil && os.SameFile(prev, info) {
+	if prev != nil && SameMirrorFile(prev, info) {
 		return
 	}
 
