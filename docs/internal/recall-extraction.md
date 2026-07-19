@@ -124,14 +124,24 @@ entries, so truncation always splits or fails.
 The daemon scheduler mirrors the embedding scheduler's shape:
 
 - sync completions are debounced (30 s) into *incremental* passes, which scan
-  for new eligible sessions and retryable failures;
+  for new eligible sessions and retryable failures. Their discovery is
+  watermarked: only sessions written since the last completed unlimited pass
+  (lagged by the quiet period, since a session becomes eligible that long
+  after its final write) are examined for new work, so steady-state passes
+  scale with recent activity rather than the archive. Sessions already in
+  progress — pending, partial, retryable failed, revisitable done — are always
+  offered through the progress-state index regardless of the watermark, and a
+  session with no recorded local write stays discoverable. Explicit and
+  limited passes never advance the watermark: they leave eligible sessions
+  behind that a bounded discovery would then never see;
 - a backstop ticker (`backstop_interval`, default 1 h) runs *full* passes, which
   additionally revisit done sessions — but only those written to since their
   unit snapshot was derived
   (`local_modified_at >= progress.content_stamped_at`; the stamp, not
   `updated_at`, because a write that lands mid-extraction predates the row's
   last touch but postdates what the model saw), so full passes do not reload the
-  whole archive;
+  whole archive. Full passes also ignore the discovery watermark — they are
+  the recovery path that reconciles anything a bounded scan missed;
 - when the backstop is disabled, a catchup ticker (paced by the quiet period,
   never faster than once a minute) runs incremental passes instead: sessions
   become eligible only after the quiet period, long after the last sync-driven
@@ -182,4 +192,6 @@ a silent fallback).
 Manual write commands refuse while a daemon owns the archive — a daemon with
 `[recall.extract]` enabled runs passes itself, and there is no extraction HTTP
 seam yet. They also reject `--server` rather than silently operating on the
-local archive while the user targets a remote daemon.
+local archive while the user targets a remote daemon, and they hold the offline
+writer lock for their lifetime, so a multi-step extraction pass can never
+overlap another direct writer or a resync swapping the database underneath it.

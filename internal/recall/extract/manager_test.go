@@ -897,3 +897,95 @@ func TestManagerStagesEntriesUntilActivation(t *testing.T) {
 		t.Fatalf("staged entries = %d after activation, want 0", len(staged))
 	}
 }
+
+func TestManagerSnapshotReadSeesMetadataOnlyWrites(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, "http://unused", nil)
+
+	before, err := m.sessionSnapshot(ctx, "sess-1")
+	if err != nil || before == nil {
+		t.Fatalf("sessionSnapshot before: %v", err)
+	}
+	// A rescan that finds only candidate findings replaces the findings
+	// under the same rules version and leak count: the only session-row
+	// signal is local_modified_at, so the snapshot read must load it.
+	time.Sleep(5 * time.Millisecond)
+	if err := d.ReplaceSessionSecretFindings(
+		"sess-1", nil, 0, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	after, err := m.sessionSnapshot(ctx, "sess-1")
+	if err != nil || after == nil {
+		t.Fatalf("sessionSnapshot after: %v", err)
+	}
+	if !sessionSnapshotChanged(before, after) {
+		t.Fatal("a metadata-only write between snapshot reads must be " +
+			"detected; the snapshot read is blind to local_modified_at")
+	}
+}
+
+func TestManagerWatermarkLimitsIncrementalDiscovery(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	// A watermark ahead of the session's last write must hide it from an
+	// incremental pass: steady-state scans only look at recent writes.
+	m.watermark = time.Now().Add(time.Hour)
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("result = %+v with %d calls; incremental discovery must "+
+			"respect the watermark", result, log.count())
+	}
+
+	// Full passes are the recovery path and ignore the watermark.
+	result, err = m.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if result.Sessions != 1 {
+		t.Fatalf("result = %+v; a full pass must ignore the watermark", result)
+	}
+}
+
+func TestManagerWatermarkAdvancesOnlyOnCompleteScanPasses(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	start := time.Now()
+	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-1"}); err != nil {
+		t.Fatalf("explicit RunPass: %v", err)
+	}
+	if !m.watermark.IsZero() {
+		t.Fatal("an explicit single-session pass must not advance the watermark")
+	}
+	if _, err := m.RunPass(ctx, PassOptions{Limit: 1}); err != nil {
+		t.Fatalf("limited RunPass: %v", err)
+	}
+	if !m.watermark.IsZero() {
+		t.Fatal("a limited pass leaves sessions behind and must not " +
+			"advance the watermark")
+	}
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if m.watermark.IsZero() {
+		t.Fatal("a completed scan pass must advance the watermark")
+	}
+	lag := start.Add(-m.cfg.QuietPeriod)
+	if m.watermark.After(start) || m.watermark.Before(lag.Add(-time.Minute)) {
+		t.Fatalf("watermark = %v, want roughly pass start minus the quiet "+
+			"period (start %v)", m.watermark, start)
+	}
+}

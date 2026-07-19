@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1044,4 +1045,115 @@ func TestExtractProgressStatsAggregatesByState(t *testing.T) {
 	assert.Equal(t, 2, stats.UnitsDone)
 	assert.Equal(t, 10, stats.UnitsTotal)
 	assert.Equal(t, 2, stats.Entries)
+}
+
+func backdateLocalModified(t *testing.T, d *DB, id string, ago time.Duration) {
+	t.Helper()
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
+		time.Now().Add(-ago).UTC().Format("2006-01-02T15:04:05.000Z"), id)
+	require.NoError(t, err)
+}
+
+func TestExtractCandidatesChangedSinceLimitsDiscovery(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-old", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-fresh", 2*time.Hour, nil)
+	backdateLocalModified(t, d, "sess-old", 3*time.Hour)
+
+	base := ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
+	}
+
+	ids, err := d.ExtractCandidates(ctx, base)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"sess-old", "sess-fresh"}, ids,
+		"an unrestricted scan must discover everything")
+
+	limited := base
+	limited.ChangedSince = time.Now().Add(-time.Hour)
+	ids, err = d.ExtractCandidates(ctx, limited)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sess-fresh"}, ids,
+		"discovery must skip sessions not written since the watermark")
+
+	// A session with no recorded local write predates the watermark column:
+	// it must stay discoverable rather than be silently stranded.
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET local_modified_at = NULL WHERE id = 'sess-old'")
+	require.NoError(t, err)
+	ids, err = d.ExtractCandidates(ctx, limited)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"sess-old", "sess-fresh"}, ids,
+		"a NULL local_modified_at must not hide a session from discovery")
+}
+
+func TestExtractCandidatesChangedSinceKeepsProgressBacklog(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-partial", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-failed", 2*time.Hour, nil)
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-partial", "fp-a", "dg", 2)
+	require.NoError(t, err)
+	require.NoError(t,
+		d.AdvanceExtractCursor(ctx, "sess-partial", "fp-a", "dg", 1))
+	_, err = d.UpsertExtractProgress(ctx, "sess-failed", "fp-a", "dg", 2)
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-failed", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0, LastError: "boom",
+	}))
+	backdateLocalModified(t, d, "sess-partial", 3*time.Hour)
+	backdateLocalModified(t, d, "sess-failed", 3*time.Hour)
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:       "fp-a",
+		QuietCutoff:       time.Now().Add(-30 * time.Minute),
+		FailedRetryCutoff: time.Now().Add(time.Minute),
+		ScanVersions:      []string{"rules-v1"},
+		ChangedSince:      time.Now().Add(-time.Hour),
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"sess-partial", "sess-failed"}, ids,
+		"the watermark limits discovery only; interrupted and retryable "+
+			"sessions already in progress must always be offered")
+}
+
+func TestExtractCandidatesChangedSinceAvoidsSessionScan(t *testing.T) {
+	d := testDB(t)
+
+	query, args, err := extractCandidateSQL(ExtractCandidateQuery{
+		Fingerprint:       "fp-a",
+		QuietCutoff:       time.Now().Add(-30 * time.Minute),
+		FailedRetryCutoff: time.Now().Add(-time.Hour),
+		ScanVersions:      []string{"rules-v1"},
+		ChangedSince:      time.Now().Add(-time.Hour),
+	})
+	require.NoError(t, err)
+
+	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+		details = append(details, detail)
+	}
+	require.NoError(t, rows.Err())
+	for _, detail := range details {
+		assert.NotRegexp(t, `^SCAN s\b`, detail,
+			"a watermarked scan must not walk the whole sessions table; "+
+				"plan:\n%s", strings.Join(details, "\n"))
+	}
 }

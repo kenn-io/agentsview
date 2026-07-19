@@ -640,7 +640,110 @@ type ExtractCandidateQuery struct {
 	FailedRetryCutoff time.Time
 	ScanVersions      []string
 	IncludeDone       bool
-	Limit             int
+	// ChangedSince restricts *discovery* — sessions with no progress row
+	// under this generation yet — to those written at or after it, so a
+	// steady-state scan pass touches only recent writes instead of the whole
+	// archive. Sessions already in progress (pending, partial, retryable
+	// failed, revisitable done) are always offered regardless. The zero
+	// value leaves discovery unrestricted.
+	ChangedSince time.Time
+	Limit        int
+}
+
+// extractEligibleSessionSQL is the extraction privacy boundary over one
+// sessions row aliased s. Both arms of the candidates query apply it, so the
+// discovery and progress paths can never disagree about eligibility. It
+// consumes len(ScanVersions)+1 args: the versions, then the quiet cutoff.
+const extractEligibleSessionSQL = `s.deleted_at IS NULL
+	AND s.is_automated = 0
+	AND s.secret_leak_count = 0
+	AND s.secrets_rules_version IN (%s)
+	AND NOT EXISTS (
+		SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id
+	)
+	AND s.message_count > 0
+	AND s.ended_at IS NOT NULL
+	AND s.ended_at != ''
+	AND s.ended_at <= ?`
+
+// extractCandidateSQL builds the candidates query as a union of two indexed
+// arms: discovery walks sessions by local_modified_at (bounded by
+// ChangedSince when set) for sessions with no progress row, and the backlog
+// arm walks this generation's progress rows by state. Keeping the arms
+// separate lets each use its own index instead of forcing a full scan of
+// the sessions table on every pass.
+func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
+	if strings.TrimSpace(q.Fingerprint) == "" {
+		return "", nil, fmt.Errorf(
+			"extract candidate query requires a fingerprint")
+	}
+	if len(q.ScanVersions) == 0 {
+		return "", nil, fmt.Errorf(
+			"extract candidate query requires the current secret-scan " +
+				"versions: without them unscanned sessions would count as clean")
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = -1
+	}
+	versionMarks := strings.Repeat("?,", len(q.ScanVersions))
+	versionMarks = versionMarks[:len(versionMarks)-1]
+	eligible := fmt.Sprintf(extractEligibleSessionSQL, versionMarks)
+	eligibleArgs := make([]any, 0, len(q.ScanVersions)+1)
+	for _, version := range q.ScanVersions {
+		eligibleArgs = append(eligibleArgs, version)
+	}
+	eligibleArgs = append(eligibleArgs,
+		q.QuietCutoff.UTC().Format(extractTimeLayout))
+
+	var sb strings.Builder
+	var args []any
+	sb.WriteString(`
+		SELECT id FROM (
+		SELECT s.id AS id, s.ended_at AS ended_at
+		FROM sessions s
+		WHERE ` + eligible + `
+			AND NOT EXISTS (
+				SELECT 1 FROM recall_extract_progress p
+				WHERE p.session_id = s.id AND p.generation_fingerprint = ?
+			)`)
+	args = append(args, eligibleArgs...)
+	args = append(args, q.Fingerprint)
+	if !q.ChangedSince.IsZero() {
+		// A NULL local_modified_at (archives predating the column) must
+		// stay discoverable; both branches of the OR are ranges over the
+		// same index.
+		sb.WriteString(`
+			AND (s.local_modified_at IS NULL OR s.local_modified_at >= ?)`)
+		args = append(args, q.ChangedSince.UTC().Format(extractTimeLayout))
+	}
+	sb.WriteString(`
+		UNION
+		SELECT s.id AS id, s.ended_at AS ended_at
+		FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ?
+			AND (
+				p.state IN (?, ?)
+				OR (p.state = ? AND p.updated_at <= ?)
+				OR (? AND p.state = ?
+					AND (s.local_modified_at IS NULL
+						OR s.local_modified_at >= p.content_stamped_at))
+			)
+			AND ` + eligible + `
+		)
+		ORDER BY ended_at ASC, id ASC
+		LIMIT ?`)
+	args = append(args,
+		q.Fingerprint,
+		ExtractProgressPending, ExtractProgressPartial,
+		ExtractProgressFailed,
+		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
+		q.IncludeDone, ExtractProgressDone,
+	)
+	args = append(args, eligibleArgs...)
+	args = append(args, limit)
+	return sb.String(), args, nil
 }
 
 // ExtractCandidates returns eligible session ids, oldest ended first.
@@ -653,60 +756,11 @@ func (db *DB) ExtractCandidates(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if strings.TrimSpace(q.Fingerprint) == "" {
-		return nil, fmt.Errorf("extract candidate query requires a fingerprint")
+	query, args, err := extractCandidateSQL(q)
+	if err != nil {
+		return nil, err
 	}
-	if len(q.ScanVersions) == 0 {
-		return nil, fmt.Errorf(
-			"extract candidate query requires the current secret-scan " +
-				"versions: without them unscanned sessions would count as clean")
-	}
-	limit := q.Limit
-	if limit <= 0 {
-		limit = -1
-	}
-	versionMarks := strings.Repeat("?,", len(q.ScanVersions))
-	versionMarks = versionMarks[:len(versionMarks)-1]
-	args := []any{q.Fingerprint}
-	for _, version := range q.ScanVersions {
-		args = append(args, version)
-	}
-	args = append(args,
-		q.QuietCutoff.UTC().Format(extractTimeLayout),
-		ExtractProgressPending, ExtractProgressPartial,
-		ExtractProgressFailed,
-		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
-		q.IncludeDone, ExtractProgressDone,
-		limit,
-	)
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT s.id
-		FROM sessions s
-		LEFT JOIN recall_extract_progress p
-			ON p.session_id = s.id AND p.generation_fingerprint = ?
-		WHERE s.deleted_at IS NULL
-			AND s.is_automated = 0
-			AND s.secret_leak_count = 0
-			AND s.secrets_rules_version IN (`+versionMarks+`)
-			AND NOT EXISTS (
-				SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id
-			)
-			AND s.message_count > 0
-			AND s.ended_at IS NOT NULL
-			AND s.ended_at != ''
-			AND s.ended_at <= ?
-			AND (
-				p.session_id IS NULL
-				OR p.state IN (?, ?)
-				OR (p.state = ? AND p.updated_at <= ?)
-				OR (? AND p.state = ?
-					AND (s.local_modified_at IS NULL
-						OR s.local_modified_at >= p.content_stamped_at))
-			)
-		ORDER BY s.ended_at ASC, s.id ASC
-		LIMIT ?`,
-		args...,
-	)
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying extract candidates: %w", err)
 	}

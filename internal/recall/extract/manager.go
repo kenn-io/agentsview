@@ -50,6 +50,15 @@ type Manager struct {
 	fingerprint string
 	splitFloor  int
 	passMu      sync.Mutex
+	// watermark bounds discovery for incremental scan passes: only sessions
+	// written at or after it are examined for new work, so steady-state
+	// passes scale with recent activity instead of the archive. It lags the
+	// last completed pass by the quiet period (a session becomes eligible
+	// quietPeriod after its final write, and that write is what discovery
+	// sees), advances only when an unlimited scan pass completes, and is
+	// ignored by full passes — they are the recovery path. Guarded by
+	// passMu.
+	watermark time.Time
 }
 
 // PassOptions selects what one pass covers. SessionID targets a single
@@ -176,6 +185,7 @@ func (m *Manager) runPassLocked(
 	ctx context.Context, opts PassOptions,
 ) (PassResult, error) {
 	var result PassResult
+	passStart := time.Now()
 	if err := m.ensureGeneration(ctx); err != nil {
 		return result, err
 	}
@@ -218,6 +228,14 @@ func (m *Manager) runPassLocked(
 		return result, err
 	}
 	result.Activated = activated
+	// Only a scan pass that covered everything it found may advance the
+	// watermark: an explicit or limited pass leaves eligible sessions
+	// behind that a bounded discovery would then never see. Sessions this
+	// pass skipped on a snapshot mismatch were concurrently written, so
+	// their local_modified_at already lies past the new watermark.
+	if opts.SessionID == "" && opts.Limit == 0 {
+		m.watermark = passStart.Add(-m.cfg.QuietPeriod)
+	}
 	return result, nil
 }
 
@@ -255,12 +273,19 @@ func (m *Manager) passSessions(
 		return []string{opts.SessionID}, nil
 	}
 	now := time.Now()
+	changedSince := m.watermark
+	if opts.Full {
+		// Full passes are the recovery path: they reconcile the whole
+		// archive, including sessions a bounded discovery missed.
+		changedSince = time.Time{}
+	}
 	return m.cfg.DB.ExtractCandidates(ctx, db.ExtractCandidateQuery{
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
 		ScanVersions:      []string{secrets.RulesVersion()},
 		IncludeDone:       opts.Full,
+		ChangedSince:      changedSince,
 		Limit:             opts.Limit,
 	})
 }
@@ -353,11 +378,22 @@ type sessionOutcome struct {
 	failed  bool
 }
 
+// sessionSnapshot reads the session row with its full column set. The
+// snapshot bracket around the message load depends on local_modified_at,
+// which the standard GetSession column list does not carry — loading it nil
+// on both sides would blind the comparison to metadata-only writes such as
+// a findings replace under an unchanged rules version.
+func (m *Manager) sessionSnapshot(
+	ctx context.Context, sessionID string,
+) (*db.Session, error) {
+	return m.cfg.DB.GetSessionFull(ctx, sessionID)
+}
+
 func (m *Manager) extractSession(
 	ctx context.Context, sessionID string, staged bool,
 ) (sessionOutcome, error) {
 	var outcome sessionOutcome
-	session, err := m.cfg.DB.GetSession(ctx, sessionID)
+	session, err := m.sessionSnapshot(ctx, sessionID)
 	if err != nil {
 		return outcome, err
 	}
@@ -378,7 +414,7 @@ func (m *Manager) extractSession(
 	// eligibility check and the message read, the transcript just loaded may
 	// contain content the check never saw. Skip silently — the write bumped
 	// local_modified_at, so the next pass retries against a settled view.
-	recheck, err := m.cfg.DB.GetSession(ctx, sessionID)
+	recheck, err := m.sessionSnapshot(ctx, sessionID)
 	if err != nil {
 		return outcome, err
 	}

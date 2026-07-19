@@ -277,3 +277,18 @@ func TestResolveExtractDistillationLoadsPromptDir(t *testing.T) {
 	assert.NotEmpty(t, dist.Prompts[extract.RoleAction],
 		"roles without override files keep profile prompts")
 }
+
+func TestRecallExtractRunRefusesWhileOfflineWriterHoldsLock(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	server := extractModelStub(t)
+	writeExtractConfig(t, dataDir, server.URL)
+	seedExtractCLISession(t, dataDir)
+	holdWriteOwnerLockForTest(t, dataDir)
+
+	_, err := executeCommand(newRootCommand(), "recall", "extract", "run")
+	require.Error(t, err,
+		"an extraction pass is a multi-step write and must not overlap "+
+			"another offline writer or a resync database swap")
+	assert.Contains(t, err.Error(), "lock")
+}

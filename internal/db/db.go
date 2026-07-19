@@ -2113,6 +2113,18 @@ func (db *DB) migrateColumns() error {
 			"creating idx_sessions_termination_status: %w", err,
 		)
 	}
+	// Lets watermarked extraction scans discover recently written sessions
+	// without walking the whole table. Created here rather than in
+	// schema.sql because local_modified_at is a migrated column that legacy
+	// archives gain just above.
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sessions_local_modified
+		 ON sessions(local_modified_at)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_sessions_local_modified: %w", err,
+		)
+	}
 	if _, err := w.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_insights_cache
 		 ON insights(cache_key, created_at DESC)

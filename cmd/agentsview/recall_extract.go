@@ -159,13 +159,18 @@ func setupRecallExtraction(
 // openWritableExtractDB opens the archive read-write for manual extraction
 // commands, refusing while a daemon owns it: there is no extraction HTTP
 // seam yet, and a daemon with [recall.extract] enabled runs passes itself.
-func openWritableExtractDB(cfg config.Config) (*db.DB, error) {
+// The returned lock is the offline writer lock; the caller holds it for the
+// command's lifetime so a multi-step extraction pass cannot overlap another
+// direct writer or a resync swapping the database underneath it.
+func openWritableExtractDB(
+	ctx context.Context, cfg config.Config,
+) (*db.DB, *writeOwnerLock, error) {
 	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tr.Mode == transportHTTP {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"a local daemon is running and owns the archive; a daemon with " +
 				"[recall.extract] enabled runs extraction passes itself — " +
 				"stop it to run extraction manually")
@@ -175,10 +180,9 @@ func openWritableExtractDB(cfg config.Config) (*db.DB, error) {
 		if reason == "" {
 			reason = "the archive is not writable right now"
 		}
-		return nil, fmt.Errorf("%s; refusing to run extraction", reason)
+		return nil, nil, fmt.Errorf("%s; refusing to run extraction", reason)
 	}
-	applyClassifierConfig(cfg)
-	return db.Open(cfg.DBPath)
+	return openWriteDB(ctx, cfg)
 }
 
 func loadExtractConfig(cmd *cobra.Command) (config.Config, error) {
@@ -247,10 +251,11 @@ func newRecallExtractRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, err := openWritableExtractDB(cfg)
+			database, lock, err := openWritableExtractDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
+			defer func() { _ = lock.Close() }()
 			defer database.Close()
 			mgr, err := buildExtractManager(cfg.Recall.Extract, database)
 			if err != nil {
@@ -372,10 +377,11 @@ func newRecallExtractActivateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, err := openWritableExtractDB(cfg)
+			database, lock, err := openWritableExtractDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
+			defer func() { _ = lock.Close() }()
 			defer database.Close()
 			mgr, err := buildExtractManager(cfg.Recall.Extract, database)
 			if err != nil {
@@ -404,10 +410,11 @@ func newRecallExtractRetireCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, err := openWritableExtractDB(cfg)
+			database, lock, err := openWritableExtractDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
+			defer func() { _ = lock.Close() }()
 			defer database.Close()
 			if err := database.RetireExtractGeneration(
 				cmd.Context(), args[0], force,
