@@ -176,6 +176,14 @@ func openWritableExtractDB(cfg config.Config) (*db.DB, error) {
 }
 
 func loadExtractConfig(cmd *cobra.Command) (config.Config, error) {
+	// These commands operate on the local archive only; silently reading
+	// local state while the user targets a remote daemon would be worse
+	// than refusing.
+	if remote, _ := cmd.Flags().GetString("server"); strings.TrimSpace(remote) != "" {
+		return config.Config{}, fmt.Errorf(
+			"recall extract %s does not support --server: extraction runs "+
+				"against the local archive", cmd.Name())
+	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
 		return config.Config{}, fmt.Errorf("loading config: %w", err)

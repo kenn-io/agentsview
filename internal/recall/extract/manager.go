@@ -7,13 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
-	recall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/db"
+	recall "go.kenn.io/agentsview/internal/recall"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 const (
@@ -229,6 +231,9 @@ func (m *Manager) passSessions(
 		if err != nil {
 			return nil, err
 		}
+		if session == nil {
+			return nil, fmt.Errorf("session %s not found", opts.SessionID)
+		}
 		if err := extractableSession(opts.SessionID, session); err != nil {
 			return nil, err
 		}
@@ -239,6 +244,7 @@ func (m *Manager) passSessions(
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
+		ScanVersions:      secrets.ActiveRulesVersions(),
 		IncludeDone:       opts.Full,
 		Limit:             opts.Limit,
 	})
@@ -247,11 +253,9 @@ func (m *Manager) passSessions(
 // extractableSession enforces the extraction privacy boundary for explicit
 // single-session runs. The scan path enforces the same predicates in SQL;
 // keeping both in lockstep means no path can feed an excluded session to
-// the model.
+// the model. Callers must have checked s for nil already.
 func extractableSession(id string, s *db.Session) error {
 	switch {
-	case s == nil:
-		return fmt.Errorf("session %s not found", id)
 	case s.DeletedAt != nil:
 		return fmt.Errorf("session %s is trashed", id)
 	case s.IsAutomated:
@@ -263,12 +267,24 @@ func extractableSession(id string, s *db.Session) error {
 			"session %s has %d secret findings and is excluded from "+
 				"extraction", id, s.SecretLeakCount,
 		)
+	case !currentScanVersion(s.SecretsRulesVersion):
+		return fmt.Errorf(
+			"session %s has no secret scan under the current rules; run "+
+				"'agentsview secrets scan --backfill' first", id,
+		)
 	case s.MessageCount == 0:
 		return fmt.Errorf("session %s has no messages", id)
 	case s.EndedAt == nil || *s.EndedAt == "":
 		return fmt.Errorf("session %s has not ended", id)
 	}
 	return nil
+}
+
+// currentScanVersion reports whether version is a secret-scan rules version
+// the current binary considers fresh. An unscanned session ("") never is:
+// the privacy boundary fails closed.
+func currentScanVersion(version string) bool {
+	return slices.Contains(secrets.ActiveRulesVersions(), version)
 }
 
 type sessionOutcome struct {
@@ -285,6 +301,9 @@ func (m *Manager) extractSession(
 	session, err := m.cfg.DB.GetSession(ctx, sessionID)
 	if err != nil {
 		return outcome, err
+	}
+	if session == nil {
+		return outcome, fmt.Errorf("session %s not found", sessionID)
 	}
 	if err := extractableSession(sessionID, session); err != nil {
 		return outcome, err
@@ -304,6 +323,24 @@ func (m *Manager) extractSession(
 	}
 	units := m.cfg.Segmenter.Units(messages)
 	digest := unitsDigest(units)
+	// A digest change means previously extracted units may have different
+	// content now (an assistant run that grew re-packs into an existing
+	// unit). Entry ids are positional, so stale entries would both linger
+	// and block their replacements; rebuild the session's generated
+	// corpus instead.
+	previous, found, err := m.cfg.DB.ExtractProgress(
+		ctx, sessionID, m.fingerprint,
+	)
+	if err != nil {
+		return outcome, err
+	}
+	if found && previous.ContentDigest != digest {
+		if _, err := m.cfg.DB.DeleteExtractedRecallEntries(
+			ctx, m.fingerprint, sessionID,
+		); err != nil {
+			return outcome, err
+		}
+	}
 	progress, err := m.cfg.DB.UpsertExtractProgress(
 		ctx, sessionID, m.fingerprint, digest, len(units),
 	)
@@ -450,10 +487,16 @@ func (m *Manager) maybeActivate(ctx context.Context) (bool, error) {
 	if stats.Done == 0 || stats.Pending > 0 || stats.Partial > 0 {
 		return false, nil
 	}
+	if stats.Entries == 0 {
+		// Sessions completed but nothing was extracted: activating would
+		// replace whatever is currently active with an empty corpus.
+		return false, nil
+	}
 	backlog, err := m.cfg.DB.ExtractCandidates(ctx, db.ExtractCandidateQuery{
-		Fingerprint: m.fingerprint,
-		QuietCutoff: time.Now().Add(-m.cfg.QuietPeriod),
-		Limit:       1,
+		Fingerprint:  m.fingerprint,
+		QuietCutoff:  time.Now().Add(-m.cfg.QuietPeriod),
+		ScanVersions: secrets.ActiveRulesVersions(),
+		Limit:        1,
 	})
 	if err != nil {
 		return false, err
@@ -481,6 +524,12 @@ func (m *Manager) Activate(ctx context.Context) error {
 			m.fingerprint,
 		)
 	}
+	if stats.Entries == 0 {
+		return fmt.Errorf(
+			"refusing to activate generation %s: no extracted entries — "+
+				"activating would serve an empty corpus", m.fingerprint,
+		)
+	}
 	return m.cfg.DB.ActivateExtractGeneration(ctx, m.fingerprint)
 }
 
@@ -502,6 +551,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
+		ScanVersions:      secrets.ActiveRulesVersions(),
 	})
 	if err != nil {
 		return status, err

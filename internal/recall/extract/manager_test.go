@@ -3,6 +3,7 @@ package extract
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 func newTestArchive(t *testing.T) *db.DB {
@@ -57,6 +59,29 @@ func seedSession(t *testing.T, d *db.DB, id string, msgs []db.Message, mutate fu
 		if err := d.InsertMessages(msgs); err != nil {
 			t.Fatalf("seeding messages for %s: %v", id, err)
 		}
+	}
+	// Extraction requires a current clean secret scan, not just a zero
+	// leak count.
+	if err := d.ReplaceSessionSecretFindings(
+		id, nil, 0, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatalf("stamping secret scan for %s: %v", id, err)
+	}
+}
+
+// growSession appends messages and stamps the transcript write, the way a
+// sync pass would.
+func growSession(t *testing.T, d *db.DB, id string, msgs []db.Message, startOrdinal int) {
+	t.Helper()
+	for i := range msgs {
+		msgs[i].SessionID = id
+		msgs[i].Ordinal = startOrdinal + i
+	}
+	if err := d.InsertMessages(msgs); err != nil {
+		t.Fatalf("growing session %s: %v", id, err)
+	}
+	if err := d.BumpLocalModifiedAt(id); err != nil {
+		t.Fatalf("bumping local_modified_at for %s: %v", id, err)
 	}
 }
 
@@ -423,15 +448,10 @@ func TestManagerFullPassTopsUpGrownSession(t *testing.T) {
 		t.Fatalf("rescan must skip done sessions, got %+v", result)
 	}
 
-	// The session grows; a full pass re-derives units and tops up.
-	grown := turnMessages("ask", "answer", "follow-up", "more work")[2:]
-	for i := range grown {
-		grown[i].SessionID = "sess-1"
-		grown[i].Ordinal = i + 2
-	}
-	if err := d.InsertMessages(grown); err != nil {
-		t.Fatalf("growing session: %v", err)
-	}
+	// The session grows; a full pass re-derives units, replaces the
+	// session's generated entries, and extracts the new units.
+	growSession(t, d, "sess-1",
+		turnMessages("ask", "answer", "follow-up", "more work")[2:], 2)
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
 		t.Fatalf("RunPass full: %v", err)
@@ -439,10 +459,136 @@ func TestManagerFullPassTopsUpGrownSession(t *testing.T) {
 	if result.Sessions != 1 {
 		t.Fatalf("full pass must revisit the grown session, got %+v", result)
 	}
-	// Replayed units dedupe by deterministic id; only new units add entries.
-	if result.Entries != 2 {
-		t.Fatalf("entries = %d, want 2 new (replays must dedupe)",
-			result.Entries)
+	if result.Entries != 4 {
+		t.Fatalf("entries = %d, want 4 (digest change rebuilds the "+
+			"session's corpus)", result.Entries)
+	}
+	var count int
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	count = len(entries)
+	if count != 4 {
+		t.Fatalf("stored entries = %d, want exactly 4 (no stale leftovers)",
+			count)
+	}
+}
+
+func TestManagerFullPassReplacesEntriesOfChangedUnits(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	// Titles encode the unit text length so re-extraction of changed
+	// content is observable.
+	server, _ := modelServer(t, func(text string, _ int) (int, string) {
+		content := fmt.Sprintf(
+			`{"entries":[{"type":"fact","title":"len-%d",`+
+				`"body":"b","entities":[]}]}`,
+			utf8.RuneCountInString(text))
+		return http.StatusOK, completionBody(t, content)
+	})
+	seedSession(t, d, "sess-1", turnMessages("ask", "first answer"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	before, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 1, 0))
+	if err != nil || before == nil {
+		t.Fatalf("unit-1 entry missing after first pass: %v", err)
+	}
+
+	// The assistant run grows: unit 1 now packs both messages, so its
+	// content — and the entry extracted from it — changes.
+	growSession(t, d, "sess-1",
+		[]db.Message{{Role: "assistant", Content: "second answer"}}, 2)
+	result, err := m.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if result.Sessions != 1 {
+		t.Fatalf("full pass must revisit the changed session, got %+v", result)
+	}
+	after, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 1, 0))
+	if err != nil || after == nil {
+		t.Fatalf("unit-1 entry missing after re-extraction: %v", err)
+	}
+	if after.Title == before.Title {
+		t.Fatalf("unit-1 entry still says %q; a changed unit must not "+
+			"keep its stale entry", after.Title)
+	}
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("stored entries = %d, want 2 (stale entries removed)",
+			len(entries))
+	}
+}
+
+func TestManagerSkipsSessionsWithoutCurrentSecretScan(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// Seed without the scan stamp: leak count 0 but never scanned.
+	ended := time.Now().Add(-time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	if err := d.UpsertSession(db.Session{
+		ID: "sess-unscanned", Project: "proj", Machine: "local",
+		Agent: "claude", EndedAt: &ended, MessageCount: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msgs := turnMessages("a", "b")
+	for i := range msgs {
+		msgs[i].SessionID = "sess-unscanned"
+		msgs[i].Ordinal = i
+	}
+	if err := d.InsertMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("unscanned session reached the model: %+v, %d calls",
+			result, log.count())
+	}
+
+	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-unscanned"})
+	if err == nil {
+		t.Fatal("explicit run on an unscanned session must be refused")
+	}
+	if log.count() != 0 {
+		t.Fatal("refusal must happen before any model call")
+	}
+}
+
+func TestManagerZeroEntryGenerationNeverActivates(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, func(string, int) (int, string) {
+		return http.StatusOK, completionBody(t, `{"entries":[]}`)
+	})
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 1 {
+		t.Fatalf("result = %+v, want the session completed", result)
+	}
+	if result.Activated {
+		t.Fatal("a generation with no entries must not auto-activate: " +
+			"it would replace the active corpus with nothing")
+	}
+	if err := m.Activate(ctx); err == nil {
+		t.Fatal("explicit activation of an entryless generation must be refused")
 	}
 }
 

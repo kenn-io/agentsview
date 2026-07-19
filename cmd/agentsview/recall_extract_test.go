@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // extractModelStub answers every /chat/completions call with one fact entry.
@@ -78,6 +79,30 @@ func seedExtractCLISession(t *testing.T, dataDir string) {
 		{SessionID: "extract-session", Ordinal: 1, Role: "assistant",
 			Content: "pinned the clock in the scheduler test"},
 	}))
+	require.NoError(t, d.ReplaceSessionSecretFindings(
+		"extract-session", nil, 0, secrets.RulesVersion()))
+}
+
+func TestRecallExtractCommandsRejectRemoteServer(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	server := extractModelStub(t)
+	writeExtractConfig(t, dataDir, server.URL)
+
+	for _, sub := range [][]string{
+		{"recall", "extract", "run"},
+		{"recall", "extract", "status"},
+		{"recall", "extract", "activate"},
+		{"recall", "extract", "retire", "fp"},
+		{"recall", "extract", "doctor"},
+	} {
+		args := append(append([]string{}, sub...),
+			"--server", "http://remote:8080")
+		_, err := executeCommand(newRootCommand(), args...)
+		require.Error(t, err, "%v must not silently ignore --server", sub)
+		assert.Contains(t, err.Error(), "--server",
+			"%v error must name the unsupported flag", sub)
+	}
 }
 
 func TestRecallExtractRunAndStatusEndToEnd(t *testing.T) {

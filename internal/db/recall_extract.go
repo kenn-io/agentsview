@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 // Extraction generation states. A generation is one distillation
@@ -571,12 +573,16 @@ const extractTimeLayout = "2006-01-02T15:04:05.000Z"
 // finished sessions settle before being read. FailedRetryCutoff gates failed
 // rows: only failures last touched at or before it are retried, and the zero
 // value retries nothing — a caller that forgets to set it can never cause a
-// retry storm. IncludeDone revisits completed sessions so their content
-// digests can be rechecked for growth.
+// retry storm. ScanVersions are the secret-scan rules versions considered
+// current; sessions whose last scan is missing or stale are excluded, and an
+// empty list is an error rather than "trust everything". IncludeDone
+// revisits completed sessions so their content digests can be rechecked, but
+// only those written to since extraction finished.
 type ExtractCandidateQuery struct {
 	Fingerprint       string
 	QuietCutoff       time.Time
 	FailedRetryCutoff time.Time
+	ScanVersions      []string
 	IncludeDone       bool
 	Limit             int
 }
@@ -594,10 +600,29 @@ func (db *DB) ExtractCandidates(
 	if strings.TrimSpace(q.Fingerprint) == "" {
 		return nil, fmt.Errorf("extract candidate query requires a fingerprint")
 	}
+	if len(q.ScanVersions) == 0 {
+		return nil, fmt.Errorf(
+			"extract candidate query requires the current secret-scan " +
+				"versions: without them unscanned sessions would count as clean")
+	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = -1
 	}
+	versionMarks := strings.Repeat("?,", len(q.ScanVersions))
+	versionMarks = versionMarks[:len(versionMarks)-1]
+	args := []any{q.Fingerprint}
+	for _, version := range q.ScanVersions {
+		args = append(args, version)
+	}
+	args = append(args,
+		q.QuietCutoff.UTC().Format(extractTimeLayout),
+		ExtractProgressPending, ExtractProgressPartial,
+		ExtractProgressFailed,
+		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
+		q.IncludeDone, ExtractProgressDone,
+		limit,
+	)
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT s.id
 		FROM sessions s
@@ -606,6 +631,7 @@ func (db *DB) ExtractCandidates(
 		WHERE s.deleted_at IS NULL
 			AND s.is_automated = 0
 			AND s.secret_leak_count = 0
+			AND s.secrets_rules_version IN (`+versionMarks+`)
 			AND s.message_count > 0
 			AND s.ended_at IS NOT NULL
 			AND s.ended_at != ''
@@ -614,17 +640,13 @@ func (db *DB) ExtractCandidates(
 				p.session_id IS NULL
 				OR p.state IN (?, ?)
 				OR (p.state = ? AND p.updated_at <= ?)
-				OR (? AND p.state = ?)
+				OR (? AND p.state = ?
+					AND (s.local_modified_at IS NULL
+						OR s.local_modified_at > p.updated_at))
 			)
 		ORDER BY s.ended_at ASC, s.id ASC
 		LIMIT ?`,
-		q.Fingerprint,
-		q.QuietCutoff.UTC().Format(extractTimeLayout),
-		ExtractProgressPending, ExtractProgressPartial,
-		ExtractProgressFailed,
-		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
-		q.IncludeDone, ExtractProgressDone,
-		limit,
+		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying extract candidates: %w", err)
@@ -692,6 +714,41 @@ func (db *DB) InsertExtractedRecallEntries(
 		return 0, fmt.Errorf("commit extracted entries insert: %w", err)
 	}
 	return inserted, nil
+}
+
+// DeleteExtractedRecallEntries removes one session's machine-generated
+// entries under one generation, so a changed transcript can be re-extracted
+// without leaving stale entries behind or colliding with their ids. Entries
+// whose review state has been touched by a human are preserved. Evidence
+// rows cascade with their entries. Returns how many entries were deleted.
+func (db *DB) DeleteExtractedRecallEntries(
+	ctx context.Context, fingerprint, sessionID string,
+) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := db.getWriter().ExecContext(ctx, `
+		DELETE FROM recall_entries
+		WHERE source_run_id = ? AND source_session_id = ?
+			AND review_state = ?`,
+		fingerprint, sessionID, corerecall.ReviewStateUnreviewedAuto,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"deleting extracted entries for %s/%s: %w",
+			fingerprint, sessionID, err,
+		)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting deleted extracted entries: %w", err)
+	}
+	return int(deleted), nil
 }
 
 // ExtractProgressStats aggregates one generation's progress rows and its

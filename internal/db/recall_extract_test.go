@@ -540,6 +540,9 @@ func seedExtractCandidate(
 		mutate(&s)
 	}
 	require.NoError(t, d.UpsertSession(s))
+	// Mark the session cleanly scanned under the test rules version;
+	// eligibility requires a current scan, not just a zero leak count.
+	require.NoError(t, d.ReplaceSessionSecretFindings(id, nil, 0, "rules-v1"))
 }
 
 func TestExtractCandidatesFiltersIneligibleSessions(t *testing.T) {
@@ -559,6 +562,7 @@ func TestExtractCandidatesFiltersIneligibleSessions(t *testing.T) {
 	seedExtractCandidate(t, d, "sess-recent", 5*time.Minute, nil)
 	seedExtractCandidate(t, d, "sess-secret", 2*time.Hour, nil)
 	seedExtractCandidate(t, d, "sess-trashed", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-stale-scan", 2*time.Hour, nil)
 	_, err := d.getWriter().Exec(
 		"UPDATE sessions SET secret_leak_count = 2 WHERE id = 'sess-secret'")
 	require.NoError(t, err)
@@ -566,13 +570,37 @@ func TestExtractCandidatesFiltersIneligibleSessions(t *testing.T) {
 		"UPDATE sessions SET deleted_at = '2026-01-01T00:00:00.000Z' " +
 			"WHERE id = 'sess-trashed'")
 	require.NoError(t, err)
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET secrets_rules_version = 'rules-v0' " +
+			"WHERE id = 'sess-stale-scan'")
+	require.NoError(t, err)
+	// Never scanned: secrets_rules_version stays '' with leak count 0.
+	unscannedEnded := time.Now().Add(-2 * time.Hour).UTC().
+		Format("2006-01-02T15:04:05.000Z")
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "sess-unscanned", Project: "proj",
+		Machine: defaultMachine, Agent: defaultAgent,
+		EndedAt: &unscannedEnded, MessageCount: 3,
+	}))
 
 	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
-		Fingerprint: "fp-a",
-		QuietCutoff: time.Now().Add(-30 * time.Minute),
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"sess-ok"}, ids)
+	assert.Equal(t, []string{"sess-ok"}, ids,
+		"unscanned and stale-scanned sessions must never be candidates")
+}
+
+func TestExtractCandidatesRequireScanVersions(t *testing.T) {
+	d := testDB(t)
+	_, err := d.ExtractCandidates(context.Background(), ExtractCandidateQuery{
+		Fingerprint: "fp-a",
+		QuietCutoff: time.Now(),
+	})
+	require.Error(t, err,
+		"a query without scan versions would treat unscanned as clean")
 }
 
 func TestExtractCandidatesRespectsProgressState(t *testing.T) {
@@ -623,6 +651,7 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 		Fingerprint:       "fp-a",
 		QuietCutoff:       time.Now().Add(-30 * time.Minute),
 		FailedRetryCutoff: time.Now().Add(-30 * time.Minute),
+		ScanVersions:      []string{"rules-v1"},
 	}
 	ids, err := d.ExtractCandidates(ctx, query)
 	require.NoError(t, err)
@@ -630,10 +659,22 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 		[]string{"sess-new", "sess-pending", "sess-partial", "sess-failed-stale"},
 		ids, "done stays done, fresh failures wait out the backoff")
 
+	// A done session whose transcript has not changed since extraction is
+	// left alone even by a full pass; only new writes re-open it.
 	query.IncludeDone = true
 	ids, err = d.ExtractCandidates(ctx, query)
 	require.NoError(t, err)
-	assert.Contains(t, ids, "sess-done")
+	assert.NotContains(t, ids, "sess-done",
+		"unchanged done sessions must not be reloaded by full passes")
+
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET local_modified_at = '2999-01-01T00:00:00.000Z' " +
+			"WHERE id = 'sess-done'")
+	require.NoError(t, err)
+	ids, err = d.ExtractCandidates(ctx, query)
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-done",
+		"a transcript write after extraction re-opens the session")
 
 	query.IncludeDone = false
 	query.Limit = 2
@@ -659,11 +700,56 @@ func TestExtractCandidatesZeroFailedCutoffSkipsFailedRows(t *testing.T) {
 	}))
 
 	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
-		Fingerprint: "fp-a",
-		QuietCutoff: time.Now().Add(-30 * time.Minute),
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
 	})
 	require.NoError(t, err)
 	assert.Empty(t, ids, "zero retry cutoff must never resurrect failures")
+}
+
+func TestDeleteExtractedRecallEntriesScopesToGenerationAndSession(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	seedExtractSession(t, d, "sess-2")
+
+	entry := func(id, sessionID, fp, reviewState string) RecallEntry {
+		return RecallEntry{
+			ID: id, Type: "fact", ReviewState: reviewState,
+			Title: "t", Body: "b",
+			SourceSessionID: sessionID, SourceRunID: fp,
+			Evidence: []RecallEvidence{{
+				SessionID: sessionID, MessageEndOrdinal: 1,
+			}},
+		}
+	}
+	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		entry("e-del-1", "sess-1", "fp-a", "unreviewed_auto"),
+		entry("e-del-2", "sess-1", "fp-a", "unreviewed_auto"),
+		entry("e-reviewed", "sess-1", "fp-a", "human_reviewed"),
+		entry("e-other-fp", "sess-1", "fp-b", "unreviewed_auto"),
+		entry("e-other-sess", "sess-2", "fp-a", "unreviewed_auto"),
+	})
+	require.NoError(t, err)
+
+	deleted, err := d.DeleteExtractedRecallEntries(ctx, "fp-a", "sess-1")
+	require.NoError(t, err)
+	assert.Equal(t, 2, deleted)
+
+	for id, want := range map[string]bool{
+		"e-del-1": false, "e-del-2": false,
+		"e-reviewed": true, "e-other-fp": true, "e-other-sess": true,
+	} {
+		got, err := d.GetRecallEntry(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, want, got != nil, "entry %s", id)
+	}
+	var evidence int
+	require.NoError(t, d.getWriter().QueryRow(
+		"SELECT COUNT(*) FROM recall_evidence WHERE entry_id IN "+
+			"('e-del-1','e-del-2')").Scan(&evidence))
+	assert.Zero(t, evidence, "evidence must not outlive deleted entries")
 }
 
 func TestInsertExtractedRecallEntriesIsIdempotent(t *testing.T) {

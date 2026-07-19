@@ -1021,9 +1021,21 @@ agentsview recall get <id>
 agentsview recall query <text>
 agentsview recall brief <task>
 agentsview recall stats
-agentsview recall extract --session <id> --dry-run
+agentsview recall extract run [--session <id>] [--full] [--limit <n>]
+agentsview recall extract status
+agentsview recall extract activate
+agentsview recall extract retire <fingerprint> [--force]
+agentsview recall extract doctor
+agentsview recall extract preview --session <id>
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
+
+Model-backed extraction requires an enabled `[recall.extract]` config section
+— see [Recall](/recall/#automatic-extraction). `preview` replaces the earlier
+`extract --session <id> --dry-run` form, which still works as a fallback. The
+extraction subcommands operate on the local archive only and refuse
+`--server`; while a daemon owns the archive, it runs extraction passes itself
+and manual `run`/`activate`/`retire` are refused.
 
 Use an isolated `AGENTSVIEW_DATA_DIR` for Recall population experiments. Import
 with `--dry-run` first; a write requires `--yes`, and a remote write also requires

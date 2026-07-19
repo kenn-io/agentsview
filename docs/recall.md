@@ -28,14 +28,15 @@ The current implementation is local and SQLite-only. The CLI provides:
 - `recall list`, `get`, and `stats` for inspection;
 - `recall query` for ranked lexical retrieval;
 - `recall brief` for a packed, trusted task briefing;
-- `recall extract --dry-run` for previewing deterministic session chunks; and
+- `recall extract` for opt-in model-backed extraction (see
+  [Automatic extraction](#automatic-extraction)), including
+  `recall extract preview` for previewing deterministic session chunks; and
 - `recall import --dry-run` for validating reviewed JSONL candidates.
 
-There is no automatic model-backed distillation yet. The extraction command does
-not write entries, and reviewed JSONL import is a guarded laboratory inlet, not
-a stable or recommended end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR`
-for experiments. The import command refuses the default data directory unless
-the operator explicitly overrides that guard.
+Reviewed JSONL import is a guarded laboratory inlet, not a stable or recommended
+end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The
+import command refuses the default data directory unless the operator explicitly
+overrides that guard.
 
 Recall is not available through PostgreSQL or DuckDB stores. It also has no web
 UI and no semantic retrieval over Recall entries.
@@ -43,6 +44,45 @@ UI and no semantic retrieval over Recall entries.
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but
 read-only archives remain queryable without recording.
+
+## Automatic extraction
+
+Extraction is opt-in and off by default. When `[recall.extract]` is enabled, a
+local OpenAI-compatible model distills ended sessions into entries, and the
+daemon schedules passes automatically: sync activity triggers incremental
+passes, and a periodic backstop revisits sessions whose transcripts changed
+after extraction. Entries produced this way are stored `unreviewed_auto` — they
+remain outside trusted Recall until promoted.
+
+```toml
+[recall.extract]
+enabled = true
+model = "your-model-name"
+
+[recall.extract.servers.local]
+endpoint = "http://127.0.0.1:30000/v1"
+```
+
+Optional keys: `deployment` (labels which serving instance produced the corpus),
+`server` (selects among multiple named servers), `quiet_period` (default `"30m"`
+— how long a session must have been ended before extraction),
+`backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
+`max_window_chars` (default 50000), `max_tokens`, a `[recall.extract.prompts]`
+table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
+`extra_body`).
+
+Sessions are only ever extracted when they are not automated, not trashed, and
+have a clean, current secret scan — a session with secret findings, or one never
+scanned under the current rules, never reaches the model. These filters are not
+configurable. Session content is sent only to the endpoints you configure.
+
+Each distillation configuration (model, prompts, segmentation, request shape) is
+fingerprinted as a *generation*; changing the configuration builds a new corpus
+rather than mixing outputs, and one generation is active at a time.
+`recall extract status` shows coverage, `run` executes a manual pass,
+`activate`/`retire` manage generations, and `doctor` validates the configuration
+with a single probe call. See `docs/internal/recall-extraction.md` for the
+design contracts.
 
 ## Evidence and trust
 
