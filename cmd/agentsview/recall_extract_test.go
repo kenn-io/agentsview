@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -317,7 +317,7 @@ func TestRecallExtractRunRefusesWhileOfflineWriterHoldsLock(t *testing.T) {
 	assert.Contains(t, err.Error(), "lock")
 }
 
-func TestResolveExtractDistillationRestrictsRedirectsToOrigin(t *testing.T) {
+func TestResolveExtractDistillationRefusesAllRedirects(t *testing.T) {
 	cfg := config.RecallExtractConfig{
 		Enabled:          true,
 		Model:            "m",
@@ -333,30 +333,26 @@ func TestResolveExtractDistillationRestrictsRedirectsToOrigin(t *testing.T) {
 	require.NoError(t, err)
 	redirect := dist.Client.HTTPClient.CheckRedirect
 	require.NotNil(t, redirect,
-		"the model client must police redirect targets: a compliant "+
-			"endpoint must not steer the extraction POST elsewhere")
+		"the model client must refuse redirects: a compliant endpoint "+
+			"must not steer the extraction POST anywhere")
 
-	// Redirects may only stay on the configured origin: a 307/308 replays
-	// the POST — transcript content included — to whatever destination the
-	// endpoint names, including loopback services that trust local callers.
-	samePath := &http.Request{
-		URL: mustParseURL(t, "https://build-box:30000/v1/chat/completions"),
+	// A 307/308 replays the POST — transcript content included — to
+	// whatever destination the endpoint names. A name-based same-origin
+	// allowance is not enough: the redirect target is re-resolved, so a
+	// rebinding hostname passes the string check while the connection
+	// lands on a loopback or LAN service that trusts local callers. No
+	// redirect is followed at all, same-origin included.
+	for name, target := range map[string]string{
+		"same-origin":    "https://build-box:30000/v1/chat/completions",
+		"plaintext":      "http://build-box:30000/v1/x",
+		"cross-origin":   "https://other-box/v1/x",
+		"different port": "https://build-box:30001/v1/x",
+		"loopback":       "http://127.0.0.1:9/v1/x",
+	} {
+		req := &http.Request{URL: mustParseURL(t, target)}
+		require.Error(t, redirect(req, nil),
+			"a %s redirect must be refused", name)
 	}
-	require.NoError(t, redirect(samePath, nil),
-		"a same-origin redirect stays on the configured endpoint")
-	insecure := &http.Request{URL: mustParseURL(t, "http://build-box:30000/v1/x")}
-	require.Error(t, redirect(insecure, nil),
-		"a downgrade to plaintext must be refused even on the same host")
-	crossOrigin := &http.Request{URL: mustParseURL(t, "https://other-box/v1/x")}
-	require.Error(t, redirect(crossOrigin, nil),
-		"a cross-origin https redirect must be refused")
-	otherPort := &http.Request{URL: mustParseURL(t, "https://build-box:30001/v1/x")}
-	require.Error(t, redirect(otherPort, nil),
-		"a different port is a different origin")
-	loopback := &http.Request{URL: mustParseURL(t, "http://127.0.0.1:9/v1/x")}
-	require.Error(t, redirect(loopback, nil),
-		"a redirect into loopback must be refused: local services often "+
-			"trust local callers")
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {

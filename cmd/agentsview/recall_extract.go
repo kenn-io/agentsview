@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -91,28 +90,21 @@ func resolveExtractDistillation(
 	if err != nil {
 		return dist, fmt.Errorf("parsing backstop_interval: %w", err)
 	}
-	// Redirects may only stay on the configured origin (scheme, host,
-	// port). A 307/308 replays the extraction POST — transcript content
-	// included — to whatever destination the endpoint names, so following
-	// one anywhere else would let a compromised endpoint exfiltrate the
-	// request to another server or aim it at loopback services that trust
-	// local callers. Same-origin also keeps the transport policy already
-	// validated for the endpoint itself.
-	origin, err := url.Parse(server.Endpoint)
-	if err != nil {
-		return dist, fmt.Errorf(
-			"parsing endpoint for server %q: %w", serverName, err)
-	}
+	// Redirects are never followed. A 307/308 replays the extraction POST
+	// — transcript content included — to whatever destination the endpoint
+	// names, letting a compromised endpoint exfiltrate the request or aim
+	// it at loopback services that trust local callers. A name-based
+	// same-origin allowance would not close this: the redirect target is
+	// re-resolved, so a rebinding hostname passes any string comparison
+	// while the connection lands elsewhere. Endpoints must be configured
+	// with their final URL.
 	httpClient := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			if req.URL.Scheme != origin.Scheme || req.URL.Host != origin.Host {
-				return fmt.Errorf(
-					"refusing redirect to %q: extraction requests may only "+
-						"follow redirects on the configured endpoint origin "+
-						"%s://%s", req.URL.String(), origin.Scheme, origin.Host)
-			}
-			return nil
+			return fmt.Errorf(
+				"refusing redirect to %q: extraction requests do not "+
+					"follow redirects; configure the endpoint's final URL",
+				req.URL.String())
 		},
 	}
 	return extractDistillation{

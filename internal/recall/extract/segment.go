@@ -85,7 +85,19 @@ func (TurnsV1) PromptRoles() []PromptRole {
 func (s TurnsV1) Units(messages []Message) []Unit {
 	var units []Unit
 	var run []ordinalBlock
+	prevOrdinal := -1
 	for _, message := range messages {
+		// Ingest filtering can drop rows after ordinals are assigned, so
+		// the stored transcript may skip ordinals. Evidence provenance
+		// requires gap-free ranges, so no unit may span a missing row:
+		// flush the current run at every discontinuity. Skipped system and
+		// empty rows below still occupy their ordinals, so they keep a run
+		// contiguous.
+		if prevOrdinal >= 0 && message.Ordinal != prevOrdinal+1 {
+			units = packRun(run, s.MaxWindowChars, units)
+			run = nil
+		}
+		prevOrdinal = message.Ordinal
 		if message.IsSystem {
 			continue
 		}

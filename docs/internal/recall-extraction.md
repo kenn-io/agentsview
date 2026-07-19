@@ -33,9 +33,13 @@ most one generation is *active* at a time; the lifecycle is
 `TurnsV1` derives units at user/assistant turn granularity: each non-system user
 message becomes one *intent* unit, and each run of assistant messages between
 user messages is packed into *action* units of at most `max_window_chars` code
-points. Derivation is deterministic — resume cursors index into the unit list
-and entry identity embeds the unit index, so replaying a session after a restart
-or upgrade must yield the same units in the same order.
+points. Runs additionally split at ordinal discontinuities: ingest filtering can
+drop rows after ordinals are assigned, and evidence provenance requires gap-free
+transcript ranges, so a unit spanning a missing row could never commit. Skipped
+system and empty rows still occupy their ordinals and keep a run contiguous.
+Derivation is deterministic — resume cursors index into the unit list and entry
+identity embeds the unit index, so replaying a session after a restart or
+upgrade must yield the same units in the same order.
 
 ## Privacy boundary
 
@@ -94,8 +98,13 @@ are persisted through a single transaction that re-verifies the session
 snapshot, the eligibility predicates, and the absence of secret findings before
 inserting the entries and advancing the cursor — the pre-call recheck only saves
 a wasted model call, since a write can land between any out-of-band check and
-the insert. A guard failure persists nothing; the caller classifies it
-(concurrent write → silent retry next pass, eligibility lost → discard).
+the insert. A guard failure persists nothing; the caller classifies it by
+re-reading the session: eligibility lost means discard, a changed snapshot means
+a concurrent write landed and the next pass silently retries against a settled
+view, and an *unchanged* snapshot means the refusal is deterministic (for
+example an evidence range the transcript cannot verify) — that is recorded as a
+failure so the backoff applies instead of paying for the same doomed model call
+on every pass.
 
 Eligibility loss *after* extraction is reconciled on every scheduled pass —
 incremental ones included, because with the backstop disabled no full pass ever
@@ -268,10 +277,16 @@ promote a generation that does not cover what it claims. Failed sessions do not
 block activation — they retry later and top the corpus up. An entryless
 generation never activates, manually or automatically: activation retires the
 previously active generation, and replacing a working corpus with an empty one
-must not happen silently. Promotion re-verifies eligibility inside the
-activation transaction: entries whose source session was trashed, flagged
-automated, or scanned into findings after staging are left archived (the
-retraction pass deletes them) instead of being served.
+must not happen silently. All of these checks are advisory racing against
+concurrent writes, so the activation transaction re-verifies them before
+switching generations: it aborts if any session is pending or partial, if any
+completed, still-eligible session has transcript writes past its coverage stamp
+or a scan stamp outside the current rules versions, or if promotion would leave
+zero servable (accepted, provenance-verified) entries — a blocked activation
+changes nothing and the next pass retries after re-extraction. Promotion also
+re-verifies eligibility inside the same transaction: entries whose source
+session was trashed, flagged automated, or scanned into findings after staging
+are left archived (the retraction pass deletes them) instead of being served.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;

@@ -49,12 +49,23 @@ func seedSession(t *testing.T, d *db.DB, id string, msgs []db.Message, mutate fu
 	if mutate != nil {
 		mutate(&s)
 	}
+	for i := range msgs {
+		msgs[i].Ordinal = i
+	}
+	seedSessionRows(t, d, s, msgs)
+}
+
+// seedSessionRows stores the session and its message rows keeping the
+// ordinals the caller assigned, so tests can model transcripts whose ingest
+// filtering left ordinal gaps.
+func seedSessionRows(t *testing.T, d *db.DB, s db.Session, msgs []db.Message) {
+	t.Helper()
+	id := s.ID
 	if err := d.UpsertSession(s); err != nil {
 		t.Fatalf("seeding session %s: %v", id, err)
 	}
 	for i := range msgs {
 		msgs[i].SessionID = id
-		msgs[i].Ordinal = i
 	}
 	if len(msgs) > 0 {
 		if err := d.InsertMessages(msgs); err != nil {
@@ -1663,5 +1674,133 @@ func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 	if !result.Activated {
 		t.Fatalf("result = %+v; once the changed session is re-extracted "+
 			"the generation must activate", result)
+	}
+}
+
+// gappedSessionRows models a transcript whose ingest filtering dropped the
+// row at ordinal 2 after ordinals were assigned: the stored message rows
+// skip an ordinal without any content mismatch (the row count still matches
+// the session's message count).
+func gappedSessionRows(t *testing.T, d *db.DB, id string) {
+	t.Helper()
+	ended := time.Now().Add(-time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	seedSessionRows(t, d, db.Session{
+		ID:           id,
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "claude",
+		Cwd:          "/work/proj",
+		GitBranch:    "main",
+		EndedAt:      &ended,
+		MessageCount: 3,
+	}, []db.Message{
+		{Ordinal: 0, Role: "user", Content: "fix the bug"},
+		{Ordinal: 1, Role: "assistant", Content: "first step"},
+		{Ordinal: 3, Role: "assistant", Content: "second step"},
+	})
+}
+
+// TestManagerExtractsAcrossTranscriptOrdinalGap pins that a transcript with
+// a filtered-out row still extracts to completion: units split at the gap,
+// every evidence range verifies, and the session reaches done instead of
+// failing the same commit on every pass.
+func TestManagerExtractsAcrossTranscriptOrdinalGap(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	gappedSessionRows(t, d, "sess-1")
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 1 || result.Failed != 0 {
+		t.Fatalf("result = %+v, want one completed session", result)
+	}
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressDone {
+		t.Fatalf("progress state = %s (%s), want done: a unit spanning the "+
+			"gap can never commit", progress.State, progress.LastError)
+	}
+	if log.count() != 3 {
+		t.Fatalf("model calls = %d, want 3 (intent + one action unit per "+
+			"side of the gap)", log.count())
+	}
+}
+
+// TestManagerBacksOffStableEvidenceFailures pins the drift classification:
+// a commit refusal against a session that re-reads as unchanged is a
+// deterministic failure, not a concurrent write, so it must take the failure
+// backoff instead of silently retrying — and paying for another model call —
+// on every subsequent pass.
+func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	server, log := modelServer(t, func(_ string, call int) (int, string) {
+		if call == 1 {
+			// While the manager waits on the first model call, the last
+			// row of the action unit's evidence range vanishes from the
+			// transcript without any session-row write: the commit's
+			// evidence window then fails deterministically while the
+			// session re-reads as unchanged.
+			if _, err := side.Exec("DELETE FROM messages " +
+				"WHERE session_id = 'sess-1' AND ordinal = 2"); err != nil {
+				t.Errorf("deleting message row: %v", err)
+			}
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "fix the bug"},
+		{Role: "assistant", Content: "first step"},
+		{Role: "assistant", Content: "second step"},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("result = %+v; a stable commit refusal must be recorded "+
+			"as a failure, not left pending", result)
+	}
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressFailed || progress.LastError == "" {
+		t.Fatalf("progress = %s (%q), want a recorded failure",
+			progress.State, progress.LastError)
+	}
+	calls := log.count()
+
+	// The failed row is inside its backoff window: an immediate pass must
+	// not spend another model call on it.
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("second RunPass: %v", err)
+	}
+	if log.count() != calls {
+		t.Fatalf("model calls grew from %d to %d; a stable failure must "+
+			"back off instead of retrying every pass", calls, log.count())
 	}
 }

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,14 +54,16 @@ func TestExtractGenerationActivateKeepsSingleActive(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
+	seedExtractSession(t, d, "sess-1")
 	for _, fp := range []string{"fp-a", "fp-b"} {
 		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
 			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
 		})
 		require.NoError(t, err)
+		seedServableExtractEntry(t, d, fp, "sess-1", "e-"+fp)
 	}
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a"))
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-b"))
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-b", []string{"rules-v1"}))
 
 	generations, err := d.ExtractGenerations(ctx)
 	require.NoError(t, err)
@@ -71,7 +74,7 @@ func TestExtractGenerationActivateKeepsSingleActive(t *testing.T) {
 	assert.Equal(t, ExtractGenerationRetired, states["fp-a"])
 	assert.Equal(t, ExtractGenerationActive, states["fp-b"])
 
-	err = d.ActivateExtractGeneration(ctx, "fp-missing")
+	err = d.ActivateExtractGeneration(ctx, "fp-missing", []string{"rules-v1"})
 	assert.Error(t, err, "unknown fingerprint must refuse")
 }
 
@@ -83,7 +86,9 @@ func TestExtractGenerationRetireActiveRequiresForce(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a"))
+	seedExtractSession(t, d, "sess-1")
+	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
 
 	err = d.RetireExtractGeneration(ctx, "fp-a", false)
 	require.Error(t, err, "retiring the active generation needs force")
@@ -296,7 +301,8 @@ func TestCopyRecallEntriesFromCarriesExtractState(t *testing.T) {
 		ParamsJSON: `{"max_window_chars":50000}`,
 	})
 	require.NoError(t, err)
-	require.NoError(t, src.ActivateExtractGeneration(ctx, "fp-a"))
+	seedServableExtractEntry(t, src, "fp-a", "sess-1", "e-src")
+	require.NoError(t, src.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
 	_, err = src.UpsertExtractProgress(ctx, ExtractProgressUpsert{
 		SessionID: "sess-1", Fingerprint: "fp-a",
 		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
@@ -879,6 +885,7 @@ func TestActivateExtractGenerationSkipsIneligibleSessions(t *testing.T) {
 			ID: id, Type: "fact", ReviewState: "unreviewed_auto",
 			Status: "archived", Title: "t", Body: "b",
 			SourceSessionID: sessionID, SourceRunID: "fp-a",
+			ProvenanceOK: true,
 			Evidence: []RecallEvidence{{
 				SessionID: sessionID, MessageEndOrdinal: 1,
 			}},
@@ -896,7 +903,7 @@ func TestActivateExtractGenerationSkipsIneligibleSessions(t *testing.T) {
 	// retraction pass to delete.
 	require.NoError(t, d.SoftDeleteSession("sess-trashed"))
 
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a"))
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
 	ok, err := d.GetRecallEntry(ctx, "e-ok")
 	require.NoError(t, err)
 	require.NotNil(t, ok)
@@ -1059,16 +1066,23 @@ func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 			return err
 		},
 		"ActivateExtractGeneration": func() error {
-			return d.ActivateExtractGeneration(ctx, "fp-a")
+			err := d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+			if errors.Is(err, ErrExtractActivationBlocked) {
+				// The in-tx activation guards refuse (the seeded row
+				// never reaches done); this subtest only measures that
+				// the write waited for db.mu.
+				return nil
+			}
+			return err
 		},
 		"RetireExtractGeneration": func() error {
 			return d.RetireExtractGeneration(ctx, "fp-a", true)
 		},
 		"UpsertExtractProgress": func() error {
 			_, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
-		SessionID: "sess-1", Fingerprint: "fp-a",
-		ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
-	})
+				SessionID: "sess-1", Fingerprint: "fp-a",
+				ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
+			})
 			return err
 		},
 		"AdvanceExtractCursor": func() error {
@@ -1447,23 +1461,22 @@ func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-old"))
-
 	entry := func(id, fp, status, reviewState string) RecallEntry {
 		return RecallEntry{
 			ID: id, Type: "fact", Status: status, ReviewState: reviewState,
-			Title: "t", Body: "b",
+			Title: "t", Body: "b", ProvenanceOK: true,
 			SourceSessionID: "sess-1", SourceRunID: fp,
 		}
 	}
 	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{
-		entry("e-old", "fp-old", "accepted", "unreviewed_auto"),
+		entry("e-old", "fp-old", "archived", "unreviewed_auto"),
 		entry("e-new-staged", "fp-new", "archived", "unreviewed_auto"),
 		entry("e-reviewed", "fp-old", "accepted", "human_reviewed"),
 	})
 	require.NoError(t, err)
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-old", []string{"rules-v1"}))
 
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-new"))
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-new", []string{"rules-v1"}))
 
 	status := func(id string) string {
 		got, err := d.GetRecallEntry(ctx, id)
@@ -1487,13 +1500,14 @@ func TestRetireExtractGenerationArchivesServedEntries(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a"))
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{{
-		ID: "e-1", Type: "fact", Status: "accepted",
+		ID: "e-1", Type: "fact", Status: "archived",
 		ReviewState: "unreviewed_auto", Title: "t", Body: "b",
+		ProvenanceOK:    true,
 		SourceSessionID: "sess-1", SourceRunID: "fp-a",
 	}})
 	require.NoError(t, err)
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
 
 	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
 	got, err := d.GetRecallEntry(ctx, "e-1")
@@ -2142,4 +2156,143 @@ func TestExtractCandidatesFullScanPlanIsIndexBounded(t *testing.T) {
 			"a watermarked full pass must not walk every progress row; "+
 				"plan:\n%s", strings.Join(details, "\n"))
 	}
+}
+
+// seedServableExtractEntry stores one archived, provenance-verified machine
+// entry so activation has something to promote and serve.
+func seedServableExtractEntry(t *testing.T, d *DB, fingerprint, sessionID, entryID string) {
+	t.Helper()
+	_, err := d.InsertExtractedRecallEntries(context.Background(), []RecallEntry{{
+		ID: entryID, Type: "fact", ReviewState: "unreviewed_auto",
+		Status: "archived", Title: "t", Body: "b",
+		SourceSessionID: sessionID, SourceRunID: fingerprint,
+		ProvenanceOK: true,
+	}})
+	require.NoError(t, err)
+}
+
+func generationStates(t *testing.T, d *DB) map[string]string {
+	t.Helper()
+	generations, err := d.ExtractGenerations(context.Background())
+	require.NoError(t, err)
+	states := map[string]string{}
+	for _, gen := range generations {
+		states[gen.Fingerprint] = gen.State
+	}
+	return states
+}
+
+// TestActivateExtractGenerationRefusesUnfinishedCoverage pins that the
+// coverage gate holds inside the activation transaction: a session can slip
+// back to pending between the caller's backlog probe and the activation
+// write, and promoting around it would retire the served corpus while the
+// replacement is still being built.
+func TestActivateExtractGenerationRefusesUnfinishedCoverage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	for _, fp := range []string{"fp-old", "fp-a"} {
+		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-old", "sess-1", "e-old")
+	require.NoError(t,
+		d.ActivateExtractGeneration(ctx, "fp-old", []string{"rules-v1"}))
+	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
+	_, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	err = d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+	require.ErrorIs(t, err, ErrExtractActivationBlocked)
+	states := generationStates(t, d)
+	assert.Equal(t, ExtractGenerationActive, states["fp-old"],
+		"a blocked activation must leave the served corpus in place")
+	assert.Equal(t, ExtractGenerationBuilding, states["fp-a"])
+	entry, err := d.GetRecallEntry(ctx, "e-a")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "archived", entry.Status)
+}
+
+// TestActivateExtractGenerationRefusesDriftedDoneCoverage pins the in-tx
+// staleness gates: a transcript write since the coverage stamp, or a scan
+// stamp no longer current, means the staged entries describe a transcript
+// state that was never re-approved — such coverage must not be promoted
+// even though it never re-enters the caller's backlog probe.
+func TestActivateExtractGenerationRefusesDriftedDoneCoverage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	err = d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v2"})
+	require.ErrorIs(t, err, ErrExtractActivationBlocked,
+		"a session scanned under a superseded rules version is uncovered")
+
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, d.BumpLocalModifiedAt("sess-1"))
+	err = d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+	require.ErrorIs(t, err, ErrExtractActivationBlocked,
+		"a transcript write after the coverage stamp is uncovered work")
+	assert.Equal(t, ExtractGenerationBuilding, generationStates(t, d)["fp-a"])
+
+	// Re-covering the session (a revisit advancing the stamp past the
+	// write) unblocks activation.
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t,
+		d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
+}
+
+// TestActivateExtractGenerationRefusesEmptyPromotion pins the replacement
+// guarantee: when every staged entry's session lost eligibility after the
+// caller's checks, activation must abort instead of retiring the served
+// corpus with nothing servable to replace it.
+func TestActivateExtractGenerationRefusesEmptyPromotion(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	for _, fp := range []string{"fp-old", "fp-a"} {
+		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
+	seedExtractCandidate(t, d, "sess-old", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-old", "sess-old", "e-old")
+	require.NoError(t,
+		d.ActivateExtractGeneration(ctx, "fp-old", []string{"rules-v1"}))
+	seedExtractCandidate(t, d, "sess-gone", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-a", "sess-gone", "e-gone")
+	require.NoError(t, d.SoftDeleteSession("sess-gone"))
+
+	err := d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+	require.ErrorIs(t, err, ErrExtractActivationBlocked)
+	states := generationStates(t, d)
+	assert.Equal(t, ExtractGenerationActive, states["fp-old"],
+		"an activation with nothing servable must not retire the served corpus")
+	assert.Equal(t, ExtractGenerationBuilding, states["fp-a"])
+	old, err := d.GetRecallEntry(ctx, "e-old")
+	require.NoError(t, err)
+	require.NotNil(t, old)
+	assert.Equal(t, "accepted", old.Status,
+		"the served generation's entries must keep serving")
 }

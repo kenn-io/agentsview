@@ -638,7 +638,9 @@ func (m *Manager) extractSession(
 		})
 		switch {
 		case errors.Is(err, db.ErrExtractSessionDrifted):
-			eligible, _, rerr := m.recheckExtraction(ctx, sessionID, session)
+			eligible, unchanged, rerr := m.recheckExtraction(
+				ctx, sessionID, session,
+			)
 			if rerr != nil {
 				return outcome, rerr
 			}
@@ -649,9 +651,31 @@ func (m *Manager) extractSession(
 					return outcome, derr
 				}
 				outcome.failed = true
+				return outcome, nil
 			}
-			// Still eligible: a concurrent write bumped the snapshot, so
-			// the next pass retries against a settled view.
+			if unchanged {
+				// The session re-reads exactly as bracketed, so the
+				// refusal is deterministic (e.g. an evidence range the
+				// transcript cannot verify), not a concurrent write:
+				// retrying next pass would spend another model call to
+				// fail the same way. Record it so the backoff applies.
+				if markErr := m.cfg.DB.MarkExtractProgressFailed(
+					ctx, db.ExtractFailure{
+						SessionID:      sessionID,
+						Fingerprint:    m.fingerprint,
+						ExpectedDigest: digest,
+						ExpectedCursor: i,
+						LastError:      err.Error(),
+					},
+				); markErr != nil &&
+					!errors.Is(markErr, db.ErrStaleExtractProgress) {
+					return outcome, markErr
+				}
+				outcome.failed = true
+				return outcome, nil
+			}
+			// A concurrent write bumped the snapshot: the next pass
+			// retries against a settled view.
 			return outcome, nil
 		case errors.Is(err, db.ErrStaleExtractProgress):
 			// Another writer reset or took over this session; its view
@@ -833,7 +857,15 @@ func (m *Manager) maybeActivate(ctx context.Context) (bool, error) {
 	if len(backlog) > 0 {
 		return false, nil
 	}
-	if err := m.cfg.DB.ActivateExtractGeneration(ctx, m.fingerprint); err != nil {
+	err = m.cfg.DB.ActivateExtractGeneration(
+		ctx, m.fingerprint, []string{secrets.RulesVersion()},
+	)
+	if errors.Is(err, db.ErrExtractActivationBlocked) {
+		// Coverage moved between the checks above and the activation
+		// transaction's own guards; the next pass re-extracts and retries.
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
 	return true, nil
@@ -859,7 +891,9 @@ func (m *Manager) Activate(ctx context.Context) error {
 				"activating would serve an empty corpus", m.fingerprint,
 		)
 	}
-	return m.cfg.DB.ActivateExtractGeneration(ctx, m.fingerprint)
+	return m.cfg.DB.ActivateExtractGeneration(
+		ctx, m.fingerprint, []string{secrets.RulesVersion()},
+	)
 }
 
 // Status reports this generation's coverage and the current backlog.

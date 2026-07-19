@@ -74,9 +74,10 @@ table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
 Non-loopback endpoints must use HTTPS: extraction sends transcript content to
 the endpoint, and plaintext HTTP off the machine could be intercepted. A server
 entry may set `allow_http = true` to accept that risk explicitly (for example on
-a trusted LAN). Redirects are followed only within the configured endpoint's
-origin (scheme, host, and port): a redirect elsewhere would replay the request —
-transcript content included — to whatever destination the endpoint names.
+a trusted LAN). Redirects are never followed: a redirect would replay the
+request — transcript content included — to whatever destination the endpoint
+names, and even a same-origin allowance can be steered elsewhere by re-resolving
+the hostname. Configure the endpoint with its final URL.
 
 Sessions are only ever extracted when they are not automated, not trashed, and
 have a clean, current **full** secret scan — a session with secret findings of

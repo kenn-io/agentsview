@@ -108,3 +108,50 @@ func TestTurnsV1EmptySession(t *testing.T) {
 		t.Errorf("Units(nil) = %d units, want 0", len(units))
 	}
 }
+
+// TestTurnsV1SplitsActionRunsAtOrdinalGaps pins that a run of assistant
+// messages never packs across a missing ordinal. Ingest filtering can drop
+// rows after ordinals are assigned (e.g. tool-result-only user messages), and
+// evidence provenance requires gap-free transcript ranges — a unit spanning
+// the hole would fail verification on every commit attempt.
+func TestTurnsV1SplitsActionRunsAtOrdinalGaps(t *testing.T) {
+	units := TurnsV1{MaxWindowChars: 50000}.Units([]Message{
+		{Ordinal: 0, Role: "user", Content: "fix the bug"},
+		{Ordinal: 1, Role: "assistant", Content: "first step"},
+		{Ordinal: 3, Role: "assistant", Content: "second step"},
+	})
+	if len(units) != 3 {
+		t.Fatalf("unit count = %d, want 3 (intent + one action unit per "+
+			"side of the gap)", len(units))
+	}
+	first, second := units[1], units[2]
+	if first.Role != RoleAction || first.OrdinalStart != 1 || first.OrdinalEnd != 1 {
+		t.Errorf("unit 1 = %s (%d,%d), want action (1,1)",
+			first.Role, first.OrdinalStart, first.OrdinalEnd)
+	}
+	if second.Role != RoleAction || second.OrdinalStart != 3 || second.OrdinalEnd != 3 {
+		t.Errorf("unit 2 = %s (%d,%d), want action (3,3)",
+			second.Role, second.OrdinalStart, second.OrdinalEnd)
+	}
+}
+
+// TestTurnsV1PacksRunsAcrossSkippedRows pins the complement: system and
+// empty rows are skipped from unit text but still occupy their ordinals in
+// the stored transcript, so a run packed across them stays verifiable and
+// must not be split.
+func TestTurnsV1PacksRunsAcrossSkippedRows(t *testing.T) {
+	units := TurnsV1{MaxWindowChars: 50000}.Units([]Message{
+		{Ordinal: 0, Role: "assistant", Content: "a"},
+		{Ordinal: 1, Role: "assistant", Content: "   "},
+		{Ordinal: 2, Role: "user", Content: "sys note", IsSystem: true},
+		{Ordinal: 3, Role: "assistant", Content: "b"},
+	})
+	if len(units) != 1 {
+		t.Fatalf("unit count = %d, want 1 (skipped rows keep the run "+
+			"contiguous)", len(units))
+	}
+	if units[0].OrdinalStart != 0 || units[0].OrdinalEnd != 3 {
+		t.Errorf("unit range = (%d,%d), want (0,3)",
+			units[0].OrdinalStart, units[0].OrdinalEnd)
+	}
+}

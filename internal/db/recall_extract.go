@@ -46,6 +46,13 @@ func extractDriftErrorf(format string, args ...any) error {
 		format+": %w", append(args, ErrExtractSessionDrifted)...)
 }
 
+// ErrExtractActivationBlocked reports that an activation's in-transaction
+// guards refused to switch generations: coverage regressed, staged coverage
+// went stale, or promotion would leave nothing servable. Nothing was
+// changed; the caller retries after the next build pass restores coverage.
+var ErrExtractActivationBlocked = errors.New(
+	"extract generation activation blocked")
+
 // ExtractGeneration is one row of the extraction generation registry.
 type ExtractGeneration struct {
 	Fingerprint string `json:"fingerprint"`
@@ -148,12 +155,24 @@ func (db *DB) ExtractGenerations(
 
 // ActivateExtractGeneration makes the identified generation active and
 // retires whichever generation was previously active, in one transaction so
-// two generations can never be active simultaneously.
+// two generations can never be active simultaneously. The caller's coverage
+// checks are advisory: sessions can slip back to pending, gain writes past
+// their coverage stamp, or lose their scan stamp between those checks and
+// this write, so the same gates are re-verified inside the transaction —
+// against scanVersions as the set of current secret-scan rules — and any
+// mismatch aborts with ErrExtractActivationBlocked instead of retiring the
+// served corpus around it.
 func (db *DB) ActivateExtractGeneration(
-	ctx context.Context, fingerprint string,
+	ctx context.Context, fingerprint string, scanVersions []string,
 ) error {
 	if err := db.requireWritable(); err != nil {
 		return err
+	}
+	if len(scanVersions) == 0 {
+		return fmt.Errorf(
+			"activating generation %s requires the current secret-scan "+
+				"versions: without them stale coverage would count as "+
+				"current", fingerprint)
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -166,6 +185,11 @@ func (db *DB) ActivateExtractGeneration(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := verifyExtractActivationCoverageTx(
+		ctx, tx, fingerprint, scanVersions,
+	); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_extract_generations
 		SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -225,7 +249,87 @@ func (db *DB) ActivateExtractGeneration(
 	); err != nil {
 		return fmt.Errorf("promoting activated generation entries: %w", err)
 	}
+	// The switch must leave something servable: every staged entry may
+	// have been excluded (sessions turned ineligible) or retracted since
+	// the caller's checks, and committing then would retire the served
+	// corpus with no replacement. Serving additionally requires verified
+	// provenance, so revoked entries do not count.
+	var servable int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM recall_entries
+		WHERE review_state = 'unreviewed_auto' AND status = 'accepted'
+		  AND provenance_ok != 0 AND source_run_id = ?`,
+		fingerprint,
+	).Scan(&servable); err != nil {
+		return fmt.Errorf("counting servable entries: %w", err)
+	}
+	if servable == 0 {
+		return fmt.Errorf(
+			"generation %s has no servable entries to promote: %w",
+			fingerprint, ErrExtractActivationBlocked)
+	}
 	return tx.Commit()
+}
+
+// verifyExtractActivationCoverageTx re-verifies, inside the activation
+// transaction, that the generation's coverage still supports serving:
+// no session is pending or partial, and no completed session — still
+// extraction-eligible — has transcript writes past its coverage stamp or a
+// scan stamp outside the current rules versions. Failed sessions do not
+// block (they retry and top the corpus up later), and sessions that turned
+// ineligible are ignored here: promotion excludes their entries and the
+// retraction pass removes them.
+func verifyExtractActivationCoverageTx(
+	ctx context.Context, tx *sql.Tx, fingerprint string, scanVersions []string,
+) error {
+	var building int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM recall_extract_progress
+		WHERE generation_fingerprint = ? AND state IN (?, ?)`,
+		fingerprint, ExtractProgressPending, ExtractProgressPartial,
+	).Scan(&building); err != nil {
+		return fmt.Errorf("counting unfinished coverage: %w", err)
+	}
+	if building > 0 {
+		return fmt.Errorf(
+			"generation %s has %d sessions still being extracted: %w",
+			fingerprint, building, ErrExtractActivationBlocked)
+	}
+	versionMarks := strings.TrimSuffix(
+		strings.Repeat("?,", len(scanVersions)), ",")
+	args := make([]any, 0, len(scanVersions)+2)
+	args = append(args, fingerprint, ExtractProgressDone)
+	for _, version := range scanVersions {
+		args = append(args, version)
+	}
+	// The stamp comparison mirrors the done-revisit gate (>= keeps the
+	// same-millisecond write on the safe side; the NULL pair settles
+	// legacy rows once), and the scan-stamp arm catches the case the
+	// backlog probe cannot see: a transcript write clears the stamp, which
+	// removes the session from the eligible candidate set entirely while
+	// its staged entries would still promote.
+	var stale int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ? AND p.state = ?
+		  AND NOT (`+extractSessionIneligibleSQL+`)
+		  AND (
+			((s.local_modified_at IS NULL AND p.content_stamped_at = '')
+				OR s.local_modified_at >= p.content_stamped_at)
+			OR s.secrets_rules_version IS NULL
+			OR s.secrets_rules_version NOT IN (`+versionMarks+`)
+		  )`,
+		args...,
+	).Scan(&stale); err != nil {
+		return fmt.Errorf("counting stale coverage: %w", err)
+	}
+	if stale > 0 {
+		return fmt.Errorf(
+			"generation %s has %d completed sessions whose coverage went "+
+				"stale: %w", fingerprint, stale, ErrExtractActivationBlocked)
+	}
+	return nil
 }
 
 // RetireExtractGeneration retires a generation. Retiring the active
