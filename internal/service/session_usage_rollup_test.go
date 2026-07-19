@@ -188,11 +188,11 @@ func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t
 }
 
 func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
-	authoritativeRootCost := 1.0
+	rootSessionCost := 1.0
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
-				SessionID: "root", HasCost: true, CostUSD: authoritativeRootCost,
+				SessionID: "root", HasCost: true, CostUSD: rootSessionCost,
 				CostSource: export.CostSourceReported, BreakdownCount: 1,
 			},
 			"child": {
@@ -206,9 +206,9 @@ func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
 		rows: []activity.UsageRow{
 			{
 				SessionID: "root", Cost: 10,
-				AuthoritativeCost: &authoritativeRootCost,
-				CostSource:        export.CostSourceComputed,
-				Priced:            true, Contributes: true,
+				SessionCost: &rootSessionCost,
+				CostSource:  export.CostSourceComputed,
+				Priced:      true, Contributes: true,
 			},
 			{
 				SessionID: "child", Cost: 2,

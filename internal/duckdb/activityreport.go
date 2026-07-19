@@ -220,23 +220,23 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		cost, costSource, priced, contributes, authoritativeCost :=
+		cost, costSource, priced, contributes, sessionCost :=
 			duckActivityUsageCost(r, rateResolver)
 		out = append(out, activity.UsageRow{
-			SessionID:         r.sessionID,
-			Model:             r.model,
-			Timestamp:         r.ts,
-			OutputTokens:      r.outputTok,
-			Cost:              cost,
-			CostSource:        costSource,
-			AuthoritativeCost: authoritativeCost,
-			Priced:            priced,
-			Contributes:       contributes,
-			Agent:             r.agent,
-			ClaudeMessageID:   r.claudeMessageID,
-			ClaudeRequestID:   r.claudeRequestID,
-			SourceUUID:        r.sourceUUID,
-			UsageDedupKey:     r.usageDedupKey,
+			SessionID:       r.sessionID,
+			Model:           r.model,
+			Timestamp:       r.ts,
+			OutputTokens:    r.outputTok,
+			Cost:            cost,
+			CostSource:      costSource,
+			SessionCost:     sessionCost,
+			Priced:          priced,
+			Contributes:     contributes,
+			Agent:           r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID,
+			UsageDedupKey:   r.usageDedupKey,
 		})
 	}
 	return out, nil
@@ -545,12 +545,12 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		cost, costSource, priced, contributes, authoritativeCost :=
+		cost, costSource, priced, contributes, sessionCost :=
 			duckActivityUsageCost(o.scan, rateResolver)
 		row := o.row
 		row.Cost = cost
 		row.CostSource = costSource
-		row.AuthoritativeCost = authoritativeCost
+		row.SessionCost = sessionCost
 		row.Priced = priced
 		row.Contributes = contributes
 		out = append(out, row)
@@ -705,11 +705,11 @@ func duckActivityReportRowStatus(
 func duckActivityUsageCost(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
 ) (cost float64, costSource export.CostSource, priced, contributes bool,
-	authoritativeCost *float64) {
+	sessionCost *float64) {
 	costRow := r
 	if r.costSource == db.CopilotReportedCostSource && r.costUSD != nil {
 		v := *r.costUSD
-		authoritativeCost = &v
+		sessionCost = &v
 		costRow.costUSD = nil
 		pricing.RecordUnattributedReported()
 	}
