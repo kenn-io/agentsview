@@ -251,6 +251,52 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
+  it("surfaces a build failure returned by the initial status probe", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({ last_error: "background build failed" }),
+    );
+
+    const { component, onResolved } = mountHelp();
+    await settle();
+
+    expect(text()).toContain("Embeddings build failed");
+    expect(text()).toContain("background build failed");
+    expect(text()).not.toContain("Build embeddings");
+    expect(onResolved).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("retries the search when the initial status probe sees a completed build", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({
+        last_result: {
+          Fingerprint: "fp-1",
+          Activated: true,
+          Refresh: { Upserted: 1, Deleted: 0, Unchanged: 0 },
+          Repair: {
+            scanned: false,
+            scan_complete: false,
+            documents: 0,
+            chunks: 0,
+            failed: 0,
+            remaining: 0,
+            remaining_known: false,
+          },
+          Fill: { Documents: 1, Chunks: 2, Skipped: 0, Stale: 0 },
+        },
+      }),
+    );
+
+    const { component, onResolved } = mountHelp();
+    await settle();
+
+    expect(onResolved).toHaveBeenCalledOnce();
+    expect(text()).not.toContain("Build embeddings");
+
+    unmount(component);
+  });
+
   it("watches an already-running build instead of failing on 409", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 

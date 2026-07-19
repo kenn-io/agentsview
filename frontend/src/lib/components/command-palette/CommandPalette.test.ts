@@ -8,6 +8,7 @@ import {
 } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import { ApiError } from "../../api/runtime.js";
+import { registerShortcuts } from "../../utils/keyboard.js";
 
 const {
   mockUi,
@@ -27,6 +28,7 @@ const {
       clearScrollState: vi.fn(),
     },
     mockSessions: {
+      activeSessionId: null as string | null,
       sessions: [] as Array<{
         id: string;
         project: string;
@@ -42,6 +44,7 @@ const {
       filters: { project: "" },
       selectSession: vi.fn(),
       navigateToSession: vi.fn(),
+      deselectSession: vi.fn(),
     },
     mockSearchStore: {
       results: [] as Array<unknown>,
@@ -185,6 +188,10 @@ describe("CommandPalette", () => {
       () => new Promise(() => {}),
     );
     mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
+    mockSessions.activeSessionId = null;
+    mockSessions.deselectSession.mockImplementation(() => {
+      mockSessions.activeSessionId = null;
+    });
     mockUi.activeModal = "commandPalette";
     mockSessions.filters.project = "";
     mockSessions.sessions = [
@@ -658,6 +665,44 @@ describe("CommandPalette", () => {
       unmount(component);
     },
   );
+
+  it("stops setup Escape before global shortcuts deselect the active session", async () => {
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
+      new ApiError(501, "embeddings manager not available"),
+    );
+    mockSearchStore.mode = "semantic";
+    mockSearchStore.error = {
+      detail:
+        "semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'",
+      kind: "semantic-unavailable",
+    };
+    mockSessions.activeSessionId = "session-1";
+    const cleanupShortcuts = registerShortcuts({
+      navigateMessage: vi.fn(),
+      navigateUserPrompt: vi.fn(),
+    });
+    const component = mount(CommandPalette, { target: document.body });
+
+    try {
+      await enterSearchQuery();
+      const copy = await tickUntil(".semantic-setup button.kit-copy-btn");
+      copy.focus();
+      copy.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      expect(mockUi.activeModal).toBeNull();
+      expect(mockSessions.activeSessionId).toBe("session-1");
+      expect(mockSessions.deselectSession).not.toHaveBeenCalled();
+    } finally {
+      cleanupShortcuts();
+      unmount(component);
+    }
+  });
 
   it("renders empty and result states when no higher-priority state applies", async () => {
     const empty = mount(CommandPalette, { target: document.body });
