@@ -14,9 +14,9 @@ Evidence classes:
   documentation was found after the searches recorded in the entry.
 
 Usage notes distinguish values persisted by the provider from costs Agentsview
-computes later with its pricing catalog. A compatible upstream implementation is
-useful evidence for a shared format family, but is called out when it is not the
-product's own producer source.
+computes later with its pricing catalog. A compatible upstream implementation,
+independent parser, or recorded fixture is useful evidence for a format, but is
+called out when it is not the product's own producer source.
 
 All entries were last verified on 2026-07-19. A pinned revision is a
 reproducible research snapshot, not a claim that it produced every historical
@@ -69,16 +69,25 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** OpenClaude JSONL with Claude-compatible message content and usage
   objects.
-- **Evidence:** `no-public-source`.
-- **Upstream:** Product pages, first-party documentation, and public GitHub
-  repositories discoverable for OpenClaude were searched 2026-07-19; no
-  authoritative persistence source or format documentation was found.
+
+- **Evidence:** `source`.
+
+- **Upstream:** Clone `https://github.com/Gitlawb/openclaude.git` at
+  `1ddb7d68399a2cd5028d4c5f487676f941879eae`; see the pinned
+  [session JSONL writer](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/utils/sessionStorage.ts),
+
+    [project-directory resolver](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/utils/envUtils.ts),
+    and
+    [assistant message type](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/types/message.ts).
+
 - **Usage and cost:** Claude-style input, output, cache-creation, and cache-read
-  tokens are persisted. Agentsview derives money from its pricing catalog; no
-  provider-reported cost is consumed.
+  tokens are persisted in each assistant message's API usage object.
+  Agentsview derives money from its pricing catalog; no provider-reported cost
+  is consumed.
+
 - **Agentsview:** `internal/parser/openclaude.go` plus the shared Claude parsing
-  code in `internal/parser/claude.go`; compatibility with Claude fields is an
-  observed format relationship, not an upstream guarantee.
+  code in `internal/parser/claude.go`; the producer writes the same
+  project-scoped JSONL family that the parser consumes.
 
 ## Cowork (`cowork`)
 
@@ -469,12 +478,33 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** Legacy JSONL plus companion metadata JSON, and newer SQLite
   session databases.
+
 - **Evidence:** `no-public-source`.
-- **Upstream:** The first-party [Kiro documentation](https://kiro.dev/docs/) and
-  public AWS/Kiro GitHub repositories were searched 2026-07-19. No producer
-  source or authoritative schema for either local generation was found.
-- **Usage and cost:** The consumed stores currently provide transcript and model
-  context but no token, cache, reasoning, credit, or USD events to Agentsview.
+
+- **Upstream:** Kiro's first-party [license page](https://kiro.dev/license/) and
+  [CLI page](https://kiro.dev/cli/) were checked 2026-07-19: current Kiro CLI
+  is proprietary. The open-source predecessor can be cloned from
+  `https://github.com/aws/amazon-q-developer-cli.git` at
+  `15cc8f3cd18c4272925ce1c7053268eedff1ea0a`, but its pinned
+  [conversation migration](https://github.com/aws/amazon-q-developer-cli/blob/15cc8f3cd18c4272925ce1c7053268eedff1ea0a/crates/chat-cli/src/database/sqlite_migrations/007_conversations_table.sql)
+  does not establish either Kiro generation. Useful independent format
+  evidence can be cloned from `https://github.com/ingo-eichhorst/Irrlicht.git`
+  at `12375a273a289c131a45b4fd3eb1ad6483b4e9d4`; see its pinned
+  [Kiro JSONL parser](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/parser.go),
+
+    [sidecar metrics reader](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/sidecar_metrics.go),
+    and recorded
+    [token-accounting assessment](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/replaydata/agents/kiro-cli/scenarios/5-1_token-accounting/metadata.json).
+    These are consumer observations, not Kiro producer authority, and they do
+    not cover the newer `conversations_v2` writer.
+
+- **Usage and cost:** JSONL events contain no model, token, cache, credit, or
+  USD fields. The companion state can contain model/window metadata, context
+  percentage, and per-turn credit metering; the recorded Kiro 2.5.1 evidence
+  found input/output counters present but zero and no cache split. Agentsview
+  currently consumes none of those sidecar usage fields, so it emits no Kiro
+  usage or cost metrics.
+
 - **Agentsview:** `internal/parser/kiro.go`, `internal/parser/kiro_sqlite.go`,
   and `internal/parser/kiro_provider.go`; both generations must remain
   discoverable.
@@ -483,9 +513,12 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** Historical `.chat` files and newer workspace-session JSON data.
 - **Evidence:** `no-public-source`.
-- **Upstream:** The first-party [Kiro documentation](https://kiro.dev/docs/) and
-  public AWS/Kiro repositories were searched 2026-07-19; no IDE persistence
-  serializer or versioned disk schema was public.
+- **Upstream:** Kiro's first-party [license page](https://kiro.dev/license/),
+  [documentation](https://kiro.dev/docs/), and the public
+  [kirodotdev/Kiro repository](https://github.com/kirodotdev/Kiro/tree/e8daa058590dd58efb14f6d41ddb3ba1a26cfba3)
+  were checked 2026-07-19. The IDE is proprietary, and the public repository
+  contains community and issue infrastructure rather than the IDE persistence
+  serializer or a versioned disk schema.
 - **Usage and cost:** Model metadata may be present, but the consumed format
   exposes no authoritative token, cache, reasoning, credit, or monetary cost.
 - **Agentsview:** `internal/parser/kiro_ide.go` and
@@ -573,14 +606,23 @@ Grok section and remove the explicit registry exception in the coverage test.
 
 - **Format:** A `warp.sqlite` database whose conversation records include
   transcript metadata and aggregate usage counters.
-- **Evidence:** `no-public-source`.
-- **Upstream:** The first-party [Warp documentation](https://docs.warp.dev/) and
-  public Warp repositories were searched 2026-07-19; no authoritative local
-  database schema for AI conversations was found.
+
+- **Evidence:** `source`.
+
+- **Upstream:** Clone `https://github.com/warpdotdev/warp.git` at
+  `69ce3728acae0b01c2f457b65a90c144664686aa`; see the pinned
+  [agent conversation migration](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/migrations/2025-06-09-013710_create_agent_conversations_table/up.sql),
+
+    [persistence writer](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/app/src/persistence/agent.rs),
+    and
+    [conversation usage types](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/src/model.rs).
+
 - **Usage and cost:** The consumed metadata has aggregate `warp_tokens` and
-  `byok_tokens`, not attributable per-request billing tokens, cache splits, or
-  reasoning. Agentsview reports the aggregates as session metrics and does not
-  derive USD from them.
+  `byok_tokens` by model and category, plus custom-endpoint tokens and credit
+  fields upstream. Agentsview consumes only the Warp/BYOK aggregates; they are
+  not attributable per-request billing tokens, cache splits, or reasoning, so
+  it reports them as session metrics and does not derive USD from them.
+
 - **Agentsview:** `internal/parser/warp.go` and `internal/parser/warp_paths.go`.
 
 ## Positron (`positron`)
