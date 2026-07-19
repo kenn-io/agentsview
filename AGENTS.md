@@ -91,6 +91,27 @@ Instructions for autonomous coding agents working in this repository.
   different implementation, explain why and keep the observable behavior the
   same.
 
+## DuckDB Mirror
+
+- DuckDB is a disposable read mirror of the SQLite archive, never a system of
+  record. Backend Parity above applies to SQLite and PostgreSQL only; DuckDB
+  is derived data and must stay rebuildable from SQLite at any time.
+- The mirror has no in-place schema migrations. A mirror schema or source
+  data-version change bumps `internal/duckdb.SchemaVersion` and forces a full
+  rebuild into a fresh file that is validated and atomically swapped in. Do
+  not add ALTER-style migrations, version-bridging reads, or compatibility
+  shims for old mirror files.
+- All DuckDB push state (cutoff, revisions, scope, machine, versions) lives in
+  the mirror's own `sync_metadata`. Never store DuckDB sync cursors in SQLite;
+  deleting the mirror file must lose nothing.
+- Incremental updates are whole-session replace only, gated by per-session
+  fingerprints. Do not add per-table, per-column, or diff-based incremental
+  sync to the mirror.
+- Quack is read-side only. `duckdb push` writes the local mirror file; there is
+  no remote DuckDB push and none should be added.
+- Never overwrite an existing file that is not positively identified as an
+  agentsview DuckDB mirror; unrecognized destinations fail closed.
+
 ## Localization
 
 - Keep frontend message catalogs synchronized. When adding, removing, or
@@ -170,6 +191,8 @@ CLI (agentsview) -> Config -> DB (SQLite/FTS5)
 - `internal/db/` - SQLite sessions, messages, search, analytics, and schema.
 - `internal/postgres/` - PostgreSQL push sync, read-only store, schema, and
   connection helpers.
+- `internal/duckdb/` - Disposable DuckDB read mirror: probe, rebuild-and-swap,
+  session-replace push, and the Quack read backend (see DuckDB Mirror above).
 - `internal/parser/` - Per-agent session file parsers and content extraction.
 - `internal/server/` - HTTP handlers, SSE, middleware, search, and export.
 - `internal/sync/` - Sync engine, file watcher, discovery, and hashing.
@@ -209,6 +232,9 @@ CLI (agentsview) -> Config -> DB (SQLite/FTS5)
 | `internal/postgres/messages.go`  | PG message queries and ILIKE search                       |
 | `internal/postgres/analytics.go` | PG analytics queries                                      |
 | `internal/postgres/time.go`      | Timestamp conversion helpers                              |
+| `internal/duckdb/probe.go`       | Read-only mirror probe and rebuild triggers               |
+| `internal/duckdb/rebuild.go`     | Full rebuild into a temp file, validate, atomic swap      |
+| `internal/duckdb/sync.go`        | Push entry point and session-replace incremental          |
 | `internal/config/config.go`      | Config loading and flag registration                      |
 
 ## Development
