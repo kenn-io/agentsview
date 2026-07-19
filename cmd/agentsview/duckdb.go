@@ -117,9 +117,6 @@ func writeDuckDBPushPlan(
 	syncStateTarget string,
 ) {
 	target := "local file " + duckCfg.Path
-	if duckCfg.URL != "" {
-		target = "remote Quack endpoint"
-	}
 	mode := "incremental"
 	if cfg.Full {
 		mode = "full"

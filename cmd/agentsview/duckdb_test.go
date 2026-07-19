@@ -125,44 +125,39 @@ func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T
 	require.NoError(t, err)
 }
 
+// TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon verifies that a
+// remote Quack URL is rejected client-side before any request reaches the
+// daemon: push now writes the local mirror only.
 func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 	duckCfg := config.DuckDBConfig{
 		URL:           "quack:127.0.0.1:9494",
 		Token:         "quack-token",
 		AllowInsecure: true,
 	}
-	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
-		auth:            "Bearer secret",
-		full:            true,
-		projects:        []string{"a"},
-		excludeProjects: []string{"b"},
-		url:             duckCfg.URL,
-		token:           duckCfg.Token,
-		allowInsecure:   duckCfg.AllowInsecure,
-		syncStateTarget: duckdbsync.SyncStateTargetForConfig(duckCfg),
-	}, duckdbsync.PushResult{
-		SessionsPushed: 2,
-		MessagesPushed: 3,
-		Duration:       time.Second,
+	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		t.Fatal("daemon push route should not be called for a rejected remote target")
 	})
 
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{AuthToken: "secret"}, ts.URL,
 	)
-	result, err := backend.DuckDBPush(
+	_, err := backend.DuckDBPush(
 		context.Background(),
 		duckCfg,
 		DuckDBPushConfig{Full: true},
 		[]string{"a"},
 		[]string{"b"},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 2, result.SessionsPushed)
-	assert.Equal(t, 3, result.MessagesPushed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
+	assert.Contains(t, err.Error(), "quack serve")
 }
 
 func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
+	mirrorPath := filepath.Join(t.TempDir(), "mirror.duckdb")
 	ctx, cancel := context.WithCancel(context.Background())
 	var startupPushes int
 	startup := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
@@ -173,8 +168,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, "quack:127.0.0.1:9494", req.DuckDB.URL)
-		assert.Equal(t, "secret", req.DuckDB.Token)
+		assert.Equal(t, mirrorPath, req.DuckDB.Path)
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
@@ -187,8 +181,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, "quack:127.0.0.1:9494", req.DuckDB.URL)
-		assert.Equal(t, "secret", req.DuckDB.Token)
+		assert.Equal(t, mirrorPath, req.DuckDB.Path)
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
@@ -199,8 +192,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	err := backend.DuckDBPushWatch(
 		ctx,
 		config.DuckDBConfig{
-			URL:   "quack:127.0.0.1:9494",
-			Token: "secret",
+			Path: mirrorPath,
 		},
 		DuckDBPushConfig{},
 		nil,
@@ -214,11 +206,14 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
-func TestWriteDuckDBPushPlanOmitsRemoteSecrets(t *testing.T) {
+// TestWriteDuckDBPushPlanDescribesLocalTarget verifies the printed plan
+// always names the local mirror file: push writes the local mirror only, so
+// there is no remote Quack endpoint branch (and no remote secret) to
+// describe.
+func TestWriteDuckDBPushPlanDescribesLocalTarget(t *testing.T) {
 	var out bytes.Buffer
 	duckCfg := config.DuckDBConfig{
-		URL:         "quack:https://user:duck-secret@duck.example.test/path?token=duck-secret",
-		Token:       "duck-token",
+		Path:        "/data/agentsview.duckdb",
 		MachineName: "workstation",
 	}
 
@@ -232,14 +227,11 @@ func TestWriteDuckDBPushPlanOmitsRemoteSecrets(t *testing.T) {
 	)
 
 	got := out.String()
-	assert.Contains(t, got, "DuckDB push target: remote Quack endpoint")
+	assert.Contains(t, got, "DuckDB push target: local file /data/agentsview.duckdb")
 	assert.Contains(t, got, `machine "workstation"`)
 	assert.Contains(t, got, "mode full")
 	assert.Contains(t, got, "sync scope url-abc123")
 	assert.Contains(t, got, "DuckDB push filters: include projects alpha, beta")
-	assert.NotContains(t, got, duckCfg.URL)
-	assert.NotContains(t, got, duckCfg.Token)
-	assert.NotContains(t, got, "duck-secret")
 }
 
 func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {

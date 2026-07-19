@@ -531,18 +531,6 @@ func TestSyncMissingMirrorRowWithUnchangedLocalSessionIsRepaired(t *testing.T) {
 	assert.Contains(t, fingerprints, fixture.betaID)
 }
 
-func TestSyncCheckpointPolicySkipsRemoteQuackTargets(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	policy := &checkpointSpy{err: errors.New("checkpoint should not run")}
-	syncer.connectionKind = duckDBQuackClientConnection
-	syncer.maintenance = policy
-
-	require.NoError(t, syncer.checkpointAfterMutatingPush(ctx))
-	assert.Zero(t, policy.calls)
-}
-
 func TestDuckCheckpointDecisionRequiresFreeBlockThreshold(t *testing.T) {
 	assert.False(t, shouldCheckpointDuckDB(duckDBSize{
 		blockSize:  duckCheckpointMinFreeBytes,

@@ -150,6 +150,9 @@ func TestLocalArchiveWriteBackendDuckDBPushStopsAfterCanceledLocalSync(t *testin
 		})
 }
 
+// TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL verifies that
+// a configured remote Quack URL now fails the push outright: push writes the
+// local mirror only, so a remote target is rejected rather than attempted.
 func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
 
@@ -165,7 +168,8 @@ func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T)
 			nil,
 		)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "duckdb quack token is required")
+		assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
+		assert.Contains(t, err.Error(), "quack serve")
 	})
 }
 
@@ -187,7 +191,7 @@ func TestLocalArchiveWriteBackendDuckDBPushValidatesRemoteBeforeLocalSync(t *tes
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duckdb quack token is required")
+	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
 	assert.NotContains(t, out, "Database:")
 	assert.NotContains(t, out, "Opening DuckDB mirror")
 }

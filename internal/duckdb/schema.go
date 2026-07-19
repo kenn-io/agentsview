@@ -653,26 +653,16 @@ var mirrorTables = []tableSpec{
 	},
 }
 
-type schemaOptions struct {
-	createIndexes bool
-}
-
 // EnsureSchema creates and additively migrates the DuckDB mirror schema.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
-	return ensureSchema(ctx, db, schemaOptions{createIndexes: true})
+	return ensureSchema(ctx, db)
 }
 
-func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
+func ensureSchema(ctx context.Context, db *sql.DB) error {
 	for _, table := range mirrorTables {
 		if _, err := db.ExecContext(ctx, table.create); err != nil {
 			return fmt.Errorf("creating duckdb table %s: %w", table.name, err)
 		}
-	}
-	if !opts.createIndexes {
-		if err := checkSchemaShapeCompat(ctx, db, remoteSchema); err != nil {
-			return err
-		}
-		return checkSchemaRepairsViaQuack(ctx, db)
 	}
 
 	existing, err := loadColumns(ctx, db)

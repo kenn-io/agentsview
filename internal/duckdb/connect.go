@@ -191,61 +191,16 @@ func NewStoreFromConfig(cfg config.DuckDBConfig) (*Store, error) {
 	return NewStore(cfg.Path)
 }
 
-// ValidatePushTarget validates remote DuckDB push targets without opening a
-// DuckDB connection. Local file targets are validated when opened.
+// ValidatePushTarget rejects remote push targets. The mirror is written
+// locally; expose it read-only with `agentsview duckdb quack serve`.
 func ValidatePushTarget(cfg config.DuckDBConfig) error {
-	if cfg.URL == "" {
-		return nil
-	}
-	return ValidateQuackClientURL(cfg.URL, cfg.Token, cfg.AllowInsecure)
-}
-
-// NewFromConfig opens either a local DuckDB mirror file or a remote Quack
-// endpoint for push sync.
-func NewFromConfig(
-	cfg config.DuckDBConfig, local *db.DB, opts SyncOptions,
-) (*Sync, error) {
-	if err := validateSyncInputs(local, cfg.MachineName); err != nil {
-		return nil, err
-	}
-	var (
-		duck           *sql.DB
-		quack          *quackClient
-		err            error
-		connectionKind = duckDBBaseConnection
-	)
 	if cfg.URL != "" {
-		quack, err = openQuackClient(cfg.URL, cfg.Token, cfg.AllowInsecure)
-		if err == nil {
-			duck = quack.DB()
-		}
-		connectionKind = duckDBQuackClientConnection
-	} else {
-		duck, err = Open(cfg.Path)
+		return fmt.Errorf("duckdb push writes the local mirror file and cannot " +
+			"push to a remote Quack endpoint; unset [duckdb].url / " +
+			"AGENTSVIEW_DUCKDB_URL for pushes and serve the mirror with " +
+			"'agentsview duckdb quack serve'")
 	}
-	if err != nil {
-		return nil, err
-	}
-	backfillTargetScope := opts.SyncStateTarget
-	if backfillTargetScope == "" {
-		if cfg.URL == "" {
-			backfillTargetScope = localDuckDBBackfillTargetScope(cfg.Path)
-		} else {
-			backfillTargetScope = SyncStateTargetForConfig(cfg)
-		}
-	}
-	return &Sync{
-		duck:                duck,
-		local:               local,
-		machine:             cfg.MachineName,
-		syncStateScope:      opts.SyncStateTarget,
-		backfillTargetScope: backfillTargetScope,
-		projects:            opts.Projects,
-		excludeProjects:     opts.ExcludeProjects,
-		connectionKind:      connectionKind,
-		quack:               quack,
-		maintenance:         duckDBCheckpointMaintenance{},
-	}, nil
+	return nil
 }
 
 // NewQuackStore attaches a remote DuckDB exposed over Quack.
@@ -259,16 +214,6 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 		quack:          client,
 		connectionKind: duckDBQuackClientConnection,
 	}, nil
-}
-
-// OpenQuack opens an in-memory DuckDB client and attaches a remote DuckDB
-// exposed over Quack as the default catalog.
-func OpenQuack(rawURL, token string, allowInsecure bool) (*sql.DB, error) {
-	client, err := openQuackClient(rawURL, token, allowInsecure)
-	if err != nil {
-		return nil, err
-	}
-	return client.DB(), nil
 }
 
 type quackClient struct {
@@ -539,27 +484,6 @@ func (q *quackClient) queryRemote(
 		)
 	}
 	return q.duck.QueryContext(ctx, query, sqlText)
-}
-
-func (q *quackClient) execRemote(
-	ctx context.Context, sqlText string, retryStale bool,
-) error {
-	query := "FROM " + quackAttachmentName + ".query(?)"
-	_, err := q.duck.ExecContext(ctx, query, sqlText)
-	if err == nil || !retryStale || !isStaleQuackConnectionError(err) ||
-		ctx.Err() != nil {
-		return err
-	}
-	q.reattachMu.Lock()
-	defer q.reattachMu.Unlock()
-	if reattachErr := q.reattachLocked(ctx); reattachErr != nil {
-		return fmt.Errorf(
-			"%w; reattaching quack endpoint %s: %v",
-			err, RedactQuackURL(q.rawURL), reattachErr,
-		)
-	}
-	_, err = q.duck.ExecContext(ctx, query, sqlText)
-	return err
 }
 
 func isStaleQuackConnectionError(err error) bool {

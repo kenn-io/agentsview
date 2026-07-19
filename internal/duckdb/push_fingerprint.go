@@ -48,22 +48,6 @@ type duckQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-type syncDuckQueryer struct {
-	sync *Sync
-}
-
-func (q syncDuckQueryer) QueryContext(
-	ctx context.Context, query string, args ...any,
-) (*sql.Rows, error) {
-	return queryDuckDBContext(
-		ctx, q.sync.duck, q.sync.connectionKind, q.sync.quack, query, args...,
-	)
-}
-
-func (s *Sync) targetQueryer() duckQueryer {
-	return syncDuckQueryer{sync: s}
-}
-
 func (s *Sync) duckMessagePushAction(
 	ctx context.Context, q duckQueryer, sessionID string, msgs []db.Message,
 ) (duckMessagePushAction, error) {

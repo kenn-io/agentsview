@@ -269,7 +269,10 @@ func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 		"projects and exclude_projects are mutually exclusive")
 }
 
-func TestDuckDBPushRejectsMissingQuackTokenAsBadRequest(t *testing.T) {
+// TestDuckDBPushRejectsRemoteURLAsBadRequest verifies the daemon-side push
+// route rejects a remote Quack URL as bad request: push writes the local
+// mirror only, so a configured [duckdb].url is never a valid push target.
+func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
 	s := testServer(t, 30)
 
 	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
@@ -285,7 +288,7 @@ func TestDuckDBPushRejectsMissingQuackTokenAsBadRequest(t *testing.T) {
 	var statusErr interface{ GetStatus() int }
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "duckdb quack token is required")
+	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
 }
 
 func TestDuckDBPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {

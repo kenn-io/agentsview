@@ -90,6 +90,14 @@ func TestValidateQuackClientURL(t *testing.T) {
 	}
 }
 
+func TestValidatePushTargetRejectsRemoteURL(t *testing.T) {
+	err := ValidatePushTarget(config.DuckDBConfig{URL: "quack:127.0.0.1:9494", Token: "t"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
+	assert.Contains(t, err.Error(), "quack serve")
+	assert.NoError(t, ValidatePushTarget(config.DuckDBConfig{Path: "/tmp/x.duckdb"}))
+}
+
 func TestLocalDuckDBBackfillTargetScopeUsesCanonicalPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")

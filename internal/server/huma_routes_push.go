@@ -318,18 +318,9 @@ func (s *Server) humaDuckDBPush(
 			var result duckdbsync.PushResult
 			_, err := engine.SyncThenRun(ctx, body.Full, nil,
 				func(forceFull bool) error {
-					var syncer *duckdbsync.Sync
-					var err error
-					if duckCfg.URL != "" {
-						syncer, err = duckdbsync.NewFromConfig(
-							duckCfg, local, opts,
-						)
-					} else {
-						syncer, err = duckdbsync.New(
-							duckCfg.Path, local, duckCfg.MachineName,
-							opts,
-						)
-					}
+					syncer, err := duckdbsync.New(
+						duckCfg.Path, local, duckCfg.MachineName, opts,
+					)
 					if err != nil {
 						return err
 					}

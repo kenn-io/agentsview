@@ -513,17 +513,9 @@ func (b *localArchiveWriteBackend) duckDBPush(
 		ExcludeProjects: excludeProjects,
 		SyncStateTarget: syncStateTarget,
 	}
-	var syncer *duckdbsync.Sync
-	var err error
-	if duckCfg.URL != "" {
-		syncer, err = duckdbsync.NewFromConfig(
-			duckCfg, b.database, opts,
-		)
-	} else {
-		syncer, err = duckdbsync.New(
-			duckCfg.Path, b.database, duckCfg.MachineName, opts,
-		)
-	}
+	syncer, err := duckdbsync.New(
+		duckCfg.Path, b.database, duckCfg.MachineName, opts,
+	)
 	if err != nil {
 		return duckdbsync.PushResult{}, err
 	}
