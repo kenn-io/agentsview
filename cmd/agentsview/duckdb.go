@@ -197,22 +197,23 @@ func runDuckDBStatus() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	lastPush := ""
-	if duckCfg.URL == "" {
-		probe, err := duckdbsync.ProbeMirror(ctx, duckCfg.Path)
-		if err != nil {
-			log.Printf("warning: reading duckdb last push: %v", err)
-		} else {
-			lastPush = probe.LastPushAt
-		}
-	}
-
-	status, err := duckdbsync.ReadStatusFromConfig(ctx, duckCfg, lastPush)
+	status, err := duckdbsync.ReadStatusFromConfig(ctx, duckCfg)
 	if err != nil {
 		fatal("duckdb status: %v", err)
 	}
-	fmt.Printf("Machine:         %s\n", status.Machine)
+	machine := status.LastPushMachine
+	if machine == "" {
+		machine = duckCfg.MachineName
+	}
+	scope := status.Scope
+	if scope == "" {
+		scope = "all projects"
+	}
+	fmt.Printf("Machine:         %s\n", machine)
 	fmt.Printf("Last push:       %s\n", valueOrNever(status.LastPushAt))
+	fmt.Printf("Schema version:  %d\n", status.SchemaVersion)
+	fmt.Printf("Data version:    %d\n", status.DataVersion)
+	fmt.Printf("Scope:           %s\n", scope)
 	fmt.Printf("DuckDB sessions: %d\n", status.DuckDBSessions)
 	fmt.Printf("DuckDB messages: %d\n", status.DuckDBMessages)
 }

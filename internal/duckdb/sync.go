@@ -79,12 +79,18 @@ type PushProgress struct {
 	Errors        int
 }
 
-// SyncStatus holds summary information about the DuckDB mirror.
+// SyncStatus holds summary information about the DuckDB mirror, read from
+// the target's own sync_metadata (see readMachineStatus) rather than any
+// local watermark.
 type SyncStatus struct {
-	Machine        string `json:"machine"`
-	LastPushAt     string `json:"last_push_at"`
-	DuckDBSessions int    `json:"duckdb_sessions"`
-	DuckDBMessages int    `json:"duckdb_messages"`
+	Machine         string `json:"machine"`
+	LastPushAt      string `json:"last_push_at"`
+	LastPushMachine string `json:"last_push_machine"`
+	SchemaVersion   int    `json:"schema_version"`
+	DataVersion     int    `json:"data_version"`
+	Scope           string `json:"scope"`
+	DuckDBSessions  int    `json:"duckdb_sessions"`
+	DuckDBMessages  int    `json:"duckdb_messages"`
 }
 
 // New opens a DuckDB mirror file and returns a Sync instance. It never
@@ -134,19 +140,6 @@ func (s *Sync) Close() error {
 
 func (s *Sync) isFiltered() bool {
 	return len(s.projects) > 0 || len(s.excludeProjects) > 0
-}
-
-// Status returns current DuckDB mirror row counts. It tolerates a mirror
-// with no metadata yet (fresh or pre-v3 file): readMirrorMetadata and
-// readMachineStatus both degrade to zero values instead of erroring.
-func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
-	meta, err := readMirrorMetadata(ctx, s.duck)
-	if err != nil {
-		log.Printf("warning: reading duckdb mirror metadata: %v", err)
-	}
-	return readMachineStatus(
-		ctx, s.duck, duckDBBaseConnection, nil, s.machine, meta.LastPushAt,
-	)
 }
 
 // Push builds or updates the local DuckDB mirror. It probes the existing

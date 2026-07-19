@@ -905,34 +905,17 @@ func TestSyncProjectFiltersMatchPushScope(t *testing.T) {
 	assertDuckDBCountWhere(t, excludeConn, "sessions", "project = ?", "beta", 1)
 }
 
-func TestSyncStatusCountsDuckDBRows(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	seedDuckDBSyncFixture(t, local)
-	path := filepath.Join(t.TempDir(), "status.duckdb")
-
-	_, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
-	require.NoError(t, err)
-
-	syncer := newTestSync(t, path, local, SyncOptions{})
-	insertOtherMachineDuckSession(t, syncer.DB())
-
-	status, err := syncer.Status(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "test-machine", status.Machine)
-	assert.NotEmpty(t, status.LastPushAt)
-	assert.Equal(t, 2, status.DuckDBSessions)
-	assert.Equal(t, 3, status.DuckDBMessages)
-}
-
-func TestReadStatusFromConfigCountsMachineScopedDuckDBRows(t *testing.T) {
+func TestReadStatusFromConfigReportsTargetPushMetadataAndCounts(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
 	target := filepath.Join(t.TempDir(), "status.duckdb")
 
+	before := time.Now().UTC()
 	_, err := Push(ctx, target, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
+	after := time.Now().UTC()
+
 	conn, err := Open(target)
 	require.NoError(t, err)
 	insertOtherMachineDuckSession(t, conn)
@@ -941,12 +924,57 @@ func TestReadStatusFromConfigCountsMachineScopedDuckDBRows(t *testing.T) {
 	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
 		Path:        target,
 		MachineName: "test-machine",
-	}, "2026-06-30T12:00:00.000Z")
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "test-machine", status.Machine)
-	assert.Equal(t, "2026-06-30T12:00:00.000Z", status.LastPushAt)
+	assert.Equal(t, "test-machine", status.LastPushMachine)
+	assert.Equal(t, SchemaVersion, status.SchemaVersion)
+	assert.Equal(t, db.CurrentDataVersion(), status.DataVersion)
+	assert.Empty(t, status.Scope, "unfiltered push canonicalizes to empty scope")
 	assert.Equal(t, 2, status.DuckDBSessions)
 	assert.Equal(t, 3, status.DuckDBMessages)
+
+	lastPushAt, err := time.Parse(time.RFC3339, status.LastPushAt)
+	require.NoError(t, err)
+	assert.WithinRange(t, lastPushAt, before.Add(-time.Second), after.Add(time.Second))
+}
+
+func TestReadStatusFromConfigReportsScopeAndDegradesOnMissingMetadata(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	target := filepath.Join(t.TempDir(), "status.duckdb")
+
+	_, err := Push(ctx, target, local, "test-machine",
+		SyncOptions{Projects: []string{"alpha"}}, true, nil)
+	require.NoError(t, err)
+
+	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
+		Path:        target,
+		MachineName: "test-machine",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, canonicalPushScope([]string{"alpha"}, nil), status.Scope)
+
+	conn, err := Open(target)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `DELETE FROM sync_metadata`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	blankStatus, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
+		Path:        target,
+		MachineName: "test-machine",
+	})
+	require.NoError(t, err, "missing metadata rows should not fail status")
+	assert.Equal(t, "test-machine", blankStatus.Machine)
+	assert.Empty(t, blankStatus.LastPushAt)
+	assert.Empty(t, blankStatus.LastPushMachine)
+	assert.Zero(t, blankStatus.SchemaVersion)
+	assert.Zero(t, blankStatus.DataVersion)
+	assert.Empty(t, blankStatus.Scope)
+	assert.Equal(t, 1, blankStatus.DuckDBSessions,
+		"row counts still read even with metadata gone")
 }
 
 type syncFixture struct {

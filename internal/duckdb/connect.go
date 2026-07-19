@@ -58,12 +58,14 @@ func isCredentialQueryKey(key, credential string) bool {
 	return false
 }
 
-// ReadStatusFromConfig reads DuckDB/Quack row counts without requiring a local
-// Sync handle. Callers pass any local last-push watermark they want displayed.
+// ReadStatusFromConfig reads DuckDB/Quack push metadata and row counts
+// without requiring a local Sync handle. It reports the TARGET's own
+// sync_metadata (last push time/machine, schema/data version, scope) rather
+// than any locally tracked watermark, so it works identically for a local
+// mirror file and a remote Quack endpoint.
 func ReadStatusFromConfig(
 	ctx context.Context,
 	cfg config.DuckDBConfig,
-	lastPush string,
 ) (SyncStatus, error) {
 	if cfg.MachineName == "" {
 		return SyncStatus{}, fmt.Errorf("machine name must not be empty")
@@ -74,20 +76,32 @@ func ReadStatusFromConfig(
 	}
 	defer store.Close()
 	return readMachineStatus(
-		ctx, store.DB(), store.connectionKind, store.quack,
-		cfg.MachineName, lastPush,
+		ctx, store.DB(), store.connectionKind, store.quack, cfg.MachineName,
 	)
 }
 
+// readMachineStatus reads the target's push metadata and machine-scoped row
+// counts. It tolerates a mirror with no sync_metadata rows yet, or missing
+// tables entirely (a fresh, foreign, or pre-v3 file): both degrade to zero
+// values instead of erroring, since status must not crash on an old mirror.
 func readMachineStatus(
 	ctx context.Context,
 	duck *sql.DB,
 	connectionKind duckDBConnectionKind,
 	quack *quackClient,
 	machine string,
-	lastPush string,
 ) (SyncStatus, error) {
-	status := SyncStatus{Machine: machine, LastPushAt: lastPush}
+	status := SyncStatus{Machine: machine}
+	meta, err := readTargetMirrorStatusMetadata(ctx, duck, connectionKind, quack)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	status.LastPushAt = meta.LastPushAt
+	status.LastPushMachine = meta.LastPushMachine
+	status.SchemaVersion = meta.SchemaVersion
+	status.DataVersion = meta.DataVersion
+	status.Scope = meta.Scope
+
 	if err := queryDuckDBRowContext(ctx, duck, connectionKind, quack,
 		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
 		machine,
@@ -111,6 +125,73 @@ func readMachineStatus(
 		return SyncStatus{}, fmt.Errorf("counting duckdb messages: %w", err)
 	}
 	return status, nil
+}
+
+// targetMirrorStatusMetadata is the subset of mirror push metadata that
+// duckdb status reports, read from whatever mirror the caller is connected
+// to (local file or remote Quack endpoint) via queryDuckDBContext so the
+// query literalizes correctly over Quack's query() table function.
+type targetMirrorStatusMetadata struct {
+	SchemaVersion   int
+	DataVersion     int
+	Scope           string
+	LastPushAt      string
+	LastPushMachine string
+}
+
+func readTargetMirrorStatusMetadata(
+	ctx context.Context,
+	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
+	quack *quackClient,
+) (targetMirrorStatusMetadata, error) {
+	rows, err := queryDuckDBContext(ctx, duck, connectionKind, quack,
+		`SELECT key, value FROM sync_metadata WHERE key IN (?, ?, ?, ?, ?)`,
+		schemaVersionMetadataKey, dataVersionMetadataKey, pushScopeMetadataKey,
+		lastPushAtMetadataKey, lastPushMachineMetadataKey,
+	)
+	if err != nil {
+		if isMissingDuckDBTable(err) {
+			return targetMirrorStatusMetadata{}, nil
+		}
+		return targetMirrorStatusMetadata{}, fmt.Errorf(
+			"reading duckdb mirror push metadata: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	raw := make(map[string]string, 5)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return targetMirrorStatusMetadata{}, fmt.Errorf(
+				"scanning duckdb mirror push metadata: %w", err,
+			)
+		}
+		raw[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return targetMirrorStatusMetadata{}, fmt.Errorf(
+			"iterating duckdb mirror push metadata: %w", err,
+		)
+	}
+
+	meta := targetMirrorStatusMetadata{
+		Scope:           raw[pushScopeMetadataKey],
+		LastPushAt:      raw[lastPushAtMetadataKey],
+		LastPushMachine: raw[lastPushMachineMetadataKey],
+	}
+	if meta.SchemaVersion, err = parseMirrorMetadataInt(
+		schemaVersionMetadataKey, raw[schemaVersionMetadataKey],
+	); err != nil {
+		return targetMirrorStatusMetadata{}, err
+	}
+	if meta.DataVersion, err = parseMirrorMetadataInt(
+		dataVersionMetadataKey, raw[dataVersionMetadataKey],
+	); err != nil {
+		return targetMirrorStatusMetadata{}, err
+	}
+	return meta, nil
 }
 
 func isMissingDuckDBTable(err error) bool {

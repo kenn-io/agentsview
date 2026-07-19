@@ -269,10 +269,15 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 		URL:         uri,
 		Token:       token,
 		MachineName: "quack-client",
-	}, "2026-06-30T12:00:00.000Z")
+	})
 	require.NoError(t, err, "read Quack-backed status from config")
 	assert.Equal(t, "quack-client", configStatus.Machine)
-	assert.Equal(t, "2026-06-30T12:00:00.000Z", configStatus.LastPushAt)
+	assert.Equal(t, "quack-client", configStatus.LastPushMachine,
+		"status should report the SERVER file's own push metadata")
+	assert.NotEmpty(t, configStatus.LastPushAt)
+	assert.Equal(t, SchemaVersion, configStatus.SchemaVersion)
+	assert.Equal(t, db.CurrentDataVersion(), configStatus.DataVersion)
+	assert.Empty(t, configStatus.Scope, "unfiltered push canonicalizes to empty scope")
 	assert.Equal(t, 3, configStatus.DuckDBSessions)
 	assert.Equal(t, 4, configStatus.DuckDBMessages)
 
