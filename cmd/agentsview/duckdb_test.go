@@ -261,6 +261,34 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 	assert.Contains(t, got, "DuckDB push wrote: sessions 3 (claude=2, codex=1), messages 7")
 }
 
+// TestWriteDuckDBPushDiagnosticsReportsRebuildMode verifies that a rebuild
+// (Diagnostics.Full) always prints its mode and reason, even though a
+// rebuild leaves Diagnostics.Cutoff empty (only pushChangedSessions, the
+// incremental path, sets it) — the bug this guards against is the CLI
+// silently printing nothing for a rebuild-instead-of-incremental push.
+func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
+	var out bytes.Buffer
+
+	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+		SessionsPushed: 2,
+		MessagesPushed: 5,
+		Diagnostics: duckdbsync.PushDiagnostics{
+			Full:          true,
+			RebuildReason: "missing file",
+			PushedSessions: duckdbsync.PushSessionCounts{
+				Total:   2,
+				ByAgent: map[string]int{"claude": 2},
+			},
+		},
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "DuckDB push mode: rebuild (missing file)")
+	assert.Contains(t, got, "DuckDB push wrote: sessions 2 (claude=2), messages 5")
+	assert.NotContains(t, got, "DuckDB push source:",
+		"a rebuild has no incremental candidate/skip counters to print")
+}
+
 func TestWriteDuckDBQuackServeStartupDoesNotPrintToken(t *testing.T) {
 	var out bytes.Buffer
 	const token = "plain-quack-secret-token"

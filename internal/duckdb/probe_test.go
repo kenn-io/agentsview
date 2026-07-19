@@ -4,6 +4,8 @@ package duckdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,6 +146,130 @@ func TestCanonicalPushScopeIsDeterministicAndSorted(t *testing.T) {
 		canonicalPushScope([]string{"a"}, nil),
 		canonicalPushScope(nil, []string{"a"}),
 	)
+}
+
+// TestIsMirrorLockConflictErrorClassifiesLockMessages tests the pure
+// error-string classifier in isolation, using fabricated errors: an actual
+// cross-process DuckDB lock conflict is hard to reproduce in-process (the
+// duckdb-go driver shares an instance cache per path within one process, so
+// a second in-process open of the same path does not race a lock the way a
+// second OS process would), so the classifier itself is what gets tested
+// directly against representative error strings instead.
+func TestIsMirrorLockConflictErrorClassifiesLockMessages(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{
+			name: "could not set lock",
+			err: errors.New(
+				"IO Error: Could not set lock on file " +
+					`"/tmp/agentsview.duckdb": Conflicting lock is held in ` +
+					`process 12345`,
+			),
+			want: true,
+		},
+		{
+			name: "conflicting lock only",
+			err:  errors.New("Conflicting lock is held"),
+			want: true,
+		},
+		{"unrelated io error", errors.New("no such file or directory"), false},
+		{"malformed database", errors.New("file is not a valid DuckDB database"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isMirrorLockConflictError(tt.err))
+		})
+	}
+}
+
+func TestProbeMirrorReportsLockConflictDistinctFromOtherShapeIssues(t *testing.T) {
+	probe := MirrorProbe{
+		FileExists:   true,
+		ShapeIssue:   "Could not set lock on file",
+		LockConflict: true,
+	}
+	assert.True(t, probe.NeedsRebuild("", 1),
+		"a lock conflict still forces a rebuild, same as any other shape issue")
+}
+
+func TestRebuildReasonReportsEachTrigger(t *testing.T) {
+	baseProbe := func() MirrorProbe {
+		return MirrorProbe{
+			FileExists: true, ShapeOK: true,
+			SchemaVersion: SchemaVersion, DataVersion: 1, Scope: "",
+		}
+	}
+	tests := []struct {
+		name    string
+		probe   MirrorProbe
+		scope   string
+		dataVer int
+		full    bool
+		localDR int64
+		want    string
+	}{
+		{
+			name: "missing file", probe: MirrorProbe{}, dataVer: 1,
+			want: "missing file",
+		},
+		{
+			name: "full requested", probe: baseProbe(), dataVer: 1, full: true,
+			want: "--full requested",
+		},
+		{
+			name: "schema version mismatch",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.SchemaVersion = SchemaVersion - 1
+				return p
+			}(),
+			dataVer: 1,
+			want: fmt.Sprintf(
+				"schema version %d vs %d", SchemaVersion-1, SchemaVersion,
+			),
+		},
+		{
+			name: "data version mismatch", probe: baseProbe(), dataVer: 2,
+			want: "data version 1 vs 2",
+		},
+		{
+			name: "scope changed", probe: baseProbe(), scope: "other", dataVer: 1,
+			want: "scope changed",
+		},
+		{
+			name: "lock conflict",
+			probe: MirrorProbe{
+				FileExists: true, ShapeIssue: "Could not set lock",
+				LockConflict: true,
+			},
+			dataVer: 1,
+			want:    "mirror locked by another process — likely a running serve; rebuilding from scratch because incremental update cannot proceed while it is served",
+		},
+		{
+			name: "deletion cursor ahead of local archive",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.DeletionRevision = 5
+				return p
+			}(),
+			dataVer: 1, localDR: 2,
+			want: "mirror deletion cursor ahead of archive; archive was rebuilt",
+		},
+		{
+			name: "no rebuild needed", probe: baseProbe(), dataVer: 1,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rebuildReason(tt.probe, tt.scope, tt.dataVer, tt.full, tt.localDR)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestProbeMirrorOpensReadOnlyAndNeverMutates(t *testing.T) {

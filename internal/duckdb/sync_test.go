@@ -81,32 +81,37 @@ func TestPushAppliesDeletionJournalDelta(t *testing.T) {
 func TestPushRebuildTriggers(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
-		name   string
-		mangle func(t *testing.T, path string)
+		name          string
+		mangle        func(t *testing.T, path string)
+		wantReasonHas string
 	}{
 		{
 			name: "schema version too old",
 			mangle: func(t *testing.T, path string) {
 				setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "2")
 			},
+			wantReasonHas: "schema version",
 		},
 		{
 			name: "schema version too new",
 			mangle: func(t *testing.T, path string) {
 				setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "99")
 			},
+			wantReasonHas: "schema version",
 		},
 		{
 			name: "data version drift",
 			mangle: func(t *testing.T, path string) {
 				setMirrorMetadataValue(t, path, dataVersionMetadataKey, "999999")
 			},
+			wantReasonHas: "data version",
 		},
 		{
 			name: "scope drift",
 			mangle: func(t *testing.T, path string) {
 				setMirrorMetadataValue(t, path, pushScopeMetadataKey, `{"projects":["other"]}`)
 			},
+			wantReasonHas: "scope changed",
 		},
 		{
 			name: "deleted sync_metadata row",
@@ -119,12 +124,25 @@ func TestPushRebuildTriggers(t *testing.T) {
 				)
 				require.NoError(t, err)
 			},
+			wantReasonHas: "schema version",
 		},
 		{
 			name: "deleted mirror file",
 			mangle: func(t *testing.T, path string) {
 				require.NoError(t, os.Remove(path))
 			},
+			wantReasonHas: "missing file",
+		},
+		{
+			name: "dropped sync_metadata table",
+			mangle: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(`DROP TABLE sync_metadata`)
+				require.NoError(t, err)
+			},
+			wantReasonHas: "shape issue",
 		},
 	}
 	for _, tt := range tests {
@@ -138,9 +156,49 @@ func TestPushRebuildTriggers(t *testing.T) {
 			res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.True(t, res.Diagnostics.Full)
+			assert.Contains(t, res.Diagnostics.RebuildReason, tt.wantReasonHas)
 			assertMirrorMessageCount(t, path, "sess-1", 2)
 		})
 	}
+}
+
+// TestPushRebuildReasonReportsFullFlag verifies an explicitly requested
+// --full push records that as its RebuildReason even though the existing
+// mirror would otherwise be valid for an incremental push.
+func TestPushRebuildReasonReportsFullFlag(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, true, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full)
+	assert.Equal(t, "--full requested", res.Diagnostics.RebuildReason)
+}
+
+// TestPushRebuildsWhenMirrorDeletionCursorAheadOfLocal is the FIX2b
+// regression: a mirror whose recorded deletion journal revision is higher
+// than the local archive's current counter (the archive was rebuilt or
+// replaced, e.g. by a resync, and its own counter no longer reaches that
+// far) must trigger a rebuild instead of failing LoadSessionDeletionDelta's
+// window validation with "invalid session deletion publication window".
+func TestPushRebuildsWhenMirrorDeletionCursorAheadOfLocal(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	setMirrorMetadataValue(t, path, deletionRevisionMetadataKey, "5")
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full)
+	assert.Equal(t,
+		"mirror deletion cursor ahead of archive; archive was rebuilt",
+		res.Diagnostics.RebuildReason,
+	)
+	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
 // TestPushDoesNotAdvanceStateOnError injects a session that fails to push

@@ -56,13 +56,22 @@ type PushResult struct {
 
 // PushDiagnostics summarizes how a DuckDB push selected sessions.
 type PushDiagnostics struct {
-	Full                     bool
+	Full bool
+	// RebuildReason is the human-readable reason a rebuild was chosen
+	// instead of an incremental push (see rebuildReason); empty for an
+	// incremental push (Full is false).
+	RebuildReason            string
 	Cutoff                   string
 	LocalSessionCount        int
 	CandidateSessions        PushSessionCounts
 	SkippedUnchangedSessions PushSessionCounts
 	PushedSessions           PushSessionCounts
 	DeletedStaleSessions     int
+	// CurationRefreshed reports whether this push actually rewrote
+	// starred_sessions/pinned_messages, as opposed to skipping the refresh
+	// because the local in-scope curation state's fingerprint matched what
+	// was already recorded in the mirror (see refreshCurationIfChanged).
+	CurationRefreshed bool
 }
 
 // PushSessionCounts summarizes a set of sessions without exposing content.
@@ -145,7 +154,12 @@ func (s *Sync) isFiltered() bool {
 // Push builds or updates the local DuckDB mirror. It probes the existing
 // file read-only, rebuilds from scratch when full is set or the probe
 // demands it (missing/damaged file, schema or data version drift, scope
-// change), and otherwise runs a bounded session-replace incremental push.
+// change, cross-process lock conflict, or a deletion cursor the local
+// archive can no longer explain), and otherwise runs a bounded
+// session-replace incremental push. Every rebuild logs and records its
+// trigger in Diagnostics.RebuildReason, since a rebuild silently substituted
+// for a requested incremental push (for example because a live 'duckdb
+// serve' holds the mirror open) is otherwise invisible to the operator.
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, full bool, onProgress func(PushProgress),
@@ -155,10 +169,21 @@ func Push(
 	if err != nil {
 		return PushResult{}, err
 	}
-	if full || probe.NeedsRebuild(scope, db.CurrentDataVersion()) {
-		return rebuildMirror(ctx, path, local, machine, opts, onProgress)
+	localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
+	if err != nil {
+		return PushResult{}, err
 	}
-	return incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+
+	reason := rebuildReason(
+		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
+	)
+	if reason == "" {
+		return incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+	}
+	log.Printf("duckdbsync: rebuilding mirror: %s", reason)
+	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
+	result.Diagnostics.RebuildReason = reason
+	return result, err
 }
 
 // incrementalPush applies a bounded session-replace update against an

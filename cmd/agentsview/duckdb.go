@@ -128,7 +128,32 @@ func writeDuckDBPushPlan(
 	)
 }
 
+// writeDuckDBPushDiagnostics prints how the push selected sessions. A
+// rebuild (result.Diagnostics.Full) has no incremental candidate/skip
+// counters to report — pushEverything never populates them — so it gets its
+// own branch that always prints, including the reason a rebuild ran instead
+// of the requested incremental push (see rebuildReason in
+// internal/duckdb/probe.go). Earlier code only printed anything when
+// Diagnostics.Cutoff was non-empty, which incremental pushes always set but
+// rebuilds never do; that made every rebuild-instead-of-incremental case
+// (missing file, schema drift, a live serve holding the mirror locked, ...)
+// silently print nothing here, leaving only the generic "Pushed N
+// sessions..." summary with no indication a full rebuild had just run.
 func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
+	if result.Diagnostics.Full {
+		reason := result.Diagnostics.RebuildReason
+		if reason == "" {
+			reason = "unspecified"
+		}
+		fmt.Fprintf(w, "DuckDB push mode: rebuild (%s)\n", reason)
+		fmt.Fprintf(
+			w,
+			"DuckDB push wrote: sessions %s, messages %d\n",
+			formatDuckDBPushSessionCounts(result.Diagnostics.PushedSessions),
+			result.MessagesPushed,
+		)
+		return
+	}
 	if result.Diagnostics.Cutoff == "" {
 		return
 	}

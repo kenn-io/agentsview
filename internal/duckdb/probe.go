@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 )
 
 // MirrorProbe summarizes a DuckDB mirror file's shape and push-scope
@@ -14,9 +15,15 @@ import (
 // rebuildMirror: callers use it to decide whether a mirror is safe to serve
 // as-is or needs a full rebuild.
 type MirrorProbe struct {
-	FileExists       bool
-	ShapeOK          bool   // tables+columns+metadata parse
-	ShapeIssue       string // human-readable reason when !ShapeOK
+	FileExists bool
+	ShapeOK    bool   // tables+columns+metadata parse
+	ShapeIssue string // human-readable reason when !ShapeOK
+	// LockConflict is true when ShapeIssue is specifically a DuckDB
+	// cross-process lock conflict (another process, typically a running
+	// 'duckdb serve' or 'duckdb quack serve', already has the mirror file
+	// open) rather than a genuinely malformed or incompatible file. See
+	// isMirrorLockConflictError.
+	LockConflict     bool
 	SchemaVersion    int
 	DataVersion      int
 	Scope            string // canonical scope string, see canonicalPushScope
@@ -40,11 +47,36 @@ func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 
 	conn, err := openReadOnlyMirror(path)
 	if err != nil {
-		return MirrorProbe{FileExists: true, ShapeIssue: err.Error()}, nil
+		return MirrorProbe{
+			FileExists:   true,
+			ShapeIssue:   err.Error(),
+			LockConflict: isMirrorLockConflictError(err),
+		}, nil
 	}
 	defer func() { _ = conn.Close() }()
 
 	return probeOpenMirror(ctx, conn), nil
+}
+
+// isMirrorLockConflictError reports whether err indicates DuckDB refused to
+// open the mirror because another process already holds it open — the
+// signature of a running 'duckdb serve' or 'duckdb quack serve'. DuckDB is
+// single-writer/exclusive across processes: even a read-only open cannot
+// coexist with another process's handle on the same file, so while the
+// mirror is served, incremental update is impossible and rebuild is the
+// only way to make progress. Rebuild-into-temp-then-rename still works
+// during this window because the lock the serving process holds binds the
+// inode it opened, not the path string: swapMirrorFile's rename replaces
+// what the path points at without touching that inode, so the serving
+// process keeps running against its (now unlinked but still open) old
+// handle until it notices the replacement and reopens.
+func isMirrorLockConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Could not set lock") ||
+		strings.Contains(msg, "Conflicting lock")
 }
 
 // openReadOnlyMirror opens an existing DuckDB file read-only so probing can
@@ -131,6 +163,53 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 	return p.SchemaVersion != SchemaVersion ||
 		p.DataVersion != sourceDataVersion ||
 		p.Scope != scope
+}
+
+// rebuildReason returns a human-readable explanation for why probe forces a
+// rebuild instead of an incremental push, or "" when an incremental push
+// can proceed. It is the diagnostic/logging counterpart to NeedsRebuild:
+// every condition NeedsRebuild's bool contract covers (missing/damaged
+// file, schema/data version drift, scope change) is reported here with the
+// specific "why", plus two conditions NeedsRebuild does not see: a
+// cross-process lock conflict (LockConflict) and the mirror's deletion
+// journal cursor sitting ahead of the local archive's own counter, which
+// happens when the local archive was rebuilt or replaced (e.g. by a resync)
+// and its deletion journal no longer covers the range the mirror already
+// advanced past — applying a delta in that state would otherwise fail with
+// an invalid publication window rather than just rebuilding.
+// localDeletionRevision is the caller's local.SessionDeletionPublicationRevision
+// read, passed in rather than threaded through NeedsRebuild's pure
+// scope/version signature.
+func rebuildReason(
+	probe MirrorProbe, scope string, sourceDataVersion int, full bool,
+	localDeletionRevision int64,
+) string {
+	switch {
+	case full:
+		return "--full requested"
+	case !probe.FileExists:
+		return "missing file"
+	case probe.LockConflict:
+		return "mirror locked by another process — likely a running serve; " +
+			"rebuilding from scratch because incremental update cannot " +
+			"proceed while it is served"
+	case !probe.ShapeOK:
+		return "shape issue: " + probe.ShapeIssue
+	case probe.SchemaVersion != SchemaVersion:
+		return fmt.Sprintf(
+			"schema version %d vs %d", probe.SchemaVersion, SchemaVersion,
+		)
+	case probe.DataVersion != sourceDataVersion:
+		return fmt.Sprintf(
+			"data version %d vs %d", probe.DataVersion, sourceDataVersion,
+		)
+	case probe.Scope != scope:
+		return "scope changed"
+	case probe.DeletionRevision > localDeletionRevision:
+		return "mirror deletion cursor ahead of archive; archive was rebuilt"
+	default:
+		return ""
+	}
 }
 
 // canonicalPushScope renders a push's project filters into a deterministic

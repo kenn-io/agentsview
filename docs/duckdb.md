@@ -185,3 +185,13 @@ Environment variables override the config file:
   stops serving during the switch and, if the replacement is incompatible,
   stays down (retrying with backoff) until a good file shows up. Run pushes
   before or between serve sessions when that timing matters.
+- **A push always rebuilds while a serve process holds the mirror open** —
+  DuckDB is single-writer/exclusive across processes, so a second process
+  (including a read-only probe) cannot open a mirror file that
+  `duckdb serve` or `duckdb quack serve` already has open. `duckdb push`
+  detects this lock conflict and rebuilds the mirror from scratch instead
+  of failing; incremental update is not possible while the mirror is
+  served. The running serve process picks up the rebuilt file automatically
+  (see the reopen behavior above) without needing a restart. If the cost of
+  rebuilding on every push matters, stop `duckdb serve`/`duckdb quack serve`
+  before pushing and restart it afterward.
