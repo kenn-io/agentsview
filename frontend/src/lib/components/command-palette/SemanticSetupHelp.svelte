@@ -1,11 +1,20 @@
 <script module lang="ts">
-  // build_ids whose completed last_result has already driven one automatic
+  // Builds whose completed last_result has already driven one automatic
   // search retry. Module-level so it survives the remounts the command palette
   // performs each time the underlying search 501s again: a retired generation
   // whose daemon still reports the old last_result would otherwise loop
   // search + status forever. One auto-retry per observed build, then the panel
-  // shows setup controls instead.
-  const resolvedBuildIds = new Set<number>();
+  // shows setup controls instead. Keyed on build_id plus started_at because
+  // build_id is daemon-process-local and restarts from 1 after a daemon
+  // restart.
+  const resolvedBuildIds = new Set<string>();
+
+  function resolvedBuildKey(status: {
+    build_id?: number;
+    started_at?: string;
+  }): string {
+    return `${status.build_id ?? 0}:${status.started_at ?? ""}`;
+  }
 
   // Testing-only: clear the module-level retry ledger between cases so remount
   // behavior can be exercised in isolation.
@@ -127,13 +136,13 @@ endpoint = "http://localhost:11434/v1"`;
         retryAction = "build";
         phase = "failed";
       } else if (status.last_result) {
-        const buildId = status.build_id ?? 0;
-        if (resolvedBuildIds.has(buildId)) {
+        const buildKey = resolvedBuildKey(status);
+        if (resolvedBuildIds.has(buildKey)) {
           // Already auto-retried this build once and the search still 501s, so
           // stop looping and offer the setup controls instead.
           phase = "ready";
         } else {
-          resolvedBuildIds.add(buildId);
+          resolvedBuildIds.add(buildKey);
           onResolved();
         }
       } else {
@@ -205,7 +214,7 @@ endpoint = "http://localhost:11434/v1"`;
         phase = "failed";
         return;
       }
-      resolvedBuildIds.add(status.build_id ?? 0);
+      resolvedBuildIds.add(resolvedBuildKey(status));
       onResolved();
     } catch (e) {
       if (disposed || isAbortError(e)) return;

@@ -407,6 +407,40 @@ describe("SemanticSetupHelp", () => {
     unmount(second.component);
   });
 
+  it("auto-resolves again when the same build_id comes from a restarted daemon", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({
+        build_id: 1,
+        started_at: "2026-07-19T10:00:00Z",
+        last_result: completedResult(),
+      }),
+    );
+
+    const onResolved = vi.fn();
+    const first = mountHelp(onResolved);
+    await settle();
+    expect(onResolved).toHaveBeenCalledOnce();
+
+    unmount(first.component);
+    document.body.innerHTML = "";
+
+    // build_id is daemon-process-local: after a daemon restart its first
+    // build is build_id 1 again, distinguished only by started_at. That
+    // fresh build must still get its automatic retry.
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
+      idleStatus({
+        build_id: 1,
+        started_at: "2026-07-19T11:30:00Z",
+        last_result: completedResult(),
+      }),
+    );
+    const second = mountHelp(onResolved);
+    await settle();
+    expect(onResolved).toHaveBeenCalledTimes(2);
+
+    unmount(second.component);
+  });
+
   it("auto-resolves again when a later build_id appears after remount", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ build_id: 1, last_result: completedResult() }),
