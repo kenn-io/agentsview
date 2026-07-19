@@ -3,6 +3,25 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## Unreleased
+
+**Improvements**
+
+- Restrict **`duckdb push`** to the local mirror file. It no longer targets a
+  remote Quack endpoint; configuring `[duckdb].url` now makes push fail with
+  an error to unset it and serve the mirror remotely with
+  `duckdb quack serve` instead. `duckdb status` and `duckdb serve` still read
+  from a configured `[duckdb].url`.
+- Rebuild the **DuckDB mirror** whenever its project-filter scope changes,
+  keeping the mirror scoped to exactly the sessions requested by the latest
+  `--projects` / `--exclude-projects` push instead of preserving rows from an
+  earlier, differently scoped push. The mirror is also rebuilt when it is
+  missing or damaged, when `--full` is passed, or when the mirror's schema or
+  the local data version no longer matches; other pushes update it
+  incrementally.
+
+---
+
 ## 0.38.1
 <small>2026-07-13</small>
 

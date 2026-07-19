@@ -672,13 +672,17 @@ agentsview duckdb quack serve   # expose the mirror over Quack
 
 `duckdb push` accepts the same `--full` / `--projects` / `--exclude-projects` /
 `--all-projects` / `--watch` / `--debounce` / `--interval` flags as `pg push`.
-With `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL`, `duckdb push`, `duckdb status`,
-and `duckdb serve` target the remote Quack endpoint; otherwise they use the
-local mirror file. When `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set,
-`duckdb quack serve` exposes that same mirror by default unless `--path`
-overrides it. `duckdb serve` accepts the same serve flags as `pg serve`. The
-DuckDB backend is unavailable on Windows ARM64 (the upstream bindings ship no
-prebuilt library for that platform); all other commands work normally there.
+`duckdb push` always writes the local mirror file at `[duckdb].path`; it never
+targets a remote Quack endpoint. If `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL`
+is configured, push fails immediately with an error to unset it and serve the
+mirror remotely with `duckdb quack serve` instead. `duckdb status` and
+`duckdb serve` do target the remote Quack endpoint when `[duckdb].url` or
+`AGENTSVIEW_DUCKDB_URL` is set, and the local mirror file otherwise. When
+`[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set, `duckdb quack serve`
+exposes that same mirror by default unless `--path` overrides it.
+`duckdb serve` accepts the same serve flags as `pg serve`. The DuckDB backend
+is unavailable on Windows ARM64 (the upstream bindings ship no prebuilt
+library for that platform); all other commands work normally there.
 
 ______________________________________________________________________
 
@@ -1208,7 +1212,7 @@ agentsview help
 | `AGENTSVIEW_PG_MACHINE`           |                                                      | Machine name for PG push sync                                                                       |
 | `AGENTSVIEW_PG_SCHEMA`            | `agentsview`                                         | PostgreSQL schema name                                                                              |
 | `AGENTSVIEW_DUCKDB_PATH`          | `~/.agentsview/sessions.duckdb`                      | DuckDB mirror file path                                                                             |
-| `AGENTSVIEW_DUCKDB_URL`           |                                                      | Remote Quack endpoint URL for `duckdb push`, `duckdb status`, and `duckdb serve`                    |
+| `AGENTSVIEW_DUCKDB_URL`           |                                                      | Remote Quack endpoint URL for `duckdb status` and `duckdb serve` (read side only)                   |
 | `AGENTSVIEW_DUCKDB_TOKEN`         |                                                      | Quack authentication token                                                                          |
 | `AGENTSVIEW_DUCKDB_MACHINE`       |                                                      | Machine name for DuckDB push                                                                        |
 | `AGENTSVIEW_GITHUB_TOKEN`         |                                                      | GitHub token used for local Gist publishing fallback and `agentsview stats` PR aggregation          |
