@@ -35,12 +35,11 @@
     "@sveltejs/vite-plugin-svelte": "7.2.0",
     "@testing-library/svelte": "^5.3.1",
     "@tsconfig/svelte": "5.0.8",
-    "@typescript/native": "npm:typescript@7.0.2",
     "jsdom": "29.1.1",
     "openapi-typescript-codegen": "^0.31.0",
     "svelte": "5.56.4",
     "svelte-check": "4.7.2",
-    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript": "6.0.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.4",
     "vite-plus": "0.2.4",
     "vitest": "4.1.10"
