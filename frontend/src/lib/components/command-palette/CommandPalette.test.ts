@@ -7,8 +7,16 @@ import {
   beforeEach,
 } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
+import { ApiError } from "../../api/runtime.js";
 
-const { mockUi, mockSessions, mockSearchStore, mockRouter, mockCopyToClipboard } = vi.hoisted(
+const {
+  mockUi,
+  mockSessions,
+  mockSearchStore,
+  mockRouter,
+  mockCopyToClipboard,
+  mockEmbeddingsService,
+} = vi.hoisted(
   () => ({
     mockUi: {
       activeModal: "commandPalette" as
@@ -55,6 +63,10 @@ const { mockUi, mockSessions, mockSearchStore, mockRouter, mockCopyToClipboard }
       navigateToSession: vi.fn(),
     },
     mockCopyToClipboard: vi.fn(),
+    mockEmbeddingsService: {
+      getApiV1EmbeddingsStatus: vi.fn(),
+      postApiV1EmbeddingsBuild: vi.fn(),
+    },
   }),
 );
 
@@ -91,10 +103,7 @@ vi.mock("../../api/generated/index.js", async (importOriginal) => {
     await importOriginal<typeof import("../../api/generated/index.js")>();
   return {
     ...actual,
-    EmbeddingsService: {
-      getApiV1EmbeddingsStatus: vi.fn(() => new Promise(() => {})),
-      postApiV1EmbeddingsBuild: vi.fn(),
-    },
+    EmbeddingsService: mockEmbeddingsService,
   };
 });
 
@@ -171,6 +180,11 @@ describe("CommandPalette", () => {
     mockSearchStore.error = null;
     mockSearchStore.mode = "fulltext";
     mockSearchStore.sort = "relevance";
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockReset();
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(
+      () => new Promise(() => {}),
+    );
+    mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
     mockUi.activeModal = "commandPalette";
     mockSessions.filters.project = "";
     mockSessions.sessions = [
@@ -572,6 +586,78 @@ describe("CommandPalette", () => {
 
     unmount(component);
   });
+
+  it.each([
+    [
+      "Build",
+      () => mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        done: 0,
+        total: 0,
+        eta_milliseconds: 0,
+      }),
+      "button",
+      "Build embeddings",
+    ],
+    [
+      "Retry",
+      () => mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
+        new Error("status probe failed"),
+      ),
+      "button",
+      "Retry",
+    ],
+    [
+      "Copy",
+      () => mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
+        new ApiError(501, "embeddings manager not available"),
+      ),
+      "button.kit-copy-btn",
+      "",
+    ],
+  ] as const)(
+    "does not cancel Enter on the semantic setup %s control",
+    async (_name, arrangeStatus, selector, label) => {
+      arrangeStatus();
+      mockSearchStore.mode = "semantic";
+      mockSearchStore.error = {
+        detail:
+          "semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'",
+        kind: "semantic-unavailable",
+      };
+      const component = mount(CommandPalette, { target: document.body });
+      await enterSearchQuery();
+
+      const controls = await tickUntil(".semantic-setup");
+      const control = Array.from(
+        controls.querySelectorAll<HTMLButtonElement>(selector),
+      ).find((button) => !label || button.textContent?.includes(label));
+      expect(control).toBeDefined();
+      control!.focus();
+      expect(document.activeElement).toBe(control);
+
+      const enter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      const allowed = control!.dispatchEvent(enter);
+
+      expect(allowed).toBe(true);
+      expect(enter.defaultPrevented).toBe(false);
+
+      control!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(mockUi.activeModal).toBeNull();
+
+      unmount(component);
+    },
+  );
 
   it("renders empty and result states when no higher-priority state applies", async () => {
     const empty = mount(CommandPalette, { target: document.body });

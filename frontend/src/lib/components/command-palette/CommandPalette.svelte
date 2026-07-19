@@ -87,6 +87,16 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    const interactiveTarget =
+      e.target !== inputRef &&
+      e.target instanceof Element &&
+      e.target.closest(
+        "button, a[href], input, select, textarea, [contenteditable='true'], " +
+          "[role='button'], [role='checkbox'], [role='combobox'], " +
+          "[role='menuitem'], [role='radio'], [role='switch'], [role='tab']",
+      );
+    if (e.key !== "Escape" && interactiveTarget) return;
+
     if (e.key === "ArrowDown") {
       e.preventDefault();
       selectedIndex = Math.min(selectedIndex + 1, totalItems - 1);
