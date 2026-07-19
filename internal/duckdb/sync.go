@@ -39,10 +39,20 @@ const (
 	duckDBQuackClientConnection
 )
 
-// SyncOptions holds optional DuckDB push-scope filters.
+// SyncOptions holds optional DuckDB push-scope filters and push-mode
+// behavior.
 type SyncOptions struct {
 	Projects        []string
 	ExcludeProjects []string
+	// DeferLockedRebuild makes Push return a successful no-op (with
+	// Diagnostics.Deferred set) instead of rebuilding when the ONLY thing
+	// standing in the way of an incremental push is that a live DuckDB
+	// process holds the mirror (nothing is inspectable under the lock, so
+	// no other rebuild trigger can even be determined). Watch-mode /
+	// daemon-driven automatic pushes set it so a long-running serve does
+	// not turn every changed batch into an O(archive) rebuild; explicit
+	// pushes leave it unset and keep rebuilding under a lock.
+	DeferLockedRebuild bool
 }
 
 // PushResult summarizes a DuckDB push operation.
@@ -77,6 +87,14 @@ type PushDiagnostics struct {
 	// because the local in-scope curation state's fingerprint matched what
 	// was already recorded in the mirror (see refreshCurationIfChanged).
 	CurationRefreshed bool
+	// Deferred reports that the push touched nothing because the mirror is
+	// held by a live DuckDB process and the caller opted into
+	// SyncOptions.DeferLockedRebuild; DeferredReason carries the
+	// human-readable explanation. No cutoff, marker, or mirror state
+	// advances on a deferred push, so the next unlocked push catches up on
+	// everything that changed in the meantime.
+	Deferred       bool
+	DeferredReason string
 }
 
 // PushSessionCounts summarizes a set of sessions without exposing content.
@@ -170,6 +188,8 @@ func (s *Sync) isFiltered() bool {
 // trigger in Diagnostics.RebuildReason, since a rebuild silently substituted
 // for a requested incremental push (for example because a live 'duckdb
 // serve' holds the mirror open) is otherwise invisible to the operator.
+// Automatic watch-mode callers can opt out of the rebuild-under-lock
+// behavior with SyncOptions.DeferLockedRebuild (see deferLockedRebuild).
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, full bool, onProgress func(PushProgress),
@@ -191,6 +211,9 @@ func Push(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision, machine,
 	)
 	var result PushResult
+	if deferred, ok := deferLockedRebuild(opts, full, probe); ok {
+		return deferred, nil
+	}
 	if reason == "" {
 		result, err = incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
 	} else {
@@ -205,6 +228,35 @@ func Push(
 		cleanUpLegacyDuckDBSyncState(local)
 	}
 	return result, err
+}
+
+// deferLockedRebuild decides whether a push should return a successful
+// no-op instead of rebuilding: the caller opted in
+// (SyncOptions.DeferLockedRebuild, set by automatic watch-mode pushes), the
+// push is not an explicit --full request, and the probe shows a
+// marker-recognized mirror that a live DuckDB process holds
+// (Uninspectable covers both a cross-process lock conflict and the
+// same-process double-open rejection). Under the lock NOTHING about the
+// mirror is inspectable, so a genuine schema/data-version/scope mismatch
+// cannot be distinguished anyway; the lock itself is the only actionable
+// signal, and it clears when the serve process releases the file or is
+// restarted, at which point the next push proceeds normally from the
+// mirror's unadvanced cutoff. An unrecognized locked file never defers: it
+// falls through to ensureReplaceableMirror's fail-closed error so a
+// misconfigured path keeps surfacing loudly even in watch mode.
+func deferLockedRebuild(
+	opts SyncOptions, full bool, probe MirrorProbe,
+) (PushResult, bool) {
+	if !opts.DeferLockedRebuild || full ||
+		!probe.Uninspectable || !probe.RecognizedMirror {
+		return PushResult{}, false
+	}
+	var result PushResult
+	result.Diagnostics.Deferred = true
+	result.Diagnostics.DeferredReason =
+		"mirror is locked by a serving process; deferring until it is released"
+	log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
+	return result, true
 }
 
 // ensureReplaceableMirror is the fail-closed overwrite guard for rebuilds:

@@ -543,6 +543,96 @@ func TestPushRebuildsOverLiveMirrorWithMarker(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+// TestPushDefersLockedRebuildForAutomaticPushes is the FINDING 3
+// regression: a watch-mode (automatic) push that hits a recognized mirror
+// held by a live DuckDB process must return a successful deferred no-op —
+// not rebuild the whole archive on every changed batch — and must not
+// advance the mirror's push cutoff, so the next unlocked push catches up
+// on everything that changed while the mirror was held.
+func TestPushDefersLockedRebuildForAutomaticPushes(t *testing.T) {
+	ctx := context.Background()
+	watchOpts := SyncOptions{DeferLockedRebuild: true}
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", watchOpts, false, nil)
+	require.NoError(t, err)
+	baseline, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	require.True(t, baseline.ShapeOK)
+
+	appendMessage(t, local, "sess-1")
+	held, err := Open(path)
+	require.NoError(t, err)
+
+	res, err := Push(ctx, path, local, "m", watchOpts, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Deferred, "the locked push must defer")
+	assert.Contains(t, res.Diagnostics.DeferredReason, "locked by a serving process")
+	assert.False(t, res.Diagnostics.Full, "a deferred push must not rebuild")
+	assert.Zero(t, res.SessionsPushed, "a deferred push must not write sessions")
+
+	require.NoError(t, held.Close())
+	after, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, baseline.LastPushCutoff, after.LastPushCutoff,
+		"a deferred push must not advance the mirror's push cutoff")
+	assertMirrorMessageCount(t, path, "sess-1", 2)
+
+	catchUp, err := Push(ctx, path, local, "m", watchOpts, false, nil)
+	require.NoError(t, err)
+	assert.False(t, catchUp.Diagnostics.Deferred)
+	assert.False(t, catchUp.Diagnostics.Full,
+		"the unlocked catch-up push must be incremental, not a rebuild")
+	assert.Equal(t, 1, catchUp.SessionsPushed,
+		"the catch-up push must pick up the change made while the mirror was held")
+	assertMirrorMessageCount(t, path, "sess-1", 3)
+}
+
+// TestDeferLockedRebuildConditions pins exactly when an automatic push may
+// defer: only with the opt-in set, no --full request, and a
+// marker-recognized mirror held by a live DuckDB process. Everything else
+// keeps today's behavior — full rebuilds still rebuild, an unrecognized
+// locked file still falls through to the fail-closed overwrite guard, and
+// an inspectable mirror never defers.
+func TestDeferLockedRebuildConditions(t *testing.T) {
+	heldRecognized := MirrorProbe{
+		FileExists: true, Uninspectable: true, LockConflict: true,
+		RecognizedMirror: true,
+	}
+	tests := []struct {
+		name  string
+		opts  SyncOptions
+		full  bool
+		probe MirrorProbe
+		want  bool
+	}{
+		{"opted-in locked recognized", SyncOptions{DeferLockedRebuild: true},
+			false, heldRecognized, true},
+		{"opted-in same-process hold", SyncOptions{DeferLockedRebuild: true},
+			false, MirrorProbe{
+				FileExists: true, Uninspectable: true, RecognizedMirror: true,
+			}, true},
+		{"no opt-in", SyncOptions{}, false, heldRecognized, false},
+		{"full requested", SyncOptions{DeferLockedRebuild: true},
+			true, heldRecognized, false},
+		{"unrecognized locked file", SyncOptions{DeferLockedRebuild: true},
+			false, MirrorProbe{FileExists: true, Uninspectable: true}, false},
+		{"inspectable mirror", SyncOptions{DeferLockedRebuild: true},
+			false, MirrorProbe{
+				FileExists: true, ShapeOK: true, RecognizedMirror: true,
+			}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, deferred := deferLockedRebuild(tt.opts, tt.full, tt.probe)
+			assert.Equal(t, tt.want, deferred)
+			assert.Equal(t, tt.want, result.Diagnostics.Deferred)
+			if tt.want {
+				assert.NotEmpty(t, result.Diagnostics.DeferredReason)
+			}
+		})
+	}
+}
+
 // TestPushFailsClosedWhenMirrorLosesSentinel pins the strict side of the
 // recognition boundary: recognition requires the agentsview sentinel (the
 // agentsview_schema_version row in sync_metadata), not just familiar table

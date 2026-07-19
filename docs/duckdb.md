@@ -190,13 +190,20 @@ Environment variables override the config file:
   stops serving during the switch and, if the replacement is incompatible,
   stays down (retrying with backoff) until a good file shows up. Run pushes
   before or between serve sessions when that timing matters.
-- **A push always rebuilds while a serve process holds the mirror open** —
-  DuckDB is single-writer/exclusive across processes, so a second process
-  (including a read-only probe) cannot open a mirror file that
-  `duckdb serve` or `duckdb quack serve` already has open. `duckdb push`
-  detects this lock conflict and rebuilds the mirror from scratch instead
-  of failing; incremental update is not possible while the mirror is
-  served. Because a locked file's content cannot be inspected at all, push
+- **A manual push rebuilds while a serve process holds the mirror open;
+  watch-mode pushes defer instead** — DuckDB is single-writer/exclusive
+  across processes, so a second process (including a read-only probe)
+  cannot open a mirror file that `duckdb serve` or `duckdb quack serve`
+  already has open. An explicit `duckdb push` detects this lock conflict
+  and rebuilds the mirror from scratch instead of failing; incremental
+  update is not possible while the mirror is served. The automatic pushes
+  of `duckdb push --watch` instead skip the locked mirror entirely
+  (logging the deferral) so a long-running serve does not turn every
+  changed batch into a full-archive rebuild; the mirror's push cutoff is
+  not advanced by a deferred push, so once the serve process releases the
+  file or is restarted, the next push catches up on everything that
+  changed in the meantime. Because a locked file's content cannot be
+  inspected at all, push
   only rebuilds over it when the sidecar ownership marker
   (`<mirror-path>.agentsview-mirror`, written next to the mirror by every
   successful push) is present and records the filesystem identity of the

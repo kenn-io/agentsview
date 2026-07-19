@@ -29,6 +29,12 @@ type DuckDBPushConfig struct {
 	Watch           bool
 	Debounce        time.Duration
 	Interval        time.Duration
+	// DeferLockedRebuild is set by the watch loops' automatic pushes so a
+	// mirror held by a live serve process defers instead of rebuilding the
+	// whole archive on every changed batch (see
+	// duckdbsync.SyncOptions.DeferLockedRebuild). Explicit `duckdb push`
+	// runs leave it false and keep today's rebuild-under-lock behavior.
+	DeferLockedRebuild bool
 }
 
 type DuckDBQuackServeConfig struct {
@@ -140,6 +146,14 @@ func writeDuckDBPushPlan(
 // silently print nothing here, leaving only the generic "Pushed N
 // sessions..." summary with no indication a full rebuild had just run.
 func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
+	if result.Diagnostics.Deferred {
+		reason := result.Diagnostics.DeferredReason
+		if reason == "" {
+			reason = "unspecified"
+		}
+		fmt.Fprintf(w, "DuckDB push mode: deferred (%s)\n", reason)
+		return
+	}
 	if result.Diagnostics.Full {
 		reason := result.Diagnostics.RebuildReason
 		if reason == "" {

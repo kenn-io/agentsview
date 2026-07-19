@@ -177,6 +177,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		require.NotNil(t, req.DuckDB)
 		assert.Empty(t, req.DuckDB.Path,
 			"the CLI defers to the daemon's pinned mirror path")
+		assert.True(t, req.DeferLockedRebuild,
+			"watch-mode daemon pushes must ask the daemon to defer locked rebuilds")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
@@ -191,6 +193,8 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		require.NotNil(t, req.DuckDB)
 		assert.Empty(t, req.DuckDB.Path,
 			"the CLI defers to the daemon's pinned mirror path")
+		assert.True(t, req.DeferLockedRebuild,
+			"watch-mode daemon pushes must ask the daemon to defer locked rebuilds")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
@@ -296,6 +300,28 @@ func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 	assert.Contains(t, got, "DuckDB push wrote: sessions 2 (claude=2), messages 5")
 	assert.NotContains(t, got, "DuckDB push source:",
 		"a rebuild has no incremental candidate/skip counters to print")
+}
+
+// TestWriteDuckDBPushDiagnosticsReportsDeferredMode verifies a deferred
+// watch-mode push (mirror held by a live serve; see
+// duckdbsync.SyncOptions.DeferLockedRebuild) prints its mode and reason
+// instead of the incremental or rebuild counters, none of which exist for
+// a push that touched nothing.
+func TestWriteDuckDBPushDiagnosticsReportsDeferredMode(t *testing.T) {
+	var out bytes.Buffer
+
+	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+		Diagnostics: duckdbsync.PushDiagnostics{
+			Deferred:       true,
+			DeferredReason: "mirror is locked by a serving process; deferring until it is released",
+		},
+	})
+
+	got := out.String()
+	assert.Contains(t, got,
+		"DuckDB push mode: deferred (mirror is locked by a serving process; deferring until it is released)")
+	assert.NotContains(t, got, "DuckDB push wrote:",
+		"a deferred push wrote nothing and must not print write counters")
 }
 
 func TestWriteDuckDBQuackServeStartupDoesNotPrintToken(t *testing.T) {

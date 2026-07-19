@@ -25,6 +25,10 @@ type daemonPushRequest struct {
 	// NoVectors mirrors the CLI --no-vectors flag into the daemon: it has no
 	// per-invocation flag of its own, so the gate must travel in the request.
 	NoVectors bool `json:"no_vectors,omitempty"`
+	// DeferLockedRebuild is set by the automatic watch-mode DuckDB pushes so
+	// the daemon defers instead of rebuilding when a live serve process
+	// holds the mirror (see duckdbsync.SyncOptions.DeferLockedRebuild).
+	DeferLockedRebuild bool `json:"defer_locked_rebuild,omitempty"`
 }
 
 // postDaemonPush delegates a push to the local daemon. It negotiates an SSE

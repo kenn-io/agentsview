@@ -217,6 +217,10 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	push := func(pctx context.Context, reason pushReason, full bool) error {
 		pushCfg := cfg
 		pushCfg.Full = full
+		// Watch pushes are automatic: a mirror held by a live serve
+		// process defers instead of rebuilding the whole archive on
+		// every changed batch. Push ignores the flag when full is set.
+		pushCfg.DeferLockedRebuild = true
 		backend := archiveWriteBackend(b)
 		cleanup := func() {}
 		if reason != reasonStartup {
@@ -296,10 +300,11 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	return postDaemonPush[duckdbsync.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/duckdb",
 		daemonPushRequest{
-			Full:            cfg.Full,
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			DuckDB:          &duckCfg,
+			Full:               cfg.Full,
+			Projects:           projects,
+			ExcludeProjects:    excludeProjects,
+			DuckDB:             &duckCfg,
+			DeferLockedRebuild: cfg.DeferLockedRebuild,
 		},
 		onProgress,
 	)
@@ -485,8 +490,9 @@ func (b *localArchiveWriteBackend) duckDBPush(
 
 	fmt.Println("Starting DuckDB push...")
 	opts := duckdbsync.SyncOptions{
-		Projects:        projects,
-		ExcludeProjects: excludeProjects,
+		Projects:           projects,
+		ExcludeProjects:    excludeProjects,
+		DeferLockedRebuild: cfg.DeferLockedRebuild,
 	}
 	result, err := duckdbsync.Push(
 		ctx, duckCfg.Path, b.database, duckCfg.MachineName, opts, forceFull,
@@ -522,6 +528,10 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	push := func(pctx context.Context, reason pushReason, full bool) error {
 		pushCfg := cfg
 		pushCfg.Full = full
+		// Watch pushes are automatic: a mirror held by a live serve
+		// process defers instead of rebuilding the whole archive on
+		// every changed batch. Push ignores the flag when full is set.
+		pushCfg.DeferLockedRebuild = true
 		res, err := b.DuckDBPush(pctx, duckCfg, pushCfg, projects, exclude)
 		if err != nil {
 			return err
@@ -559,6 +569,13 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 }
 
 func logDuckDBWatchPushResult(res duckdbsync.PushResult, reason pushReason) {
+	if res.Diagnostics.Deferred {
+		log.Printf(
+			"duckdb watch: push deferred: %s (%s)",
+			res.Diagnostics.DeferredReason, reason,
+		)
+		return
+	}
 	if res.Diagnostics.Cutoff != "" {
 		log.Printf(
 			"duckdb watch: source local %d; candidates %s; skipped unchanged %s; stale deleted %d; wrote sessions %s, messages %d (%s)",
