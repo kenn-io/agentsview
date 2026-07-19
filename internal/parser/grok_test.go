@@ -67,6 +67,51 @@ func TestGrokProviderGoldenCurrentTranscriptSemantics(t *testing.T) {
 	assert.Equal(t, "also keep interjections", result.Messages[4].Content)
 }
 
+func TestGrokProviderGoldenLegacyTranscript(t *testing.T) {
+	result := parseGrokGolden(t, "legacy")
+	assert.Equal(t, TranscriptFidelityFull, result.Session.TranscriptFidelity)
+	assert.Equal(t, "Review parser compatibility", result.Session.FirstMessage)
+	require.Len(t, result.Messages, 4)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "Review parser compatibility", result.Messages[0].Content)
+	require.Len(t, result.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "call_1", result.Messages[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "grok-4.5", result.Messages[1].Model)
+	require.Len(t, result.Messages[2].ToolResults, 1)
+	assert.Equal(t, "call_1", result.Messages[2].ToolResults[0].ToolUseID)
+}
+
+func TestGrokProviderParsesMixedTranscriptFormats(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "mixed-formats"
+	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", sessionID), `{
+		"info":{"id":"mixed-formats","cwd":"/workspace/agentsview"},
+		"session_summary":"mixed",
+		"created_at":"2026-07-18T10:00:00Z",
+		"updated_at":"2026-07-18T10:01:00Z"
+	}`)
+	writeGrokFixtureFile(
+		t,
+		filepath.Join(root, "cwd-key", sessionID, "chat_history.jsonl"),
+		"{\"role\":\"user\",\"content\":\"legacy question\"}\n"+
+			"{\"type\":\"assistant\",\"content\":\"current answer\"}\n",
+	)
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(
+		context.Background(),
+		ParseRequest{Source: sources[0]},
+	)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	messages := outcome.Results[0].Result.Messages
+	require.Len(t, messages, 2)
+	assert.Equal(t, "legacy question", messages[0].Content)
+	assert.Equal(t, "current answer", messages[1].Content)
+}
+
 func TestGrokProviderSummarySource(t *testing.T) {
 	root := t.TempDir()
 	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", "sess-1"), `{

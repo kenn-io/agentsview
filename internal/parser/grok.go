@@ -217,7 +217,7 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 			continue
 		}
 		root := gjson.Parse(line)
-		switch root.Get("type").Str {
+		switch grokChatRowKind(root) {
 		case "system":
 			// System prompts are vendor boilerplate; skip them.
 			continue
@@ -327,6 +327,24 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 	}
 	flushThinking()
 	return messages, malformed, nil
+}
+
+func grokChatRowKind(root gjson.Result) string {
+	if kind := strings.TrimSpace(root.Get("type").Str); kind != "" {
+		return kind
+	}
+	switch strings.TrimSpace(root.Get("role").Str) {
+	case "system":
+		return "system"
+	case "user":
+		return "user"
+	case "assistant":
+		return "assistant"
+	case "tool":
+		return "tool_result"
+	default:
+		return ""
+	}
 }
 
 func grokBackendToolMessage(
