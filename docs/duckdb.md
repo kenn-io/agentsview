@@ -196,7 +196,16 @@ Environment variables override the config file:
   `duckdb serve` or `duckdb quack serve` already has open. `duckdb push`
   detects this lock conflict and rebuilds the mirror from scratch instead
   of failing; incremental update is not possible while the mirror is
-  served. On POSIX platforms, where rename is atomic even against an open
+  served. Because a locked file cannot be inspected at all, push only
+  rebuilds over it when the sidecar ownership marker
+  (`<mirror-path>.agentsview-mirror`, written next to the mirror by every
+  successful push) is present; a locked file without the marker makes the
+  push fail with an error instead of overwriting what might not be an
+  agentsview mirror at all. Mirrors created by versions that predate the
+  marker gain it automatically on their next unlocked push — if such a
+  mirror is served continuously, stop the serve process once, run
+  `duckdb push`, and restart serve; every later push-under-serve then
+  works again. On POSIX platforms, where rename is atomic even against an open
   destination handle, the running serve process picks up the rebuilt file
   automatically (see the reopen behavior above) without needing a restart.
   On Windows, the serve process's open handle on the destination file can

@@ -347,6 +347,8 @@ func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
 	assert.NoFileExists(t, path+".reopen-2")
 	assert.FileExists(t, otherPath+".reopen-1")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
+	assert.FileExists(t, MirrorMarkerPath(path),
+		"the sidecar ownership marker shares the mirror path prefix but must never be swept")
 }
 
 // TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp guards against a caller

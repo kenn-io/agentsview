@@ -485,20 +485,96 @@ func (lockConflictProbeConn) QueryContext(
 // loadColumns call, in production. Before routing that error through
 // classifyProbeError, probeOpenMirror only ever set LockConflict from the
 // openReadOnlyMirror error path, so a lock conflict surfacing here would
-// silently degrade to a generic, unclassified shape issue instead.
+// silently degrade to a generic, unclassified shape issue instead. The
+// lazy path must also apply the sidecar-marker recognition gate: a locked
+// file is recognized as ours only when the marker exists next to it.
 func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
 	lockConflictProbeRegisterOnce.Do(func() {
 		sql.Register("agentsview_lock_conflict_probe", lockConflictProbeDriver{})
 	})
-	conn, err := sql.Open("agentsview_lock_conflict_probe", t.Name())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	for _, markerPresent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marker_%v", markerPresent), func(t *testing.T) {
+			conn, err := sql.Open("agentsview_lock_conflict_probe", t.Name())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			if markerPresent {
+				require.NoError(t, writeMirrorMarker(path, "m"))
+			}
 
-	probe := probeOpenMirror(context.Background(), conn)
+			probe := probeOpenMirror(context.Background(), conn, path)
 
-	assert.True(t, probe.FileExists)
-	assert.False(t, probe.ShapeOK)
-	assert.True(t, probe.LockConflict,
-		"a lock conflict surfacing from the first lazy query must still be classified")
-	assert.Contains(t, probe.ShapeIssue, "Could not set lock")
+			assert.True(t, probe.FileExists)
+			assert.False(t, probe.ShapeOK)
+			assert.True(t, probe.LockConflict,
+				"a lock conflict surfacing from the first lazy query must still be classified")
+			assert.True(t, probe.Uninspectable)
+			assert.Contains(t, probe.ShapeIssue, "Could not set lock")
+			assert.Equal(t, markerPresent, probe.RecognizedMirror,
+				"locked-file recognition must be gated on the sidecar marker")
+		})
+	}
+}
+
+// TestRecognizeUninspectableMirrorRequiresMarker pins the marker gate for
+// files a live DuckDB process holds: a lock conflict or same-process
+// double-open rejection proves a real DuckDB database sits at the path, but
+// recognition (which authorizes a rebuild to overwrite the file) requires
+// the sidecar marker too — a misconfigured path at a FOREIGN served
+// database has no marker and must not be recognized. Errors that do not
+// indicate a live DuckDB process never recognize, marker or not.
+func TestRecognizeUninspectableMirrorRequiresMarker(t *testing.T) {
+	lockErr := errors.New(
+		`IO Error: Could not set lock on file "/tmp/agentsview.duckdb": ` +
+			"Conflicting lock is held in process 12345",
+	)
+	sameProcessErr := errors.New(
+		"Can't open a connection to same database file with a different " +
+			"configuration than existing connections",
+	)
+	otherErr := errors.New("file is not a valid DuckDB database")
+	tests := []struct {
+		name   string
+		err    error
+		marker bool
+		want   bool
+	}{
+		{"lock conflict without marker", lockErr, false, false},
+		{"lock conflict with marker", lockErr, true, true},
+		{"same-process open without marker", sameProcessErr, false, false},
+		{"same-process open with marker", sameProcessErr, true, true},
+		{"unrelated error with marker", otherErr, true, false},
+		{"unrelated error without marker", otherErr, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			if tt.marker {
+				require.NoError(t, writeMirrorMarker(path, "m"))
+			}
+			assert.Equal(t, tt.want, recognizeUninspectableMirror(path, tt.err))
+		})
+	}
+}
+
+// TestEnsureReplaceableMirrorLockedFileWithoutMarkerFailsActionably pins
+// the fail-closed error for the case a rebuild must never proceed through:
+// an existing file held by a DuckDB process with no sidecar marker. The
+// error must name the marker path and explain both possibilities (a
+// pre-marker mirror of ours vs someone else's database).
+func TestEnsureReplaceableMirrorLockedFileWithoutMarkerFailsActionably(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	probe := MirrorProbe{
+		FileExists:    true,
+		ShapeIssue:    "Could not set lock on file",
+		LockConflict:  true,
+		Uninspectable: true,
+	}
+
+	err := ensureReplaceableMirror(path, probe)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no agentsview marker")
+	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
+	assert.Contains(t, err.Error(), "stop the serving process")
 }

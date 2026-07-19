@@ -24,6 +24,13 @@ type MirrorProbe struct {
 	// open) rather than a genuinely malformed or incompatible file. See
 	// isMirrorLockConflictError.
 	LockConflict bool
+	// Uninspectable is true when the file's contents could not be examined
+	// because a live DuckDB process holds the file: either a cross-process
+	// lock conflict (LockConflict) or duckdb-go's same-process double-open
+	// rejection (see isMirrorOpenInSameProcessError). Recognition then
+	// rests solely on the sidecar marker file (see RecognizedMirror and
+	// MirrorMarkerPath).
+	Uninspectable bool
 	// RecognizedMirror is true when the existing file is positively
 	// identified as an agentsview DuckDB mirror. An OPENABLE file is
 	// recognized only when it carries the agentsview sentinel: a
@@ -39,15 +46,20 @@ type MirrorProbe struct {
 	// A file that cannot be inspected because a DuckDB process already
 	// holds it — a cross-process lock conflict (the normal state while a
 	// serve process has the mirror open) or a same-process double-open
-	// rejection — is also recognized: failing closed there would break the
-	// core push-under-serve policy, since a serve process always holds the
-	// mirror and push must still be able to rebuild it. That is a
-	// deliberate residual risk: a locked file is presumed ours because the
-	// path comes from the caller's own mirror configuration, and daemon
-	// pushes pin it to the server config. Push refuses to rebuild over an
-	// existing unrecognized file so a misdirected path (for example the
-	// primary SQLite archive) is never silently replaced by a mirror
-	// rebuild.
+	// rejection — is recognized only when the sidecar ownership marker
+	// (see MirrorMarkerPath) exists next to it. The locked file itself is
+	// impossible to inspect (the DuckDB lock binds the inode, so even a
+	// hardlink alias hits the same lock), but every successful push writes
+	// the marker, so a locked genuine mirror normally has one; requiring
+	// it keeps the core push-under-serve flow working while making a
+	// misconfigured path that points at a FOREIGN DuckDB database another
+	// process is serving fail closed instead of being atomically
+	// overwritten by a rebuild. Accepted residual edge: a stale marker
+	// left behind after a user manually swaps a foreign DuckDB database
+	// into the exact same path still recognizes the locked foreign file.
+	// Push refuses to rebuild over an existing unrecognized file so a
+	// misdirected path (for example the primary SQLite archive) is never
+	// silently replaced by a mirror rebuild.
 	RecognizedMirror bool
 	SchemaVersion    int
 	DataVersion      int
@@ -73,21 +85,37 @@ func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 
 	conn, err := openReadOnlyMirror(path)
 	if err != nil {
-		lockConflict := isMirrorLockConflictError(err)
 		return MirrorProbe{
-			FileExists:   true,
-			ShapeIssue:   err.Error(),
-			LockConflict: lockConflict,
-			// A lock conflict (another process) or a same-process
-			// double-open rejection proves the file is a live DuckDB
-			// database; any other open failure means the file is not a
-			// DuckDB database at all, so it is not a recognized mirror.
-			RecognizedMirror: lockConflict || isMirrorOpenInSameProcessError(err),
+			FileExists:       true,
+			ShapeIssue:       err.Error(),
+			LockConflict:     isMirrorLockConflictError(err),
+			Uninspectable:    isMirrorUninspectableError(err),
+			RecognizedMirror: recognizeUninspectableMirror(path, err),
 		}, nil
 	}
 	defer func() { _ = conn.Close() }()
 
-	return probeOpenMirror(ctx, conn), nil
+	return probeOpenMirror(ctx, conn, path), nil
+}
+
+// isMirrorUninspectableError reports whether err means a live DuckDB
+// process holds the file, so its contents cannot be examined at all: a
+// cross-process lock conflict or duckdb-go's same-process double-open
+// rejection. Any other error means the file is simply not an openable
+// DuckDB database.
+func isMirrorUninspectableError(err error) bool {
+	return isMirrorLockConflictError(err) || isMirrorOpenInSameProcessError(err)
+}
+
+// recognizeUninspectableMirror decides RecognizedMirror for a file a live
+// DuckDB process is holding: the open/query error proves a real DuckDB
+// database sits at path, but not that it is OURS, so recognition
+// additionally requires the sidecar ownership marker every successful push
+// writes (see MirrorMarkerPath and MirrorProbe.RecognizedMirror). An error
+// that is not a lock conflict or same-process rejection never recognizes,
+// marker or not.
+func recognizeUninspectableMirror(path string, err error) bool {
+	return isMirrorUninspectableError(err) && mirrorMarkerExists(path)
 }
 
 // isMirrorLockConflictError reports whether err indicates DuckDB refused to
@@ -117,8 +145,9 @@ func isMirrorLockConflictError(err error) bool {
 // connections"): the probe opens read-only, so it hits this whenever the
 // SAME process already holds the mirror open read-write (a live Store
 // while a push runs in-process). Like a cross-process lock conflict, it
-// proves the path is a live DuckDB database, so the file counts as a
-// recognized mirror even though it cannot be inspected right now.
+// proves the path is a live DuckDB database that cannot be inspected right
+// now; whether the file counts as a recognized mirror then depends on the
+// sidecar marker (see recognizeUninspectableMirror).
 func isMirrorOpenInSameProcessError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "same database file")
 }
@@ -138,14 +167,14 @@ func openReadOnlyMirror(path string) (*sql.DB, error) {
 	return conn, nil
 }
 
-func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
+func probeOpenMirror(ctx context.Context, conn *sql.DB, path string) MirrorProbe {
 	probe := MirrorProbe{FileExists: true}
 
 	existing, err := loadColumns(ctx, conn)
 	if err != nil {
 		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
-		probe.RecognizedMirror = probe.LockConflict ||
-			isMirrorOpenInSameProcessError(err)
+		probe.Uninspectable = isMirrorUninspectableError(err)
+		probe.RecognizedMirror = recognizeUninspectableMirror(path, err)
 		return probe
 	}
 	// Recognition is looser than shape validity (a mirror from another
@@ -155,8 +184,8 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	recognized, err := hasMirrorSentinel(ctx, conn, existing)
 	if err != nil {
 		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
-		probe.RecognizedMirror = probe.LockConflict ||
-			isMirrorOpenInSameProcessError(err)
+		probe.Uninspectable = isMirrorUninspectableError(err)
+		probe.RecognizedMirror = recognizeUninspectableMirror(path, err)
 		return probe
 	}
 	probe.RecognizedMirror = recognized

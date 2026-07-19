@@ -234,6 +234,20 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 			},
 		},
 		{
+			// A stale sidecar marker must not weaken openable-file
+			// recognition: for a file the probe can actually inspect, the
+			// in-database sentinel is the only recognition signal.
+			name: "foreign duckdb database with stale marker",
+			write: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(`CREATE TABLE unrelated (x INTEGER)`)
+				require.NoError(t, err)
+				require.NoError(t, writeMirrorMarker(path, "m"))
+			},
+		},
+		{
 			name: "foreign duckdb database with sync_metadata but no agentsview key",
 			write: func(t *testing.T, path string) {
 				conn, err := Open(path)
@@ -272,6 +286,102 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPushWritesMirrorMarkerAfterRebuild verifies a successful rebuild
+// leaves the sidecar ownership marker next to the mirror (one JSON line;
+// existence is the recognition signal, content is informational).
+func TestPushWritesMirrorMarkerAfterRebuild(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(MirrorMarkerPath(path))
+	require.NoError(t, err)
+	var content map[string]any
+	require.NoError(t, json.Unmarshal(data, &content))
+	assert.Equal(t, float64(SchemaVersion), content["schema_version"])
+	assert.Equal(t, "m", content["machine"])
+	assert.NotEmpty(t, content["written_at"])
+}
+
+// TestPushHealsMissingMirrorMarkerOnIncrementalPush covers the pre-marker
+// upgrade path: a mirror created by an agentsview version without the
+// sidecar marker regains one at the end of its next unlocked incremental
+// push, so later locked probes recognize it again.
+func TestPushHealsMissingMirrorMarkerOnIncrementalPush(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(MirrorMarkerPath(path)))
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.FileExists(t, MirrorMarkerPath(path))
+}
+
+// TestPushFailsClosedWhenLiveMirrorHasNoMarker is the FINDING 1 regression:
+// a file some DuckDB process is holding open cannot be inspected, so before
+// the sidecar marker existed it was recognized on faith and a rebuild would
+// atomically overwrite it — even when the path was misconfigured to point at
+// a foreign served database. The same-process double-open rejection (a live
+// handle in this process, exactly what a serving Store looks like) is the
+// in-process-reproducible stand-in for a cross-process lock conflict: both
+// probe as Uninspectable and both must fail closed, file untouched, when no
+// marker exists next to the file.
+func TestPushFailsClosedWhenLiveMirrorHasNoMarker(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(MirrorMarkerPath(path)))
+
+	held, err := Open(path)
+	require.NoError(t, err)
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no agentsview marker")
+	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, after,
+		"a refused push must leave the existing file byte-identical")
+	require.NoError(t, held.Close())
+	assertMirrorMessageCount(t, path, "sess-1", 2)
+}
+
+// TestPushRebuildsOverLiveMirrorWithMarker is the recognized side of the
+// FINDING 1 boundary: with the sidecar marker present, a mirror held open by
+// a live DuckDB handle (the push-under-serve case) still rebuilds via
+// temp-file-plus-rename exactly as before the marker gate existed, and the
+// rebuild refreshes the marker.
+func TestPushRebuildsOverLiveMirrorWithMarker(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.FileExists(t, MirrorMarkerPath(path))
+
+	held, err := Open(path)
+	require.NoError(t, err)
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full,
+		"a held mirror cannot be updated incrementally; push must rebuild")
+	assert.FileExists(t, MirrorMarkerPath(path))
+
+	require.NoError(t, held.Close())
+	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
 // TestPushFailsClosedWhenMirrorLosesSentinel pins the strict side of the

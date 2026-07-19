@@ -211,16 +211,28 @@ func Push(
 // before rebuildMirror renames a fresh file over an EXISTING destination,
 // that destination must be positively identified as an agentsview DuckDB
 // mirror (see MirrorProbe.RecognizedMirror). A missing file is always fine
-// (fresh create), and a lock conflict is recognized (it proves a DuckDB
-// database another process holds open — the normal rebuild-under-serve
-// case). Anything else — a SQLite database, an arbitrary file, a foreign
-// DuckDB database without the agentsview sentinel — must never be replaced: the
-// mirror path is caller-supplied configuration, and pointing it at a real
-// data file (for example the primary sessions.db) must fail instead of
-// destroying that file.
+// (fresh create). A file held by a live DuckDB process (a lock conflict or
+// same-process double-open — the normal rebuild-under-serve case) is
+// recognized only via the sidecar marker, since the file itself cannot be
+// inspected. Anything else — a SQLite database, an arbitrary file, a
+// foreign DuckDB database without the agentsview sentinel — must never be
+// replaced: the mirror path is caller-supplied configuration, and pointing
+// it at a real data file (for example the primary sessions.db) must fail
+// instead of destroying that file.
 func ensureReplaceableMirror(path string, probe MirrorProbe) error {
 	if !probe.FileExists || probe.RecognizedMirror {
 		return nil
+	}
+	if probe.Uninspectable {
+		return fmt.Errorf(
+			"refusing to replace %s: existing file is locked by a DuckDB "+
+				"process and has no agentsview marker (%s); if it is your "+
+				"mirror created by an agentsview version without markers, "+
+				"stop the serving process and re-run the push (an unlocked "+
+				"push writes the marker); if it is not your mirror, point "+
+				"[duckdb].path at a different file",
+			path, MirrorMarkerPath(path),
+		)
 	}
 	return fmt.Errorf(
 		"refusing to replace %s: existing file is not an agentsview duckdb "+
@@ -262,7 +274,18 @@ func incrementalPush(
 		return PushResult{}, err
 	}
 	defer func() { _ = s.Close() }()
-	return s.runIncrementalPush(ctx, opts, probe, onProgress)
+	result, err := s.runIncrementalPush(ctx, opts, probe, onProgress)
+	if err != nil {
+		return result, err
+	}
+	// Mirrors created before the sidecar marker existed heal here on their
+	// next unlocked push: without the marker, a later push while a serve
+	// process holds the file would fail closed (see
+	// recognizeUninspectableMirror).
+	if err := ensureMirrorMarker(path, machine); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // runIncrementalPush is incrementalPush's algorithm, split out as a *Sync

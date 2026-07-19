@@ -488,11 +488,17 @@ func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(unrelated, []byte("x"), 0o644))
 	require.NoError(t, os.Chtimes(unrelated, oldTime, oldTime))
 
+	marker := MirrorMarkerPath(path)
+	require.NoError(t, writeMirrorMarker(path, "m"))
+	require.NoError(t, os.Chtimes(marker, oldTime, oldTime))
+
 	require.NoError(t, sweepStaleTempFiles(path))
 
 	assert.FileExists(t, freshTmp, "a fresh temp file must survive the sweep")
 	assert.NoFileExists(t, staleTmp, "a temp file older than staleTempFileAge must be removed")
 	assert.FileExists(t, unrelated, "sweep must only touch path.tmp-* files")
+	assert.FileExists(t, marker,
+		"the sidecar ownership marker shares the mirror path prefix but must never be swept")
 }
 
 // TestSweepStaleTempFilesNoMatchesIsNoOp guards the common case (no
