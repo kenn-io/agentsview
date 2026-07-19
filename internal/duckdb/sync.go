@@ -66,7 +66,11 @@ type PushDiagnostics struct {
 	CandidateSessions        PushSessionCounts
 	SkippedUnchangedSessions PushSessionCounts
 	PushedSessions           PushSessionCounts
-	DeletedStaleSessions     int
+	// DeletedStaleSessions counts mirror session rows an incremental push
+	// removed: deletion-journal tombstones that were still mirror-resident
+	// plus window candidates whose project moved out of the push scope
+	// (see applyDeletionDelta and deleteOutOfScopeMirrorSessions).
+	DeletedStaleSessions int
 	// CurationRefreshed reports whether this push actually rewrote
 	// starred_sessions/pinned_messages, as opposed to skipping the refresh
 	// because the local in-scope curation state's fingerprint matched what
@@ -334,6 +338,14 @@ func (s *Sync) runIncrementalPush(
 // pushChangedSessions selects candidates in [probe.LastPushCutoff, cutoff],
 // splits them into changed/unchanged by comparing local and mirror
 // fingerprints, and pushes the changed ones in batches.
+//
+// The window is listed WITHOUT project filters and partitioned in Go
+// instead: a session whose project moved OUT of this mirror's scope since
+// the last push would never be selected by a scope-filtered listing again,
+// so its stale mirror row (pushed while it was still in scope) would
+// survive every incremental push until the next full rebuild. Out-of-scope
+// candidates that are still mirror-resident are removed here; work stays
+// bounded by the changed window either way.
 func (s *Sync) pushChangedSessions(
 	ctx context.Context, probe MirrorProbe, onProgress func(PushProgress),
 	result *PushResult,
@@ -341,15 +353,20 @@ func (s *Sync) pushChangedSessions(
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
 	result.Diagnostics.Cutoff = cutoff
 	candidates, err := s.local.ListSessionsForMirrorWindow(
-		ctx, probe.LastPushCutoff, cutoff, s.projects, s.excludeProjects,
+		ctx, probe.LastPushCutoff, cutoff, nil, nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions for duckdb incremental push: %w", err)
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
-	result.Diagnostics.CandidateSessions = countPushSessions(candidates)
 
-	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, candidates)
+	inScope, outOfScope := s.partitionPushScope(candidates)
+	result.Diagnostics.CandidateSessions = countPushSessions(inScope)
+	if err := s.deleteOutOfScopeMirrorSessions(ctx, outOfScope, result); err != nil {
+		return nil, err
+	}
+
+	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, inScope)
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +384,64 @@ func (s *Sync) pushChangedSessions(
 	}
 	result.Diagnostics.PushedSessions = countPushSessions(pushed)
 	return pushed, nil
+}
+
+// partitionPushScope splits window candidates by this Sync's project scope
+// using the same allowlist/denylist semantics the SQL filters apply (see
+// projectMatchesPushScope): with a projects allowlist only listed projects
+// are in scope, and any excluded project is out of scope.
+func (s *Sync) partitionPushScope(
+	candidates []db.Session,
+) (inScope, outOfScope []db.Session) {
+	if !s.isFiltered() {
+		return candidates, nil
+	}
+	inScope = make([]db.Session, 0, len(candidates))
+	for _, sess := range candidates {
+		if projectMatchesPushScope(sess.Project, s.projects, s.excludeProjects) {
+			inScope = append(inScope, sess)
+		} else {
+			outOfScope = append(outOfScope, sess)
+		}
+	}
+	return inScope, outOfScope
+}
+
+// deleteOutOfScopeMirrorSessions removes the mirror rows of window
+// candidates whose project no longer matches the push scope. Only
+// mirror-resident sessions cost anything: the residency probe and the
+// delete cascade are both bounded by the candidate window, and a session
+// that was never mirrored (or already removed) is skipped outright.
+// Removed rows are counted in Diagnostics.DeletedStaleSessions alongside
+// deletion-journal tombstones.
+func (s *Sync) deleteOutOfScopeMirrorSessions(
+	ctx context.Context, outOfScope []db.Session, result *PushResult,
+) error {
+	if len(outOfScope) == 0 {
+		return nil
+	}
+	resident, err := s.mirrorResidentSessionIDs(ctx, sessionIDs(outOfScope))
+	if err != nil {
+		return err
+	}
+	if len(resident) == 0 {
+		return nil
+	}
+	if err := s.withDuckTx(ctx, "delete out-of-scope sessions", func(tx *sql.Tx) error {
+		for _, sess := range outOfScope {
+			if !resident[sess.ID] {
+				continue
+			}
+			if err := s.deleteMirrorSession(ctx, tx, sess.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	result.Diagnostics.DeletedStaleSessions += len(resident)
+	return nil
 }
 
 // selectChangedSessions compares each candidate's freshly computed local
@@ -439,6 +514,61 @@ func (s *Sync) readMirrorFingerprintBatch(
 			return fmt.Errorf("scanning duckdb mirror fingerprint: %w", err)
 		}
 		out[id] = fp.String
+	}
+	return rows.Err()
+}
+
+// mirrorResidentSessionIDs reports which of ids currently exist in the
+// mirror under this Sync's machine name. IDs are deduplicated and queried
+// in batches of 500, so cost tracks the caller's ID list (a candidate
+// window, a tombstone delta, the curation set), never total mirror size.
+func (s *Sync) mirrorResidentSessionIDs(
+	ctx context.Context, ids []string,
+) (map[string]bool, error) {
+	seen := make(map[string]bool, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		unique = append(unique, id)
+	}
+	resident := make(map[string]bool, len(unique))
+	const batchSize = 500
+	for start := 0; start < len(unique); start += batchSize {
+		end := min(start+batchSize, len(unique))
+		if err := s.readMirrorResidentBatch(ctx, unique[start:end], resident); err != nil {
+			return nil, err
+		}
+	}
+	return resident, nil
+}
+
+func (s *Sync) readMirrorResidentBatch(
+	ctx context.Context, batch []string, out map[string]bool,
+) error {
+	placeholders := make([]string, len(batch))
+	args := make([]any, 0, len(batch)+1)
+	args = append(args, s.machine)
+	for i, id := range batch {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	rows, err := s.duck.QueryContext(ctx,
+		`SELECT id FROM sessions WHERE machine = ? AND id IN (`+
+			strings.Join(placeholders, ",")+`)`, args...,
+	)
+	if err != nil {
+		return fmt.Errorf("reading duckdb mirror resident sessions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scanning duckdb mirror resident session: %w", err)
+		}
+		out[id] = true
 	}
 	return rows.Err()
 }

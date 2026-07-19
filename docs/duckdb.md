@@ -171,13 +171,17 @@ Environment variables override the config file:
   `--full` is passed, the mirror's schema version does not match the running
   binary, the local SQLite data version has changed (for example after a
   resync), or the project-filter scope has changed. Otherwise push applies a
-  bounded incremental update that replaces only changed sessions and applies
-  recorded deletions.
+  bounded incremental update that replaces only changed sessions, applies
+  recorded deletions, and removes previously mirrored sessions whose project
+  has since moved out of the configured scope.
 - **Scope changes rebuild the mirror** — `--projects` / `--exclude-projects`
   (or the configured `projects` / `exclude_projects`) scope is a property of
   the whole mirror file. Changing it rebuilds the mirror to contain exactly
   the new scope; sessions that were in scope for an earlier push are no
-  longer preserved once they fall out of scope.
+  longer preserved once they fall out of scope. With an unchanged scope, a
+  session whose own project reassignment moves it out of scope is removed
+  from the mirror by the next incremental push, including when it was
+  hard-deleted locally after the move.
 - **`duckdb serve` and `duckdb quack serve` never create or migrate the
   mirror** — a missing or schema-incompatible file makes them exit with an
   error to run `duckdb push --full`. Both detect when a later push replaces

@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -128,11 +129,13 @@ func mirrorMessageCountViaStore(t *testing.T, store *Store, sessionID string) in
 
 // TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes is the
 // project-filter counterpart to TestPushWorkBoundedByChangedBatchNotArchiveSize:
-// with a project filter configured, an incremental push must select, push,
-// and tombstone only in-scope sessions. An out-of-scope session was never
+// with a project filter configured, an incremental push must push and
+// tombstone only in-scope sessions. An out-of-scope session was never
 // mirrored by the initial filtered full push, so mutating or hard-deleting
-// it locally must be invisible to both the diagnostics and the mirror
-// contents of a later incremental push.
+// it locally must leave the in-scope diagnostics counts and the mirror
+// contents untouched (the window listing does see out-of-scope changes,
+// but only to reconcile mirror-resident rows — a never-mirrored session is
+// skipped without counting anywhere).
 func TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -194,16 +197,109 @@ func TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.LessOrEqual(t, res.Diagnostics.CandidateSessions.Total, 2,
-		"the out-of-scope mutation must never enter the candidate window")
+		"the out-of-scope mutation must not count as an in-scope candidate")
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
 		"only the in-scope mutated session is pushed")
 	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
-		"only the in-scope hard delete is tombstoned")
+		"only the in-scope, mirror-resident hard delete counts as removed")
 
 	assertMirrorMessageCount(t, path, "sess-in-1", 2)
 	assertMirrorSessionAbsent(t, path, "sess-in-2")
 	assertMirrorSessionAbsent(t, path, "sess-out-1")
 	assertMirrorSessionAbsent(t, path, "sess-out-2")
+}
+
+// TestProjectTransitionRemovesSessionFromFilteredMirror covers the
+// scope-transition gap: a session pushed into a filtered mirror while its
+// project was in scope, whose project then changes to an out-of-scope one
+// (a real transition also bumps a sync signal, here local_modified_at, the
+// way a session rewrite does), must be REMOVED from the mirror by the next
+// incremental push. A scope-filtered candidate listing would never select
+// it again, leaving the stale row behind until a full rebuild.
+func TestProjectTransitionRemovesSessionFromFilteredMirror(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		opts      SyncOptions
+		toProject string
+	}{
+		{
+			name:      "moves into an excluded project",
+			opts:      SyncOptions{ExcludeProjects: []string{"scratch"}},
+			toProject: "scratch",
+		},
+		{
+			name:      "moves off the include allowlist",
+			opts:      SyncOptions{Projects: []string{"alpha"}},
+			toProject: "gamma",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			local, path := newPushFixture(t, 2)
+			_, err := Push(ctx, path, local, "m", tt.opts, false, nil)
+			require.NoError(t, err)
+			assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-1", 1)
+
+			moveSessionToProject(t, local, "sess-1", tt.toProject)
+
+			res, err := Push(ctx, path, local, "m", tt.opts, false, nil)
+			require.NoError(t, err)
+			assert.False(t, res.Diagnostics.Full)
+			assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
+				"the out-of-scope-moved resident session must count as removed")
+			assert.Zero(t, res.Diagnostics.PushedSessions.Total)
+			assertMirrorSessionAbsent(t, path, "sess-1")
+			assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-2", 1)
+			assertMirrorTableCountWhere(t, path, "messages", "session_id = ?", "sess-1", 0)
+
+			// A follow-up push has nothing left to reconcile.
+			res2, err := Push(ctx, path, local, "m", tt.opts, false, nil)
+			require.NoError(t, err)
+			assert.Zero(t, res2.Diagnostics.DeletedStaleSessions)
+		})
+	}
+}
+
+// TestProjectTransitionThenHardDeleteAppliesTombstone is the deletion-journal
+// side of the scope-transition gap: a session that moved out of the push
+// scope and was THEN hard-deleted journals a tombstone under its new
+// (out-of-scope) project. A scope-filtered tombstone load would skip it and
+// strand the mirror row forever; the unfiltered load must apply it.
+func TestProjectTransitionThenHardDeleteAppliesTombstone(t *testing.T) {
+	ctx := context.Background()
+	opts := SyncOptions{ExcludeProjects: []string{"scratch"}}
+	local, path := newPushFixture(t, 2)
+	_, err := Push(ctx, path, local, "m", opts, false, nil)
+	require.NoError(t, err)
+	assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-1", 1)
+
+	moveSessionToProject(t, local, "sess-1", "scratch")
+	require.NoError(t, local.DeleteSession("sess-1"))
+
+	res, err := Push(ctx, path, local, "m", opts, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
+		"the out-of-scope tombstone must still remove the resident mirror row")
+	assertMirrorSessionAbsent(t, path, "sess-1")
+	assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-2", 1)
+}
+
+// moveSessionToProject reassigns a session's project the way a real
+// transition lands: alongside a bumped local_modified_at (which advances
+// sync_marker via the trigger), since a project change always comes from a
+// session rewrite rather than an isolated column edit.
+func moveSessionToProject(t *testing.T, local *db.DB, sessionID, project string) {
+	t.Helper()
+	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`UPDATE sessions SET project = ?, local_modified_at = ? WHERE id = ?`,
+			project, modifiedAt, sessionID,
+		)
+		return err
+	}))
 }
 
 // TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize is the

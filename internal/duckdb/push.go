@@ -414,16 +414,23 @@ func (s *Sync) replaceStarredSessions(
 }
 
 // applyDeletionDelta removes every mirror session tombstoned in the local
-// deletion journal within (after, through], scoped to this Sync's project
-// filters. This is the mirror-resident replacement for the old local-scan
-// hard-delete reconciliation: the journal already tells us exactly which
-// sessions to remove, so there is no need to diff the full local/mirror
-// session ID sets on every push.
+// deletion journal within (after, through]. This is the mirror-resident
+// replacement for the old local-scan hard-delete reconciliation: the
+// journal already tells us exactly which sessions to remove, so there is
+// no need to diff the full local/mirror session ID sets on every push.
+//
+// Tombstones are loaded with NO project filter: a tombstone's recorded
+// project is the session's LAST project, so a session that moved out of
+// the push scope and was then hard-deleted would be invisible to a
+// scope-filtered delta, leaving its mirror row (pushed while it was still
+// in scope) behind forever. The residency probe keeps the work bounded by
+// the delta: only tombstones whose sessions actually exist in the mirror
+// cost a delete cascade, and only those count as DeletedStaleSessions.
 func (s *Sync) applyDeletionDelta(
 	ctx context.Context, after, through int64, result *PushResult,
 ) error {
 	tombstones, err := s.local.LoadSessionDeletionDelta(
-		ctx, after, through, s.projects, s.excludeProjects,
+		ctx, after, through, nil, nil,
 	)
 	if err != nil {
 		return fmt.Errorf("loading duckdb session deletion delta: %w", err)
@@ -431,17 +438,33 @@ func (s *Sync) applyDeletionDelta(
 	if len(tombstones) == 0 {
 		return nil
 	}
+	ids := make([]string, len(tombstones))
+	for i, tombstone := range tombstones {
+		ids[i] = tombstone.SessionID
+	}
+	resident, err := s.mirrorResidentSessionIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if len(resident) == 0 {
+		return nil
+	}
 	if err := s.withDuckTx(ctx, "apply session deletion delta", func(tx *sql.Tx) error {
+		deleted := make(map[string]bool, len(resident))
 		for _, tombstone := range tombstones {
+			if !resident[tombstone.SessionID] || deleted[tombstone.SessionID] {
+				continue
+			}
 			if err := s.deleteMirrorSession(ctx, tx, tombstone.SessionID); err != nil {
 				return err
 			}
+			deleted[tombstone.SessionID] = true
 		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	result.Diagnostics.DeletedStaleSessions = len(tombstones)
+	result.Diagnostics.DeletedStaleSessions += len(resident)
 	return nil
 }
 
