@@ -97,16 +97,24 @@ a wasted model call, since a write can land between any out-of-band check and
 the insert. A guard failure persists nothing; the caller classifies it
 (concurrent write → silent retry next pass, eligibility lost → discard).
 
-Eligibility loss *after* extraction is reconciled by full passes: sessions since
+Eligibility loss *after* extraction is reconciled on every scheduled pass —
+incremental ones included, because with the backstop disabled no full pass ever
+runs and privacy retraction must not be schedulable away. Sessions since
 trashed, flagged automated, or carrying secret findings or leaks get their
-`unreviewed_auto` entries deleted and their progress rows removed, so an
-excluded session's corpus stops serving, a lingering pending or partial row
-cannot block activation forever, and a session that becomes eligible again is
-rediscovered and re-extracted from scratch. Stale or missing scan versions
-deliberately do not qualify — they are transient (every transcript write clears
-the stamp until rescan), and deleting on them would rebuild the corpus on every
-sync. The walk is bounded by the full watermark like done revisits; a fresh
-manager reconciles unbounded.
+`unreviewed_auto` entries deleted across *all* registered generations (a retired
+generation keeps serving until the next activation, so retraction is
+generation-independent) and their progress rows removed, so an excluded
+session's corpus stops serving, a lingering pending or partial row cannot block
+activation forever, and a session that becomes eligible again is rediscovered
+and re-extracted from scratch. Both deletes are set-based, so retraction cannot
+be blocked by SQLite's host-parameter limit however many sessions match. Stale
+or missing scan versions deliberately do not qualify — they are transient (every
+transcript write clears the stamp until rescan), and deleting on them would
+rebuild the corpus on every sync. The walk is bounded by its own watermark,
+which advances on every completed unlimited scan pass; a fresh manager
+reconciles unbounded. A mid-extraction discard is likewise atomic: the entry
+delete and the guarded cursor reset commit together, so a resume can never skip
+units whose entries no longer exist.
 
 A stable bracket whose loaded message count differs from the row's is a
 different case — the sync loop writes the session row before the transcript, so
@@ -260,7 +268,10 @@ promote a generation that does not cover what it claims. Failed sessions do not
 block activation — they retry later and top the corpus up. An entryless
 generation never activates, manually or automatically: activation retires the
 previously active generation, and replacing a working corpus with an empty one
-must not happen silently.
+must not happen silently. Promotion re-verifies eligibility inside the
+activation transaction: entries whose source session was trashed, flagged
+automated, or scanned into findings after staging are left archived (the
+retraction pass deletes them) instead of being served.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;

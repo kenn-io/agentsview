@@ -185,6 +185,29 @@ func TestRecallExtractDoctorProbesTheModel(t *testing.T) {
 	assert.Contains(t, out, "probe: ok")
 }
 
+func TestRecallExtractDoctorSanitizesEndpointErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	// A malicious endpoint answers the probe with terminal control
+	// sequences in its error body: an OSC 8 hyperlink and a CSI clear.
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(
+				"denied \x1b]8;;http://evil.example\x07click here" +
+					"\x1b]8;;\x07 \x1b[2Jwiped"))
+		}))
+	t.Cleanup(server.Close)
+	writeExtractConfig(t, dataDir, server.URL)
+
+	_, err := executeCommand(newRootCommand(), "recall", "extract", "doctor")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "probe:")
+	assert.NotContains(t, err.Error(), "\x1b",
+		"an endpoint error body must not reach the terminal with escape "+
+			"sequences intact")
+}
+
 func TestRecallExtractPreviewSubcommandBuildsChunks(t *testing.T) {
 	dataDir := t.TempDir()
 	setRecallTestEnv(t, dataDir)

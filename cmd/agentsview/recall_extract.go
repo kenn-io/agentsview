@@ -502,7 +502,10 @@ func newRecallExtractDoctorCommand() *cobra.Command {
 				extractDoctorProbeText, 1,
 			)
 			if err != nil {
-				return fmt.Errorf("probe: %w", err)
+				// The error can embed the endpoint's raw response body;
+				// a malicious server must not reach the terminal with
+				// escape sequences intact.
+				return fmt.Errorf("probe: %s", sanitizeTerminal(err.Error()))
 			}
 			fmt.Fprintf(out,
 				"probe: ok (%d entries, %d prompt + %d completion tokens)\n",

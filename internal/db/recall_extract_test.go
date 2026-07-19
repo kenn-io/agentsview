@@ -750,10 +750,13 @@ func TestCommitExtractedUnitRefusesDriftAndIneligibility(t *testing.T) {
 func TestReconcileIneligibleExtractSessions(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
-		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
-	})
-	require.NoError(t, err)
+	var err error
+	for _, fp := range []string{"fp-a", "fp-old"} {
+		_, err = d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
 	entry := func(id, sessionID, fp, reviewState string) RecallEntry {
 		return RecallEntry{
 			ID: id, Type: "fact", ReviewState: reviewState,
@@ -778,9 +781,18 @@ func TestReconcileIneligibleExtractSessions(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
+	// Retraction is generation-independent: a retired-but-registered
+	// generation's entries and progress must go too, while runs that are
+	// not extraction generations (imports) are untouched.
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-trashed", Fingerprint: "fp-old",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		entry("e-human", "sess-trashed", "fp-a", "human_reviewed"),
-		entry("e-other-gen", "sess-trashed", "fp-b", "unreviewed_auto"),
+		entry("e-old-gen", "sess-trashed", "fp-old", "unreviewed_auto"),
+		entry("e-import-run", "sess-trashed", "run-import", "unreviewed_auto"),
 	})
 	require.NoError(t, err)
 
@@ -797,19 +809,21 @@ func TestReconcileIneligibleExtractSessions(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionSecretFindings(
 		"sess-finding", []SecretFinding{finding}, 0, "rules-v1"))
 
-	sessions, entries, err := d.ReconcileIneligibleExtractSessions(
-		ctx, "fp-a", time.Time{})
+	rowsRemoved, entriesDeleted, err := d.ReconcileIneligibleExtractSessions(
+		ctx, time.Time{})
 	require.NoError(t, err)
-	assert.Equal(t, 3, sessions)
-	assert.Equal(t, 3, entries)
+	assert.Equal(t, 4, rowsRemoved,
+		"three fp-a rows plus the trashed session's fp-old row")
+	assert.Equal(t, 4, entriesDeleted)
 
 	for id, want := range map[string]bool{
 		"e-sess-trashed":   false,
 		"e-sess-automated": false,
 		"e-sess-finding":   false,
+		"e-old-gen":        false,
 		"e-sess-ok":        true,
 		"e-human":          true,
-		"e-other-gen":      true,
+		"e-import-run":     true,
 	} {
 		got, err := d.GetRecallEntry(ctx, id)
 		require.NoError(t, err)
@@ -825,6 +839,9 @@ func TestReconcileIneligibleExtractSessions(t *testing.T) {
 			"progress row for %s: a removed row lets a restored session "+
 				"rediscover from scratch and stops blocking activation", id)
 	}
+	_, found, err := d.ExtractProgress(ctx, "sess-trashed", "fp-old")
+	require.NoError(t, err)
+	assert.False(t, found, "retraction must span every generation")
 
 	// The bound mirrors the done-revisit watermark: every ineligibility
 	// write records a local write, so a steady-state pass only examines
@@ -837,17 +854,112 @@ func TestReconcileIneligibleExtractSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.SoftDeleteSession("sess-old-trash"))
 	backdateLocalModified(t, d, "sess-old-trash", 3*time.Hour)
-	sessions, _, err = d.ReconcileIneligibleExtractSessions(
-		ctx, "fp-a", time.Now().Add(-time.Hour))
+	rowsRemoved, _, err = d.ReconcileIneligibleExtractSessions(
+		ctx, time.Now().Add(-time.Hour))
 	require.NoError(t, err)
-	assert.Zero(t, sessions,
+	assert.Zero(t, rowsRemoved,
 		"a bounded reconciliation must skip sessions written before the "+
 			"watermark")
-	sessions, _, err = d.ReconcileIneligibleExtractSessions(
-		ctx, "fp-a", time.Time{})
+	rowsRemoved, _, err = d.ReconcileIneligibleExtractSessions(
+		ctx, time.Time{})
 	require.NoError(t, err)
-	assert.Equal(t, 1, sessions,
+	assert.Equal(t, 1, rowsRemoved,
 		"an unbounded reconciliation must clean the backdated session")
+}
+
+func TestActivateExtractGenerationSkipsIneligibleSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	entry := func(id, sessionID string) RecallEntry {
+		return RecallEntry{
+			ID: id, Type: "fact", ReviewState: "unreviewed_auto",
+			Status: "archived", Title: "t", Body: "b",
+			SourceSessionID: sessionID, SourceRunID: "fp-a",
+			Evidence: []RecallEvidence{{
+				SessionID: sessionID, MessageEndOrdinal: 1,
+			}},
+		}
+	}
+	seedExtractCandidate(t, d, "sess-ok", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-trashed", 2*time.Hour, nil)
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		entry("e-ok", "sess-ok"),
+		entry("e-trashed", "sess-trashed"),
+	})
+	require.NoError(t, err)
+	// The session is trashed between staging and activation: promotion
+	// must not start serving its entries. They stay archived for the
+	// retraction pass to delete.
+	require.NoError(t, d.SoftDeleteSession("sess-trashed"))
+
+	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a"))
+	ok, err := d.GetRecallEntry(ctx, "e-ok")
+	require.NoError(t, err)
+	require.NotNil(t, ok)
+	assert.Equal(t, "accepted", ok.Status)
+	trashed, err := d.GetRecallEntry(ctx, "e-trashed")
+	require.NoError(t, err)
+	require.NotNil(t, trashed)
+	assert.Equal(t, "archived", trashed.Status,
+		"activation must not promote entries of an ineligible session")
+}
+
+func TestDiscardExtractedSessionOutputIsAtomic(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "dg", 1))
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{{
+		ID: "e-1", Type: "fact", ReviewState: "unreviewed_auto",
+		Title: "t", Body: "b",
+		SourceSessionID: "sess-1", SourceRunID: "fp-a",
+		Evidence: []RecallEvidence{{
+			SessionID: "sess-1", MessageEndOrdinal: 1,
+		}},
+	}})
+	require.NoError(t, err)
+
+	// A stale guard rolls the whole discard back: deleting the entries
+	// while leaving the cursor past them would let a later resume skip
+	// units whose output no longer exists.
+	err = d.DiscardExtractedSessionOutput(ctx, ExtractFailure{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ExpectedDigest: "dg-other", ExpectedCursor: 1,
+		LastError: "ineligible", Reopen: true,
+	})
+	require.ErrorIs(t, err, ErrStaleExtractProgress)
+	got, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	require.NotNil(t, got,
+		"a refused discard must not delete the session's entries")
+
+	require.NoError(t, d.DiscardExtractedSessionOutput(ctx, ExtractFailure{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 1,
+		LastError: "session became ineligible during extraction",
+		Reopen:    true,
+	}))
+	got, err = d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ExtractProgressFailed, progress.State)
+	assert.Zero(t, progress.UnitCursor)
 }
 
 func TestExtractStatsEntryCountPlanIsIndexBounded(t *testing.T) {

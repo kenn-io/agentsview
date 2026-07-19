@@ -206,12 +206,21 @@ func (db *DB) ActivateExtractGeneration(
 	); err != nil {
 		return fmt.Errorf("archiving retired generation entries: %w", err)
 	}
+	// Promotion re-verifies eligibility inside the activation transaction:
+	// a session trashed, flagged automated, or scanned into findings after
+	// its entries were staged must not start serving on activation. Its
+	// entries stay archived for the retraction pass to delete.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
 		SET status = 'accepted',
 		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
-		  AND source_run_id = ?`,
+		  AND source_run_id = ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM sessions s
+			WHERE s.id = recall_entries.source_session_id
+			  AND (`+extractSessionIneligibleSQL+`)
+		  )`,
 		fingerprint,
 	); err != nil {
 		return fmt.Errorf("promoting activated generation entries: %w", err)
@@ -1179,22 +1188,33 @@ func bindExtractedEvidenceTx(
 	return entries, nil
 }
 
+// extractSessionIneligibleSQL matches sessions (aliased s) whose extraction
+// output must be retracted: trashed, flagged automated, or carrying secret
+// findings or leaks. Stale or missing scan versions deliberately do not
+// qualify — they are transient (every transcript write clears the stamp
+// until rescan) and retracting on them would rebuild the corpus on every
+// sync.
+const extractSessionIneligibleSQL = `s.deleted_at IS NOT NULL
+	OR s.is_automated != 0
+	OR s.secret_leak_count > 0
+	OR EXISTS (SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id)`
+
 // ReconcileIneligibleExtractSessions removes the generated corpus of
-// sessions that lost extraction eligibility after extraction: trashed,
-// flagged automated, or carrying secret findings or leaks. Their
-// unreviewed_auto entries are deleted and their progress rows removed, so
-// nothing keeps serving from an excluded session, a lingering pending or
-// partial row cannot block activation forever, and a session that becomes
-// eligible again is rediscovered and re-extracted from scratch. Stale or
-// missing scan versions deliberately do not qualify — they are transient
-// (every transcript write clears the stamp until rescan) and deleting on
-// them would rebuild the corpus on every sync. changedSince bounds the walk
-// the way the full watermark bounds done revisits: every ineligibility
-// write records a local write, so the zero value (fresh manager) is the
-// only unbounded path. Returns how many sessions were reconciled and how
-// many entries were deleted.
+// sessions that lost extraction eligibility after extraction. It is
+// generation-independent — a retired generation keeps serving until the next
+// activation, so its entries must be retracted too. Ineligible sessions'
+// unreviewed_auto entries under any registered generation are deleted and
+// their progress rows removed across generations, so nothing keeps serving
+// from an excluded session, a lingering pending or partial row cannot block
+// activation forever, and a session that becomes eligible again is
+// rediscovered and re-extracted from scratch. Both deletes are set-based —
+// no per-session host parameters, so retraction cannot be blocked by
+// SQLite's parameter limit however many sessions match. changedSince bounds
+// the walk: every ineligibility write records a local write, so the zero
+// value (fresh manager) is the only unbounded path. Returns how many
+// progress rows were removed and how many entries were deleted.
 func (db *DB) ReconcileIneligibleExtractSessions(
-	ctx context.Context, fingerprint string, changedSince time.Time,
+	ctx context.Context, changedSince time.Time,
 ) (int, int, error) {
 	if err := db.requireWritable(); err != nil {
 		return 0, 0, err
@@ -1209,77 +1229,114 @@ func (db *DB) ReconcileIneligibleExtractSessions(
 		return 0, 0, fmt.Errorf("begin extract reconcile: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	query := `
-		SELECT p.session_id
-		FROM recall_extract_progress p
-		JOIN sessions s ON s.id = p.session_id
-		WHERE p.generation_fingerprint = ?
-		  AND (s.deleted_at IS NOT NULL
-			OR s.is_automated != 0
-			OR s.secret_leak_count > 0
-			OR EXISTS (
-				SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id
-			))`
-	args := []any{fingerprint}
+	ineligible := `
+		SELECT s.id FROM sessions s
+		WHERE (` + extractSessionIneligibleSQL + `)`
+	var bound []any
 	if !changedSince.IsZero() {
-		query += `
+		ineligible += `
 		  AND s.local_modified_at >= ?`
-		args = append(args, changedSince.UTC().Format(extractTimeLayout))
+		bound = append(bound,
+			changedSince.UTC().Format(extractTimeLayout))
 	}
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return 0, 0, fmt.Errorf("finding ineligible extract sessions: %w", err)
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, 0, fmt.Errorf(
-				"scanning ineligible extract session: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, 0, fmt.Errorf("reading ineligible extract sessions: %w", err)
-	}
-	if len(ids) == 0 {
-		return 0, 0, tx.Commit()
-	}
-	marks := strings.Repeat("?,", len(ids))
-	marks = marks[:len(marks)-1]
-	deleteArgs := make([]any, 0, len(ids)+2)
-	deleteArgs = append(deleteArgs,
-		fingerprint, corerecall.ReviewStateUnreviewedAuto)
-	for _, id := range ids {
-		deleteArgs = append(deleteArgs, id)
-	}
+	entryArgs := make([]any, 0, len(bound)+1)
+	entryArgs = append(entryArgs, corerecall.ReviewStateUnreviewedAuto)
+	entryArgs = append(entryArgs, bound...)
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM recall_entries
-		WHERE source_run_id = ? AND review_state = ?
-		  AND source_session_id IN (`+marks+`)`, deleteArgs...)
+		WHERE review_state = ?
+		  AND source_run_id IN
+		      (SELECT fingerprint FROM recall_extract_generations)
+		  AND source_session_id IN (`+ineligible+`)`, entryArgs...)
 	if err != nil {
 		return 0, 0, fmt.Errorf("deleting ineligible entries: %w", err)
 	}
-	deleted, err := result.RowsAffected()
+	entriesDeleted, err := result.RowsAffected()
 	if err != nil {
 		return 0, 0, fmt.Errorf("counting reconciled entries: %w", err)
 	}
-	progressArgs := make([]any, 0, len(ids)+1)
-	progressArgs = append(progressArgs, fingerprint)
-	for _, id := range ids {
-		progressArgs = append(progressArgs, id)
-	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err = tx.ExecContext(ctx, `
 		DELETE FROM recall_extract_progress
-		WHERE generation_fingerprint = ?
-		  AND session_id IN (`+marks+`)`, progressArgs...); err != nil {
+		WHERE session_id IN (`+ineligible+`)`, bound...)
+	if err != nil {
 		return 0, 0, fmt.Errorf("removing ineligible progress rows: %w", err)
+	}
+	rowsRemoved, err := result.RowsAffected()
+	if err != nil {
+		return 0, 0, fmt.Errorf("counting reconciled progress rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, 0, fmt.Errorf("commit extract reconcile: %w", err)
 	}
-	return len(ids), int(deleted), nil
+	return int(rowsRemoved), int(entriesDeleted), nil
+}
+
+// DiscardExtractedSessionOutput atomically deletes one session's generated
+// entries under one generation and reopens its progress row as a retryable
+// failure. The two must move together: deleting the entries while leaving
+// the cursor past them would let a later resume skip units whose output no
+// longer exists. A stale guard (digest or cursor moved, another writer took
+// over) rolls the whole discard back and returns ErrStaleExtractProgress.
+func (db *DB) DiscardExtractedSessionOutput(
+	ctx context.Context, failure ExtractFailure,
+) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("begin extract discard: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM recall_entries
+		WHERE source_run_id = ? AND source_session_id = ?
+			AND review_state = ?`,
+		failure.Fingerprint, failure.SessionID,
+		corerecall.ReviewStateUnreviewedAuto,
+	); err != nil {
+		return fmt.Errorf(
+			"discarding entries for session %s: %w", failure.SessionID, err)
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE recall_extract_progress
+		SET last_error = ?,
+			unit_cursor = CASE WHEN ? THEN 0 ELSE unit_cursor END,
+			state = ?,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE session_id = ? AND generation_fingerprint = ?
+		  AND content_digest = ?
+		  AND unit_cursor = ?
+		  AND (? OR state != ?)`,
+		failure.LastError, failure.Reopen, ExtractProgressFailed,
+		failure.SessionID, failure.Fingerprint,
+		failure.ExpectedDigest, failure.ExpectedCursor,
+		failure.Reopen, ExtractProgressDone,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"reopening progress for session %s: %w", failure.SessionID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"reopening progress for session %s: %w", failure.SessionID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf(
+			"discarding session %s under digest %s at cursor %d: %w",
+			failure.SessionID, failure.ExpectedDigest,
+			failure.ExpectedCursor, ErrStaleExtractProgress)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit extract discard: %w", err)
+	}
+	return nil
 }
 
 // DeleteExtractedRecallEntries removes one session's machine-generated

@@ -68,6 +68,14 @@ type Manager struct {
 	// to pass N+1. Recovery from a lost watermark is a fresh manager, whose
 	// zero value revisits unbounded. Guarded by passMu.
 	fullWatermark time.Time
+	// reconcileWatermark bounds eligibility retraction the same way: only
+	// sessions written at or after it are examined for lost eligibility.
+	// It advances on every completed unlimited scan pass — incremental
+	// ones included, because with the backstop disabled no full pass ever
+	// runs and retraction must not depend on one. Every ineligibility
+	// write (trash, automation flag, findings) records a local write, so a
+	// write during pass N stays visible to pass N+1. Guarded by passMu.
+	reconcileWatermark time.Time
 }
 
 // PassOptions selects what one pass covers. SessionID targets a single
@@ -232,16 +240,18 @@ func (m *Manager) runPassLocked(
 			result.Sessions++
 		}
 	}
-	// Full passes also reconcile eligibility loss that happened after
+	// Every scheduled pass reconciles eligibility loss that happened after
 	// extraction: sessions since trashed, flagged automated, or carrying
-	// secret findings get their generated entries deleted and their
-	// progress rows removed, so an excluded session's corpus stops serving
-	// and a lingering pending or partial row cannot block activation
-	// forever. Bounded by the full watermark like done revisits — every
-	// ineligibility write records a local write.
-	if opts.SessionID == "" && opts.Full {
+	// secret findings get their generated entries deleted (across all
+	// registered generations — a retired generation keeps serving until
+	// the next activation) and their progress rows removed, so an
+	// excluded session's corpus stops serving and a lingering pending or
+	// partial row cannot block activation forever. Not gated on full
+	// passes: with the backstop disabled only incremental passes run, and
+	// privacy retraction must not be schedulable away.
+	if opts.SessionID == "" {
 		if _, _, err := m.cfg.DB.ReconcileIneligibleExtractSessions(
-			ctx, m.fingerprint, m.fullWatermark,
+			ctx, m.reconcileWatermark,
 		); err != nil {
 			return result, err
 		}
@@ -264,6 +274,9 @@ func (m *Manager) runPassLocked(
 		}
 		if opts.Full && passStart.After(m.fullWatermark) {
 			m.fullWatermark = passStart
+		}
+		if passStart.After(m.reconcileWatermark) {
+			m.reconcileWatermark = passStart
 		}
 	}
 	return result, nil
@@ -682,17 +695,14 @@ func (m *Manager) recheckExtraction(
 
 // discardIneligibleSession fails a session closed mid-extraction: its
 // generated entries are deleted and its progress row is reopened at cursor
-// zero, so nothing extracted under the lost eligibility persists and a
-// session that becomes eligible again re-extracts from scratch.
+// zero, atomically — a delete that landed without the cursor reset would
+// let a later resume skip units whose entries no longer exist. A stale
+// guard means another writer took over; its view wins and nothing is
+// discarded.
 func (m *Manager) discardIneligibleSession(
 	ctx context.Context, sessionID, digest string, cursor int,
 ) error {
-	if _, err := m.cfg.DB.DeleteExtractedRecallEntries(
-		ctx, m.fingerprint, sessionID,
-	); err != nil {
-		return err
-	}
-	err := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
+	err := m.cfg.DB.DiscardExtractedSessionOutput(ctx, db.ExtractFailure{
 		SessionID:      sessionID,
 		Fingerprint:    m.fingerprint,
 		ExpectedDigest: digest,

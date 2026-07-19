@@ -1369,14 +1369,14 @@ func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
 				"mid-extraction; want none", len(entries), status)
 		}
 	}
-	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
-	if err != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
-	}
-	if progress.State != db.ExtractProgressFailed || progress.UnitCursor != 0 {
-		t.Fatalf("progress = %s at cursor %d, want failed at 0 so a "+
-			"restored session re-extracts from scratch",
-			progress.State, progress.UnitCursor)
+	// The mid-pass discard reopened the row; the end-of-pass retraction
+	// then removed it entirely, so a restored session rediscovers through
+	// the no-progress discovery arm and re-extracts from scratch.
+	if _, found, err := d.ExtractProgress(
+		ctx, "sess-1", m.Fingerprint(),
+	); err != nil || found {
+		t.Fatalf("ExtractProgress: found=%v err=%v; a trashed session "+
+			"must not keep a progress row past the pass", found, err)
 	}
 }
 
@@ -1506,6 +1506,38 @@ func TestManagerFullPassReconcilesIneligibleSessions(t *testing.T) {
 		t.Fatalf("progress for the trashed session: found=%v err=%v; a "+
 			"lingering row would block activation and hide re-extraction "+
 			"after restore", found, err)
+	}
+}
+
+func TestManagerIncrementalPassReconcilesIneligibleSessions(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+
+	// With the backstop disabled, only incremental passes are ever
+	// scheduled — retraction must not depend on full passes running.
+	if err := d.SoftDeleteSession("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	for _, status := range []string{"", "archived"} {
+		entries, err := d.ListRecallEntries(ctx,
+			db.RecallQuery{Status: status, Limit: 50})
+		if err != nil {
+			t.Fatalf("ListRecallEntries(%q): %v", status, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("%d %q entries survive from a trashed session after "+
+				"an incremental pass", len(entries), status)
+		}
 	}
 }
 
