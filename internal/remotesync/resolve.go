@@ -54,6 +54,9 @@ func ResolveTargets(cfg config.Config) TargetSet {
 }
 
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
+	if def.Type == parser.AgentTrae {
+		return false
+	}
 	if !def.FileBased {
 		return false
 	}

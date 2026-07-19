@@ -108,7 +108,9 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		s := &storedSessions[i]
 		storedByID[s.ID] = s
 		if s.FilePath != nil && *s.FilePath != "" {
-			base := parseDiffSourceKey(*s.FilePath)
+			base := parseDiffSourceKey(
+				parser.AgentType(s.Agent), *s.FilePath,
+			)
 			storedByPath[base] = append(storedByPath[base], s)
 		}
 	}
@@ -366,7 +368,7 @@ func sortAndLimitParseDiffFiles(
 	if limit > 0 && len(files) > limit {
 		limited = true
 		for _, f := range files[limit:] {
-			cutPaths[parseDiffSourceKey(f.Path)] = true
+			cutPaths[parseDiffSourceKey(f.Agent, f.Path)] = true
 		}
 		files = files[:limit]
 	}
@@ -391,8 +393,8 @@ func parseDiffDiscoveryMtime(f parser.DiscoveredFile) (int64, bool) {
 	return f.ProviderSource.DiscoveryMTimeNS, true
 }
 
-func parseDiffSourceKey(path string) string {
-	if isPerSessionDBVirtualSource(path) {
+func parseDiffSourceKey(agent parser.AgentType, path string) string {
+	if isPerSessionDBVirtualSource(agent, path) {
 		return path
 	}
 	return stripVirtualSourceSuffix(path)
@@ -409,10 +411,14 @@ func parseDiffSourceKey(path string) string {
 var perSessionDBVirtualSourceBases = []string{
 	"opencode.db", "kilo.db", "mimocode.db", "sessions.db",
 	parser.WarpDBFilename, parser.ForgeDBFilename, parser.PiebaldDBFilename,
-	parser.WindsurfStateDBName,
 }
 
-func isPerSessionDBVirtualSource(path string) bool {
+func isPerSessionDBVirtualSource(agent parser.AgentType, path string) bool {
+	if _, _, ok := parser.ParseVirtualSourcePathForBase(
+		path, parser.WindsurfStateDBName,
+	); ok {
+		return agent == parser.AgentWindsurf
+	}
 	for _, base := range perSessionDBVirtualSourceBases {
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, base); ok {
 			return true
@@ -441,6 +447,11 @@ func stripVirtualSourceSuffix(path string) string {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "threads.db"); ok {
+		return dbPath
+	}
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(
+		path, parser.WindsurfStateDBName,
+	); ok {
 		return dbPath
 	}
 	for _, base := range perSessionDBVirtualSourceBases {
@@ -613,7 +624,7 @@ func (e *Engine) parseDiffCollectFile(
 	resolver worktreeProjectResolver,
 	presencePaths *[]string,
 ) error {
-	base := parseDiffSourceKey(job.path)
+	base := parseDiffSourceKey(fileAgents[job.path], job.path)
 
 	if job.err != nil {
 		storedHere := storedByPath[base]
@@ -1000,7 +1011,9 @@ func (e *Engine) parseDiffSweepStored(
 		case s.FilePath == nil || *s.FilePath == "":
 			reason = "source missing"
 		default:
-			sourceKey := parseDiffSourceKey(*s.FilePath)
+			sourceKey := parseDiffSourceKey(
+				parser.AgentType(s.Agent), *s.FilePath,
+			)
 			sourcePath := stripVirtualSourceSuffix(*s.FilePath)
 			switch {
 			case cutPaths[sourceKey]:

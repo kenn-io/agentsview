@@ -80,6 +80,21 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }
 
+func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
+	root := t.TempDir()
+	traeRoot := filepath.Join(root, "TRAE", "User")
+	claudeRoot := filepath.Join(root, "claude")
+	require.NoError(t, os.MkdirAll(traeRoot, 0o755))
+	require.NoError(t, os.MkdirAll(claudeRoot, 0o755))
+
+	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentTrae:   {traeRoot},
+		parser.AgentClaude: {claudeRoot},
+	}})
+	assert.NotContains(t, targets.Dirs, parser.AgentTrae)
+	assert.Equal(t, []string{claudeRoot}, targets.Dirs[parser.AgentClaude])
+}
+
 func TestResolveTargetsSkipsAiderHomeRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("os.UserHomeDir does not use HOME on Windows")

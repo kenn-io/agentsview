@@ -65,6 +65,10 @@ type multiSessionConfig struct {
 	// fingerprint returns the source freshness fingerprint (Size/MTime/Hash);
 	// the base supplies the Key.
 	fingerprint func(src multiSessionSource) (SourceFingerprint, error)
+	// parseContainerOutcome optionally builds the full container outcome
+	// directly, for providers that need container-level completeness or
+	// no-session semantics beyond a flat []ParseResult.
+	parseContainerOutcome func(src multiSessionSource, req ParseRequest) (ParseOutcome, error)
 	// parseContainer parses every member of a container into one result each.
 	// The full ParseRequest is passed so a closure can read req.Machine and
 	// per-request hints such as req.Source.ProjectHint.
@@ -151,6 +155,12 @@ func WithContainerParse(
 	return func(c *multiSessionConfig) { c.parseContainer = fn }
 }
 
+func WithContainerParseOutcome(
+	fn func(src multiSessionSource, req ParseRequest) (ParseOutcome, error),
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.parseContainerOutcome = fn }
+}
+
 func WithMemberParse(
 	fn func(src multiSessionSource, req ParseRequest) (*ParseResult, error),
 ) MultiSessionOption {
@@ -191,8 +201,8 @@ func NewMultiSessionContainerSourceSet(
 		panic("multi-session container: missing WithMemberLookup")
 	case cfg.fingerprint == nil:
 		panic("multi-session container: missing WithFingerprint")
-	case cfg.parseContainer == nil:
-		panic("multi-session container: missing WithContainerParse")
+	case cfg.parseContainer == nil && cfg.parseContainerOutcome == nil:
+		panic("multi-session container: missing WithContainerParse or WithContainerParseOutcome")
 	case cfg.parseMember == nil:
 		panic("multi-session container: missing WithMemberParse")
 	}
@@ -242,6 +252,10 @@ func (s multiSessionContainerSourceSet) discoverMatches(
 	out := make([]multiSessionMatch, 0, len(containers))
 	for _, container := range containers {
 		if container == "" {
+			continue
+		}
+		if match, ok := s.cfg.classifyPath(root, container, false); ok {
+			out = append(out, match)
 			continue
 		}
 		out = append(out, multiSessionMatch{Path: container, Container: container})
@@ -438,6 +452,19 @@ func (s multiSessionContainerSourceSet) parse(
 			ResultSetComplete: true,
 			ForceReplace:      true,
 		}, nil
+	}
+
+	if s.cfg.parseContainerOutcome != nil {
+		outcome, err := s.cfg.parseContainerOutcome(src, req)
+		if err != nil {
+			return ParseOutcome{}, err
+		}
+		if fingerprintHash != "" && s.cfg.stampContainerHash {
+			for i := range outcome.Results {
+				outcome.Results[i].Result.Session.File.Hash = fingerprintHash
+			}
+		}
+		return outcome, nil
 	}
 
 	results, err := s.cfg.parseContainer(src, req)

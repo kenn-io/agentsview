@@ -885,6 +885,10 @@ func providerChangedPathForceParse(
 	}
 	if filepath.Clean(sourcePath) != filepath.Clean(eventPath) &&
 		!providerVirtualSourceBackedByEvent(sourcePath, eventPath) {
+		if agent == parser.AgentTrae &&
+			filepath.Base(sourcePath) == parser.WindsurfStateDBName {
+			return filepath.Base(eventPath) == "workspace.json"
+		}
 		// OpenCode-family storage sessions resolve message/part events
 		// to their session JSON, whose fingerprint and stat signature
 		// span those same child files, and the classifier invalidates
@@ -4703,15 +4707,14 @@ func (e *Engine) processProviderFile(
 
 // dropUnchangedSharedSQLiteResults reproduces the legacy per-session skip the
 // folded processZed/processShelley loops and the aiderFileUnchanged check
-// performed. Zed and Shelley keep every session in one shared SQLite database,
-// and Aider fans every run out of one shared history file, so the provider
-// re-parses every session on any change to that shared source. Without a
-// per-session filter the engine would rewrite and recount unchanged sessions.
-// This drops results whose stored file_mtime (and, for Shelley's
-// second-precision timestamps and Aider's whole-file content hash, the
-// fingerprint stored in file_hash) and data_version already match, using the
-// path rewriter so remote stored paths resolve. Force-parse runs (parse-diff,
-// single-session resync) keep every result so they always re-emit.
+// performed. Zed, Shelley, and Trae keep every session in one shared SQLite
+// database, and Aider fans every run out of one shared history file, so the
+// provider re-parses every session on any change to that shared source.
+// Without a per-session filter the engine would rewrite and recount unchanged
+// sessions. This drops results whose stored file_mtime and, when available, the
+// fingerprint stored in file_hash already match, using the path rewriter so
+// remote stored paths resolve. Force-parse runs (parse-diff, single-session
+// resync) keep every result so they always re-emit.
 func (e *Engine) dropUnchangedSharedSQLiteResults(
 	file parser.DiscoveredFile,
 	results []parser.ParseResult,
@@ -4722,6 +4725,12 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 	compareHash := false
 	switch file.Agent {
 	case parser.AgentShelley:
+		compareHash = true
+	case parser.AgentTrae:
+		// Trae fans one shared SQLite store out into virtual per-session paths.
+		// Every session shares the container fingerprint hash, which catches
+		// same-mtime rewrites while still letting unchanged sessions drop after
+		// the provider re-parses the container.
 		compareHash = true
 	case parser.AgentAider:
 		// Every aider run in a history file shares the file's content hash, so
@@ -5158,6 +5167,14 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentTrae {
+		if filepath.Base(file.Path) == "state.vscdb" {
+			return false
+		}
+		if _, _, ok := parser.SplitTraeVirtualPath(file.Path); ok {
 			return false
 		}
 	}

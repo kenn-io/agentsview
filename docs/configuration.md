@@ -322,9 +322,14 @@ Windsurf stores workspace chats in `workspaceStorage/<hash>/state.vscdb`.
 Trae stores chats in `workspaceStorage/<hash>/state.vscdb` and
 `globalStorage/state.vscdb`. Override these roots with `TRAE_DIR` or the
 `trae_dirs` configuration key.
-AgentsView watches the `workspaceStorage` subtree and reads chat records from
-that SQLite database. Set `WINDSURF_DIR` or `windsurf_dirs` if your user-data
-directory is somewhere else.
+AgentsView watches `workspaceStorage` and `globalStorage`, then reads chat
+records from those SQLite stores.
+
+Trae local parsing is supported, but remote HTTP and SSH target resolution is
+still disabled. A Trae root is a full user profile, and AgentsView does not
+archive or ship that profile wholesale. The follow-up path is Windsurf-style
+curated file targets only: `state.vscdb`, `state.vscdb-wal`, and
+`workspace.json` for each supported workspace store.
 
 **Positron Assistant default directory** (macOS only):
 

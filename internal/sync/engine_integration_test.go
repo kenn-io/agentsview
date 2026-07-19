@@ -43,6 +43,7 @@ type testEnv struct {
 	ompDir            string
 	kiroDir           string
 	shelleyDir        string
+	traeDir           string
 	windsurfDir       string
 	antigravityCLIDir string
 	db                *db.DB
@@ -280,6 +281,8 @@ func assignFocusedAgentDir(
 		env.kiroDir = dir
 	case parser.AgentShelley:
 		env.shelleyDir = dir
+	case parser.AgentTrae:
+		env.traeDir = dir
 	case parser.AgentWindsurf:
 		env.windsurfDir = dir
 	case parser.AgentAntigravityCLI:

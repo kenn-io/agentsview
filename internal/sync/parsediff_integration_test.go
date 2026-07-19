@@ -57,6 +57,7 @@ func parseDiffAgentDirs(env *testEnv) map[parser.AgentType][]string {
 	add(parser.AgentKiro, env.kiroDir)
 	add(parser.AgentKilo, env.kiloDir)
 	add(parser.AgentShelley, env.shelleyDir)
+	add(parser.AgentTrae, env.traeDir)
 	add(parser.AgentWindsurf, env.windsurfDir)
 	add(parser.AgentAntigravityCLI, env.antigravityCLIDir)
 	return dirs

@@ -211,6 +211,9 @@ func remoteDefaultRootTail(rel string) string {
 // resolveAgentHasOnDiskSource reports whether a file-backed agent has local
 // sources the resolve script should probe via the provider facade.
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
+	if def.Type == parser.AgentTrae {
+		return false
+	}
 	if !def.FileBased {
 		return false
 	}

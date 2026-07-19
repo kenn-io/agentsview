@@ -2082,8 +2082,8 @@ func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
 		DataVersion: db.CurrentDataVersion(),
 	}
 	storedByPath := map[string][]*db.Session{
-		parseDiffSourceKey(firstPath):  {first},
-		parseDiffSourceKey(secondPath): {second},
+		parseDiffSourceKey(parser.AgentOpenCode, firstPath):  {first},
+		parseDiffSourceKey(parser.AgentOpenCode, secondPath): {second},
 	}
 	job := syncJob{
 		path: firstPath,
@@ -2142,8 +2142,8 @@ func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
 		DataVersion: db.CurrentDataVersion(),
 	}
 	storedByPath := map[string][]*db.Session{
-		parseDiffSourceKey(firstPath):  {first},
-		parseDiffSourceKey(secondPath): {second},
+		parseDiffSourceKey(parser.AgentOpenCode, firstPath):  {first},
+		parseDiffSourceKey(parser.AgentOpenCode, secondPath): {second},
 	}
 	job := syncJob{path: firstPath}
 	engine := &Engine{db: dbtest.OpenTestDB(t)}
@@ -2202,6 +2202,16 @@ func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 			"cut path %q must be one exact virtual source", path,
 		)
 	}
+}
+
+func TestParseDiffSourceKeyStateVSCDBIsAgentAware(t *testing.T) {
+	dbPath := "/tmp/state.vscdb"
+	virtualPath := dbPath + "#session-1"
+
+	assert.Equal(t, virtualPath,
+		parseDiffSourceKey(parser.AgentWindsurf, virtualPath))
+	assert.Equal(t, dbPath,
+		parseDiffSourceKey(parser.AgentTrae, virtualPath))
 }
 
 func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {

@@ -245,6 +245,20 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				return root, path, path + "#deleted"
 			},
 		},
+		{
+			name: "Trae multi-session container", agent: parser.AgentTrae,
+			setup: func(t *testing.T) (string, string, string) {
+				root := t.TempDir()
+				path := filepath.Join(root, "globalStorage", "state.vscdb")
+				writeTraeSyncDB(t, path, "reply")
+				store, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = store.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, `{"list":[]}`, "memento/icube-ai-agent-storage")
+				require.NoError(t, err)
+				require.NoError(t, store.Close())
+				return root, path, path + "#rewrite"
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,13 +32,23 @@ var openCodeFamilySQLiteAgents = []parser.AgentType{
 	parser.AgentIcodemate,
 }
 
+const sqliteContainerWholeSourceID = "\x00container"
+
 // sqliteContainerSourceForFile maps a discovered file to its shared SQLite
-// container path and session ID, or ok=false when the file is not an
-// OpenCode-family SQLite virtual source (storage-mode JSON sessions
-// included).
+// container path and session ID, or ok=false when the file is not one of the
+// shared-SQLite sources that can gate-skip before fingerprinting.
 func sqliteContainerSourceForFile(
 	file parser.DiscoveredFile,
 ) (dbPath, sessionID string, ok bool) {
+	if file.Agent == parser.AgentTrae {
+		if dbPath, _, ok := parser.SplitTraeVirtualPath(file.Path); ok {
+			return dbPath, sqliteContainerWholeSourceID, true
+		}
+		if filepath.Base(file.Path) == parser.WindsurfStateDBName {
+			return file.Path, sqliteContainerWholeSourceID, true
+		}
+		return "", "", false
+	}
 	dbName := openCodeFormatDBName(file.Agent)
 	if dbName == "" {
 		return "", "", false
@@ -46,8 +57,8 @@ func sqliteContainerSourceForFile(
 }
 
 // sqliteContainerPathForResultPath maps a processed result path back to its
-// container. Result paths arrive without an agent, so every family DB name
-// is tried.
+// container. Result paths arrive without an agent, so every family DB name is
+// tried before the Trae forms.
 func sqliteContainerPathForResultPath(path string) string {
 	for _, agent := range openCodeFamilySQLiteAgents {
 		dbPath, _, ok := parser.ParseVirtualSourcePathForBase(
@@ -56,6 +67,12 @@ func sqliteContainerPathForResultPath(path string) string {
 		if ok {
 			return dbPath
 		}
+	}
+	if dbPath, _, ok := parser.SplitTraeVirtualPath(path); ok {
+		return dbPath
+	}
+	if filepath.Base(path) == parser.WindsurfStateDBName {
+		return path
 	}
 	return ""
 }
@@ -113,7 +130,40 @@ func (e *Engine) captureSQLiteContainerStates() map[string]parser.SQLiteContaine
 			}
 		}
 	}
+	for _, dir := range e.agentDirs[parser.AgentTrae] {
+		if dir == "" || strings.HasPrefix(dir, "s3://") {
+			continue
+		}
+		for _, dbPath := range traeContainerPaths(filepath.Clean(dir)) {
+			if state, ok := parser.StatSQLiteContainerState(dbPath); ok {
+				states[dbPath] = state
+			}
+		}
+	}
 	return states
+}
+
+func traeContainerPaths(root string) []string {
+	var paths []string
+	global := filepath.Join(root, "globalStorage", parser.WindsurfStateDBName)
+	if info, err := os.Stat(global); err == nil && !info.IsDir() {
+		paths = append(paths, global)
+	}
+	workspace := filepath.Join(root, "workspaceStorage")
+	if entries, err := os.ReadDir(workspace); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(
+				workspace, entry.Name(), parser.WindsurfStateDBName,
+			)
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths
 }
 
 // beginSQLiteContainerPass starts a pass's gate bookkeeping from the

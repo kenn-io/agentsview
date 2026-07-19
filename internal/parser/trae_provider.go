@@ -1,7 +1,7 @@
 package parser
 
 import (
-	"context"
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -11,99 +11,49 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const traeStateDBName = "state.vscdb"
-
 const traeStorageKey = "memento/icube-ai-agent-storage"
-
-var _ Provider = (*traeProvider)(nil)
-
-type traeProviderFactory struct{ def AgentDef }
+const traeSnapshotCacheMaxBytes int64 = 32 << 20
 
 func newTraeProviderFactory(def AgentDef) ProviderFactory {
-	return traeProviderFactory{def: cloneAgentDef(def)}
+	snapshots := newTraeSnapshotCache()
+	memberPresent := newTraeMemberPresence(snapshots)
+	return NewMultiSessionProviderFactory(def, traeProviderCapabilities(), func(cfg ProviderConfig) multiSessionContainerSourceSet {
+		return NewMultiSessionContainerSourceSet(AgentTrae, cfg.Roots,
+			WithContainerDiscovery(traeDiscoverContainers),
+			WithWatchRoots(traeWatchRoots),
+			WithChangedPathClassifier(traeClassifyPath),
+			WithMemberLookup(func(root, rawID string) (multiSessionMatch, bool) {
+				return traeFindMember(root, rawID, snapshots)
+			}),
+			WithFingerprint(traeFingerprintSource),
+			WithContainerParseOutcome(func(src multiSessionSource, req ParseRequest) (ParseOutcome, error) {
+				return traeParseContainerOutcome(snapshots, src, req)
+			}),
+			WithMemberParse(func(src multiSessionSource, req ParseRequest) (*ParseResult, error) {
+				return traeParseMember(snapshots, src, req)
+			}),
+			WithMemberPresence(memberPresent),
+		)
+	})
 }
 
-func (f traeProviderFactory) Definition() AgentDef { return cloneAgentDef(f.def) }
+type traeDB struct{ path, project string }
 
-func (f traeProviderFactory) Capabilities() Capabilities { return traeProviderCapabilities() }
-
-func (f traeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
-	cfg = cfg.Clone()
-	return &traeProvider{
-		ProviderBase: ProviderBase{Def: cloneAgentDef(f.def), Caps: traeProviderCapabilities(), Config: cfg},
-		sources:      newTraeSourceSet(cfg.Roots),
+func traeDiscoverContainers(root string) []string {
+	dbs := traeDBs(root)
+	paths := make([]string, 0, len(dbs))
+	for _, db := range dbs {
+		paths = append(paths, db.path)
 	}
+	return paths
 }
 
-type traeProvider struct {
-	ProviderBase
-	sources traeSourceSet
-}
-
-func (p *traeProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	return p.sources.Discover(ctx)
-}
-
-func (p *traeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
-	return p.sources.WatchPlan(ctx)
-}
-
-func (p *traeProvider) SourcesForChangedPath(ctx context.Context, req ChangedPathRequest) ([]SourceRef, error) {
-	return p.sources.SourcesForChangedPath(ctx, req)
-}
-
-func (p *traeProvider) FindSource(ctx context.Context, req FindSourceRequest) (SourceRef, bool, error) {
-	return p.sources.FindSource(ctx, ProviderFindRequestWithRawSessionID(p.Def, req))
-}
-
-func (p *traeProvider) Fingerprint(ctx context.Context, source SourceRef) (SourceFingerprint, error) {
-	return p.sources.Fingerprint(ctx, source)
-}
-
-func (p *traeProvider) Parse(ctx context.Context, req ParseRequest) (ParseOutcome, error) {
-	if err := ctx.Err(); err != nil {
-		return ParseOutcome{}, err
-	}
-	src, ok := p.sources.sourceFromRef(req.Source)
-	if !ok {
-		return ParseOutcome{}, fmt.Errorf("trae source path unavailable")
-	}
-	if _, err := os.Stat(src.DBPath); err != nil {
-		if os.IsNotExist(err) {
-			return ParseOutcome{ResultSetComplete: true, SkipReason: SkipNoSession}, nil
-		}
-		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
-	}
-	sess, msgs, err := parseTraeSession(src.DBPath, src.SessionID, src.Project, firstNonEmptyJSONLString(req.Machine, p.Config.Machine), src.VirtualPath)
-	if err == sql.ErrNoRows || sess == nil {
-		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
-	}
-	if err != nil {
-		return ParseOutcome{}, err
-	}
-	if req.Fingerprint.Hash != "" {
-		sess.File.Hash, sess.File.Size, sess.File.Mtime = req.Fingerprint.Hash, req.Fingerprint.Size, req.Fingerprint.MTimeNS
-	}
-	return ParseOutcome{Results: []ParseResultOutcome{{Result: ParseResult{Session: *sess, Messages: msgs}, DataVersion: DataVersionCurrent}}, ResultSetComplete: true, ForceReplace: true}, nil
-}
-
-type traeSource struct{ Root, DBPath, SessionID, Project, VirtualPath string }
-
-type traeSourceSet struct{ roots []string }
-
-func newTraeSourceSet(roots []string) traeSourceSet {
-	return traeSourceSet{roots: cleanJSONLRoots(roots)}
-}
-
-type traeDB struct {
-	path, project string
-	mtime         int64
-}
-
-func (s traeSourceSet) dbs(root string) []traeDB {
+func traeDBs(root string) []traeDB {
 	var dbs []traeDB
 	workspace := filepath.Join(filepath.Clean(root), "workspaceStorage")
 	if entries, err := os.ReadDir(workspace); err == nil {
@@ -113,13 +63,13 @@ func (s traeSourceSet) dbs(root string) []traeDB {
 			}
 			path := filepath.Join(workspace, entry.Name(), traeStateDBName)
 			if info, err := os.Stat(path); err == nil && !info.IsDir() {
-				dbs = append(dbs, traeDB{path, traeWorkspaceProject(path), info.ModTime().UnixNano()})
+				dbs = append(dbs, traeDB{path, traeWorkspaceProject(path)})
 			}
 		}
 	}
 	global := filepath.Join(filepath.Clean(root), "globalStorage", traeStateDBName)
 	if info, err := os.Stat(global); err == nil && !info.IsDir() {
-		dbs = append(dbs, traeDB{global, "unknown", info.ModTime().UnixNano()})
+		dbs = append(dbs, traeDB{global, "unknown"})
 	}
 	sort.Slice(dbs, func(i, j int) bool { return dbs[i].path < dbs[j].path })
 	return dbs
@@ -133,173 +83,252 @@ func traeWorkspaceProject(path string) string {
 	return project
 }
 
-func (s traeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	var sources []SourceRef
-	seen := map[string]struct{}{}
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		for _, db := range s.dbs(root) {
-			records, err := listTraeSessionRecords(db.path)
-			if err != nil {
-				return nil, err
-			}
-			for _, record := range records {
-				ref := s.newSourceRef(root, db.path, record.SessionID, db.project)
-				ref.DiscoveryMTimeNS = db.mtime
-				addJSONLSource(ref, &sources, seen)
-			}
-		}
-	}
-	sortJSONLSources(sources)
-	return sources, nil
-}
-
-func (s traeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
+func traeWatchRoots(configured []string) []WatchRoot {
 	var roots []WatchRoot
-	for _, root := range s.roots {
+	for _, root := range configured {
 		for _, subdir := range []string{"workspaceStorage", "globalStorage"} {
 			path := filepath.Join(filepath.Clean(root), subdir)
 			roots = append(roots, WatchRoot{Path: path, Recursive: subdir == "workspaceStorage", IncludeGlobs: []string{traeStateDBName, traeStateDBName + "-wal", "workspace.json"}, DebounceKey: string(AgentTrae) + ":" + subdir + ":" + path})
 		}
 	}
-	return WatchPlan{Roots: roots}, nil
+	return roots
 }
 
-func (s traeSourceSet) SourcesForChangedPath(ctx context.Context, req ChangedPathRequest) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func traeClassifyPath(root, path string, allowMissing bool) (multiSessionMatch, bool) {
+	path = filepath.Clean(path)
+	if dbPath, id, ok := splitTraeVirtualPath(path); ok && traeDBBelongsToRoot(root, dbPath, !allowMissing) {
+		return traeMatch(dbPath, id), true
 	}
-	for _, root := range s.roots {
-		path, ok := s.dbPathForEvent(root, req)
-		if !ok {
-			continue
-		}
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				return nil, nil
-			}
-			return nil, err
-		}
-		return s.sourcesForDB(root, path)
+	if traeDBBelongsToRoot(root, path, !allowMissing) {
+		return traeMatch(path, ""), true
 	}
-	return nil, nil
+	if allowMissing {
+		if dbPath, ok := traeDBPathForEvent(root, path); ok {
+			return traeMatch(dbPath, ""), true
+		}
+	}
+	return multiSessionMatch{}, false
 }
 
-func (s traeSourceSet) FindSource(ctx context.Context, req FindSourceRequest) (SourceRef, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return SourceRef{}, false, err
-	}
-	for _, candidate := range []string{req.StoredFilePath, req.FingerprintKey} {
-		for _, root := range s.roots {
-			if ref, ok := s.sourceRef(root, candidate); ok {
-				return ref, true, nil
-			}
-		}
-	}
-	if req.RawSessionID == "" {
-		return SourceRef{}, false, nil
-	}
-	for _, root := range s.roots {
-		for _, db := range s.dbs(root) {
-			records, err := listTraeSessionRecords(db.path)
-			if err != nil {
-				return SourceRef{}, false, err
-			}
-			for _, record := range records {
-				if record.SessionID == req.RawSessionID {
-					return s.newSourceRef(root, db.path, record.SessionID, db.project), true, nil
-				}
-			}
-		}
-	}
-	return SourceRef{}, false, nil
-}
-
-func (s traeSourceSet) Fingerprint(ctx context.Context, source SourceRef) (SourceFingerprint, error) {
-	if err := ctx.Err(); err != nil {
-		return SourceFingerprint{}, err
-	}
-	src, ok := s.sourceFromRef(source)
-	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("trae source path unavailable")
-	}
-	info, err := os.Stat(src.DBPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return SourceFingerprint{Key: src.VirtualPath}, nil
-		}
-		return SourceFingerprint{}, err
-	}
-	manifest := ""
-	if filepath.Base(filepath.Dir(src.DBPath)) != "globalStorage" {
-		manifest = windsurfWorkspaceManifestPath(src.DBPath)
-	}
-	combined := antigravityCLICombinedFileInfo(info, src.DBPath+"-wal", manifest)
-	hash, err := traeSourceHash(src.DBPath, manifest)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	return SourceFingerprint{Key: src.VirtualPath, Size: combined.Size(), MTimeNS: combined.ModTime().UnixNano(), Hash: hash}, nil
-}
-
-func (s traeSourceSet) sourceFromRef(source SourceRef) (traeSource, bool) {
-	if src, ok := source.Opaque.(traeSource); ok && src.DBPath != "" && src.SessionID != "" {
-		return src, true
-	}
-	for _, candidate := range []string{source.DisplayPath, source.FingerprintKey, source.Key} {
-		for _, root := range s.roots {
-			if ref, ok := s.sourceRef(root, candidate); ok {
-				return ref.Opaque.(traeSource), true
-			}
-		}
-	}
-	return traeSource{}, false
-}
-
-func (s traeSourceSet) sourceRef(root, virtualPath string) (SourceRef, bool) {
-	dbPath, sessionID, ok := splitTraeVirtualPath(virtualPath)
-	if !ok || sessionID == "" || !s.dbBelongsToRoot(root, dbPath) {
-		return SourceRef{}, false
-	}
+func traeMatch(dbPath, id string) multiSessionMatch {
 	project := "unknown"
 	if filepath.Base(filepath.Dir(dbPath)) != "globalStorage" {
 		project = traeWorkspaceProject(dbPath)
 	}
-	return s.newSourceRef(root, dbPath, sessionID, project), true
+	path := dbPath
+	if id != "" {
+		path = traeVirtualPath(dbPath, id)
+	}
+	return multiSessionMatch{Path: path, Container: dbPath, MemberID: id, ProjectHint: project}
 }
 
-func (s traeSourceSet) newSourceRef(root, dbPath, sessionID, project string) SourceRef {
-	path := traeVirtualPath(dbPath, sessionID)
-	return SourceRef{Provider: AgentTrae, Key: path, DisplayPath: path, FingerprintKey: path, ProjectHint: project, Opaque: traeSource{root, dbPath, sessionID, project, path}}
+func traeFindMember(
+	root, rawID string,
+	snapshots *traeSnapshotCache,
+) (multiSessionMatch, bool) {
+	for _, db := range traeDBs(root) {
+		snapshot, err := snapshots.load(db.path)
+		if err != nil {
+			continue
+		}
+		for _, record := range snapshot.records {
+			if record.SessionID == rawID {
+				return traeMatch(db.path, rawID), true
+			}
+		}
+	}
+	return multiSessionMatch{}, false
 }
 
-func (s traeSourceSet) sourcesForDB(root, path string) ([]SourceRef, error) {
-	records, err := listTraeSessionRecords(path)
+func traeFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
+	info, err := os.Stat(src.Container)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return SourceFingerprint{}, nil
+		}
+		return SourceFingerprint{}, err
+	}
+	manifest := ""
+	if filepath.Base(filepath.Dir(src.Container)) != "globalStorage" {
+		manifest = windsurfWorkspaceManifestPath(src.Container)
+	}
+	combined := antigravityCLICombinedFileInfo(info, src.Container+"-wal", manifest)
+	hash, err := traeSourceHash(src.Container, manifest)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	return SourceFingerprint{Size: combined.Size(), MTimeNS: combined.ModTime().UnixNano(), Hash: hash}, nil
+}
+
+func traeParseContainerOutcome(
+	snapshots *traeSnapshotCache,
+	src multiSessionSource,
+	req ParseRequest,
+) (ParseOutcome, error) {
+	snapshot, err := snapshots.load(src.Container)
+	if err != nil {
+		return ParseOutcome{}, err
+	}
+	if !snapshot.authoritative {
+		return ParseOutcome{
+			ResultSetComplete: false,
+			SkipReason:        SkipNoSession,
+		}, nil
+	}
+	results := make([]ParseResultOutcome, 0, len(snapshot.records))
+	for _, record := range snapshot.records {
+		result, err := traeParseRecord(src, record, req)
+		if err != nil {
+			return ParseOutcome{}, err
+		}
+		if result != nil {
+			results = append(results, ParseResultOutcome{
+				Result:      *result,
+				DataVersion: DataVersionCurrent,
+			})
+		}
+	}
+	if len(results) == 0 {
+		return ParseOutcome{
+			ResultSetComplete: snapshot.complete,
+			ForceReplace:      snapshot.complete,
+			SkipReason:        SkipNoSession,
+		}, nil
+	}
+	return ParseOutcome{
+		Results:           results,
+		ResultSetComplete: snapshot.complete,
+		ForceReplace:      true,
+	}, nil
+}
+
+func traeParseMember(
+	snapshots *traeSnapshotCache,
+	src multiSessionSource,
+	req ParseRequest,
+) (*ParseResult, error) {
+	snapshot, err := snapshots.load(src.Container)
 	if err != nil {
 		return nil, err
 	}
-	project := "unknown"
-	if filepath.Base(filepath.Dir(path)) != "globalStorage" {
-		project = traeWorkspaceProject(path)
+	if !snapshot.authoritative {
+		return nil, fmt.Errorf("trae storage in %s is not an explicit session list", src.Container)
 	}
-	sources := make([]SourceRef, 0, len(records))
-	seen := map[string]struct{}{}
-	for _, record := range records {
-		addJSONLSource(s.newSourceRef(root, path, record.SessionID, project), &sources, seen)
+	record, ok := snapshot.record(strings.TrimPrefix(src.MemberID, "trae:"))
+	if !ok && !snapshot.complete {
+		return nil, fmt.Errorf("trae storage in %s contains malformed session entries", src.Container)
 	}
-	sortJSONLSources(sources)
-	return sources, nil
+	if !ok {
+		return nil, nil
+	}
+	result, err := traeParseRecord(src, record, req)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return result, nil
 }
 
-func (s traeSourceSet) dbPathForEvent(root string, req ChangedPathRequest) (string, bool) {
+func traeParseRecord(src multiSessionSource, record traeSessionRecord, req ParseRequest) (*ParseResult, error) {
+	sess, msgs := parseTraeSessionRecord(
+		record.Session,
+		req.Source.ProjectHint,
+		req.Machine,
+		traeVirtualPath(src.Container, record.SessionID),
+	)
+	if sess == nil {
+		return nil, nil
+	}
+	sess.File.Hash = traeRecordHash(record.Hash, req.Source.ProjectHint)
+	return &ParseResult{Session: *sess, Messages: msgs}, nil
+}
+
+func newTraeMemberPresence(snapshots *traeSnapshotCache) func(src multiSessionSource) bool {
+	return func(src multiSessionSource) bool {
+		if src.MemberID == "" {
+			return IsRegularFile(src.Container)
+		}
+		if !IsRegularFile(src.Container) {
+			snapshots.delete(src.Container)
+			return false
+		}
+		snapshot, err := snapshots.load(src.Container)
+		if err != nil {
+			return true
+		}
+		if !snapshot.authoritative || !snapshot.complete {
+			return true
+		}
+		_, ok := snapshot.ids[strings.TrimPrefix(src.MemberID, "trae:")]
+		return ok
+	}
+}
+
+type traeSnapshotCacheEntry struct {
+	state SQLiteContainerState
+	data  traeSessionSnapshot
+}
+
+type traeSnapshotCache struct {
+	mu     sync.RWMutex
+	byPath map[string]traeSnapshotCacheEntry
+	bytes  int64
+}
+
+func newTraeSnapshotCache() *traeSnapshotCache {
+	return &traeSnapshotCache{byPath: make(map[string]traeSnapshotCacheEntry)}
+}
+
+func (c *traeSnapshotCache) load(path string) (traeSessionSnapshot, error) {
+	state, stateOK := StatSQLiteContainerState(path)
+	if stateOK {
+		c.mu.RLock()
+		entry, ok := c.byPath[path]
+		c.mu.RUnlock()
+		if ok && entry.state == state {
+			return entry.data, nil
+		}
+	}
+
+	snapshot, err := loadTraeSessionSnapshot(path)
+	if err != nil {
+		c.delete(path)
+		return traeSessionSnapshot{}, err
+	}
+	if !stateOK {
+		c.delete(path)
+		return snapshot, nil
+	}
+	c.mu.Lock()
+	if existing, ok := c.byPath[path]; ok {
+		c.bytes -= existing.data.bytes
+	}
+	if c.bytes+snapshot.bytes > traeSnapshotCacheMaxBytes {
+		clear(c.byPath)
+		c.bytes = 0
+	}
+	if snapshot.bytes > traeSnapshotCacheMaxBytes {
+		c.mu.Unlock()
+		return snapshot, nil
+	}
+	c.byPath[path] = traeSnapshotCacheEntry{state: state, data: snapshot}
+	c.bytes += snapshot.bytes
+	c.mu.Unlock()
+	return snapshot, nil
+}
+
+func (c *traeSnapshotCache) delete(path string) {
+	c.mu.Lock()
+	if existing, ok := c.byPath[path]; ok {
+		c.bytes -= existing.data.bytes
+	}
+	delete(c.byPath, path)
+	c.mu.Unlock()
+}
+
+func traeDBPathForEvent(root, path string) (string, bool) {
 	for _, subdir := range []string{"workspaceStorage", "globalStorage"} {
 		watch := filepath.Join(filepath.Clean(root), subdir)
-		if req.WatchRoot != "" && !samePath(req.WatchRoot, watch) {
-			continue
-		}
-		rel, ok := relUnder(watch, filepath.Clean(req.Path))
+		rel, ok := relUnder(watch, filepath.Clean(path))
 		if !ok {
 			continue
 		}
@@ -314,15 +343,16 @@ func (s traeSourceSet) dbPathForEvent(root string, req ChangedPathRequest) (stri
 	return "", false
 }
 
-func (s traeSourceSet) dbBelongsToRoot(root, path string) bool {
+func traeDBBelongsToRoot(root, path string, requireRegular bool) bool {
 	for _, subdir := range []string{"workspaceStorage", "globalStorage"} {
 		rel, ok := relUnder(filepath.Join(filepath.Clean(root), subdir), filepath.Clean(path))
 		if !ok {
 			continue
 		}
 		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if (subdir == "globalStorage" && len(parts) == 1 && parts[0] == traeStateDBName) || (subdir == "workspaceStorage" && len(parts) == 2 && parts[1] == traeStateDBName) {
-			return true
+		valid := (subdir == "globalStorage" && len(parts) == 1 && parts[0] == traeStateDBName) || (subdir == "workspaceStorage" && len(parts) == 2 && parts[1] == traeStateDBName)
+		if valid {
+			return !requireRegular || IsRegularFile(path)
 		}
 	}
 	return false
@@ -330,40 +360,162 @@ func (s traeSourceSet) dbBelongsToRoot(root, path string) bool {
 
 type traeSessionRecord struct {
 	SessionID string
-	Data      []byte
+	Session   traeSession
+	Hash      string
 }
 
-func listTraeSessionRecords(path string) ([]traeSessionRecord, error) {
+type traeSessionSnapshot struct {
+	records       []traeSessionRecord
+	ids           map[string]struct{}
+	authoritative bool
+	complete      bool
+	bytes         int64
+}
+
+func (s traeSessionSnapshot) record(id string) (traeSessionRecord, bool) {
+	for _, record := range s.records {
+		if record.SessionID == id {
+			return record, true
+		}
+	}
+	return traeSessionRecord{}, false
+}
+
+func loadTraeSessionSnapshot(path string) (traeSessionSnapshot, error) {
 	value, err := readTraeValue(path)
 	if err != nil {
-		return nil, err
+		return traeSessionSnapshot{}, err
+	}
+	return decodeTraeSessionSnapshot(value)
+}
+
+func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
+	snapshot := traeSessionSnapshot{
+		ids:      map[string]struct{}{},
+		complete: true,
 	}
 	if value == "" {
-		return nil, nil
+		snapshot.complete = false
+		return snapshot, nil
 	}
-	var store traeStore
+	var store map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(value), &store); err != nil {
-		return nil, nil
+		return traeSessionSnapshot{}, err
 	}
-	records := make([]traeSessionRecord, 0, len(store.List))
+	rawList, ok := store["list"]
+	if !ok || !traeExplicitList(rawList) {
+		snapshot.complete = false
+		return snapshot, nil
+	}
+	snapshot.authoritative = true
+	var list []json.RawMessage
+	if err := json.Unmarshal(rawList, &list); err != nil {
+		return traeSessionSnapshot{}, err
+	}
+	snapshot.records = make([]traeSessionRecord, 0, len(list))
 	seen := map[string]struct{}{}
-	for _, rawSession := range store.List {
+	for _, raw := range list {
+		if id := traeSessionIDHint(raw); id != "" {
+			snapshot.ids[id] = struct{}{}
+		}
 		var session traeSession
-		if err := json.Unmarshal(rawSession, &session); err != nil {
+		if err := json.Unmarshal(raw, &session); err != nil {
+			snapshot.complete = false
 			continue
 		}
 		id := strings.TrimSpace(session.SessionID)
 		if id == "" || len(session.Messages) == 0 {
+			snapshot.complete = false
+			continue
+		}
+		if !traeSessionProducesMessages(session) {
+			snapshot.complete = false
 			continue
 		}
 		if _, ok := seen[id]; ok {
+			snapshot.complete = false
 			continue
 		}
 		seen[id] = struct{}{}
-		records = append(records, traeSessionRecord{id, append([]byte(nil), rawSession...)})
+		snapshot.records = append(snapshot.records, traeSessionRecord{
+			SessionID: id,
+			Session:   session,
+			Hash:      traeRecordHash(string(raw), ""),
+		})
+		snapshot.bytes += traeSessionApproxBytes(session)
 	}
-	sort.Slice(records, func(i, j int) bool { return records[i].SessionID < records[j].SessionID })
-	return records, nil
+	sort.Slice(snapshot.records, func(i, j int) bool { return snapshot.records[i].SessionID < snapshot.records[j].SessionID })
+	return snapshot, nil
+}
+
+func traeExplicitList(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '['
+}
+
+func traeSessionIDHint(raw json.RawMessage) string {
+	var hint struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(raw, &hint); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(hint.SessionID)
+}
+
+func traeSessionProducesMessages(session traeSession) bool {
+	for _, msg := range session.Messages {
+		role := RoleType(strings.ToLower(strings.TrimSpace(msg.Role)))
+		if role != RoleUser && role != RoleAssistant {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" && role == RoleAssistant {
+			content = traeAssistantFallback(msg.AgentTaskContent)
+		}
+		if content != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func traeSessionApproxBytes(session traeSession) int64 {
+	size := int64(len(session.SessionID) + len(session.Model))
+	for _, msg := range session.Messages {
+		size += int64(
+			len(msg.Role) +
+				len(msg.Content) +
+				len(msg.AgentTaskContent) +
+				len(msg.Model),
+		)
+	}
+	return size
+}
+
+func traeSelectRawRecord(path, id string) (json.RawMessage, bool, error) {
+	value, err := readTraeValue(path)
+	if err != nil {
+		return nil, false, err
+	}
+	var store map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &store); err != nil {
+		return nil, false, err
+	}
+	rawList, ok := store["list"]
+	if !ok || !traeExplicitList(rawList) {
+		return nil, false, nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(rawList, &list); err != nil {
+		return nil, false, err
+	}
+	for _, raw := range list {
+		if traeSessionIDHint(raw) == strings.TrimPrefix(id, "trae:") {
+			return raw, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 func readTraeValue(path string) (string, error) {
@@ -383,9 +535,6 @@ func readTraeValue(path string) (string, error) {
 	return value, nil
 }
 
-type traeStore struct {
-	List []json.RawMessage `json:"list"`
-}
 type traeSession struct {
 	SessionID string        `json:"sessionId"`
 	CreatedAt traeTime      `json:"createdAt"`
@@ -401,7 +550,6 @@ type traeMessage struct {
 	Model            string          `json:"model,omitempty"`
 	TurnIndex        int             `json:"turnIndex"`
 }
-
 type traeTime struct{ time.Time }
 
 func (t *traeTime) UnmarshalJSON(data []byte) error {
@@ -424,25 +572,7 @@ func (t *traeTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func parseTraeSession(path, id, project, machine, virtualPath string) (*ParsedSession, []ParsedMessage, error) {
-	records, err := listTraeSessionRecords(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	var selected traeSession
-	found := false
-	for _, record := range records {
-		if record.SessionID == id {
-			if err := json.Unmarshal(record.Data, &selected); err != nil {
-				return nil, nil, err
-			}
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil, nil, sql.ErrNoRows
-	}
+func parseTraeSessionRecord(selected traeSession, project, machine, virtualPath string) (*ParsedSession, []ParsedMessage) {
 	var messages []ParsedMessage
 	first := ""
 	started := selected.CreatedAt.Time
@@ -475,17 +605,17 @@ func parseTraeSession(path, id, project, machine, virtualPath string) (*ParsedSe
 		messages = append(messages, ParsedMessage{Ordinal: len(messages), Role: role, Content: content, Timestamp: stamp, ContentLength: len(content), Model: model})
 	}
 	if len(messages) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	ended := selected.UpdatedAt.Time
 	if ended.IsZero() {
 		ended = messages[len(messages)-1].Timestamp
 	}
-	sess := &ParsedSession{ID: "trae:" + strings.TrimPrefix(id, "trae:"), Project: project, Machine: machine, Agent: AgentTrae, SourceSessionID: id, FirstMessage: first, StartedAt: started, EndedAt: ended, MessageCount: len(messages), File: FileInfo{Path: virtualPath}}
+	sess := &ParsedSession{ID: "trae:" + strings.TrimPrefix(selected.SessionID, "trae:"), Project: project, Machine: machine, Agent: AgentTrae, SourceSessionID: selected.SessionID, FirstMessage: first, StartedAt: started, EndedAt: ended, MessageCount: len(messages), File: FileInfo{Path: virtualPath}}
 	if started.IsZero() {
 		sess.StartedAt = messages[0].Timestamp
 	}
-	return sess, messages, nil
+	return sess, messages
 }
 
 func traeAssistantFallback(raw json.RawMessage) string {
@@ -525,17 +655,15 @@ func splitTraeVirtualPath(path string) (string, string, bool) {
 }
 
 func WriteTraeSessionJSON(w io.Writer, path, id string) error {
-	records, err := listTraeSessionRecords(path)
+	record, ok, err := traeSelectRawRecord(path, id)
 	if err != nil {
 		return err
 	}
-	for _, record := range records {
-		if record.SessionID == id {
-			_, err = w.Write(record.Data)
-			return err
-		}
+	if !ok {
+		return fmt.Errorf("trae session %s not found in %s: %w", id, path, os.ErrNotExist)
 	}
-	return fmt.Errorf("trae session %s not found in %s: %w", id, path, os.ErrNotExist)
+	_, err = w.Write(record)
+	return err
 }
 
 func traeSourceHash(path, manifest string) (string, error) {
@@ -558,9 +686,20 @@ func traeSourceHash(path, manifest string) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
+func traeRecordHash(raw, projectHint string) string {
+	sum := sha256.New()
+	_, _ = sum.Write([]byte(raw))
+	if projectHint != "" {
+		_, _ = sum.Write([]byte{0})
+		_, _ = sum.Write([]byte(projectHint))
+	}
+	return fmt.Sprintf("%x", sum.Sum(nil))
+}
+
 func traeProviderCapabilities() Capabilities {
 	caps := windsurfProviderCapabilities()
-	caps.Source.StoredSourceHints = CapabilityUnsupported
+	caps.Source = multiSessionContainerSourceCapabilities(CapabilitySupported, CapabilitySupported)
+	caps.Source.CompositeFingerprint = CapabilitySupported
 	caps.Content.AggregateUsageEvents = CapabilityUnsupported
 	caps.Content.ToolCalls = CapabilityUnsupported
 	caps.Content.ToolResults = CapabilityUnsupported

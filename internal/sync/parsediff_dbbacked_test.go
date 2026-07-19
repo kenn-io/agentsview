@@ -10,6 +10,7 @@ package sync_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,6 +116,39 @@ func createWindsurfWorkspaceDB(t *testing.T, root, payload string) string {
 	)
 	require.NoError(t, err)
 	return dbPath
+}
+
+func createTraeStateDB(t *testing.T, root string, sessions []any) string {
+	t.Helper()
+	storageDir := filepath.Join(root, "globalStorage")
+	require.NoError(t, os.MkdirAll(storageDir, 0o755))
+	dbPath := filepath.Join(storageDir, "state.vscdb")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+	value, err := json.Marshal(map[string]any{"list": sessions})
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
+		"memento/icube-ai-agent-storage",
+		string(value),
+	)
+	require.NoError(t, err)
+	return dbPath
+}
+
+func traeParseDiffSession(id, reply string) map[string]any {
+	return map[string]any{
+		"sessionId": id,
+		"createdAt": 1715340600000,
+		"updatedAt": 1715340900000,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "same prompt"},
+			map[string]any{"role": "assistant", "content": reply},
+		},
+	}
 }
 
 // TestParseDiffCoversForge proves Forge's shared .forge.db, discovered as one
@@ -372,4 +406,42 @@ func TestParseDiffWindsurfLimitScopesPerSession(t *testing.T) {
 	require.Len(t, skipped, 1, "exactly one skipped Windsurf session listed")
 	assert.Contains(t, skipped[0].Reason, "limit",
 		"cut Windsurf session reads as not-sampled")
+}
+
+func TestParseDiffTraePartialRemovalUsesContainerPresenceSweep(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentTrae)
+	dbPath := createTraeStateDB(t, env.traeDir, []any{
+		traeParseDiffSession("trae-a", "Answer A."),
+		traeParseDiffSession("trae-b", "Answer B."),
+	})
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 2})
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	value, err := json.Marshal(map[string]any{
+		"list": []any{traeParseDiffSession("trae-a", "Answer A.")},
+	})
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE ItemTable SET value = ? WHERE key = ?`,
+		string(value), "memento/icube-ai-agent-storage",
+	)
+	require.NoError(t, err)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentTrae},
+	})
+
+	assert.Equal(t, 1, report.FilesExamined, "Trae parses one container source")
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 2, Identical: 1, Changed: 1,
+	}, report.Totals)
+	sd := findSessionDiff(report, "trae:trae-b")
+	require.NotNil(t, sd, "removed Trae sibling must be listed")
+	assert.Equal(t, sync.DiffChanged, sd.Class)
+	assert.ElementsMatch(t, []string{sync.FieldPresence},
+		sessionDiffFieldNames(sd, false))
+	assert.True(t, report.HasFailures(),
+		"partial Trae removal must trip --fail-on-change")
 }
