@@ -584,6 +584,289 @@ func TestExtractCandidatesLegacyNullRowsSettleAfterStamp(t *testing.T) {
 		"an unstamped legacy row must re-open for its settling revisit")
 }
 
+func seedCommitUnitSession(t *testing.T, d *DB, id string) *Session {
+	t.Helper()
+	seedExtractCandidate(t, d, id, 2*time.Hour, nil)
+	insertMessages(t, d,
+		recallEvidenceMessage(id, 0, "user", "ask", id+"-uuid-0"),
+		recallEvidenceMessage(id, 1, "assistant", "work", id+"-uuid-1"),
+		recallEvidenceMessage(id, 2, "assistant", "done", id+"-uuid-2"),
+	)
+	// The message writes atomically revoked the scan stamp; restore it the
+	// way a completed rescan would.
+	require.NoError(t, d.ReplaceSessionSecretFindings(id, nil, 0, "rules-v1"))
+	session, err := d.GetSessionFull(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	return session
+}
+
+func commitUnitEntry(id, sessionID string, start, end int) RecallEntry {
+	return RecallEntry{
+		ID: id, Type: "fact", ReviewState: "unreviewed_auto",
+		Title: "t", Body: "b",
+		SourceSessionID: sessionID, SourceRunID: "fp-a",
+		ProvenanceOK: true,
+		Evidence: []RecallEvidence{{
+			SessionID:           sessionID,
+			MessageStartOrdinal: start,
+			MessageEndOrdinal:   end,
+		}},
+	}
+}
+
+func TestCommitExtractedUnitBindsEvidenceAndAdvances(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := seedCommitUnitSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	commit := ExtractUnitCommit{
+		SessionID: "sess-1", Fingerprint: "fp-a", Digest: "dg", Cursor: 0,
+		ScanVersions:       []string{"rules-v1"},
+		MessageCount:       session.MessageCount,
+		TranscriptRevision: session.TranscriptRevision,
+		LocalModifiedAt:    session.LocalModifiedAt,
+		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 0, 1)},
+	}
+	inserted, err := d.CommitExtractedUnit(ctx, commit)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inserted)
+
+	entry, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Len(t, entry.Evidence, 1)
+	ev := entry.Evidence[0]
+	assert.NotEmpty(t, ev.ContentDigest,
+		"evidence must carry the host-derived content digest, or the "+
+			"reconciler revokes provenance on the first transcript write")
+	assert.Equal(t, "sess-1-uuid-0", ev.MessageStartSourceUUID)
+	assert.Equal(t, "sess-1-uuid-1", ev.MessageEndSourceUUID)
+
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, progress.UnitCursor)
+	assert.Equal(t, ExtractProgressPartial, progress.State)
+
+	commit.Cursor = 1
+	commit.Entries = []RecallEntry{commitUnitEntry("e-2", "sess-1", 2, 2)}
+	_, err = d.CommitExtractedUnit(ctx, commit)
+	require.NoError(t, err)
+	progress, _, err = d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, progress.State)
+}
+
+func TestCommitExtractedUnitRefusesDriftAndIneligibility(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := seedCommitUnitSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	commit := ExtractUnitCommit{
+		SessionID: "sess-1", Fingerprint: "fp-a", Digest: "dg", Cursor: 0,
+		ScanVersions:       []string{"rules-v1"},
+		MessageCount:       session.MessageCount,
+		TranscriptRevision: session.TranscriptRevision,
+		LocalModifiedAt:    session.LocalModifiedAt,
+		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 0, 1)},
+	}
+
+	// The snapshot guard is verified inside the insert transaction: a
+	// commit carrying a stale view must not persist anything.
+	drifted := commit
+	drifted.MessageCount = 99
+	_, err = d.CommitExtractedUnit(ctx, drifted)
+	require.ErrorIs(t, err, ErrExtractSessionDrifted)
+	entry, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	assert.Nil(t, entry, "a drifted commit must roll back its entries")
+	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Zero(t, progress.UnitCursor,
+		"a drifted commit must not advance the cursor")
+
+	// A candidate-confidence finding recorded between the caller's recheck
+	// and the commit makes the session ineligible without changing the
+	// leak count.
+	finding := SecretFinding{
+		SessionID: "sess-1", RuleName: "jwt", Confidence: "candidate",
+		LocationKind: "message", RedactedMatch: "eyJ…",
+		RulesVersion: "rules-v1",
+	}
+	require.NoError(t, d.ReplaceSessionSecretFindings(
+		"sess-1", []SecretFinding{finding}, 0, "rules-v1"))
+	fresh, err := d.GetSessionFull(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, fresh)
+	withFinding := commit
+	withFinding.TranscriptRevision = fresh.TranscriptRevision
+	withFinding.LocalModifiedAt = fresh.LocalModifiedAt
+	_, err = d.CommitExtractedUnit(ctx, withFinding)
+	require.ErrorIs(t, err, ErrExtractSessionDrifted,
+		"a finding recorded concurrently must refuse the commit even "+
+			"with a matching snapshot")
+
+	// A trashed session refuses the commit outright.
+	session2 := seedCommitUnitSession(t, d, "sess-2")
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-2", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.SoftDeleteSession("sess-2"))
+	trashed, err := d.GetSessionFull(ctx, "sess-2")
+	require.NoError(t, err)
+	require.NotNil(t, trashed)
+	commit2 := ExtractUnitCommit{
+		SessionID: "sess-2", Fingerprint: "fp-a", Digest: "dg", Cursor: 0,
+		ScanVersions:       []string{"rules-v1"},
+		MessageCount:       session2.MessageCount,
+		TranscriptRevision: trashed.TranscriptRevision,
+		LocalModifiedAt:    trashed.LocalModifiedAt,
+		Entries:            []RecallEntry{commitUnitEntry("e-3", "sess-2", 0, 1)},
+	}
+	_, err = d.CommitExtractedUnit(ctx, commit2)
+	require.ErrorIs(t, err, ErrExtractSessionDrifted)
+}
+
+func TestReconcileIneligibleExtractSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	entry := func(id, sessionID, fp, reviewState string) RecallEntry {
+		return RecallEntry{
+			ID: id, Type: "fact", ReviewState: reviewState,
+			Title: "t", Body: "b",
+			SourceSessionID: sessionID, SourceRunID: fp,
+			Evidence: []RecallEvidence{{
+				SessionID: sessionID, MessageEndOrdinal: 1,
+			}},
+		}
+	}
+	for _, id := range []string{
+		"sess-trashed", "sess-automated", "sess-finding", "sess-ok",
+	} {
+		seedExtractCandidate(t, d, id, 2*time.Hour, nil)
+		_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+			SessionID: id, Fingerprint: "fp-a",
+			ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+		})
+		require.NoError(t, err)
+		_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+			entry("e-"+id, id, "fp-a", "unreviewed_auto"),
+		})
+		require.NoError(t, err)
+	}
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		entry("e-human", "sess-trashed", "fp-a", "human_reviewed"),
+		entry("e-other-gen", "sess-trashed", "fp-b", "unreviewed_auto"),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, d.SoftDeleteSession("sess-trashed"))
+	automated, err := d.GetSessionFull(ctx, "sess-automated")
+	require.NoError(t, err)
+	automated.IsAutomated = true
+	require.NoError(t, d.UpsertSession(*automated))
+	finding := SecretFinding{
+		SessionID: "sess-finding", RuleName: "jwt", Confidence: "candidate",
+		LocationKind: "message", RedactedMatch: "eyJ…",
+		RulesVersion: "rules-v1",
+	}
+	require.NoError(t, d.ReplaceSessionSecretFindings(
+		"sess-finding", []SecretFinding{finding}, 0, "rules-v1"))
+
+	sessions, entries, err := d.ReconcileIneligibleExtractSessions(
+		ctx, "fp-a", time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, sessions)
+	assert.Equal(t, 3, entries)
+
+	for id, want := range map[string]bool{
+		"e-sess-trashed":   false,
+		"e-sess-automated": false,
+		"e-sess-finding":   false,
+		"e-sess-ok":        true,
+		"e-human":          true,
+		"e-other-gen":      true,
+	} {
+		got, err := d.GetRecallEntry(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, want, got != nil, "entry %s", id)
+	}
+	for id, want := range map[string]bool{
+		"sess-trashed": false, "sess-automated": false,
+		"sess-finding": false, "sess-ok": true,
+	} {
+		_, found, err := d.ExtractProgress(ctx, id, "fp-a")
+		require.NoError(t, err)
+		assert.Equal(t, want, found,
+			"progress row for %s: a removed row lets a restored session "+
+				"rediscover from scratch and stops blocking activation", id)
+	}
+
+	// The bound mirrors the done-revisit watermark: every ineligibility
+	// write records a local write, so a steady-state pass only examines
+	// sessions written since the last completed full pass.
+	seedExtractCandidate(t, d, "sess-old-trash", 2*time.Hour, nil)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-old-trash", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.SoftDeleteSession("sess-old-trash"))
+	backdateLocalModified(t, d, "sess-old-trash", 3*time.Hour)
+	sessions, _, err = d.ReconcileIneligibleExtractSessions(
+		ctx, "fp-a", time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Zero(t, sessions,
+		"a bounded reconciliation must skip sessions written before the "+
+			"watermark")
+	sessions, _, err = d.ReconcileIneligibleExtractSessions(
+		ctx, "fp-a", time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, sessions,
+		"an unbounded reconciliation must clean the backdated session")
+}
+
+func TestExtractStatsEntryCountPlanIsIndexBounded(t *testing.T) {
+	d := testDB(t)
+	rows, err := d.getReader().Query(
+		"EXPLAIN QUERY PLAN SELECT COUNT(*) FROM recall_entries " +
+			"WHERE source_run_id = 'fp-a'")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		assert.False(t, strings.HasPrefix(detail, "SCAN recall_entries"),
+			"stats must not scan the whole corpus per pass: %s", detail)
+	}
+	require.NoError(t, rows.Err())
+}
+
 func TestSyncExtractedEntryContextRefreshesGeneratedEntries(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +33,18 @@ const (
 // reset for re-extraction) or the cursor would regress. Workers treat it as
 // "re-read the row and re-derive units", never as data loss.
 var ErrStaleExtractProgress = errors.New("extract progress is stale")
+
+// ErrExtractSessionDrifted reports that a guarded commit found the session
+// changed or no longer eligible: the transcript state the caller derived its
+// unit from is not the state on disk, or the session was trashed, flagged
+// automated, or gained secret findings. Nothing was persisted.
+var ErrExtractSessionDrifted = errors.New(
+	"extract session drifted during commit")
+
+func extractDriftErrorf(format string, args ...any) error {
+	return fmt.Errorf(
+		format+": %w", append(args, ErrExtractSessionDrifted)...)
+}
 
 // ExtractGeneration is one row of the extraction generation registry.
 type ExtractGeneration struct {
@@ -913,7 +926,19 @@ func (db *DB) InsertExtractedRecallEntries(
 		return 0, fmt.Errorf("begin extracted entries insert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	inserted, err := insertExtractedRecallEntriesTx(ctx, tx, entries)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit extracted entries insert: %w", err)
+	}
+	return inserted, nil
+}
 
+func insertExtractedRecallEntriesTx(
+	ctx context.Context, tx *sql.Tx, entries []RecallEntry,
+) (int, error) {
 	inserted := 0
 	for _, entry := range entries {
 		if entry.ID == "" {
@@ -936,10 +961,325 @@ func (db *DB) InsertExtractedRecallEntries(
 		}
 		inserted++
 	}
+	return inserted, nil
+}
+
+// ExtractUnitCommit is one distilled unit's guarded write: the entries to
+// insert plus the transcript state (digest, cursor, snapshot fields) they
+// were derived from. CommitExtractedUnit verifies the guard inside the same
+// transaction that persists the entries, so output distilled from a stale or
+// newly ineligible view can never land.
+type ExtractUnitCommit struct {
+	SessionID    string
+	Fingerprint  string
+	Digest       string
+	Cursor       int
+	ScanVersions []string
+	// Snapshot guard: the session-row state the unit was derived from.
+	MessageCount       int
+	TranscriptRevision *string
+	LocalModifiedAt    *string
+	Entries            []RecallEntry
+}
+
+// CommitExtractedUnit atomically re-verifies the session (eligibility,
+// absence of secret findings, and an unchanged snapshot), binds each
+// entry's evidence to the host transcript (content digest and stable
+// endpoint UUIDs — without them the evidence reconciler revokes provenance
+// on the first transcript write), inserts the entries, and advances the
+// progress cursor. A guard failure returns ErrExtractSessionDrifted with
+// nothing persisted; a cursor conflict returns ErrStaleExtractProgress.
+func (db *DB) CommitExtractedUnit(
+	ctx context.Context, u ExtractUnitCommit,
+) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	if len(u.ScanVersions) == 0 {
+		return 0, fmt.Errorf(
+			"committing unit for session %s requires the current "+
+				"secret-scan versions", u.SessionID)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin extracted unit commit: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := verifyExtractCommitGuardTx(ctx, tx, u); err != nil {
+		return 0, err
+	}
+	entries, err := bindExtractedEvidenceTx(ctx, tx, u)
+	if err != nil {
+		return 0, err
+	}
+	inserted, err := insertExtractedRecallEntriesTx(ctx, tx, entries)
+	if err != nil {
+		return 0, err
+	}
+	next := u.Cursor + 1
+	result, err := tx.ExecContext(ctx, `
+		UPDATE recall_extract_progress
+		SET unit_cursor = ?,
+			state = CASE WHEN ? >= units_total THEN ? ELSE ? END,
+			last_error = '',
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE session_id = ? AND generation_fingerprint = ?
+		  AND content_digest = ?
+		  AND unit_cursor < ?
+		  AND ? <= units_total`,
+		next, next, ExtractProgressDone, ExtractProgressPartial,
+		u.SessionID, u.Fingerprint, u.Digest, next, next,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"advancing cursor for session %s: %w", u.SessionID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"advancing cursor for session %s: %w", u.SessionID, err)
+	}
+	if affected == 0 {
+		return 0, fmt.Errorf(
+			"advancing cursor for session %s to %d under digest %s: %w",
+			u.SessionID, next, u.Digest, ErrStaleExtractProgress)
+	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit extracted entries insert: %w", err)
+		return 0, fmt.Errorf("commit extracted unit: %w", err)
 	}
 	return inserted, nil
+}
+
+func verifyExtractCommitGuardTx(
+	ctx context.Context, tx *sql.Tx, u ExtractUnitCommit,
+) error {
+	var (
+		deletedAt, revision, localModified sql.NullString
+		isAutomated                        bool
+		leakCount, messageCount            int
+		rulesVersion                       string
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT deleted_at, is_automated, secret_leak_count,
+		       secrets_rules_version, message_count,
+		       transcript_revision, local_modified_at
+		FROM sessions WHERE id = ?`, u.SessionID,
+	).Scan(&deletedAt, &isAutomated, &leakCount, &rulesVersion,
+		&messageCount, &revision, &localModified)
+	if errors.Is(err, sql.ErrNoRows) {
+		return extractDriftErrorf("session %s vanished", u.SessionID)
+	}
+	if err != nil {
+		return fmt.Errorf(
+			"reading session %s for unit commit: %w", u.SessionID, err)
+	}
+	versionOK := slices.Contains(u.ScanVersions, rulesVersion)
+	switch {
+	case deletedAt.Valid:
+		return extractDriftErrorf("session %s was trashed", u.SessionID)
+	case isAutomated:
+		return extractDriftErrorf(
+			"session %s was flagged automated", u.SessionID)
+	case leakCount > 0:
+		return extractDriftErrorf(
+			"session %s gained %d secret leaks", u.SessionID, leakCount)
+	case !versionOK:
+		return extractDriftErrorf(
+			"session %s lost its current secret scan", u.SessionID)
+	case messageCount != u.MessageCount:
+		return extractDriftErrorf(
+			"session %s message count moved from %d to %d",
+			u.SessionID, u.MessageCount, messageCount)
+	case !nullableStringEqual(revision, u.TranscriptRevision):
+		return extractDriftErrorf(
+			"session %s transcript revision changed", u.SessionID)
+	case !nullableStringEqual(localModified, u.LocalModifiedAt):
+		return extractDriftErrorf(
+			"session %s was written to during distillation", u.SessionID)
+	}
+	var findings int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM secret_findings WHERE session_id = ?",
+		u.SessionID,
+	).Scan(&findings); err != nil {
+		return fmt.Errorf(
+			"counting findings for session %s: %w", u.SessionID, err)
+	}
+	if findings > 0 {
+		return extractDriftErrorf(
+			"session %s gained %d secret findings", u.SessionID, findings)
+	}
+	return nil
+}
+
+func nullableStringEqual(stored sql.NullString, expected *string) bool {
+	if !stored.Valid || expected == nil {
+		return !stored.Valid && expected == nil
+	}
+	return stored.String == *expected
+}
+
+// bindExtractedEvidenceTx stamps host-derived provenance onto each entry's
+// evidence rows: the content digest and stable endpoint UUIDs the evidence
+// reconciler later re-verifies. Ranges are bound once and shared, since every
+// entry of one unit cites the same transcript window.
+func bindExtractedEvidenceTx(
+	ctx context.Context, tx *sql.Tx, u ExtractUnitCommit,
+) ([]RecallEntry, error) {
+	type ordinalRange struct{ start, end int }
+	bound := make(map[ordinalRange]RecallEvidenceSelectionMetadata)
+	entries := make([]RecallEntry, len(u.Entries))
+	for i, entry := range u.Entries {
+		entry.Evidence = append([]RecallEvidence(nil), entry.Evidence...)
+		for j, evidence := range entry.Evidence {
+			key := ordinalRange{
+				evidence.MessageStartOrdinal, evidence.MessageEndOrdinal,
+			}
+			metadata, ok := bound[key]
+			if !ok {
+				window, err := buildRecallEvidenceWindow(
+					ctx, tx, u.SessionID, key.start, key.end)
+				if err != nil {
+					if isRecallEvidenceValidationError(err) {
+						return nil, extractDriftErrorf(
+							"evidence window %d-%d for session %s is "+
+								"invalid (%v)", key.start, key.end,
+							u.SessionID, err)
+					}
+					return nil, err
+				}
+				metadata, err = window.BindSelection(RecallEvidenceSelection{
+					MessageStartOrdinal: key.start,
+					MessageEndOrdinal:   key.end,
+				})
+				if err != nil {
+					if isRecallEvidenceValidationError(err) {
+						return nil, extractDriftErrorf(
+							"evidence selection %d-%d for session %s is "+
+								"invalid (%v)", key.start, key.end,
+							u.SessionID, err)
+					}
+					return nil, err
+				}
+				bound[key] = metadata
+			}
+			entry.Evidence[j].ContentDigest = metadata.ContentDigest
+			entry.Evidence[j].MessageStartSourceUUID =
+				metadata.MessageStartSourceUUID
+			entry.Evidence[j].MessageEndSourceUUID =
+				metadata.MessageEndSourceUUID
+		}
+		entries[i] = entry
+	}
+	return entries, nil
+}
+
+// ReconcileIneligibleExtractSessions removes the generated corpus of
+// sessions that lost extraction eligibility after extraction: trashed,
+// flagged automated, or carrying secret findings or leaks. Their
+// unreviewed_auto entries are deleted and their progress rows removed, so
+// nothing keeps serving from an excluded session, a lingering pending or
+// partial row cannot block activation forever, and a session that becomes
+// eligible again is rediscovered and re-extracted from scratch. Stale or
+// missing scan versions deliberately do not qualify — they are transient
+// (every transcript write clears the stamp until rescan) and deleting on
+// them would rebuild the corpus on every sync. changedSince bounds the walk
+// the way the full watermark bounds done revisits: every ineligibility
+// write records a local write, so the zero value (fresh manager) is the
+// only unbounded path. Returns how many sessions were reconciled and how
+// many entries were deleted.
+func (db *DB) ReconcileIneligibleExtractSessions(
+	ctx context.Context, fingerprint string, changedSince time.Time,
+) (int, int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin extract reconcile: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	query := `
+		SELECT p.session_id
+		FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ?
+		  AND (s.deleted_at IS NOT NULL
+			OR s.is_automated != 0
+			OR s.secret_leak_count > 0
+			OR EXISTS (
+				SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id
+			))`
+	args := []any{fingerprint}
+	if !changedSince.IsZero() {
+		query += `
+		  AND s.local_modified_at >= ?`
+		args = append(args, changedSince.UTC().Format(extractTimeLayout))
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("finding ineligible extract sessions: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, 0, fmt.Errorf(
+				"scanning ineligible extract session: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, 0, fmt.Errorf("reading ineligible extract sessions: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, 0, tx.Commit()
+	}
+	marks := strings.Repeat("?,", len(ids))
+	marks = marks[:len(marks)-1]
+	deleteArgs := make([]any, 0, len(ids)+2)
+	deleteArgs = append(deleteArgs,
+		fingerprint, corerecall.ReviewStateUnreviewedAuto)
+	for _, id := range ids {
+		deleteArgs = append(deleteArgs, id)
+	}
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM recall_entries
+		WHERE source_run_id = ? AND review_state = ?
+		  AND source_session_id IN (`+marks+`)`, deleteArgs...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("deleting ineligible entries: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, 0, fmt.Errorf("counting reconciled entries: %w", err)
+	}
+	progressArgs := make([]any, 0, len(ids)+1)
+	progressArgs = append(progressArgs, fingerprint)
+	for _, id := range ids {
+		progressArgs = append(progressArgs, id)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM recall_extract_progress
+		WHERE generation_fingerprint = ?
+		  AND session_id IN (`+marks+`)`, progressArgs...); err != nil {
+		return 0, 0, fmt.Errorf("removing ineligible progress rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, fmt.Errorf("commit extract reconcile: %w", err)
+	}
+	return len(ids), int(deleted), nil
 }
 
 // DeleteExtractedRecallEntries removes one session's machine-generated

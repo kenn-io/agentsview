@@ -1431,6 +1431,84 @@ func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 	}
 }
 
+func TestManagerProvenanceSurvivesTranscriptGrowth(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+
+	// A transcript append triggers evidence reconciliation for the
+	// session. The evidenced range is untouched, so provenance must
+	// survive — which requires the evidence to carry the host content
+	// digest; an empty digest is revoked on the spot.
+	growSession(t, d, "sess-1",
+		turnMessages("a", "b", "later", "more")[2:], 2)
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected extracted entries")
+	}
+	for _, entry := range entries {
+		if !entry.ProvenanceOK {
+			t.Fatalf("entry %s lost provenance on an append that never "+
+				"touched its evidenced range", entry.ID)
+		}
+		if len(entry.Evidence) != 1 || entry.Evidence[0].ContentDigest == "" {
+			t.Fatalf("entry %s evidence carries no content digest; the "+
+				"reconciler revokes it on the next relevant write",
+				entry.ID)
+		}
+	}
+}
+
+func TestManagerFullPassReconcilesIneligibleSessions(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+
+	// The session is trashed after extraction completed: its corpus must
+	// not keep serving, and its progress row must not linger.
+	if err := d.SoftDeleteSession("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.SourceSessionID == "sess-1" {
+			t.Fatalf("entry %s still serves from a trashed session",
+				entry.ID)
+		}
+	}
+	if len(entries) == 0 {
+		t.Fatal("the eligible session's entries must survive reconciliation")
+	}
+	if _, found, err := d.ExtractProgress(
+		ctx, "sess-1", m.Fingerprint(),
+	); err != nil || found {
+		t.Fatalf("progress for the trashed session: found=%v err=%v; a "+
+			"lingering row would block activation and hide re-extraction "+
+			"after restore", found, err)
+	}
+}
+
 func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

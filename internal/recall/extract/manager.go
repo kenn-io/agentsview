@@ -232,6 +232,20 @@ func (m *Manager) runPassLocked(
 			result.Sessions++
 		}
 	}
+	// Full passes also reconcile eligibility loss that happened after
+	// extraction: sessions since trashed, flagged automated, or carrying
+	// secret findings get their generated entries deleted and their
+	// progress rows removed, so an excluded session's corpus stops serving
+	// and a lingering pending or partial row cannot block activation
+	// forever. Bounded by the full watermark like done revisits — every
+	// ineligibility write records a local write.
+	if opts.SessionID == "" && opts.Full {
+		if _, _, err := m.cfg.DB.ReconcileIneligibleExtractSessions(
+			ctx, m.fingerprint, m.fullWatermark,
+		); err != nil {
+			return result, err
+		}
+	}
 	activated, err := m.maybeActivate(ctx)
 	if err != nil {
 		return result, err
@@ -591,40 +605,49 @@ func (m *Manager) extractSession(
 			outcome.failed = true
 			return outcome, nil
 		}
-		eligible, unchanged, err = m.recheckExtraction(ctx, sessionID, session)
-		if err != nil {
-			return outcome, err
-		}
-		if !eligible {
-			if err := m.discardIneligibleSession(
-				ctx, sessionID, digest, i,
-			); err != nil {
-				return outcome, err
+		// The unit's output is committed under an in-transaction guard: the
+		// session snapshot, eligibility, and absence of findings are
+		// re-verified atomically with the insert and cursor advance, and
+		// the evidence is bound to the host transcript (content digest,
+		// stable endpoint UUIDs) so the evidence reconciler can re-verify
+		// provenance instead of revoking it. The pre-call recheck above
+		// only saves a wasted model call; this is the enforcement point.
+		inserted, err := m.cfg.DB.CommitExtractedUnit(ctx, db.ExtractUnitCommit{
+			SessionID:          sessionID,
+			Fingerprint:        m.fingerprint,
+			Digest:             digest,
+			Cursor:             i,
+			ScanVersions:       []string{secrets.RulesVersion()},
+			MessageCount:       session.MessageCount,
+			TranscriptRevision: session.TranscriptRevision,
+			LocalModifiedAt:    session.LocalModifiedAt,
+			Entries:            m.extractedEntries(session, unit, i, entries, staged),
+		})
+		switch {
+		case errors.Is(err, db.ErrExtractSessionDrifted):
+			eligible, _, rerr := m.recheckExtraction(ctx, sessionID, session)
+			if rerr != nil {
+				return outcome, rerr
 			}
-			outcome.failed = true
+			if !eligible {
+				if derr := m.discardIneligibleSession(
+					ctx, sessionID, digest, i,
+				); derr != nil {
+					return outcome, derr
+				}
+				outcome.failed = true
+			}
+			// Still eligible: a concurrent write bumped the snapshot, so
+			// the next pass retries against a settled view.
 			return outcome, nil
-		}
-		if !unchanged {
-			return outcome, nil
-		}
-		inserted, err := m.cfg.DB.InsertExtractedRecallEntries(
-			ctx, m.extractedEntries(session, unit, i, entries, staged),
-		)
-		if err != nil {
-			return outcome, err
-		}
-		outcome.entries += inserted
-		err = m.cfg.DB.AdvanceExtractCursor(
-			ctx, sessionID, m.fingerprint, digest, i+1,
-		)
-		if errors.Is(err, db.ErrStaleExtractProgress) {
+		case errors.Is(err, db.ErrStaleExtractProgress):
 			// Another writer reset or took over this session; its view
 			// wins and this pass simply stops contributing to it.
 			return outcome, nil
-		}
-		if err != nil {
+		case err != nil:
 			return outcome, err
 		}
+		outcome.entries += inserted
 		outcome.units++
 	}
 	outcome.done = true

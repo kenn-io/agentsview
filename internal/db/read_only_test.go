@@ -294,7 +294,7 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"pg sync state", "pg_sync_state", "value"},
 		{"model pricing", "model_pricing", "updated_at"},
 		{"secret finding", "secret_findings", "rules_version"},
-		{"recall entry", "recall_entries", "review_state"},
+		{"recall entry", "recall_entries", "uncertainty"},
 		{"recall evidence", "recall_evidence", "snippet"},
 		{"extract generation", "recall_extract_generations", "state"},
 		{"extract progress stamp", "recall_extract_progress",

@@ -358,6 +358,8 @@ CREATE INDEX IF NOT EXISTS idx_recall_entries_source_session
     ON recall_entries(source_session_id);
 CREATE INDEX IF NOT EXISTS idx_recall_entries_source_episode
     ON recall_entries(source_episode_id);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_source_run
+    ON recall_entries(source_run_id, source_session_id, review_state);
 CREATE INDEX IF NOT EXISTS idx_recall_entries_updated
     ON recall_entries(updated_at DESC, id);
 CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession

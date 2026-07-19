@@ -89,6 +89,25 @@ entries are deleted and its progress row is reopened at cursor zero as a
 retryable failure, so nothing extracted under the lost eligibility persists and
 a session that becomes eligible again re-extracts from scratch.
 
+The enforcement point is the unit commit itself. Each distilled unit's entries
+are persisted through a single transaction that re-verifies the session
+snapshot, the eligibility predicates, and the absence of secret findings before
+inserting the entries and advancing the cursor — the pre-call recheck only saves
+a wasted model call, since a write can land between any out-of-band check and
+the insert. A guard failure persists nothing; the caller classifies it
+(concurrent write → silent retry next pass, eligibility lost → discard).
+
+Eligibility loss *after* extraction is reconciled by full passes: sessions since
+trashed, flagged automated, or carrying secret findings or leaks get their
+`unreviewed_auto` entries deleted and their progress rows removed, so an
+excluded session's corpus stops serving, a lingering pending or partial row
+cannot block activation forever, and a session that becomes eligible again is
+rediscovered and re-extracted from scratch. Stale or missing scan versions
+deliberately do not qualify — they are transient (every transcript write clears
+the stamp until rescan), and deleting on them would rebuild the corpus on every
+sync. The walk is bounded by the full watermark like done revisits; a fresh
+manager reconciles unbounded.
+
 A stable bracket whose loaded message count differs from the row's is a
 different case — the sync loop writes the session row before the transcript, so
 the row can durably claim more or fewer messages than are stored, and no future
@@ -147,6 +166,15 @@ Entry ids are positional (`sha256` of generation fingerprint, session id, unit
 index, entry index), so within one digest a replayed unit dedupes to zero new
 rows; across digests the delete step prevents stale entries from lingering or
 blocking their replacements.
+
+Evidence provenance is bound at commit time through the recall evidence-window
+APIs: inside the unit-commit transaction, each cited ordinal range is rebuilt as
+a host-authorized window and its selection metadata — the host-derived content
+digest and stable endpoint source UUIDs — is stamped onto the evidence rows
+before `provenance_ok` entries are inserted. The evidence reconciler re-verifies
+exactly that digest on later transcript writes and resyncs, so untouched
+evidence survives coordinate shifts instead of being revoked for a missing
+digest.
 
 Entries also copy session context — project, cwd, git branch, agent — at insert
 time, and a metadata-only session update keeps the unit digest unchanged. A
