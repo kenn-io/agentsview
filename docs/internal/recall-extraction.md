@@ -94,13 +94,17 @@ retryable failure, so nothing extracted under the lost eligibility persists and
 a session that becomes eligible again re-extracts from scratch.
 
 The enforcement point is the unit commit itself. Each distilled unit's entries
-are persisted through a single transaction that re-verifies the session
-snapshot, the eligibility predicates, and the absence of secret findings before
-inserting the entries and advancing the cursor — the pre-call recheck only saves
-a wasted model call, since a write can land between any out-of-band check and
-the insert. A guard failure persists nothing; the caller classifies it by
-re-reading the session: eligibility lost means discard, a changed snapshot means
-a concurrent write landed and the next pass silently retries against a settled
+are persisted through a single transaction that re-verifies the session snapshot
+(`ended_at` included: a bare row update can reopen or re-date a session without
+touching any other guarded field), the eligibility predicates, and the absence
+of secret findings before inserting the entries and advancing the cursor from
+exactly the position the unit was derived at — a same-digest reopen resets the
+cursor after deleting entries, so a merely-monotonic advance would let a stale
+worker skip units that no longer have output — the pre-call recheck only saves a
+wasted model call, since a write can land between any out-of-band check and the
+insert. A guard failure persists nothing; the caller classifies it by re-reading
+the session: eligibility lost means discard, a changed snapshot means a
+concurrent write landed and the next pass silently retries against a settled
 view, and an *unchanged* snapshot means the refusal is deterministic (for
 example an evidence range the transcript cannot verify) — that is recorded as a
 failure so the backoff applies instead of paying for the same doomed model call
@@ -281,12 +285,15 @@ must not happen silently. All of these checks are advisory racing against
 concurrent writes, so the activation transaction re-verifies them before
 switching generations: it aborts if any session is pending or partial, if any
 completed, still-eligible session has transcript writes past its coverage stamp
-or a scan stamp outside the current rules versions, or if promotion would leave
-zero servable (accepted, provenance-verified) entries — a blocked activation
-changes nothing and the next pass retries after re-extraction. Promotion also
-re-verifies eligibility inside the same transaction: entries whose source
-session was trashed, flagged automated, or scanned into findings after staging
-are left archived (the retraction pass deletes them) instead of being served.
+or a scan stamp outside the current rules versions, if any eligible session has
+no progress row at all (a single-session run, or a session ending after the
+caller's checks, is uncovered work no progress-based gate can see), or if
+promotion would leave zero servable (accepted, provenance-verified) entries — a
+blocked activation changes nothing and the next pass retries after
+re-extraction. Promotion also re-verifies eligibility inside the same
+transaction: entries whose source session was trashed, flagged automated, or
+scanned into findings after staging are left archived (the retraction pass
+deletes them) instead of being served.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;

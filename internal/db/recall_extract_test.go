@@ -62,8 +62,10 @@ func TestExtractGenerationActivateKeepsSingleActive(t *testing.T) {
 		require.NoError(t, err)
 		seedServableExtractEntry(t, d, fp, "sess-1", "e-"+fp)
 	}
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-b", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-b", []string{"rules-v1"}, time.Now()))
 
 	generations, err := d.ExtractGenerations(ctx)
 	require.NoError(t, err)
@@ -74,7 +76,8 @@ func TestExtractGenerationActivateKeepsSingleActive(t *testing.T) {
 	assert.Equal(t, ExtractGenerationRetired, states["fp-a"])
 	assert.Equal(t, ExtractGenerationActive, states["fp-b"])
 
-	err = d.ActivateExtractGeneration(ctx, "fp-missing", []string{"rules-v1"})
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-missing", []string{"rules-v1"}, time.Now())
 	assert.Error(t, err, "unknown fingerprint must refuse")
 }
 
@@ -88,7 +91,8 @@ func TestExtractGenerationRetireActiveRequiresForce(t *testing.T) {
 	require.NoError(t, err)
 	seedExtractSession(t, d, "sess-1")
 	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 
 	err = d.RetireExtractGeneration(ctx, "fp-a", false)
 	require.Error(t, err, "retiring the active generation needs force")
@@ -302,7 +306,8 @@ func TestCopyRecallEntriesFromCarriesExtractState(t *testing.T) {
 	})
 	require.NoError(t, err)
 	seedServableExtractEntry(t, src, "fp-a", "sess-1", "e-src")
-	require.NoError(t, src.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+	require.NoError(t, src.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 	_, err = src.UpsertExtractProgress(ctx, ExtractProgressUpsert{
 		SessionID: "sess-1", Fingerprint: "fp-a",
 		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
@@ -641,6 +646,7 @@ func TestCommitExtractedUnitBindsEvidenceAndAdvances(t *testing.T) {
 		MessageCount:       session.MessageCount,
 		TranscriptRevision: session.TranscriptRevision,
 		LocalModifiedAt:    session.LocalModifiedAt,
+		EndedAt:            session.EndedAt,
 		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 0, 1)},
 	}
 	inserted, err := d.CommitExtractedUnit(ctx, commit)
@@ -692,6 +698,7 @@ func TestCommitExtractedUnitRefusesDriftAndIneligibility(t *testing.T) {
 		MessageCount:       session.MessageCount,
 		TranscriptRevision: session.TranscriptRevision,
 		LocalModifiedAt:    session.LocalModifiedAt,
+		EndedAt:            session.EndedAt,
 		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 0, 1)},
 	}
 
@@ -902,8 +909,18 @@ func TestActivateExtractGenerationSkipsIneligibleSessions(t *testing.T) {
 	// must not start serving its entries. They stay archived for the
 	// retraction pass to delete.
 	require.NoError(t, d.SoftDeleteSession("sess-trashed"))
+	// The eligible session is covered; the trashed one is ineligible and
+	// needs no coverage. Settle first: seeding bumps local_modified_at,
+	// and a same-millisecond stamp reads as stale coverage.
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-ok", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
 
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 	ok, err := d.GetRecallEntry(ctx, "e-ok")
 	require.NoError(t, err)
 	require.NotNil(t, ok)
@@ -1066,7 +1083,8 @@ func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 			return err
 		},
 		"ActivateExtractGeneration": func() error {
-			err := d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+			err := d.ActivateExtractGeneration(
+				ctx, "fp-a", []string{"rules-v1"}, time.Now())
 			if errors.Is(err, ErrExtractActivationBlocked) {
 				// The in-tx activation guards refuse (the seeded row
 				// never reaches done); this subtest only measures that
@@ -1474,9 +1492,11 @@ func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
 		entry("e-reviewed", "fp-old", "accepted", "human_reviewed"),
 	})
 	require.NoError(t, err)
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-old", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-old", []string{"rules-v1"}, time.Now()))
 
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-new", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-new", []string{"rules-v1"}, time.Now()))
 
 	status := func(id string) string {
 		got, err := d.GetRecallEntry(ctx, id)
@@ -1507,7 +1527,8 @@ func TestRetireExtractGenerationArchivesServedEntries(t *testing.T) {
 		SourceSessionID: "sess-1", SourceRunID: "fp-a",
 	}})
 	require.NoError(t, err)
-	require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 
 	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
 	got, err := d.GetRecallEntry(ctx, "e-1")
@@ -2196,10 +2217,11 @@ func TestActivateExtractGenerationRefusesUnfinishedCoverage(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
+	seedExtractSession(t, d, "sess-old")
+	seedServableExtractEntry(t, d, "fp-old", "sess-old", "e-old")
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-old", []string{"rules-v1"}, time.Now()))
 	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
-	seedServableExtractEntry(t, d, "fp-old", "sess-1", "e-old")
-	require.NoError(t,
-		d.ActivateExtractGeneration(ctx, "fp-old", []string{"rules-v1"}))
 	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
 	_, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
 		SessionID: "sess-1", Fingerprint: "fp-a",
@@ -2207,7 +2229,8 @@ func TestActivateExtractGenerationRefusesUnfinishedCoverage(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now())
 	require.ErrorIs(t, err, ErrExtractActivationBlocked)
 	states := generationStates(t, d)
 	assert.Equal(t, ExtractGenerationActive, states["fp-old"],
@@ -2239,13 +2262,15 @@ func TestActivateExtractGenerationRefusesDriftedDoneCoverage(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v2"})
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v2"}, time.Now())
 	require.ErrorIs(t, err, ErrExtractActivationBlocked,
 		"a session scanned under a superseded rules version is uncovered")
 
 	time.Sleep(2 * time.Millisecond)
 	require.NoError(t, d.BumpLocalModifiedAt("sess-1"))
-	err = d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now())
 	require.ErrorIs(t, err, ErrExtractActivationBlocked,
 		"a transcript write after the coverage stamp is uncovered work")
 	assert.Equal(t, ExtractGenerationBuilding, generationStates(t, d)["fp-a"])
@@ -2259,7 +2284,8 @@ func TestActivateExtractGenerationRefusesDriftedDoneCoverage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t,
-		d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}))
+		d.ActivateExtractGeneration(
+			ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
 }
 
@@ -2276,15 +2302,16 @@ func TestActivateExtractGenerationRefusesEmptyPromotion(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	seedExtractCandidate(t, d, "sess-old", 2*time.Hour, nil)
+	seedExtractSession(t, d, "sess-old")
 	seedServableExtractEntry(t, d, "fp-old", "sess-old", "e-old")
-	require.NoError(t,
-		d.ActivateExtractGeneration(ctx, "fp-old", []string{"rules-v1"}))
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-old", []string{"rules-v1"}, time.Now()))
 	seedExtractCandidate(t, d, "sess-gone", 2*time.Hour, nil)
 	seedServableExtractEntry(t, d, "fp-a", "sess-gone", "e-gone")
 	require.NoError(t, d.SoftDeleteSession("sess-gone"))
 
-	err := d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"})
+	err := d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now())
 	require.ErrorIs(t, err, ErrExtractActivationBlocked)
 	states := generationStates(t, d)
 	assert.Equal(t, ExtractGenerationActive, states["fp-old"],
@@ -2295,4 +2322,131 @@ func TestActivateExtractGenerationRefusesEmptyPromotion(t *testing.T) {
 	require.NotNil(t, old)
 	assert.Equal(t, "accepted", old.Status,
 		"the served generation's entries must keep serving")
+}
+
+// TestCommitExtractedUnitRefusesEndedAtDrift pins ended_at as part of the
+// commit guard: eligibility treats it as state (a session that resumes is
+// no longer approved for extraction), and a bare session-row update can
+// re-date or clear it without moving any other guarded field.
+func TestCommitExtractedUnitRefusesEndedAtDrift(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := seedCommitUnitSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	commit := ExtractUnitCommit{
+		SessionID: "sess-1", Fingerprint: "fp-a", Digest: "dg", Cursor: 0,
+		ScanVersions:       []string{"rules-v1"},
+		MessageCount:       session.MessageCount,
+		TranscriptRevision: session.TranscriptRevision,
+		LocalModifiedAt:    session.LocalModifiedAt,
+		EndedAt:            session.EndedAt,
+		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 0, 1)},
+	}
+
+	// The session was re-dated (a resume that ended again) between the
+	// caller's read and the commit.
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET ended_at = '2099-01-01T00:00:00.000Z' " +
+			"WHERE id = 'sess-1'")
+	require.NoError(t, err)
+	_, err = d.CommitExtractedUnit(ctx, commit)
+	require.ErrorIs(t, err, ErrExtractSessionDrifted)
+	entry, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	assert.Nil(t, entry, "an ended_at drift must roll back its entries")
+
+	// The session was reopened outright (ended_at cleared).
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET ended_at = NULL WHERE id = 'sess-1'")
+	require.NoError(t, err)
+	_, err = d.CommitExtractedUnit(ctx, commit)
+	require.ErrorIs(t, err, ErrExtractSessionDrifted)
+}
+
+// TestCommitExtractedUnitRefusesCursorMismatch pins the cursor guard to the
+// exact cursor the unit was derived from: after a same-digest reopen resets
+// the row to zero (its entries were just deleted), a stale worker's commit
+// for a later unit must not fast-forward the cursor past units that no
+// longer have output.
+func TestCommitExtractedUnitRefusesCursorMismatch(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := seedCommitUnitSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	commit := ExtractUnitCommit{
+		SessionID: "sess-1", Fingerprint: "fp-a", Digest: "dg", Cursor: 1,
+		ScanVersions:       []string{"rules-v1"},
+		MessageCount:       session.MessageCount,
+		TranscriptRevision: session.TranscriptRevision,
+		LocalModifiedAt:    session.LocalModifiedAt,
+		EndedAt:            session.EndedAt,
+		Entries:            []RecallEntry{commitUnitEntry("e-1", "sess-1", 2, 2)},
+	}
+	_, err = d.CommitExtractedUnit(ctx, commit)
+	require.ErrorIs(t, err, ErrStaleExtractProgress,
+		"the stored cursor is 0: a commit derived from cursor 1 is stale")
+	entry, err := d.GetRecallEntry(ctx, "e-1")
+	require.NoError(t, err)
+	assert.Nil(t, entry, "a stale-cursor commit must roll back its entries")
+	progress, _, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	assert.Zero(t, progress.UnitCursor)
+}
+
+// TestActivateExtractGenerationRefusesUncoveredEligibleSessions pins the
+// in-tx discovery gate: an eligible session with no progress row (for
+// example after a single-session run) is uncovered work, and activating
+// around it would retire the served corpus for an incomplete generation.
+func TestActivateExtractGenerationRefusesUncoveredEligibleSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
+	// Seeding bumps local_modified_at at millisecond precision; settle so
+	// the coverage stamp below compares as after the seed writes.
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	seedExtractCandidate(t, d, "sess-2", 2*time.Hour, nil)
+	time.Sleep(2 * time.Millisecond)
+
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now())
+	require.ErrorIs(t, err, ErrExtractActivationBlocked,
+		"an eligible session with no progress row is uncovered work")
+	assert.Equal(t, ExtractGenerationBuilding, generationStates(t, d)["fp-a"])
+
+	// Covering the session unblocks activation.
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-2", Fingerprint: "fp-a",
+		ContentDigest: "dg2", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
 }

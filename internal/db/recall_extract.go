@@ -157,13 +157,15 @@ func (db *DB) ExtractGenerations(
 // retires whichever generation was previously active, in one transaction so
 // two generations can never be active simultaneously. The caller's coverage
 // checks are advisory: sessions can slip back to pending, gain writes past
-// their coverage stamp, or lose their scan stamp between those checks and
-// this write, so the same gates are re-verified inside the transaction —
-// against scanVersions as the set of current secret-scan rules — and any
-// mismatch aborts with ErrExtractActivationBlocked instead of retiring the
-// served corpus around it.
+// their coverage stamp, lose their scan stamp, or become eligible without
+// ever being extracted between those checks and this write, so the same
+// gates are re-verified inside the transaction — against scanVersions as
+// the set of current secret-scan rules and quietCutoff as the eligibility
+// cutoff — and any mismatch aborts with ErrExtractActivationBlocked instead
+// of retiring the served corpus around it.
 func (db *DB) ActivateExtractGeneration(
-	ctx context.Context, fingerprint string, scanVersions []string,
+	ctx context.Context, fingerprint string,
+	scanVersions []string, quietCutoff time.Time,
 ) error {
 	if err := db.requireWritable(); err != nil {
 		return err
@@ -186,7 +188,7 @@ func (db *DB) ActivateExtractGeneration(
 	defer func() { _ = tx.Rollback() }()
 
 	if err := verifyExtractActivationCoverageTx(
-		ctx, tx, fingerprint, scanVersions,
+		ctx, tx, fingerprint, scanVersions, quietCutoff,
 	); err != nil {
 		return err
 	}
@@ -272,15 +274,18 @@ func (db *DB) ActivateExtractGeneration(
 }
 
 // verifyExtractActivationCoverageTx re-verifies, inside the activation
-// transaction, that the generation's coverage still supports serving:
-// no session is pending or partial, and no completed session — still
+// transaction, that the generation's coverage still supports serving: no
+// session is pending or partial, no completed session — still
 // extraction-eligible — has transcript writes past its coverage stamp or a
-// scan stamp outside the current rules versions. Failed sessions do not
-// block (they retry and top the corpus up later), and sessions that turned
-// ineligible are ignored here: promotion excludes their entries and the
-// retraction pass removes them.
+// scan stamp outside the current rules versions, and no eligible session
+// lacks a progress row entirely (a single-session run, or a session ending
+// after the caller's checks, leaves uncovered work that no progress-based
+// gate can see). Failed sessions do not block (they retry and top the
+// corpus up later), and sessions that turned ineligible are ignored here:
+// promotion excludes their entries and the retraction pass removes them.
 func verifyExtractActivationCoverageTx(
-	ctx context.Context, tx *sql.Tx, fingerprint string, scanVersions []string,
+	ctx context.Context, tx *sql.Tx, fingerprint string,
+	scanVersions []string, quietCutoff time.Time,
 ) error {
 	var building int
 	if err := tx.QueryRowContext(ctx, `
@@ -328,6 +333,32 @@ func verifyExtractActivationCoverageTx(
 		return fmt.Errorf(
 			"generation %s has %d completed sessions whose coverage went "+
 				"stale: %w", fingerprint, stale, ErrExtractActivationBlocked)
+	}
+	eligibleArgs := make([]any, 0, len(scanVersions)+2)
+	for _, version := range scanVersions {
+		eligibleArgs = append(eligibleArgs, version)
+	}
+	eligibleArgs = append(eligibleArgs,
+		quietCutoff.UTC().Format(extractTimeLayout), fingerprint)
+	var uncovered bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sessions s
+			WHERE `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks)+`
+			  AND NOT EXISTS (
+				SELECT 1 FROM recall_extract_progress p
+				WHERE p.session_id = s.id
+				  AND p.generation_fingerprint = ?
+			  )
+		)`,
+		eligibleArgs...,
+	).Scan(&uncovered); err != nil {
+		return fmt.Errorf("probing uncovered eligible sessions: %w", err)
+	}
+	if uncovered {
+		return fmt.Errorf(
+			"generation %s has eligible sessions that were never "+
+				"extracted: %w", fingerprint, ErrExtractActivationBlocked)
 	}
 	return nil
 }
@@ -1092,6 +1123,7 @@ type ExtractUnitCommit struct {
 	MessageCount       int
 	TranscriptRevision *string
 	LocalModifiedAt    *string
+	EndedAt            *string
 	Entries            []RecallEntry
 }
 
@@ -1134,6 +1166,10 @@ func (db *DB) CommitExtractedUnit(
 	if err != nil {
 		return 0, err
 	}
+	// The stored cursor must be exactly the one this unit was derived
+	// from: a same-digest reopen resets the row to zero after deleting its
+	// entries, and a merely-monotonic guard would let a stale worker
+	// fast-forward past units that no longer have output.
 	next := u.Cursor + 1
 	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_extract_progress
@@ -1143,10 +1179,10 @@ func (db *DB) CommitExtractedUnit(
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE session_id = ? AND generation_fingerprint = ?
 		  AND content_digest = ?
-		  AND unit_cursor < ?
+		  AND unit_cursor = ?
 		  AND ? <= units_total`,
 		next, next, ExtractProgressDone, ExtractProgressPartial,
-		u.SessionID, u.Fingerprint, u.Digest, next, next,
+		u.SessionID, u.Fingerprint, u.Digest, u.Cursor, next,
 	)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -1172,18 +1208,18 @@ func verifyExtractCommitGuardTx(
 	ctx context.Context, tx *sql.Tx, u ExtractUnitCommit,
 ) error {
 	var (
-		deletedAt, revision, localModified sql.NullString
-		isAutomated                        bool
-		leakCount, messageCount            int
-		rulesVersion                       string
+		deletedAt, revision, localModified, endedAt sql.NullString
+		isAutomated                                 bool
+		leakCount, messageCount                     int
+		rulesVersion                                string
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT deleted_at, is_automated, secret_leak_count,
 		       secrets_rules_version, message_count,
-		       transcript_revision, local_modified_at
+		       transcript_revision, local_modified_at, ended_at
 		FROM sessions WHERE id = ?`, u.SessionID,
 	).Scan(&deletedAt, &isAutomated, &leakCount, &rulesVersion,
-		&messageCount, &revision, &localModified)
+		&messageCount, &revision, &localModified, &endedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return extractDriftErrorf("session %s vanished", u.SessionID)
 	}
@@ -1214,6 +1250,13 @@ func verifyExtractCommitGuardTx(
 	case !nullableStringEqual(localModified, u.LocalModifiedAt):
 		return extractDriftErrorf(
 			"session %s was written to during distillation", u.SessionID)
+	case !nullableStringEqual(endedAt, u.EndedAt):
+		// A bare session-row update can reopen or re-date a session
+		// without moving any other guarded field; eligibility treats
+		// ended_at as state, so the commit must too.
+		return extractDriftErrorf(
+			"session %s was reopened or re-dated during distillation",
+			u.SessionID)
 	}
 	var findings int
 	if err := tx.QueryRowContext(ctx,

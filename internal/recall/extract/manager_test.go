@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1802,5 +1803,35 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 	if log.count() != calls {
 		t.Fatalf("model calls grew from %d to %d; a stable failure must "+
 			"back off instead of retrying every pass", calls, log.count())
+	}
+}
+
+// TestManagerExplicitActivateRefusesUncoveredSessions pins the reviewer
+// scenario for the in-tx discovery gate: extracting one session by hand and
+// then activating must not retire the served corpus while other eligible
+// sessions were never extracted.
+func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-1"}); err != nil {
+		t.Fatalf("single-session RunPass: %v", err)
+	}
+	err := m.Activate(ctx)
+	if !errors.Is(err, db.ErrExtractActivationBlocked) {
+		t.Fatalf("Activate = %v, want ErrExtractActivationBlocked: sess-2 "+
+			"is eligible and was never extracted", err)
+	}
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("full RunPass: %v", err)
+	}
+	if !result.Activated {
+		t.Fatalf("result = %+v; full coverage must activate", result)
 	}
 }

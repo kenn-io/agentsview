@@ -634,6 +634,7 @@ func (m *Manager) extractSession(
 			MessageCount:       session.MessageCount,
 			TranscriptRevision: session.TranscriptRevision,
 			LocalModifiedAt:    session.LocalModifiedAt,
+			EndedAt:            session.EndedAt,
 			Entries:            m.extractedEntries(session, unit, i, entries, staged),
 		})
 		switch {
@@ -859,6 +860,7 @@ func (m *Manager) maybeActivate(ctx context.Context) (bool, error) {
 	}
 	err = m.cfg.DB.ActivateExtractGeneration(
 		ctx, m.fingerprint, []string{secrets.RulesVersion()},
+		time.Now().Add(-m.cfg.QuietPeriod),
 	)
 	if errors.Is(err, db.ErrExtractActivationBlocked) {
 		// Coverage moved between the checks above and the activation
@@ -893,6 +895,7 @@ func (m *Manager) Activate(ctx context.Context) error {
 	}
 	return m.cfg.DB.ActivateExtractGeneration(
 		ctx, m.fingerprint, []string{secrets.RulesVersion()},
+		time.Now().Add(-m.cfg.QuietPeriod),
 	)
 }
 
