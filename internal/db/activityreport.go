@@ -165,10 +165,10 @@ func (db *DB) GetSessionUsageRows(
 		}
 		_, outputTok, _, _, _ := sqliteSessionUsageRowTokens(r)
 		costRow := r
-		var authoritativeCost *float64
+		var sessionCost *float64
 		if r.costSource == CopilotReportedCostSource && r.costUSD.Valid {
 			v := r.costUSD.Float64
-			authoritativeCost = &v
+			sessionCost = &v
 			costRow.costUSD = sql.NullFloat64{}
 			rateResolver.RecordUnattributedReported()
 		}
@@ -178,20 +178,20 @@ func (db *DB) GetSessionUsageRows(
 			costSource = export.CostSourceReported
 		}
 		out = append(out, activity.UsageRow{
-			SessionID:         r.sessionID,
-			Model:             r.model,
-			Timestamp:         r.ts,
-			OutputTokens:      outputTok,
-			Cost:              cost,
-			CostSource:        costSource,
-			AuthoritativeCost: authoritativeCost,
-			Priced:            priced,
-			Contributes:       contributes,
-			Agent:             r.agent,
-			ClaudeMessageID:   r.claudeMessageID,
-			ClaudeRequestID:   r.claudeRequestID,
-			SourceUUID:        r.sourceUUID,
-			UsageDedupKey:     r.usageDedupKey,
+			SessionID:       r.sessionID,
+			Model:           r.model,
+			Timestamp:       r.ts,
+			OutputTokens:    outputTok,
+			Cost:            cost,
+			CostSource:      costSource,
+			SessionCost:     sessionCost,
+			Priced:          priced,
+			Contributes:     contributes,
+			Agent:           r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID,
+			UsageDedupKey:   r.usageDedupKey,
 		})
 	}
 	return out, nil
@@ -487,10 +487,10 @@ func (db *DB) activityReportUsage(
 		}
 		_, outputTok, _, _, _, _ := dailyUsageAmounts(o.scan, rateResolver)
 		costRow := o.scan
-		var authoritativeCost *float64
+		var sessionCost *float64
 		if o.scan.costSource == CopilotReportedCostSource && o.scan.costUSD.Valid {
 			v := o.scan.costUSD.Float64
-			authoritativeCost = &v
+			sessionCost = &v
 			costRow.costUSD = sql.NullFloat64{}
 			rateResolver.RecordUnattributedReported()
 		}
@@ -503,7 +503,7 @@ func (db *DB) activityReportUsage(
 		row.OutputTokens = outputTok
 		row.Cost = cost
 		row.CostSource = costSource
-		row.AuthoritativeCost = authoritativeCost
+		row.SessionCost = sessionCost
 		row.Priced = priced
 		row.Contributes = contributes
 		out = append(out, row)

@@ -53,20 +53,20 @@ type ActivityEvent struct {
 // GetDailyUsage). Rows MUST be delivered ordered by
 // (ts ASC, session_id ASC, COALESCE(message_ordinal,-1) ASC).
 type UsageRow struct {
-	SessionID         string
-	Model             string
-	Timestamp         string // ts, RFC3339 or ""
-	OutputTokens      int
-	Cost              float64
-	CostSource        export.CostSource
-	AuthoritativeCost *float64
-	Priced            bool
-	Contributes       bool
-	Agent             string
-	ClaudeMessageID   string
-	ClaudeRequestID   string
-	SourceUUID        string
-	UsageDedupKey     string
+	SessionID       string
+	Model           string
+	Timestamp       string // ts, RFC3339 or ""
+	OutputTokens    int
+	Cost            float64
+	CostSource      export.CostSource
+	SessionCost     *float64
+	Priced          bool
+	Contributes     bool
+	Agent           string
+	ClaudeMessageID string
+	ClaudeRequestID string
+	SourceUUID      string
+	UsageDedupKey   string
 }
 
 type UsageCostAllocation struct {
@@ -77,29 +77,29 @@ type UsageCostAllocation struct {
 }
 
 // AllocateUsageCosts selects aggregate row costs without changing the
-// row/model estimates. A session may carry one authoritative total; when it
-// does, that settlement wholly replaces the session's row costs.
+// row/model estimates. A session may carry one session total; when it does,
+// that settlement wholly replaces the session's row costs.
 func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
-	type authoritativeCost struct {
+	type sessionCost struct {
 		index int
 		cost  float64
 	}
 	allocated := make([]UsageCostAllocation, len(usage))
-	authoritative := make(map[string]authoritativeCost)
+	sessionCosts := make(map[string]sessionCost)
 	for i, row := range usage {
 		allocated[i] = UsageCostAllocation{
 			Cost: row.Cost, CostSource: row.CostSource,
 			Priced: row.Priced, Contributes: row.Contributes,
 		}
-		if row.AuthoritativeCost != nil {
-			authoritative[row.SessionID] = authoritativeCost{
+		if row.SessionCost != nil {
+			sessionCosts[row.SessionID] = sessionCost{
 				index: i,
-				cost:  *row.AuthoritativeCost,
+				cost:  *row.SessionCost,
 			}
 		}
 	}
 	for i := range allocated {
-		reported, ok := authoritative[usage[i].SessionID]
+		selected, ok := sessionCosts[usage[i].SessionID]
 		if !ok {
 			continue
 		}
@@ -108,9 +108,9 @@ func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 			allocated[i].CostSource = ""
 			allocated[i].Priced = true
 		}
-		if i == reported.index {
+		if i == selected.index {
 			allocated[i] = UsageCostAllocation{
-				Cost: reported.cost, CostSource: export.CostSourceReported,
+				Cost: selected.cost, CostSource: export.CostSourceReported,
 				Priced: true, Contributes: true,
 			}
 		}
