@@ -71,12 +71,21 @@ scan. The atomic replace path re-stamps inside the same transaction.
 
 The eligibility check is also bound to the transcript actually sent: the manager
 re-reads the session row (full column set — the standard list omits
-`local_modified_at`) after loading its messages and compares the two reads
-(message count, transcript revision, scan version, leak count, ended-at, last
-local write), and requires the loaded message count to equal the row's — the
-sync loop writes the session row before the transcript, so mid-write the row can
-claim more or fewer messages than are stored. Any mismatch skips the session
-silently and the next pass retries against a settled view.
+`local_modified_at`) after loading its messages, compares the two reads (message
+count, transcript revision, scan version, leak count, ended-at, last local
+write), and re-runs the eligibility predicates against the second read —
+trashing or flagging a session automated flips fields the comparison does not
+watch. An unstable bracket skips the session silently: a concurrent write bumped
+`local_modified_at`, so the next pass retries against a settled view, and a
+newly ineligible session must simply not be extracted.
+
+A stable bracket whose loaded message count differs from the row's is a
+different case — the sync loop writes the session row before the transcript, so
+the row can durably claim more or fewer messages than are stored, and no future
+write may ever re-surface the session. That mismatch never reaches the model,
+but it is recorded as a retryable *failure* (visible in status, re-offered after
+the backoff) instead of skipped: a silent skip would let the discovery
+watermarks advance past the session's writes and exclude it forever.
 
 ## Progress and resume
 
@@ -96,6 +105,12 @@ advances are strictly monotonic and can never resurrect a failed or done row.
 A failed session waits out `failure_backoff` before the scan offers it again, so
 one poisoned transcript cannot monopolize passes. Cancellation (daemon shutdown)
 leaves the row resumable instead of burning the backoff.
+
+A full resync carries progress rows into the rebuilt database with
+`content_stamped_at` intact — an empty stamp reads as "changed since coverage"
+for every completed session, so losing it would reload the whole archive's
+transcripts on the next full pass. Archives written before the column existed
+copy it as empty; those rows re-open once and settle on their first revisit.
 
 ## Content-change reconciliation
 
@@ -152,10 +167,18 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   (`local_modified_at >= progress.content_stamped_at`; the stamp, not
   `updated_at`, because a write that lands mid-extraction predates the row's
   last touch but postdates what the model saw), so full passes do not reload the
-  whole archive. Full passes bound their discovery by the same watermark — the
-  hourly backstop must not walk the whole archive either. Unbounded
-  reconciliation is the fresh-manager path: a daemon restart or a manual
-  `recall extract run` starts with a zero watermark and scans everything once;
+  whole archive's transcripts. The revisit drives from the sessions side of
+  the join so the planner can bound it with the `local_modified_at` index, and
+  a second watermark bounds it the way the discovery watermark bounds
+  discovery: only done sessions written since the last completed unlimited
+  full pass are rechecked, so the hourly backstop walks recent writes instead
+  of every completed progress row. The full watermark ratchets to the pass
+  *start* with no quiet-period lag — a write landing during pass N carries a
+  `local_modified_at` at or after N's start, so pass N+1 still sees it. Full
+  passes bound their discovery by the same watermark incremental passes use.
+  Unbounded reconciliation is the fresh-manager path: a daemon restart or a
+  manual `recall extract run` starts with zero watermarks and scans everything
+  once;
 - when the backstop is disabled, a catchup ticker (paced by the quiet period,
   never faster than once a minute) runs incremental passes instead: sessions
   become eligible only after the quiet period, long after the last sync-driven

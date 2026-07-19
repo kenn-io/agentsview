@@ -1335,3 +1335,159 @@ func TestReplaceSessionContentEndsScanStamped(t *testing.T) {
 	assert.Equal(t, "rules-v2", session.SecretsRulesVersion,
 		"an atomic content replace carries its own scan stamp")
 }
+
+func TestCopyRecallExtractStatePreservesContentStamp(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcDB, err := Open(filepath.Join(dir, "old.db"))
+	require.NoError(t, err, "open src")
+	seedExtractSession(t, srcDB, "s1")
+	_, err = srcDB.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	stamp := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	_, err = srcDB.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: stamp,
+	})
+	require.NoError(t, err)
+	require.NoError(t, srcDB.AdvanceExtractCursor(ctx, "s1", "fp-a", "dg", 1))
+	require.NoError(t, srcDB.Close())
+
+	destDB, err := Open(filepath.Join(dir, "new.db"))
+	require.NoError(t, err, "open dest")
+	defer destDB.Close()
+	seedExtractSession(t, destDB, "s1")
+
+	require.NoError(t,
+		destDB.CopyRecallEntriesFrom(filepath.Join(dir, "old.db")))
+
+	// An empty stamp reads as "changed since coverage" for every completed
+	// session, so losing it across a resync would reload the whole
+	// archive's transcripts on the next full pass.
+	var copied string
+	require.NoError(t, destDB.getReader().QueryRow(
+		"SELECT content_stamped_at FROM recall_extract_progress "+
+			"WHERE session_id = 's1'").Scan(&copied))
+	assert.Equal(t, "2026-07-01T10:00:00.000Z", copied,
+		"resync must preserve the transcript-read stamp")
+}
+
+func TestCopyRecallExtractStateToleratesPreStampArchives(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcDB, err := Open(filepath.Join(dir, "old.db"))
+	require.NoError(t, err, "open src")
+	seedExtractSession(t, srcDB, "s1")
+	_, err = srcDB.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = srcDB.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	// Simulate an archive written before the stamp column existed.
+	_, err = srcDB.getWriter().Exec(
+		"ALTER TABLE recall_extract_progress DROP COLUMN content_stamped_at")
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
+
+	destDB, err := Open(filepath.Join(dir, "new.db"))
+	require.NoError(t, err, "open dest")
+	defer destDB.Close()
+	seedExtractSession(t, destDB, "s1")
+
+	require.NoError(t,
+		destDB.CopyRecallEntriesFrom(filepath.Join(dir, "old.db")))
+	var state string
+	require.NoError(t, destDB.getReader().QueryRow(
+		"SELECT state FROM recall_extract_progress "+
+			"WHERE session_id = 's1'").Scan(&state))
+	assert.Equal(t, ExtractProgressPending, state,
+		"pre-stamp rows still copy; their empty stamp re-opens them once")
+}
+
+func TestExtractCandidatesDoneRevisitBoundedByWatermark(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	for _, id := range []string{"sess-old-change", "sess-new-change"} {
+		seedExtractCandidate(t, d, id, 4*time.Hour, nil)
+		_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+			SessionID: id, Fingerprint: "fp-a",
+			ContentDigest: "dg", UnitsTotal: 1,
+			StampedAt: time.Now().Add(-3 * time.Hour),
+		})
+		require.NoError(t, err)
+		require.NoError(t, d.AdvanceExtractCursor(ctx, id, "fp-a", "dg", 1))
+	}
+	// Both sessions changed after their unit snapshots, but only one
+	// changed since the last full pass; the other was already offered to
+	// (and evidently reconciled by) an earlier full pass.
+	backdateLocalModified(t, d, "sess-old-change", 2*time.Hour)
+	backdateLocalModified(t, d, "sess-new-change", 10*time.Minute)
+
+	base := ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
+		IncludeDone:  true,
+	}
+	ids, err := d.ExtractCandidates(ctx, base)
+	require.NoError(t, err)
+	assert.ElementsMatch(t,
+		[]string{"sess-old-change", "sess-new-change"}, ids,
+		"an unbounded revisit scan must offer every changed done session")
+
+	bounded := base
+	bounded.DoneChangedSince = time.Now().Add(-time.Hour)
+	ids, err = d.ExtractCandidates(ctx, bounded)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sess-new-change"}, ids,
+		"a bounded revisit scan must only walk sessions written since "+
+			"the last full pass")
+}
+
+func TestExtractCandidatesFullScanPlanIsIndexBounded(t *testing.T) {
+	d := testDB(t)
+
+	query, args, err := extractCandidateSQL(ExtractCandidateQuery{
+		Fingerprint:       "fp-a",
+		QuietCutoff:       time.Now().Add(-30 * time.Minute),
+		FailedRetryCutoff: time.Now().Add(-time.Hour),
+		ScanVersions:      []string{"rules-v1"},
+		IncludeDone:       true,
+		ChangedSince:      time.Now().Add(-time.Hour),
+		DoneChangedSince:  time.Now().Add(-2 * time.Hour),
+	})
+	require.NoError(t, err)
+
+	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+		details = append(details, detail)
+	}
+	require.NoError(t, rows.Err())
+	for _, detail := range details {
+		assert.NotRegexp(t, `^SCAN s\b`, detail,
+			"a watermarked full pass must not walk the sessions table; "+
+				"plan:\n%s", strings.Join(details, "\n"))
+		assert.NotRegexp(t, `^SCAN p\b`, detail,
+			"a watermarked full pass must not walk every progress row; "+
+				"plan:\n%s", strings.Join(details, "\n"))
+	}
+}

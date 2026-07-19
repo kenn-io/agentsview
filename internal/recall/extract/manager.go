@@ -59,6 +59,15 @@ type Manager struct {
 	// ignored by full passes — they are the recovery path. Guarded by
 	// passMu.
 	watermark time.Time
+	// fullWatermark bounds the done-revisit arm of full passes the same
+	// way: only completed sessions written at or after it are rechecked, so
+	// the periodic backstop scales with recent writes instead of every done
+	// row. It advances to the pass start when an unlimited full pass
+	// completes — no quiet-period lag, because a write landing during pass N
+	// carries a local_modified_at at or after N's start and so stays visible
+	// to pass N+1. Recovery from a lost watermark is a fresh manager, whose
+	// zero value revisits unbounded. Guarded by passMu.
+	fullWatermark time.Time
 }
 
 // PassOptions selects what one pass covers. SessionID targets a single
@@ -239,6 +248,9 @@ func (m *Manager) runPassLocked(
 		if w := passStart.Add(-m.cfg.QuietPeriod); w.After(m.watermark) {
 			m.watermark = w
 		}
+		if opts.Full && passStart.After(m.fullWatermark) {
+			m.fullWatermark = passStart
+		}
 	}
 	return result, nil
 }
@@ -278,12 +290,12 @@ func (m *Manager) passSessions(
 	}
 	now := time.Now()
 	// Every scheduled pass — full ones included — bounds discovery by the
-	// watermark, so background work scales with recent writes rather than
-	// the archive; a full pass differs only in revisiting changed done
-	// sessions (which the progress-state index bounds). Unbounded
-	// reconciliation is the fresh-manager path: a daemon restart or a
-	// manual CLI run starts with a zero watermark.
-	return m.cfg.DB.ExtractCandidates(ctx, db.ExtractCandidateQuery{
+	// watermark, and a full pass additionally bounds its done revisits by
+	// the full watermark, so background work scales with recent writes
+	// rather than the archive. Unbounded reconciliation is the
+	// fresh-manager path: a daemon restart or a manual CLI run starts with
+	// zero watermarks.
+	q := db.ExtractCandidateQuery{
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
@@ -291,7 +303,11 @@ func (m *Manager) passSessions(
 		IncludeDone:       opts.Full,
 		ChangedSince:      m.watermark,
 		Limit:             opts.Limit,
-	})
+	}
+	if opts.Full {
+		q.DoneChangedSince = m.fullWatermark
+	}
+	return m.cfg.DB.ExtractCandidates(ctx, q)
 }
 
 // refuseSecretFindings excludes sessions with recorded secret findings of any
@@ -368,6 +384,16 @@ func sessionSnapshotChanged(before, after *db.Session) bool {
 		!stringPtrEqual(before.LocalModifiedAt, after.LocalModifiedAt)
 }
 
+// extractionBracketStable reports whether the second snapshot read matches
+// the first and still passes eligibility. The comparison alone is not
+// enough: trash and automation flags can flip without touching any field
+// sessionSnapshotChanged watches, and content extracted under that stale
+// view would outlive the session's exclusion.
+func extractionBracketStable(id string, before, after *db.Session) bool {
+	return after != nil && !sessionSnapshotChanged(before, after) &&
+		extractableSession(id, after) == nil
+}
+
 func stringPtrEqual(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -418,24 +444,29 @@ func (m *Manager) extractSession(
 	if err != nil {
 		return outcome, err
 	}
-	// Re-read the session and compare: if sync wrote to it between the
+	// Re-read the session and recheck: if sync wrote to it between the
 	// eligibility check and the message read, the transcript just loaded may
-	// contain content the check never saw. Skip silently — the write bumped
-	// local_modified_at, so the next pass retries against a settled view.
+	// contain content the check never saw, and a session trashed or flagged
+	// automated in that window is no longer eligible at all. Skip silently —
+	// a concurrent write bumped local_modified_at so the next pass retries
+	// against a settled view, and a newly ineligible session must simply
+	// not be extracted.
 	recheck, err := m.sessionSnapshot(ctx, sessionID)
 	if err != nil {
 		return outcome, err
 	}
-	if recheck == nil || sessionSnapshotChanged(session, recheck) {
+	if !extractionBracketStable(sessionID, session, recheck) {
 		return outcome, nil
 	}
 	// The sync loop writes the session row before the transcript, so
 	// mid-write the row can claim more (or fewer) messages than are
 	// stored. Eligibility was judged from the row; a transcript that does
-	// not match it contains content the check never approved.
-	if len(rows) != session.MessageCount {
-		return outcome, nil
-	}
+	// not match it contains content the check never approved, so it must
+	// not reach the model. The snapshot bracket was stable, so this is not
+	// a caught-mid-write race either: recorded below as a retryable
+	// failure, because a silent skip would let the discovery watermarks
+	// advance past the session's writes and exclude it forever.
+	countMismatch := len(rows) != session.MessageCount
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
 		messages = append(messages, Message{
@@ -478,6 +509,22 @@ func (m *Manager) extractSession(
 		return outcome, err
 	}
 	if progress.State == db.ExtractProgressDone {
+		return outcome, nil
+	}
+	if countMismatch {
+		if markErr := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
+			SessionID:      sessionID,
+			Fingerprint:    m.fingerprint,
+			ExpectedDigest: digest,
+			ExpectedCursor: progress.UnitCursor,
+			LastError: fmt.Sprintf(
+				"transcript has %d messages but the session row claims %d",
+				len(rows), session.MessageCount,
+			),
+		}); markErr != nil && !errors.Is(markErr, db.ErrStaleExtractProgress) {
+			return outcome, markErr
+		}
+		outcome.failed = true
 		return outcome, nil
 	}
 	for i := progress.UnitCursor; i < len(units); i++ {

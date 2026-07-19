@@ -584,6 +584,24 @@ func (db *DB) ExtractProgress(
 	return progress, true, nil
 }
 
+// attachedColumnExistsTx reports whether the attached old_db's table carries
+// the named column, so copies can adapt to archives written before a column
+// was introduced.
+func attachedColumnExistsTx(
+	ctx context.Context, tx *sql.Tx, table, column string,
+) (bool, error) {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pragma_table_info(?, 'old_db') WHERE name = ?
+		)`, table, column).Scan(&exists); err != nil {
+		return false, fmt.Errorf(
+			"checking source column %s.%s: %w", table, column, err,
+		)
+	}
+	return exists, nil
+}
+
 // copyRecallExtractStateFromAttachedTx carries the extraction generation
 // registry and per-session resume cursors across a full resync. Without it a
 // rebuild silently discards the active generation and every cursor, forcing
@@ -621,13 +639,28 @@ func copyRecallExtractStateFromAttachedTx(
 	if !progressExists {
 		return nil
 	}
+	// content_stamped_at must survive the copy: an empty stamp reads as
+	// "changed since coverage" for every completed session, so losing it
+	// would reload the whole archive's transcripts on the next full pass.
+	// Archives written before the column existed copy it as '' — those
+	// rows re-open once and settle on their first revisit.
+	stampExists, err := attachedColumnExistsTx(
+		ctx, tx, "recall_extract_progress", "content_stamped_at",
+	)
+	if err != nil {
+		return err
+	}
+	stampSource := "''"
+	if stampExists {
+		stampSource = "content_stamped_at"
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO recall_extract_progress (
 			session_id, generation_fingerprint, unit_cursor, units_total,
-			state, content_digest, last_error, updated_at
+			state, content_digest, content_stamped_at, last_error, updated_at
 		)
 		SELECT session_id, generation_fingerprint, unit_cursor, units_total,
-		       state, content_digest, last_error, updated_at
+		       state, content_digest, `+stampSource+`, last_error, updated_at
 		FROM old_db.recall_extract_progress
 		WHERE session_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying extract progress: %w", err)
@@ -663,12 +696,18 @@ type ExtractCandidateQuery struct {
 	// failed, revisitable done) are always offered regardless. The zero
 	// value leaves discovery unrestricted.
 	ChangedSince time.Time
-	Limit        int
+	// DoneChangedSince restricts the *done-revisit* arm the same way: only
+	// completed sessions written at or after it are rechecked, so a
+	// steady-state full pass walks recent writes via the sessions index
+	// instead of every completed progress row. The zero value leaves the
+	// revisit unrestricted; ignored unless IncludeDone is set.
+	DoneChangedSince time.Time
+	Limit            int
 }
 
 // extractEligibleSessionSQL is the extraction privacy boundary over one
-// sessions row aliased s. Both arms of the candidates query apply it, so the
-// discovery and progress paths can never disagree about eligibility. It
+// sessions row aliased s. Every arm of the candidates query applies it, so
+// the discovery and progress paths can never disagree about eligibility. It
 // consumes len(ScanVersions)+1 args: the versions, then the quiet cutoff.
 const extractEligibleSessionSQL = `s.deleted_at IS NULL
 	AND s.is_automated = 0
@@ -682,12 +721,15 @@ const extractEligibleSessionSQL = `s.deleted_at IS NULL
 	AND s.ended_at != ''
 	AND s.ended_at <= ?`
 
-// extractCandidateSQL builds the candidates query as a union of two indexed
+// extractCandidateSQL builds the candidates query as a union of indexed
 // arms: discovery walks sessions by local_modified_at (bounded by
-// ChangedSince when set) for sessions with no progress row, and the backlog
-// arm walks this generation's progress rows by state. Keeping the arms
-// separate lets each use its own index instead of forcing a full scan of
-// the sessions table on every pass.
+// ChangedSince when set) for sessions with no progress row; the queue arm
+// walks this generation's pending, partial, and failed progress rows by
+// state; and the done-revisit arm (IncludeDone) walks sessions by
+// local_modified_at again (bounded by DoneChangedSince when set) joining
+// their done progress rows. Keeping the arms separate lets each use its own
+// index instead of forcing a full scan of the sessions or progress tables
+// on every pass.
 func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 	if strings.TrimSpace(q.Fingerprint) == "" {
 		return "", nil, fmt.Errorf(
@@ -742,22 +784,44 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 			AND (
 				p.state IN (?, ?)
 				OR (p.state = ? AND p.updated_at <= ?)
-				OR (? AND p.state = ?
-					AND (s.local_modified_at IS NULL
-						OR s.local_modified_at >= p.content_stamped_at))
 			)
-			AND ` + eligible + `
-		)
-		ORDER BY ended_at ASC, id ASC
-		LIMIT ?`)
+			AND ` + eligible)
 	args = append(args,
 		q.Fingerprint,
 		ExtractProgressPending, ExtractProgressPartial,
 		ExtractProgressFailed,
 		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
-		q.IncludeDone, ExtractProgressDone,
 	)
 	args = append(args, eligibleArgs...)
+	if q.IncludeDone {
+		// Done revisits drive from the sessions side so the planner can
+		// bound them with idx_sessions_local_modified; walking done progress
+		// rows instead would scan every completed session each pass.
+		sb.WriteString(`
+		UNION
+		SELECT s.id AS id, s.ended_at AS ended_at
+		FROM sessions s
+		JOIN recall_extract_progress p ON p.session_id = s.id
+			AND p.generation_fingerprint = ?
+		WHERE p.state = ?
+			AND (s.local_modified_at IS NULL
+				OR s.local_modified_at >= p.content_stamped_at)
+			AND ` + eligible)
+		args = append(args, q.Fingerprint, ExtractProgressDone)
+		args = append(args, eligibleArgs...)
+		if !q.DoneChangedSince.IsZero() {
+			// NULL local_modified_at rows (archives predating the column)
+			// must stay revisitable regardless of the bound.
+			sb.WriteString(`
+			AND (s.local_modified_at IS NULL OR s.local_modified_at >= ?)`)
+			args = append(args,
+				q.DoneChangedSince.UTC().Format(extractTimeLayout))
+		}
+	}
+	sb.WriteString(`
+		)
+		ORDER BY ended_at ASC, id ASC
+		LIMIT ?`)
 	args = append(args, limit)
 	return sb.String(), args, nil
 }

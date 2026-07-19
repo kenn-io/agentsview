@@ -863,6 +863,48 @@ func TestSessionSnapshotChanged(t *testing.T) {
 	}
 }
 
+func TestExtractionBracketStable(t *testing.T) {
+	ended := "2026-01-01T00:00:00.000Z"
+	revision := "rev-1"
+	modified := "2026-01-01T00:00:00.000Z"
+	base := func() *db.Session {
+		return &db.Session{
+			ID:                  "s",
+			MessageCount:        4,
+			EndedAt:             &ended,
+			TranscriptRevision:  &revision,
+			SecretsRulesVersion: secrets.RulesVersion(),
+			LocalModifiedAt:     &modified,
+		}
+	}
+	if !extractionBracketStable("s", base(), base()) {
+		t.Fatal("identical eligible snapshots must read as stable")
+	}
+	if extractionBracketStable("s", base(), nil) {
+		t.Fatal("a vanished session row must read as unstable")
+	}
+	moved := base()
+	other := "2026-01-01T00:00:01.000Z"
+	moved.LocalModifiedAt = &other
+	if extractionBracketStable("s", base(), moved) {
+		t.Fatal("a moved local_modified_at must read as unstable")
+	}
+	// Trash and automation flags can flip without touching any field the
+	// snapshot comparison watches; the bracket must recheck eligibility.
+	trashed := base()
+	deleted := "2026-01-01T00:00:02.000Z"
+	trashed.DeletedAt = &deleted
+	if extractionBracketStable("s", base(), trashed) {
+		t.Fatal("a concurrently trashed session must read as unstable")
+	}
+	automated := base()
+	automated.IsAutomated = true
+	if extractionBracketStable("s", base(), automated) {
+		t.Fatal("a concurrently automation-flagged session must read as " +
+			"unstable")
+	}
+}
+
 func TestManagerStagesEntriesUntilActivation(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()
@@ -1026,7 +1068,66 @@ func TestManagerWatermarkAdvancesOnlyOnCompleteScanPasses(t *testing.T) {
 	}
 }
 
-func TestManagerSkipsTranscriptOutOfStepWithSessionRow(t *testing.T) {
+func TestManagerFullWatermarkBoundsDoneRevisits(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if !m.fullWatermark.IsZero() {
+		t.Fatal("an incremental pass must not advance the full watermark")
+	}
+	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if m.fullWatermark.IsZero() {
+		t.Fatal("a completed unlimited full pass must advance the full " +
+			"watermark")
+	}
+	// A limited full pass may leave revisits behind and must not advance
+	// the full watermark.
+	bounded := newManager(t, d, server.URL, nil)
+	if _, err := bounded.RunPass(ctx, PassOptions{Full: true, Limit: 1}); err != nil {
+		t.Fatalf("limited RunPass full: %v", err)
+	}
+	if !bounded.fullWatermark.IsZero() {
+		t.Fatal("a limited full pass must not advance the full watermark")
+	}
+	firstCalls := log.count()
+
+	// The session grows, but a full watermark ahead of the write hides the
+	// done revisit from scheduled full passes: the steady-state backstop
+	// walks recent writes, not every completed session in the archive.
+	growSession(t, d, "sess-1",
+		turnMessages("ask", "answer", "follow-up", "more work")[2:], 2)
+	m.fullWatermark = time.Now().Add(time.Hour)
+	result, err := m.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != firstCalls {
+		t.Fatalf("result = %+v with %d calls; done revisits must respect "+
+			"the full watermark", result, log.count()-firstCalls)
+	}
+
+	// Recovery is a fresh manager — daemon restart or a manual CLI run —
+	// whose zero full watermark revisits unbounded.
+	fresh := newManager(t, d, server.URL, nil)
+	result, err = fresh.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("fresh RunPass full: %v", err)
+	}
+	if result.Sessions != 1 {
+		t.Fatalf("result = %+v; a fresh manager must revisit the grown "+
+			"session", result)
+	}
+}
+
+func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
@@ -1034,7 +1135,8 @@ func TestManagerSkipsTranscriptOutOfStepWithSessionRow(t *testing.T) {
 
 	// The sync loop writes the session row before the transcript: mid-write
 	// the row can claim more (or fewer) messages than are stored. A loaded
-	// transcript that does not match the approved row state must be skipped.
+	// transcript that does not match the approved row state must not reach
+	// the model.
 	session, err := d.GetSessionFull(ctx, "sess-1")
 	if err != nil || session == nil {
 		t.Fatalf("GetSessionFull: %v", err)
@@ -1043,7 +1145,10 @@ func TestManagerSkipsTranscriptOutOfStepWithSessionRow(t *testing.T) {
 	if err := d.UpsertSession(*session); err != nil {
 		t.Fatal(err)
 	}
-	m := newManager(t, d, server.URL, nil)
+	settleSessionWrite()
+	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.FailureBackoff = 5 * time.Millisecond
+	})
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
@@ -1052,6 +1157,43 @@ func TestManagerSkipsTranscriptOutOfStepWithSessionRow(t *testing.T) {
 	if result.Sessions != 0 || log.count() != 0 {
 		t.Fatalf("result = %+v with %d calls; a transcript out of step with "+
 			"the session row must not reach the model", result, log.count())
+	}
+	// The snapshot bracket was stable, so this was not a caught-mid-write
+	// race: a silent skip would let the watermarks advance past the
+	// session's writes and exclude it forever. The mismatch must be
+	// recorded as a retryable failure instead.
+	if result.Failed != 1 {
+		t.Fatalf("result = %+v; a stable out-of-step transcript must be "+
+			"recorded as a retryable failure, not silently skipped", result)
+	}
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressFailed {
+		t.Fatalf("state = %s, want failed", progress.State)
+	}
+	if progress.LastError == "" {
+		t.Fatal("the failure must record why the session was refused")
+	}
+
+	// The row heals. Watermarks far ahead of every write prove the retry
+	// flows through the queue arm, which discovery bounds never gate.
+	session.MessageCount = 2
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+	m.watermark = time.Now().Add(time.Hour)
+	m.fullWatermark = time.Now().Add(time.Hour)
+	time.Sleep(10 * time.Millisecond)
+	result, err = m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass retry: %v", err)
+	}
+	if result.Sessions != 1 {
+		t.Fatalf("result = %+v; the healed session must extract on retry",
+			result)
 	}
 }
 
