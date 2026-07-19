@@ -180,8 +180,9 @@ See [Activity](/activity/) for the full reference.
 AgentsView reads the session files that your
 [AI coding agents](/configuration/#session-discovery) leave on your machine and
 gives you a local-first desktop and web app to work with them. By default
-everything stays on your machine. Optionally, [PostgreSQL sync](/pg-sync/) can
-push session data to a shared database for team or multi-machine setups.
+everything stays on your machine. For multi-machine use, a primary viewer can
+read [out-of-band filesystem copies](/filesystem-sync/), or
+[PostgreSQL sync](/pg-sync/) can push session data to a shared database.
 
 <div class="grid cards" markdown>
 

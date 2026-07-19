@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -103,6 +104,621 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		WHERE source_archive_id = $1`, archiveID,
 	).Scan(&snapshotCount))
 	assert.Zero(t, snapshotCount)
+}
+
+func TestIncrementalPushPublishesSessionIdentitySupersession(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_supersession_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	const (
+		oldID     = "old-machine~session"
+		currentID = "new-machine~session"
+	)
+	oldParentID := oldID
+	for _, session := range []db.Session{
+		{ID: oldID, Project: "app", Machine: "old-machine", Agent: "claude"},
+		{ID: "child", Project: "app", Machine: "laptop", Agent: "claude",
+			ParentSessionID: &oldParentID, SourceSessionID: oldID},
+		{ID: "parent", Project: "app", Machine: "laptop", Agent: "claude"},
+	} {
+		require.NoError(t, local.UpsertSession(session))
+	}
+	require.NoError(t, local.InsertMessages([]db.Message{
+		{SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+			SourceUUID: "stable"},
+		{SessionID: "parent", Ordinal: 0, Role: "assistant", Content: "spawn",
+			ToolCalls: []db.ToolCall{{
+				ToolName: "Agent", Category: "agent", ToolUseID: "spawn",
+				SubagentSessionID: oldID,
+				ResultEvents: []db.ToolResultEvent{{
+					ToolUseID: "spawn", SubagentSessionID: oldID,
+					Source: "progress", Status: "completed",
+				}},
+			}}},
+	}))
+	oldMessages, err := local.GetAllMessages(ctx, oldID)
+	require.NoError(t, err)
+	require.Len(t, oldMessages, 1)
+	_, err = local.PinMessage(oldID, oldMessages[0].ID, nil)
+	require.NoError(t, err)
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx,
+		`INSERT INTO starred_sessions (session_id) VALUES ($1)`, oldID)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `
+		INSERT INTO pinned_messages (
+			session_id, message_id, ordinal, source_uuid, note
+		)
+		SELECT $1, ordinal, ordinal, source_uuid, 'shared note'
+		FROM messages
+		WHERE session_id = $1 AND ordinal = 0`, oldID)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: currentID, Project: "app", Machine: "new-machine", Agent: "claude",
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: currentID, Ordinal: 0, Role: "user", Content: "old",
+		SourceUUID: "stable",
+	}}))
+	require.NoError(t, local.SupersedeSessionIdentities(
+		currentID, []string{oldID},
+	))
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, result.SessionsPushed, 3)
+
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM excluded_sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_aliases
+		WHERE session_id = $1 AND alias_id = $2`,
+		currentID, oldID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sessions
+		WHERE id = 'child' AND parent_session_id = $1 AND source_session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tool_calls
+		WHERE session_id = 'parent' AND subagent_session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tool_result_events
+		WHERE session_id = 'parent' AND subagent_session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pinned_messages WHERE session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = $1`,
+		currentID).Scan(&count))
+	assert.Equal(t, 1, count)
+
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_aliases
+		WHERE session_id = $1 AND alias_id = $2`,
+		currentID, oldID).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+func TestPushPropagatesIdentityAliasChainTombstones(t *testing.T) {
+	for i, tombstoneID := range []string{"old-session", "current-session"} {
+		t.Run(tombstoneID, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			schema := fmt.Sprintf("agentsview_alias_tombstone_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, local.Close()) })
+			for _, id := range []string{
+				"old-session", "middle-session", "current-session",
+			} {
+				require.NoError(t, local.UpsertSession(db.Session{
+					ID: id, Project: "app", Machine: "laptop", Agent: "claude",
+				}))
+			}
+			require.NoError(t, local.SupersedeSessionIdentities(
+				"middle-session", []string{"old-session"},
+			))
+			require.NoError(t, local.SupersedeSessionIdentities(
+				"current-session", []string{"middle-session"},
+			))
+
+			syncer, err := New(
+				pgURL, schema, local, "laptop", true, SyncOptions{},
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			require.NoError(t, syncer.EnsureSchema(ctx))
+			_, err = syncer.pg.ExecContext(ctx,
+				`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+				tombstoneID,
+			)
+			require.NoError(t, err)
+
+			for _, full := range []bool{false, false, true} {
+				_, err = syncer.Push(ctx, full, nil)
+				require.NoError(t, err)
+			}
+			var count int
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM excluded_sessions
+				WHERE id = ANY($1)`,
+				[]string{"old-session", "middle-session", "current-session"},
+			).Scan(&count))
+			assert.Equal(t, 3, count)
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM sessions
+				WHERE id = ANY($1)`,
+				[]string{"old-session", "middle-session", "current-session"},
+			).Scan(&count))
+			assert.Zero(t, count)
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM session_aliases
+				WHERE session_id = ANY($1) OR alias_id = ANY($1)`,
+				[]string{"old-session", "middle-session", "current-session"},
+			).Scan(&count))
+			assert.Zero(t, count)
+		})
+	}
+}
+
+func TestApplyPGSessionIdentityAliasesRestoresPins(t *testing.T) {
+	type testMessage struct {
+		ordinal    int
+		sourceUUID string
+	}
+	tests := []struct {
+		name          string
+		oldOrdinal    int
+		oldSourceUUID string
+		current       []testMessage
+		canonicalPin  bool
+		wantOrdinal   int
+		wantSource    string
+		wantNote      string
+		wantCreatedAt time.Time
+	}{
+		{
+			name:          "canonical conflict",
+			oldSourceUUID: "stable",
+			current:       []testMessage{{ordinal: 2, sourceUUID: "stable"}},
+			canonicalPin:  true,
+			wantOrdinal:   2,
+			wantSource:    "stable",
+			wantNote:      "canonical note",
+			wantCreatedAt: time.Date(2026, 7, 17, 11, 0, 0, 0, time.UTC),
+		},
+		{
+			name:          "duplicate UUID falls back to ordinal",
+			oldOrdinal:    1,
+			oldSourceUUID: "duplicate",
+			current: []testMessage{
+				{ordinal: 0, sourceUUID: "duplicate"},
+				{ordinal: 1, sourceUUID: "changed"},
+				{ordinal: 2, sourceUUID: "duplicate"},
+			},
+			wantOrdinal:   1,
+			wantSource:    "changed",
+			wantNote:      "superseded note",
+			wantCreatedAt: time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			name:          "missing UUID falls back to ordinal",
+			oldOrdinal:    1,
+			oldSourceUUID: "missing",
+			current:       []testMessage{{ordinal: 1, sourceUUID: "changed"}},
+			wantOrdinal:   1,
+			wantSource:    "changed",
+			wantNote:      "superseded note",
+			wantCreatedAt: time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "empty UUID falls back to ordinal",
+			oldOrdinal:  1,
+			current:     []testMessage{{ordinal: 1}},
+			wantOrdinal: 1,
+			wantNote:    "superseded note",
+			wantCreatedAt: time.Date(
+				2026, 7, 17, 10, 0, 0, 0, time.UTC,
+			),
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			schema := fmt.Sprintf("agentsview_identity_pin_restore_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			pg, err := Open(pgURL, schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, pg.Close()) })
+			require.NoError(t, EnsureSchema(ctx, pg, schema))
+			const (
+				oldID     = "old-session"
+				currentID = "current-session"
+			)
+			for _, id := range []string{oldID, currentID} {
+				_, err = pg.ExecContext(ctx, `
+					INSERT INTO sessions (
+						id, machine, project, agent, first_message,
+						started_at, message_count, user_message_count
+					)
+					VALUES (
+						$1, 'machine', 'project', 'claude', 'message',
+						'2026-07-17T09:00:00Z'::timestamptz, 1, 1
+					)`, id)
+				require.NoError(t, err)
+			}
+			_, err = pg.ExecContext(ctx, `
+				INSERT INTO messages (
+					session_id, ordinal, role, content, content_length,
+					source_uuid
+				)
+				VALUES ($1, $2, 'user', 'old', 3, $3)`,
+				oldID, tt.oldOrdinal, tt.oldSourceUUID,
+			)
+			require.NoError(t, err)
+			for _, message := range tt.current {
+				_, err = pg.ExecContext(ctx, `
+					INSERT INTO messages (
+						session_id, ordinal, role, content, content_length,
+						source_uuid
+					)
+					VALUES ($1, $2, 'user', 'current', 7, $3)`,
+					currentID, message.ordinal, message.sourceUUID,
+				)
+				require.NoError(t, err)
+			}
+			_, err = pg.ExecContext(ctx, `
+				INSERT INTO pinned_messages (
+					session_id, message_id, ordinal, source_uuid, note, created_at
+				)
+				VALUES (
+					$1, $2, $2, $3, 'superseded note',
+					'2026-07-17T10:00:00Z'::timestamptz
+				)`, oldID, tt.oldOrdinal, tt.oldSourceUUID)
+			require.NoError(t, err)
+			if tt.canonicalPin {
+				_, err = pg.ExecContext(ctx, `
+					INSERT INTO pinned_messages (
+						session_id, message_id, ordinal, source_uuid,
+						note, created_at
+					)
+					VALUES (
+						$1, $2, $2, $3, 'canonical note',
+						'2026-07-17T11:00:00Z'::timestamptz
+					)`, currentID, tt.wantOrdinal, tt.wantSource)
+				require.NoError(t, err)
+			}
+
+			syncer := &Sync{pg: pg, machine: "machine"}
+			_, err = syncer.applyPGSessionIdentityAliases(
+				ctx, []db.SessionIdentityAlias{{
+					AliasID: oldID, SessionID: currentID, Machine: "machine",
+				}}, "", nil,
+			)
+			require.NoError(t, err)
+
+			rows, err := pg.QueryContext(ctx, `
+				SELECT ordinal, source_uuid, note, created_at
+				FROM pinned_messages
+				WHERE session_id = $1`, currentID)
+			require.NoError(t, err)
+			defer rows.Close()
+			require.True(t, rows.Next())
+			var ordinal int
+			var sourceUUID, note string
+			var createdAt time.Time
+			require.NoError(t, rows.Scan(
+				&ordinal, &sourceUUID, &note, &createdAt,
+			))
+			assert.Equal(t, tt.wantOrdinal, ordinal)
+			assert.Equal(t, tt.wantSource, sourceUUID)
+			assert.Equal(t, tt.wantNote, note)
+			assert.Equal(t, tt.wantCreatedAt, createdAt.UTC())
+			assert.False(t, rows.Next(), "expected exactly one canonical pin")
+			require.NoError(t, rows.Err())
+		})
+	}
+}
+
+func TestApplyPGSessionIdentityAliasesRequiresBothRowsOwned(t *testing.T) {
+	tests := []struct {
+		name        string
+		sourceOwner string
+		targetOwner string
+		wantMigrate bool
+	}{
+		{
+			name:        "source foreign",
+			sourceOwner: "foreign-owner",
+			targetOwner: "local-owner",
+		},
+		{
+			name:        "target foreign",
+			sourceOwner: "local-owner",
+			targetOwner: "foreign-owner",
+		},
+		{
+			name:        "both owned",
+			sourceOwner: "local-owner",
+			targetOwner: "local-owner",
+			wantMigrate: true,
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pgURL := testPGURL(t)
+			schema := fmt.Sprintf("agentsview_identity_ownership_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			pg, err := Open(pgURL, schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, pg.Close()) })
+			require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+			_, err = pg.ExecContext(ctx, `
+				INSERT INTO sessions (
+					id, machine, owner_marker, project, agent,
+					parent_session_id, message_count, user_message_count
+				)
+				VALUES
+					('old-session', 'machine', $1, 'app', 'claude', NULL, 0, 0),
+					('current-session', 'machine', $2, 'app', 'claude', NULL, 0, 0),
+					('dependent', 'machine', 'foreign-dependent', 'app', 'claude',
+					 'old-session', 0, 0)`,
+				tt.sourceOwner, tt.targetOwner,
+			)
+			require.NoError(t, err)
+
+			syncer := &Sync{pg: pg, machine: "machine"}
+			pending, err := syncer.applyPGSessionIdentityAliases(
+				ctx, []db.SessionIdentityAlias{{
+					AliasID: "old-session", SessionID: "current-session",
+					Machine: "machine",
+				}}, "local-owner", nil,
+			)
+			require.NoError(t, err)
+			if tt.wantMigrate {
+				assert.Empty(t, pending)
+			} else {
+				assert.Len(t, pending, 1)
+			}
+
+			var oldCount, currentCount, aliasCount int
+			require.NoError(t, pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sessions WHERE id = 'old-session'`,
+			).Scan(&oldCount))
+			require.NoError(t, pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sessions WHERE id = 'current-session'`,
+			).Scan(&currentCount))
+			require.NoError(t, pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM session_aliases
+				WHERE session_id = 'current-session' AND alias_id = 'old-session'`,
+			).Scan(&aliasCount))
+			var parentID string
+			require.NoError(t, pg.QueryRowContext(ctx, `
+				SELECT parent_session_id FROM sessions WHERE id = 'dependent'`,
+			).Scan(&parentID))
+
+			if tt.wantMigrate {
+				assert.Zero(t, oldCount)
+				assert.Equal(t, 1, currentCount)
+				assert.Equal(t, 1, aliasCount)
+				assert.Equal(t, "current-session", parentID)
+			} else {
+				assert.Equal(t, 1, oldCount)
+				assert.Equal(t, 1, currentCount)
+				assert.Zero(t, aliasCount)
+				assert.Equal(t, "old-session", parentID)
+			}
+		})
+	}
+}
+
+func TestPushBlocksIdentityAliasMigrationToForeignOwnedTarget(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_foreign_target_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	const (
+		oldID     = "owned-old-session"
+		currentID = "foreign-current-session"
+	)
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: oldID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+	}}))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	_, err = syncer.pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent,
+			parent_session_id, message_count, user_message_count
+		)
+		VALUES
+			($1, 'foreign-machine', 'foreign-owner', 'app', 'claude', NULL, 0, 0),
+			('foreign-dependent', 'foreign-machine', 'foreign-owner',
+			 'app', 'claude', $2, 0, 0)`,
+		currentID, oldID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: currentID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: currentID, Ordinal: 0, Role: "user", Content: "new",
+	}}))
+	require.NoError(t, local.SupersedeSessionIdentities(
+		currentID, []string{oldID},
+	))
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SkippedConflicts)
+
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID).Scan(&count))
+	assert.Equal(t, 1, count, "owned old session must not be deleted")
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM session_aliases
+		WHERE session_id = $1 OR alias_id = $2`,
+		currentID, oldID,
+	).Scan(&count))
+	assert.Zero(t, count, "foreign replacement must not receive the alias")
+
+	var parentSessionID, ownerMarker string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT parent_session_id, owner_marker
+		FROM sessions
+		WHERE id = 'foreign-dependent'`,
+	).Scan(&parentSessionID, &ownerMarker))
+	assert.Equal(t, oldID, parentSessionID,
+		"blocked migration must not rewire foreign relationships")
+	assert.Equal(t, "foreign-owner", ownerMarker)
+}
+
+func TestPushIdentityMigrationPreservesPGCuration(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_curation_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	const (
+		oldID       = "curated-old-session"
+		currentID   = "curated-current-session"
+		curatedName = "PG curated name"
+	)
+	oldSourceName := "Old source name"
+	currentSourceName := "Current source name"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: oldID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.RenameSession(oldID, &oldSourceName))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: oldID, Ordinal: 0, Role: "user", Content: "old",
+	}}))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `
+		UPDATE sessions
+		SET display_name = $2, deleted_at = NOW()
+		WHERE id = $1`,
+		oldID, curatedName,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: currentID, Project: "app", Machine: "laptop", Agent: "claude",
+		MessageCount: 1, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.RenameSession(currentID, &currentSourceName))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: currentID, Ordinal: 0, Role: "user", Content: "current",
+	}}))
+	require.NoError(t, local.SupersedeSessionIdentities(
+		currentID, []string{oldID},
+	))
+
+	for i, full := range []bool{false, true} {
+		_, err = syncer.Push(ctx, full, nil)
+		require.NoError(t, err, "push iteration %d", i)
+
+		var displayName, sourceDisplayName string
+		var deletedAt sql.NullTime
+		var sourceDeletedAt sql.NullTime
+		require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+			SELECT display_name, source_display_name,
+				deleted_at, source_deleted_at
+			FROM sessions
+			WHERE id = $1`,
+			currentID,
+		).Scan(
+			&displayName, &sourceDisplayName, &deletedAt, &sourceDeletedAt,
+		))
+		assert.Equal(t, curatedName, displayName)
+		assert.Equal(t, currentSourceName, sourceDisplayName,
+			"replacement source name remains the curation baseline")
+		assert.True(t, deletedAt.Valid,
+			"identity migration must not resurrect a PG-trashed session")
+		assert.False(t, sourceDeletedAt.Valid,
+			"active replacement remains the source trash baseline")
+
+		var count int
+		require.NoError(t, syncer.pg.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sessions WHERE id = $1`, oldID,
+		).Scan(&count))
+		assert.Zero(t, count)
+		require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM session_aliases
+			WHERE session_id = $1 AND alias_id = $2`,
+			currentID, oldID,
+		).Scan(&count))
+		assert.Equal(t, 1, count)
+	}
 }
 
 func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(

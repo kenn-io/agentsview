@@ -317,7 +317,7 @@ func (s codexSourceSet) discover(
 			// live-over-archived preference (which inspects a local codexSource
 			// layout) does not apply here.
 			for _, file := range discoverCodexS3(root) {
-				source := s3SourceRefFromDiscoveredFile(file)
+				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue
 				}

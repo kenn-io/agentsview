@@ -190,10 +190,20 @@ func (e *Engine) processS3Session(
 	case parser.AgentClaude:
 		sessionID := strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
 		fullID := applyIDPrefixToID(idPrefix, sessionID)
+		suppressed, err := e.db.PrepareSessionSourceIdentity(
+			file.Path, string(file.Agent), fullID,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if suppressed {
+			return processResult{skip: true}
+		}
 		if e.shouldSkipFileWithPrefix(
 			idPrefix, sessionID, sourceInfo, sourceFingerprint,
 		) &&
-			e.db.GetSessionFilePath(fullID) == file.Path {
+			e.db.GetSessionFilePath(fullID) == file.Path &&
+			!e.hasSupersededS3SessionIdentity(file, fullID) {
 			sess, _ := e.db.GetSession(ctx, fullID)
 			if sess != nil &&
 				sess.Project != "" &&
@@ -207,10 +217,20 @@ func (e *Engine) processS3Session(
 		); uuid != "" {
 			sessionID := "codex:" + uuid
 			fullID := applyIDPrefixToID(idPrefix, sessionID)
+			suppressed, err := e.db.PrepareSessionSourceIdentity(
+				file.Path, string(file.Agent), fullID,
+			)
+			if err != nil {
+				return processResult{err: err}
+			}
+			if suppressed {
+				return processResult{skip: true}
+			}
 			if e.shouldSkipFileWithPrefix(
 				idPrefix, sessionID, sourceInfo, sourceFingerprint,
 			) &&
-				e.db.GetSessionFilePath(fullID) == file.Path {
+				e.db.GetSessionFilePath(fullID) == file.Path &&
+				!e.hasSupersededS3SessionIdentity(file, fullID) {
 				sess, _ := e.db.GetSession(ctx, fullID)
 				indexNameChanged := false
 				if sess != nil &&
@@ -309,6 +329,21 @@ func (e *Engine) processS3Session(
 		idPrefix, res.excludedSessionIDs,
 	)
 	return res
+}
+
+func (e *Engine) hasSupersededS3SessionIdentity(
+	file parser.DiscoveredFile, currentID string,
+) bool {
+	ids, err := e.db.ListSessionIDsByFilePath(file.Path, string(file.Agent))
+	if err != nil {
+		return true
+	}
+	for _, id := range ids {
+		if id != currentID {
+			return true
+		}
+	}
+	return false
 }
 
 // parseMaterializedS3Source parses an s3:// object that has been materialized to

@@ -1800,6 +1800,84 @@ func TestReplaceSessionMessagesPinFallsBackToOrdinal(t *testing.T) {
 	assert.Equal(t, 1, pins[0].Ordinal, "pin ordinal")
 }
 
+func TestReplaceSessionMessagesPinUsesUniqueUUIDOtherwiseOrdinal(t *testing.T) {
+	tests := []struct {
+		name        string
+		sourceUUID  string
+		replacement []Message
+		wantOrdinal int
+	}{
+		{
+			name:       "unique UUID",
+			sourceUUID: "stable",
+			replacement: []Message{
+				{Ordinal: 0, Role: "user", Content: "new", SourceUUID: "new"},
+				{Ordinal: 2, Role: "assistant", Content: "stable",
+					SourceUUID: "stable"},
+			},
+			wantOrdinal: 2,
+		},
+		{
+			name:       "duplicate UUID",
+			sourceUUID: "duplicate",
+			replacement: []Message{
+				{Ordinal: 0, Role: "assistant", Content: "first",
+					SourceUUID: "duplicate"},
+				{Ordinal: 1, Role: "assistant", Content: "ordinal fallback",
+					SourceUUID: "changed"},
+				{Ordinal: 2, Role: "assistant", Content: "second",
+					SourceUUID: "duplicate"},
+			},
+			wantOrdinal: 1,
+		},
+		{
+			name:       "missing UUID",
+			sourceUUID: "missing",
+			replacement: []Message{
+				{Ordinal: 1, Role: "assistant", Content: "ordinal fallback",
+					SourceUUID: "changed"},
+			},
+			wantOrdinal: 1,
+		},
+		{
+			name: "empty UUID",
+			replacement: []Message{
+				{Ordinal: 1, Role: "assistant", Content: "legacy fallback"},
+			},
+			wantOrdinal: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := context.Background()
+			insertSession(t, d, "s1", "p")
+			require.NoError(t, d.InsertMessages([]Message{{
+				SessionID: "s1", Ordinal: 1, Role: "assistant",
+				Content: "original", SourceUUID: tt.sourceUUID,
+			}}))
+			msgs, err := d.GetAllMessages(ctx, "s1")
+			require.NoError(t, err)
+			note := "keep me"
+			_, err = d.PinMessage("s1", msgs[0].ID, &note)
+			require.NoError(t, err)
+			for i := range tt.replacement {
+				tt.replacement[i].SessionID = "s1"
+			}
+
+			require.NoError(t, d.ReplaceSessionMessages("s1", tt.replacement))
+
+			pins, err := d.ListPinnedMessages(ctx, "s1", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, tt.wantOrdinal, pins[0].Ordinal)
+			require.NotNil(t, pins[0].Note)
+			assert.Equal(t, note, *pins[0].Note)
+		})
+	}
+}
+
 func TestGetSessionFilePath(t *testing.T) {
 	d := testDB(t)
 

@@ -160,6 +160,10 @@ type SourceRef struct {
 	// Provider identifies the provider that created this source and must match
 	// the provider instance used for subsequent operations.
 	Provider AgentType
+	// ConfiguredRoot preserves the configured root that produced this source.
+	// It may differ from the canonical source path when a provider collapses a
+	// directory onto a sibling container file.
+	ConfiguredRoot string
 	// Key is stable within the provider across process restarts. It is suitable
 	// for dedupe and diagnostics, but not necessarily for DB freshness checks.
 	Key string

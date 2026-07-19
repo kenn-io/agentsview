@@ -940,6 +940,355 @@ func TestDedupeCodexS3IncludesSourceMachine(t *testing.T) {
 	})
 }
 
+func TestStructuredS3MachineOverrideChangesStoredMachineAndIDPrefix(t *testing.T) {
+	database := openTestDB(t)
+	root := "s3://bucket/pathbox/raw/claude"
+	sessionPath := root + "/test-proj/override-id.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, sessionPath, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewEngine(database, EngineConfig{
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentClaude: {root: "explicitbox"},
+		},
+		Machine: "viewer",
+	})
+	file := parser.DiscoveredFile{
+		Agent:       parser.AgentClaude,
+		Path:        sessionPath,
+		Project:     "test-proj",
+		Machine:     engine.s3MachineForSource(parser.AgentClaude, root, "pathbox"),
+		SourceSize:  int64(len(content)),
+		SourceMtime: mtime,
+	}
+
+	res := engine.processFile(context.Background(), file)
+
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess: res.results[0].Session,
+		msgs: res.results[0].Messages,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	sess, err := database.GetSessionFull(
+		context.Background(), "explicitbox~override-id",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "explicitbox", sess.Machine)
+	assert.Equal(t, sessionPath, derefString(sess.FilePath))
+	pathDerived, err := database.GetSessionFull(
+		context.Background(), "pathbox~override-id",
+	)
+	require.NoError(t, err)
+	assert.Nil(t, pathDerived)
+}
+
+func TestS3MachineLabelTransitionsReattributeStoredSession(t *testing.T) {
+	database := openTestDB(t)
+	root := "s3://bucket/pathbox/raw/claude"
+	sessionPath := root + "/test-proj/transition-id.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, sessionPath, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewEngine(database, EngineConfig{Machine: "viewer"})
+	writeAs := func(machine string) string {
+		t.Helper()
+		res := engine.processFile(context.Background(), parser.DiscoveredFile{
+			Agent:       parser.AgentClaude,
+			Path:        sessionPath,
+			Project:     "test-proj",
+			Machine:     machine,
+			SourceSize:  int64(len(content)),
+			SourceMtime: mtime,
+		})
+		require.NoError(t, res.err)
+		require.False(t, res.skip)
+		require.Len(t, res.results, 1)
+		sessionID := machine + "~transition-id"
+		written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+			sess: res.results[0].Session,
+			msgs: res.results[0].Messages,
+			usageEvents: []parser.ParsedUsageEvent{{
+				SessionID:    sessionID,
+				Source:       "session",
+				Model:        "fixture-model",
+				InputTokens:  10,
+				OutputTokens: 2,
+				OccurredAt:   "2024-01-01T00:00:05Z",
+				DedupKey:     "transition-usage",
+			}},
+		}}, syncWriteDefault, false)
+		require.Equal(t, 1, written)
+		require.Zero(t, failed)
+		return sessionID
+	}
+
+	pathDerivedID := writeAs("pathbox")
+	pathDerivedMessages, err := database.GetAllMessages(
+		context.Background(), pathDerivedID,
+	)
+	require.NoError(t, err)
+	require.Len(t, pathDerivedMessages, 2)
+	pinNote := "keep this message"
+	_, err = database.PinMessage(
+		pathDerivedID, pathDerivedMessages[0].ID, &pinNote,
+	)
+	require.NoError(t, err)
+	_, err = database.InsertRecallEntry(db.RecallEntry{
+		ID: "transition-recall", Type: "fact", Scope: "project",
+		Title: "Transition recall", Body: "Preserve this entry",
+		SourceSessionID: pathDerivedID,
+		Evidence: []db.RecallEvidence{{
+			SessionID:           pathDerivedID,
+			MessageStartOrdinal: 0,
+			MessageEndOrdinal:   1,
+		}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:              "referencing-child",
+		Project:         "test-proj",
+		Machine:         "viewer",
+		Agent:           "claude",
+		ParentSessionID: strPtr(pathDerivedID),
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:      "referencing-parent",
+		Project: "test-proj",
+		Machine: "viewer",
+		Agent:   "claude",
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "referencing-parent",
+		Ordinal:   0,
+		Role:      "assistant",
+		Content:   "spawn",
+		ToolCalls: []db.ToolCall{{
+			ToolName:          "Agent",
+			Category:          "agent",
+			ToolUseID:         "transition-tool",
+			SubagentSessionID: pathDerivedID,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID:         "transition-tool",
+				SubagentSessionID: pathDerivedID,
+				Source:            "progress",
+				Status:            "completed",
+				EventIndex:        0,
+			}},
+		}},
+	}}))
+
+	for _, transition := range []struct {
+		name  string
+		from  string
+		label string
+	}{
+		{name: "path-derived to explicit", from: pathDerivedID, label: "explicitbox"},
+		{name: "explicit to changed label", from: "explicitbox~transition-id", label: "renamedbox"},
+	} {
+		t.Run(transition.name, func(t *testing.T) {
+			currentID := writeAs(transition.label)
+
+			old, err := database.GetSessionFull(context.Background(), transition.from)
+			require.NoError(t, err)
+			assert.Nil(t, old)
+			ids, err := database.ListSessionIDsByFilePath(sessionPath, "claude")
+			require.NoError(t, err)
+			assert.Equal(t, []string{currentID}, ids)
+
+			msgs, err := database.GetAllMessages(context.Background(), currentID)
+			require.NoError(t, err)
+			assert.Len(t, msgs, 2)
+			events, err := database.GetUsageEvents(context.Background(), currentID)
+			require.NoError(t, err)
+			assert.Len(t, events, 1)
+			pins, err := database.ListPinnedMessages(
+				context.Background(), currentID, "",
+			)
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			require.NotNil(t, pins[0].Note)
+			assert.Equal(t, pinNote, *pins[0].Note)
+			recall, err := database.GetRecallEntry(
+				context.Background(), "transition-recall",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, recall)
+			assert.Equal(t, currentID, recall.SourceSessionID)
+			require.Len(t, recall.Evidence, 1)
+			assert.Equal(t, currentID, recall.Evidence[0].SessionID)
+
+			child, err := database.GetSessionFull(
+				context.Background(), "referencing-child",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, child)
+			require.NotNil(t, child.ParentSessionID)
+			assert.Equal(t, currentID, *child.ParentSessionID)
+
+			parentMessages, err := database.GetAllMessages(
+				context.Background(), "referencing-parent",
+			)
+			require.NoError(t, err)
+			require.Len(t, parentMessages, 1)
+			require.Len(t, parentMessages[0].ToolCalls, 1)
+			call := parentMessages[0].ToolCalls[0]
+			assert.Equal(t, currentID, call.SubagentSessionID)
+			require.Len(t, call.ResultEvents, 1)
+			assert.Equal(t, currentID, call.ResultEvents[0].SubagentSessionID)
+		})
+	}
+}
+
+func TestS3MachineLabelTransitionPropagatesRejectedReplacement(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	path := "s3://bucket/pathbox/raw/claude/test-proj/rejected-id.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	engine := NewEngine(database, EngineConfig{Machine: "viewer"})
+	parse := func(machine string) parser.ParseResult {
+		t.Helper()
+		res := engine.processFile(context.Background(), parser.DiscoveredFile{
+			Agent:       parser.AgentClaude,
+			Path:        path,
+			Project:     "test-proj",
+			Machine:     machine,
+			SourceSize:  int64(len(content)),
+			SourceMtime: mtime,
+		})
+		require.NoError(t, res.err)
+		require.Len(t, res.results, 1)
+		return res.results[0]
+	}
+
+	initial := parse("pathbox")
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess: initial.Session,
+		msgs: initial.Messages,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+
+	const replacementID = "explicitbox~rejected-id"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:      replacementID,
+		Project: "placeholder",
+		Machine: "explicitbox",
+		Agent:   "claude",
+	}))
+	require.NoError(t, database.DeleteSession(replacementID))
+
+	replacement := engine.processFile(
+		context.Background(),
+		parser.DiscoveredFile{
+			Agent:       parser.AgentClaude,
+			Path:        path,
+			Project:     "test-proj",
+			Machine:     "explicitbox",
+			SourceSize:  int64(len(content)),
+			SourceMtime: mtime,
+		},
+	)
+	require.NoError(t, replacement.err)
+	assert.True(t, replacement.skip)
+	assert.Empty(t, replacement.results)
+
+	old, err := database.GetSessionFull(
+		context.Background(), "pathbox~rejected-id",
+	)
+	require.NoError(t, err)
+	assert.Nil(t, old)
+	assert.True(t, database.IsSessionExcluded("pathbox~rejected-id"))
+	assert.True(t, database.IsSessionExcluded(replacementID))
+}
+
+func TestS3MachineLabelTransitionDoesNotResurrectDeletedSource(t *testing.T) {
+	database := openTestDB(t)
+	sourcePath := "s3://bucket/pathbox/raw/claude/test-proj/deleted-id.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC).UnixNano()
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	engine := NewEngine(database, EngineConfig{Machine: "viewer"})
+	process := func(machine string) processResult {
+		t.Helper()
+		return engine.processFile(context.Background(), parser.DiscoveredFile{
+			Agent:       parser.AgentClaude,
+			Path:        sourcePath,
+			Project:     "test-proj",
+			Machine:     machine,
+			SourceSize:  int64(len(content)),
+			SourceMtime: mtime,
+		})
+	}
+
+	initial := process("pathbox")
+	require.NoError(t, initial.err)
+	require.Len(t, initial.results, 1)
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess: initial.results[0].Session,
+		msgs: initial.results[0].Messages,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+
+	const (
+		oldID = "pathbox~deleted-id"
+		newID = "renamedbox~deleted-id"
+	)
+	require.NoError(t, database.DeleteSession(oldID))
+	replacement := process("renamedbox")
+	require.NoError(t, replacement.err)
+	assert.True(t, replacement.skip)
+	assert.Empty(t, replacement.results)
+	assert.True(t, database.IsSessionExcluded(oldID))
+	assert.True(t, database.IsSessionExcluded(newID))
+	session, err := database.GetSessionFull(context.Background(), newID)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+}
+
 func TestSyncS3MachineFromRootUsesRawAgentLayout(t *testing.T) {
 	assert.Equal(
 		t,

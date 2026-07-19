@@ -25,6 +25,7 @@ const (
 	lastPushBoundaryStateKey           = "last_push_boundary_state"
 	lastPushTargetFingerprintKey       = "pg_target_fingerprint_v1"
 	sessionAliasBackfillStateKey       = "pg_session_alias_backfill_v1"
+	sessionIdentityAliasStateKey       = "session_identity_alias_publication_revision_v1"
 	projectIdentityPublicationStateKey = "project_identity_publication_revision_v2"
 	transcriptRevisionBackfillStateKey = "pg_transcript_revision_backfill_v1"
 )
@@ -271,6 +272,11 @@ func (s *Sync) Push(
 		return result, err
 	}
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
+	identityAliases, identityAliasRevision, identityAliasStateKey, err :=
+		s.sessionIdentityAliasesForPush(ctx, full)
+	if err != nil {
+		return result, err
+	}
 
 	allSessions, err := s.local.ListSessionsModifiedBetween(
 		ctx, lastPush, cutoff, s.projects, s.excludeProjects,
@@ -331,9 +337,20 @@ func (s *Sync) Push(
 		}
 	}
 
-	if err := purgePGExcludedPushSessions(
-		ctx, s.pg, sessionByID,
-	); err != nil {
+	boundedAliases, err := s.local.ListSessionIdentityAliasesForSessions(
+		ctx, mapKeys(sessionByID),
+	)
+	if err != nil {
+		return result, err
+	}
+	identityAliases = mergeSessionIdentityAliases(
+		identityAliases, boundedAliases,
+	)
+
+	identityAliases, err = filterPGExcludedPushSessions(
+		ctx, s.pg, sessionByID, identityAliases,
+	)
+	if err != nil {
 		return result, err
 	}
 
@@ -412,6 +429,17 @@ func (s *Sync) Push(
 	})
 
 	if len(sessions) == 0 {
+		pendingAliases, err := s.applyPGSessionIdentityAliases(
+			ctx, identityAliases, markerID, legacyMarkerMachines,
+		)
+		if err != nil {
+			return result, err
+		}
+		if err := markSessionIdentityAliasesPublished(
+			state, identityAliasStateKey, identityAliasRevision, pendingAliases,
+		); err != nil {
+			return result, err
+		}
 		if s.isFiltered() {
 			// Filtered pushes use filter-scoped sync state, so
 			// they can advance their own watermark without
@@ -520,6 +548,25 @@ func (s *Sync) Push(
 		}
 	}
 
+	if result.Errors == 0 {
+		pendingAliases, err := s.applyPGSessionIdentityAliases(
+			ctx, identityAliases, markerID, legacyMarkerMachines,
+		)
+		if err != nil {
+			return result, err
+		}
+		if err := markSessionIdentityAliasesPublished(
+			state, identityAliasStateKey, identityAliasRevision, pendingAliases,
+		); err != nil {
+			return result, err
+		}
+	} else {
+		log.Printf(
+			"pgsync: skipping session identity alias publication after %d session push errors",
+			result.Errors,
+		)
+	}
+
 	if s.isFiltered() {
 		// Filtered pushes use filter-scoped sync state, so
 		// they can advance their own watermark without moving
@@ -581,6 +628,350 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func (s *Sync) sessionIdentityAliasesForPush(
+	ctx context.Context,
+	force bool,
+) ([]db.SessionIdentityAlias, int64, string, error) {
+	revision, err := s.local.SessionIdentityAliasPublicationRevision(ctx)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	databaseGeneration, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("loading source database generation: %w", err)
+	}
+	stateKey := sessionIdentityAliasStateKey + ":" + databaseGeneration
+	publishedValue, err := s.effectiveSyncState().GetSyncState(stateKey)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf(
+			"reading session identity alias publication revision: %w", err,
+		)
+	}
+	fullPublication := force || publishedValue == ""
+	var publicationState sessionIdentityAliasPublicationState
+	published := int64(0)
+	if !fullPublication {
+		err = json.Unmarshal([]byte(publishedValue), &publicationState)
+		if err != nil {
+			published, err = strconv.ParseInt(publishedValue, 10, 64)
+			publicationState.Revision = published
+		} else {
+			published = publicationState.Revision
+		}
+		if err != nil || published < 0 || published > revision {
+			fullPublication = true
+		} else if published == revision {
+			return publicationState.Pending, revision, stateKey, nil
+		}
+	}
+	if fullPublication {
+		aliases, err := s.local.ListSessionIdentityAliases(
+			ctx, s.projects, s.excludeProjects,
+		)
+		return aliases, revision, stateKey, err
+	}
+	aliases, err := s.local.ListSessionIdentityAliasChanges(
+		ctx, published, revision, s.projects, s.excludeProjects,
+	)
+	return mergeSessionIdentityAliases(
+		publicationState.Pending, aliases,
+	), revision, stateKey, err
+}
+
+func mergeSessionIdentityAliases(
+	groups ...[]db.SessionIdentityAlias,
+) []db.SessionIdentityAlias {
+	merged := make(map[string]db.SessionIdentityAlias)
+	for _, aliases := range groups {
+		for _, alias := range aliases {
+			if alias.AliasID == "" {
+				continue
+			}
+			if previous, ok := merged[alias.AliasID]; ok &&
+				previous.Revision > alias.Revision {
+				continue
+			}
+			merged[alias.AliasID] = alias
+		}
+	}
+	aliases := make([]db.SessionIdentityAlias, 0, len(merged))
+	for _, alias := range merged {
+		aliases = append(aliases, alias)
+	}
+	sort.Slice(aliases, func(i, j int) bool {
+		if aliases[i].SessionID != aliases[j].SessionID {
+			return aliases[i].SessionID < aliases[j].SessionID
+		}
+		return aliases[i].AliasID < aliases[j].AliasID
+	})
+	return aliases
+}
+
+type sessionIdentityAliasPublicationState struct {
+	Revision int64                     `json:"revision"`
+	Pending  []db.SessionIdentityAlias `json:"pending,omitempty"`
+}
+
+func markSessionIdentityAliasesPublished(
+	state syncStateStore, key string, revision int64,
+	pending []db.SessionIdentityAlias,
+) error {
+	if key == "" {
+		return nil
+	}
+	raw, err := json.Marshal(sessionIdentityAliasPublicationState{
+		Revision: revision,
+		Pending:  pending,
+	})
+	if err != nil {
+		return fmt.Errorf("encoding session identity alias publication state: %w", err)
+	}
+	if err := state.SetSyncState(key, string(raw)); err != nil {
+		return fmt.Errorf(
+			"recording session identity alias publication revision: %w", err,
+		)
+	}
+	return nil
+}
+
+type pgSessionOwnership struct {
+	machine     string
+	ownerMarker string
+}
+
+func (s *Sync) applyPGSessionIdentityAliases(
+	ctx context.Context,
+	aliases []db.SessionIdentityAlias,
+	markerID string,
+	legacyMarkerMachines []string,
+) ([]db.SessionIdentityAlias, error) {
+	eligibleAliases := make([]db.SessionIdentityAlias, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias.Deleted || alias.AliasID == "" || alias.SessionID == "" ||
+			alias.AliasID == alias.SessionID {
+			continue
+		}
+		eligibleAliases = append(eligibleAliases, alias)
+	}
+	sort.Slice(eligibleAliases, func(i, j int) bool {
+		if eligibleAliases[i].SessionID != eligibleAliases[j].SessionID {
+			return eligibleAliases[i].SessionID < eligibleAliases[j].SessionID
+		}
+		return eligibleAliases[i].AliasID < eligibleAliases[j].AliasID
+	})
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("beginning session identity alias publication: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	ownershipIDs := make([]string, 0, len(eligibleAliases)*2)
+	for _, alias := range eligibleAliases {
+		ownershipIDs = append(ownershipIDs, alias.AliasID, alias.SessionID)
+	}
+	ownershipIDs = uniqueNonEmptyStrings(ownershipIDs)
+	ownership := make(map[string]pgSessionOwnership, len(ownershipIDs))
+	if len(ownershipIDs) > 0 {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, machine, owner_marker
+			FROM sessions
+			WHERE id = ANY($1)
+			FOR UPDATE`, ownershipIDs)
+		if err != nil {
+			return nil, fmt.Errorf("checking session identity alias ownership: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			var owner pgSessionOwnership
+			if err := rows.Scan(&id, &owner.machine, &owner.ownerMarker); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf(
+					"scanning session identity alias ownership: %w", err,
+				)
+			}
+			ownership[id] = owner
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf(
+				"closing session identity alias ownership rows: %w", err,
+			)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf(
+				"iterating session identity alias ownership: %w", err,
+			)
+		}
+	}
+
+	pending := make([]db.SessionIdentityAlias, 0)
+	for _, alias := range eligibleAliases {
+		target, targetExists := ownership[alias.SessionID]
+		if !targetExists {
+			log.Printf(
+				"pgsync: skipping session identity alias %s: replacement %s "+
+					"is missing from postgres",
+				alias.AliasID, alias.SessionID,
+			)
+			pending = append(pending, alias)
+			continue
+		}
+		expectedMachine := alias.Machine
+		if expectedMachine == "" || expectedMachine == "local" {
+			expectedMachine = s.machine
+		}
+		if !sameSessionOwner(
+			target.ownerMarker, target.machine, markerID,
+			expectedMachine, legacyMarkerMachines,
+		) {
+			log.Printf(
+				"pgsync: skipping session identity alias %s: replacement %s "+
+					"is owned by machine %q",
+				alias.AliasID, alias.SessionID, target.machine,
+			)
+			pending = append(pending, alias)
+			continue
+		}
+		if source, sourceExists := ownership[alias.AliasID]; sourceExists &&
+			!sameSessionOwner(
+				source.ownerMarker, source.machine, markerID,
+				expectedMachine, legacyMarkerMachines,
+			) {
+			log.Printf(
+				"pgsync: skipping session identity alias %s: source is "+
+					"owned by machine %q",
+				alias.AliasID, source.machine,
+			)
+			pending = append(pending, alias)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE sessions current
+			SET display_name = CASE
+					WHEN current.display_name IS DISTINCT FROM
+						current.source_display_name
+						THEN current.display_name
+					WHEN old.display_name IS DISTINCT FROM
+						old.source_display_name
+						THEN old.display_name
+					ELSE current.display_name
+				END,
+				deleted_at = CASE
+					WHEN current.deleted_at IS DISTINCT FROM
+						current.source_deleted_at
+						THEN current.deleted_at
+					WHEN old.deleted_at IS DISTINCT FROM
+						old.source_deleted_at
+						THEN old.deleted_at
+					ELSE current.deleted_at
+				END
+			FROM sessions old
+			WHERE current.id = $1 AND old.id = $2`,
+			alias.SessionID, alias.AliasID,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"preserving postgres session curation from %s: %w",
+				alias.AliasID, err,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO starred_sessions (session_id, created_at)
+			SELECT $1, created_at
+			FROM starred_sessions
+			WHERE session_id = $2
+			ON CONFLICT (session_id) DO UPDATE SET
+				created_at = LEAST(
+					starred_sessions.created_at, EXCLUDED.created_at
+				)`, alias.SessionID, alias.AliasID); err != nil {
+			return nil, fmt.Errorf("retargeting postgres session star %s: %w",
+				alias.AliasID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO pinned_messages (
+				session_id, message_id, ordinal, source_uuid, note, created_at
+			)
+			SELECT $1, target.ordinal, target.ordinal,
+				target.source_uuid, old.note, old.created_at
+			FROM pinned_messages old
+			JOIN LATERAL (
+				SELECT m.ordinal, m.source_uuid
+				FROM messages m
+				WHERE m.session_id = $1
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = $1
+						  AND old.source_uuid <> ''
+						  AND candidate.source_uuid = old.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					old.ordinal
+				  )
+			) target ON TRUE
+			WHERE old.session_id = $2
+			ON CONFLICT (session_id, message_id) DO NOTHING`,
+			alias.SessionID, alias.AliasID); err != nil {
+			return nil, fmt.Errorf("retargeting postgres session pins %s: %w",
+				alias.AliasID, err)
+		}
+		for _, update := range []struct {
+			query string
+			name  string
+		}{
+			{
+				"UPDATE sessions SET parent_session_id = $1 WHERE parent_session_id = $2",
+				"parent session references",
+			},
+			{
+				"UPDATE sessions SET source_session_id = $1 WHERE source_session_id = $2",
+				"source session references",
+			},
+			{
+				"UPDATE tool_calls SET subagent_session_id = $1 WHERE subagent_session_id = $2",
+				"tool-call subagent references",
+			},
+			{
+				"UPDATE tool_result_events SET subagent_session_id = $1 WHERE subagent_session_id = $2",
+				"tool-result subagent references",
+			},
+		} {
+			if _, err := tx.ExecContext(
+				ctx, update.query, alias.SessionID, alias.AliasID,
+			); err != nil {
+				return nil, fmt.Errorf("retargeting postgres %s from %s: %w",
+					update.name, alias.AliasID, err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM session_aliases
+			 WHERE alias_id = $1 OR session_id = $1`,
+			alias.AliasID,
+		); err != nil {
+			return nil, fmt.Errorf("removing stale postgres aliases for %s: %w",
+				alias.AliasID, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM sessions WHERE id = $1`, alias.AliasID,
+		); err != nil {
+			return nil, fmt.Errorf("deleting superseded postgres session %s: %w",
+				alias.AliasID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_aliases (session_id, alias_id)
+			VALUES ($1, $2)
+			ON CONFLICT (session_id, alias_id) DO NOTHING`,
+			alias.SessionID, alias.AliasID,
+		); err != nil {
+			return nil, fmt.Errorf("publishing postgres session alias %s: %w",
+				alias.AliasID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing session identity aliases: %w", err)
+	}
+	return pending, nil
 }
 
 // runVectorPushPhase runs the vector push phase and wraps its error. With no
@@ -1523,48 +1914,81 @@ func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 func purgePGExcludedPushSessions(
 	ctx context.Context, pg *sql.DB, sessionByID map[string]db.Session,
 ) error {
-	tombstoneIDsBySession := make(map[string][]string, len(sessionByID))
-	candidateIDs := []string{}
-	for id, sess := range sessionByID {
-		tombstoneIDs := pgSessionTombstoneIDs(sess)
-		tombstoneIDsBySession[id] = tombstoneIDs
-		candidateIDs = append(candidateIDs, tombstoneIDs...)
+	_, err := filterPGExcludedPushSessions(ctx, pg, sessionByID, nil)
+	return err
+}
+
+func filterPGExcludedPushSessions(
+	ctx context.Context,
+	pg *sql.DB,
+	sessionByID map[string]db.Session,
+	aliases []db.SessionIdentityAlias,
+) ([]db.SessionIdentityAlias, error) {
+	groups := newSessionIdentityGroups()
+	for _, alias := range aliases {
+		groups.union(alias.AliasID, alias.SessionID)
+	}
+	for _, sess := range sessionByID {
+		ids := pgSessionTombstoneIDs(sess)
+		for _, id := range ids[1:] {
+			groups.union(ids[0], id)
+		}
+		groups.add(sess.ID)
+	}
+	groupMembers := groups.members()
+	candidateIDs := make([]string, 0, len(groups.parent))
+	for id := range groups.parent {
+		candidateIDs = append(candidateIDs, id)
 	}
 	excludedIDs, err := readPGExcludedSessionIDs(ctx, pg, candidateIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(excludedIDs) == 0 {
-		return nil
+		return aliases, nil
 	}
 
-	purgeIDs := []string{}
-	for id, tombstoneIDs := range tombstoneIDsBySession {
-		if !hasPGExcludedSessionID(tombstoneIDs, excludedIDs) {
+	blockedRoots := make(map[string]struct{})
+	for id := range excludedIDs {
+		if _, ok := groups.parent[id]; ok {
+			blockedRoots[groups.find(id)] = struct{}{}
+		}
+	}
+	purgeIDs := make([]string, 0)
+	for root := range blockedRoots {
+		purgeIDs = append(purgeIDs, groupMembers[root]...)
+	}
+	for id := range sessionByID {
+		if _, ok := blockedRoots[groups.find(id)]; !ok {
 			continue
 		}
-		purgeIDs = append(purgeIDs, tombstoneIDs...)
 		delete(sessionByID, id)
 	}
 	purgeIDs = uniqueNonEmptyStrings(purgeIDs)
 	if len(purgeIDs) == 0 {
-		return nil
+		return aliases, nil
 	}
 	if err := insertPGExcludedSessionIDs(ctx, pg, purgeIDs); err != nil {
-		return err
+		return nil, err
 	}
-	return deletePGExcludedSessionRows(ctx, pg, purgeIDs)
-}
-
-func hasPGExcludedSessionID(
-	ids []string, excluded map[string]struct{},
-) bool {
-	for _, id := range ids {
-		if _, ok := excluded[id]; ok {
-			return true
+	if _, err := pg.ExecContext(ctx,
+		`DELETE FROM session_aliases
+		 WHERE session_id = ANY($1) OR alias_id = ANY($1)`,
+		purgeIDs,
+	); err != nil {
+		return nil, fmt.Errorf("deleting pg excluded session aliases: %w", err)
+	}
+	if err := deletePGExcludedSessionRows(ctx, pg, purgeIDs); err != nil {
+		return nil, err
+	}
+	filtered := aliases[:0]
+	for _, alias := range aliases {
+		if _, ok := blockedRoots[groups.find(alias.SessionID)]; ok {
+			continue
 		}
+		filtered = append(filtered, alias)
 	}
-	return false
+	return filtered, nil
 }
 
 type pgSessionQueryer interface {
@@ -1588,6 +2012,57 @@ func deletePGExcludedSessionRows(
 		return fmt.Errorf("deleting pg excluded session rows: %w", err)
 	}
 	return nil
+}
+
+type sessionIdentityGroups struct {
+	parent map[string]string
+}
+
+func newSessionIdentityGroups() *sessionIdentityGroups {
+	return &sessionIdentityGroups{parent: make(map[string]string)}
+}
+
+func (g *sessionIdentityGroups) add(id string) {
+	if id == "" {
+		return
+	}
+	if _, ok := g.parent[id]; !ok {
+		g.parent[id] = id
+	}
+}
+
+func (g *sessionIdentityGroups) find(id string) string {
+	g.add(id)
+	root := id
+	for g.parent[root] != root {
+		root = g.parent[root]
+	}
+	for id != root {
+		parent := g.parent[id]
+		g.parent[id] = root
+		id = parent
+	}
+	return root
+}
+
+func (g *sessionIdentityGroups) union(left, right string) {
+	if left == "" || right == "" {
+		return
+	}
+	leftRoot := g.find(left)
+	rightRoot := g.find(right)
+	if leftRoot != rightRoot {
+		g.parent[rightRoot] = leftRoot
+	}
+}
+
+func (g *sessionIdentityGroups) members() map[string][]string {
+	out := make(map[string][]string)
+	for id := range g.parent {
+		root := g.find(id)
+		out[root] = append(out[root], id)
+	}
+	return out
 }
 
 func deletePGSessionIfExcluded(
@@ -2500,26 +2975,32 @@ func reconcilePinnedMessages(
 		)
 	}
 
-	// Move shifted source-backed pins out of the real ordinal range
-	// first. Pins already on their resolved target stay in place so
-	// duplicate repairs prefer the current target row's metadata.
-	// When multiple messages share a source_uuid (the schema allows
-	// it), prefer the message at the pin's current message_id so a
-	// correctly-placed pin is not relocated to a different duplicate.
+	// Move shifted pins out of the real ordinal range first. A source UUID is
+	// authoritative only when it identifies exactly one message; otherwise the
+	// saved ordinal remains the anchor.
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
+			SELECT
 				p.id, p.message_id, p.ordinal,
-				m.ordinal AS target_ordinal
+				target.ordinal AS target_ordinal
 			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
+			JOIN LATERAL (
+				SELECT m.ordinal
+				FROM messages m
+				WHERE m.session_id = p.session_id
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = p.session_id
+						  AND p.source_uuid <> ''
+						  AND candidate.source_uuid = p.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					p.ordinal
+				  )
+			) target ON TRUE
 			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
 		),
 		numbered AS (
 			SELECT id,
@@ -2542,18 +3023,27 @@ func reconcilePinnedMessages(
 
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
+			SELECT
 				p.id, p.message_id, p.created_at,
-				m.ordinal AS target_ordinal
+				target.ordinal AS target_ordinal
 			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
+			JOIN LATERAL (
+				SELECT m.ordinal
+				FROM messages m
+				WHERE m.session_id = p.session_id
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = p.session_id
+						  AND p.source_uuid <> ''
+						  AND candidate.source_uuid = p.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					p.ordinal
+				  )
+			) target ON TRUE
 			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
 		),
 		ranked AS (
 			SELECT id, target_ordinal,
@@ -2581,21 +3071,31 @@ func reconcilePinnedMessages(
 
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
-			SELECT DISTINCT ON (p.id)
+			SELECT
 				p.id, p.message_id, p.created_at,
-				m.ordinal AS target_ordinal
+				target.ordinal AS target_ordinal,
+				target.source_uuid AS target_source_uuid
 			FROM pinned_messages p
-			JOIN messages m
-				ON m.session_id = p.session_id
-				AND m.source_uuid = p.source_uuid
+			JOIN LATERAL (
+				SELECT m.ordinal, m.source_uuid
+				FROM messages m
+				WHERE m.session_id = p.session_id
+				  AND m.ordinal = COALESCE(
+					(
+						SELECT MIN(candidate.ordinal)
+						FROM messages candidate
+						WHERE candidate.session_id = p.session_id
+						  AND p.source_uuid <> ''
+						  AND candidate.source_uuid = p.source_uuid
+						HAVING COUNT(*) = 1
+					),
+					p.ordinal
+				  )
+			) target ON TRUE
 			WHERE p.session_id = $1
-				AND p.source_uuid <> ''
-			ORDER BY p.id,
-				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
-				m.ordinal
 		),
 		ranked AS (
-			SELECT id, target_ordinal,
+			SELECT id, target_ordinal, target_source_uuid,
 				ROW_NUMBER() OVER (
 					PARTITION BY target_ordinal
 					ORDER BY
@@ -2607,7 +3107,8 @@ func reconcilePinnedMessages(
 		)
 		UPDATE pinned_messages p
 		SET message_id = r.target_ordinal,
-			ordinal = r.target_ordinal
+			ordinal = r.target_ordinal,
+			source_uuid = r.target_source_uuid
 		FROM ranked r
 		WHERE p.id = r.id
 			AND r.target_rank = 1`,
@@ -2618,31 +3119,15 @@ func reconcilePinnedMessages(
 		)
 	}
 
-	// Prune pins whose anchor no longer exists. For source-backed
-	// pins (source_uuid <> '') the canonical anchor is source_uuid,
-	// so a pin must be dropped when no message in this session has
-	// that source_uuid — otherwise a stale pin can survive on top
-	// of an unrelated message that now occupies the same ordinal.
-	// The ordinal-NOT-EXISTS clause additionally removes legacy
-	// pins (source_uuid = '') with a stale ordinal and clears any
-	// non-rank-1 duplicate left at the sentinel ordinal by step 2.
+	// Prune pins whose UUID and ordinal anchors both failed, plus non-winning
+	// conflicts left at sentinel ordinals.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM pinned_messages p
 		WHERE p.session_id = $1
-			AND (
-				(
-					p.source_uuid <> ''
-					AND NOT EXISTS (
-						SELECT 1 FROM messages m
-						WHERE m.session_id = p.session_id
-							AND m.source_uuid = p.source_uuid
-					)
-				)
-				OR NOT EXISTS (
-					SELECT 1 FROM messages m
-					WHERE m.session_id = p.session_id
-						AND m.ordinal = p.message_id
-				)
+			AND NOT EXISTS (
+				SELECT 1 FROM messages m
+				WHERE m.session_id = p.session_id
+					AND m.ordinal = p.message_id
 			)`,
 		sessionID,
 	); err != nil {

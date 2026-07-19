@@ -356,9 +356,10 @@ type S3DiscoveredSource struct {
 // enumerated by a source set's discovery. The s3 URI is the stable identity
 // across Key, DisplayPath, and FingerprintKey, and the durable object metadata
 // rides in the Opaque payload for the engine to thread into the DiscoveredFile.
-func s3SourceRefFromDiscoveredFile(file DiscoveredFile) SourceRef {
+func s3SourceRefFromDiscoveredFile(root string, file DiscoveredFile) SourceRef {
 	return SourceRef{
 		Provider:       file.Agent,
+		ConfiguredRoot: root,
 		Key:            file.Path,
 		DisplayPath:    file.Path,
 		FingerprintKey: file.Path,

@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -14,6 +15,57 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
+	root := t.TempDir()
+	sessionsRoot := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
+	writeHermesSyncStateDB(t, root)
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsRoot},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentHermes: {sessionsRoot: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+
+	stats := engine.SyncAll(context.Background(), nil)
+
+	require.Equal(t, 1, stats.Synced)
+	sess, err := database.GetSessionFull(context.Background(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
+	require.NotNil(t, sess.FilePath)
+	assert.Equal(t, filepath.Join(root, "state.db"), *sess.FilePath)
+}
+
+func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
+	root := t.TempDir()
+	sessionsRoot := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
+	stateDB := writeHermesSyncStateDB(t, root)
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsRoot},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentHermes: {sessionsRoot: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+
+	engine.SyncPathsContext(context.Background(), []string{stateDB})
+
+	sess, err := database.GetSessionFull(context.Background(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
+}
 
 func TestSyncPathsHermesStateDBEventRefreshesArchive(t *testing.T) {
 	if testing.Short() {

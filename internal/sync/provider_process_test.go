@@ -122,6 +122,89 @@ func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 	assert.Len(t, res.results[0].Messages, 2)
 }
 
+func TestProviderChangedPathUsesSourceMachine(t *testing.T) {
+	root := t.TempDir()
+	dbPath := writeProcessProviderForgeDB(t, root)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentForge: {root},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentForge: {root: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+
+	files := engine.classifyProviderChangedPath(dbPath)
+	require.Len(t, files, 1)
+	assert.Equal(t, "archivebox", files[0].Machine)
+
+	res := engine.processFile(context.Background(), files[0])
+
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "archivebox", res.results[0].Session.Machine)
+	assert.Equal(t, "forge:conv-001", res.results[0].Session.ID)
+
+	engine.SyncPathsContext(context.Background(), []string{dbPath})
+	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
+}
+
+func TestProviderPeriodicSyncUsesSourceMachine(t *testing.T) {
+	root := t.TempDir()
+	writeProcessProviderForgeDB(t, root)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentForge: {root},
+		},
+		SourceMachines: map[parser.AgentType]map[string]string{
+			parser.AgentForge: {root: "archivebox"},
+		},
+		Machine: "localbox",
+	})
+
+	stats := engine.SyncAll(context.Background(), nil)
+
+	assert.False(t, stats.Aborted)
+	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
+}
+
+func TestProviderPeriodicSyncReattributesFreshDBBackedSource(t *testing.T) {
+	root := t.TempDir()
+	writeProcessProviderForgeDB(t, root)
+	database := openTestDB(t)
+	newEngine := func(machine string) *Engine {
+		return NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentForge: {root},
+			},
+			SourceMachines: map[parser.AgentType]map[string]string{
+				parser.AgentForge: {root: machine},
+			},
+			Machine: "localbox",
+		})
+	}
+
+	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, first.Synced)
+	second := newEngine("newbox").SyncAll(context.Background(), nil)
+	require.Equal(t, 1, second.Synced)
+
+	sess, err := database.GetSessionFull(context.Background(), "forge:conv-001")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "newbox", sess.Machine)
+	assert.Equal(t, 2, sess.MessageCount)
+}
+
 func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 
 	root := t.TempDir()

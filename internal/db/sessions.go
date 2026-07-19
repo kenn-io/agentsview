@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1805,6 +1806,7 @@ type IncrementalInfo struct {
 type IncrementalSessionUpdate struct {
 	EndedAt                 *string
 	TerminationStatus       *string
+	Machine                 *string
 	MsgCount                int
 	UserMsgCount            int
 	FileSize                int64
@@ -1953,6 +1955,7 @@ func updateSessionIncrementalTx(
 	result, err := tx.Exec(`
 		UPDATE sessions SET
 			ended_at = COALESCE(?, ended_at),
+			machine = COALESCE(?, machine),
 			message_count = ?,
 			user_message_count = ?,
 			file_size = ?,
@@ -1971,7 +1974,8 @@ func updateSessionIncrementalTx(
 			-- incremental-vs-full skew.
 			last_write_incremental = 1
 		WHERE id = ?`,
-		update.EndedAt, update.MsgCount, update.UserMsgCount,
+		update.EndedAt, update.Machine,
+		update.MsgCount, update.UserMsgCount,
 		update.FileSize, update.FileMtime,
 		update.FileHash,
 		update.NextOrdinal, lastEntryUUID,
@@ -2063,6 +2067,56 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// GetFileInfoByPathForMachine returns source metadata only when the path has
+// active sessions and all of them carry the requested machine attribution.
+func (db *DB) GetFileInfoByPathForMachine(
+	path, machine string,
+) (size int64, mtime int64, ok bool) {
+	var s, m sql.NullInt64
+	err := db.getReader().QueryRow(`
+		SELECT file_size, file_mtime
+		FROM sessions
+		WHERE file_path = ? AND deleted_at IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM sessions
+				WHERE file_path = ? AND deleted_at IS NULL
+					AND COALESCE(machine, '') <> ?
+			)
+		ORDER BY file_mtime DESC
+		LIMIT 1`,
+		path, path, machine,
+	).Scan(&s, &m)
+	if err != nil {
+		return 0, 0, false
+	}
+	return s.Int64, m.Int64, true
+}
+
+const sessionMachinesByFilePathSQL = `
+	SELECT COUNT(*),
+		COALESCE(SUM(
+			CASE WHEN COALESCE(machine, '') <> ? THEN 1 ELSE 0 END
+		), 0)
+	FROM sessions
+	WHERE agent = ? AND file_path = ? AND deleted_at IS NULL`
+
+// SessionMachinesByFilePathMatch reports whether an agent source path has
+// active sessions and whether all of them carry the requested machine
+// attribution.
+func (db *DB) SessionMachinesByFilePathMatch(
+	agent, path, machine string,
+) (hasSessions, matches bool) {
+	var count, mismatches int
+	err := db.getReader().QueryRow(
+		sessionMachinesByFilePathSQL,
+		machine, agent, path,
+	).Scan(&count, &mismatches)
+	if err != nil || count == 0 {
+		return false, false
+	}
+	return true, mismatches == 0
+}
+
 // GetProjectByPath returns the stored project for the newest
 // non-deleted session matching file_path.
 func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
@@ -2080,16 +2134,17 @@ func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
 }
 
 // GetSourceRepairStateByPath returns the newest active session's project and
-// file metadata plus the minimum active parser data version for one source
-// path. It combines the lightweight self-healing checks used by hot sync paths
-// into one query.
+// file metadata plus the minimum active parser data version and machine
+// attribution state for one source path. It combines the lightweight
+// self-healing checks used by hot sync paths into one query.
 func (db *DB) GetSourceRepairStateByPath(
-	path string,
+	path, machine string,
 ) (
 	project string,
 	dataVersion int,
 	fileSize int64,
 	fileMtime int64,
+	machineMatches bool,
 	ok bool,
 ) {
 	err := db.getReader().QueryRow(`
@@ -2097,16 +2152,23 @@ func (db *DB) GetSourceRepairStateByPath(
 			SELECT MIN(data_version)
 			FROM sessions
 			WHERE file_path = ? AND deleted_at IS NULL
+		), NOT EXISTS (
+			SELECT 1
+			FROM sessions
+			WHERE file_path = ? AND deleted_at IS NULL
+				AND COALESCE(machine, '') <> ?
 		)
 		FROM sessions
 		WHERE file_path = ? AND deleted_at IS NULL
 		ORDER BY file_mtime DESC
-		LIMIT 1`, path, path,
-	).Scan(&project, &fileSize, &fileMtime, &dataVersion)
+		LIMIT 1`, path, path, machine, path,
+	).Scan(
+		&project, &fileSize, &fileMtime, &dataVersion, &machineMatches,
+	)
 	if err != nil {
-		return "", 0, 0, 0, false
+		return "", 0, 0, 0, false, false
 	}
-	return project, dataVersion, fileSize, fileMtime, true
+	return project, dataVersion, fileSize, fileMtime, machineMatches, true
 }
 
 // GetFileHashByPath returns the stored file_hash for the session
@@ -2155,6 +2217,666 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 		return nil, fmt.Errorf("iterating session IDs by file path: %w", err)
 	}
 	return ids, nil
+}
+
+// PrepareSessionSourceIdentity records an identity for a source and propagates
+// any permanent deletion or trash state already attached to that source.
+func (db *DB) PrepareSessionSourceIdentity(
+	path, agent, id string,
+) (bool, error) {
+	if path == "" || agent == "" || id == "" {
+		return false, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return false, fmt.Errorf("beginning source identity preparation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO session_source_identities (
+			source_path, agent, session_id
+		) VALUES (?, ?, ?)`, path, agent, id); err != nil {
+		return false, fmt.Errorf("recording source identity %s: %w", id, err)
+	}
+	ids, err := sessionSourceIdentityIDsTx(tx, path, agent)
+	if err != nil {
+		return false, err
+	}
+	suppressed := false
+	for _, identityID := range ids {
+		var blocked int
+		if err := tx.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM excluded_sessions WHERE id = ?
+				UNION ALL
+				SELECT 1 FROM sessions
+				WHERE id = ? AND deleted_at IS NOT NULL
+			)`, identityID, identityID).Scan(&blocked); err != nil {
+			return false, fmt.Errorf(
+				"checking source identity %s suppression: %w", identityID, err,
+			)
+		}
+		if blocked != 0 {
+			suppressed = true
+			break
+		}
+	}
+	if suppressed {
+		for _, identityID := range ids {
+			if err := excludeSessionIDTx(tx, identityID); err != nil {
+				return false, fmt.Errorf(
+					"propagating source identity exclusion %s: %w",
+					identityID, err,
+				)
+			}
+			var live int
+			if err := tx.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1 FROM sessions
+					WHERE id = ? AND deleted_at IS NULL
+				)`, identityID).Scan(&live); err != nil {
+				return false, fmt.Errorf(
+					"checking live source identity %s: %w", identityID, err,
+				)
+			}
+			if live == 0 {
+				continue
+			}
+			if err := deleteSessionMessagesTx(tx, identityID); err != nil {
+				return false, fmt.Errorf(
+					"deleting suppressed source identity %s messages: %w",
+					identityID, err,
+				)
+			}
+			if _, err := tx.Exec(
+				"DELETE FROM sessions WHERE id = ? AND deleted_at IS NULL",
+				identityID,
+			); err != nil {
+				return false, fmt.Errorf(
+					"deleting suppressed source identity %s: %w",
+					identityID, err,
+				)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("committing source identity preparation: %w", err)
+	}
+	return suppressed, nil
+}
+
+// ListSessionSourceIdentityIDs returns every identity ever observed for a
+// source, including identities whose session rows no longer exist.
+func (db *DB) ListSessionSourceIdentityIDs(path, agent string) ([]string, error) {
+	rows, err := db.getReader().Query(`
+		SELECT session_id
+		FROM session_source_identities
+		WHERE source_path = ? AND agent = ?
+		UNION
+		SELECT id
+		FROM sessions
+		WHERE file_path = ? AND agent = ?
+		ORDER BY 1`, path, agent, path, agent)
+	if err != nil {
+		return nil, fmt.Errorf("listing source identity history: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning source identity history: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating source identity history: %w", err)
+	}
+	return ids, nil
+}
+
+func sessionSourceIdentityIDsTx(
+	tx *sql.Tx, path, agent string,
+) ([]string, error) {
+	rows, err := tx.Query(`
+		SELECT session_id
+		FROM session_source_identities
+		WHERE source_path = ? AND agent = ?
+		UNION
+		SELECT id
+		FROM sessions
+		WHERE file_path = ? AND agent = ?
+		ORDER BY 1`, path, agent, path, agent)
+	if err != nil {
+		return nil, fmt.Errorf("loading source identity history: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning source identity history: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating source identity history: %w", err)
+	}
+	return ids, nil
+}
+
+// SupersedeSessionIdentities merges stale identities into a replacement session
+// for the same source. The complete merge and old-row deletion are atomic.
+func (db *DB) SupersedeSessionIdentities(
+	currentID string, supersededIDs []string,
+) error {
+	if len(supersededIDs) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning session identity supersession: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
+
+	var currentExists int
+	if err := tx.QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NULL", currentID,
+	).Scan(&currentExists); err != nil {
+		return fmt.Errorf("checking replacement session %s: %w", currentID, err)
+	}
+
+	for _, oldID := range supersededIDs {
+		if oldID == "" || oldID == currentID {
+			continue
+		}
+		if err := supersedeSessionIdentityTx(tx, currentID, oldID); err != nil {
+			return err
+		}
+	}
+	if err := reconcileRecallEvidenceForSessionTx(
+		context.Background(), tx, currentID, &pendingRecallRevocations,
+	); err != nil {
+		return fmt.Errorf("reconciling recall evidence for %s: %w", currentID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	pendingRecallRevocations.flush()
+	return nil
+}
+
+func supersedeSessionIdentityTx(tx *sql.Tx, currentID, oldID string) error {
+	pins, err := savePinsTx(tx, oldID)
+	if err != nil {
+		return fmt.Errorf("preserving pins from %s: %w", oldID, err)
+	}
+	if err := restorePinsTx(tx, currentID, pins); err != nil {
+		return fmt.Errorf("reattaching pins from %s: %w", oldID, err)
+	}
+
+	if _, err := tx.Exec(`
+			UPDATE sessions
+			SET display_name = COALESCE(
+				display_name,
+				(SELECT display_name FROM sessions WHERE id = ?)
+			)
+			WHERE id = ?`, oldID, currentID); err != nil {
+		return fmt.Errorf("preserving session name from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(`
+			INSERT INTO starred_sessions (session_id, created_at)
+			SELECT ?, created_at
+			FROM starred_sessions
+			WHERE session_id = ?
+			ON CONFLICT(session_id) DO UPDATE SET
+				created_at = MIN(created_at, excluded.created_at)`,
+		currentID, oldID,
+	); err != nil {
+		return fmt.Errorf("preserving session star from %s: %w", oldID, err)
+	}
+
+	if err := mergeUsageEventsForSessionIdentityTx(tx, currentID, oldID); err != nil {
+		return err
+	}
+	if err := mergeSecretFindingsForSessionIdentityTx(tx, currentID, oldID); err != nil {
+		return err
+	}
+	if err := mergeProjectSnapshotForSessionIdentityTx(tx, currentID, oldID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE session_identity_aliases
+		SET session_id = ?,
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE session_id = ?`, currentID, oldID); err != nil {
+		return fmt.Errorf("retargeting identity aliases from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO session_identity_aliases (alias_id, session_id)
+		VALUES (?, ?)
+		ON CONFLICT(alias_id) DO UPDATE SET
+			session_id = excluded.session_id,
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+		oldID, currentID,
+	); err != nil {
+		return fmt.Errorf("recording identity alias from %s: %w", oldID, err)
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id IN (
+			SELECT session_id FROM tool_calls WHERE subagent_session_id = ?
+			UNION
+			SELECT session_id FROM tool_result_events WHERE subagent_session_id = ?
+		)`, oldID, oldID); err != nil {
+		return fmt.Errorf("marking tool relationship owners for %s: %w", oldID, err)
+	}
+
+	for _, update := range []struct {
+		query string
+		name  string
+	}{
+		{
+			`UPDATE recall_entries
+			 SET source_session_id = ?,
+			     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE source_session_id = ?`,
+			"recall entries",
+		},
+		{
+			"UPDATE recall_evidence SET session_id = ? WHERE session_id = ?",
+			"recall evidence",
+		},
+		{
+			`UPDATE sessions
+			 SET parent_session_id = ?,
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE parent_session_id = ?`,
+			"parent session references",
+		},
+		{
+			`UPDATE sessions
+			 SET source_session_id = ?,
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE source_session_id = ?`,
+			"source session references",
+		},
+		{
+			"UPDATE tool_calls SET subagent_session_id = ? WHERE subagent_session_id = ?",
+			"tool-call subagent references",
+		},
+		{
+			"UPDATE tool_result_events SET subagent_session_id = ? WHERE subagent_session_id = ?",
+			"tool-result subagent references",
+		},
+		{
+			"UPDATE project_identity_observations SET session_id = ? WHERE session_id = ?",
+			"project identity observations",
+		},
+	} {
+		if _, err := tx.Exec(update.query, currentID, oldID); err != nil {
+			return fmt.Errorf(
+				"retargeting %s from %s: %w", update.name, oldID, err,
+			)
+		}
+	}
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ?`, currentID); err != nil {
+		return fmt.Errorf("marking replacement session %s modified: %w", currentID, err)
+	}
+	if err := deleteSessionMessagesTx(tx, oldID); err != nil {
+		return fmt.Errorf("deleting superseded session %s messages: %w", oldID, err)
+	}
+	if _, err := tx.Exec("DELETE FROM sessions WHERE id = ?", oldID); err != nil {
+		return fmt.Errorf("deleting superseded session %s: %w", oldID, err)
+	}
+	return nil
+}
+
+// SessionIdentityAlias records a durable old-to-current session identity.
+type SessionIdentityAlias struct {
+	AliasID   string `json:"alias_id"`
+	SessionID string `json:"session_id"`
+	Project   string `json:"project,omitempty"`
+	Machine   string `json:"machine,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	Deleted   bool   `json:"deleted,omitempty"`
+}
+
+// ListSessionIdentityAliases returns aliases whose current session is within
+// the requested push scope.
+func (db *DB) ListSessionIdentityAliases(
+	ctx context.Context, projects, excludeProjects []string,
+) ([]SessionIdentityAlias, error) {
+	query := `SELECT a.alias_id, a.session_id, s.project, s.machine
+		FROM session_identity_aliases a
+		JOIN sessions s ON s.id = a.session_id`
+	var (
+		args  []any
+		where []string
+	)
+	if len(projects) > 0 {
+		where = append(where, "s.project IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(projects)), ",")+")")
+		for _, project := range projects {
+			args = append(args, project)
+		}
+	}
+	if len(excludeProjects) > 0 {
+		where = append(where, "s.project NOT IN ("+
+			strings.TrimSuffix(strings.Repeat("?,", len(excludeProjects)), ",")+")")
+		for _, project := range excludeProjects {
+			args = append(args, project)
+		}
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY a.alias_id"
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing session identity aliases: %w", err)
+	}
+	defer rows.Close()
+	var aliases []SessionIdentityAlias
+	for rows.Next() {
+		var alias SessionIdentityAlias
+		if err := rows.Scan(
+			&alias.AliasID, &alias.SessionID, &alias.Project, &alias.Machine,
+		); err != nil {
+			return nil, fmt.Errorf("scanning session identity alias: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session identity aliases: %w", err)
+	}
+	return aliases, nil
+}
+
+// SessionIdentityAliasPublicationRevision is an O(1) change token for durable
+// session aliases.
+func (db *DB) SessionIdentityAliasPublicationRevision(
+	ctx context.Context,
+) (int64, error) {
+	var raw string
+	err := db.getReader().QueryRowContext(ctx,
+		`SELECT value FROM archive_metadata WHERE key = ?`,
+		"session_identity_alias_publication_revision",
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf(
+			"reading session identity alias publication revision: %w", err,
+		)
+	}
+	revision, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || revision < 0 {
+		return 0, fmt.Errorf(
+			"invalid session identity alias publication revision %q", raw,
+		)
+	}
+	return revision, nil
+}
+
+// ListSessionIdentityAliasChanges returns the latest alias changes in the
+// requested revision interval and project scope.
+func (db *DB) ListSessionIdentityAliasChanges(
+	ctx context.Context, after, through int64,
+	projects, excludeProjects []string,
+) ([]SessionIdentityAlias, error) {
+	query := `SELECT alias_id, session_id, project, machine, revision, deleted
+		FROM session_identity_alias_changes
+		WHERE revision > ? AND revision <= ?`
+	args := []any{after, through}
+	if len(projects) > 0 {
+		query += " AND project IN (" +
+			strings.TrimSuffix(strings.Repeat("?,", len(projects)), ",") + ")"
+		for _, project := range projects {
+			args = append(args, project)
+		}
+	}
+	if len(excludeProjects) > 0 {
+		query += " AND project NOT IN (" +
+			strings.TrimSuffix(strings.Repeat("?,", len(excludeProjects)), ",") + ")"
+		for _, project := range excludeProjects {
+			args = append(args, project)
+		}
+	}
+	query += " ORDER BY revision, alias_id"
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing session identity alias changes: %w", err)
+	}
+	defer rows.Close()
+	var aliases []SessionIdentityAlias
+	for rows.Next() {
+		var alias SessionIdentityAlias
+		if err := rows.Scan(
+			&alias.AliasID, &alias.SessionID, &alias.Project, &alias.Machine,
+			&alias.Revision, &alias.Deleted,
+		); err != nil {
+			return nil, fmt.Errorf("scanning session identity alias change: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session identity alias changes: %w", err)
+	}
+	return aliases, nil
+}
+
+// ListSessionIdentityAliasesForSessions returns durable aliases for a bounded
+// set of replacement sessions.
+func (db *DB) ListSessionIdentityAliasesForSessions(
+	ctx context.Context, sessionIDs []string,
+) ([]SessionIdentityAlias, error) {
+	seen := make(map[string]struct{}, len(sessionIDs))
+	uniqueIDs := make([]string, 0, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	sessionIDs = uniqueIDs
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+	var aliases []SessionIdentityAlias
+	const batchSize = 500
+	for start := 0; start < len(sessionIDs); start += batchSize {
+		end := min(start+batchSize, len(sessionIDs))
+		batch := sessionIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		query := `SELECT a.alias_id, a.session_id, s.project, s.machine
+			FROM session_identity_aliases a
+			JOIN sessions s ON s.id = a.session_id
+			WHERE a.session_id IN (` +
+			strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `)`
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"listing session identity aliases for sessions: %w", err,
+			)
+		}
+		for rows.Next() {
+			var alias SessionIdentityAlias
+			if err := rows.Scan(
+				&alias.AliasID, &alias.SessionID, &alias.Project, &alias.Machine,
+			); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf(
+					"scanning bounded session identity alias: %w", err,
+				)
+			}
+			aliases = append(aliases, alias)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf(
+				"iterating bounded session identity aliases: %w", err,
+			)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf(
+				"closing bounded session identity aliases: %w", err,
+			)
+		}
+	}
+	sort.Slice(aliases, func(i, j int) bool {
+		return aliases[i].AliasID < aliases[j].AliasID
+	})
+	return aliases, nil
+}
+
+func mergeUsageEventsForSessionIdentityTx(
+	tx *sql.Tx, currentID, oldID string,
+) error {
+	if _, err := tx.Exec(`
+		DELETE FROM usage_events
+		WHERE session_id = ?
+		  AND EXISTS (
+			SELECT 1
+			FROM usage_events current
+			WHERE current.session_id = ?
+			  AND (
+				(usage_events.dedup_key <> ''
+				 AND current.source = usage_events.source
+				 AND current.dedup_key = usage_events.dedup_key)
+				OR
+				(usage_events.dedup_key = ''
+				 AND current.dedup_key = ''
+				 AND current.message_ordinal IS usage_events.message_ordinal
+				 AND current.source = usage_events.source
+				 AND current.model = usage_events.model
+				 AND current.input_tokens = usage_events.input_tokens
+				 AND current.output_tokens = usage_events.output_tokens
+				 AND current.cache_creation_input_tokens =
+					usage_events.cache_creation_input_tokens
+				 AND current.cache_read_input_tokens =
+					usage_events.cache_read_input_tokens
+				 AND current.reasoning_tokens = usage_events.reasoning_tokens
+				 AND current.cost_usd IS usage_events.cost_usd
+				 AND current.cost_status = usage_events.cost_status
+				 AND current.cost_source = usage_events.cost_source
+				 AND current.occurred_at IS usage_events.occurred_at)
+			  )
+		  )`, oldID, currentID); err != nil {
+		return fmt.Errorf("deduplicating usage events from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(
+		"UPDATE usage_events SET session_id = ? WHERE session_id = ?",
+		currentID, oldID,
+	); err != nil {
+		return fmt.Errorf("retargeting usage events from %s: %w", oldID, err)
+	}
+	return nil
+}
+
+func mergeSecretFindingsForSessionIdentityTx(
+	tx *sql.Tx, currentID, oldID string,
+) error {
+	if _, err := tx.Exec(`
+		INSERT INTO secret_findings (
+			session_id, rule_name, confidence, location_kind,
+			message_ordinal, call_index, event_index, match_start, match_end,
+			match_index, redacted_match, rules_version, created_at
+		)
+		SELECT
+			?, old.rule_name, old.confidence, old.location_kind,
+			old.message_ordinal, old.call_index, old.event_index,
+			old.match_start, old.match_end, old.match_index,
+			old.redacted_match, old.rules_version, old.created_at
+		FROM secret_findings old
+		WHERE old.session_id = ?
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM secret_findings current
+			WHERE current.session_id = ?
+			  AND current.rule_name = old.rule_name
+			  AND current.location_kind = old.location_kind
+			  AND current.message_ordinal = old.message_ordinal
+			  AND current.call_index IS old.call_index
+			  AND current.event_index IS old.event_index
+			  AND current.match_start = old.match_start
+			  AND current.match_end = old.match_end
+			  AND current.match_index = old.match_index
+		  )`, currentID, oldID, currentID); err != nil {
+		return fmt.Errorf("preserving secret findings from %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET secret_leak_count = (
+				SELECT count(*) FROM secret_findings WHERE session_id = ?
+			),
+			secrets_rules_version = COALESCE(
+				NULLIF(secrets_rules_version, ''),
+				(SELECT secrets_rules_version FROM sessions WHERE id = ?)
+			)
+		WHERE id = ?`, currentID, oldID, currentID); err != nil {
+		return fmt.Errorf("updating preserved secret summary from %s: %w", oldID, err)
+	}
+	return nil
+}
+
+func mergeProjectSnapshotForSessionIdentityTx(
+	tx *sql.Tx, currentID, oldID string,
+) error {
+	if _, err := tx.Exec(`
+		UPDATE session_project_identity_snapshots AS current
+		SET project = old.project,
+			machine = (SELECT machine FROM sessions WHERE id = ?),
+			root_path = old.root_path,
+			git_remote = old.git_remote,
+			git_remote_name = old.git_remote_name,
+			repository_path = old.repository_path,
+			worktree_name = old.worktree_name,
+			worktree_root_path = old.worktree_root_path,
+			worktree_relationship = old.worktree_relationship,
+			checkout_state = old.checkout_state,
+			git_branch = old.git_branch,
+			remote_resolution = old.remote_resolution,
+			remote_candidate_count = old.remote_candidate_count,
+			observed_at = old.observed_at,
+			normalized_remote = old.normalized_remote,
+			key_source = old.key_source,
+			key = old.key
+		FROM session_project_identity_snapshots AS old
+		WHERE current.session_id = ?
+		  AND old.session_id = ?
+		  AND current.remote_resolution = 'unknown'
+		  AND (
+			old.remote_resolution <> 'unknown'
+			OR current.key = ''
+		  )`,
+		currentID, currentID, oldID,
+	); err != nil {
+		return fmt.Errorf("preserving project snapshot from %s: %w", oldID, err)
+	}
+	return nil
 }
 
 const storedSourcePathHintRootBatchSize = 100
@@ -2411,6 +3133,25 @@ func sessionAliasIDsTx(tx *sql.Tx, where string, args ...any) ([]string, error) 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session alias state: %w", err)
+	}
+	rows, err = tx.Query(`
+		SELECT a.alias_id
+		FROM session_identity_aliases a
+		JOIN sessions s ON s.id = a.session_id
+		WHERE `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("loading durable session aliases: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var aliasID string
+		if err := rows.Scan(&aliasID); err != nil {
+			return nil, fmt.Errorf("scanning durable session alias: %w", err)
+		}
+		aliases = append(aliases, aliasID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating durable session aliases: %w", err)
 	}
 	return aliases, nil
 }

@@ -242,7 +242,7 @@ func (s claudeSourceSet) discoveredSourceRef(
 	root string, file DiscoveredFile,
 ) (SourceRef, bool) {
 	if strings.HasPrefix(file.Path, "s3://") {
-		return s3SourceRefFromDiscoveredFile(file), true
+		return s3SourceRefFromDiscoveredFile(root, file), true
 	}
 	return s.sourceRef(root, file.Path)
 }

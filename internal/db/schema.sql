@@ -492,6 +492,40 @@ CREATE TABLE IF NOT EXISTS excluded_sessions (
     id         TEXT PRIMARY KEY,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Durable aliases for session identities replaced by source reattribution.
+-- Unlike excluded_sessions, these do not represent a user deletion.
+CREATE TABLE IF NOT EXISTS session_identity_aliases (
+    alias_id          TEXT PRIMARY KEY,
+    session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    local_modified_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_session_identity_aliases_session
+    ON session_identity_aliases(session_id);
+
+-- Durable source identity history survives session deletion so a source whose
+-- canonical ID changes cannot bypass an earlier user tombstone.
+CREATE TABLE IF NOT EXISTS session_source_identities (
+    source_path TEXT NOT NULL,
+    agent       TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (source_path, agent, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_source_identities_session
+    ON session_source_identities(session_id);
+
+CREATE TRIGGER IF NOT EXISTS sessions_preserve_source_identity
+BEFORE DELETE ON sessions
+WHEN OLD.file_path IS NOT NULL AND OLD.file_path != ''
+BEGIN
+    INSERT OR IGNORE INTO session_source_identities (
+        source_path, agent, session_id
+    ) VALUES (OLD.file_path, OLD.agent, OLD.id);
+END;
+
 -- Skipped files cache: persists skip decisions for files that
 -- produced no session (non-interactive, parse errors) so they
 -- survive process restarts without re-parsing.
@@ -621,12 +655,120 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
 CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshot_changes_revision
     ON session_project_identity_snapshot_changes(revision);
 
+CREATE TABLE IF NOT EXISTS session_identity_alias_changes (
+    alias_id    TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    project     TEXT NOT NULL,
+    machine     TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_identity_alias_changes_revision
+    ON session_identity_alias_changes(revision);
+
+INSERT INTO session_identity_alias_changes (
+    alias_id, session_id, project, machine, revision, deleted
+)
+SELECT a.alias_id, a.session_id, s.project, s.machine, 0, 0
+FROM session_identity_aliases a
+JOIN sessions s ON s.id = a.session_id
+WHERE true
+ON CONFLICT(alias_id) DO NOTHING;
+
+DROP TRIGGER IF EXISTS trg_session_identity_aliases_revision_insert;
+DROP TRIGGER IF EXISTS trg_session_identity_aliases_revision_update;
+DROP TRIGGER IF EXISTS trg_session_identity_aliases_revision_delete;
 DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_insert;
 DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_update;
 DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_delete;
 DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_insert;
 DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_update;
 DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
+
+CREATE TRIGGER IF NOT EXISTS trg_session_identity_aliases_revision_insert
+AFTER INSERT ON session_identity_aliases BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('session_identity_alias_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_identity_alias_changes (
+        alias_id, session_id, project, machine, revision, deleted
+    )
+    SELECT NEW.alias_id, NEW.session_id, s.project, s.machine,
+        CAST(m.value AS INTEGER), 0
+    FROM sessions s
+    JOIN archive_metadata m
+      ON m.key = 'session_identity_alias_publication_revision'
+    WHERE s.id = NEW.session_id
+    ON CONFLICT(alias_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        project = excluded.project,
+        machine = excluded.machine,
+        revision = excluded.revision,
+        deleted = 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_session_identity_aliases_revision_update
+AFTER UPDATE OF session_id ON session_identity_aliases
+WHEN OLD.session_id IS NOT NEW.session_id BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('session_identity_alias_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_identity_alias_changes (
+        alias_id, session_id, project, machine, revision, deleted
+    )
+    SELECT NEW.alias_id, NEW.session_id, s.project, s.machine,
+        CAST(m.value AS INTEGER), 0
+    FROM sessions s
+    JOIN archive_metadata m
+      ON m.key = 'session_identity_alias_publication_revision'
+    WHERE s.id = NEW.session_id
+    ON CONFLICT(alias_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        project = excluded.project,
+        machine = excluded.machine,
+        revision = excluded.revision,
+        deleted = 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_session_identity_aliases_revision_delete
+AFTER DELETE ON session_identity_aliases BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('session_identity_alias_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_identity_alias_changes (
+        alias_id, session_id, project, machine, revision, deleted
+    )
+    VALUES (
+        OLD.alias_id,
+        OLD.session_id,
+        COALESCE(
+            (SELECT project FROM session_identity_alias_changes
+             WHERE alias_id = OLD.alias_id),
+            (SELECT project FROM sessions WHERE id = OLD.session_id),
+            ''
+        ),
+        COALESCE(
+            (SELECT machine FROM session_identity_alias_changes
+             WHERE alias_id = OLD.alias_id),
+            (SELECT machine FROM sessions WHERE id = OLD.session_id),
+            ''
+        ),
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'session_identity_alias_publication_revision'),
+        1
+    )
+    ON CONFLICT(alias_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        revision = excluded.revision,
+        deleted = 1;
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
 AFTER INSERT ON project_identity_observations BEGIN

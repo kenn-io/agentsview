@@ -74,6 +74,7 @@ func syncService(
 	}
 	engine := sync.NewEngine(d, sync.EngineConfig{
 		AgentDirs:          cfg.AgentDirs,
+		SourceMachines:     cfg.SourceMachines,
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
 		Machine:            cfg.LocalMachineName,
 	})
