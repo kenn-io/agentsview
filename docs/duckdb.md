@@ -199,7 +199,10 @@ Environment variables override the config file:
   to the mirror are never touched, whatever they are named. The directory
   is safe to delete whenever no `duckdb push`, `duckdb serve`, or
   `duckdb quack serve` process is running; the next push or serve recreates
-  it as needed.
+  it as needed. The directory must be private: it is created
+  user-only-writable, and push/serve refuse a work directory that is a
+  symlink, owned by another user, or writable by group or other (delete or
+  `chmod go-w` it and retry).
 - **`duckdb serve` and `duckdb quack serve` never create or migrate the
   mirror** — a missing or schema-incompatible file makes them exit with an
   error to run `duckdb push --full`. Both detect when a later push replaces

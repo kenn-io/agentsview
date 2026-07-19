@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -526,6 +527,69 @@ func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
 // match the generated shape — os.CreateTemp expands "*" to digits only —
 // are left alone regardless of age, and the work directory itself is never
 // removed.
+// TestEnsureMirrorWorkDirFailsClosedOnUntrustedDir pins the private-dir
+// contract: rebuild temp files and reopen aliases must never land in a
+// work directory something else controls. A pre-existing symlink at the
+// work-dir path (planted before the first rebuild), a plain file, or a
+// group/other-writable directory must all fail closed with an actionable
+// error rather than being silently used.
+func TestEnsureMirrorWorkDirFailsClosedOnUntrustedDir(t *testing.T) {
+	t.Run("creates private dir", func(t *testing.T) {
+		mirror := filepath.Join(t.TempDir(), "m.duckdb")
+		workDir, err := ensureMirrorWorkDir(mirror)
+		require.NoError(t, err)
+		info, err := os.Lstat(workDir)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+		if runtime.GOOS != "windows" {
+			assert.Equal(t, os.FileMode(0), info.Mode().Perm()&0o077,
+				"a fresh work directory must be private to the current user")
+		}
+	})
+
+	t.Run("accepts legacy 0755 dir", func(t *testing.T) {
+		mirror := filepath.Join(t.TempDir(), "m.duckdb")
+		require.NoError(t, os.Mkdir(mirrorWorkDirPath(mirror), 0o755))
+		_, err := ensureMirrorWorkDir(mirror)
+		assert.NoError(t, err,
+			"an owner-only-writable directory from an older build must keep working")
+	})
+
+	t.Run("rejects symlinked dir", func(t *testing.T) {
+		dir := t.TempDir()
+		mirror := filepath.Join(dir, "m.duckdb")
+		elsewhere := filepath.Join(dir, "elsewhere")
+		require.NoError(t, os.Mkdir(elsewhere, 0o700))
+		if err := os.Symlink(elsewhere, mirrorWorkDirPath(mirror)); err != nil {
+			t.Skipf("cannot create symlinks on this platform: %v", err)
+		}
+		_, err := ensureMirrorWorkDir(mirror)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "symlink")
+	})
+
+	t.Run("rejects plain file", func(t *testing.T) {
+		mirror := filepath.Join(t.TempDir(), "m.duckdb")
+		require.NoError(t, os.WriteFile(mirrorWorkDirPath(mirror), nil, 0o644))
+		_, err := ensureMirrorWorkDir(mirror)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a directory")
+	})
+
+	t.Run("rejects group or other writable dir", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("mode-bit checks do not apply to Windows ACLs")
+		}
+		mirror := filepath.Join(t.TempDir(), "m.duckdb")
+		workDir := mirrorWorkDirPath(mirror)
+		require.NoError(t, os.Mkdir(workDir, 0o700))
+		require.NoError(t, os.Chmod(workDir, 0o777))
+		_, err := ensureMirrorWorkDir(mirror)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "writable by group or other")
+	})
+}
+
 func TestSweepStaleTempFilesRemovesOnlyOldFilesInsideWorkDir(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")

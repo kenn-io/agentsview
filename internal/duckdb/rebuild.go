@@ -35,12 +35,45 @@ func mirrorWorkDirPath(path string) string {
 // returns its path. Callers may only invoke it once real work is starting —
 // a rebuild creating its temp file, a serve process hardlinking a reopen
 // alias — never from probe/status/sweep paths, which must stay create-free.
+//
+// The directory must be private: rebuild temp files and reopen aliases
+// live here, and the temp-file flow unlinks a reserved name before DuckDB
+// reopens it (see createMirrorTempPath), so anyone who can write in this
+// directory could swap in a symlink mid-rebuild or replace the temp file
+// before the final rename. A fresh directory is created 0700, and an
+// existing one is verified — a real directory (not a symlink), owned by
+// the current user, not writable by group or other (Unix; Windows access
+// control is ACL-based and skips the ownership check) — failing closed
+// otherwise. This only matters when the mirror sits in a directory other
+// local users can write to (a pre-created hostile work dir); in default
+// user-owned locations nobody else can create the directory first.
 func ensureMirrorWorkDir(path string) (string, error) {
 	workDir := mirrorWorkDirPath(path)
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
+	if err := os.Mkdir(workDir, 0o700); err != nil && !os.IsExist(err) {
 		return "", fmt.Errorf(
 			"creating duckdb mirror work directory %s: %w", workDir, err,
 		)
+	}
+	info, err := os.Lstat(workDir)
+	if err != nil {
+		return "", fmt.Errorf(
+			"statting duckdb mirror work directory %s: %w", workDir, err,
+		)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf(
+			"duckdb mirror work directory %s is a symlink; remove it and retry",
+			workDir,
+		)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf(
+			"duckdb mirror work directory %s is not a directory; remove it and retry",
+			workDir,
+		)
+	}
+	if err := checkWorkDirPrivate(workDir, info); err != nil {
+		return "", err
 	}
 	return workDir, nil
 }
@@ -94,7 +127,9 @@ func rebuildMirror(
 // starting — probe/status paths never reach this) and removes the file
 // immediately: DuckDB must create the file itself (os.CreateTemp leaves
 // behind an empty file DuckDB's Open would otherwise try to reuse as a
-// zero-byte database).
+// zero-byte database). The unlink-to-reopen window is safe because
+// ensureMirrorWorkDir guarantees the directory is writable only by the
+// current user — nothing else can swap a symlink onto the reserved name.
 func createMirrorTempPath(path string) (string, error) {
 	workDir, err := ensureMirrorWorkDir(path)
 	if err != nil {
