@@ -12,8 +12,44 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// mirrorWorkDirSuffix is appended to the mirror path to form the mirror's
+// private work directory, which holds every generated artifact: rebuild
+// temp files (createMirrorTempPath) and reopen hardlink aliases
+// (openMirrorAlias). The directory name itself is the ownership marker —
+// only agentsview creates and writes into <mirror>.agentsview-work — so the
+// stale-artifact sweeps (sweepStaleTempFiles,
+// SweepStaleMirrorReopenAliases) can safely run before the destination is
+// even probed or recognized as ours: they only ever delete inside this
+// directory and never touch SIBLINGS of the mirror, whose names a user's
+// own files could coincidentally match. The sidecar ownership marker
+// (MirrorMarkerPath) deliberately stays a sibling: it must remain readable
+// while the mirror is locked and is never a sweep target.
+const mirrorWorkDirSuffix = ".agentsview-work"
+
+// mirrorWorkDirPath returns the path of the private work directory for the
+// mirror at path. It never creates the directory: probes and sweeps must
+// not create anything (see ensureMirrorWorkDir).
+func mirrorWorkDirPath(path string) string {
+	return path + mirrorWorkDirSuffix
+}
+
+// ensureMirrorWorkDir creates the mirror's work directory if needed and
+// returns its path. Callers may only invoke it once real work is starting —
+// a rebuild creating its temp file, a serve process hardlinking a reopen
+// alias — never from probe/status/sweep paths, which must stay create-free.
+func ensureMirrorWorkDir(path string) (string, error) {
+	workDir := mirrorWorkDirPath(path)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return "", fmt.Errorf(
+			"creating duckdb mirror work directory %s: %w", workDir, err,
+		)
+	}
+	return workDir, nil
+}
+
 // rebuildMirror builds a fresh DuckDB mirror file from scratch in a
-// temporary file next to path, then atomically swaps it into place. It is
+// temporary file inside the mirror's work directory, then atomically swaps
+// it over path. It is
 // the only way a schema v3 mirror is created or repaired: unlike Sync.Push,
 // it never touches an existing mirror file in place, so a rebuild that
 // fails at any point leaves the previous mirror (if any) fully intact.
@@ -63,13 +99,18 @@ func rebuildMirror(
 	return result, nil
 }
 
-// createMirrorTempPath reserves a temp file name next to path and removes
-// it immediately: DuckDB must create the file itself (os.CreateTemp leaves
+// createMirrorTempPath reserves a temp file name inside the mirror's work
+// directory (created here, lazily, because a rebuild is now actually
+// starting — probe/status paths never reach this) and removes the file
+// immediately: DuckDB must create the file itself (os.CreateTemp leaves
 // behind an empty file DuckDB's Open would otherwise try to reuse as a
 // zero-byte database).
 func createMirrorTempPath(path string) (string, error) {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	workDir, err := ensureMirrorWorkDir(path)
+	if err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(workDir, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return "", fmt.Errorf("creating duckdb rebuild temp file: %w", err)
 	}
@@ -83,7 +124,8 @@ func createMirrorTempPath(path string) (string, error) {
 	return tmpPath, nil
 }
 
-// staleTempFileAge is how old a path.tmp-* rebuild temp file must be before
+// staleTempFileAge is how old a work-directory .tmp-<digits> rebuild temp
+// file must be before
 // sweepStaleTempFiles removes it. A running rebuild's own temp file is
 // always younger than this, so the guard only ever catches leftovers from a
 // process that crashed or was killed mid-rebuild (see createMirrorTempPath
@@ -103,29 +145,34 @@ func createMirrorTempPath(path string) (string, error) {
 // in place), so there is no risk of corruption, only a failed push.
 const staleTempFileAge = 24 * time.Hour
 
-// sweepStaleTempFiles removes path.tmp-<digits> rebuild temp files older
-// than staleTempFileAge. Always safe to call at the start of a push: a
-// fresh rebuild creates its own temp file after this runs, so it can never
-// sweep up a file it is about to use.
+// sweepStaleTempFiles removes <base>.tmp-<digits> rebuild temp files older
+// than staleTempFileAge from the mirror's work directory. Always safe to
+// call at the start of a push, even before ProbeMirror has recognized the
+// destination as ours: the work directory's name is itself the ownership
+// marker (see mirrorWorkDirSuffix), so nothing outside it — in particular
+// no sibling of the mirror, whatever its name — is ever deleted. A missing
+// work directory means nothing was ever generated here; the sweep returns
+// nil without creating it. A fresh rebuild creates its own temp file after
+// this runs, so the sweep can never remove a file it is about to use.
 //
-// This walks the parent directory with os.ReadDir and matches names by
-// literal prefix instead of filepath.Glob(path+".tmp-*"): path is
-// interpolated into the pattern, and glob metacharacters ([, ?, *) in a
-// project or archive directory name would otherwise be interpreted as glob
-// syntax instead of literal characters, silently breaking or over-matching
-// the sweep. The suffix after the prefix must be entirely ASCII digits —
-// the exact shape createMirrorTempPath's os.CreateTemp "*" expansion
-// generates — so a user file that merely shares the prefix (for example
-// "mirror.duckdb.tmp-notes.txt") is never deleted.
+// Names are matched by literal prefix over os.ReadDir instead of
+// filepath.Glob: path is interpolated into a glob pattern, and glob
+// metacharacters ([, ?, *) in a project or archive directory name would
+// otherwise be interpreted as glob syntax instead of literal characters,
+// silently breaking or over-matching the sweep. The suffix after the
+// prefix must be entirely ASCII digits — the exact shape
+// createMirrorTempPath's os.CreateTemp "*" expansion generates — so any
+// other file inside the work directory survives, and the directory itself
+// is never removed.
 func sweepStaleTempFiles(path string) error {
-	dir := filepath.Dir(path)
+	workDir := mirrorWorkDirPath(path)
 	prefix := filepath.Base(path) + ".tmp-"
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(workDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("reading duckdb mirror directory %s: %w", dir, err)
+		return fmt.Errorf("reading duckdb mirror work directory %s: %w", workDir, err)
 	}
 	cutoff := time.Now().Add(-staleTempFileAge)
 	for _, entry := range entries {
@@ -133,7 +180,7 @@ func sweepStaleTempFiles(path string) error {
 			!isGeneratedSweepName(entry.Name(), prefix) {
 			continue
 		}
-		m := filepath.Join(dir, entry.Name())
+		m := filepath.Join(workDir, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -155,8 +202,9 @@ func sweepStaleTempFiles(path string) error {
 // non-empty run of ASCII digits — the only shape the stale-file sweeps
 // (sweepStaleTempFiles and SweepStaleMirrorReopenAliases) ever generate:
 // os.CreateTemp expands its "*" to decimal digits and reopen aliases append
-// time.Now().UnixNano(). Anything else next to the mirror is a user's file
-// and must survive the sweeps.
+// time.Now().UnixNano(). The sweeps already confine themselves to the
+// mirror's work directory; the shape check is a second guard so that even
+// inside that directory only generated artifacts are ever removed.
 func isGeneratedSweepName(name, prefix string) bool {
 	if !strings.HasPrefix(name, prefix) {
 		return false
@@ -412,12 +460,16 @@ func validateBuiltMirror(ctx context.Context, tmpPath string, wantSessions int) 
 	return nil
 }
 
-// swapMirrorFile atomically replaces dstPath with tmpPath. POSIX rename
-// over an existing file succeeds on the first attempt; the retry loop
-// exists for platforms (Windows) where another process briefly holding the
-// destination open causes a sharing violation. dstPath is left untouched on
-// every failed attempt because rename is atomic: there is no partial state
-// where the mirror is half-replaced.
+// swapMirrorFile atomically replaces dstPath with tmpPath. tmpPath lives in
+// the mirror's work directory, a subdirectory of dstPath's own parent, so
+// the rename never crosses a volume boundary: it stays a same-filesystem
+// rename and remains atomic on POSIX and Windows exactly as a
+// sibling-to-sibling rename would. POSIX rename over an existing file
+// succeeds on the first attempt; the retry loop exists for platforms
+// (Windows) where another process briefly holding the destination open
+// causes a sharing violation. dstPath is left untouched on every failed
+// attempt because rename is atomic: there is no partial state where the
+// mirror is half-replaced.
 func swapMirrorFile(tmpPath, dstPath string) error {
 	var err error
 	for attempt := range 5 {

@@ -32,9 +32,10 @@ var _ db.Store = (*Store)(nil)
 // duck, fileInfo, and aliasPath so an in-flight query never observes a
 // handle mid-swap. path is empty for NewStoreFromDB and remote/Quack
 // stores, which have no local file to watch. aliasPath is the hardlink
-// path.reopen-N that duck is actually opened against once the Store has
-// reopened at least once (see openMirrorAlias); it is "" for the original
-// connection NewStore opens directly on path.
+// (<base>.reopen-N inside the mirror's work directory) that duck is
+// actually opened against once the Store has reopened at least once (see
+// openMirrorAlias); it is "" for the original connection NewStore opens
+// directly on path.
 type Store struct {
 	path      string
 	handleMu  sync.RWMutex

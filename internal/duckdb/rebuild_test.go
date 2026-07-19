@@ -147,11 +147,13 @@ func TestRebuildMirrorLeavesNoTempFilesOnSwapFailure(t *testing.T) {
 
 	require.Error(t, err)
 	assert.DirExists(t, path, "swap failure must leave the destination untouched")
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	for _, entry := range entries {
-		assert.NotContains(t, entry.Name(), ".tmp-",
-			"failed rebuild must not leave a temp mirror file behind")
+	for _, checkDir := range []string{dir, mirrorWorkDirPath(path)} {
+		entries, err := os.ReadDir(checkDir)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			assert.NotContains(t, entry.Name(), ".tmp-",
+				"failed rebuild must not leave a temp mirror file behind in %s", checkDir)
+		}
 	}
 }
 
@@ -465,18 +467,26 @@ func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 1)
 }
 
-// TestSweepStaleTempFilesRemovesOnlyOldFiles covers sweepStaleTempFiles'
-// age guard and shape guard: a path.tmp-<digits> file younger than
-// staleTempFileAge is a rebuild that is (or recently was) genuinely in
-// progress and must survive, while an old one is a crash leftover
-// (rebuildMirror's own cleanup only fires for its own process; a killed
-// process never reaches it) and must be removed. Files that don't match
-// the generated shape — os.CreateTemp expands "*" to digits only — are
-// user files and are left alone regardless of age, even when they share
-// the literal path.tmp- prefix.
-func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
+// TestSweepStaleTempFilesRemovesOnlyOldFilesInsideWorkDir covers
+// sweepStaleTempFiles' ownership, age, and shape guards. Ownership is
+// location: the sweep only ever looks inside the mirror's private work
+// directory (<mirror>.agentsview-work), so SIBLING files of the mirror are
+// never touched, no matter how exactly their names match the generated
+// temp-file shape — the sweep runs before the destination is even probed,
+// and a user's own `mirror.duckdb.tmp-123` next to a path that is not our
+// mirror must survive it. Inside the work directory, a <base>.tmp-<digits>
+// file younger than staleTempFileAge is a rebuild that is (or recently was)
+// genuinely in progress and must survive, while an old one is a crash
+// leftover (rebuildMirror's own cleanup only fires for its own process; a
+// killed process never reaches it) and must be removed. Files that don't
+// match the generated shape — os.CreateTemp expands "*" to digits only —
+// are left alone regardless of age, and the work directory itself is never
+// removed.
+func TestSweepStaleTempFilesRemovesOnlyOldFilesInsideWorkDir(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
+	workDir := mirrorWorkDirPath(path)
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
 	oldTime := time.Now().Add(-2 * staleTempFileAge)
 	writeOldFile := func(name string) string {
 		t.Helper()
@@ -485,16 +495,21 @@ func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 		return name
 	}
 
-	freshTmp := path + ".tmp-123456789"
-	require.NoError(t, os.WriteFile(freshTmp, []byte("x"), 0o644))
-
-	staleTmp := writeOldFile(path + ".tmp-987654321")
+	// Sibling user files: old AND exactly digit-shaped, yet outside the work
+	// directory, so the sweep must never touch them.
+	siblingTmp := writeOldFile(path + ".tmp-123")
+	siblingReopen := writeOldFile(path + ".reopen-456")
 	unrelated := writeOldFile(filepath.Join(dir, "unrelated.txt"))
-	userNotes := writeOldFile(path + ".tmp-notes.txt")
-	emptySuffix := writeOldFile(path + ".tmp-")
+
+	freshTmp := filepath.Join(workDir, "mirror.duckdb.tmp-123456789")
+	require.NoError(t, os.WriteFile(freshTmp, []byte("x"), 0o644))
+	staleTmp := writeOldFile(filepath.Join(workDir, "mirror.duckdb.tmp-987654321"))
+	userNotes := writeOldFile(filepath.Join(workDir, "mirror.duckdb.tmp-notes.txt"))
+	emptySuffix := writeOldFile(filepath.Join(workDir, "mirror.duckdb.tmp-"))
 
 	// writeMirrorMarker binds the marker to the mirror file's identity, so
-	// the mirror file itself must exist first.
+	// the mirror file itself must exist first. The marker stays a SIBLING of
+	// the mirror and must never be swept.
 	require.NoError(t, os.WriteFile(path, []byte("mirror"), 0o644))
 	marker := MirrorMarkerPath(path)
 	require.NoError(t, writeMirrorMarker(path, "m"))
@@ -502,37 +517,49 @@ func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 
 	require.NoError(t, sweepStaleTempFiles(path))
 
+	assert.FileExists(t, siblingTmp,
+		"a user's sibling file matching the temp shape must never be swept")
+	assert.FileExists(t, siblingReopen,
+		"a user's sibling file matching the reopen shape must never be swept")
+	assert.FileExists(t, unrelated, "unrelated sibling files must survive")
 	assert.FileExists(t, freshTmp, "a fresh temp file must survive the sweep")
-	assert.NoFileExists(t, staleTmp, "a temp file older than staleTempFileAge must be removed")
-	assert.FileExists(t, unrelated, "sweep must only touch path.tmp-<digits> files")
+	assert.NoFileExists(t, staleTmp,
+		"a work-dir temp file older than staleTempFileAge must be removed")
 	assert.FileExists(t, userNotes,
-		"a user file sharing the prefix but with a non-digit suffix must survive")
+		"a work-dir file with a non-digit suffix must survive")
 	assert.FileExists(t, emptySuffix,
-		"a bare path.tmp- name (empty suffix) is not a generated temp file and must survive")
+		"a bare .tmp- name (empty suffix) is not a generated temp file and must survive")
+	assert.DirExists(t, workDir, "the sweep must never remove the work directory itself")
 	assert.FileExists(t, marker,
-		"the sidecar ownership marker shares the mirror path prefix but must never be swept")
+		"the sidecar ownership marker is a sibling and must never be swept")
 }
 
-// TestSweepStaleTempFilesNoMatchesIsNoOp guards the common case (no
-// leftover temp files at all) against a spurious error from an empty glob.
-func TestSweepStaleTempFilesNoMatchesIsNoOp(t *testing.T) {
+// TestSweepStaleTempFilesMissingWorkDirIsNoOp guards the common case: no
+// work directory yet (nothing was ever rebuilt or reopened at this path).
+// The sweep must return nil without creating the directory — probes and
+// sweeps never create anything.
+func TestSweepStaleTempFilesMissingWorkDirIsNoOp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	require.NoError(t, sweepStaleTempFiles(path))
+	assert.NoDirExists(t, mirrorWorkDirPath(path),
+		"a sweep must never create the work directory")
 }
 
 // TestSweepStaleTempFilesHandlesGlobMetacharactersInDirectory is the FIX7
 // regression: sweepStaleTempFiles used to build its match pattern with
-// filepath.Glob(path+".tmp-*"), so a project or archive directory name
-// containing glob metacharacters ([, ?, *) would be interpreted as glob
-// syntax instead of literal characters, breaking or over-matching the
-// sweep. A literal os.ReadDir + prefix-match sweep must work the same way
-// regardless of what characters appear in the directory name.
+// filepath.Glob, so a project or archive directory name containing glob
+// metacharacters ([, ?, *) would be interpreted as glob syntax instead of
+// literal characters, breaking or over-matching the sweep. A literal
+// os.ReadDir + prefix-match sweep must work the same way regardless of what
+// characters appear in the directory name.
 func TestSweepStaleTempFilesHandlesGlobMetacharactersInDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "proj[1]")
 	require.NoError(t, os.Mkdir(dir, 0o755))
 	path := filepath.Join(dir, "mirror.duckdb")
+	workDir := mirrorWorkDirPath(path)
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
 
-	staleTmp := path + ".tmp-424242"
+	staleTmp := filepath.Join(workDir, "mirror.duckdb.tmp-424242")
 	require.NoError(t, os.WriteFile(staleTmp, []byte("x"), 0o644))
 	oldTime := time.Now().Add(-2 * staleTempFileAge)
 	require.NoError(t, os.Chtimes(staleTmp, oldTime, oldTime))

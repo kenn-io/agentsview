@@ -19,15 +19,20 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// countReopenAliasFiles globs dir for the hardlink files openMirrorAlias
-// creates (path.reopen-N). A non-zero count after a Store has fully settled
-// and closed means an alias leaked instead of being removed by swapHandle
-// or Store.Close.
+// countReopenAliasFiles counts the hardlink files openMirrorAlias creates
+// (<base>.reopen-N inside each mirror's work directory), checking dir itself
+// and every work directory under it. A non-zero count after a Store has
+// fully settled and closed means an alias leaked instead of being removed by
+// swapHandle or Store.Close.
 func countReopenAliasFiles(t *testing.T, dir string) int {
 	t.Helper()
 	matches, err := filepath.Glob(filepath.Join(dir, "*.reopen-*"))
 	require.NoError(t, err)
-	return len(matches)
+	nested, err := filepath.Glob(
+		filepath.Join(dir, "*"+mirrorWorkDirSuffix, "*.reopen-*"),
+	)
+	require.NoError(t, err)
+	return len(matches) + len(nested)
 }
 
 // buildMirrorFixture builds a fresh, on-disk, schema-v3-compatible mirror
@@ -323,42 +328,72 @@ func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
 // TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases simulates the
 // crash-leftover case SweepStaleMirrorReopenAliases exists to clean up: a
 // previous serve process died without reaching Store.Close or a
-// mirror-replacement swap, leaving its path.reopen-N hardlink behind. The
-// next serve process must remove it (and any other reopen aliases for the
-// same mirror) before opening its own handle, and must leave unrelated
-// files alone.
+// mirror-replacement swap, leaving its reopen hardlink behind in the
+// mirror's work directory. The next serve process must remove it (and any
+// other reopen aliases for the same mirror) before opening its own handle,
+// and must leave everything else alone — most importantly the mirror's
+// SIBLING files: the sweep runs before the destination is recognized as
+// ours, so a user's own `m.duckdb.reopen-3` next to the path must survive
+// no matter how exactly it matches the generated alias shape (ownership is
+// the work-directory location, not the file name).
 func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "session-1")
+	workDir := mirrorWorkDirPath(path)
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
 
-	require.NoError(t, os.Link(path, path+".reopen-1"))
-	require.NoError(t, os.Link(path, path+".reopen-2"))
+	require.NoError(t, os.Link(path, filepath.Join(workDir, "m.duckdb.reopen-1")))
+	require.NoError(t, os.Link(path, filepath.Join(workDir, "m.duckdb.reopen-2")))
 	otherPath := filepath.Join(dir, "other.duckdb")
 	buildMirrorFixture(t, otherPath, "session-2")
-	require.NoError(t, os.Link(otherPath, otherPath+".reopen-1"))
-	// User files that merely share the literal ".reopen-" prefix are not
+	otherWorkDir := mirrorWorkDirPath(otherPath)
+	require.NoError(t, os.MkdirAll(otherWorkDir, 0o755))
+	otherAlias := filepath.Join(otherWorkDir, "other.duckdb.reopen-1")
+	require.NoError(t, os.Link(otherPath, otherAlias))
+	// Sibling user files exactly matching the generated shapes must survive:
+	// they live next to the mirror, not inside its work directory.
+	siblingAlias := path + ".reopen-3"
+	require.NoError(t, os.WriteFile(siblingAlias, []byte("keep me"), 0o644))
+	siblingTmp := path + ".tmp-4"
+	require.NoError(t, os.WriteFile(siblingTmp, []byte("keep me"), 0o644))
+	// Work-dir files that merely share the literal ".reopen-" prefix are not
 	// generated aliases (openMirrorAlias appends UnixNano digits only) and
 	// must survive, as must a bare empty-suffix name.
-	userBackup := path + ".reopen-backup"
+	userBackup := filepath.Join(workDir, "m.duckdb.reopen-backup")
 	require.NoError(t, os.WriteFile(userBackup, []byte("keep me"), 0o644))
-	emptySuffix := path + ".reopen-"
+	emptySuffix := filepath.Join(workDir, "m.duckdb.reopen-")
 	require.NoError(t, os.WriteFile(emptySuffix, []byte("keep me"), 0o644))
 
 	require.NoError(t, SweepStaleMirrorReopenAliases(path))
 
-	assert.NoFileExists(t, path+".reopen-1")
-	assert.NoFileExists(t, path+".reopen-2")
-	assert.FileExists(t, otherPath+".reopen-1",
+	assert.NoFileExists(t, filepath.Join(workDir, "m.duckdb.reopen-1"))
+	assert.NoFileExists(t, filepath.Join(workDir, "m.duckdb.reopen-2"))
+	assert.FileExists(t, otherAlias,
 		"sweeping path's aliases must leave other.duckdb's alias untouched")
+	assert.FileExists(t, siblingAlias,
+		"a user's sibling file matching the reopen shape must never be swept")
+	assert.FileExists(t, siblingTmp,
+		"a user's sibling file matching the temp shape must never be swept")
 	assert.FileExists(t, userBackup,
-		"a user file sharing the prefix but with a non-digit suffix must survive")
+		"a work-dir file with a non-digit suffix must survive")
 	assert.FileExists(t, emptySuffix,
-		"a bare path.reopen- name (empty suffix) is not a generated alias and must survive")
+		"a bare .reopen- name (empty suffix) is not a generated alias and must survive")
+	assert.DirExists(t, workDir, "sweep must never remove the work directory itself")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 	assert.FileExists(t, MirrorMarkerPath(path),
-		"the sidecar ownership marker shares the mirror path prefix but must never be swept")
+		"the sidecar ownership marker is a sibling and must never be swept")
+}
+
+// TestSweepStaleMirrorReopenAliasesMissingWorkDirIsNoOp: no work directory
+// means nothing was ever rebuilt or reopened at this path; the sweep must
+// return nil without creating the directory.
+func TestSweepStaleMirrorReopenAliasesMissingWorkDirIsNoOp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.duckdb")
+	require.NoError(t, SweepStaleMirrorReopenAliases(path))
+	assert.NoDirExists(t, mirrorWorkDirPath(path),
+		"a sweep must never create the work directory")
 }
 
 // TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp guards against a caller
@@ -371,24 +406,25 @@ func TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp(t *testing.T) {
 
 // TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory is
 // the FIX7 regression: SweepStaleMirrorReopenAliases used to build its
-// match pattern with filepath.Glob(path+".reopen-*"), so a project or
-// archive directory name containing glob metacharacters ([, ?, *) would be
-// interpreted as glob syntax instead of literal characters, breaking or
-// over-matching the sweep. A literal os.ReadDir + prefix-match sweep must
-// work the same way regardless of what characters appear in the directory
-// name.
+// match pattern with filepath.Glob, so a project or archive directory name
+// containing glob metacharacters ([, ?, *) would be interpreted as glob
+// syntax instead of literal characters, breaking or over-matching the
+// sweep. A literal os.ReadDir + prefix-match sweep must work the same way
+// regardless of what characters appear in the directory name.
 func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := filepath.Join(t.TempDir(), "proj[1]")
 	require.NoError(t, os.Mkdir(dir, 0o755))
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "session-1")
-
-	require.NoError(t, os.Link(path, path+".reopen-1"))
+	workDir := mirrorWorkDirPath(path)
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	alias := filepath.Join(workDir, "m.duckdb.reopen-1")
+	require.NoError(t, os.Link(path, alias))
 
 	require.NoError(t, SweepStaleMirrorReopenAliases(path))
 
-	assert.NoFileExists(t, path+".reopen-1",
+	assert.NoFileExists(t, alias,
 		"a reopen alias in a glob-metacharacter directory must still be swept")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 }

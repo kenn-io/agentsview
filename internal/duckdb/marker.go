@@ -8,9 +8,11 @@ import (
 )
 
 // mirrorMarkerSuffix is appended to the mirror path to form the sidecar
-// ownership marker's path. The name deliberately does not match the prefix
-// patterns the stale-file sweeps remove (path+".tmp-", path+".reopen-"),
-// so neither sweep can ever delete the marker.
+// ownership marker's path. The marker deliberately stays a SIBLING of the
+// mirror rather than living in the work directory (mirrorWorkDirSuffix):
+// it must remain readable while the mirror is locked, and the stale-file
+// sweeps only ever delete inside the work directory, so neither sweep can
+// touch it.
 const mirrorMarkerSuffix = ".agentsview-mirror"
 
 // MirrorMarkerPath returns the path of the sidecar ownership marker for

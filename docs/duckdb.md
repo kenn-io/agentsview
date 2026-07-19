@@ -191,6 +191,15 @@ Environment variables override the config file:
   session whose own project reassignment moves it out of scope is removed
   from the mirror by the next incremental push, including when it was
   hard-deleted locally after the move.
+- **Generated artifacts live in a per-mirror work directory** — push and
+  serve keep everything they generate (rebuild temp files, the hardlink
+  aliases serve uses to reopen a replaced mirror) in a private directory
+  next to the mirror named `<mirror-path>.agentsview-work`. Stale-artifact
+  cleanup only ever deletes inside that directory, so your own files next
+  to the mirror are never touched, whatever they are named. The directory
+  is safe to delete whenever no `duckdb push`, `duckdb serve`, or
+  `duckdb quack serve` process is running; the next push or serve recreates
+  it as needed.
 - **`duckdb serve` and `duckdb quack serve` never create or migrate the
   mirror** — a missing or schema-incompatible file makes them exit with an
   error to run `duckdb push --full`. Both detect when a later push replaces

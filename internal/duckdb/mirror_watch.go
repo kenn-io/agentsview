@@ -138,10 +138,20 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 // before the rename) keeps serving whatever it already had open,
 // undisturbed.
 //
-// The caller must Close the returned *sql.DB and then call
-// removeMirrorAlias(alias) once it is done with the connection.
+// The alias lives inside the mirror's work directory (created lazily here —
+// a reopen is real work on a mirror that necessarily exists), so it shares
+// the sweeps' ownership-through-location guarantee and a hardlink to the
+// same-filesystem mirror always works. The caller must Close the returned
+// *sql.DB and then call removeMirrorAlias(alias) once it is done with the
+// connection.
 func openMirrorAlias(path string) (conn *sql.DB, alias string, err error) {
-	alias = fmt.Sprintf("%s.reopen-%d", path, time.Now().UnixNano())
+	workDir, err := ensureMirrorWorkDir(path)
+	if err != nil {
+		return nil, "", err
+	}
+	alias = filepath.Join(workDir, fmt.Sprintf(
+		"%s.reopen-%d", filepath.Base(path), time.Now().UnixNano(),
+	))
 	if err := os.Link(path, alias); err != nil {
 		return nil, "", fmt.Errorf("hardlinking duckdb mirror for reopen: %w", err)
 	}
@@ -195,47 +205,55 @@ func reportMirrorReplacementEvent(onEvent func(err error), err error) {
 	}
 }
 
-// SweepStaleMirrorReopenAliases removes every path.reopen-N hardlink left
-// next to path. Callers hold each alias only for the lifetime of the *sql.DB
-// connection opened on it (see openMirrorAlias/removeMirrorAlias), so any
-// alias still present is a leftover from a process that crashed or was
-// killed before it could clean up after itself; it is always safe to remove
-// unconditionally (there is no in-progress swap to race: an alias belonging
-// to a live process's *current* handle is only ever known to that process,
-// which will remove it itself on the next successful reopen or on Close).
-// This is meant to be called once, before a serve process opens its own
-// first handle on path — not from a running Store, which already sweeps its
-// own alias in Close and in the mirror-replacement swap.
+// SweepStaleMirrorReopenAliases removes every <base>.reopen-N hardlink left
+// in the mirror's work directory. Callers hold each alias only for the
+// lifetime of the *sql.DB connection opened on it (see
+// openMirrorAlias/removeMirrorAlias), so any alias still present is a
+// leftover from a process that crashed or was killed before it could clean
+// up after itself; it is always safe to remove unconditionally (there is no
+// in-progress swap to race: an alias belonging to a live process's
+// *current* handle is only ever known to that process, which will remove it
+// itself on the next successful reopen or on Close). This is meant to be
+// called once, before a serve process opens its own first handle on path —
+// not from a running Store, which already sweeps its own alias in Close and
+// in the mirror-replacement swap.
 //
-// This walks the parent directory with os.ReadDir and matches names by
-// literal prefix instead of filepath.Glob(path+".reopen-*"): path is
-// interpolated into the pattern, and glob metacharacters ([, ?, *) in a
-// project or archive directory name would otherwise be interpreted as glob
-// syntax instead of literal characters, silently breaking or over-matching
-// the sweep. The suffix after the prefix must be entirely ASCII digits —
-// the exact shape openMirrorAlias generates (time.Now().UnixNano()) — so a
-// user file that merely shares the prefix (for example
-// "mirror.duckdb.reopen-backup") is never deleted (see
-// isGeneratedSweepName).
+// Like sweepStaleTempFiles, the sweep is safe even before the destination
+// is recognized as ours: it only ever deletes inside the work directory,
+// whose name is itself the ownership marker (see mirrorWorkDirSuffix), so
+// SIBLING files of the mirror — including a user's own file that exactly
+// matches the generated alias shape — are never touched. A missing work
+// directory means nothing was ever generated here; the sweep returns nil
+// without creating it.
+//
+// Names are matched by literal prefix over os.ReadDir instead of
+// filepath.Glob: path is interpolated into a glob pattern, and glob
+// metacharacters ([, ?, *) in a project or archive directory name would
+// otherwise be interpreted as glob syntax instead of literal characters,
+// silently breaking or over-matching the sweep. The suffix after the
+// prefix must be entirely ASCII digits — the exact shape openMirrorAlias
+// generates (time.Now().UnixNano()) — so any other file inside the work
+// directory (for example "mirror.duckdb.reopen-backup") survives, and the
+// directory itself is never removed (see isGeneratedSweepName).
 func SweepStaleMirrorReopenAliases(path string) error {
 	if path == "" {
 		return nil
 	}
-	dir := filepath.Dir(path)
+	workDir := mirrorWorkDirPath(path)
 	prefix := filepath.Base(path) + ".reopen-"
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(workDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("reading duckdb mirror directory %s: %w", dir, err)
+		return fmt.Errorf("reading duckdb mirror work directory %s: %w", workDir, err)
 	}
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() ||
 			!isGeneratedSweepName(entry.Name(), prefix) {
 			continue
 		}
-		m := filepath.Join(dir, entry.Name())
+		m := filepath.Join(workDir, entry.Name())
 		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("removing stale duckdb mirror reopen alias %s: %w", m, err)
 		}
