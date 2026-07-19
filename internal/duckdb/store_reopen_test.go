@@ -255,3 +255,40 @@ func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond,
 		"store must adopt a good mirror that arrives after an incompatible one")
 }
+
+// TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases simulates the
+// crash-leftover case SweepStaleMirrorReopenAliases exists to clean up: a
+// previous serve process died without reaching Store.Close or a
+// mirror-replacement swap, leaving its path.reopen-N hardlink behind. The
+// next serve process must remove it (and any other reopen aliases for the
+// same mirror) before opening its own handle, and must leave unrelated
+// files alone.
+func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.duckdb")
+	buildMirrorFixture(t, path, "session-1")
+
+	require.NoError(t, os.Link(path, path+".reopen-1"))
+	require.NoError(t, os.Link(path, path+".reopen-2"))
+	otherPath := filepath.Join(dir, "other.duckdb")
+	buildMirrorFixture(t, otherPath, "session-2")
+	require.NoError(t, os.Link(otherPath, otherPath+".reopen-1"))
+
+	require.NoError(t, SweepStaleMirrorReopenAliases(path))
+
+	assert.Equal(t, 1, countReopenAliasFiles(t, dir),
+		"sweeping path's aliases must leave other.duckdb's alias untouched")
+	assert.NoFileExists(t, path+".reopen-1")
+	assert.NoFileExists(t, path+".reopen-2")
+	assert.FileExists(t, otherPath+".reopen-1")
+	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
+}
+
+// TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp guards against a caller
+// passing an empty path (e.g. a NewStoreFromDB / remote Quack config that
+// has no local mirror file to sweep): it must return nil without globbing
+// or attempting any filesystem operation.
+func TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp(t *testing.T) {
+	require.NoError(t, SweepStaleMirrorReopenAliases(""))
+}

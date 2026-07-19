@@ -360,6 +360,15 @@ func openDuckDBServeStore(
 		if err := probeDuckDBMirrorForServe(ctx, duckCfg.Path); err != nil {
 			fatal("duckdb serve: %v", err)
 		}
+		// Any path.reopen-* hardlink present here predates this process: it
+		// can only have been left behind by a previous serve process that
+		// crashed or was killed before removing its own alias (a live
+		// Store always cleans up its own alias in Close or on the next
+		// mirror-replacement swap). Safe to sweep unconditionally before
+		// this process opens its own first handle.
+		if err := duckdbsync.SweepStaleMirrorReopenAliases(duckCfg.Path); err != nil {
+			log.Printf("duckdb serve: sweeping stale mirror reopen aliases: %v", err)
+		}
 	}
 
 	applyClassifierConfig(appCfg)

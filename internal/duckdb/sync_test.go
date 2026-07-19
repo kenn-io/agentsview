@@ -278,13 +278,13 @@ func TestPushSessionBatchReturnsContextCancellation(t *testing.T) {
 	var result PushResult
 	var pushed []db.Session
 
-	err := syncer.pushSessionBatch(
+	err := syncer.pushSessionBatchForMode(
 		ctx,
 		[]db.Session{syncSession(
 			"duck-canceled", "alpha", "canceled",
 			"2026-01-10T00:00:00.000Z", 1,
 		)},
-		0, 1, &result, &pushed, nil,
+		0, 1, &result, &pushed, nil, nil,
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -329,13 +329,13 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(oldLog) })
 
-	err = syncer.pushSessionBatch(
+	err = syncer.pushSessionBatchForMode(
 		ctx, sessions, 0, len(sessions), &result, &pushed,
 		func(p PushProgress) {
 			if p.SessionsDone == 1 {
 				cancel()
 			}
-		},
+		}, nil,
 	)
 
 	require.ErrorIs(t, err, context.Canceled)

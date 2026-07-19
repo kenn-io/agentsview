@@ -2256,11 +2256,12 @@ func (db *DB) migrateColumns() error {
 
 // syncMarkerSchemaSQL creates the sync_marker index and the triggers that
 // keep it equal to the max of created_at, local_modified_at, ended_at,
-// started_at, and file_mtime (the SQL twin of localSessionSyncMarker in
-// internal/duckdb/sync.go), normalized to ms-precision UTC text.
+// started_at, and file_mtime, normalized to ms-precision UTC text. This is
+// the SQL twin of the max-of-signals sync marker computation; the
+// PostgreSQL push computes the same value in Go (see internal/postgres).
 // MAX(a,b,...) returns NULL if any argument is NULL, hence the COALESCEs.
 // Only created_at falls back to the raw string if parsing fails (matching
-// localSessionSyncMarker's behavior); other fields fall back to the empty
+// the Go computation's behavior); other fields fall back to the empty
 // string.
 // AFTER UPDATE OF only fires on the five source columns, and the trigger
 // body writes only sync_marker, so it cannot recurse.
@@ -2302,14 +2303,14 @@ END;
 `
 
 // backfillSyncMarkerSQL computes sync_marker for rows written before
-// the column existed. It is the SQL twin of the trigger bodies above
-// and of localSessionSyncMarker in internal/duckdb/sync.go: the max of
-// created_at, local_modified_at, ended_at, started_at, and file_mtime,
-// normalized to ms-precision UTC text. Only created_at falls back to the
-// raw string if parsing fails (matching localSessionSyncMarker's behavior);
-// other fields fall back to the empty string. The WHERE clause makes it
-// idempotent and
-// cheap once every row has a marker.
+// the column existed. It is the SQL twin of the trigger bodies above and of
+// the max-of-signals sync marker computation the PostgreSQL push performs
+// in Go (see internal/postgres): the max of created_at, local_modified_at,
+// ended_at, started_at, and file_mtime, normalized to ms-precision UTC
+// text. Only created_at falls back to the raw string if parsing fails
+// (matching the Go computation's behavior); other fields fall back to the
+// empty string. The WHERE clause makes it idempotent and cheap once every
+// row has a marker.
 const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), created_at, ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(local_modified_at, '')), ''),
@@ -3547,6 +3548,24 @@ func (db *DB) SetSyncState(key, value string) error {
 		 VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		key, value,
+	)
+	return err
+}
+
+// DeleteSyncStateByPrefix removes every pg_sync_state row whose key starts
+// with prefix. Used to clean up state left behind by superseded sync
+// designs (e.g. the pre-schema-v3 DuckDB push watermarks, now tracked in
+// the mirror's own sync_metadata table instead of local pg_sync_state).
+// prefix is escaped so LIKE metacharacters in it (%, _) match literally.
+func (db *DB) DeleteSyncStateByPrefix(prefix string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	escaped := strings.NewReplacer(
+		"\\", "\\\\", "%", "\\%", "_", "\\_",
+	).Replace(prefix)
+	_, err := db.getWriter().Exec(
+		"DELETE FROM pg_sync_state WHERE key LIKE ? ESCAPE '\\'",
+		escaped+"%",
 	)
 	return err
 }

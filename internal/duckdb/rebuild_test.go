@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -359,4 +360,41 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 		"session mutated during rebuild must still be caught by the next incremental push")
 	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
 		"session hard-deleted during rebuild must still be reconciled by the next incremental push")
+}
+
+// TestSweepStaleTempFilesRemovesOnlyOldFiles covers sweepStaleTempFiles'
+// age guard: a path.tmp-* file younger than staleTempFileAge is a rebuild
+// that is (or recently was) genuinely in progress and must survive, while
+// an old one is a crash leftover (rebuildMirror's own cleanup only fires
+// for its own process; a killed process never reaches it) and must be
+// removed. Files that don't match the glob at all are left alone
+// regardless of age.
+func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+
+	freshTmp := path + ".tmp-fresh"
+	require.NoError(t, os.WriteFile(freshTmp, []byte("x"), 0o644))
+
+	staleTmp := path + ".tmp-stale"
+	require.NoError(t, os.WriteFile(staleTmp, []byte("x"), 0o644))
+	oldTime := time.Now().Add(-2 * staleTempFileAge)
+	require.NoError(t, os.Chtimes(staleTmp, oldTime, oldTime))
+
+	unrelated := filepath.Join(dir, "unrelated.txt")
+	require.NoError(t, os.WriteFile(unrelated, []byte("x"), 0o644))
+	require.NoError(t, os.Chtimes(unrelated, oldTime, oldTime))
+
+	require.NoError(t, sweepStaleTempFiles(path))
+
+	assert.FileExists(t, freshTmp, "a fresh temp file must survive the sweep")
+	assert.NoFileExists(t, staleTmp, "a temp file older than staleTempFileAge must be removed")
+	assert.FileExists(t, unrelated, "sweep must only touch path.tmp-* files")
+}
+
+// TestSweepStaleTempFilesNoMatchesIsNoOp guards the common case (no
+// leftover temp files at all) against a spurious error from an empty glob.
+func TestSweepStaleTempFilesNoMatchesIsNoOp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	require.NoError(t, sweepStaleTempFiles(path))
 }

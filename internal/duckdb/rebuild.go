@@ -75,6 +75,42 @@ func createMirrorTempPath(path string) (string, error) {
 	return tmpPath, nil
 }
 
+// staleTempFileAge is how old a path.tmp-* rebuild temp file must be before
+// sweepStaleTempFiles removes it. A running rebuild's own temp file is
+// always younger than this, so the guard only ever catches leftovers from a
+// process that crashed or was killed mid-rebuild (see createMirrorTempPath
+// and rebuildMirror's deferred cleanup, which only fires for that process's
+// own file and never runs at all if the process is killed outright).
+const staleTempFileAge = time.Hour
+
+// sweepStaleTempFiles removes path.tmp-* rebuild temp files older than
+// staleTempFileAge. Always safe to call at the start of a push: a fresh
+// rebuild creates its own temp file after this runs, so it can never sweep
+// up a file it is about to use.
+func sweepStaleTempFiles(path string) error {
+	matches, err := filepath.Glob(path + ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("globbing duckdb mirror temp files: %w", err)
+	}
+	cutoff := time.Now().Add(-staleTempFileAge)
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("statting duckdb mirror temp file %s: %w", m, err)
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing stale duckdb mirror temp file %s: %w", m, err)
+		}
+	}
+	return nil
+}
+
 // rebuildSnapshot captures the mirror metadata state tokens that must be
 // read BEFORE pushEverything enumerates sessions. A session mutated or
 // hard-deleted while the rebuild's session push loop is still running must

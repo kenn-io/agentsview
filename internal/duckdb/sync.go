@@ -164,6 +164,9 @@ func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, full bool, onProgress func(PushProgress),
 ) (PushResult, error) {
+	if err := sweepStaleTempFiles(path); err != nil {
+		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
+	}
 	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	probe, err := ProbeMirror(ctx, path)
 	if err != nil {
@@ -177,13 +180,37 @@ func Push(
 	reason := rebuildReason(
 		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
 	)
+	var result PushResult
 	if reason == "" {
-		return incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+		result, err = incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+	} else {
+		log.Printf("duckdbsync: rebuilding mirror: %s", reason)
+		result, err = rebuildMirror(ctx, path, local, machine, opts, onProgress)
+		result.Diagnostics.RebuildReason = reason
 	}
-	log.Printf("duckdbsync: rebuilding mirror: %s", reason)
-	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
-	result.Diagnostics.RebuildReason = reason
+	if err == nil {
+		cleanUpLegacyDuckDBSyncState(local)
+	}
 	return result, err
+}
+
+// legacyDuckDBSyncStateKeyPrefix matches the local pg_sync_state keys the
+// pre-schema-v3 DuckDB push design used for its watermark, boundary, and
+// backfill bookkeeping (duckdb_last_push_at, duckdb_last_push_boundary_state,
+// duckdb_transcript_revision_backfill_v1, and their ":<scope>" scoped
+// variants). Schema v3 tracks all of that in the mirror's own sync_metadata
+// table instead (see ProbeMirror), so nothing in this package or elsewhere
+// reads these keys any more; they are cleared opportunistically after every
+// successful push so upgraded archives don't carry dead rows forever.
+const legacyDuckDBSyncStateKeyPrefix = "duckdb_"
+
+// cleanUpLegacyDuckDBSyncState removes leftover pre-schema-v3 pg_sync_state
+// rows. Best-effort: a failure here does not affect the push that just
+// succeeded, so it is only logged, not returned as an error.
+func cleanUpLegacyDuckDBSyncState(local *db.DB) {
+	if err := local.DeleteSyncStateByPrefix(legacyDuckDBSyncStateKeyPrefix); err != nil {
+		log.Printf("duckdbsync: cleaning up legacy sync state: %v", err)
+	}
 }
 
 // incrementalPush applies a bounded session-replace update against an
@@ -436,20 +463,6 @@ func (s *Sync) withDuckTx(
 }
 
 const duckSessionPushBatchSize = 100
-
-func (s *Sync) pushSessionBatch(
-	ctx context.Context,
-	sessions []db.Session,
-	offset int,
-	total int,
-	result *PushResult,
-	pushed *[]db.Session,
-	onProgress func(PushProgress),
-) error {
-	return s.pushSessionBatchForMode(
-		ctx, sessions, offset, total, result, pushed, onProgress, nil,
-	)
-}
 
 func (s *Sync) pushSessionBatchForMode(
 	ctx context.Context,

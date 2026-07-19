@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -154,4 +155,31 @@ func reportMirrorReplacementEvent(onEvent func(err error), err error) {
 	if onEvent != nil {
 		onEvent(err)
 	}
+}
+
+// SweepStaleMirrorReopenAliases removes every path.reopen-N hardlink left
+// next to path. Callers hold each alias only for the lifetime of the *sql.DB
+// connection opened on it (see openMirrorAlias/removeMirrorAlias), so any
+// alias still present is a leftover from a process that crashed or was
+// killed before it could clean up after itself; it is always safe to remove
+// unconditionally (there is no in-progress swap to race: an alias belonging
+// to a live process's *current* handle is only ever known to that process,
+// which will remove it itself on the next successful reopen or on Close).
+// This is meant to be called once, before a serve process opens its own
+// first handle on path — not from a running Store, which already sweeps its
+// own alias in Close and in the mirror-replacement swap.
+func SweepStaleMirrorReopenAliases(path string) error {
+	if path == "" {
+		return nil
+	}
+	matches, err := filepath.Glob(path + ".reopen-*")
+	if err != nil {
+		return fmt.Errorf("globbing duckdb mirror reopen aliases: %w", err)
+	}
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing stale duckdb mirror reopen alias %s: %w", m, err)
+		}
+	}
+	return nil
 }
