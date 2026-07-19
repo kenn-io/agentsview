@@ -2941,10 +2941,17 @@ func (db *DB) applySessionCoverageUpdates(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// local_modified_at is bumped so the sync_marker trigger fires and push
+	// targets (PostgreSQL and the DuckDB mirror) re-select the repaired
+	// sessions: both has_* columns are mirrored, but neither is a
+	// sync_marker signal, so this one-time repair would otherwise leave
+	// already-pushed rows stale until an unrelated change re-selected them
+	// (see updateSessionSignalsTx for the same pattern).
 	stmt, err := tx.Prepare(
 		`UPDATE sessions
 		 SET has_total_output_tokens = ?,
-		     has_peak_context_tokens = ?
+		     has_peak_context_tokens = ?,
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ?`,
 	)
 	if err != nil {

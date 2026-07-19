@@ -90,6 +90,122 @@ func TestReplaceSessionUsageEventsAdvancesSyncMarker(t *testing.T) {
 		"clearing usage events must advance sync_marker")
 }
 
+// TestLinkSubagentSessionsAdvancesSyncMarker pins the push-visibility
+// contract for subagent linking: LinkSubagentSessions writes
+// parent_session_id and relationship_type — both mirrored columns, neither
+// a sync_marker signal — so it must bump local_modified_at, or linking an
+// older session after a push target's cutoff would never re-push it
+// (PostgreSQL and the DuckDB mirror alike).
+func TestLinkSubagentSessionsAdvancesSyncMarker(t *testing.T) {
+	database := testDB(t)
+	ctx := context.Background()
+
+	backdate := func(id string) {
+		t.Helper()
+		_, err := database.getWriter().ExecContext(ctx,
+			`UPDATE sessions SET created_at = '2026-07-01T10:00:00.000Z',
+				local_modified_at = '2026-07-01T10:00:00.000Z'
+			 WHERE id = ?`, id)
+		require.NoError(t, err)
+	}
+	readMarker := func(id string) string {
+		t.Helper()
+		var marker string
+		require.NoError(t, database.getReader().QueryRowContext(ctx,
+			`SELECT sync_marker FROM sessions WHERE id = ?`, id).Scan(&marker))
+		return marker
+	}
+
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "sm-parent", Project: "p", Machine: "m", Agent: "claude-code"}))
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "sm-child", Project: "p", Machine: "m", Agent: "claude-code"}))
+	insertMessages(t, database, Message{
+		SessionID:     "sm-parent",
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "[Task: run subagent]",
+		ContentLength: 20,
+		HasToolUse:    true,
+		ToolCalls: []ToolCall{{
+			SessionID:         "sm-parent",
+			ToolName:          "Task",
+			Category:          "Task",
+			ToolUseID:         "toolu_link1",
+			SubagentSessionID: "sm-child",
+		}},
+	})
+	backdate("sm-child")
+	require.Equal(t, "2026-07-01T10:00:00.000Z", readMarker("sm-child"))
+
+	require.NoError(t, database.LinkSubagentSessions())
+
+	var parentID, relationship string
+	require.NoError(t, database.getReader().QueryRowContext(ctx,
+		`SELECT parent_session_id, relationship_type
+		 FROM sessions WHERE id = ?`, "sm-child").
+		Scan(&parentID, &relationship))
+	require.Equal(t, "sm-parent", parentID)
+	require.Equal(t, "subagent", relationship)
+	assert.Greater(t, readMarker("sm-child"), "2026-07-01T10:00:00.000Z",
+		"linking a subagent session must advance its sync_marker")
+}
+
+// TestSetToolCallSubagentSessionAdvancesSyncMarker pins the same contract
+// for the single-link write path: the linkage lands in mirrored data
+// (tool_calls.subagent_session_id and transcript_revision) without
+// touching a sync_marker signal, so an actual change must bump
+// local_modified_at, while a no-op call must not.
+func TestSetToolCallSubagentSessionAdvancesSyncMarker(t *testing.T) {
+	database := testDB(t)
+	ctx := context.Background()
+
+	backdate := func(id string) {
+		t.Helper()
+		_, err := database.getWriter().ExecContext(ctx,
+			`UPDATE sessions SET created_at = '2026-07-01T10:00:00.000Z',
+				local_modified_at = '2026-07-01T10:00:00.000Z'
+			 WHERE id = ?`, id)
+		require.NoError(t, err)
+	}
+	readMarker := func(id string) string {
+		t.Helper()
+		var marker string
+		require.NoError(t, database.getReader().QueryRowContext(ctx,
+			`SELECT sync_marker FROM sessions WHERE id = ?`, id).Scan(&marker))
+		return marker
+	}
+
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "sm-link", Project: "p", Machine: "m", Agent: "claude-code"}))
+	insertMessages(t, database, Message{
+		SessionID:     "sm-link",
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "[Task: run subagent]",
+		ContentLength: 20,
+		HasToolUse:    true,
+		ToolCalls: []ToolCall{{
+			SessionID: "sm-link",
+			ToolName:  "Task",
+			Category:  "Task",
+			ToolUseID: "toolu_sm1",
+		}},
+	})
+	backdate("sm-link")
+
+	require.NoError(t, database.SetToolCallSubagentSession(
+		"sm-link", "toolu_sm1", "sm-linked-child"))
+	assert.Greater(t, readMarker("sm-link"), "2026-07-01T10:00:00.000Z",
+		"a new subagent linkage must advance sync_marker")
+
+	backdate("sm-link")
+	require.NoError(t, database.SetToolCallSubagentSession(
+		"sm-link", "toolu_sm1", "sm-linked-child"))
+	assert.Equal(t, "2026-07-01T10:00:00.000Z", readMarker("sm-link"),
+		"an unchanged linkage must not advance sync_marker")
+}
+
 func TestListSessionsForMirrorWindowInclusiveLowerBoundUnboundedAbove(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()

@@ -5835,6 +5835,17 @@ func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
 		false, false,
 	)
 	requireNoError(t, err, "insert message")
+	// Backdate the marker signals so the repair's sync_marker advancement
+	// is observable: has_total_output_tokens/has_peak_context_tokens are
+	// mirrored by the push targets but are not sync_marker signals, so the
+	// repair must bump local_modified_at for the repaired rows to re-enter
+	// the incremental push window.
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET created_at = '2026-07-01T10:00:00.000Z',
+			local_modified_at = '2026-07-01T10:00:00.000Z'
+		 WHERE id = 'current'`,
+	)
+	requireNoError(t, err, "backdate session")
 	_, err = d.getWriter().Exec(
 		`DELETE FROM stats WHERE key = ?`,
 		tokenCoverageRepairStatsKey,
@@ -5862,6 +5873,12 @@ func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
 		"HasContextTokens = false, want true")
 	assert.True(t, msgs[0].HasOutputTokens,
 		"HasOutputTokens = false, want true")
+	var marker string
+	requireNoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT sync_marker FROM sessions WHERE id = 'current'`).Scan(&marker),
+		"read sync_marker after repair")
+	assert.Greater(t, marker, "2026-07-01T10:00:00.000Z",
+		"the coverage repair must advance sync_marker so push targets re-select the row")
 	_, err = d.getWriter().Exec(
 		`UPDATE sessions
 		 SET has_total_output_tokens = 0,

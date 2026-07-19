@@ -2156,6 +2156,22 @@ func (db *DB) SetToolCallSubagentSession(
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+		// Bump local_modified_at so the sync_marker trigger fires and push
+		// targets re-select the session: the linkage lands in mirrored
+		// data (tool_calls.subagent_session_id and transcript_revision)
+		// but touches no sync_marker signal on its own (see
+		// LinkSubagentSessions for the same pattern).
+		if _, err := tx.Exec(
+			`UPDATE sessions
+			    SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			  WHERE id = ?`,
+			sessionID,
+		); err != nil {
+			return fmt.Errorf(
+				"bumping local_modified_at for %s after subagent link: %w",
+				sessionID, err,
+			)
+		}
 	}
 	return tx.Commit()
 }

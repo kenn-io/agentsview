@@ -543,6 +543,76 @@ func TestPushRebuildsOverLiveMirrorWithMarker(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+// TestPushIncrementalMirrorsSubagentLinkBackfill is the FINDING 4
+// regression: LinkSubagentSessions rewrites a session's parent_session_id
+// and relationship_type without any session file changing, so unless it
+// bumps a sync_marker signal the linked session never re-enters the
+// incremental window and the mirror keeps the stale relationship until the
+// next full rebuild.
+func TestPushIncrementalMirrorsSubagentLinkBackfill(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ts := "2026-02-01T00:01:00.000Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: syncSession("parent-1", "alpha", "parent", ts, 2),
+			Messages: []db.Message{
+				syncMessage("parent-1", 0, "user", "spawn a subagent", ts),
+				syncMessage("parent-1", 1, "assistant", "[Task: subagent]", ts,
+					db.ToolCall{
+						SessionID: "parent-1",
+						ToolName:  "Task",
+						Category:  "Task",
+						ToolUseID: "toolu_child",
+					}),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: syncSession("child-1", "alpha", "child", ts, 1),
+			Messages: []db.Message{
+				syncMessage("child-1", 0, "user", "child work", ts),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assertMirrorSessionRelationship(t, path, "child-1", "", "root")
+
+	// The linkage is discovered later, with the session files untouched.
+	require.NoError(t, local.SetToolCallSubagentSession(
+		"parent-1", "toolu_child", "child-1"))
+	require.NoError(t, local.LinkSubagentSessions())
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"the follow-up push must be incremental")
+	assertMirrorSessionRelationship(t, path, "child-1", "parent-1", "subagent")
+}
+
+func assertMirrorSessionRelationship(
+	t *testing.T, path, sessionID, wantParent, wantRelationship string,
+) {
+	t.Helper()
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var parent sql.NullString
+	var relationship string
+	require.NoError(t, conn.QueryRow(
+		`SELECT parent_session_id, relationship_type
+		 FROM sessions WHERE id = ?`, sessionID,
+	).Scan(&parent, &relationship))
+	assert.Equal(t, wantParent, parent.String, "mirror parent_session_id")
+	assert.Equal(t, wantRelationship, relationship, "mirror relationship_type")
+}
+
 // TestPushDefersLockedRebuildForAutomaticPushes is the FINDING 3
 // regression: a watch-mode (automatic) push that hits a recognized mirror
 // held by a live DuckDB process must return a successful deferred no-op —

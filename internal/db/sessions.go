@@ -1482,6 +1482,13 @@ func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// local_modified_at is bumped so the sync_marker trigger fires and
+	// push targets (PostgreSQL and the DuckDB mirror) re-select the linked
+	// session: parent_session_id and relationship_type are mirrored
+	// columns, but neither is a sync_marker signal, so linking an older
+	// session after a mirror's cutoff would otherwise never re-push it
+	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
+	// same pattern).
 	_, err := db.getWriter().Exec(`
 		UPDATE sessions
 		SET parent_session_id = (
@@ -1490,7 +1497,8 @@ func (db *DB) LinkSubagentSessions() error {
 			WHERE tc.subagent_session_id = sessions.id
 			LIMIT 1
 		),
-		relationship_type = 'subagent'
+		relationship_type = 'subagent',
+		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE relationship_type != 'subagent'
 		AND EXISTS (
 			SELECT 1 FROM tool_calls tc
