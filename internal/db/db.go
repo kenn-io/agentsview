@@ -2085,10 +2085,7 @@ func (db *DB) migrateColumns() error {
 	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
 		return err
 	}
-	if _, err := w.Exec(syncMarkerSchemaSQL); err != nil {
-		return fmt.Errorf("creating sync_marker index and triggers: %w", err)
-	}
-	if err := backfillSyncMarkerLocked(w); err != nil {
+	if err := installSyncMarkerSchemaLocked(w); err != nil {
 		return err
 	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
@@ -2336,13 +2333,52 @@ const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', file_mtime / 1000000000.0, 'unixepoch'), '')
 ) WHERE sync_marker IS NULL`
 
-// backfillSyncMarkerLocked seeds sync_marker for sessions rows that predate
-// the column (or the trigger-maintenance introduced by this migration). Safe
-// to run on every startup: the WHERE sync_marker IS NULL clause makes it a
-// no-op once the archive is caught up.
-func backfillSyncMarkerLocked(w *writerHandle) error {
-	if _, err := w.Exec(backfillSyncMarkerSQL); err != nil {
+// installSyncMarkerSchemaLocked applies syncMarkerSchemaSQL and the
+// sync_marker backfill in ONE write transaction. The DROP/CREATE trigger
+// pairs must not be split across transactions: with a trigger absent,
+// another handle on the same archive (a CLI command racing the daemon's
+// startup, or a second concurrent Open) could update a session without
+// refreshing sync_marker, leaving a stale marker that permanently hides
+// the change from incremental mirror windows. The backfill rides in the
+// same transaction so no writer can observe triggers without markers.
+// Safe to run on every startup: the CREATE IF NOT EXISTS statements and
+// the backfill's WHERE sync_marker IS NULL clause make it a no-op once
+// the archive is caught up.
+func installSyncMarkerSchemaLocked(w *writerHandle) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("beginning sync_marker schema transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(syncMarkerSchemaSQL); err != nil {
+		return fmt.Errorf("creating sync_marker index and triggers: %w", err)
+	}
+	if _, err := tx.Exec(backfillSyncMarkerSQL); err != nil {
 		return fmt.Errorf("backfilling sync_marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing sync_marker schema: %w", err)
+	}
+	return nil
+}
+
+// execSchemaScriptLocked applies schema.sql inside one write transaction.
+// The script drops and recreates the deletion-journal and identity-journal
+// triggers to propagate trigger-body updates on upgrade; without a
+// transaction, another process's session delete could land in the window
+// where a trigger is absent, skipping the journal row that incremental
+// mirror consumers (PG tombstones, the DuckDB deletion delta) rely on.
+func execSchemaScriptLocked(w *writerHandle) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("beginning schema script transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(schemaSQL); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing schema script: %w", err)
 	}
 	return nil
 }
@@ -3270,7 +3306,7 @@ func (db *DB) init() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	if _, err := w.Exec(schemaSQL); err != nil {
+	if err := execSchemaScriptLocked(w); err != nil {
 		return err
 	}
 

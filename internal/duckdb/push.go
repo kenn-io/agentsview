@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,6 +131,15 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 	return out, nil
 }
 
+// syncCursorUsageEvents appends the cursor admin usage rows the mirror has
+// not consumed yet, tracked by a high-water id in mirror sync_metadata
+// (cursorUsageMaxIDMetadataKey). The local table is append-only with a
+// monotonic id, so each push's work is bounded by the appended batch, not
+// total history — automatic watcher pushes run this on every filesystem
+// batch. A fresh rebuild file has no metadata, so the first sync after a
+// rebuild loads the full history; if a crash lands between the insert
+// commit and the high-water record, the overlap is re-read and deduped by
+// the mirror's unique dedup_key index (ON CONFLICT DO NOTHING).
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	// Cursor admin rows are global and unattributed, so project-filtered pushes
 	// cannot sync them honestly.
@@ -137,7 +147,20 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		return nil
 	}
 
-	events, err := s.local.GetCursorUsageEvents(ctx)
+	stored, err := readMetadataKey(ctx, s.duck, cursorUsageMaxIDMetadataKey)
+	if err != nil {
+		return err
+	}
+	var sinceID int64
+	if stored != "" {
+		sinceID, err = strconv.ParseInt(stored, 10, 64)
+		if err != nil {
+			return fmt.Errorf(
+				"parsing cursor usage high-water id %q: %w", stored, err)
+		}
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx, sinceID)
 	if err != nil {
 		return fmt.Errorf("loading local cursor usage events: %w", err)
 	}
@@ -159,7 +182,17 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb cursor usage sync: %w", err)
 	}
-	return nil
+
+	maxID := sinceID
+	for _, ev := range events {
+		if ev.ID > maxID {
+			maxID = ev.ID
+		}
+	}
+	return recordMetadataKey(
+		ctx, s.duck, cursorUsageMaxIDMetadataKey,
+		strconv.FormatInt(maxID, 10),
+	)
 }
 
 // syncProjectIdentityObservations publishes project identity observations

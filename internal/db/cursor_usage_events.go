@@ -139,8 +139,13 @@ func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// GetCursorUsageEvents returns cursor usage rows with id greater than
+// sinceID, in (occurred_at, id) order. The table is append-only (no
+// updates or deletes), so its integer primary key grows monotonically and
+// sinceID acts as a high-water mark: pass 0 for the full history, or the
+// largest previously consumed ID to load only appended rows.
 func (db *DB) GetCursorUsageEvents(
-	ctx context.Context,
+	ctx context.Context, sinceID int64,
 ) ([]CursorUsageEvent, error) {
 	if !db.hasCursorUsageTable() {
 		return nil, nil
@@ -152,7 +157,8 @@ func (db *DB) GetCursorUsageEvents(
 			charged_cents, cursor_token_fee,
 			user_id, user_email, is_headless, dedup_key
 		FROM cursor_usage_events
-		ORDER BY occurred_at, id`)
+		WHERE id > ?
+		ORDER BY occurred_at, id`, sinceID)
 	if err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)
 	}

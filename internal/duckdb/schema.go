@@ -41,6 +41,16 @@ const (
 // skip (see refreshCurationIfChanged in push.go).
 const curationFingerprintMetadataKey = "agentsview_curation_fingerprint"
 
+// cursorUsageMaxIDMetadataKey stores the largest local cursor_usage_events
+// id the mirror has consumed. The local table is append-only with a
+// monotonic integer primary key, so this high-water mark lets every push
+// load only appended rows instead of the full history (see
+// syncCursorUsageEvents in push.go). Like the curation fingerprint, it is
+// read and written directly and plays no part in the rebuild-vs-incremental
+// decision; a fresh rebuild file has no metadata, so its first sync loads
+// the full history.
+const cursorUsageMaxIDMetadataKey = "agentsview_cursor_usage_max_id"
+
 // DuckDB schema notes:
 //
 //   - DuckDB stores timestamps as TIMESTAMP for mirror tables; read queries

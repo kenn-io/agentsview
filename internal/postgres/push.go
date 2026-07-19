@@ -3349,7 +3349,11 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		return nil
 	}
 
-	events, err := s.local.GetCursorUsageEvents(ctx)
+	// The PG push is explicit and on-demand, so it keeps the full-history
+	// load (sinceID 0): the remote dedup index makes re-inserts no-ops and
+	// there is no per-filesystem-event pressure to bound, unlike the DuckDB
+	// automatic push which tracks a high-water id in mirror metadata.
+	events, err := s.local.GetCursorUsageEvents(ctx, 0)
 	if err != nil {
 		return fmt.Errorf("loading local cursor usage events: %w", err)
 	}

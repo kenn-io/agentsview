@@ -505,6 +505,72 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 		"pinned_messages", "session_id = ?", "sess-2", 0)
 }
 
+// TestCursorUsageSyncBoundedByAppendedEventsNotHistory is the
+// cardinality-scaling regression for syncCursorUsageEvents: every push
+// used to reload and re-insert the full cursor usage history, so
+// automatic watcher pushes scaled with total archive history instead of
+// the appended batch. The high-water id in mirror sync_metadata must
+// limit each push to rows appended since the last one. The black-box
+// observable: a historical row deleted directly from the mirror stays
+// deleted after the next push — re-reading history would resurrect it,
+// because the dedup-key conflict target only ignores rows that are still
+// present — while a newly appended local event still arrives. Asserted at
+// a small and a twenty-times-larger history size, per the background
+// cardinality-regression rule.
+func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
+	ctx := context.Background()
+	for _, size := range []int{20, 400} {
+		t.Run(fmt.Sprintf("history_%d", size), func(t *testing.T) {
+			local, path := newPushFixture(t, 2)
+			events := make([]db.CursorUsageEvent, 0, size)
+			for i := range size {
+				events = append(events, db.CursorUsageEvent{
+					OccurredAt:  fmt.Sprintf("2026-01-01T%02d:%02d:%02dZ", i/3600, i/60%60, i%60),
+					Model:       "cursor-model",
+					Kind:        "usage",
+					InputTokens: i + 1,
+				})
+			}
+			require.NoError(t, local.InsertCursorUsageEvents(events))
+
+			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			require.NoError(t, err)
+			assertMirrorTableCount(t, path, "cursor_usage_events", size)
+
+			// Delete one historical row directly from the mirror; the
+			// connection is closed before the next Push (see
+			// assertMirrorTableCount for the never-hold-open contract).
+			conn, err := Open(path)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx,
+				`DELETE FROM cursor_usage_events WHERE input_tokens = 1`)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+
+			require.NoError(t, local.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+				OccurredAt:  "2026-02-01T00:00:00Z",
+				Model:       "cursor-model",
+				Kind:        "usage",
+				InputTokens: 999999,
+			}}))
+			appendMessage(t, local, "sess-1")
+
+			res, err := Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
+			require.NoError(t, err)
+			assert.False(t, res.Diagnostics.Full,
+				"a valid mirror must take the incremental path")
+
+			// The appended event arrived; the deleted historical row did
+			// not come back, so history was not re-read.
+			assertMirrorTableCountWhere(t, path,
+				"cursor_usage_events", "input_tokens = ?", 999999, 1)
+			assertMirrorTableCountWhere(t, path,
+				"cursor_usage_events", "input_tokens = ?", 1, 0)
+			assertMirrorTableCount(t, path, "cursor_usage_events", size)
+		})
+	}
+}
+
 // TestCurationRefreshRetriesUntilSkippedSessionIsMirrored pins the
 // written-fingerprint contract: when replaceCuration residency-skips a
 // star for an in-scope session absent from the mirror, the recorded

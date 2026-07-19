@@ -4031,7 +4031,7 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 
 	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
 
-	gotEvents, err := dstDB.GetCursorUsageEvents(ctx)
+	gotEvents, err := dstDB.GetCursorUsageEvents(ctx, 0)
 	require.NoError(t, err, "GetCursorUsageEvents")
 	require.Len(t, gotEvents, 2, "cursor usage events")
 	gotFingerprint, err := dstDB.CursorUsageEventFingerprint()
