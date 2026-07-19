@@ -543,46 +543,46 @@ func isContextOverflowDetail(body string) bool {
 			return true
 		}
 	}
-	// Output-budget validation names the parameter ("Input validation
-	// error: max_tokens exceeds the maximum allowed value") and often
-	// carries both a subject and an overflow term; unless the message also
-	// names the context length explicitly, splitting the input cannot fix
-	// it, so it is not an overflow.
-	outputBudgetParams := []string{
-		"max_tokens", "max_new_tokens", "max_completion_tokens",
+	containsAny := func(needles []string) bool {
+		return slices.ContainsFunc(needles, func(needle string) bool {
+			return strings.Contains(lower, needle)
+		})
 	}
-	if slices.ContainsFunc(outputBudgetParams, func(param string) bool {
-		return strings.Contains(lower, param)
-	}) {
-		return strings.Contains(lower, "context length") ||
-			strings.Contains(lower, "context size") ||
-			strings.Contains(lower, "context window")
-	}
-	// Length-specific input phrasings are unambiguous on their own.
-	lengthPhrases := []string{
+	hasOverflowTerm := containsAny(
+		[]string{"exceed", "too long", "too large", "maximum"},
+	)
+	// Explicit input-side length evidence wins outright — including
+	// combined-budget messages like "input tokens plus max_tokens exceed
+	// the model maximum", which splitting the input does fix. Bare "input"
+	// and bare "prompt" are deliberately not subjects: servers prefix
+	// arbitrary validation errors with "Input validation error:", and
+	// parameter names like prompt_logprobs would pair with any overflow
+	// term. Length-qualified forms are safe — "invalid input length
+	// parameter" has no overflow term.
+	if containsAny([]string{
 		"input is too long", "input too long",
 		"input is too large", "input too large",
-	}
-	if slices.ContainsFunc(lengthPhrases, func(phrase string) bool {
-		return strings.Contains(lower, phrase)
+		"prompt is too long", "prompt too long",
 	}) {
 		return true
 	}
-	// Bare "input" is deliberately not a subject: servers prefix arbitrary
-	// validation errors with "Input validation error:", which would pair
-	// with the overflow term of any out-of-range parameter. The
-	// length-qualified forms "input length" and "input tokens" are safe
-	// subjects — paired with an overflow term they describe the input's
-	// size, while "invalid input length parameter" has no overflow term.
-	subjects := []string{"context", "prompt", "input length", "input tokens"}
-	overflowTerms := []string{"exceed", "too long", "too large", "maximum"}
-	hasSubject := slices.ContainsFunc(subjects, func(subject string) bool {
-		return strings.Contains(lower, subject)
-	})
-	hasOverflowTerm := slices.ContainsFunc(overflowTerms, func(term string) bool {
-		return strings.Contains(lower, term)
-	})
-	return hasSubject && hasOverflowTerm
+	if hasOverflowTerm && containsAny([]string{
+		"input length", "input tokens", "prompt length", "prompt tokens",
+	}) {
+		return true
+	}
+	// With no input-side evidence, a message naming an output-budget
+	// parameter is a configuration error — even "max_tokens exceeds the
+	// context window" is not fixed by splitting the input.
+	if containsAny([]string{
+		"max_tokens", "max_new_tokens", "max_completion_tokens",
+	}) {
+		return false
+	}
+	// Bare "context" paired with an overflow term covers the common server
+	// phrasings: "maximum context length is ...", "exceeds the available
+	// context size".
+	return hasOverflowTerm && strings.Contains(lower, "context")
 }
 
 // SplitFloorChars is the smallest unit size worth splitting further. A unit

@@ -346,6 +346,7 @@ func TestIsContextOverflowDetail(t *testing.T) {
 		`input is too large for the model context`,
 		`input length 5000 exceeds maximum 4096`,
 		`input tokens (6000) exceed the model maximum`,
+		`input tokens plus max_tokens exceed the model maximum`,
 	}
 	for _, body := range overflow {
 		if !isContextOverflowDetail(body) {
@@ -364,6 +365,8 @@ func TestIsContextOverflowDetail(t *testing.T) {
 		`Input validation error: max_tokens exceeds the maximum allowed value`,
 		`Input validation error: temperature exceeds the maximum allowed value`,
 		`invalid input: repetition_penalty exceeds maximum`,
+		`prompt_logprobs exceeds maximum allowed value`,
+		`max_tokens (5000) exceeds the context window (4096)`,
 		`model "test-model" not found`,
 	}
 	for _, body := range notOverflow {
