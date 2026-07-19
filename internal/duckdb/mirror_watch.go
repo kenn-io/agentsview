@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -213,7 +212,11 @@ func reportMirrorReplacementEvent(onEvent func(err error), err error) {
 // interpolated into the pattern, and glob metacharacters ([, ?, *) in a
 // project or archive directory name would otherwise be interpreted as glob
 // syntax instead of literal characters, silently breaking or over-matching
-// the sweep.
+// the sweep. The suffix after the prefix must be entirely ASCII digits —
+// the exact shape openMirrorAlias generates (time.Now().UnixNano()) — so a
+// user file that merely shares the prefix (for example
+// "mirror.duckdb.reopen-backup") is never deleted (see
+// isGeneratedSweepName).
 func SweepStaleMirrorReopenAliases(path string) error {
 	if path == "" {
 		return nil
@@ -228,7 +231,8 @@ func SweepStaleMirrorReopenAliases(path string) error {
 		return fmt.Errorf("reading duckdb mirror directory %s: %w", dir, err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+		if !entry.Type().IsRegular() ||
+			!isGeneratedSweepName(entry.Name(), prefix) {
 			continue
 		}
 		m := filepath.Join(dir, entry.Name())

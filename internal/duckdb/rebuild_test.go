@@ -466,27 +466,32 @@ func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
 }
 
 // TestSweepStaleTempFilesRemovesOnlyOldFiles covers sweepStaleTempFiles'
-// age guard: a path.tmp-* file younger than staleTempFileAge is a rebuild
-// that is (or recently was) genuinely in progress and must survive, while
-// an old one is a crash leftover (rebuildMirror's own cleanup only fires
-// for its own process; a killed process never reaches it) and must be
-// removed. Files that don't match the glob at all are left alone
-// regardless of age.
+// age guard and shape guard: a path.tmp-<digits> file younger than
+// staleTempFileAge is a rebuild that is (or recently was) genuinely in
+// progress and must survive, while an old one is a crash leftover
+// (rebuildMirror's own cleanup only fires for its own process; a killed
+// process never reaches it) and must be removed. Files that don't match
+// the generated shape — os.CreateTemp expands "*" to digits only — are
+// user files and are left alone regardless of age, even when they share
+// the literal path.tmp- prefix.
 func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
+	oldTime := time.Now().Add(-2 * staleTempFileAge)
+	writeOldFile := func(name string) string {
+		t.Helper()
+		require.NoError(t, os.WriteFile(name, []byte("x"), 0o644))
+		require.NoError(t, os.Chtimes(name, oldTime, oldTime))
+		return name
+	}
 
-	freshTmp := path + ".tmp-fresh"
+	freshTmp := path + ".tmp-123456789"
 	require.NoError(t, os.WriteFile(freshTmp, []byte("x"), 0o644))
 
-	staleTmp := path + ".tmp-stale"
-	require.NoError(t, os.WriteFile(staleTmp, []byte("x"), 0o644))
-	oldTime := time.Now().Add(-2 * staleTempFileAge)
-	require.NoError(t, os.Chtimes(staleTmp, oldTime, oldTime))
-
-	unrelated := filepath.Join(dir, "unrelated.txt")
-	require.NoError(t, os.WriteFile(unrelated, []byte("x"), 0o644))
-	require.NoError(t, os.Chtimes(unrelated, oldTime, oldTime))
+	staleTmp := writeOldFile(path + ".tmp-987654321")
+	unrelated := writeOldFile(filepath.Join(dir, "unrelated.txt"))
+	userNotes := writeOldFile(path + ".tmp-notes.txt")
+	emptySuffix := writeOldFile(path + ".tmp-")
 
 	// writeMirrorMarker binds the marker to the mirror file's identity, so
 	// the mirror file itself must exist first.
@@ -499,7 +504,11 @@ func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 
 	assert.FileExists(t, freshTmp, "a fresh temp file must survive the sweep")
 	assert.NoFileExists(t, staleTmp, "a temp file older than staleTempFileAge must be removed")
-	assert.FileExists(t, unrelated, "sweep must only touch path.tmp-* files")
+	assert.FileExists(t, unrelated, "sweep must only touch path.tmp-<digits> files")
+	assert.FileExists(t, userNotes,
+		"a user file sharing the prefix but with a non-digit suffix must survive")
+	assert.FileExists(t, emptySuffix,
+		"a bare path.tmp- name (empty suffix) is not a generated temp file and must survive")
 	assert.FileExists(t, marker,
 		"the sidecar ownership marker shares the mirror path prefix but must never be swept")
 }
@@ -523,7 +532,7 @@ func TestSweepStaleTempFilesHandlesGlobMetacharactersInDirectory(t *testing.T) {
 	require.NoError(t, os.Mkdir(dir, 0o755))
 	path := filepath.Join(dir, "mirror.duckdb")
 
-	staleTmp := path + ".tmp-stale"
+	staleTmp := path + ".tmp-424242"
 	require.NoError(t, os.WriteFile(staleTmp, []byte("x"), 0o644))
 	oldTime := time.Now().Add(-2 * staleTempFileAge)
 	require.NoError(t, os.Chtimes(staleTmp, oldTime, oldTime))

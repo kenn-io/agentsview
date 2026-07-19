@@ -103,17 +103,20 @@ func createMirrorTempPath(path string) (string, error) {
 // in place), so there is no risk of corruption, only a failed push.
 const staleTempFileAge = 24 * time.Hour
 
-// sweepStaleTempFiles removes path.tmp-* rebuild temp files older than
-// staleTempFileAge. Always safe to call at the start of a push: a fresh
-// rebuild creates its own temp file after this runs, so it can never sweep
-// up a file it is about to use.
+// sweepStaleTempFiles removes path.tmp-<digits> rebuild temp files older
+// than staleTempFileAge. Always safe to call at the start of a push: a
+// fresh rebuild creates its own temp file after this runs, so it can never
+// sweep up a file it is about to use.
 //
 // This walks the parent directory with os.ReadDir and matches names by
 // literal prefix instead of filepath.Glob(path+".tmp-*"): path is
 // interpolated into the pattern, and glob metacharacters ([, ?, *) in a
 // project or archive directory name would otherwise be interpreted as glob
 // syntax instead of literal characters, silently breaking or over-matching
-// the sweep.
+// the sweep. The suffix after the prefix must be entirely ASCII digits —
+// the exact shape createMirrorTempPath's os.CreateTemp "*" expansion
+// generates — so a user file that merely shares the prefix (for example
+// "mirror.duckdb.tmp-notes.txt") is never deleted.
 func sweepStaleTempFiles(path string) error {
 	dir := filepath.Dir(path)
 	prefix := filepath.Base(path) + ".tmp-"
@@ -126,7 +129,8 @@ func sweepStaleTempFiles(path string) error {
 	}
 	cutoff := time.Now().Add(-staleTempFileAge)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+		if !entry.Type().IsRegular() ||
+			!isGeneratedSweepName(entry.Name(), prefix) {
 			continue
 		}
 		m := filepath.Join(dir, entry.Name())
@@ -145,6 +149,28 @@ func sweepStaleTempFiles(path string) error {
 		}
 	}
 	return nil
+}
+
+// isGeneratedSweepName reports whether name is prefix followed by a
+// non-empty run of ASCII digits — the only shape the stale-file sweeps
+// (sweepStaleTempFiles and SweepStaleMirrorReopenAliases) ever generate:
+// os.CreateTemp expands its "*" to decimal digits and reopen aliases append
+// time.Now().UnixNano(). Anything else next to the mirror is a user's file
+// and must survive the sweeps.
+func isGeneratedSweepName(name, prefix string) bool {
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	suffix := name[len(prefix):]
+	if suffix == "" {
+		return false
+	}
+	for i := 0; i < len(suffix); i++ {
+		if suffix[i] < '0' || suffix[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // rebuildSnapshot captures the mirror metadata state tokens that must be

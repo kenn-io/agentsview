@@ -338,14 +338,24 @@ func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
 	otherPath := filepath.Join(dir, "other.duckdb")
 	buildMirrorFixture(t, otherPath, "session-2")
 	require.NoError(t, os.Link(otherPath, otherPath+".reopen-1"))
+	// User files that merely share the literal ".reopen-" prefix are not
+	// generated aliases (openMirrorAlias appends UnixNano digits only) and
+	// must survive, as must a bare empty-suffix name.
+	userBackup := path + ".reopen-backup"
+	require.NoError(t, os.WriteFile(userBackup, []byte("keep me"), 0o644))
+	emptySuffix := path + ".reopen-"
+	require.NoError(t, os.WriteFile(emptySuffix, []byte("keep me"), 0o644))
 
 	require.NoError(t, SweepStaleMirrorReopenAliases(path))
 
-	assert.Equal(t, 1, countReopenAliasFiles(t, dir),
-		"sweeping path's aliases must leave other.duckdb's alias untouched")
 	assert.NoFileExists(t, path+".reopen-1")
 	assert.NoFileExists(t, path+".reopen-2")
-	assert.FileExists(t, otherPath+".reopen-1")
+	assert.FileExists(t, otherPath+".reopen-1",
+		"sweeping path's aliases must leave other.duckdb's alias untouched")
+	assert.FileExists(t, userBackup,
+		"a user file sharing the prefix but with a non-digit suffix must survive")
+	assert.FileExists(t, emptySuffix,
+		"a bare path.reopen- name (empty suffix) is not a generated alias and must survive")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 	assert.FileExists(t, MirrorMarkerPath(path),
 		"the sidecar ownership marker shares the mirror path prefix but must never be swept")
