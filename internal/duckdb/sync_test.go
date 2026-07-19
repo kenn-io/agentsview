@@ -376,16 +376,21 @@ func TestPushHealsMissingMirrorMarkerOnIncrementalPush(t *testing.T) {
 // in-process-reproducible stand-in for a cross-process lock conflict: both
 // probe as Uninspectable and both must fail closed, file untouched, when no
 // marker exists next to the file.
+// Byte reads bracket the live-handle window instead of overlapping it: the
+// "before" bytes are captured before Open and the "after" bytes only after
+// Close, because Windows sharing semantics reject reading a file another
+// DuckDB handle has open (POSIX allows it). The push under test runs while
+// the handle is held either way, which is the scenario being pinned.
 func TestPushFailsClosedWhenLiveMirrorHasNoMarker(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(MirrorMarkerPath(path)))
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
 
 	held, err := Open(path)
-	require.NoError(t, err)
-	before, err := os.ReadFile(path)
 	require.NoError(t, err)
 
 	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
@@ -393,12 +398,123 @@ func TestPushFailsClosedWhenLiveMirrorHasNoMarker(t *testing.T) {
 	assert.Contains(t, err.Error(), "no agentsview marker")
 	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
 
+	require.NoError(t, held.Close())
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, before, after,
 		"a refused push must leave the existing file byte-identical")
-	require.NoError(t, held.Close())
 	assertMirrorMessageCount(t, path, "sess-1", 2)
+}
+
+// TestPushFailsClosedWhenLiveMirrorMarkerIdentityMismatches closes the
+// stale-marker residual edge of FINDING 1: after the mirror is manually
+// replaced by an unrelated DuckDB database that a live process then holds
+// open, the leftover marker still sits next to the path but records the
+// OLD mirror's filesystem identity. The push must fail closed with the
+// identity-mismatch error and leave the foreign file byte-identical, not
+// atomically overwrite it. Byte reads bracket the live-handle window for
+// Windows sharing semantics (see TestPushFailsClosedWhenLiveMirrorHasNoMarker).
+func TestPushFailsClosedWhenLiveMirrorMarkerIdentityMismatches(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.FileExists(t, MirrorMarkerPath(path))
+
+	// Manually swap a foreign DuckDB database into the exact mirror path.
+	// It is created next to the still-live mirror, so the two files have
+	// distinct filesystem identities even on inode-recycling filesystems.
+	foreignPath := filepath.Join(filepath.Dir(path), "foreign.duckdb")
+	foreign, err := Open(foreignPath)
+	require.NoError(t, err)
+	_, err = foreign.Exec(`CREATE TABLE unrelated (x INTEGER)`)
+	require.NoError(t, err)
+	require.NoError(t, foreign.Close())
+	require.NoError(t, os.Rename(foreignPath, path))
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	held, err := Open(path)
+	require.NoError(t, err)
+
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not the mirror this marker")
+	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
+
+	require.NoError(t, held.Close())
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, after,
+		"a refused push must leave the foreign file byte-identical")
+}
+
+// TestPushRebuildRebindsMarkerToSwappedFile pins the marker's identity
+// binding across a rebuild: the swap renames a brand-new file over the
+// mirror path, so the recorded identity from the previous push no longer
+// describes the file at the path, and the freshly written marker must
+// record the post-swap file's identity instead.
+func TestPushRebuildRebindsMarkerToSwappedFile(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	first := readMarkerIdentity(t, path)
+
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, true, nil)
+	require.NoError(t, err)
+
+	second := readMarkerIdentity(t, path)
+	current, err := fileIdentityForPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, current, second,
+		"the marker must record the post-swap file's identity")
+	assert.NotEqual(t, first, second,
+		"a rebuild swaps in a new file, so the recorded identity must change")
+}
+
+// TestPushRewritesStaleMarkerIdentityOnIncrementalPush pins the
+// self-healing side of the identity binding: a successful unlocked push
+// proves the file at the path is the mirror it just wrote, so a marker
+// whose recorded identity disagrees (or records none) is rewritten to
+// match instead of being left to fail the next locked probe.
+func TestPushRewritesStaleMarkerIdentityOnIncrementalPush(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	stale := readMarker(t, path)
+	stale.FileIdentity = fileIdentity{A: 1, B: 2, C: 3}
+	data, err := json.Marshal(stale)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(MirrorMarkerPath(path), data, 0o644))
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+
+	current, err := fileIdentityForPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, current, readMarkerIdentity(t, path),
+		"an unlocked push must rewrite a marker whose identity went stale")
+}
+
+func readMarker(t *testing.T, path string) mirrorMarkerContent {
+	t.Helper()
+	data, err := os.ReadFile(MirrorMarkerPath(path))
+	require.NoError(t, err)
+	var content mirrorMarkerContent
+	require.NoError(t, json.Unmarshal(data, &content))
+	return content
+}
+
+func readMarkerIdentity(t *testing.T, path string) fileIdentity {
+	t.Helper()
+	identity := readMarker(t, path).FileIdentity
+	require.False(t, identity.isZero(),
+		"every push-written marker must record a file identity")
+	return identity
 }
 
 // TestPushRebuildsOverLiveMirrorWithMarker is the recognized side of the

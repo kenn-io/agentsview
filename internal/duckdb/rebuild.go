@@ -52,8 +52,10 @@ func rebuildMirror(
 	}
 	success = true
 	// The marker is written after the swap so it can never exist without a
-	// real mirror at path. A failure here is reported as a push error (see
-	// writeMirrorMarker), but the freshly swapped mirror itself is intact.
+	// real mirror at path, and so it records the filesystem identity of
+	// the final, swapped-in file (writeMirrorMarker stats path itself). A
+	// failure here is reported as a push error (see writeMirrorMarker),
+	// but the freshly swapped mirror itself is intact.
 	if err := writeMirrorMarker(path, machine); err != nil {
 		return result, err
 	}

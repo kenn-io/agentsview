@@ -488,6 +488,9 @@ func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(unrelated, []byte("x"), 0o644))
 	require.NoError(t, os.Chtimes(unrelated, oldTime, oldTime))
 
+	// writeMirrorMarker binds the marker to the mirror file's identity, so
+	// the mirror file itself must exist first.
+	require.NoError(t, os.WriteFile(path, []byte("mirror"), 0o644))
 	marker := MirrorMarkerPath(path)
 	require.NoError(t, writeMirrorMarker(path, "m"))
 	require.NoError(t, os.Chtimes(marker, oldTime, oldTime))

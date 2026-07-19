@@ -498,6 +498,7 @@ func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, conn.Close()) })
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			require.NoError(t, os.WriteFile(path, []byte("locked"), 0o644))
 			if markerPresent {
 				require.NoError(t, writeMirrorMarker(path, "m"))
 			}
@@ -516,14 +517,17 @@ func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
 	}
 }
 
-// TestRecognizeUninspectableMirrorRequiresMarker pins the marker gate for
-// files a live DuckDB process holds: a lock conflict or same-process
-// double-open rejection proves a real DuckDB database sits at the path, but
-// recognition (which authorizes a rebuild to overwrite the file) requires
-// the sidecar marker too — a misconfigured path at a FOREIGN served
-// database has no marker and must not be recognized. Errors that do not
-// indicate a live DuckDB process never recognize, marker or not.
-func TestRecognizeUninspectableMirrorRequiresMarker(t *testing.T) {
+// TestRecognizeUninspectableMirrorRequiresVerifiedMarker pins the marker
+// gate for files a live DuckDB process holds: a lock conflict or
+// same-process double-open rejection proves a real DuckDB database sits at
+// the path, but recognition (which authorizes a rebuild to overwrite the
+// file) requires the sidecar marker too, verified against the file's
+// current filesystem identity — a misconfigured path at a FOREIGN served
+// database has no marker, and a stale marker left behind after the mirror
+// was manually replaced by a different file records the OLD file's
+// identity; neither may recognize. Errors that do not indicate a live
+// DuckDB process never recognize, marker or not.
+func TestRecognizeUninspectableMirrorRequiresVerifiedMarker(t *testing.T) {
 	lockErr := errors.New(
 		`IO Error: Could not set lock on file "/tmp/agentsview.duckdb": ` +
 			"Conflicting lock is held in process 12345",
@@ -533,26 +537,67 @@ func TestRecognizeUninspectableMirrorRequiresMarker(t *testing.T) {
 			"configuration than existing connections",
 	)
 	otherErr := errors.New("file is not a valid DuckDB database")
+
+	fileOnly := func(t *testing.T, path string) {
+		require.NoError(t, os.WriteFile(path, []byte("locked"), 0o644))
+	}
+	verifiedMarker := func(t *testing.T, path string) {
+		fileOnly(t, path)
+		require.NoError(t, writeMirrorMarker(path, "m"))
+	}
+	// Replace path with a DIFFERENT file after the marker is written. The
+	// replacement is created while the original still exists, so the two
+	// files are guaranteed distinct filesystem identities even on
+	// filesystems that recycle inode numbers quickly.
+	staleMarker := func(t *testing.T, path string) {
+		verifiedMarker(t, path)
+		other := path + ".other"
+		require.NoError(t, os.WriteFile(other, []byte("foreign"), 0o644))
+		require.NoError(t, os.Rename(other, path))
+	}
+	// A marker written by a pre-identity build records no file identity
+	// and is deliberately unverified (no backward-compatibility shim; this
+	// branch is unreleased).
+	identityLessMarker := func(t *testing.T, path string) {
+		fileOnly(t, path)
+		require.NoError(t, os.WriteFile(
+			MirrorMarkerPath(path),
+			[]byte(`{"schema_version":3,"machine":"m","written_at":"2026-07-18T00:00:00Z"}`+"\n"),
+			0o644,
+		))
+	}
+	unparseableMarker := func(t *testing.T, path string) {
+		fileOnly(t, path)
+		require.NoError(t, os.WriteFile(
+			MirrorMarkerPath(path), []byte("not json"), 0o644,
+		))
+	}
+
 	tests := []struct {
-		name   string
-		err    error
-		marker bool
-		want   bool
+		name           string
+		err            error
+		setup          func(t *testing.T, path string)
+		wantRecognized bool
+		wantMismatch   bool
 	}{
-		{"lock conflict without marker", lockErr, false, false},
-		{"lock conflict with marker", lockErr, true, true},
-		{"same-process open without marker", sameProcessErr, false, false},
-		{"same-process open with marker", sameProcessErr, true, true},
-		{"unrelated error with marker", otherErr, true, false},
-		{"unrelated error without marker", otherErr, false, false},
+		{"lock conflict without marker", lockErr, fileOnly, false, false},
+		{"lock conflict with verified marker", lockErr, verifiedMarker, true, false},
+		{"lock conflict with stale marker", lockErr, staleMarker, false, true},
+		{"lock conflict with identity-less marker", lockErr, identityLessMarker, false, false},
+		{"lock conflict with unparseable marker", lockErr, unparseableMarker, false, false},
+		{"same-process open without marker", sameProcessErr, fileOnly, false, false},
+		{"same-process open with verified marker", sameProcessErr, verifiedMarker, true, false},
+		{"same-process open with stale marker", sameProcessErr, staleMarker, false, true},
+		{"unrelated error with verified marker", otherErr, verifiedMarker, false, false},
+		{"unrelated error without marker", otherErr, fileOnly, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			if tt.marker {
-				require.NoError(t, writeMirrorMarker(path, "m"))
-			}
-			assert.Equal(t, tt.want, recognizeUninspectableMirror(path, tt.err))
+			tt.setup(t, path)
+			recognized, mismatch := recognizeUninspectableMirror(path, tt.err)
+			assert.Equal(t, tt.wantRecognized, recognized, "recognized")
+			assert.Equal(t, tt.wantMismatch, mismatch, "identity mismatch")
 		})
 	}
 }
@@ -575,6 +620,29 @@ func TestEnsureReplaceableMirrorLockedFileWithoutMarkerFailsActionably(t *testin
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no agentsview marker")
+	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
+	assert.Contains(t, err.Error(), "stop the serving process")
+}
+
+// TestEnsureReplaceableMirrorMarkerIdentityMismatchFailsActionably pins the
+// fail-closed error for a locked file whose sidecar marker was written for
+// a DIFFERENT file (the mirror was manually replaced): the error must say
+// the file is not the marker's mirror rather than claiming the marker is
+// missing.
+func TestEnsureReplaceableMirrorMarkerIdentityMismatchFailsActionably(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	probe := MirrorProbe{
+		FileExists:             true,
+		ShapeIssue:             "Could not set lock on file",
+		LockConflict:           true,
+		Uninspectable:          true,
+		MarkerIdentityMismatch: true,
+	}
+
+	err := ensureReplaceableMirror(path, probe)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not the mirror this marker")
 	assert.Contains(t, err.Error(), MirrorMarkerPath(path))
 	assert.Contains(t, err.Error(), "stop the serving process")
 }

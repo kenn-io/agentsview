@@ -213,15 +213,28 @@ func Push(
 // mirror (see MirrorProbe.RecognizedMirror). A missing file is always fine
 // (fresh create). A file held by a live DuckDB process (a lock conflict or
 // same-process double-open — the normal rebuild-under-serve case) is
-// recognized only via the sidecar marker, since the file itself cannot be
-// inspected. Anything else — a SQLite database, an arbitrary file, a
-// foreign DuckDB database without the agentsview sentinel — must never be
-// replaced: the mirror path is caller-supplied configuration, and pointing
-// it at a real data file (for example the primary sessions.db) must fail
-// instead of destroying that file.
+// recognized only via the identity-verified sidecar marker, since the file
+// itself cannot be inspected. Anything else — a SQLite database, an
+// arbitrary file, a foreign DuckDB database without the agentsview
+// sentinel, a locked file whose marker was written for a different file —
+// must never be replaced: the mirror path is caller-supplied configuration,
+// and pointing it at a real data file (for example the primary sessions.db)
+// must fail instead of destroying that file.
 func ensureReplaceableMirror(path string, probe MirrorProbe) error {
 	if !probe.FileExists || probe.RecognizedMirror {
 		return nil
+	}
+	if probe.MarkerIdentityMismatch {
+		return fmt.Errorf(
+			"refusing to replace %s: the file at %s is not the mirror this "+
+				"marker (%s) was written for — the mirror was replaced by a "+
+				"different file that a DuckDB process now holds open; if the "+
+				"file really is your mirror, stop the serving process and "+
+				"re-run the push (an unlocked push re-verifies and rewrites "+
+				"the marker); if it is not your mirror, point [duckdb].path "+
+				"at a different file",
+			path, path, MirrorMarkerPath(path),
+		)
 	}
 	if probe.Uninspectable {
 		return fmt.Errorf(
@@ -279,9 +292,11 @@ func incrementalPush(
 		return result, err
 	}
 	// Mirrors created before the sidecar marker existed heal here on their
-	// next unlocked push: without the marker, a later push while a serve
-	// process holds the file would fail closed (see
-	// recognizeUninspectableMirror).
+	// next unlocked push: without a marker verified against the file's
+	// identity, a later push while a serve process holds the file would
+	// fail closed (see recognizeUninspectableMirror). ensureMirrorMarker
+	// also rewrites a marker whose recorded identity no longer matches the
+	// file this push just updated, keeping the binding self-correcting.
 	if err := ensureMirrorMarker(path, machine); err != nil {
 		return result, err
 	}
