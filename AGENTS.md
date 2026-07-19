@@ -112,6 +112,12 @@ Instructions for autonomous coding agents working in this repository.
 - Never overwrite an existing file that is not positively identified as an
   agentsview DuckDB mirror; unrecognized destinations fail closed.
 
+## Provider Format Provenance
+
+When adding a provider or changing a provider's on-disk format or usage/cost
+accounting, consult `docs/internal/session-format-sources.md` and update its
+evidence entry in the same change.
+
 ## Localization
 
 - Keep frontend message catalogs synchronized. When adding, removing, or
