@@ -2280,11 +2280,17 @@ func (db *DB) migrateColumns() error {
 // pre-existing sessions table, and a trigger body referencing a column that
 // doesn't exist yet fails to create. Running it here, right after the
 // column migration, guarantees the column is present first.
+//
+// The unconditional DROP followed by CREATE IF NOT EXISTS mirrors the
+// project-identity journal triggers in schema.sql: the DROP propagates
+// trigger-body updates on the next Open, while IF NOT EXISTS keeps two
+// concurrent Opens from colliding when both pass the DROP before either
+// CREATE runs (see TestMigrationRace).
 const syncMarkerSchemaSQL = `
 CREATE INDEX IF NOT EXISTS idx_sessions_sync_marker ON sessions(sync_marker);
 
 DROP TRIGGER IF EXISTS trg_sessions_sync_marker_insert;
-CREATE TRIGGER trg_sessions_sync_marker_insert
+CREATE TRIGGER IF NOT EXISTS trg_sessions_sync_marker_insert
 AFTER INSERT ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
@@ -2297,7 +2303,7 @@ BEGIN
 END;
 
 DROP TRIGGER IF EXISTS trg_sessions_sync_marker_update;
-CREATE TRIGGER trg_sessions_sync_marker_update
+CREATE TRIGGER IF NOT EXISTS trg_sessions_sync_marker_update
 AFTER UPDATE OF created_at, local_modified_at, ended_at, started_at, file_mtime ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(

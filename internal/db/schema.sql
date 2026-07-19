@@ -770,7 +770,7 @@ CREATE INDEX IF NOT EXISTS idx_session_deletion_changes_revision
     ON session_deletion_changes(revision);
 
 DROP TRIGGER IF EXISTS trg_sessions_deletion_journal_delete;
-CREATE TRIGGER trg_sessions_deletion_journal_delete
+CREATE TRIGGER IF NOT EXISTS trg_sessions_deletion_journal_delete
 AFTER DELETE ON sessions
 BEGIN
     INSERT INTO archive_metadata (key, value)
@@ -787,7 +787,7 @@ BEGIN
 END;
 
 DROP TRIGGER IF EXISTS trg_sessions_deletion_journal_insert;
-CREATE TRIGGER trg_sessions_deletion_journal_insert
+CREATE TRIGGER IF NOT EXISTS trg_sessions_deletion_journal_insert
 AFTER INSERT ON sessions
 WHEN EXISTS (SELECT 1 FROM session_deletion_changes WHERE session_id = NEW.id)
 BEGIN
