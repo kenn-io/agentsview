@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -65,6 +66,10 @@ type RecallExtractServerConfig struct {
 	// Timeout is a parseable duration string applied to each model call.
 	// Distillation calls on local models are slow; default "120s".
 	Timeout string `toml:"timeout" json:"timeout"`
+	// AllowHTTP opts into plaintext HTTP to a non-loopback host.
+	// Extraction sends transcript content to the endpoint; without this
+	// explicit opt-in, non-loopback endpoints must use HTTPS.
+	AllowHTTP bool `toml:"allow_http" json:"allow_http,omitempty"`
 }
 
 // RecallExtractPromptsConfig selects the prompt profile and optional
@@ -199,12 +204,46 @@ func (s RecallExtractServerConfig) validate(name string) error {
 			"[recall.extract.servers.%s] endpoint %q must be an http(s) URL",
 			name, s.Endpoint)
 	}
+	if err := ValidateExtractTransport(u, s.AllowHTTP); err != nil {
+		return fmt.Errorf("[recall.extract.servers.%s] %w", name, err)
+	}
 	if _, err := time.ParseDuration(s.Timeout); err != nil {
 		return fmt.Errorf(
 			"[recall.extract.servers.%s] invalid timeout %q: %w",
 			name, s.Timeout, err)
 	}
 	return nil
+}
+
+// ValidateExtractTransport enforces the extraction transport privacy rule
+// shared by config validation and the model client's redirect policy:
+// transcript content only travels in plaintext to loopback hosts, unless
+// allow_http explicitly opts a server in. Applying the same rule to
+// redirect targets means a compliant endpoint cannot be downgraded to a
+// non-compliant one mid-request.
+func ValidateExtractTransport(u *url.URL, allowHTTP bool) error {
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+	default:
+		return fmt.Errorf(
+			"endpoint %q must use http or https", u.String())
+	}
+	if allowHTTP {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf(
+		"endpoint %q sends transcript content over plaintext http to a "+
+			"non-loopback host; use https, or set allow_http = true to "+
+			"accept that risk explicitly", u.String())
 }
 
 // normalizedRecallExtractServers fills each named server's unset timeout

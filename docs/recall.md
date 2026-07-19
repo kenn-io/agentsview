@@ -71,6 +71,11 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
 `extra_body`).
 
+Non-loopback endpoints must use HTTPS: extraction sends transcript content to
+the endpoint, and plaintext HTTP off the machine could be intercepted. A server
+entry may set `allow_http = true` to accept that risk explicitly (for example on
+a trusted LAN). Redirects that would downgrade a compliant endpoint are refused.
+
 Sessions are only ever extracted when they are not automated, not trashed, and
 have a clean, current **full** secret scan — a session with secret findings of
 any confidence, one never scanned, or one covered only by the fast inline sync

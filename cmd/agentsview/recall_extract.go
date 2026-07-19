@@ -90,11 +90,21 @@ func resolveExtractDistillation(
 	if err != nil {
 		return dist, fmt.Errorf("parsing backstop_interval: %w", err)
 	}
+	// Redirect targets obey the same transport policy as the configured
+	// endpoint, so a compliant endpoint cannot be downgraded to
+	// non-loopback plaintext mid-request.
+	allowHTTP := server.AllowHTTP
+	httpClient := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			return config.ValidateExtractTransport(req.URL, allowHTTP)
+		},
+	}
 	return extractDistillation{
 		Client: &extract.Client{
 			BaseURL:    server.Endpoint,
 			Model:      cfg.Model,
-			HTTPClient: &http.Client{Timeout: timeout},
+			HTTPClient: httpClient,
 			Request:    request,
 		},
 		Prompts:   extract.PromptsFor(profile, overrides),

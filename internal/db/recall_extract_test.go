@@ -103,7 +103,10 @@ func TestExtractProgressLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	progress, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	progress, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressPending, progress.State)
 	assert.Equal(t, 0, progress.UnitCursor)
@@ -131,16 +134,25 @@ func TestExtractProgressUpsertResetsOnDigestChange(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 4))
 
-	same, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	same, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressDone, same.State, "same digest keeps progress")
 	assert.Equal(t, 4, same.UnitCursor)
 
-	grown, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 6)
+	grown, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-2", UnitsTotal: 6, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressPending, grown.State, "digest change resets")
 	assert.Equal(t, 0, grown.UnitCursor)
@@ -156,7 +168,10 @@ func TestExtractProgressFailureKeepsCursor(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
 
@@ -183,7 +198,10 @@ func TestExtractProgressUnknownSessionRefused(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = d.UpsertExtractProgress(ctx, "sess-missing", "fp-a", "digest-1", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-missing", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	assert.Error(t, err, "progress rows require an existing session")
 }
 
@@ -195,7 +213,10 @@ func TestAdvanceExtractCursorRejectsStaleDigest(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 6)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-2", UnitsTotal: 6, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 
 	err = d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 3)
@@ -216,7 +237,10 @@ func TestAdvanceExtractCursorIsMonotonicAndBounded(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 3))
 
@@ -239,7 +263,10 @@ func TestMarkExtractProgressFailedRejectsStaleDigest(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 6)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-2", UnitsTotal: 6, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 
 	err = d.MarkExtractProgressFailed(ctx, ExtractFailure{
@@ -270,10 +297,16 @@ func TestCopyRecallEntriesFromCarriesExtractState(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, src.ActivateExtractGeneration(ctx, "fp-a"))
-	_, err = src.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	_, err = src.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, src.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
-	_, err = src.UpsertExtractProgress(ctx, "sess-gone", "fp-a", "digest-9", 3)
+	_, err = src.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-gone", Fingerprint: "fp-a",
+		ContentDigest: "digest-9", UnitsTotal: 3, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	src.Close()
 
@@ -326,7 +359,10 @@ func TestMarkExtractProgressFailedRejectsDoneRow(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 2)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
 
@@ -355,7 +391,10 @@ func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 2)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 
 	// Every mutation below is valid regardless of the order the map yields
@@ -374,7 +413,10 @@ func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 			return d.RetireExtractGeneration(ctx, "fp-a", true)
 		},
 		"UpsertExtractProgress": func() error {
-			_, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 2)
+			_, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 			return err
 		},
 		"AdvanceExtractCursor": func() error {
@@ -423,18 +465,27 @@ func TestUpsertExtractProgressZeroUnitsCompletesImmediately(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	progress, err := d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 0)
+	progress, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 0, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressDone, progress.State,
 		"a session with no units has nothing left to extract")
 	assert.Equal(t, 0, progress.UnitCursor)
 
-	progress, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 0)
+	progress, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-2", UnitsTotal: 0, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressDone, progress.State,
 		"a digest reset to zero units must also complete immediately")
 
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-3", -1)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-3", UnitsTotal: -1, StampedAt: time.Now(),
+	})
 	require.Error(t, err, "negative unit totals must be refused")
 }
 
@@ -446,11 +497,17 @@ func TestAdvanceExtractCursorStaleAfterShrinkingReset(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 10)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 10, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 7))
 
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-2", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-2", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 
 	err = d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 8)
@@ -472,7 +529,10 @@ func TestMarkExtractProgressFailedRejectsAdvancedCursor(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
 
@@ -502,7 +562,10 @@ func TestAdvanceExtractCursorReplayKeepsFailureState(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-1", "fp-a", "digest-1", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
 	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
@@ -634,7 +697,10 @@ func TestExtractCandidatesDoneRevisitUsesContentStamp(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-done", "fp-a", "dg", 1)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-done", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-done", "fp-a", "dg", 1))
 
@@ -665,40 +731,58 @@ func TestExtractCandidatesDoneRevisitUsesContentStamp(t *testing.T) {
 			"when progress was updated later")
 }
 
-func TestUpsertExtractProgressHealsEmptyContentStamp(t *testing.T) {
+func TestUpsertExtractProgressStampsCallerCutoff(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	seedExtractCandidate(t, d, "sess-copied", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
 	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-copied", "fp-a", "dg", 1)
-	require.NoError(t, err)
-	require.NoError(t,
-		d.AdvanceExtractCursor(ctx, "sess-copied", "fp-a", "dg", 1))
 
-	// A row copied from a pre-stamp archive has an empty content stamp,
-	// which matches every future full pass. A same-digest upsert must
-	// re-stamp it — the digest was just re-derived from the live
-	// transcript — so the row settles instead of being revisited forever.
-	_, err = d.getWriter().Exec(
-		"UPDATE recall_extract_progress SET content_stamped_at = '' " +
-			"WHERE session_id = 'sess-copied'")
-	require.NoError(t, err)
+	readStamp := func() string {
+		t.Helper()
+		var stamp string
+		require.NoError(t, d.getReader().QueryRow(
+			"SELECT content_stamped_at FROM recall_extract_progress "+
+				"WHERE session_id = 'sess-1'").Scan(&stamp))
+		return stamp
+	}
 
-	progress, err := d.UpsertExtractProgress(ctx, "sess-copied", "fp-a", "dg", 1)
+	// The stamp is the caller's cutoff, captured before it read the
+	// transcript — not the row's write time. A write landing between the
+	// read and this upsert must compare as after the stamp.
+	first := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: first,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "2026-07-01T10:00:00.000Z", readStamp())
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "dg", 1))
+
+	// A revisit that re-derives the same digest advances the stamp to its
+	// own cutoff: the transcript was re-verified as of the new read, and a
+	// stale stamp would leave later metadata writes re-opening the session
+	// on every full pass forever.
+	second := first.Add(time.Hour)
+	progress, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: second,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressDone, progress.State,
 		"a same-digest upsert must not reset completed progress")
+	assert.Equal(t, "2026-07-01T11:00:00.000Z", readStamp(),
+		"a same-digest upsert must advance the stamp to the new cutoff")
 
-	var stamp string
-	require.NoError(t, d.getReader().QueryRow(
-		"SELECT content_stamped_at FROM recall_extract_progress "+
-			"WHERE session_id = 'sess-copied'").Scan(&stamp))
-	assert.NotEmpty(t, stamp,
-		"an empty content stamp must heal on a same-digest upsert")
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1,
+	})
+	assert.Error(t, err, "a zero cutoff would silently claim coverage "+
+		"through the row's write time")
 }
 
 func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
@@ -795,17 +879,29 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	_, err := d.UpsertExtractProgress(ctx, "sess-pending", "fp-a", "dg", 2)
+	_, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-pending", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-partial", "fp-a", "dg", 2)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-partial", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t,
 		d.AdvanceExtractCursor(ctx, "sess-partial", "fp-a", "dg", 1))
-	_, err = d.UpsertExtractProgress(ctx, "sess-done", "fp-a", "dg", 1)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-done", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-done", "fp-a", "dg", 1))
 	for _, id := range []string{"sess-failed-fresh", "sess-failed-stale"} {
-		_, err = d.UpsertExtractProgress(ctx, id, "fp-a", "dg", 2)
+		_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+			SessionID: id, Fingerprint: "fp-a",
+			ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+		})
 		require.NoError(t, err)
 		require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
 			SessionID: id, Fingerprint: "fp-a",
@@ -817,7 +913,10 @@ func TestExtractCandidatesRespectsProgressState(t *testing.T) {
 			"'2000-01-01T00:00:00.000Z' WHERE session_id = 'sess-failed-stale'")
 	require.NoError(t, err)
 	// Progress under another generation must not hide a session from fp-a.
-	_, err = d.UpsertExtractProgress(ctx, "sess-new", "fp-b", "dg", 1)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-new", Fingerprint: "fp-b",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-new", "fp-b", "dg", 1))
 
@@ -866,7 +965,10 @@ func TestExtractCandidatesZeroFailedCutoffSkipsFailedRows(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-failed", "fp-a", "dg", 2)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-failed", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
 		SessionID: "sess-failed", Fingerprint: "fp-a",
@@ -1008,22 +1110,37 @@ func TestExtractProgressStatsAggregatesByState(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	_, err := d.UpsertExtractProgress(ctx, "s-pending", "fp-a", "dg", 2)
+	_, err := d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s-pending", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "s-partial", "fp-a", "dg", 3)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s-partial", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 3, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "s-partial", "fp-a", "dg", 1))
-	_, err = d.UpsertExtractProgress(ctx, "s-done", "fp-a", "dg", 1)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s-done", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.AdvanceExtractCursor(ctx, "s-done", "fp-a", "dg", 1))
-	_, err = d.UpsertExtractProgress(ctx, "s-failed", "fp-a", "dg", 4)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s-failed", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 4, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
 		SessionID: "s-failed", Fingerprint: "fp-a",
 		ExpectedDigest: "dg", LastError: "boom",
 	}))
 	// Rows under another generation must not leak into fp-a's stats.
-	_, err = d.UpsertExtractProgress(ctx, "s-pending", "fp-b", "dg", 9)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "s-pending", Fingerprint: "fp-b",
+		ContentDigest: "dg", UnitsTotal: 9, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
@@ -1102,11 +1219,17 @@ func TestExtractCandidatesChangedSinceKeepsProgressBacklog(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, "sess-partial", "fp-a", "dg", 2)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-partial", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t,
 		d.AdvanceExtractCursor(ctx, "sess-partial", "fp-a", "dg", 1))
-	_, err = d.UpsertExtractProgress(ctx, "sess-failed", "fp-a", "dg", 2)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-failed", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
 	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
 		SessionID: "sess-failed", Fingerprint: "fp-a",
@@ -1156,4 +1279,59 @@ func TestExtractCandidatesChangedSinceAvoidsSessionScan(t *testing.T) {
 			"a watermarked scan must not walk the whole sessions table; "+
 				"plan:\n%s", strings.Join(details, "\n"))
 	}
+}
+
+func TestTranscriptMutationInvalidatesSecretScanFreshness(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	msgs := []Message{{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "hi"}}
+	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.ReplaceSessionSecretFindings("sess-1", nil, 0, "rules-v1"))
+
+	// Appending messages must revoke scan freshness in the same
+	// transaction: the incremental sync path re-scans in a separate later
+	// write, and until it lands the appended content is unscanned.
+	require.NoError(t, d.InsertMessages([]Message{
+		{SessionID: "sess-1", Ordinal: 1, Role: "assistant", Content: "token"},
+	}))
+	session, err := d.GetSession(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Empty(t, session.SecretsRulesVersion,
+		"a transcript mutation must atomically invalidate the secret scan")
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint:  "fp-a",
+		QuietCutoff:  time.Now().Add(-30 * time.Minute),
+		ScanVersions: []string{"rules-v1"},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "sess-1",
+		"a session whose scan was invalidated must not be a candidate")
+}
+
+func TestReplaceSessionContentEndsScanStamped(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	msgs := []Message{{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "hi"}}
+	require.NoError(t, d.InsertMessages(msgs))
+
+	// The full-replace path persists messages, signals, and findings in one
+	// transaction; the mid-transaction invalidation must not leak out.
+	require.NoError(t, d.ReplaceSessionContent("sess-1",
+		[]Message{
+			{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "hello"},
+		},
+		SessionSignalUpdate{SecretsRulesVersion: "rules-v2"},
+		nil,
+	))
+	session, err := d.GetSession(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "rules-v2", session.SecretsRulesVersion,
+		"an atomic content replace carries its own scan stamp")
 }

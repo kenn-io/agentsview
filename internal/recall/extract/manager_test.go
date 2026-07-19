@@ -67,10 +67,23 @@ func seedSession(t *testing.T, d *db.DB, id string, msgs []db.Message, mutate fu
 	); err != nil {
 		t.Fatalf("stamping secret scan for %s: %v", id, err)
 	}
+	settleSessionWrite()
 }
 
-// growSession appends messages and stamps the transcript write, the way a
-// sync pass would.
+// settleSessionWrite pushes subsequent pass cutoffs into a later millisecond
+// than the seed writes. Timestamps carry millisecond precision, and the
+// done-revisit gate treats a write in the same millisecond as the cutoff as
+// after it (the safe direction); without the gap a session extracted in the
+// same millisecond it was seeded reads as perpetually changed. Production
+// has the quiet period between the last write and any pass.
+func settleSessionWrite() {
+	time.Sleep(2 * time.Millisecond)
+}
+
+// growSession appends messages and settles the session the way a sync pass
+// followed by a full secret rescan would: the row's message count matches
+// the transcript again and the full-scan stamp is restored (the append
+// itself revokes it), which also bumps local_modified_at.
 func growSession(t *testing.T, d *db.DB, id string, msgs []db.Message, startOrdinal int) {
 	t.Helper()
 	for i := range msgs {
@@ -80,9 +93,20 @@ func growSession(t *testing.T, d *db.DB, id string, msgs []db.Message, startOrdi
 	if err := d.InsertMessages(msgs); err != nil {
 		t.Fatalf("growing session %s: %v", id, err)
 	}
-	if err := d.BumpLocalModifiedAt(id); err != nil {
-		t.Fatalf("bumping local_modified_at for %s: %v", id, err)
+	session, err := d.GetSessionFull(context.Background(), id)
+	if err != nil || session == nil {
+		t.Fatalf("loading grown session %s: %v", id, err)
 	}
+	session.MessageCount = startOrdinal + len(msgs)
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatalf("updating grown session %s: %v", id, err)
+	}
+	if err := d.ReplaceSessionSecretFindings(
+		id, nil, 0, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatalf("re-stamping secret scan for %s: %v", id, err)
+	}
+	settleSessionWrite()
 }
 
 func turnMessages(pairs ...string) []db.Message {
@@ -927,15 +951,17 @@ func TestManagerSnapshotReadSeesMetadataOnlyWrites(t *testing.T) {
 	}
 }
 
-func TestManagerWatermarkLimitsIncrementalDiscovery(t *testing.T) {
+func TestManagerWatermarkLimitsScanDiscovery(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 
-	// A watermark ahead of the session's last write must hide it from an
-	// incremental pass: steady-state scans only look at recent writes.
+	// A watermark ahead of the session's last write must hide it from
+	// scheduled passes — incremental and full alike: steady-state scans
+	// only look at recent writes, and the hourly backstop must not walk
+	// the whole archive.
 	m.watermark = time.Now().Add(time.Hour)
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
@@ -945,14 +971,24 @@ func TestManagerWatermarkLimitsIncrementalDiscovery(t *testing.T) {
 		t.Fatalf("result = %+v with %d calls; incremental discovery must "+
 			"respect the watermark", result, log.count())
 	}
-
-	// Full passes are the recovery path and ignore the watermark.
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
 		t.Fatalf("RunPass full: %v", err)
 	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("result = %+v with %d calls; full-pass discovery must "+
+			"respect the watermark too", result, log.count())
+	}
+
+	// Recovery is a fresh manager — daemon restart or a manual CLI run —
+	// whose zero watermark scans unbounded.
+	fresh := newManager(t, d, server.URL, nil)
+	result, err = fresh.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("fresh RunPass full: %v", err)
+	}
 	if result.Sessions != 1 {
-		t.Fatalf("result = %+v; a full pass must ignore the watermark", result)
+		t.Fatalf("result = %+v; a fresh manager must discover unbounded", result)
 	}
 }
 
@@ -987,5 +1023,85 @@ func TestManagerWatermarkAdvancesOnlyOnCompleteScanPasses(t *testing.T) {
 	if m.watermark.After(start) || m.watermark.Before(lag.Add(-time.Minute)) {
 		t.Fatalf("watermark = %v, want roughly pass start minus the quiet "+
 			"period (start %v)", m.watermark, start)
+	}
+}
+
+func TestManagerSkipsTranscriptOutOfStepWithSessionRow(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+
+	// The sync loop writes the session row before the transcript: mid-write
+	// the row can claim more (or fewer) messages than are stored. A loaded
+	// transcript that does not match the approved row state must be skipped.
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	if err != nil || session == nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	session.MessageCount = 4
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("result = %+v with %d calls; a transcript out of step with "+
+			"the session row must not reach the model", result, log.count())
+	}
+}
+
+func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, _ := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 1 || result.Activated {
+		t.Fatalf("result = %+v, want 1 session and no activation", result)
+	}
+
+	// The completed session's transcript changes: its extracted corpus is
+	// stale, so the generation is not actually covered.
+	time.Sleep(5 * time.Millisecond)
+	growSession(t, d, "sess-1",
+		turnMessages("a", "b", "later", "more")[2:], 2)
+
+	status, err := m.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.EligibleBacklog != 2 {
+		t.Fatalf("backlog = %d, want 2: the un-extracted session and the "+
+			"changed done session both need work", status.EligibleBacklog)
+	}
+
+	result, err = m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Activated {
+		t.Fatal("a generation with a stale completed session must not " +
+			"activate; its corpus does not cover the changed transcript")
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	result, err = m.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if !result.Activated {
+		t.Fatalf("result = %+v; once the changed session is re-extracted "+
+			"the generation must activate", result)
 	}
 }

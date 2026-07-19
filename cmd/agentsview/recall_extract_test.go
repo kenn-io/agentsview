@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -291,4 +292,40 @@ func TestRecallExtractRunRefusesWhileOfflineWriterHoldsLock(t *testing.T) {
 		"an extraction pass is a multi-step write and must not overlap "+
 			"another offline writer or a resync database swap")
 	assert.Contains(t, err.Error(), "lock")
+}
+
+func TestResolveExtractDistillationRejectsDowngradeRedirects(t *testing.T) {
+	cfg := config.RecallExtractConfig{
+		Enabled:          true,
+		Model:            "m",
+		MaxWindowChars:   50000,
+		QuietPeriod:      "30m",
+		BackstopInterval: "1h",
+		FailureBackoff:   "1h",
+		Servers: map[string]config.RecallExtractServerConfig{
+			"remote": {Endpoint: "https://build-box:30000/v1", Timeout: "120s"},
+		},
+	}
+	dist, err := resolveExtractDistillation(cfg)
+	require.NoError(t, err)
+	redirect := dist.Client.HTTPClient.CheckRedirect
+	require.NotNil(t, redirect,
+		"the model client must police redirect targets: a compliant "+
+			"endpoint must not be downgraded to plaintext mid-request")
+
+	insecure := &http.Request{URL: mustParseURL(t, "http://build-box:30000/v1/x")}
+	require.Error(t, redirect(insecure, nil),
+		"redirecting to non-loopback plaintext http must be refused")
+	secure := &http.Request{URL: mustParseURL(t, "https://other-box/v1/x")}
+	require.NoError(t, redirect(secure, nil))
+	loopback := &http.Request{URL: mustParseURL(t, "http://127.0.0.1:9/v1/x")}
+	require.NoError(t, redirect(loopback, nil),
+		"loopback plaintext stays within the transport policy")
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	require.NoError(t, err)
+	return u
 }

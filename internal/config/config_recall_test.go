@@ -24,8 +24,9 @@ func validRecallExtractConfig() RecallExtractConfig {
 				Timeout:  "120s",
 			},
 			"remote": {
-				Endpoint: "http://build-box:30000/v1",
-				Timeout:  "300s",
+				Endpoint:  "http://build-box:30000/v1",
+				Timeout:   "300s",
+				AllowHTTP: true,
 			},
 		},
 	}
@@ -138,6 +139,40 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 			mutate:  func(c *RecallExtractConfig) { c.MaxTokens = -1 },
 			wantErr: "max_tokens",
 		},
+		{
+			name: "plaintext http to a non-loopback host",
+			mutate: func(c *RecallExtractConfig) {
+				s := c.Servers["remote"]
+				s.AllowHTTP = false
+				c.Servers["remote"] = s
+			},
+			wantErr: "allow_http",
+		},
+		{
+			name: "https to a non-loopback host",
+			mutate: func(c *RecallExtractConfig) {
+				s := c.Servers["remote"]
+				s.Endpoint = "https://build-box:30000/v1"
+				s.AllowHTTP = false
+				c.Servers["remote"] = s
+			},
+		},
+		{
+			name: "plaintext http to localhost by name",
+			mutate: func(c *RecallExtractConfig) {
+				s := c.Servers["local"]
+				s.Endpoint = "http://localhost:30000/v1"
+				c.Servers["local"] = s
+			},
+		},
+		{
+			name: "plaintext http to IPv6 loopback",
+			mutate: func(c *RecallExtractConfig) {
+				s := c.Servers["local"]
+				s.Endpoint = "http://[::1]:30000/v1"
+				c.Servers["local"] = s
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,8 +243,9 @@ func TestRecallExtractConfigTOMLLoad(t *testing.T) {
 						"endpoint": "http://127.0.0.1:30000/v1",
 					},
 					"slow": map[string]any{
-						"endpoint": "http://build-box:30000/v1",
-						"timeout":  "600s",
+						"endpoint":   "http://build-box:30000/v1",
+						"timeout":    "600s",
+						"allow_http": true,
 					},
 				},
 				"prompts": map[string]any{
@@ -242,6 +278,8 @@ func TestRecallExtractConfigTOMLLoad(t *testing.T) {
 	assert.Equal(t, "120s", extract.Servers["local"].Timeout,
 		"unset timeout keeps default")
 	assert.Equal(t, "600s", extract.Servers["slow"].Timeout)
+	assert.True(t, extract.Servers["slow"].AllowHTTP,
+		"allow_http opts a non-loopback plaintext endpoint in")
 	assert.Equal(t, "qwen", extract.Prompts.Profile)
 	assert.Equal(t, "/etc/agentsview/prompts", extract.Prompts.Dir)
 	require.NotNil(t, extract.Request.Temperature)

@@ -286,6 +286,18 @@ func (db *DB) extractGenerationByFingerprint(
 	return gen, nil
 }
 
+// ExtractProgressUpsert describes one progress upsert. StampedAt is the
+// caller's transcript-read cutoff: the time captured *before* it began
+// reading the messages the digest describes, so a write landing during
+// derivation still compares as after the stamp and re-opens the session.
+type ExtractProgressUpsert struct {
+	SessionID     string
+	Fingerprint   string
+	ContentDigest string
+	UnitsTotal    int
+	StampedAt     time.Time
+}
+
 // UpsertExtractProgress ensures a progress row exists for the session under
 // the generation. A matching content digest keeps existing progress; a
 // changed digest resets the row to pending at cursor zero so the grown
@@ -293,10 +305,12 @@ func (db *DB) extractGenerationByFingerprint(
 // nothing to extract, so its row lands directly in done — no worker will
 // ever advance a cursor over an empty unit list.
 func (db *DB) UpsertExtractProgress(
-	ctx context.Context,
-	sessionID, fingerprint, contentDigest string,
-	unitsTotal int,
+	ctx context.Context, u ExtractProgressUpsert,
 ) (ExtractProgress, error) {
+	sessionID := u.SessionID
+	fingerprint := u.Fingerprint
+	contentDigest := u.ContentDigest
+	unitsTotal := u.UnitsTotal
 	var zero ExtractProgress
 	if err := db.requireWritable(); err != nil {
 		return zero, err
@@ -305,6 +319,13 @@ func (db *DB) UpsertExtractProgress(
 		return zero, fmt.Errorf(
 			"units total %d for session %s must not be negative",
 			unitsTotal, sessionID,
+		)
+	}
+	if u.StampedAt.IsZero() {
+		return zero, fmt.Errorf(
+			"extract progress for session %s requires the transcript-read "+
+				"cutoff: without it the stamp would silently claim coverage "+
+				"through the row's write time", sessionID,
 		)
 	}
 	db.mu.Lock()
@@ -316,19 +337,17 @@ func (db *DB) UpsertExtractProgress(
 	if unitsTotal == 0 {
 		initialState = ExtractProgressDone
 	}
-	// content_stamped_at records when the current digest's unit snapshot
-	// was derived. It moves only on insert and digest reset — never on
-	// cursor advances — so the done-revisit gate can compare transcript
-	// writes against the snapshot time rather than the last row touch. An
-	// empty stamp (a row migrated or copied from a pre-stamp archive) is
-	// re-stamped even on a matching digest: the digest was just re-derived
-	// from the live transcript, so "now" correctly binds the snapshot, and
-	// the row stops matching every future full pass.
+	// content_stamped_at always takes the caller's pre-read cutoff — on
+	// insert, on digest reset, and on a same-digest revisit alike. A
+	// revisit re-verified the transcript as of its own read, so keeping an
+	// older stamp would leave later metadata writes re-opening the session
+	// on every full pass; taking the row's write time instead would claim
+	// coverage of writes that landed after the caller read the transcript.
 	_, err := db.getWriter().ExecContext(ctx, `
 		INSERT INTO recall_extract_progress
 			(session_id, generation_fingerprint, unit_cursor, units_total,
 			 state, content_digest, content_stamped_at)
-		VALUES (?, ?, 0, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		VALUES (?, ?, 0, ?, ?, ?, ?)
 		ON CONFLICT(session_id, generation_fingerprint) DO UPDATE SET
 			unit_cursor = CASE
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
@@ -343,14 +362,11 @@ func (db *DB) UpsertExtractProgress(
 			last_error = CASE
 				WHEN recall_extract_progress.content_digest = excluded.content_digest
 				THEN recall_extract_progress.last_error ELSE '' END,
-			content_stamped_at = CASE
-				WHEN recall_extract_progress.content_digest = excluded.content_digest
-				     AND recall_extract_progress.content_stamped_at != ''
-				THEN recall_extract_progress.content_stamped_at
-				ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now') END,
+			content_stamped_at = excluded.content_stamped_at,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
 		sessionID, fingerprint, unitsTotal, initialState,
-		contentDigest, initialState,
+		contentDigest, u.StampedAt.UTC().Format(extractTimeLayout),
+		initialState,
 	)
 	if err != nil {
 		return zero, fmt.Errorf(

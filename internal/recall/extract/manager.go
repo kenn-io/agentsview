@@ -232,9 +232,13 @@ func (m *Manager) runPassLocked(
 	// watermark: an explicit or limited pass leaves eligible sessions
 	// behind that a bounded discovery would then never see. Sessions this
 	// pass skipped on a snapshot mismatch were concurrently written, so
-	// their local_modified_at already lies past the new watermark.
+	// their local_modified_at already lies past the new watermark. The
+	// advance is a ratchet — a long quiet period must not drag an already
+	// higher watermark backward.
 	if opts.SessionID == "" && opts.Limit == 0 {
-		m.watermark = passStart.Add(-m.cfg.QuietPeriod)
+		if w := passStart.Add(-m.cfg.QuietPeriod); w.After(m.watermark) {
+			m.watermark = w
+		}
 	}
 	return result, nil
 }
@@ -273,19 +277,19 @@ func (m *Manager) passSessions(
 		return []string{opts.SessionID}, nil
 	}
 	now := time.Now()
-	changedSince := m.watermark
-	if opts.Full {
-		// Full passes are the recovery path: they reconcile the whole
-		// archive, including sessions a bounded discovery missed.
-		changedSince = time.Time{}
-	}
+	// Every scheduled pass — full ones included — bounds discovery by the
+	// watermark, so background work scales with recent writes rather than
+	// the archive; a full pass differs only in revisiting changed done
+	// sessions (which the progress-state index bounds). Unbounded
+	// reconciliation is the fresh-manager path: a daemon restart or a
+	// manual CLI run starts with a zero watermark.
 	return m.cfg.DB.ExtractCandidates(ctx, db.ExtractCandidateQuery{
 		Fingerprint:       m.fingerprint,
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
 		ScanVersions:      []string{secrets.RulesVersion()},
 		IncludeDone:       opts.Full,
-		ChangedSince:      changedSince,
+		ChangedSince:      m.watermark,
 		Limit:             opts.Limit,
 	})
 }
@@ -393,6 +397,10 @@ func (m *Manager) extractSession(
 	ctx context.Context, sessionID string, staged bool,
 ) (sessionOutcome, error) {
 	var outcome sessionOutcome
+	// The transcript-read cutoff is captured before anything is read: a
+	// write landing anywhere in this function still compares as after it,
+	// so the done-revisit gate re-opens the session.
+	readCutoff := time.Now()
 	session, err := m.sessionSnapshot(ctx, sessionID)
 	if err != nil {
 		return outcome, err
@@ -419,6 +427,13 @@ func (m *Manager) extractSession(
 		return outcome, err
 	}
 	if recheck == nil || sessionSnapshotChanged(session, recheck) {
+		return outcome, nil
+	}
+	// The sync loop writes the session row before the transcript, so
+	// mid-write the row can claim more (or fewer) messages than are
+	// stored. Eligibility was judged from the row; a transcript that does
+	// not match it contains content the check never approved.
+	if len(rows) != session.MessageCount {
 		return outcome, nil
 	}
 	messages := make([]Message, 0, len(rows))
@@ -451,7 +466,13 @@ func (m *Manager) extractSession(
 		}
 	}
 	progress, err := m.cfg.DB.UpsertExtractProgress(
-		ctx, sessionID, m.fingerprint, digest, len(units),
+		ctx, db.ExtractProgressUpsert{
+			SessionID:     sessionID,
+			Fingerprint:   m.fingerprint,
+			ContentDigest: digest,
+			UnitsTotal:    len(units),
+			StampedAt:     readCutoff,
+		},
 	)
 	if err != nil {
 		return outcome, err
@@ -607,10 +628,15 @@ func (m *Manager) maybeActivate(ctx context.Context) (bool, error) {
 		// replace whatever is currently active with an empty corpus.
 		return false, nil
 	}
+	// IncludeDone: a completed session whose transcript changed since its
+	// unit snapshot is uncovered work — activating over it would promote a
+	// corpus that is already stale. Failed sessions stay excluded (zero
+	// FailedRetryCutoff): they retry later and top the corpus up.
 	backlog, err := m.cfg.DB.ExtractCandidates(ctx, db.ExtractCandidateQuery{
 		Fingerprint:  m.fingerprint,
 		QuietCutoff:  time.Now().Add(-m.cfg.QuietPeriod),
 		ScanVersions: []string{secrets.RulesVersion()},
+		IncludeDone:  true,
 		Limit:        1,
 	})
 	if err != nil {
@@ -667,6 +693,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		QuietCutoff:       now.Add(-m.cfg.QuietPeriod),
 		FailedRetryCutoff: now.Add(-m.cfg.FailureBackoff),
 		ScanVersions:      []string{secrets.RulesVersion()},
+		IncludeDone:       true,
 	})
 	if err != nil {
 		return status, err

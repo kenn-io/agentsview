@@ -61,26 +61,37 @@ model. A session is eligible only when all of the following hold:
 None of these predicates are configurable. The quiet period is a scheduling
 knob; the privacy predicates are not.
 
+Scan freshness is bound to the transcript at the storage layer: every transcript
+mutation (append, replace, diff, tool-call relink) advances
+`transcript_revision` and clears `secrets_rules_version` in the same
+transaction, so a session whose transcript changed after its last scan is
+ineligible until a rescan re-stamps it — the inline sync rescan restores only
+the definite-only version, so extraction stays excluded until the next full
+scan. The atomic replace path re-stamps inside the same transaction.
+
 The eligibility check is also bound to the transcript actually sent: the manager
-re-reads the session row after loading its messages and compares the two reads
+re-reads the session row (full column set — the standard list omits
+`local_modified_at`) after loading its messages and compares the two reads
 (message count, transcript revision, scan version, leak count, ended-at, last
-local write). Sync writes messages, scan stamps, and counts in one transaction,
-so a stable bracket means the loaded transcript is the one the check approved; a
-mismatch skips the session silently and the next pass retries against a settled
-view.
+local write), and requires the loaded message count to equal the row's — the
+sync loop writes the session row before the transcript, so mid-write the row can
+claim more or fewer messages than are stored. Any mismatch skips the session
+silently and the next pass retries against a settled view.
 
 ## Progress and resume
 
 `recall_extract_progress` records one row per (session, generation):
 `unit_cursor` counts completed units, `units_total` the derived unit count,
 `content_digest` a SHA-256 over the derived unit list, `content_stamped_at` the
-time that digest was derived (it moves only on insert and digest reset, never on
-cursor advances, so it marks the transcript snapshot the extraction covers), and
-a state machine `pending → partial → done | failed`. Mutations use optimistic
-concurrency — cursor advances and failure marks carry the digest and expected
-cursor, and a mismatch means another writer reset or took over the session; the
-caller re-reads instead of overwriting. Cursor advances are strictly monotonic
-and can never resurrect a failed or done row.
+caller's transcript-read cutoff — captured *before* the messages were read, so a
+write landing during derivation still compares as after the stamp, and taken on
+every stable upsert including same-digest revisits, so a revisit settles the
+stamp forward instead of leaving old metadata writes re-opening the session on
+every full pass — and a state machine `pending → partial → done | failed`.
+Mutations use optimistic concurrency — cursor advances and failure marks carry
+the digest and expected cursor, and a mismatch means another writer reset or
+took over the session; the caller re-reads instead of overwriting. Cursor
+advances are strictly monotonic and can never resurrect a failed or done row.
 
 A failed session waits out `failure_backoff` before the scan offers it again, so
 one poisoned transcript cannot monopolize passes. Cancellation (daemon shutdown)
@@ -132,16 +143,19 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   progress — pending, partial, retryable failed, revisitable done — are always
   offered through the progress-state index regardless of the watermark, and a
   session with no recorded local write stays discoverable. Explicit and
-  limited passes never advance the watermark: they leave eligible sessions
-  behind that a bounded discovery would then never see;
+  limited passes never advance the watermark (they leave eligible sessions
+  behind that a bounded discovery would then never see), and the advance is a
+  ratchet — it only moves forward;
 - a backstop ticker (`backstop_interval`, default 1 h) runs *full* passes, which
   additionally revisit done sessions — but only those written to since their
   unit snapshot was derived
   (`local_modified_at >= progress.content_stamped_at`; the stamp, not
   `updated_at`, because a write that lands mid-extraction predates the row's
   last touch but postdates what the model saw), so full passes do not reload the
-  whole archive. Full passes also ignore the discovery watermark — they are
-  the recovery path that reconciles anything a bounded scan missed;
+  whole archive. Full passes bound their discovery by the same watermark — the
+  hourly backstop must not walk the whole archive either. Unbounded
+  reconciliation is the fresh-manager path: a daemon restart or a manual
+  `recall extract run` starts with a zero watermark and scans everything once;
 - when the backstop is disabled, a catchup ticker (paced by the quiet period,
   never faster than once a minute) runs incremental passes instead: sessions
   become eligible only after the quiet period, long after the last sync-driven
@@ -156,10 +170,13 @@ call.
 
 A building generation auto-activates when everything currently eligible is done,
 nothing is pending or partial, and the generation has produced at least one
-entry. Failed sessions do not block activation — they retry later and top the
-corpus up. An entryless generation never activates, manually or automatically:
-activation retires the previously active generation, and replacing a working
-corpus with an empty one must not happen silently.
+entry. The backlog check counts completed sessions whose transcripts changed
+since their unit snapshot: their corpus is stale, and activating over them would
+promote a generation that does not cover what it claims. Failed sessions do not
+block activation — they retry later and top the corpus up. An entryless
+generation never activates, manually or automatically: activation retires the
+previously active generation, and replacing a working corpus with an empty one
+must not happen silently.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;
