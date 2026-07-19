@@ -5232,6 +5232,96 @@ func TestCopySessionMetadataPreservesClears(t *testing.T) {
 		sf.DeletedAt)
 }
 
+// TestCopySessionMetadataFromPreservesDeletionJournalWithRevisionGuard
+// covers both halves of the FIX2 deletion-journal durability contract in
+// one test: session_deletion_changes rows survive the resync copy
+// (gone-2, absent from dst before the copy), and highest-revision-wins
+// per session_id protects a row the destination already advanced past
+// (gone-1, whose dst revision is higher than the source's) from being
+// regressed. The same guard is exercised on the
+// session_deletion_publication_revision counter itself, copied via
+// archive_metadata: the destination's higher counter must not be lowered
+// to the source's.
+func TestCopySessionMetadataFromPreservesDeletionJournalWithRevisionGuard(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Source ("old") DB: two sessions hard-deleted, journal at revision 2.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	insertSession(t, srcDB, "gone-1", "proj")
+	requireNoError(t, srcDB.DeleteSession("gone-1"), "delete gone-1 in src")
+	insertSession(t, srcDB, "gone-2", "proj")
+	requireNoError(t, srcDB.DeleteSession("gone-2"), "delete gone-2 in src")
+	srcRevision, err := srcDB.SessionDeletionPublicationRevision(ctx)
+	requireNoError(t, err, "src revision")
+	assert.EqualValues(t, 2, srcRevision, "src revision")
+	srcDB.Close()
+
+	// Destination ("new"/resync temp) DB: gone-1 was independently
+	// deleted, undeleted (re-synced), then deleted again, landing its
+	// journal row at a revision (3) higher than the source's for the same
+	// session_id.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "gone-1", "proj")
+	requireNoError(t, dstDB.DeleteSession("gone-1"), "delete gone-1 in dst")
+	// DeleteSession permanently excludes the id, so re-inserting through
+	// the normal UpsertSession path (insertSession) would be rejected;
+	// clear the exclusion first to simulate a legitimate re-sync/undelete
+	// of gone-1 before it gets hard-deleted again below.
+	_, err = dstDB.getWriter().Exec(
+		"DELETE FROM excluded_sessions WHERE id = ?", "gone-1",
+	)
+	requireNoError(t, err, "clear gone-1 exclusion in dst")
+	insertSession(t, dstDB, "gone-1", "proj")
+	requireNoError(t, dstDB.DeleteSession("gone-1"), "re-delete gone-1 in dst")
+	dstRevisionBefore, err := dstDB.SessionDeletionPublicationRevision(ctx)
+	requireNoError(t, err, "dst revision before copy")
+	assert.EqualValues(t, 3, dstRevisionBefore, "dst revision before copy")
+
+	requireNoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
+
+	// The counter must not be lowered by the source's smaller value.
+	dstRevisionAfter, err := dstDB.SessionDeletionPublicationRevision(ctx)
+	requireNoError(t, err, "dst revision after copy")
+	assert.EqualValues(t, 3, dstRevisionAfter,
+		"max-guarded counter must not be lowered by a smaller source revision")
+
+	// gone-1: dst's higher-revision row must survive untouched.
+	var gone1Revision int64
+	var gone1Deleted bool
+	requireNoError(t, dstDB.getReader().QueryRow(
+		"SELECT revision, deleted FROM session_deletion_changes WHERE session_id = ?",
+		"gone-1",
+	).Scan(&gone1Revision, &gone1Deleted), "query gone-1 after copy")
+	assert.EqualValues(t, 3, gone1Revision,
+		"a lower-revision source row must not regress an existing tombstone")
+	assert.True(t, gone1Deleted, "gone-1 deleted")
+
+	// gone-2: absent from dst before the copy, must be copied in as-is.
+	var gone2Revision int64
+	var gone2Deleted bool
+	requireNoError(t, dstDB.getReader().QueryRow(
+		"SELECT revision, deleted FROM session_deletion_changes WHERE session_id = ?",
+		"gone-2",
+	).Scan(&gone2Revision, &gone2Deleted), "query gone-2 after copy")
+	assert.EqualValues(t, 2, gone2Revision, "gone-2 revision copied from source")
+	assert.True(t, gone2Deleted, "gone-2 deleted")
+
+	// The delta API must see both tombstones through the normal revision
+	// window, confirming the copy is usable by a subsequent DuckDB
+	// incremental push, not just present as raw rows.
+	tombstones, err := dstDB.LoadSessionDeletionDelta(ctx, 0, dstRevisionAfter, nil, nil)
+	requireNoError(t, err, "LoadSessionDeletionDelta")
+	var ids []string
+	for _, tomb := range tombstones {
+		ids = append(ids, tomb.SessionID)
+	}
+	assert.ElementsMatch(t, []string{"gone-1", "gone-2"}, ids)
+}
+
 func TestPinMessageIdempotent(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")

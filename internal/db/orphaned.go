@@ -565,7 +565,10 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE key != 'database_id'
 			ON CONFLICT(key) DO UPDATE SET
 				value = CASE
-					WHEN excluded.key = 'project_identity_publication_revision'
+					WHEN excluded.key IN (
+						'project_identity_publication_revision',
+						'session_deletion_publication_revision'
+					)
 					THEN CAST(max(
 						CAST(archive_metadata.value AS INTEGER),
 						CAST(excluded.value AS INTEGER)
@@ -575,6 +578,41 @@ func (d *DB) CopySessionMetadataFrom(
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying archive metadata: %w", err)
+		}
+	}
+
+	// Copy the session-deletion journal so a mirror push's incremental
+	// tombstone delta (see internal/duckdb Sync.applyDeletionDelta) survives
+	// a resync: the fresh DB's own journal only records deletions that
+	// happen after this resync starts, so without this copy every tombstone
+	// from before the resync would be lost and a mirror that already
+	// advanced past it would never see the session removed. Highest
+	// revision wins per session_id (the WHERE guard on DO UPDATE) so a
+	// session deleted-then-undeleted-then-deleted-again in the fresh DB
+	// during the resync window is never regressed by an older row from the
+	// quiesced source. The revision numbers themselves stay valid because
+	// the archive_metadata copy above gives the counter the same max-guard
+	// treatment, so the destination's counter is always >= every revision
+	// copied here.
+	if oldDBHasTable(ctx, tx, "session_deletion_changes") {
+		// The SELECT's "WHERE true" is required, not decorative: SQLite
+		// only recognizes "ON CONFLICT ... DO UPDATE ... WHERE ..." as an
+		// upsert clause on an INSERT...SELECT when the SELECT itself has a
+		// WHERE clause; without one the parser treats "ON CONFLICT" as
+		// invalid trailing syntax ("near DO: syntax error"), since it
+		// cannot otherwise disambiguate the upsert clause from a
+		// continuation of the SELECT.
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_deletion_changes (session_id, project, revision, deleted)
+			SELECT session_id, project, revision, deleted
+			FROM old_db.session_deletion_changes
+			WHERE true
+			ON CONFLICT(session_id) DO UPDATE SET
+				project = excluded.project,
+				revision = excluded.revision,
+				deleted = excluded.deleted
+			WHERE excluded.revision > session_deletion_changes.revision`); err != nil {
+			return fmt.Errorf("copying session deletion changes: %w", err)
 		}
 	}
 
