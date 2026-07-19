@@ -956,7 +956,9 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		}
 		// No VectorSearcher seam on the DuckDB store yet (HasSemantic always
 		// false): gate after input validation.
-		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
+		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
+			"semantic search is not supported by the DuckDB backend",
+		)
 	}
 
 	if len(f.Sources) == 0 {
