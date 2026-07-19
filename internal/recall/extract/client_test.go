@@ -17,6 +17,7 @@ type scriptedResponse struct {
 	finishReason string
 	content      string
 	errorBody    string
+	noChoices    bool
 }
 
 func newScriptedServer(
@@ -50,14 +51,18 @@ func newScriptedServer(
 				_, _ = w.Write([]byte(errorBody))
 				return
 			}
+			choices := []map[string]any{{
+				"finish_reason": resp.finishReason,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": resp.content,
+				},
+			}}
+			if resp.noChoices {
+				choices = nil
+			}
 			body := map[string]any{
-				"choices": []map[string]any{{
-					"finish_reason": resp.finishReason,
-					"message": map[string]any{
-						"role":    "assistant",
-						"content": resp.content,
-					},
-				}},
+				"choices": choices,
 				"usage": map[string]any{
 					"prompt_tokens":     7,
 					"completion_tokens": 3,
@@ -347,6 +352,8 @@ func TestIsContextOverflowDetail(t *testing.T) {
 		`input length 5000 exceeds maximum 4096`,
 		`input tokens (6000) exceed the model maximum`,
 		`input tokens plus max_tokens exceed the model maximum`,
+		`prompt is too large for this model`,
+		`prompt too large: reduce the input`,
 	}
 	for _, body := range overflow {
 		if !isContextOverflowDetail(body) {
@@ -389,6 +396,31 @@ func TestParseRetryAfter(t *testing.T) {
 		if got := parseRetryAfter(value); got != 0 {
 			t.Fatalf("parseRetryAfter(%q) = %v, want 0", value, got)
 		}
+	}
+}
+
+func TestClientChoicelessResponseAccountsUsageAcrossRetry(t *testing.T) {
+	// A choiceless 200 still reports token usage; the retry that recovers
+	// from it must not drop that cost from the accounting.
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{noChoices: true},
+		{finishReason: "stop", content: entriesJSON(t, "ok")},
+	}, &requests)
+	defer server.Close()
+
+	entries, usage, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (choiceless responses retry)",
+			len(requests))
+	}
+	if usage.PromptTokens != 14 || usage.CompletionTokens != 6 {
+		t.Fatalf("usage = %+v, want both attempts accounted (14/6)", usage)
 	}
 }
 

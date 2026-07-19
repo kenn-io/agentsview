@@ -331,7 +331,8 @@ func (c *Client) distill(
 		}
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, Usage{}, &transientError{
+		// The body parsed, so its usage is real cost even without choices.
+		return nil, parsed.Usage, &transientError{
 			err: fmt.Errorf("distill response has no choices"),
 		}
 	}
@@ -563,6 +564,7 @@ func isContextOverflowDetail(body string) bool {
 		"input is too long", "input too long",
 		"input is too large", "input too large",
 		"prompt is too long", "prompt too long",
+		"prompt is too large", "prompt too large",
 	}) {
 		return true
 	}
