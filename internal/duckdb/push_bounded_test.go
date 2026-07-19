@@ -266,6 +266,95 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 	}
 }
 
+// TestCurationRefreshSkipsWhenLocalCurationStateUnchanged is the FIX3
+// contract: an incremental push whose local in-scope curation state
+// (starred ids, pinned message id/note pairs) has not changed since the
+// last refresh skips replaceCuration's O(mirror) delete+reinsert entirely
+// (Diagnostics.CurationRefreshed false), while a push that follows a real
+// curation change still refreshes and propagates it (CurationRefreshed
+// true) exactly as before this change.
+func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 2)
+	ok, err := local.StarSession("sess-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	first, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, first.Diagnostics.Full, "initial push is a rebuild")
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
+
+	// A mutating incremental push with no curation change: the star
+	// propagated during the rebuild above, so nothing about curation state
+	// changed. appendMessage forces this to be a real (non-no-op)
+	// incremental push so the curation-refresh step actually runs its
+	// unchanged-fingerprint check.
+	appendMessage(t, local, "sess-2")
+	second, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, second.Diagnostics.Full)
+	assert.False(t, second.Diagnostics.CurationRefreshed,
+		"unchanged local curation state must skip the mirror-side refresh")
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
+
+	// Now star sess-2 too: a real curation change with no other session
+	// mutation. The next push must detect it and refresh.
+	ok, err = local.StarSession("sess-2")
+	require.NoError(t, err)
+	require.True(t, ok)
+	third, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, third.Diagnostics.Full)
+	assert.True(t, third.Diagnostics.CurationRefreshed,
+		"a real curation change must trigger the mirror-side refresh")
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-2", 1)
+
+	// And a further no-op push (curation unchanged again) skips once more.
+	fourth, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, fourth.Diagnostics.CurationRefreshed)
+}
+
+// TestCurationFingerprintDetectsNoteOnlyEdit guards the specific gap a
+// pinned-message-id-only fingerprint would miss: PinMessage on an
+// already-pinned message updates its note in place without changing the
+// pinned message id set or created_at, so the fingerprint must incorporate
+// note content, not just membership.
+func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	msgs, err := local.GetAllMessages(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	firstNote := "first note"
+	_, err = local.PinMessage("sess-1", msgs[0].ID, &firstNote)
+	require.NoError(t, err)
+
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	secondNote := "second note"
+	_, err = local.PinMessage("sess-1", msgs[0].ID, &secondNote)
+	require.NoError(t, err)
+	appendMessage(t, local, "sess-1")
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed,
+		"a note-only pin edit must still be detected as a curation change")
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var got string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT note FROM pinned_messages WHERE session_id = ? AND message_id = ?`,
+		"sess-1", msgs[0].ID,
+	).Scan(&got))
+	assert.Equal(t, secondNote, got)
+}
+
 // assertMirrorTableCount opens path, asserts table's total row count, and
 // closes the connection before returning — see the comment in
 // TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes for why a

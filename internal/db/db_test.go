@@ -4738,6 +4738,35 @@ func TestBulkStarSessions(t *testing.T) {
 	assert.Equal(t, 2, len(ids), "listed")
 }
 
+func TestListStarredSessionIDsForScope(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "alpha")
+	insertSession(t, d, "s2", "beta")
+	insertSession(t, d, "s3", "beta")
+
+	_, err := d.StarSession("s1")
+	require.NoError(t, err, "StarSession s1")
+	_, err = d.StarSession("s2")
+	require.NoError(t, err, "StarSession s2")
+
+	all, err := d.ListStarredSessionIDsForScope(ctx, nil, nil)
+	require.NoError(t, err, "unfiltered scope")
+	assert.ElementsMatch(t, []string{"s1", "s2"}, all)
+
+	alphaOnly, err := d.ListStarredSessionIDsForScope(ctx, []string{"alpha"}, nil)
+	require.NoError(t, err, "include alpha")
+	assert.Equal(t, []string{"s1"}, alphaOnly)
+
+	excludeAlpha, err := d.ListStarredSessionIDsForScope(ctx, nil, []string{"alpha"})
+	require.NoError(t, err, "exclude alpha")
+	assert.Equal(t, []string{"s2"}, excludeAlpha)
+
+	betaOnly, err := d.ListStarredSessionIDsForScope(ctx, []string{"beta"}, nil)
+	require.NoError(t, err, "include beta (s3 unstarred)")
+	assert.Equal(t, []string{"s2"}, betaOnly)
+}
+
 func TestRestoreSession(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

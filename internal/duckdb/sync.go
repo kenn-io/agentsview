@@ -243,9 +243,11 @@ func (s *Sync) runIncrementalPush(
 
 	identityRevision := probe.IdentityRevision
 	if result.Errors == 0 {
-		if err := s.replaceCuration(ctx); err != nil {
+		refreshed, err := s.refreshCurationIfChanged(ctx)
+		if err != nil {
 			return result, err
 		}
+		result.Diagnostics.CurationRefreshed = refreshed
 		identityRevision, err = s.syncProjectIdentityObservations(
 			ctx, probe.IdentityRevision, false,
 		)

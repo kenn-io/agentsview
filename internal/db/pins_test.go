@@ -22,6 +22,37 @@ func pinFirstMessage(t *testing.T, d *DB, sessionID string) int64 {
 	return msgs[0].ID
 }
 
+func TestListPinCurationForScope(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "alpha")
+	insertSession(t, d, "s2", "beta")
+	insertMessages(t, d, userMsg("s1", 0, "hello from alpha"))
+	insertMessages(t, d, userMsg("s2", 0, "hello from beta"))
+	alphaMsgID := pinFirstMessage(t, d, "s1")
+	betaMsgID := pinFirstMessage(t, d, "s2")
+	note := "beta note"
+	_, err := d.PinMessage("s2", betaMsgID, &note)
+	require.NoError(t, err, "PinMessage note update")
+
+	all, err := d.ListPinCurationForScope(ctx, nil, nil)
+	require.NoError(t, err, "unfiltered scope")
+	require.Len(t, all, 2)
+
+	alphaOnly, err := d.ListPinCurationForScope(ctx, []string{"alpha"}, nil)
+	require.NoError(t, err, "include alpha")
+	require.Len(t, alphaOnly, 1)
+	assert.Equal(t, alphaMsgID, alphaOnly[0].MessageID)
+	assert.Equal(t, "", alphaOnly[0].Note)
+
+	excludeAlpha, err := d.ListPinCurationForScope(ctx, nil, []string{"alpha"})
+	require.NoError(t, err, "exclude alpha")
+	require.Len(t, excludeAlpha, 1)
+	assert.Equal(t, betaMsgID, excludeAlpha[0].MessageID)
+	assert.Equal(t, note, excludeAlpha[0].Note)
+}
+
 func TestListPinnedMessages_NoFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

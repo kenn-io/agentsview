@@ -197,6 +197,16 @@ func (s *Sync) pushEverything(
 		if err := s.pushEverythingCuration(ctx, sessions); err != nil {
 			return result, err
 		}
+		fingerprint, err := s.curationFingerprint(ctx)
+		if err != nil {
+			return result, err
+		}
+		if err := recordMetadataKey(
+			ctx, s.duck, curationFingerprintMetadataKey, fingerprint,
+		); err != nil {
+			return result, err
+		}
+		result.Diagnostics.CurationRefreshed = true
 	}
 
 	result.Duration = time.Since(start)

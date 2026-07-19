@@ -30,6 +30,16 @@ const (
 	identityRevisionMetadataKey = "agentsview_project_identity_revision"
 )
 
+// curationFingerprintMetadataKey stores a hash of the local in-scope
+// curation state (starred session ids, pinned message ids) as of the last
+// push that actually refreshed starred_sessions/pinned_messages. It is read
+// and written directly via readMetadataKey/recordMetadataKey rather than
+// through mirrorMetadata/writeMirrorMetadata: unlike the fields in that
+// struct, it is not part of the rebuild-vs-incremental decision (see
+// rebuildReason in probe.go), only of the incremental curation-refresh
+// skip (see refreshCurationIfChanged in push.go).
+const curationFingerprintMetadataKey = "agentsview_curation_fingerprint"
+
 // DuckDB schema notes:
 //
 //   - DuckDB stores timestamps as TIMESTAMP for mirror tables; read queries

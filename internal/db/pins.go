@@ -155,6 +155,46 @@ func (db *DB) ListPinnedMessages(
 	return pins, rows.Err()
 }
 
+// PinCurationEntry is one pinned message's identity plus its note: the
+// state a curation fingerprint needs to detect a note-only edit (PinMessage
+// on an already-pinned message updates the note in place, leaving the
+// pinned message id set and created_at unchanged) as well as a
+// pin/unpin membership change.
+type PinCurationEntry struct {
+	MessageID int64
+	Note      string
+}
+
+// ListPinCurationForScope returns pinned-message curation state restricted
+// to the given project scope, sorted by message id for deterministic
+// output. Like ListStarredSessionIDsForScope, cost is bounded by the number
+// of pinned rows (one join lookup each), not archive size.
+func (db *DB) ListPinCurationForScope(
+	ctx context.Context, projects, excludeProjects []string,
+) ([]PinCurationEntry, error) {
+	where, args := curationScopeWhere("s", projects, excludeProjects)
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT pm.message_id, COALESCE(pm.note, '') FROM pinned_messages pm
+		 JOIN sessions s ON s.id = pm.session_id`+where+
+			` ORDER BY pm.message_id`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped pinned messages: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []PinCurationEntry
+	for rows.Next() {
+		var e PinCurationEntry
+		if err := rows.Scan(&e.MessageID, &e.Note); err != nil {
+			return nil, fmt.Errorf("scanning scoped pinned message: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
 // GetPinnedMessageIDs returns message IDs that are pinned for a session.
 func (db *DB) GetPinnedMessageIDs(
 	ctx context.Context, sessionID string,

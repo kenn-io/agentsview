@@ -2,7 +2,10 @@ package duckdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -446,6 +449,10 @@ func (s *Sync) applyDeletionDelta(
 // session currently in the mirror. Scope-as-mirror-property means the
 // mirror's own sessions table is the authoritative in-scope ID list, so
 // this reads it directly rather than requiring a full local session listing.
+// It is an O(mirror) delete+reinsert; callers on the incremental push path
+// should go through refreshCurationIfChanged instead of calling this
+// directly, so a push where curation did not change skips the O(mirror)
+// cost.
 func (s *Sync) replaceCuration(ctx context.Context) error {
 	ids, err := s.mirrorSessionIDs(ctx)
 	if err != nil {
@@ -457,6 +464,69 @@ func (s *Sync) replaceCuration(ctx context.Context) error {
 		}
 		return s.replaceStarredSessions(ctx, tx, ids)
 	})
+}
+
+// refreshCurationIfChanged skips replaceCuration's O(mirror) delete+reinsert
+// when the LOCAL in-scope curation state (starred session ids, pinned
+// message ids) has not changed since the last push that actually refreshed
+// it, tracked via a fingerprint stored in mirror sync_metadata
+// (curationFingerprintMetadataKey). This runs on every incremental push
+// regardless of whether any session content changed, so curation edits
+// (star/pin/unstar/unpin with no session content change) still propagate on
+// the very next push exactly as before; the added cost of a push that
+// changed nothing at all is two small local queries bounded by curation
+// size (ListStarredSessionIDsForScope, ListPinnedMessageIDsForScope), not
+// the O(mirror) refresh itself. It reports whether it actually refreshed.
+func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
+	fingerprint, err := s.curationFingerprint(ctx)
+	if err != nil {
+		return false, err
+	}
+	stored, err := readMetadataKey(ctx, s.duck, curationFingerprintMetadataKey)
+	if err != nil {
+		return false, err
+	}
+	if fingerprint == stored {
+		return false, nil
+	}
+	if err := s.replaceCuration(ctx); err != nil {
+		return false, err
+	}
+	if err := recordMetadataKey(
+		ctx, s.duck, curationFingerprintMetadataKey, fingerprint,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// curationFingerprint hashes the local in-scope curation state (sorted
+// starred session ids and pinned message id/note pairs) so
+// refreshCurationIfChanged can detect whether curation changed since the
+// last refresh. Pin notes are included, not just membership: PinMessage on
+// an already-pinned message updates its note in place without changing the
+// pinned message id set, so a fingerprint over ids alone would miss a
+// note-only edit. Both source queries are bounded by curation size, not
+// mirror or archive size.
+func (s *Sync) curationFingerprint(ctx context.Context) (string, error) {
+	starred, err := s.local.ListStarredSessionIDsForScope(ctx, s.projects, s.excludeProjects)
+	if err != nil {
+		return "", fmt.Errorf("loading starred sessions for curation fingerprint: %w", err)
+	}
+	pinned, err := s.local.ListPinCurationForScope(ctx, s.projects, s.excludeProjects)
+	if err != nil {
+		return "", fmt.Errorf("loading pinned messages for curation fingerprint: %w", err)
+	}
+	payload := struct {
+		Starred []string
+		Pinned  []db.PinCurationEntry
+	}{Starred: starred, Pinned: pinned}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encoding curation fingerprint: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Sync) mirrorSessionIDs(ctx context.Context) ([]string, error) {
