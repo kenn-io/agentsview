@@ -200,11 +200,9 @@ digest.
 Entries also copy session context — project, cwd, git branch, agent — at insert
 time, and a metadata-only session update keeps the unit digest unchanged. A
 same-digest revisit therefore synchronizes those fields on the session's
-generated entries *before* the upsert that settles the coverage stamp — a failed
-sync leaves the session re-openable instead of stamped covered with stale
-entries — so the corpus stops matching Recall filters for the old context
-without any model calls. Human-touched entries are left as they were, mirroring
-the delete path.
+generated entries, so the corpus stops matching Recall filters for the old
+context without any model calls. Human-touched entries are left as they were,
+mirroring the delete path.
 
 The same revisit also rebinds evidence. Evidence digests cover every row in
 their range — system and empty messages included — while the units digest covers
@@ -213,7 +211,14 @@ provenance on an entry whose extraction output never changed, and that works in
 both orders (revisit-then-reconcile would strand the entry just the same). The
 rebind re-derives each range through the verifying window against the current
 transcript, re-stamps digests and endpoint UUIDs, and restores revoked
-provenance, again before the stamp settles.
+provenance.
+
+Context sync, evidence rebind, and the coverage stamp land in one transaction
+guarded by the same session-snapshot and digest checks as the unit commit: a
+transcript write racing the revisit rolls the whole refresh back (silently
+retried next pass), because a partial refresh could bind stale entries to the
+new transcript, mark them provenance-verified — permanently pacifying the
+reconciler — and settle the stamp over the unseen write.
 
 A digest change deletes the previous derivation's machine entries inside the
 same transaction that resets the progress row, so no failure between the two can

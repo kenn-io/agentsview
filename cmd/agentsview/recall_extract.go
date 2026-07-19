@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +38,37 @@ type extractDistillation struct {
 
 // resolveExtractDistillation validates cfg and resolves it into a runnable
 // distillation setup.
+// redactedEndpoint returns the endpoint safe for display: URL userinfo can
+// carry Basic-auth credentials and query values can carry API keys, and
+// doctor output lands in terminals, CI logs, and pasted diagnostics. The
+// host, path, and non-sensitive parameters stay visible for debugging.
+func redactedEndpoint(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable endpoint>"
+	}
+	parsed.User = nil
+	query := parsed.Query()
+	masked := false
+	for key, values := range query {
+		if !sensitiveEndpointParam.MatchString(key) {
+			continue
+		}
+		for i := range values {
+			values[i] = "REDACTED"
+		}
+		query[key] = values
+		masked = true
+	}
+	if masked {
+		parsed.RawQuery = query.Encode()
+	}
+	return parsed.String()
+}
+
+var sensitiveEndpointParam = regexp.MustCompile(
+	`(?i)key|token|secret|password|credential|sig|auth`)
+
 func resolveExtractDistillation(
 	cfg config.RecallExtractConfig,
 ) (extractDistillation, error) {
@@ -481,7 +514,7 @@ func newRecallExtractDoctorCommand() *cobra.Command {
 				fmt.Fprintf(out, "Deployment: %s\n", dist.Identity.Deployment)
 			}
 			fmt.Fprintf(out, "Server: %s (%s)\n",
-				dist.Server, dist.Client.BaseURL)
+				dist.Server, redactedEndpoint(dist.Client.BaseURL))
 			fmt.Fprintf(out, "Profile: %s\n", dist.Profile)
 			fmt.Fprintf(out, "Segmenter: %s (max_window_chars=%d)\n",
 				dist.Segmenter.Name(), dist.Segmenter.MaxWindowChars)

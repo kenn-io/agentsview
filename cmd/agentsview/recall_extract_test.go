@@ -361,3 +361,51 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 	require.NoError(t, err)
 	return u
 }
+
+// TestRecallExtractDoctorRedactsEndpointCredentials pins that doctor output
+// never shows URL userinfo: endpoints may carry Basic-auth credentials, and
+// doctor output lands in terminals, CI logs, and pasted diagnostics.
+func TestRecallExtractDoctorRedactsEndpointCredentials(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	server := extractModelStub(t)
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	writeExtractConfig(t, dataDir,
+		"http://tester:hunter2@"+parsed.Host)
+
+	out, cmdErr := executeCommand(newRootCommand(), "recall", "extract", "doctor")
+	require.NoError(t, cmdErr, "doctor output: %s", out)
+	assert.Contains(t, out, parsed.Host,
+		"the endpoint host stays visible for diagnostics")
+	assert.NotContains(t, out, "hunter2",
+		"a Basic-auth password must never reach the terminal")
+	assert.NotContains(t, out, "tester:",
+		"URL userinfo must be dropped, not just the password")
+}
+
+func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
+	cases := map[string]struct{ in, want string }{
+		"userinfo dropped": {
+			"https://user:pass@models.example:8443/v1",
+			"https://models.example:8443/v1",
+		},
+		"sensitive query values masked": {
+			"https://models.example/v1?api_key=sekret&api-version=2024-06-01",
+			"https://models.example/v1?api-version=2024-06-01&api_key=REDACTED",
+		},
+		"signature masked": {
+			"https://models.example/v1?sig=abc123",
+			"https://models.example/v1?sig=REDACTED",
+		},
+		"plain endpoint unchanged": {
+			"http://127.0.0.1:11434/v1",
+			"http://127.0.0.1:11434/v1",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, redactedEndpoint(tc.in))
+		})
+	}
+}

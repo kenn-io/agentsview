@@ -1003,12 +1003,18 @@ func TestExtractStatsEntryCountPlanIsIndexBounded(t *testing.T) {
 	require.NoError(t, rows.Err())
 }
 
-func TestSyncExtractedEntryContextRefreshesGeneratedEntries(t *testing.T) {
-	d := testDB(t)
+// refreshCoverageFixture seeds a committed extraction for sess-1 plus
+// scoping entries under other generations and sessions, returning the
+// current session snapshot.
+func refreshCoverageFixture(t *testing.T, d *DB) *Session {
+	t.Helper()
 	ctx := context.Background()
-	seedExtractSession(t, d, "sess-1")
+	session := seedCommitUnitSession(t, d, "sess-1")
 	seedExtractSession(t, d, "sess-2")
-
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
 	entry := func(id, sessionID, fp, reviewState string) RecallEntry {
 		return RecallEntry{
 			ID: id, Type: "fact", ReviewState: reviewState,
@@ -1020,21 +1026,51 @@ func TestSyncExtractedEntryContextRefreshesGeneratedEntries(t *testing.T) {
 			}},
 		}
 	}
-	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		entry("e-auto", "sess-1", "fp-a", "unreviewed_auto"),
 		entry("e-reviewed", "sess-1", "fp-a", "human_reviewed"),
 		entry("e-other-fp", "sess-1", "fp-b", "unreviewed_auto"),
 		entry("e-other-sess", "sess-2", "fp-a", "unreviewed_auto"),
 	})
 	require.NoError(t, err)
-
-	session := &Session{
-		ID: "sess-1", Project: "proj-2", Cwd: "/new",
-		GitBranch: "feature", Agent: "codex",
-	}
-	updated, err := d.SyncExtractedEntryContext(ctx, "fp-a", session)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, updated)
+	return session
+}
+
+func refreshRequest(session *Session) ExtractCoverageRefresh {
+	return ExtractCoverageRefresh{
+		Fingerprint:  "fp-a",
+		Digest:       "dg",
+		StampedAt:    time.Now(),
+		ScanVersions: []string{"rules-v1"},
+		Session:      session,
+	}
+}
+
+func TestRefreshExtractedSessionCoverageSyncsContext(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := refreshCoverageFixture(t, d)
+
+	// A metadata-only session update leaves the units digest unchanged;
+	// the refresh must move the generated entries to the new context.
+	session.Project = "proj-2"
+	session.Cwd = "/new"
+	session.GitBranch = "feature"
+	session.Agent = "codex"
+	require.NoError(t, d.UpsertSession(*session))
+	snapshot, err := d.GetSessionFull(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+
+	progress, err := d.RefreshExtractedSessionCoverage(
+		ctx, refreshRequest(snapshot))
+	require.NoError(t, err)
+	assert.Equal(t, ExtractProgressDone, progress.State)
 
 	got, err := d.GetRecallEntry(ctx, "e-auto")
 	require.NoError(t, err)
@@ -1054,9 +1090,55 @@ func TestSyncExtractedEntryContextRefreshesGeneratedEntries(t *testing.T) {
 		assert.Equal(t, "main", got.GitBranch, id)
 	}
 
-	updated, err = d.SyncExtractedEntryContext(ctx, "fp-a", session)
+	// An already-synchronized corpus refreshes without error.
+	_, err = d.RefreshExtractedSessionCoverage(ctx, refreshRequest(snapshot))
 	require.NoError(t, err)
-	assert.Zero(t, updated, "an already-synchronized corpus must be a no-op")
+}
+
+// TestRefreshExtractedSessionCoverageRefusesDrift pins the refresh guard: a
+// transcript write landing after the caller bracketed its snapshot must
+// roll the whole refresh back — otherwise stale entries would be rebound to
+// the new transcript, marked provenance-verified, and the coverage stamp
+// would claim the unseen write.
+func TestRefreshExtractedSessionCoverageRefusesDrift(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := refreshCoverageFixture(t, d)
+	_, err := d.getWriter().Exec(
+		"UPDATE recall_entries SET provenance_ok = 0 WHERE id = 'e-auto'")
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_evidence SET content_digest = 'stale' " +
+			"WHERE entry_id = 'e-auto'")
+	require.NoError(t, err)
+	readStamp := func() string {
+		t.Helper()
+		var stamp string
+		require.NoError(t, d.getReader().QueryRow(
+			"SELECT content_stamped_at FROM recall_extract_progress "+
+				"WHERE session_id = 'sess-1'").Scan(&stamp))
+		return stamp
+	}
+	before := readStamp()
+
+	// A concurrent write bumps the session after the snapshot was taken.
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET message_count = message_count + 1 " +
+			"WHERE id = 'sess-1'")
+	require.NoError(t, err)
+
+	_, err = d.RefreshExtractedSessionCoverage(ctx, refreshRequest(session))
+	require.ErrorIs(t, err, ErrExtractSessionDrifted)
+	got, err := d.GetRecallEntry(ctx, "e-auto")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.ProvenanceOK,
+		"a drifted refresh must not restore provenance")
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "stale", got.Evidence[0].ContentDigest,
+		"a drifted refresh must not rebind evidence")
+	assert.Equal(t, before, readStamp(),
+		"a drifted refresh must not advance the coverage stamp")
 }
 
 func TestExtractMutationsWaitForDBMutex(t *testing.T) {
@@ -2539,12 +2621,12 @@ func TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically(t *testing.T)
 		"a failed progress reset must not leave the entries deleted")
 }
 
-// TestRebindExtractedEvidenceRestoresProvenance pins the revisit repair:
+// TestRefreshExtractedSessionCoverageRestoresProvenance pins the revisit repair:
 // evidence digests cover rows the units digest ignores, so the reconciler
 // can revoke provenance without the extraction output changing — a rebind
 // against the current transcript must re-stamp the evidence and restore
 // the entry.
-func TestRebindExtractedEvidenceRestoresProvenance(t *testing.T) {
+func TestRefreshExtractedSessionCoverageRestoresProvenance(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	session := seedCommitUnitSession(t, d, "sess-1")
@@ -2578,9 +2660,16 @@ func TestRebindExtractedEvidenceRestoresProvenance(t *testing.T) {
 			"WHERE entry_id = 'e-1'")
 	require.NoError(t, err)
 
-	restored, err := d.RebindExtractedEvidence(ctx, "fp-a", "sess-1")
+	// The snapshot still matches the stored session, so the refresh
+	// rebinds and restores in one guarded transaction.
+	_, err = d.RefreshExtractedSessionCoverage(ctx, ExtractCoverageRefresh{
+		Fingerprint:  "fp-a",
+		Digest:       "dg",
+		StampedAt:    time.Now(),
+		ScanVersions: []string{"rules-v1"},
+		Session:      session,
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, restored)
 	entry, err := d.GetRecallEntry(ctx, "e-1")
 	require.NoError(t, err)
 	require.NotNil(t, entry)

@@ -516,40 +516,61 @@ func (m *Manager) extractSession(
 	if err != nil {
 		return outcome, err
 	}
+	var progress db.ExtractProgress
 	if !countMismatch && found && previous.ContentDigest == digest {
-		// A same-digest revisit skips the model, but entries copied their
-		// project, cwd, branch, and agent from the session row at insert
-		// time — a metadata-only update would leave them matching filters
-		// for the old context. Synchronized before the upsert below settles
-		// the coverage stamp, so a failed sync leaves the session
-		// re-openable instead of stamped covered with stale entries.
-		if _, err := m.cfg.DB.SyncExtractedEntryContext(
-			ctx, m.fingerprint, session,
-		); err != nil {
+		// A same-digest revisit skips the model, but its entries still
+		// need work: context fields copied at insert time go stale on
+		// metadata-only updates, and evidence digests cover rows the units
+		// digest ignores, so the reconciler can revoke provenance while
+		// the extraction output is unchanged. Context sync, evidence
+		// rebind, and the coverage stamp land in one guarded transaction —
+		// a transcript write mid-refresh must not see stale entries
+		// rebound to it, marked verified, and stamped covered.
+		progress, err = m.cfg.DB.RefreshExtractedSessionCoverage(
+			ctx, db.ExtractCoverageRefresh{
+				Fingerprint:  m.fingerprint,
+				Digest:       digest,
+				StampedAt:    readCutoff,
+				ScanVersions: []string{secrets.RulesVersion()},
+				Session:      session,
+			},
+		)
+		switch {
+		case errors.Is(err, db.ErrExtractSessionDrifted):
+			eligible, _, rerr := m.recheckExtraction(ctx, sessionID, session)
+			if rerr != nil {
+				return outcome, rerr
+			}
+			if !eligible {
+				if derr := m.discardIneligibleSession(
+					ctx, sessionID, digest, previous.UnitCursor,
+				); derr != nil {
+					return outcome, derr
+				}
+				outcome.failed = true
+			}
+			// Still eligible: a concurrent write bumped the snapshot, so
+			// the next pass retries against a settled view.
+			return outcome, nil
+		case errors.Is(err, db.ErrStaleExtractProgress):
+			// Another writer reset or took over the row; its view wins.
+			return outcome, nil
+		case err != nil:
 			return outcome, err
 		}
-		// Evidence digests cover rows the units digest ignores, so the
-		// reconciler can revoke provenance while the extraction output is
-		// unchanged. Rebind against the current transcript — before the
-		// stamp settles, for the same re-openability — so revoked entries
-		// come back instead of staying dark forever.
-		if _, err := m.cfg.DB.RebindExtractedEvidence(
-			ctx, m.fingerprint, sessionID,
-		); err != nil {
+	} else {
+		progress, err = m.cfg.DB.UpsertExtractProgress(
+			ctx, db.ExtractProgressUpsert{
+				SessionID:     sessionID,
+				Fingerprint:   m.fingerprint,
+				ContentDigest: digest,
+				UnitsTotal:    len(units),
+				StampedAt:     readCutoff,
+			},
+		)
+		if err != nil {
 			return outcome, err
 		}
-	}
-	progress, err := m.cfg.DB.UpsertExtractProgress(
-		ctx, db.ExtractProgressUpsert{
-			SessionID:     sessionID,
-			Fingerprint:   m.fingerprint,
-			ContentDigest: digest,
-			UnitsTotal:    len(units),
-			StampedAt:     readCutoff,
-		},
-	)
-	if err != nil {
-		return outcome, err
 	}
 	if countMismatch {
 		// Checked before the done short-circuit: a same-digest upsert

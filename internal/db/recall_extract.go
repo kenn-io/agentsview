@@ -1187,7 +1187,14 @@ func (db *DB) CommitExtractedUnit(
 		return 0, fmt.Errorf("begin extracted unit commit: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := verifyExtractCommitGuardTx(ctx, tx, u); err != nil {
+	if err := verifyExtractSessionGuardTx(ctx, tx, ExtractSessionGuard{
+		SessionID:          u.SessionID,
+		ScanVersions:       u.ScanVersions,
+		MessageCount:       u.MessageCount,
+		TranscriptRevision: u.TranscriptRevision,
+		LocalModifiedAt:    u.LocalModifiedAt,
+		EndedAt:            u.EndedAt,
+	}); err != nil {
 		return 0, err
 	}
 	entries, err := bindExtractedEvidenceTx(ctx, tx, u)
@@ -1236,8 +1243,20 @@ func (db *DB) CommitExtractedUnit(
 	return inserted, nil
 }
 
-func verifyExtractCommitGuardTx(
-	ctx context.Context, tx *sql.Tx, u ExtractUnitCommit,
+// ExtractSessionGuard is the session-row snapshot a guarded write was
+// derived from; verification refuses the write when the stored row has
+// moved or the session is no longer eligible.
+type ExtractSessionGuard struct {
+	SessionID          string
+	ScanVersions       []string
+	MessageCount       int
+	TranscriptRevision *string
+	LocalModifiedAt    *string
+	EndedAt            *string
+}
+
+func verifyExtractSessionGuardTx(
+	ctx context.Context, tx *sql.Tx, u ExtractSessionGuard,
 ) error {
 	var (
 		deletedAt, revision, localModified, endedAt sql.NullString
@@ -1518,7 +1537,7 @@ func (db *DB) DiscardExtractedSessionOutput(
 	return nil
 }
 
-// SyncExtractedEntryContext refreshes the session-derived context fields
+// syncExtractedEntryContextTx refreshes the session-derived context fields
 // (project, cwd, git branch, agent) on one session's generated entries under
 // one generation. Entries copy those fields from the session row at insert
 // time, and a metadata-only session update keeps the unit digest unchanged —
@@ -1526,24 +1545,10 @@ func (db *DB) DiscardExtractedSessionOutput(
 // while the entries kept matching Recall filters for the old context.
 // Human-touched entries are left as they were, mirroring the delete path.
 // Returns how many entries changed.
-func (db *DB) SyncExtractedEntryContext(
-	ctx context.Context, fingerprint string, session *Session,
+func syncExtractedEntryContextTx(
+	ctx context.Context, tx *sql.Tx, fingerprint string, session *Session,
 ) (int, error) {
-	if err := db.requireWritable(); err != nil {
-		return 0, err
-	}
-	if session == nil {
-		return 0, fmt.Errorf(
-			"syncing extracted entry context for generation %s requires a "+
-				"session", fingerprint,
-		)
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	result, err := db.getWriter().ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
 		SET project = ?, cwd = ?, git_branch = ?, agent = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -1567,31 +1572,18 @@ func (db *DB) SyncExtractedEntryContext(
 	return int(updated), nil
 }
 
-// RebindExtractedEvidence re-derives evidence provenance for one session's
-// machine entries against the current transcript: each evidence range is
-// rebuilt through the verifying window, its content digest and endpoint
-// UUIDs are re-stamped, and revoked provenance is restored. Evidence
-// digests cover rows the units digest ignores (system and empty messages),
-// so the reconciler can revoke an entry whose extraction output never
-// changed; a same-digest revisit calls this to repair such entries instead
-// of settling the coverage stamp over a permanently dark corpus. Returns
-// how many entries had provenance restored.
-func (db *DB) RebindExtractedEvidence(
-	ctx context.Context, fingerprint, sessionID string,
+// rebindExtractedSessionEvidenceTx re-derives evidence provenance for one
+// session's machine entries against the current transcript: each evidence
+// range is rebuilt through the verifying window, its content digest and
+// endpoint UUIDs are re-stamped, and revoked provenance is restored.
+// Evidence digests cover rows the units digest ignores (system and empty
+// messages), so the reconciler can revoke an entry whose extraction output
+// never changed; a same-digest revisit repairs such entries instead of
+// settling the coverage stamp over a permanently dark corpus. Returns how
+// many entries had provenance restored.
+func rebindExtractedSessionEvidenceTx(
+	ctx context.Context, tx *sql.Tx, fingerprint, sessionID string,
 ) (int, error) {
-	if err := db.requireWritable(); err != nil {
-		return 0, err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	tx, err := db.getWriter().Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin evidence rebind: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	rows, err := tx.QueryContext(ctx, `
 		SELECT e.id, e.entry_id,
 		       e.message_start_ordinal, e.message_end_ordinal
@@ -1687,10 +1679,127 @@ func (db *DB) RebindExtractedEvidence(
 		}
 		restored += int(affected)
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit evidence rebind: %w", err)
-	}
 	return restored, nil
+}
+
+// ExtractCoverageRefresh is one same-digest revisit's guarded write: the
+// bracketed session snapshot to verify, the digest the revisit re-derived,
+// and the pre-read cutoff to stamp as coverage.
+type ExtractCoverageRefresh struct {
+	Fingerprint  string
+	Digest       string
+	StampedAt    time.Time
+	ScanVersions []string
+	Session      *Session
+}
+
+// RefreshExtractedSessionCoverage settles a same-digest revisit atomically:
+// one transaction re-verifies the session snapshot and privacy predicates,
+// confirms the progress row still carries the expected digest, synchronizes
+// entry context, rebinds evidence provenance against the current
+// transcript, and advances the coverage stamp. A snapshot mismatch returns
+// ErrExtractSessionDrifted and a digest mismatch ErrStaleExtractProgress,
+// with nothing persisted — a transcript write landing mid-refresh must not
+// see stale entries rebound to it, marked verified, and stamped covered.
+func (db *DB) RefreshExtractedSessionCoverage(
+	ctx context.Context, u ExtractCoverageRefresh,
+) (ExtractProgress, error) {
+	var zero ExtractProgress
+	if err := db.requireWritable(); err != nil {
+		return zero, err
+	}
+	if u.Session == nil {
+		return zero, fmt.Errorf(
+			"refreshing coverage for generation %s requires the bracketed "+
+				"session snapshot", u.Fingerprint)
+	}
+	if len(u.ScanVersions) == 0 {
+		return zero, fmt.Errorf(
+			"refreshing coverage for session %s requires the current "+
+				"secret-scan versions", u.Session.ID)
+	}
+	if u.StampedAt.IsZero() {
+		return zero, fmt.Errorf(
+			"refreshing coverage for session %s requires the "+
+				"transcript-read cutoff", u.Session.ID)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return zero, fmt.Errorf("begin coverage refresh: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := verifyExtractSessionGuardTx(ctx, tx, ExtractSessionGuard{
+		SessionID:          u.Session.ID,
+		ScanVersions:       u.ScanVersions,
+		MessageCount:       u.Session.MessageCount,
+		TranscriptRevision: u.Session.TranscriptRevision,
+		LocalModifiedAt:    u.Session.LocalModifiedAt,
+		EndedAt:            u.Session.EndedAt,
+	}); err != nil {
+		return zero, err
+	}
+	var storedDigest string
+	err = tx.QueryRowContext(ctx, `
+		SELECT content_digest FROM recall_extract_progress
+		WHERE session_id = ? AND generation_fingerprint = ?`,
+		u.Session.ID, u.Fingerprint,
+	).Scan(&storedDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return zero, fmt.Errorf(
+			"no progress row for session %s: %w",
+			u.Session.ID, ErrStaleExtractProgress)
+	}
+	if err != nil {
+		return zero, fmt.Errorf(
+			"reading progress for session %s: %w", u.Session.ID, err)
+	}
+	if storedDigest != u.Digest {
+		return zero, fmt.Errorf(
+			"progress digest for session %s moved: %w",
+			u.Session.ID, ErrStaleExtractProgress)
+	}
+	if _, err := syncExtractedEntryContextTx(
+		ctx, tx, u.Fingerprint, u.Session,
+	); err != nil {
+		return zero, err
+	}
+	if _, err := rebindExtractedSessionEvidenceTx(
+		ctx, tx, u.Fingerprint, u.Session.ID,
+	); err != nil {
+		return zero, err
+	}
+	// The stamp advance mirrors the same-digest upsert: a failed row keeps
+	// updated_at so the refresh does not reset the failure backoff clock.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE recall_extract_progress
+		SET content_stamped_at = ?,
+			updated_at = CASE WHEN state = ? THEN updated_at
+				ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now') END
+		WHERE session_id = ? AND generation_fingerprint = ?`,
+		u.StampedAt.UTC().Format(extractTimeLayout), ExtractProgressFailed,
+		u.Session.ID, u.Fingerprint,
+	); err != nil {
+		return zero, fmt.Errorf(
+			"stamping coverage for session %s: %w", u.Session.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return zero, fmt.Errorf("commit coverage refresh: %w", err)
+	}
+	progress, ok, err := db.ExtractProgress(ctx, u.Session.ID, u.Fingerprint)
+	if err != nil {
+		return zero, err
+	}
+	if !ok {
+		return zero, fmt.Errorf(
+			"extract progress for session %s vanished after refresh",
+			u.Session.ID)
+	}
+	return progress, nil
 }
 
 // ExtractProgressStats aggregates one generation's progress rows and its
