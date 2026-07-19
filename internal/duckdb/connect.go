@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	neturl "net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -70,6 +71,9 @@ func ReadStatusFromConfig(
 	if cfg.MachineName == "" {
 		return SyncStatus{}, fmt.Errorf("machine name must not be empty")
 	}
+	if cfg.URL == "" {
+		return readLocalMirrorStatus(ctx, cfg)
+	}
 	store, err := NewStoreFromConfig(cfg)
 	if err != nil {
 		return SyncStatus{}, err
@@ -77,6 +81,37 @@ func ReadStatusFromConfig(
 	defer store.Close()
 	return readMachineStatus(
 		ctx, store.DB(), store.connectionKind, store.quack, cfg.MachineName,
+	)
+}
+
+// readLocalMirrorStatus reads status from a local mirror file without ever
+// creating it. NewStoreFromConfig opens a local path read-write, which
+// CREATES the database file when it is missing — and that fresh empty file
+// then lacks the agentsview sentinel, so the next push refuses to replace
+// it and mirror initialization stays blocked until the file is removed by
+// hand. A missing file instead reports SyncStatus.MirrorMissing; an
+// existing file is opened with openReadOnlyMirror, which can never create
+// or write.
+func readLocalMirrorStatus(
+	ctx context.Context, cfg config.DuckDBConfig,
+) (SyncStatus, error) {
+	if cfg.Path == "" {
+		return SyncStatus{}, fmt.Errorf("duckdb path is required")
+	}
+	if _, err := os.Stat(cfg.Path); os.IsNotExist(err) {
+		return SyncStatus{Machine: cfg.MachineName, MirrorMissing: true}, nil
+	} else if err != nil {
+		return SyncStatus{}, fmt.Errorf(
+			"statting duckdb mirror %s: %w", cfg.Path, err,
+		)
+	}
+	conn, err := openReadOnlyMirror(cfg.Path)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	defer func() { _ = conn.Close() }()
+	return readMachineStatus(
+		ctx, conn, duckDBBaseConnection, nil, cfg.MachineName,
 	)
 }
 

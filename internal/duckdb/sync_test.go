@@ -1212,6 +1212,31 @@ func TestReadStatusFromConfigReportsScopeAndDegradesOnMissingMetadata(t *testing
 		"row counts still read even with metadata gone")
 }
 
+// TestReadStatusFromConfigDoesNotCreateMissingMirror is the FINDING 2
+// regression: status used to open a missing local mirror path through
+// NewStoreFromConfig, whose read-write open CREATES the database file. The
+// resulting empty file lacks the agentsview sentinel, so the next push
+// refused to replace it and mirror initialization stayed blocked until the
+// file was removed by hand. Status against a missing local path must
+// report MirrorMissing without creating anything.
+func TestReadStatusFromConfigDoesNotCreateMissingMirror(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "missing.duckdb")
+
+	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
+		Path:        path,
+		MachineName: "test-machine",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, status.MirrorMissing)
+	assert.Equal(t, "test-machine", status.Machine)
+	assert.Empty(t, status.LastPushAt)
+	assert.Zero(t, status.DuckDBSessions)
+	assert.NoFileExists(t, path,
+		"status must never create the mirror file")
+}
+
 // TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine is the
 // FIX2 regression: readMachineStatus previously filtered its row counts by
 // the CLIENT's configured machine name, while the LastPushMachine it

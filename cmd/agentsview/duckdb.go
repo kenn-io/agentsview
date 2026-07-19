@@ -226,6 +226,13 @@ func runDuckDBStatus() {
 	if err != nil {
 		fatal("duckdb status: %v", err)
 	}
+	if status.MirrorMissing {
+		fmt.Printf(
+			"DuckDB mirror not found at %s; run 'agentsview duckdb push' to create it\n",
+			duckCfg.Path,
+		)
+		return
+	}
 	machine := status.LastPushMachine
 	if machine == "" {
 		machine = duckCfg.MachineName

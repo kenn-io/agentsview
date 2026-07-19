@@ -97,7 +97,12 @@ type PushProgress struct {
 // the target's own sync_metadata (see readMachineStatus) rather than any
 // local watermark.
 type SyncStatus struct {
-	Machine         string `json:"machine"`
+	Machine string `json:"machine"`
+	// MirrorMissing reports that the configured local mirror file does not
+	// exist yet; every other field except Machine is zero. Status never
+	// creates the file (see readLocalMirrorStatus). Remote Quack targets
+	// never set it.
+	MirrorMissing   bool   `json:"mirror_missing,omitempty"`
 	LastPushAt      string `json:"last_push_at"`
 	LastPushMachine string `json:"last_push_machine"`
 	SchemaVersion   int    `json:"schema_version"`
