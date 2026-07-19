@@ -900,6 +900,18 @@ func (s *Sync) sessionFingerprints(
 	return out, nil
 }
 
+// duckSessionFingerprintFields lists the session-scalar portion of the
+// push fingerprint. Invariant: every session column upsertSession mirrors
+// (see sessionInsertArgs) is covered here, so no mirrored value can go
+// stale while the fingerprint still reports the session as unchanged;
+// TestDuckSessionFingerprintCoversEveryMirroredColumn enforces the
+// invariant by reflection. That deliberately includes local_modified_at,
+// the file-stat columns, and the quality-signal columns: UpdateSessionSignals
+// bumps local_modified_at on every signal recompute, so a quality-signal
+// version bump already re-lists every session as an incremental candidate —
+// the enumeration cost is paid regardless, and excluding recomputed columns
+// from the fingerprint would only skip the re-push and leave the mirror's
+// quality analytics stale until the next full rebuild.
 func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 	return []any{
 		sess.ID, sess.Project, machine, sess.Agent,
@@ -908,7 +920,9 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 		nilString(sess.SessionName),
 		nilTime(sess.StartedAt), nilTime(sess.EndedAt),
 		sess.MessageCount, sess.UserMessageCount,
-		nilString(sess.FilePath), nilString(sess.FileHash),
+		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,
+		sess.FileInode, sess.FileDevice, nilString(sess.FileHash),
+		nilTime(sess.LocalModifiedAt),
 		nilString(sess.ParentSessionID),
 		sess.RelationshipType, sess.TotalOutputTokens,
 		sess.PeakContextTokens, sess.HasTotalOutputTokens,
@@ -921,7 +935,12 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.CompactionCount, sess.MidTaskCompactionCount,
 		sess.ContextPressureMax, sess.HealthScore,
 		nilString(sess.HealthGrade), sess.HasToolCalls,
-		sess.HasContextData, sess.DataVersion,
+		sess.HasContextData,
+		sess.QualitySignalVersion, sess.ShortPromptCount,
+		sess.UnstructuredStart, sess.MissingSuccessCriteriaCount,
+		sess.MissingVerificationCount, sess.DuplicatePromptCount,
+		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
+		sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
 		nilString(sess.TranscriptRevision),

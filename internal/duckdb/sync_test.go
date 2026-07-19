@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -828,7 +829,149 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 	}
 }
 
-// TestSessionFingerprintsWriteColumn asserts the volatile-exclusion
+// TestDuckSessionFingerprintCoversEveryMirroredColumn enforces the
+// invariant documented on duckSessionFingerprintFields: every session
+// field upsertSession mirrors (via sessionInsertArgs) must also feed the
+// fingerprint, or a change to that field would be skipped as "unchanged"
+// by incremental pushes and the mirror's copy would stay stale until the
+// next full rebuild. It perturbs each db.Session field by reflection: a
+// perturbation that changes the insert args (the field is mirrored) must
+// also change the fingerprint payload. Fields that do not change the
+// insert args (sync bookkeeping like NextOrdinal, or JSON transport
+// mirrors like QualitySignals) are ignored automatically, so adding a new
+// mirrored column without fingerprinting it fails this test by name.
+func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
+	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
+	encodeArgs := func(s db.Session) string {
+		data, err := json.Marshal(sessionInsertArgs(s, "m", "fp"))
+		require.NoError(t, err)
+		return string(data)
+	}
+	encodeFingerprint := func(s db.Session) string {
+		data, err := json.Marshal(duckSessionFingerprintFields(s, "m"))
+		require.NoError(t, err)
+		return string(data)
+	}
+	baseArgs := encodeArgs(base)
+	baseFingerprint := encodeFingerprint(base)
+
+	mirrored := 0
+	typ := reflect.TypeFor[db.Session]()
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		perturbed, ok := perturbSessionField(base, i)
+		if !ok {
+			continue
+		}
+		if encodeArgs(perturbed) == baseArgs {
+			continue
+		}
+		mirrored++
+		assert.NotEqual(t, baseFingerprint, encodeFingerprint(perturbed),
+			"db.Session.%s is mirrored by upsertSession but not covered by "+
+				"duckSessionFingerprintFields; add it to the fingerprint so "+
+				"incremental pushes cannot leave the mirror's copy stale",
+			field.Name)
+	}
+	assert.GreaterOrEqual(t, mirrored, 60,
+		"perturbation stopped detecting mirrored fields; fix perturbSessionField")
+}
+
+// perturbSessionField returns a copy of base with exported field i set to a
+// distinct non-zero value, or ok=false for field kinds that cannot be
+// perturbed generically (currently only pointers to structs, e.g. the
+// QualitySignals JSON-transport mirror, which sessionInsertArgs never
+// reads).
+func perturbSessionField(base db.Session, i int) (db.Session, bool) {
+	perturbed := base
+	field := reflect.ValueOf(&perturbed).Elem().Field(i)
+	target := field
+	if field.Kind() == reflect.Pointer {
+		if field.Type().Elem().Kind() == reflect.Struct {
+			return base, false
+		}
+		target = reflect.New(field.Type().Elem()).Elem()
+	}
+	switch target.Kind() {
+	case reflect.String:
+		target.SetString("perturbed-" + reflect.TypeFor[db.Session]().Field(i).Name)
+	case reflect.Int, reflect.Int64:
+		target.SetInt(target.Int() + 101)
+	case reflect.Bool:
+		target.SetBool(!target.Bool())
+	case reflect.Float64:
+		target.SetFloat(target.Float() + 1.5)
+	default:
+		return base, false
+	}
+	if field.Kind() == reflect.Pointer {
+		field.Set(target.Addr())
+	}
+	return perturbed, true
+}
+
+// TestPushMirrorsQualitySignalRecompute is the FINDING 2 regression: a
+// quality-signal recompute (what BackfillSignals runs for every session
+// after a CurrentQualitySignalVersion bump) goes through
+// UpdateSessionSignals, which bumps local_modified_at so the session
+// re-enters the incremental candidate window — but with the quality
+// columns absent from the fingerprint, every candidate was then skipped as
+// "unchanged" and DuckDB's quality analytics stayed stale indefinitely.
+// The recomputed values must reach the mirror on the next incremental
+// push.
+func TestPushMirrorsQualitySignalRecompute(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	sess, err := local.GetSession(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NoError(t, local.UpdateSessionSignals("sess-1", db.SessionSignalUpdate{
+		ToolFailureSignalCount: sess.ToolFailureSignalCount,
+		ToolRetryCount:         sess.ToolRetryCount,
+		EditChurnCount:         sess.EditChurnCount,
+		ConsecutiveFailureMax:  sess.ConsecutiveFailureMax,
+		Outcome:                sess.Outcome,
+		OutcomeConfidence:      sess.OutcomeConfidence,
+		EndedWithRole:          sess.EndedWithRole,
+		FinalFailureStreak:     sess.FinalFailureStreak,
+		SignalsPendingSince:    sess.SignalsPendingSince,
+		CompactionCount:        sess.CompactionCount,
+		MidTaskCompactionCount: sess.MidTaskCompactionCount,
+		ContextPressureMax:     sess.ContextPressureMax,
+		HealthScore:            sess.HealthScore,
+		HealthGrade:            sess.HealthGrade,
+		HasToolCalls:           sess.HasToolCalls,
+		HasContextData:         sess.HasContextData,
+		QualitySignals: db.QualitySignals{
+			Version:              db.CurrentQualitySignalVersion,
+			ShortPromptCount:     7,
+			DuplicatePromptCount: 3,
+		},
+	}))
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
+		"a quality-only recompute must be re-pushed, not skipped as unchanged")
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var version, shortPrompts, duplicatePrompts int
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT quality_signal_version, short_prompt_count, duplicate_prompt_count
+		FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&version, &shortPrompts, &duplicatePrompts))
+	assert.Equal(t, db.CurrentQualitySignalVersion, version)
+	assert.Equal(t, 7, shortPrompts)
+	assert.Equal(t, 3, duplicatePrompts)
+}
+
+// TestSessionFingerprintsWriteColumn asserts the fingerprint-column
 // contract at the point where it actually matters: the fingerprint column
 // persisted in the mirror, not just the value sessionFingerprints computes.
 func TestSessionFingerprintsWriteColumn(t *testing.T) {

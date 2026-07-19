@@ -26,12 +26,13 @@ func (s *checkpointSpy) checkpointAfterPush(ctx context.Context, duck *sql.DB) e
 	return s.err
 }
 
-// mutateSessionVolatileStats changes only file_size/file_inode, fields that
-// are written to the mirror but deliberately excluded from both the
-// fingerprint payload (duckSessionFingerprintFields) and the sync_marker
-// trigger's driving columns, simulating a resync stat refresh that must not
-// by itself cause a mirror rewrite.
-func mutateSessionVolatileStats(t *testing.T, local *db.DB, sessionID string) {
+// mutateSessionStatColumns changes only file_size/file_inode — columns the
+// mirror carries (see upsertSession) — simulating a resync stat refresh.
+// These used to be excluded from the fingerprint payload as "volatile", but
+// the mirrored-column invariant on duckSessionFingerprintFields now covers
+// them: a mirrored column the fingerprint ignores can never be refreshed by
+// an incremental push and stays stale until the next full rebuild.
+func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
 	require.NoError(t, local.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
@@ -45,10 +46,11 @@ func mutateSessionVolatileStats(t *testing.T, local *db.DB, sessionID string) {
 	}))
 }
 
-// TestSyncIncrementalVolatileStatChangeSkipsMirrorRewrite asserts that a
-// stat-only local change (no content, no fingerprint-relevant field) does
-// not cause a session in the candidate window to be re-pushed.
-func TestSyncIncrementalVolatileStatChangeSkipsMirrorRewrite(t *testing.T) {
+// TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow asserts the
+// mirrored-column fingerprint invariant from the stat side: a stat-only
+// change to a candidate session re-pushes it so the mirror's file_size/
+// file_inode copies stay current, instead of being skipped as unchanged.
+func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
@@ -57,12 +59,23 @@ func TestSyncIncrementalVolatileStatChangeSkipsMirrorRewrite(t *testing.T) {
 	require.NoError(t, err)
 
 	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
-	mutateSessionVolatileStats(t, local, "sess-1")
+	mutateSessionStatColumns(t, local, "sess-1")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 0, res.Diagnostics.PushedSessions.Total)
-	assert.Equal(t, 1, res.Diagnostics.SkippedUnchangedSessions.Total)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+	assert.Equal(t, 0, res.Diagnostics.SkippedUnchangedSessions.Total)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var fileSize, fileInode int64
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT file_size, file_inode FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&fileSize, &fileInode))
+	assert.Equal(t, int64(1), fileSize,
+		"the refreshed stat columns must reach the mirror")
+	assert.Equal(t, int64(1), fileInode)
 }
 
 // TestPushRepairsSessionDeletedDirectlyFromMirror is the required
