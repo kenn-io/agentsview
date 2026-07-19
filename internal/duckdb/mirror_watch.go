@@ -68,6 +68,23 @@ func SameMirrorFile(a, b os.FileInfo) bool {
 		a.Size() == b.Size()
 }
 
+// PrimeFileIdentity forces info to load and cache its underlying file
+// identity immediately. The ModTime/Size fallback in SameMirrorFile is not
+// sufficient on its own: Windows stamps file times from the system clock,
+// which advances in ~15.6ms ticks, so a file written and replaced within
+// one tick carries the original's ModTime, and a same-size replacement
+// then matches on every eagerly captured field while the lazily loaded
+// identity resolves to the new file (see SameMirrorFile). Self-comparing
+// the FileInfo triggers the lazy load while the path still points at the
+// file this info describes, making later identity comparisons reliable.
+// Call it at every baseline capture (store open, watcher adoption, serve
+// loop). Harmless on platforms that fill the identity eagerly.
+func PrimeFileIdentity(info os.FileInfo) {
+	if info != nil {
+		_ = os.SameFile(info, info)
+	}
+}
+
 // checkMirrorReplacement stats the mirror path once and, if the file's
 // identity changed since the currently open handle was opened (see
 // SameMirrorFile), tries to open and validate the new file, then adopt it.
@@ -158,6 +175,7 @@ func removeMirrorAlias(alias string) {
 // the old handle completes normally; only new queries see the
 // replacement.
 func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
+	PrimeFileIdentity(info)
 	s.handleMu.Lock()
 	oldConn := s.duck
 	oldAlias := s.aliasPath

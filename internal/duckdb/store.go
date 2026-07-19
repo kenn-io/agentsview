@@ -60,6 +60,7 @@ func NewStore(path string) (*Store, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
+	PrimeFileIdentity(info)
 	return &Store{path: path, duck: conn, fileInfo: info}, nil
 }
 

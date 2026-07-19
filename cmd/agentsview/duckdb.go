@@ -584,6 +584,7 @@ func serveQuackOnce(
 	if err != nil {
 		return quackServeSession{}, fmt.Errorf("statting duckdb mirror: %w", err)
 	}
+	duckdbsync.PrimeFileIdentity(info)
 	conn, err := duckdbsync.Open(duckCfg.Path)
 	if err != nil {
 		return quackServeSession{}, err
@@ -632,11 +633,15 @@ func serveQuackOnce(
 // reopen). Identity is compared with duckdbsync.SameMirrorFile rather than
 // os.SameFile alone because Windows loads a FileInfo's file identity
 // lazily, which makes a bare os.SameFile miss an already-completed rename
-// replacement (see SameMirrorFile). A stat error (the file briefly missing
-// mid-rename) is treated as no change yet.
+// replacement (see SameMirrorFile). Callers must have primed currentInfo's
+// identity at capture time (duckdbsync.PrimeFileIdentity); the entry-time
+// prime below is a second line of defense and a no-op when the caller
+// already did. A stat error (the file briefly missing mid-rename) is
+// treated as no change yet.
 func waitForReplacementOrShutdown(
 	ctx context.Context, path string, currentInfo os.FileInfo, interval time.Duration,
 ) bool {
+	duckdbsync.PrimeFileIdentity(currentInfo)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

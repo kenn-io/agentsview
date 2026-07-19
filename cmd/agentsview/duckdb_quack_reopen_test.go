@@ -26,6 +26,13 @@ func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("v1"), 0o644))
 	info, err := os.Stat(path)
 	require.NoError(t, err)
+	// Prime while the path still points at the original, per the
+	// PrimeFileIdentity contract. The replacement below deliberately has
+	// the SAME size, and on Windows both writes can land in the same
+	// ~15.6ms clock tick and share a ModTime, so this test exercises pure
+	// primed-identity detection — without the prime it flakes whenever
+	// the rename beats the first poll tick.
+	duckdbsync.PrimeFileIdentity(info)
 
 	ctx := context.Background()
 	done := make(chan bool, 1)
