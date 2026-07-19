@@ -101,6 +101,11 @@ endpoint = "http://localhost:11434/v1"`;
         applyProgress(status.phase, status.done, status.total);
         phase = "building";
         schedulePoll();
+      } else if (status.last_error) {
+        detail = status.last_error;
+        phase = "failed";
+      } else if (status.last_result) {
+        onResolved();
       } else {
         phase = "ready";
       }
