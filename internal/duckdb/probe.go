@@ -65,10 +65,11 @@ func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 			FileExists:   true,
 			ShapeIssue:   err.Error(),
 			LockConflict: lockConflict,
-			// A lock conflict proves the file is a DuckDB database another
-			// process has open; any other open failure means the file is not
-			// a DuckDB database at all, so it is not a recognized mirror.
-			RecognizedMirror: lockConflict,
+			// A lock conflict (another process) or a same-process
+			// double-open rejection proves the file is a live DuckDB
+			// database; any other open failure means the file is not a
+			// DuckDB database at all, so it is not a recognized mirror.
+			RecognizedMirror: lockConflict || isMirrorOpenInSameProcessError(err),
 		}, nil
 	}
 	defer func() { _ = conn.Close() }()
@@ -97,6 +98,18 @@ func isMirrorLockConflictError(err error) bool {
 		strings.Contains(msg, "Conflicting lock")
 }
 
+// isMirrorOpenInSameProcessError reports whether err is duckdb-go's
+// same-process double-open rejection ("Can't open a connection to same
+// database file with a different configuration than existing
+// connections"): the probe opens read-only, so it hits this whenever the
+// SAME process already holds the mirror open read-write (a live Store
+// while a push runs in-process). Like a cross-process lock conflict, it
+// proves the path is a live DuckDB database, so the file counts as a
+// recognized mirror even though it cannot be inspected right now.
+func isMirrorOpenInSameProcessError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "same database file")
+}
+
 // openReadOnlyMirror opens an existing DuckDB file read-only so probing can
 // never create or write to it. DuckDB accepts "access_mode=read_only" as a
 // DSN query parameter, which the duckdb-go driver forwards to the native
@@ -118,7 +131,8 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	existing, err := loadColumns(ctx, conn)
 	if err != nil {
 		probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
-		probe.RecognizedMirror = probe.LockConflict
+		probe.RecognizedMirror = probe.LockConflict ||
+			isMirrorOpenInSameProcessError(err)
 		return probe
 	}
 	// Recognition is deliberately looser than shape validity: any DuckDB
