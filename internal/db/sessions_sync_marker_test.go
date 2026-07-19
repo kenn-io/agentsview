@@ -48,6 +48,48 @@ func TestSyncMarkerMaintainedByTriggers(t *testing.T) {
 	assert.Equal(t, "2026-07-03T09:00:00.500Z", marker)
 }
 
+// TestReplaceSessionUsageEventsAdvancesSyncMarker pins the push-visibility
+// contract for usage-only rewrites: ReplaceSessionUsageEvents must bump
+// local_modified_at so the sync_marker trigger fires and both push targets
+// (PostgreSQL and the DuckDB mirror) re-select the session, even when no
+// session file changed (e.g. a pricing-driven recompute).
+func TestReplaceSessionUsageEventsAdvancesSyncMarker(t *testing.T) {
+	database := testDB(t)
+	ctx := context.Background()
+
+	backdate := func(id string) {
+		t.Helper()
+		_, err := database.getWriter().ExecContext(ctx,
+			`UPDATE sessions SET created_at = '2026-07-01T10:00:00.000Z',
+				local_modified_at = '2026-07-01T10:00:00.000Z'
+			 WHERE id = ?`, id)
+		require.NoError(t, err)
+	}
+	readMarker := func(id string) string {
+		t.Helper()
+		var marker string
+		require.NoError(t, database.getReader().QueryRowContext(ctx,
+			`SELECT sync_marker FROM sessions WHERE id = ?`, id).Scan(&marker))
+		return marker
+	}
+
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "sm-usage", Project: "p", Machine: "m", Agent: "claude-code"}))
+	backdate("sm-usage")
+	require.Equal(t, "2026-07-01T10:00:00.000Z", readMarker("sm-usage"))
+
+	require.NoError(t, database.ReplaceSessionUsageEvents("sm-usage",
+		[]UsageEvent{{Source: "session", Model: "model-x", OutputTokens: 5}}))
+	assert.Greater(t, readMarker("sm-usage"), "2026-07-01T10:00:00.000Z",
+		"replacing usage events must advance sync_marker")
+
+	// A deletion-only rewrite (no new events) is a change too.
+	backdate("sm-usage")
+	require.NoError(t, database.ReplaceSessionUsageEvents("sm-usage", nil))
+	assert.Greater(t, readMarker("sm-usage"), "2026-07-01T10:00:00.000Z",
+		"clearing usage events must advance sync_marker")
+}
+
 func TestListSessionsForMirrorWindowInclusiveLowerBoundUnboundedAbove(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()

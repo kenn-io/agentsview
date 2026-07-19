@@ -105,6 +105,48 @@ func TestPushFutureMarkerSessionStillReceivesLaterChanges(t *testing.T) {
 	assert.Equal(t, "mutated content", content)
 }
 
+// TestPushIncrementalMirrorsUsageOnlyChange regression-tests the usage-only
+// gap: ReplaceSessionUsageEvents rewrites usage_events without any session
+// file change, so unless it bumps local_modified_at (and via the trigger,
+// sync_marker) the session never becomes an incremental candidate and the
+// rewrite stays permanently absent from the mirror.
+func TestPushIncrementalMirrorsUsageOnlyChange(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 2)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	// Usage-only rewrite: no message or session-file change.
+	cost := 1.25
+	require.NoError(t, local.ReplaceSessionUsageEvents("sess-2", []db.UsageEvent{{
+		SessionID:    "sess-2",
+		Source:       "session",
+		Model:        "model-x",
+		InputTokens:  10,
+		OutputTokens: 5,
+		CostUSD:      &cost,
+		OccurredAt:   "2026-02-01T00:02:30.000Z",
+	}}))
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
+		"a usage-only rewrite must re-select the session for the mirror")
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var model string
+	var costUSD float64
+	require.NoError(t, conn.QueryRow(
+		`SELECT model, cost_usd FROM usage_events WHERE session_id = ?`,
+		"sess-2",
+	).Scan(&model, &costUSD))
+	assert.Equal(t, "model-x", model)
+	assert.InDelta(t, 1.25, costUSD, 1e-9)
+}
+
 func TestPushAppliesDeletionJournalDelta(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 2)
