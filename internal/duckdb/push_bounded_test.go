@@ -494,7 +494,8 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 
 	snap, err := syncer.loadCurationSnapshot(ctx)
 	require.NoError(t, err)
-	require.NoError(t, syncer.replaceCuration(ctx, snap))
+	_, err = syncer.replaceCuration(ctx, snap)
+	require.NoError(t, err)
 
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"starred_sessions", "session_id = ?", "sess-1", 1)
@@ -502,6 +503,62 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 		"starred_sessions", "session_id = ?", "sess-2", 0)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"pinned_messages", "session_id = ?", "sess-2", 0)
+}
+
+// TestCurationRefreshRetriesUntilSkippedSessionIsMirrored pins the
+// written-fingerprint contract: when replaceCuration residency-skips a
+// star for an in-scope session absent from the mirror, the recorded
+// fingerprint must cover only what was written. Recording the full local
+// fingerprint instead would make the skipped star look delivered, so once
+// the session lands the matching fingerprint would suppress every future
+// refresh and the star would stay missing until an unrelated curation
+// edit.
+func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
+	ctx := context.Background()
+	local, _ := newPushFixture(t, 2)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
+	require.NoError(t, err)
+	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
+	require.NoError(t, err)
+	pushOne := func(id string) {
+		for _, sess := range sessions {
+			if sess.ID != id {
+				continue
+			}
+			_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID])
+			require.NoError(t, err)
+		}
+	}
+	// Mirror only sess-1; the starred sess-2 stays local-only for now.
+	pushOne("sess-1")
+	ok, err := local.StarSession("sess-2")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	refreshed, err := syncer.refreshCurationIfChanged(ctx)
+	require.NoError(t, err)
+	assert.True(t, refreshed)
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"starred_sessions", "session_id = ?", "sess-2", 0)
+
+	// Once sess-2 lands in the mirror, the unchanged local curation state
+	// must still trigger another refresh that delivers the skipped star.
+	pushOne("sess-2")
+	refreshed, err = syncer.refreshCurationIfChanged(ctx)
+	require.NoError(t, err)
+	assert.True(t, refreshed,
+		"a star skipped for a not-yet-mirrored session must refresh again once the session lands")
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"starred_sessions", "session_id = ?", "sess-2", 1)
+
+	// With every curated session resident the fingerprint converges, so
+	// further pushes skip the refresh.
+	refreshed, err = syncer.refreshCurationIfChanged(ctx)
+	require.NoError(t, err)
+	assert.False(t, refreshed)
 }
 
 // TestCurationFingerprintDetectsNoteOnlyEdit guards the specific gap a

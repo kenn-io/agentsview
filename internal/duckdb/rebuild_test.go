@@ -443,8 +443,6 @@ func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
 
 	snap, err := s.loadCurationSnapshot(ctx)
 	require.NoError(t, err)
-	fingerprint, err := snap.fingerprint()
-	require.NoError(t, err)
 
 	// A curation edit races the in-flight copy: it lands after the
 	// snapshot was taken but before replaceCuration runs.
@@ -452,9 +450,10 @@ func TestReplaceCurationWritesTheFingerprintedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	require.NoError(t, s.replaceCuration(ctx, snap))
+	written, err := s.replaceCuration(ctx, snap)
+	require.NoError(t, err)
 	require.NoError(t, recordMetadataKey(
-		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
+		ctx, s.DB(), curationFingerprintMetadataKey, written,
 	))
 	finishCurationSnapshotRebuild(t, s, local)
 
@@ -489,8 +488,6 @@ func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
 
 	snap, err := s.loadCurationSnapshot(ctx)
 	require.NoError(t, err)
-	fingerprint, err := snap.fingerprint()
-	require.NoError(t, err)
 
 	// The racing edit toggles and reverts before the copy runs.
 	ok, err := local.StarSession(ids[1])
@@ -498,9 +495,10 @@ func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, local.UnstarSession(ids[1]))
 
-	require.NoError(t, s.replaceCuration(ctx, snap))
+	written, err := s.replaceCuration(ctx, snap)
+	require.NoError(t, err)
 	require.NoError(t, recordMetadataKey(
-		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
+		ctx, s.DB(), curationFingerprintMetadataKey, written,
 	))
 	finishCurationSnapshotRebuild(t, s, local)
 

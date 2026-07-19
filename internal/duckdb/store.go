@@ -54,17 +54,26 @@ type Store struct {
 // read-only, so a serving Store coexists with other read-only opens (other
 // serve processes, push probes) and never blocks a push's probe; the Store's
 // db.Store surface is read-only anyway (see ReadOnly).
+//
+// The file identity is captured BEFORE the mirror is opened, matching
+// checkMirrorReplacement's stat-then-open order. If a rebuild swaps the
+// file inside the stat/open window, the connection serves the new
+// generation while fileInfo still describes the old one, so the
+// replacement watcher fires once and reopens onto the file it is already
+// serving — a harmless extra reopen. The reverse order inverts the race:
+// the connection serves the old generation while fileInfo describes the
+// new one, so the watcher never sees a change and the Store serves stale
+// data until the next rebuild.
 func NewStore(path string) (*Store, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
+	}
+	PrimeFileIdentity(info)
 	conn, err := OpenReadOnly(path)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
-	}
-	PrimeFileIdentity(info)
 	return &Store{path: path, duck: conn, fileInfo: info}, nil
 }
 

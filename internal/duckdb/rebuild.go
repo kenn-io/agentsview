@@ -350,12 +350,13 @@ func (s *Sync) pushEverything(
 
 	if result.Errors == 0 {
 		// One snapshot feeds both the fingerprint and the copy (see
-		// curationSnapshot): the recorded fingerprint always describes
-		// exactly what replaceCuration wrote, so a star/pin change landing
-		// during the rebuild either made it into the snapshot (and is both
-		// mirrored and fingerprinted) or lands after it (and mismatches the
-		// stored fingerprint on the next push, refreshing again). No
-		// interleaving can strand the mirror behind a matching fingerprint.
+		// curationSnapshot), and the recorded fingerprint covers what
+		// replaceCuration actually WROTE, so it always describes exactly
+		// the mirror's curation state: a star/pin change landing during
+		// the rebuild either made it into the snapshot (mirrored and
+		// fingerprinted) or lands after it (mismatches on the next push,
+		// refreshing again). No interleaving can strand the mirror behind
+		// a matching fingerprint.
 		//
 		// replaceCuration validates curation session IDs against the mirror's
 		// own sessions table, which at this point holds exactly the batches
@@ -365,15 +366,12 @@ func (s *Sync) pushEverything(
 		if err != nil {
 			return result, err
 		}
-		fingerprint, err := snap.fingerprint()
+		written, err := s.replaceCuration(ctx, snap)
 		if err != nil {
 			return result, err
 		}
-		if err := s.replaceCuration(ctx, snap); err != nil {
-			return result, err
-		}
 		if err := recordMetadataKey(
-			ctx, s.duck, curationFingerprintMetadataKey, fingerprint,
+			ctx, s.duck, curationFingerprintMetadataKey, written,
 		); err != nil {
 			return result, err
 		}

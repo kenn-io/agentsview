@@ -536,6 +536,12 @@ func (snap curationSnapshot) fingerprint() (string, error) {
 		Starred []string
 		Pinned  []db.PinCurationEntry
 	}{Starred: snap.starred, Pinned: pinned}
+	// A loaded snapshot holds nil for "no stars" while a restricted one
+	// (see replaceCuration) holds an empty slice; both must hash the same
+	// or an empty curation state would refresh on every push.
+	if len(payload.Starred) == 0 {
+		payload.Starred = nil
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("encoding curation fingerprint: %w", err)
@@ -545,38 +551,59 @@ func (snap curationSnapshot) fingerprint() (string, error) {
 }
 
 // replaceCuration rewrites starred_sessions and pinned_messages from the
-// given snapshot — never from a fresh local read, so the caller's recorded
-// fingerprint (computed from the same snapshot) always matches what lands
-// in the mirror. All work is bounded by curation size, not mirror size:
-// mirror membership is validated for exactly the snapshot's session IDs
-// (one batched lookup, see mirrorResidentSessionIDs). Only curation rows
-// whose sessions actually exist in the mirror are inserted — a star or pin
-// for a session that was never mirrored (out of scope, not yet pushed) is
-// skipped, and pin notes are preserved. The delete side stays the
-// machine-scoped clear of both tables, so removed stars/pins disappear
-// without enumerating them.
-func (s *Sync) replaceCuration(ctx context.Context, snap curationSnapshot) error {
-	starred := snap.starred
+// given snapshot — never from a fresh local read — and returns the
+// fingerprint of the resident-restricted snapshot it actually wrote. The
+// caller records THAT fingerprint, not the full snapshot's: a star or pin
+// for an in-scope session absent from the mirror (push failed, or the
+// session was created after this push enumerated its candidates) is
+// skipped by the residency check, and fingerprinting the full snapshot
+// anyway would make the skipped rows look delivered — once the session
+// lands, the matching fingerprint would suppress the refresh and the
+// star/pin would stay missing until an unrelated curation edit. With the
+// written fingerprint, the local state keeps mismatching until every
+// curated session is resident, so each push retries the (curation-bounded)
+// refresh and converges as soon as the session is mirrored.
+//
+// All work is bounded by curation size, not mirror size: mirror membership
+// is validated for exactly the snapshot's session IDs (one batched lookup,
+// see mirrorResidentSessionIDs), pin notes are preserved, and the delete
+// side stays the machine-scoped clear of both tables, so removed
+// stars/pins disappear without enumerating them.
+func (s *Sync) replaceCuration(
+	ctx context.Context, snap curationSnapshot,
+) (string, error) {
 	pinnedSessions := make([]string, 0, len(snap.pinsBySession))
 	for id := range snap.pinsBySession {
 		pinnedSessions = append(pinnedSessions, id)
 	}
 	slices.Sort(pinnedSessions)
 	resident, err := s.mirrorResidentSessionIDs(
-		ctx, append(append([]string(nil), starred...), pinnedSessions...),
+		ctx, append(append([]string(nil), snap.starred...), pinnedSessions...),
 	)
 	if err != nil {
-		return err
+		return "", err
+	}
+	written := curationSnapshot{
+		pinsBySession: make(map[string][]db.PinnedMessage, len(snap.pinsBySession)),
+	}
+	for _, id := range snap.starred {
+		if resident[id] {
+			written.starred = append(written.starred, id)
+		}
 	}
 	residentPinned := make([]string, 0, len(pinnedSessions))
 	for _, id := range pinnedSessions {
 		if resident[id] {
 			residentPinned = append(residentPinned, id)
+			written.pinsBySession[id] = snap.pinsBySession[id]
 		}
 	}
-	pinsBySession := snap.pinsBySession
+	fingerprint, err := written.fingerprint()
+	if err != nil {
+		return "", err
+	}
 
-	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
+	err = s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
 		for _, table := range []string{"pinned_messages", "starred_sessions"} {
 			if err := s.execMutation(ctx, tx, `
 				DELETE FROM `+table+`
@@ -587,14 +614,11 @@ func (s *Sync) replaceCuration(ctx context.Context, snap curationSnapshot) error
 			}
 		}
 		for _, id := range residentPinned {
-			if err := insertPinnedMessages(ctx, tx, pinsBySession[id]); err != nil {
+			if err := insertPinnedMessages(ctx, tx, written.pinsBySession[id]); err != nil {
 				return err
 			}
 		}
-		for _, id := range starred {
-			if !resident[id] {
-				continue
-			}
+		for _, id := range written.starred {
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO starred_sessions (session_id, created_at)
 				 VALUES (?, current_timestamp)`,
@@ -605,6 +629,10 @@ func (s *Sync) replaceCuration(ctx context.Context, snap curationSnapshot) error
 		}
 		return nil
 	})
+	if err != nil {
+		return "", err
+	}
+	return fingerprint, nil
 }
 
 // refreshCurationIfChanged skips replaceCuration's delete+reinsert when
@@ -617,7 +645,10 @@ func (s *Sync) replaceCuration(ctx context.Context, snap curationSnapshot) error
 // on the very next push exactly as before; the cost of a push that changed
 // nothing at all is two small local queries bounded by curation size, and
 // even a refresh that does run is curation-bounded (see replaceCuration).
-// It reports whether it actually refreshed.
+// The stored fingerprint covers what the last refresh actually WROTE, so
+// while a curated session is missing from the mirror the local state keeps
+// mismatching and every push retries the refresh until it converges (see
+// replaceCuration). It reports whether it actually refreshed.
 func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 	snap, err := s.loadCurationSnapshot(ctx)
 	if err != nil {
@@ -634,11 +665,12 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 	if fingerprint == stored {
 		return false, nil
 	}
-	if err := s.replaceCuration(ctx, snap); err != nil {
+	written, err := s.replaceCuration(ctx, snap)
+	if err != nil {
 		return false, err
 	}
 	if err := recordMetadataKey(
-		ctx, s.duck, curationFingerprintMetadataKey, fingerprint,
+		ctx, s.duck, curationFingerprintMetadataKey, written,
 	); err != nil {
 		return false, err
 	}
