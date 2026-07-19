@@ -17,6 +17,17 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// countReopenAliasFiles globs dir for the hardlink files openMirrorAlias
+// creates (path.reopen-N). A non-zero count after a Store has fully settled
+// and closed means an alias leaked instead of being removed by swapHandle
+// or Store.Close.
+func countReopenAliasFiles(t *testing.T, dir string) int {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "*.reopen-*"))
+	require.NoError(t, err)
+	return len(matches)
+}
+
 // buildMirrorFixture builds a fresh, on-disk, schema-v3-compatible mirror
 // file at path containing a single session (sessionID). It uses the same
 // rebuildMirror path production rebuilds use, so the resulting file is a
@@ -150,4 +161,97 @@ func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 
 	assert.Equal(t, []string{"old-session"}, listMirrorSessionIDs(t, store),
 		"store must keep serving the old handle when the replacement is incompatible")
+}
+
+// TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements chains a second
+// rebuild-driven swap onto the reopen contract TestStoreReopensAfterMirrorReplacement
+// covers once: a Store must not just survive one swap, it must keep working
+// after the alias it swapped onto is itself replaced, and it must not leak
+// the openMirrorAlias hardlink files that changeover uses (see mirror_watch.go).
+func TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.duckdb")
+	buildMirrorFixture(t, path, "gen-1")
+
+	store, err := NewStore(path)
+	require.NoError(t, err)
+
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	store.WatchMirrorReplacement(watchCtx, 20*time.Millisecond, nil)
+
+	assert.Equal(t, []string{"gen-1"}, listMirrorSessionIDs(t, store))
+
+	gen2Path := filepath.Join(dir, "gen2.duckdb")
+	buildMirrorFixtureAt(t, gen2Path, "gen-2")
+	require.NoError(t, os.Rename(gen2Path, path))
+	require.Eventually(t, func() bool {
+		ids := listMirrorSessionIDs(t, store)
+		return len(ids) == 1 && ids[0] == "gen-2"
+	}, 5*time.Second, 50*time.Millisecond, "store must adopt the first replacement")
+
+	gen3Path := filepath.Join(dir, "gen3.duckdb")
+	buildMirrorFixtureAt(t, gen3Path, "gen-3")
+	require.NoError(t, os.Rename(gen3Path, path))
+	require.Eventually(t, func() bool {
+		ids := listMirrorSessionIDs(t, store)
+		return len(ids) == 1 && ids[0] == "gen-3"
+	}, 5*time.Second, 50*time.Millisecond, "store must adopt the second, consecutive replacement")
+
+	// Stop polling and close before checking for leaks: Store.Close removes
+	// the currently active alias (the one backing gen-3's handle), and the
+	// gen-2 alias was already removed by the second swap itself.
+	cancelWatch()
+	require.NoError(t, store.Close())
+	assert.Equal(t, 0, countReopenAliasFiles(t, dir),
+		"no *.reopen-* hardlink files may remain once the store has settled and closed")
+}
+
+// TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement extends
+// TestStoreKeepsOldHandleWhenReplacementIncompatible: after the watcher
+// rejects one incompatible replacement and reports it via onEvent, it must
+// keep polling and pick up a subsequent good replacement rather than getting
+// stuck refusing every future swap.
+func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.duckdb")
+	buildMirrorFixture(t, path, "old-session")
+
+	store, err := NewStore(path)
+	require.NoError(t, err)
+	defer store.Close()
+
+	var mu sync.Mutex
+	var events []error
+	onEvent := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, err)
+	}
+
+	ctx := t.Context()
+	store.WatchMirrorReplacement(ctx, 20*time.Millisecond, onEvent)
+
+	badPath := filepath.Join(dir, "bad.duckdb")
+	buildIncompatibleMirrorFixture(t, badPath)
+	require.NoError(t, os.Rename(badPath, path))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(events) > 0
+	}, 5*time.Second, 100*time.Millisecond, "onEvent should report the incompatible replacement")
+	assert.Equal(t, []string{"old-session"}, listMirrorSessionIDs(t, store),
+		"store must keep serving the old handle while the replacement is incompatible")
+
+	goodPath := filepath.Join(dir, "good.duckdb")
+	buildMirrorFixtureAt(t, goodPath, "recovered-session")
+	require.NoError(t, os.Rename(goodPath, path))
+
+	require.Eventually(t, func() bool {
+		ids := listMirrorSessionIDs(t, store)
+		return len(ids) == 1 && ids[0] == "recovered-session"
+	}, 5*time.Second, 100*time.Millisecond,
+		"store must adopt a good mirror that arrives after an incompatible one")
 }

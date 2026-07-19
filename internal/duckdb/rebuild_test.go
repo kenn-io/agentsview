@@ -186,7 +186,7 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name         string
-		setupMirror  func(t *testing.T, path string) int // returns wantSessions
+		setupMirror  func(t *testing.T, path string) int // returns actual session count written
 		wantSessions int
 		expectError  bool
 		errorPattern string
