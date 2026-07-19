@@ -5305,15 +5305,14 @@ func TestCopySessionMetadataPreservesClears(t *testing.T) {
 }
 
 // TestCopySessionMetadataFromPreservesDeletionJournalWithRevisionGuard
-// covers both halves of the FIX2 deletion-journal durability contract in
+// covers both halves of the deletion-journal durability contract in
 // one test: session_deletion_changes rows survive the resync copy
 // (gone-2, absent from dst before the copy), and highest-revision-wins
-// per session_id protects a row the destination already advanced past
-// (gone-1, whose dst revision is higher than the source's) from being
-// regressed. The same guard is exercised on the
-// session_deletion_publication_revision counter itself, copied via
-// archive_metadata: the destination's higher counter must not be lowered
-// to the source's.
+// per session_id resolves a same-session conflict (gone-1, deleted in
+// both source and destination) to the fresh destination row, whose
+// revisions rebaseFreshPublicationJournalsTx lifted above every source
+// revision. The counter itself must land at source + fresh so every
+// journal row sits at or below it.
 func TestCopySessionMetadataFromPreservesDeletionJournalWithRevisionGuard(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -5355,21 +5354,23 @@ func TestCopySessionMetadataFromPreservesDeletionJournalWithRevisionGuard(t *tes
 
 	requireNoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
 
-	// The counter must not be lowered by the source's smaller value.
+	// The counter must land at source (2) + fresh (3) so the rebased fresh
+	// rows sit at or below it and above every source revision.
 	dstRevisionAfter, err := dstDB.SessionDeletionPublicationRevision(ctx)
 	requireNoError(t, err, "dst revision after copy")
-	assert.EqualValues(t, 3, dstRevisionAfter,
-		"max-guarded counter must not be lowered by a smaller source revision")
+	assert.EqualValues(t, 5, dstRevisionAfter,
+		"counter must be the sum of source and fresh counters")
 
-	// gone-1: dst's higher-revision row must survive untouched.
+	// gone-1: dst's fresh row must win the conflict, rebased above the
+	// source counter (3 fresh + 2 source).
 	var gone1Revision int64
 	var gone1Deleted bool
 	requireNoError(t, dstDB.getReader().QueryRow(
 		"SELECT revision, deleted FROM session_deletion_changes WHERE session_id = ?",
 		"gone-1",
 	).Scan(&gone1Revision, &gone1Deleted), "query gone-1 after copy")
-	assert.EqualValues(t, 3, gone1Revision,
-		"a lower-revision source row must not regress an existing tombstone")
+	assert.EqualValues(t, 5, gone1Revision,
+		"a source row must not regress the rebased fresh tombstone")
 	assert.True(t, gone1Deleted, "gone-1 deleted")
 
 	// gone-2: absent from dst before the copy, must be copied in as-is.
@@ -5392,6 +5393,134 @@ func TestCopySessionMetadataFromPreservesDeletionJournalWithRevisionGuard(t *tes
 		ids = append(ids, tomb.SessionID)
 	}
 	assert.ElementsMatch(t, []string{"gone-1", "gone-2"}, ids)
+}
+
+// TestCopySessionMetadataFromRebasesFreshDeletionJournalAboveSourceCounter
+// pins the resync stranding fix: a deletion the FRESH database records
+// during resync (e.g. a parser-exclusion drop) gets a revision from the
+// fresh counter, which starts at 1. Every mirror cursor was issued against
+// the OLD counter, so without rebasing, the fresh tombstone sits
+// permanently below the cursor and the (after, through] delta never
+// delivers it. After the copy the fresh row's revision must exceed the
+// source counter and a mirror that already consumed everything the source
+// published must still receive it.
+func TestCopySessionMetadataFromRebasesFreshDeletionJournalAboveSourceCounter(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Source ("old") DB: three deletions advance the counter to 3. A fully
+	// caught-up mirror holds consumed cursor 3.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	for _, id := range []string{"old-1", "old-2", "old-3"} {
+		insertSession(t, srcDB, id, "proj")
+		requireNoError(t, srcDB.DeleteSession(id), "delete "+id+" in src")
+	}
+	srcRevision, err := srcDB.SessionDeletionPublicationRevision(ctx)
+	requireNoError(t, err, "src revision")
+	require.EqualValues(t, 3, srcRevision, "src revision")
+	srcDB.Close()
+
+	// Destination (fresh resync) DB: one deletion recorded during the
+	// resync window; its journal row carries revision 1 from the fresh
+	// counter.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "fresh-gone", "proj")
+	requireNoError(t, dstDB.DeleteSession("fresh-gone"), "delete fresh-gone in dst")
+
+	requireNoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
+
+	var freshRevision int64
+	requireNoError(t, dstDB.getReader().QueryRow(
+		"SELECT revision FROM session_deletion_changes WHERE session_id = ?",
+		"fresh-gone",
+	).Scan(&freshRevision), "query fresh-gone after copy")
+	assert.Greater(t, freshRevision, srcRevision,
+		"the fresh deletion must be rebased above the source counter")
+
+	counter, err := dstDB.SessionDeletionPublicationRevision(ctx)
+	requireNoError(t, err, "dst counter after copy")
+	assert.EqualValues(t, srcRevision+1, counter,
+		"counter must be the sum of source and fresh counters")
+
+	// The mirror's next delta from its consumed cursor must deliver the
+	// fresh tombstone, and must not re-deliver source tombstones the
+	// cursor already covers.
+	delta, err := dstDB.LoadSessionDeletionDelta(ctx, srcRevision, counter, nil, nil)
+	requireNoError(t, err, "LoadSessionDeletionDelta from mirror cursor")
+	var ids []string
+	for _, tomb := range delta {
+		ids = append(ids, tomb.SessionID)
+	}
+	assert.Equal(t, []string{"fresh-gone"}, ids)
+}
+
+// TestCopySessionMetadataFromRebasesFreshIdentityJournal pins the same
+// stranding fix for the project-identity journals, which share the
+// trigger+counter pattern via project_identity_publication_revision: an
+// identity snapshot journaled by the FRESH database during resync must be
+// rebased above the source counter so a mirror's IdentityRevision cursor
+// still receives it through LoadProjectIdentityPublicationDelta.
+func TestCopySessionMetadataFromRebasesFreshIdentityJournal(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Source ("old") DB: session inserts advance the identity counter via
+	// the generated-snapshot trigger.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	for _, id := range []string{"old-1", "old-2", "old-3"} {
+		insertSession(t, srcDB, id, "proj")
+	}
+	srcRevision, err := srcDB.ProjectIdentityPublicationRevision(ctx)
+	requireNoError(t, err, "src identity revision")
+	require.Positive(t, srcRevision, "src identity revision")
+	srcDB.Close()
+
+	// Destination (fresh resync) DB: one session parsed during resync
+	// journals its snapshot with a small fresh revision.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "fresh-s", "proj")
+	freshRevision, err := dstDB.ProjectIdentityPublicationRevision(ctx)
+	requireNoError(t, err, "dst identity revision before copy")
+	require.Positive(t, freshRevision, "dst identity revision before copy")
+	require.Less(t, freshRevision, srcRevision,
+		"fixture must strand the fresh row below the source counter")
+
+	requireNoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
+
+	var snapshotRevision int64
+	requireNoError(t, dstDB.getReader().QueryRow(
+		"SELECT revision FROM session_project_identity_snapshot_changes WHERE session_id = ?",
+		"fresh-s",
+	).Scan(&snapshotRevision), "query fresh-s snapshot journal after copy")
+	assert.Greater(t, snapshotRevision, srcRevision,
+		"the fresh snapshot journal row must be rebased above the source counter")
+
+	// The identity base-table copies later in the same transaction fire
+	// triggers that advance the summed counter further, so the counter is
+	// at least source + fresh.
+	counter, err := dstDB.ProjectIdentityPublicationRevision(ctx)
+	requireNoError(t, err, "dst identity counter after copy")
+	assert.GreaterOrEqual(t, counter, srcRevision+freshRevision,
+		"identity counter must cover the rebased fresh rows")
+
+	delta, err := dstDB.LoadProjectIdentityPublicationDelta(
+		ctx, srcRevision, counter, nil, nil,
+	)
+	requireNoError(t, err, "LoadProjectIdentityPublicationDelta from mirror cursor")
+	var found bool
+	for _, snap := range delta.Snapshots {
+		if snap.SessionID == "fresh-s" {
+			found = true
+		}
+	}
+	assert.True(t, found,
+		"a mirror cursor at the source counter must receive the fresh snapshot")
 }
 
 func TestPinMessageIdempotent(t *testing.T) {

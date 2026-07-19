@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -557,24 +558,28 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if err := rebaseFreshPublicationJournalsTx(ctx, tx); err != nil {
+		return err
+	}
+
+	// The publication-revision counters are excluded here because
+	// rebaseFreshPublicationJournalsTx above already set each one to the
+	// sum of the source and destination counters; a plain overwrite (or the
+	// old max-guard) from the source would clobber that sum and re-strand
+	// the rebased fresh journal rows below it. database_id identifies the
+	// new physical generation and is never copied.
 	if oldDBHasTable(ctx, tx, "archive_metadata") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.archive_metadata (key, value, created_at, updated_at)
 			SELECT key, value, created_at, updated_at
 			FROM old_db.archive_metadata
-			WHERE key != 'database_id'
+			WHERE key NOT IN (
+				'database_id',
+				'project_identity_publication_revision',
+				'session_deletion_publication_revision'
+			)
 			ON CONFLICT(key) DO UPDATE SET
-				value = CASE
-					WHEN excluded.key IN (
-						'project_identity_publication_revision',
-						'session_deletion_publication_revision'
-					)
-					THEN CAST(max(
-						CAST(archive_metadata.value AS INTEGER),
-						CAST(excluded.value AS INTEGER)
-					) AS TEXT)
-					ELSE excluded.value
-				END,
+				value = excluded.value,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying archive metadata: %w", err)
@@ -590,10 +595,11 @@ func (d *DB) CopySessionMetadataFrom(
 	// revision wins per session_id (the WHERE guard on DO UPDATE) so a
 	// session deleted-then-undeleted-then-deleted-again in the fresh DB
 	// during the resync window is never regressed by an older row from the
-	// quiesced source. The revision numbers themselves stay valid because
-	// the archive_metadata copy above gives the counter the same max-guard
-	// treatment, so the destination's counter is always >= every revision
-	// copied here.
+	// quiesced source. Source rows keep their original revisions, which are
+	// <= the source counter and therefore <= the summed counter written by
+	// rebaseFreshPublicationJournalsTx; rebased fresh rows always sit above
+	// every source revision, so per-session conflicts resolve to the fresh
+	// row — the newer truth recorded during the resync window.
 	if oldDBHasTable(ctx, tx, "session_deletion_changes") {
 		// The SELECT's "WHERE true" is required, not decorative: SQLite
 		// only recognizes "ON CONFLICT ... DO UPDATE ... WHERE ..." as an
@@ -742,6 +748,119 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	return tx.Commit()
+}
+
+// publicationJournal pairs a trigger-maintained archive_metadata revision
+// counter with the journal tables whose rows it stamps.
+type publicationJournal struct {
+	counterKey string
+	tables     []string
+}
+
+func publicationJournals() []publicationJournal {
+	return []publicationJournal{
+		{
+			counterKey: archiveMetadataSessionDeletionRevisionKey,
+			tables:     []string{"session_deletion_changes"},
+		},
+		{
+			counterKey: archiveMetadataProjectIdentityRevisionKey,
+			tables: []string{
+				"project_identity_observation_changes",
+				"session_project_identity_snapshot_changes",
+			},
+		},
+	}
+}
+
+// rebaseFreshPublicationJournalsTx lifts the fresh (destination) database's
+// journal revisions above every revision the quiesced source ever issued.
+//
+// A resync builds a fresh database whose trigger-driven revision counters
+// start at 1, so journal rows recorded during the resync (a parser-exclusion
+// drop, an orphan-copy re-insert, a generated-snapshot cleanup) carry small
+// revisions. Mirrors, however, hold consumed cursors issued against the OLD
+// database's counter and apply half-open (after, through] deltas. Simply
+// max-guarding the counter back up to the old value would leave those fresh
+// rows permanently below every mirror cursor: the delta would never deliver
+// them, so e.g. a session deleted during resync would survive in the mirror
+// until a full rebuild.
+//
+// The fix: shift every fresh journal row up by the source counter and set
+// the destination counter to source + fresh. Fresh rows land above every
+// possible mirror cursor (all <= the source counter) and above every source
+// row copied afterwards, so per-key conflicts resolve to the fresh row.
+// Must run before the source journal rows are copied — the shift must only
+// touch fresh-side rows — and the counters must not be overwritten by the
+// generic archive_metadata copy afterwards. Later trigger activity in the
+// same transaction (the identity base-table copies) increments the summed
+// counter normally, staying consistent.
+func rebaseFreshPublicationJournalsTx(ctx context.Context, tx *sql.Tx) error {
+	if !oldDBHasTable(ctx, tx, "archive_metadata") {
+		return nil
+	}
+	for _, journal := range publicationJournals() {
+		oldCounter, err := archiveMetadataCounter(
+			ctx, tx, "old_db", journal.counterKey,
+		)
+		if err != nil {
+			return err
+		}
+		if oldCounter == 0 {
+			// No source history: every possible mirror cursor is <= 0, so
+			// fresh revisions are deliverable as-is.
+			continue
+		}
+		freshCounter, err := archiveMetadataCounter(
+			ctx, tx, "main", journal.counterKey,
+		)
+		if err != nil {
+			return err
+		}
+		for _, table := range journal.tables {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE main."+table+" SET revision = revision + ?",
+				oldCounter,
+			); err != nil {
+				return fmt.Errorf("rebasing %s revisions: %w", table, err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.archive_metadata (key, value)
+			VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET
+				value = excluded.value,
+				updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+			journal.counterKey,
+			strconv.FormatInt(oldCounter+freshCounter, 10),
+		); err != nil {
+			return fmt.Errorf("summing %s counter: %w", journal.counterKey, err)
+		}
+	}
+	return nil
+}
+
+// archiveMetadataCounter reads a non-negative integer archive_metadata value
+// from the given attached schema ("main" or "old_db"), returning 0 when the
+// key is absent.
+func archiveMetadataCounter(
+	ctx context.Context, tx *sql.Tx, schema, key string,
+) (int64, error) {
+	var raw string
+	err := tx.QueryRowContext(ctx,
+		"SELECT value FROM "+schema+".archive_metadata WHERE key = ?", key,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reading %s counter from %s: %w", key, schema, err)
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("invalid %s counter %q in %s", key, raw, schema)
+	}
+	return value, nil
 }
 
 // oldDBHasTable checks if a table exists in old_db.
