@@ -522,3 +522,267 @@ func TestAdvanceExtractCursorReplayKeepsFailureState(t *testing.T) {
 	assert.Equal(t, 2, progress.UnitCursor)
 	assert.Equal(t, "boom", progress.LastError)
 }
+
+func seedExtractCandidate(
+	t *testing.T, d *DB, id string, endedAgo time.Duration, mutate func(*Session),
+) {
+	t.Helper()
+	ended := time.Now().Add(-endedAgo).UTC().Format("2006-01-02T15:04:05.000Z")
+	s := Session{
+		ID:           id,
+		Project:      "proj",
+		Machine:      defaultMachine,
+		Agent:        defaultAgent,
+		EndedAt:      &ended,
+		MessageCount: 3,
+	}
+	if mutate != nil {
+		mutate(&s)
+	}
+	require.NoError(t, d.UpsertSession(s))
+}
+
+func TestExtractCandidatesFiltersIneligibleSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-ok", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-automated", 2*time.Hour, func(s *Session) {
+		s.IsAutomated = true
+	})
+	seedExtractCandidate(t, d, "sess-empty", 2*time.Hour, func(s *Session) {
+		s.MessageCount = 0
+	})
+	seedExtractCandidate(t, d, "sess-open", 2*time.Hour, func(s *Session) {
+		s.EndedAt = nil
+	})
+	seedExtractCandidate(t, d, "sess-recent", 5*time.Minute, nil)
+	seedExtractCandidate(t, d, "sess-secret", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-trashed", 2*time.Hour, nil)
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET secret_leak_count = 2 WHERE id = 'sess-secret'")
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET deleted_at = '2026-01-01T00:00:00.000Z' " +
+			"WHERE id = 'sess-trashed'")
+	require.NoError(t, err)
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint: "fp-a",
+		QuietCutoff: time.Now().Add(-30 * time.Minute),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sess-ok"}, ids)
+}
+
+func TestExtractCandidatesRespectsProgressState(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Distinct ended-at offsets pin the expected order (oldest first).
+	seedExtractCandidate(t, d, "sess-new", 6*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-pending", 5*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-partial", 4*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-done", 3*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-failed-fresh", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-failed-stale", 1*time.Hour, nil)
+
+	for _, fp := range []string{"fp-a", "fp-b"} {
+		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
+	_, err := d.UpsertExtractProgress(ctx, "sess-pending", "fp-a", "dg", 2)
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-partial", "fp-a", "dg", 2)
+	require.NoError(t, err)
+	require.NoError(t,
+		d.AdvanceExtractCursor(ctx, "sess-partial", "fp-a", "dg", 1))
+	_, err = d.UpsertExtractProgress(ctx, "sess-done", "fp-a", "dg", 1)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-done", "fp-a", "dg", 1))
+	for _, id := range []string{"sess-failed-fresh", "sess-failed-stale"} {
+		_, err = d.UpsertExtractProgress(ctx, id, "fp-a", "dg", 2)
+		require.NoError(t, err)
+		require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+			SessionID: id, Fingerprint: "fp-a",
+			ExpectedDigest: "dg", LastError: "boom",
+		}))
+	}
+	_, err = d.getWriter().Exec(
+		"UPDATE recall_extract_progress SET updated_at = " +
+			"'2000-01-01T00:00:00.000Z' WHERE session_id = 'sess-failed-stale'")
+	require.NoError(t, err)
+	// Progress under another generation must not hide a session from fp-a.
+	_, err = d.UpsertExtractProgress(ctx, "sess-new", "fp-b", "dg", 1)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-new", "fp-b", "dg", 1))
+
+	query := ExtractCandidateQuery{
+		Fingerprint:       "fp-a",
+		QuietCutoff:       time.Now().Add(-30 * time.Minute),
+		FailedRetryCutoff: time.Now().Add(-30 * time.Minute),
+	}
+	ids, err := d.ExtractCandidates(ctx, query)
+	require.NoError(t, err)
+	assert.Equal(t,
+		[]string{"sess-new", "sess-pending", "sess-partial", "sess-failed-stale"},
+		ids, "done stays done, fresh failures wait out the backoff")
+
+	query.IncludeDone = true
+	ids, err = d.ExtractCandidates(ctx, query)
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-done")
+
+	query.IncludeDone = false
+	query.Limit = 2
+	ids, err = d.ExtractCandidates(ctx, query)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sess-new", "sess-pending"}, ids)
+}
+
+func TestExtractCandidatesZeroFailedCutoffSkipsFailedRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedExtractCandidate(t, d, "sess-failed", 2*time.Hour, nil)
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "sess-failed", "fp-a", "dg", 2)
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-failed", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", LastError: "boom",
+	}))
+
+	ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+		Fingerprint: "fp-a",
+		QuietCutoff: time.Now().Add(-30 * time.Minute),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, ids, "zero retry cutoff must never resurrect failures")
+}
+
+func TestInsertExtractedRecallEntriesIsIdempotent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+
+	entry := func(id, title string) RecallEntry {
+		return RecallEntry{
+			ID:              id,
+			Type:            "fact",
+			Scope:           "project",
+			ReviewState:     "unreviewed_auto",
+			Title:           title,
+			Body:            "body",
+			Project:         "proj",
+			SourceSessionID: "sess-1",
+			SourceRunID:     "fp-a",
+			ExtractorMethod: "turns-v1",
+			Model:           "model-x",
+			Evidence: []RecallEvidence{{
+				SessionID:           "sess-1",
+				MessageStartOrdinal: 0,
+				MessageEndOrdinal:   2,
+			}},
+		}
+	}
+
+	inserted, err := d.InsertExtractedRecallEntries(ctx,
+		[]RecallEntry{entry("id-1", "one"), entry("id-2", "two")})
+	require.NoError(t, err)
+	assert.Equal(t, 2, inserted)
+
+	inserted, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		entry("id-1", "one"), entry("id-2", "two"), entry("id-3", "three"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inserted, "replayed entries are skipped, not duplicated")
+
+	var entries, evidence int
+	require.NoError(t, d.getWriter().QueryRow(
+		"SELECT COUNT(*) FROM recall_entries").Scan(&entries))
+	require.NoError(t, d.getWriter().QueryRow(
+		"SELECT COUNT(*) FROM recall_evidence WHERE entry_id = 'id-1'",
+	).Scan(&evidence))
+	assert.Equal(t, 3, entries)
+	assert.Equal(t, 1, evidence, "skipped entries must not re-insert evidence")
+}
+
+func TestInsertExtractedRecallEntriesRollsBackOnInvalidEntry(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+
+	good := RecallEntry{
+		ID: "id-ok", Type: "fact", ReviewState: "unreviewed_auto",
+		Title: "t", Body: "b", SourceSessionID: "sess-1",
+	}
+	bad := RecallEntry{
+		ID: "id-bad", Type: "fact", ReviewState: "not-a-state",
+		Title: "t", Body: "b", SourceSessionID: "sess-1",
+	}
+	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{good, bad})
+	require.Error(t, err)
+
+	var count int
+	require.NoError(t, d.getWriter().QueryRow(
+		"SELECT COUNT(*) FROM recall_entries").Scan(&count))
+	assert.Zero(t, count, "batch must be atomic")
+}
+
+func TestExtractProgressStatsAggregatesByState(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"s-pending", "s-partial", "s-done", "s-failed"} {
+		seedExtractSession(t, d, id)
+	}
+	for _, fp := range []string{"fp-a", "fp-b"} {
+		_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+			Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+	}
+	_, err := d.UpsertExtractProgress(ctx, "s-pending", "fp-a", "dg", 2)
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, "s-partial", "fp-a", "dg", 3)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "s-partial", "fp-a", "dg", 1))
+	_, err = d.UpsertExtractProgress(ctx, "s-done", "fp-a", "dg", 1)
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "s-done", "fp-a", "dg", 1))
+	_, err = d.UpsertExtractProgress(ctx, "s-failed", "fp-a", "dg", 4)
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "s-failed", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", LastError: "boom",
+	}))
+	// Rows under another generation must not leak into fp-a's stats.
+	_, err = d.UpsertExtractProgress(ctx, "s-pending", "fp-b", "dg", 9)
+	require.NoError(t, err)
+
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		{ID: "e-1", Type: "fact", ReviewState: "unreviewed_auto",
+			Title: "t", Body: "b", SourceSessionID: "s-done", SourceRunID: "fp-a"},
+		{ID: "e-2", Type: "fact", ReviewState: "unreviewed_auto",
+			Title: "t", Body: "b", SourceSessionID: "s-done", SourceRunID: "fp-a"},
+		{ID: "e-3", Type: "fact", ReviewState: "unreviewed_auto",
+			Title: "t", Body: "b", SourceSessionID: "s-done", SourceRunID: "fp-b"},
+	})
+	require.NoError(t, err)
+
+	stats, err := d.ExtractProgressStats(ctx, "fp-a")
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Pending)
+	assert.Equal(t, 1, stats.Partial)
+	assert.Equal(t, 1, stats.Done)
+	assert.Equal(t, 1, stats.Failed)
+	assert.Equal(t, 2, stats.UnitsDone)
+	assert.Equal(t, 10, stats.UnitsTotal)
+	assert.Equal(t, 2, stats.Entries)
+}

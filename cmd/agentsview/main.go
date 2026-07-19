@@ -206,6 +206,14 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}
 	}
 
+	extractSched, err := setupRecallExtraction(cfg, database)
+	if err != nil {
+		fatal("setting up recall extraction: %v", err)
+	}
+	if extractSched != nil {
+		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
+	}
+
 	var engine *sync.Engine
 	if !cfg.NoSync {
 		engine = sync.NewEngine(database, sync.EngineConfig{
@@ -399,6 +407,13 @@ func runServe(cfg config.Config, opts serveOptions) {
 		// unwind order runs Stop (which waits for any in-flight
 		// TryBuild to return) before vectors.db is closed.
 		defer vectorServe.Scheduler.Stop()
+	}
+
+	if extractSched != nil {
+		go extractSched.Run(ctx)
+		// Stop waits for any in-flight extraction pass, so the archive
+		// is never closed under one.
+		defer extractSched.Stop()
 	}
 
 	if engine != nil {

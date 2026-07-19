@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Extraction generation states. A generation is one distillation
@@ -558,4 +559,200 @@ func copyRecallExtractStateFromAttachedTx(
 		return fmt.Errorf("copying extract progress: %w", err)
 	}
 	return nil
+}
+
+// extractTimeLayout matches the strftime('%Y-%m-%dT%H:%M:%fZ') format the
+// schema stamps into session and progress timestamps, so cutoffs formatted
+// with it compare correctly as strings.
+const extractTimeLayout = "2006-01-02T15:04:05.000Z"
+
+// ExtractCandidateQuery selects sessions eligible for extraction under one
+// generation. QuietCutoff excludes sessions that ended after it, so recently
+// finished sessions settle before being read. FailedRetryCutoff gates failed
+// rows: only failures last touched at or before it are retried, and the zero
+// value retries nothing — a caller that forgets to set it can never cause a
+// retry storm. IncludeDone revisits completed sessions so their content
+// digests can be rechecked for growth.
+type ExtractCandidateQuery struct {
+	Fingerprint       string
+	QuietCutoff       time.Time
+	FailedRetryCutoff time.Time
+	IncludeDone       bool
+	Limit             int
+}
+
+// ExtractCandidates returns eligible session ids, oldest ended first.
+// Eligibility encodes the extraction privacy boundary and is deliberately
+// not configurable: automated sessions, trashed sessions, and sessions with
+// any secret findings never reach the extraction model.
+func (db *DB) ExtractCandidates(
+	ctx context.Context, q ExtractCandidateQuery,
+) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(q.Fingerprint) == "" {
+		return nil, fmt.Errorf("extract candidate query requires a fingerprint")
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = -1
+	}
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT s.id
+		FROM sessions s
+		LEFT JOIN recall_extract_progress p
+			ON p.session_id = s.id AND p.generation_fingerprint = ?
+		WHERE s.deleted_at IS NULL
+			AND s.is_automated = 0
+			AND s.secret_leak_count = 0
+			AND s.message_count > 0
+			AND s.ended_at IS NOT NULL
+			AND s.ended_at != ''
+			AND s.ended_at <= ?
+			AND (
+				p.session_id IS NULL
+				OR p.state IN (?, ?)
+				OR (p.state = ? AND p.updated_at <= ?)
+				OR (? AND p.state = ?)
+			)
+		ORDER BY s.ended_at ASC, s.id ASC
+		LIMIT ?`,
+		q.Fingerprint,
+		q.QuietCutoff.UTC().Format(extractTimeLayout),
+		ExtractProgressPending, ExtractProgressPartial,
+		ExtractProgressFailed,
+		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
+		q.IncludeDone, ExtractProgressDone,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying extract candidates: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning extract candidate: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading extract candidates: %w", err)
+	}
+	return ids, nil
+}
+
+// InsertExtractedRecallEntries inserts entries whose deterministic ids are
+// not yet present and returns how many were new. The batch is atomic: any
+// invalid entry rolls back the whole call so a replay can start clean.
+// Already-present ids are skipped without touching their evidence, which
+// makes replaying a unit after a crash or digest reset idempotent.
+func (db *DB) InsertExtractedRecallEntries(
+	ctx context.Context, entries []RecallEntry,
+) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin extracted entries insert: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	inserted := 0
+	for _, entry := range entries {
+		if entry.ID == "" {
+			return 0, fmt.Errorf("extracted recall entry id is required")
+		}
+		var exists int
+		err := tx.QueryRowContext(ctx,
+			"SELECT 1 FROM recall_entries WHERE id = ?", entry.ID,
+		).Scan(&exists)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf(
+				"checking extracted entry %s: %w", entry.ID, err,
+			)
+		}
+		if err := insertRecallEntryTx(tx, entry); err != nil {
+			return 0, err
+		}
+		inserted++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit extracted entries insert: %w", err)
+	}
+	return inserted, nil
+}
+
+// ExtractProgressStats aggregates one generation's progress rows and its
+// corpus size for status reporting.
+type ExtractProgressStats struct {
+	Pending    int `json:"pending"`
+	Partial    int `json:"partial"`
+	Done       int `json:"done"`
+	Failed     int `json:"failed"`
+	UnitsDone  int `json:"units_done"`
+	UnitsTotal int `json:"units_total"`
+	Entries    int `json:"entries"`
+}
+
+// ExtractProgressStats returns per-state session counts, unit totals, and
+// the number of entries the generation has produced.
+func (db *DB) ExtractProgressStats(
+	ctx context.Context, fingerprint string,
+) (ExtractProgressStats, error) {
+	var stats ExtractProgressStats
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT state, COUNT(*),
+			COALESCE(SUM(unit_cursor), 0), COALESCE(SUM(units_total), 0)
+		FROM recall_extract_progress
+		WHERE generation_fingerprint = ?
+		GROUP BY state`, fingerprint)
+	if err != nil {
+		return stats, fmt.Errorf("querying extract progress stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		var count, unitsDone, unitsTotal int
+		if err := rows.Scan(&state, &count, &unitsDone, &unitsTotal); err != nil {
+			return stats, fmt.Errorf("scanning extract progress stats: %w", err)
+		}
+		switch state {
+		case ExtractProgressPending:
+			stats.Pending = count
+		case ExtractProgressPartial:
+			stats.Partial = count
+		case ExtractProgressDone:
+			stats.Done = count
+		case ExtractProgressFailed:
+			stats.Failed = count
+		}
+		stats.UnitsDone += unitsDone
+		stats.UnitsTotal += unitsTotal
+	}
+	if err := rows.Err(); err != nil {
+		return stats, fmt.Errorf("reading extract progress stats: %w", err)
+	}
+	err = db.getReader().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM recall_entries WHERE source_run_id = ?",
+		fingerprint,
+	).Scan(&stats.Entries)
+	if err != nil {
+		return stats, fmt.Errorf("counting extracted entries: %w", err)
+	}
+	return stats, nil
 }

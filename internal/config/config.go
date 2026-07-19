@@ -463,6 +463,7 @@ type Config struct {
 	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
+	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
@@ -724,6 +725,14 @@ func Default() (Config, error) {
 			},
 			Embed: VectorEmbedConfig{
 				BackstopInterval: "24h",
+			},
+		},
+		Recall: RecallConfig{
+			Extract: RecallExtractConfig{
+				MaxWindowChars:   50000,
+				QuietPeriod:      "30m",
+				BackstopInterval: "1h",
+				FailureBackoff:   "1h",
 			},
 		},
 	}, nil
@@ -1003,6 +1012,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		PG                             PGConfig                   `toml:"pg"`
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
 		Vector                         VectorConfig               `toml:"vector"`
+		Recall                         RecallConfig               `toml:"recall"`
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
@@ -1170,6 +1180,7 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.Vector.Embed.BackstopInterval != "" {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
+	c.mergeRecallExtractTOML(file.Recall, meta)
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
 	// ignore the latter.
@@ -1679,6 +1690,9 @@ func finalize(cfg *Config) error {
 		return fmt.Errorf("invalid daemon_idle_timeout: %s", cfg.DaemonIdleTimeout)
 	}
 	if err := cfg.Vector.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.Recall.Extract.Validate(); err != nil {
 		return err
 	}
 	return nil
