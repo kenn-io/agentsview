@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -78,6 +79,30 @@ func TestRebuildMirrorCreatesFreshMirrorWithFingerprintsAndMetadata(t *testing.T
 	).Scan(&fingerprintCount))
 	assert.Equal(t, len(ids), fingerprintCount,
 		"every rebuilt session row must carry a push fingerprint")
+	assert.Greater(t, result.Duration, time.Duration(0))
+}
+
+// TestPushEverythingDoesNotSetDuration is the FIX9 regression: Duration is
+// owned by buildMirrorInto (see its doc comment), not pushEverything.
+// Identity publication and the mirror metadata write both happen after
+// pushEverything returns, so a Duration captured inside pushEverything
+// alone would underreport a --full push's real wall time by everything
+// after the session push loop. pushEverything itself no longer sets
+// Duration at all, leaving it to whichever caller actually spans the full
+// operation.
+func TestPushEverythingDoesNotSetDuration(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedRebuildFixture(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+
+	s := newTestSync(t, path, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, s.DB()))
+
+	result, err := s.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Duration,
+		"pushEverything must leave Duration to its caller, which spans more than the session push loop")
 }
 
 func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
@@ -362,6 +387,84 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 		"session hard-deleted during rebuild must still be reconciled by the next incremental push")
 }
 
+// TestRebuildCurationFingerprintCapturedBeforeCurationCopy is the FIX5
+// regression, mirroring TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration's
+// approach: the curation fingerprint a rebuild stores must be captured
+// BEFORE pushEverythingCuration copies curation into the mirror, the same
+// pre-capture principle rebuildSnapshot documents for the cutoff/deletion
+// revision. Capturing it AFTER the copy instead (as the code previously
+// did) can permanently strand a curation edit that races the copy: the
+// edit is fingerprinted (a late read already reflects it) but was never
+// mirrored (the copy already ran), so the stored fingerprint then matches
+// all future local state and refreshCurationIfChanged skips the mirror
+// refresh forever, until some other curation edit happens to shake it
+// loose.
+//
+// There is no hook into the middle of a running rebuild here, so — exactly
+// like the session-enumeration regression test — the race is reproduced by
+// calling the same building blocks pushEverything composes
+// (curationFingerprint, pushEverythingCuration, recordMetadataKey) directly
+// in the fixed order, with a curation mutation landing between the
+// fingerprint capture and the copy.
+func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ids := seedRebuildFixture(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+
+	s := newTestSync(t, path, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, s.DB()))
+
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", "", nil, nil)
+	require.NoError(t, err)
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i].ID < sessions[j].ID })
+	fingerprints, err := s.sessionFingerprints(ctx, sessions)
+	require.NoError(t, err)
+	for _, sess := range sessions {
+		_, err := s.pushSingleSession(ctx, sess, fingerprints[sess.ID])
+		require.NoError(t, err)
+	}
+
+	// Capture the curation fingerprint BEFORE the curation copy, exactly as
+	// the fixed pushEverything now does.
+	fingerprint, err := s.curationFingerprint(ctx)
+	require.NoError(t, err)
+
+	// A star lands after the fingerprint capture but before the curation
+	// copy below runs — standing in for a curation edit racing an
+	// in-flight rebuild's pushEverythingCuration call.
+	ok, err := local.StarSession(ids[1])
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, s.pushEverythingCuration(ctx, sessions))
+	require.NoError(t, recordMetadataKey(
+		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
+	))
+
+	snapshot, err := captureRebuildSnapshot(ctx, local)
+	require.NoError(t, err)
+	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
+	require.NoError(t, err)
+	require.NoError(t, s.writeRebuildMetadata(ctx, "", snapshot, identityRevision))
+	require.NoError(t, s.Close())
+
+	// The star already made it into this "rebuild" because
+	// pushEverythingCuration re-reads local state fresh — no data was lost —
+	// but the fingerprint stored above predates it, so the next incremental
+	// push must still detect the mismatch and refresh curation rather than
+	// treating the mirror's (already correct) state as unchanged forever.
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 1)
+
+	res, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"a valid mirror with fresh metadata must not force a rebuild")
+	assert.True(t, res.Diagnostics.CurationRefreshed,
+		"a curation change racing the rebuild's fingerprint capture must still trigger a refresh")
+	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", ids[1], 1)
+}
+
 // TestSweepStaleTempFilesRemovesOnlyOldFiles covers sweepStaleTempFiles'
 // age guard: a path.tmp-* file younger than staleTempFileAge is a rebuild
 // that is (or recently was) genuinely in progress and must survive, while
@@ -397,4 +500,27 @@ func TestSweepStaleTempFilesRemovesOnlyOldFiles(t *testing.T) {
 func TestSweepStaleTempFilesNoMatchesIsNoOp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	require.NoError(t, sweepStaleTempFiles(path))
+}
+
+// TestSweepStaleTempFilesHandlesGlobMetacharactersInDirectory is the FIX7
+// regression: sweepStaleTempFiles used to build its match pattern with
+// filepath.Glob(path+".tmp-*"), so a project or archive directory name
+// containing glob metacharacters ([, ?, *) would be interpreted as glob
+// syntax instead of literal characters, breaking or over-matching the
+// sweep. A literal os.ReadDir + prefix-match sweep must work the same way
+// regardless of what characters appear in the directory name.
+func TestSweepStaleTempFilesHandlesGlobMetacharactersInDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proj[1]")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	path := filepath.Join(dir, "mirror.duckdb")
+
+	staleTmp := path + ".tmp-stale"
+	require.NoError(t, os.WriteFile(staleTmp, []byte("x"), 0o644))
+	oldTime := time.Now().Add(-2 * staleTempFileAge)
+	require.NoError(t, os.Chtimes(staleTmp, oldTime, oldTime))
+
+	require.NoError(t, sweepStaleTempFiles(path))
+
+	assert.NoFileExists(t, staleTmp,
+		"a stale temp file in a glob-metacharacter directory must still be swept")
 }

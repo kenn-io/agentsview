@@ -155,14 +155,22 @@ func (db *DB) ListPinnedMessages(
 	return pins, rows.Err()
 }
 
-// PinCurationEntry is one pinned message's identity plus its note: the
-// state a curation fingerprint needs to detect a note-only edit (PinMessage
-// on an already-pinned message updates the note in place, leaving the
-// pinned message id set and created_at unchanged) as well as a
-// pin/unpin membership change.
+// PinCurationEntry is one pinned message's full curation-relevant identity:
+// the state a curation fingerprint needs to detect not just a note-only
+// edit (PinMessage on an already-pinned message updates the note in place,
+// leaving the pinned message id set unchanged) but also an unpin-then-repin
+// of the same message (which gets a new pin row ID and CreatedAt even
+// though MessageID is unchanged) and a NULL-vs-empty-string note change
+// (an explicit empty note is a different state than never having pinned a
+// note at all). HasNote distinguishes those last two cases instead of
+// collapsing both to an empty string the way a COALESCE-over-note read
+// would.
 type PinCurationEntry struct {
+	ID        int64
 	MessageID int64
+	CreatedAt string
 	Note      string
+	HasNote   bool
 }
 
 // ListPinCurationForScope returns pinned-message curation state restricted
@@ -174,7 +182,7 @@ func (db *DB) ListPinCurationForScope(
 ) ([]PinCurationEntry, error) {
 	where, args := curationScopeWhere("s", projects, excludeProjects)
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT pm.message_id, COALESCE(pm.note, '') FROM pinned_messages pm
+		`SELECT pm.id, pm.message_id, pm.created_at, pm.note FROM pinned_messages pm
 		 JOIN sessions s ON s.id = pm.session_id`+where+
 			` ORDER BY pm.message_id`,
 		args...,
@@ -187,9 +195,12 @@ func (db *DB) ListPinCurationForScope(
 	var entries []PinCurationEntry
 	for rows.Next() {
 		var e PinCurationEntry
-		if err := rows.Scan(&e.MessageID, &e.Note); err != nil {
+		var note sql.NullString
+		if err := rows.Scan(&e.ID, &e.MessageID, &e.CreatedAt, &note); err != nil {
 			return nil, fmt.Errorf("scanning scoped pinned message: %w", err)
 		}
+		e.HasNote = note.Valid
+		e.Note = note.String
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()

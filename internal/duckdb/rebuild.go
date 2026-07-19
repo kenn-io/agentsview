@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -81,20 +82,48 @@ func createMirrorTempPath(path string) (string, error) {
 // process that crashed or was killed mid-rebuild (see createMirrorTempPath
 // and rebuildMirror's deferred cleanup, which only fires for that process's
 // own file and never runs at all if the process is killed outright).
-const staleTempFileAge = time.Hour
+//
+// The age is a heuristic, not proof of liveness: pushes are not serialized
+// across processes, so a second push's sweep could in principle run while a
+// first push's rebuild has genuinely been in progress for longer than this
+// threshold (a very large archive, a slow disk) and race-remove its still-
+// live temp file. 24 hours makes that window large enough that hitting it
+// in practice would already be a surprising rebuild duration on its own.
+// The worst case if it does happen is bounded and self-healing: the
+// in-progress rebuild's own rename fails with an actionable "temp file
+// missing" error, that one push attempt fails, and the caller retries — the
+// existing mirror file is never touched (rebuildMirror never writes to it
+// in place), so there is no risk of corruption, only a failed push.
+const staleTempFileAge = 24 * time.Hour
 
 // sweepStaleTempFiles removes path.tmp-* rebuild temp files older than
 // staleTempFileAge. Always safe to call at the start of a push: a fresh
 // rebuild creates its own temp file after this runs, so it can never sweep
 // up a file it is about to use.
+//
+// This walks the parent directory with os.ReadDir and matches names by
+// literal prefix instead of filepath.Glob(path+".tmp-*"): path is
+// interpolated into the pattern, and glob metacharacters ([, ?, *) in a
+// project or archive directory name would otherwise be interpreted as glob
+// syntax instead of literal characters, silently breaking or over-matching
+// the sweep.
 func sweepStaleTempFiles(path string) error {
-	matches, err := filepath.Glob(path + ".tmp-*")
+	dir := filepath.Dir(path)
+	prefix := filepath.Base(path) + ".tmp-"
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("globbing duckdb mirror temp files: %w", err)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading duckdb mirror directory %s: %w", dir, err)
 	}
 	cutoff := time.Now().Add(-staleTempFileAge)
-	for _, m := range matches {
-		info, err := os.Stat(m)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		m := filepath.Join(dir, entry.Name())
+		info, err := entry.Info()
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -147,9 +176,16 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 // buildMirrorInto creates schema v3 on a fresh Sync's DuckDB file, pushes
 // every in-scope session plus the mirror's global tables, records mirror
 // metadata, and checkpoints so the on-disk file reflects every write.
+//
+// It owns start-to-finish timing for PushResult.Duration rather than
+// letting pushEverything set it: identity publication and the metadata
+// write both happen after pushEverything returns, so a Duration captured
+// inside pushEverything alone would underreport a --full push's real wall
+// time by everything after the session push loop.
 func buildMirrorInto(
 	ctx context.Context, s *Sync, opts SyncOptions, onProgress func(PushProgress),
 ) (PushResult, error) {
+	start := time.Now()
 	if err := createSchema(ctx, s.duck); err != nil {
 		return PushResult{}, err
 	}
@@ -177,6 +213,7 @@ func buildMirrorInto(
 	if _, err := s.duck.ExecContext(ctx, "CHECKPOINT"); err != nil {
 		return result, fmt.Errorf("checkpointing duckdb rebuild: %w", err)
 	}
+	result.Duration = time.Since(start)
 	return result, nil
 }
 
@@ -191,7 +228,6 @@ func buildMirrorInto(
 func (s *Sync) pushEverything(
 	ctx context.Context, onProgress func(PushProgress),
 ) (PushResult, error) {
-	start := time.Now()
 	var result PushResult
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
@@ -230,11 +266,26 @@ func (s *Sync) pushEverything(
 	result.Diagnostics.PushedSessions = countPushSessions(pushed)
 
 	if result.Errors == 0 {
-		if err := s.pushEverythingCuration(ctx, sessions); err != nil {
-			return result, err
-		}
+		// The fingerprint is captured BEFORE pushEverythingCuration copies
+		// curation into the mirror, mirroring rebuildSnapshot's pre-capture
+		// principle (see the comment there): a star/pin change that lands
+		// after this read is either already reflected by the copy below
+		// (which re-reads local state fresh, so no data is lost) or lands
+		// after the copy entirely, in which case it simply belongs to the
+		// next push. Either way the stored fingerprint predates the
+		// mutation, so the next push's fingerprint comparison mismatches and
+		// refreshes curation again — a redundant but harmless extra refresh.
+		// Capturing the fingerprint AFTER the copy instead (the previous
+		// order) can permanently strand a change: a mutation landing between
+		// the copy and the late fingerprint read is fingerprinted but never
+		// mirrored, and the stored fingerprint then matches all future local
+		// state until another curation edit happens, so refreshCurationIfChanged
+		// skips forever.
 		fingerprint, err := s.curationFingerprint(ctx)
 		if err != nil {
+			return result, err
+		}
+		if err := s.pushEverythingCuration(ctx, sessions); err != nil {
 			return result, err
 		}
 		if err := recordMetadataKey(
@@ -245,7 +296,6 @@ func (s *Sync) pushEverything(
 		result.Diagnostics.CurationRefreshed = true
 	}
 
-	result.Duration = time.Since(start)
 	return result, nil
 }
 

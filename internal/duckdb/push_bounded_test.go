@@ -96,11 +96,10 @@ func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.
 	assert.True(t, res.Diagnostics.Full)
 	assert.Zero(t, res.Errors)
 
-	cancelReader()
-	wg.Wait()
-	assert.Zero(t, readerErrs.Load(),
-		"concurrent reads against the live store must never error during a rebuild swap")
-
+	// The reader goroutine keeps running through the watcher's poll-and-adopt
+	// window (rather than stopping right after Push returns), so it actually
+	// exercises swapHandle concurrently with reads instead of merely racing
+	// the rename itself.
 	require.Eventually(t, func() bool {
 		ids := listMirrorSessionIDs(t, store)
 		if len(ids) != 2 {
@@ -108,6 +107,12 @@ func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.
 		}
 		return !slices.Contains(ids, "sess-2")
 	}, 5*time.Second, 100*time.Millisecond, "store must eventually serve the rebuilt mirror")
+
+	cancelReader()
+	wg.Wait()
+	assert.Zero(t, readerErrs.Load(),
+		"concurrent reads against the live store must never error during a rebuild swap")
+
 	assert.Equal(t, 3, mirrorMessageCountViaStore(t, store, "sess-1"),
 		"store must eventually serve sess-1's appended message")
 }
@@ -353,6 +358,45 @@ func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
 		"sess-1", msgs[0].ID,
 	).Scan(&got))
 	assert.Equal(t, secondNote, got)
+}
+
+// TestCurationFingerprintDetectsUnpinRepinWithSameNote is the FIX6
+// regression: a curation fingerprint built only from (message_id, note) is
+// unchanged by an unpin followed by a repin of the same message with the
+// identical note, so it would treat the cycle as a no-op and skip the
+// mirror refresh even though it is a genuine curation event (a distinct pin
+// row, with a new id and created_at). A second, untouched pin (sess-2) is
+// kept present throughout so pinned_messages is never fully empty locally,
+// avoiding SQLite's empty-table rowid reuse for a plain INTEGER PRIMARY KEY
+// (see the analogous comment in internal/db/pins_test.go).
+func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 2)
+	msgs1, err := local.GetAllMessages(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs1)
+	msgs2, err := local.GetAllMessages(ctx, "sess-2")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs2)
+
+	note := "same note"
+	_, err = local.PinMessage("sess-1", msgs1[0].ID, &note)
+	require.NoError(t, err)
+	_, err = local.PinMessage("sess-2", msgs2[0].ID, &note)
+	require.NoError(t, err)
+
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UnpinMessage("sess-1", msgs1[0].ID))
+	_, err = local.PinMessage("sess-1", msgs1[0].ID, &note)
+	require.NoError(t, err)
+	appendMessage(t, local, "sess-1")
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed,
+		"an unpin+repin with the same note must still be detected as a curation change")
 }
 
 // assertMirrorTableCount opens path, asserts table's total row count, and
