@@ -2260,9 +2260,17 @@ func (db *DB) migrateColumns() error {
 // the SQL twin of the max-of-signals sync marker computation; the
 // PostgreSQL push computes the same value in Go (see internal/postgres).
 // MAX(a,b,...) returns NULL if any argument is NULL, hence the COALESCEs.
-// Only created_at falls back to the raw string if parsing fails (matching
-// the Go computation's behavior); other fields fall back to the empty
-// string.
+// Every signal, including created_at, falls back to the empty string when
+// missing or unparseable — there is deliberately NO raw-string fallback for
+// created_at: the raw value would participate in MAX, and because letters
+// sort above digits a malformed created_at like "not-a-timestamp" would
+// permanently beat every normalized "2026-..." timestamp, become the
+// session's marker, advance the push cutoff, and exclude all future real
+// changes from the incremental window. The Go computation drops an
+// unparseable CreatedAt from its max the same way. A session whose ONLY
+// signal is a malformed created_at therefore gets marker ” and is
+// invisible to incremental windows, matching the PG push's window
+// semantics; a full rebuild still covers it.
 // AFTER UPDATE OF only fires on the five source columns, and the trigger
 // body writes only sync_marker, so it cannot recurse.
 //
@@ -2280,7 +2288,7 @@ CREATE TRIGGER trg_sessions_sync_marker_insert
 AFTER INSERT ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), NEW.created_at, ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
@@ -2293,7 +2301,7 @@ CREATE TRIGGER trg_sessions_sync_marker_update
 AFTER UPDATE OF created_at, local_modified_at, ended_at, started_at, file_mtime ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), NEW.created_at, ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
@@ -2307,12 +2315,14 @@ END;
 // the max-of-signals sync marker computation the PostgreSQL push performs
 // in Go (see internal/postgres): the max of created_at, local_modified_at,
 // ended_at, started_at, and file_mtime, normalized to ms-precision UTC
-// text. Only created_at falls back to the raw string if parsing fails
-// (matching the Go computation's behavior); other fields fall back to the
-// empty string. The WHERE clause makes it idempotent and cheap once every
-// row has a marker.
+// text. Every field, including created_at, falls back to the empty string
+// when missing or unparseable; see syncMarkerSchemaSQL for why created_at
+// must not fall back to its raw value (a malformed string would poison the
+// MAX and permanently advance the push cutoff past every real timestamp).
+// The WHERE clause makes it idempotent and cheap once every row has a
+// marker.
 const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), created_at, ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(local_modified_at, '')), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(ended_at, '')), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(started_at, '')), ''),

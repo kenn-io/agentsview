@@ -87,23 +87,51 @@ func TestListSessionsForMirrorWindowInclusiveBounds(t *testing.T) {
 	assert.Empty(t, none)
 }
 
-func TestSyncMarkerMalformedCreatedAtRawFallback(t *testing.T) {
+// TestSyncMarkerMalformedCreatedAtIsDropped pins the no-raw-fallback
+// contract (see syncMarkerSchemaSQL): a malformed created_at must never
+// participate in the marker MAX. Letters sort above digits, so a raw
+// fallback would let "garbage" beat every normalized "2026-..." timestamp,
+// poison the session's marker, and permanently advance the push cutoff
+// past all future real changes.
+func TestSyncMarkerMalformedCreatedAtIsDropped(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()
 
-	// Insert a session with malformed created_at.
-	sess := Session{ID: "sm-malformed", Project: "p", Machine: "m", Agent: "claude-code"}
-	require.NoError(t, database.UpsertSession(sess))
+	readMarker := func(id string) string {
+		t.Helper()
+		var marker string
+		require.NoError(t, database.getReader().QueryRowContext(ctx,
+			`SELECT sync_marker FROM sessions WHERE id = ?`, id).Scan(&marker))
+		return marker
+	}
 
-	// Update created_at to a non-ISO string (all other signals NULL/empty).
+	// Malformed created_at with no other signal: the marker is empty, so
+	// the session is invisible to incremental windows (a full rebuild
+	// still covers it), matching the PG push's window semantics.
+	require.NoError(t, database.UpsertSession(
+		Session{ID: "sm-malformed", Project: "p", Machine: "m", Agent: "claude-code"}))
 	_, err := database.getWriter().ExecContext(ctx,
 		`UPDATE sessions SET created_at = ? WHERE id = ?`, "garbage", "sm-malformed")
 	require.NoError(t, err)
+	assert.Empty(t, readMarker("sm-malformed"),
+		"a malformed created_at must not become the marker via a raw fallback")
 
-	// sync_marker should equal the raw created_at string (raw fallback),
-	// matching localSessionSyncMarker's behavior when parsing fails.
-	var marker string
-	require.NoError(t, database.getReader().QueryRowContext(ctx,
-		`SELECT sync_marker FROM sessions WHERE id = ?`, "sm-malformed").Scan(&marker))
-	assert.Equal(t, "garbage", marker)
+	// Malformed created_at plus a valid ended_at: the marker equals the
+	// normalized ended_at instead of the lexically larger raw string.
+	require.NoError(t, database.UpsertSession(
+		Session{ID: "sm-mixed", Project: "p", Machine: "m", Agent: "claude-code"}))
+	_, err = database.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET created_at = 'garbage',
+			ended_at = '2026-07-02T09:30:00.000Z' WHERE id = ?`, "sm-mixed")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-07-02T09:30:00.000Z", readMarker("sm-mixed"))
+
+	// The backfill twin applies the same rule.
+	_, err = database.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET sync_marker = NULL WHERE id IN ('sm-malformed', 'sm-mixed')`)
+	require.NoError(t, err)
+	_, err = database.getWriter().ExecContext(ctx, backfillSyncMarkerSQL)
+	require.NoError(t, err)
+	assert.Empty(t, readMarker("sm-malformed"))
+	assert.Equal(t, "2026-07-02T09:30:00.000Z", readMarker("sm-mixed"))
 }
