@@ -145,6 +145,40 @@ describe("SemanticSetupHelp", () => {
     unmount(component);
   });
 
+  it.each([
+    [
+      "no matching generation",
+      "semantic search not available: semantic search: PG has no embedding " +
+        "generation matching fingerprint abc123 (present: def456); run " +
+        "'agentsview pg push' from a machine with a matching " +
+        "[vector.embeddings] config",
+    ],
+    [
+      "missing generation chunk table",
+      "semantic search not available: semantic search: PG generation 7 " +
+        "matches fingerprint abc123 but its chunk table is missing " +
+        "(interrupted push?); re-run 'agentsview pg push' from a machine " +
+        "with a matching [vector.embeddings] config",
+    ],
+  ])(
+    "shows the PostgreSQL %s reason when the status probe is generically unavailable",
+    async (_name, reason) => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
+        new ApiError(501, "embeddings manager not available"),
+      );
+
+      const { component } = mountHelp(vi.fn(), reason);
+      await settle();
+
+      expect(text()).toContain("Semantic search is disabled");
+      expect(text()).toContain(reason);
+      expect(text()).not.toContain("enabled = true");
+      expect(text()).not.toContain("agentsview embeddings build");
+
+      unmount(component);
+    },
+  );
+
   it("offers a build button when configured but not built, and resolves after the build", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 

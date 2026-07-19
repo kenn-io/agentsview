@@ -14,8 +14,8 @@
     // ... run 'agentsview embeddings build'" remediation the panel replaces,
     // but some name a specific recoverable state (stale index after an
     // embedding-config change, vectors.db schema mismatch) that the status
-    // probe cannot distinguish — those are shown verbatim in the ready
-    // state so their remediation is not hidden.
+    // probe cannot distinguish — those are shown verbatim so their
+    // remediation is not hidden.
     searchDetail?: string | null;
   }
 
@@ -107,7 +107,10 @@ endpoint = "http://localhost:11434/v1"`;
     } catch (e) {
       if (disposed || isAbortError(e)) return;
       if (e instanceof ApiError && e.status === 501) {
-        if (e.message && e.message !== GENERIC_UNAVAILABLE) {
+        if (specificSearchDetail) {
+          detail = specificSearchDetail;
+          phase = "disabled";
+        } else if (e.message && e.message !== GENERIC_UNAVAILABLE) {
           detail = e.message;
           phase = "disabled";
         } else {
