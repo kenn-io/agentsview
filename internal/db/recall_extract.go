@@ -476,6 +476,15 @@ type ExtractFailure struct {
 	ExpectedDigest string
 	ExpectedCursor int
 	LastError      string
+	// ReopenDone lets the mark demote a completed row. Normally done rows
+	// refuse failure marks — a late worker must not clobber finished work —
+	// but a caller that has verified the session's stored state is
+	// inconsistent (its row and transcript disagree) needs the row back in
+	// a retryable state. A reopened row restarts from cursor zero: its
+	// completed-units claim was judged against the inconsistent session,
+	// and the strictly monotonic cursor could otherwise never reach done
+	// again.
+	ReopenDone bool
 }
 
 // MarkExtractProgressFailed records a failure without losing the resume
@@ -483,7 +492,9 @@ type ExtractFailure struct {
 // The update applies only when the stored digest, cursor, and non-done
 // state all match what the failing worker observed; anything else means
 // another worker moved the row on, and the failure is reported as
-// ErrStaleExtractProgress instead of demoting newer progress.
+// ErrStaleExtractProgress instead of demoting newer progress. ReopenDone
+// waives only the non-done condition — the digest and cursor guards still
+// apply — and resets a reopened row's cursor to zero.
 func (db *DB) MarkExtractProgressFailed(
 	ctx context.Context, failure ExtractFailure,
 ) error {
@@ -497,16 +508,18 @@ func (db *DB) MarkExtractProgressFailed(
 	}
 	result, err := db.getWriter().ExecContext(ctx, `
 		UPDATE recall_extract_progress
-		SET state = ?, last_error = ?,
+		SET last_error = ?,
+			unit_cursor = CASE WHEN state = ? THEN 0 ELSE unit_cursor END,
+			state = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE session_id = ? AND generation_fingerprint = ?
 		  AND content_digest = ?
 		  AND unit_cursor = ?
-		  AND state != ?`,
-		ExtractProgressFailed, failure.LastError,
+		  AND (? OR state != ?)`,
+		failure.LastError, ExtractProgressDone, ExtractProgressFailed,
 		failure.SessionID, failure.Fingerprint,
 		failure.ExpectedDigest, failure.ExpectedCursor,
-		ExtractProgressDone,
+		failure.ReopenDone, ExtractProgressDone,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -942,6 +955,55 @@ func (db *DB) DeleteExtractedRecallEntries(
 		return 0, fmt.Errorf("counting deleted extracted entries: %w", err)
 	}
 	return int(deleted), nil
+}
+
+// SyncExtractedEntryContext refreshes the session-derived context fields
+// (project, cwd, git branch, agent) on one session's generated entries under
+// one generation. Entries copy those fields from the session row at insert
+// time, and a metadata-only session update keeps the unit digest unchanged —
+// without this sync a same-digest revisit would settle the coverage stamp
+// while the entries kept matching Recall filters for the old context.
+// Human-touched entries are left as they were, mirroring the delete path.
+// Returns how many entries changed.
+func (db *DB) SyncExtractedEntryContext(
+	ctx context.Context, fingerprint string, session *Session,
+) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	if session == nil {
+		return 0, fmt.Errorf(
+			"syncing extracted entry context for generation %s requires a "+
+				"session", fingerprint,
+		)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := db.getWriter().ExecContext(ctx, `
+		UPDATE recall_entries
+		SET project = ?, cwd = ?, git_branch = ?, agent = ?,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE source_run_id = ? AND source_session_id = ?
+			AND review_state = ?
+			AND (project != ? OR cwd != ? OR git_branch != ? OR agent != ?)`,
+		session.Project, session.Cwd, session.GitBranch, session.Agent,
+		fingerprint, session.ID, corerecall.ReviewStateUnreviewedAuto,
+		session.Project, session.Cwd, session.GitBranch, session.Agent,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"syncing extracted entry context for %s/%s: %w",
+			fingerprint, session.ID, err,
+		)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting synced extracted entries: %w", err)
+	}
+	return int(updated), nil
 }
 
 // ExtractProgressStats aggregates one generation's progress rows and its

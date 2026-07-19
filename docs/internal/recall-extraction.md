@@ -85,7 +85,13 @@ the row can durably claim more or fewer messages than are stored, and no future
 write may ever re-surface the session. That mismatch never reaches the model,
 but it is recorded as a retryable *failure* (visible in status, re-offered after
 the backoff) instead of skipped: a silent skip would let the discovery
-watermarks advance past the session's writes and exclude it forever.
+watermarks advance past the session's writes and exclude it forever. The rule
+holds for completed rows too — it is applied before the done short-circuit,
+because a same-digest revisit would otherwise preserve `done` and settle the
+coverage stamp, claiming the inconsistent state as covered. The failure mark
+demotes such a row (`ReopenDone`) and resets its cursor to zero: its
+completed-units claim was judged against the inconsistent session, and the
+strictly monotonic cursor could otherwise never reach `done` again.
 
 ## Progress and resume
 
@@ -126,6 +132,13 @@ Entry ids are positional (`sha256` of generation fingerprint, session id, unit
 index, entry index), so within one digest a replayed unit dedupes to zero new
 rows; across digests the delete step prevents stale entries from lingering or
 blocking their replacements.
+
+Entries also copy session context — project, cwd, git branch, agent — at insert
+time, and a metadata-only session update keeps the unit digest unchanged. A
+same-digest revisit therefore synchronizes those fields on the session's
+generated entries before settling the coverage stamp, so the corpus stops
+matching Recall filters for the old context without any model calls.
+Human-touched entries are left as they were, mirroring the delete path.
 
 ## Model client recovery
 

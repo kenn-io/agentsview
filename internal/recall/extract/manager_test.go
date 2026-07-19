@@ -1197,6 +1197,138 @@ func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 	}
 }
 
+func TestManagerReopensDoneSessionOnCountMismatch(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.FailureBackoff = 5 * time.Millisecond
+	})
+
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	doneCalls := log.count()
+
+	// The transcript is untouched (same digest), but the session row's
+	// count drifts out of step. The completed row must not stay done with a
+	// freshly settled stamp — that would claim the inconsistent state as
+	// covered forever — and the transcript must not reach the model.
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	if err != nil || session == nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	session.MessageCount = 4
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatal(err)
+	}
+	// The sync batch path stamps local_modified_at on every session write;
+	// the bare test upsert does not, so stamp it explicitly or the
+	// done-revisit gate never re-opens the session.
+	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+	result, err := m.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if result.Failed != 1 || log.count() != doneCalls {
+		t.Fatalf("result = %+v with %d new calls; a same-digest count "+
+			"mismatch must reopen the done row as a retryable failure",
+			result, log.count()-doneCalls)
+	}
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressFailed {
+		t.Fatalf("state = %s, want failed", progress.State)
+	}
+
+	// The row heals; the retry converges back to done.
+	session.MessageCount = 2
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+	time.Sleep(10 * time.Millisecond)
+	result, err = m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass retry: %v", err)
+	}
+	if result.Sessions != 1 {
+		t.Fatalf("result = %+v; the healed session must extract on retry",
+			result)
+	}
+	progress, found, err = d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress after retry: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressDone {
+		t.Fatalf("state = %s, want done after the retry", progress.State)
+	}
+}
+
+func TestManagerRevisitSyncsEntryContext(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	doneCalls := log.count()
+
+	// A metadata-only session update keeps the unit digest unchanged, so
+	// the revisit settles without model calls — but the entries copied the
+	// old project and branch, and leaving them would keep the corpus
+	// matching Recall filters for the old context.
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	if err != nil || session == nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	session.Project = "proj-2"
+	session.GitBranch = "feature"
+	if err := d.UpsertSession(*session); err != nil {
+		t.Fatal(err)
+	}
+	// The sync batch path stamps local_modified_at on every session write;
+	// the bare test upsert does not, so stamp it explicitly or the
+	// done-revisit gate never re-opens the session.
+	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	settleSessionWrite()
+	result, err := m.RunPass(ctx, PassOptions{Full: true})
+	if err != nil {
+		t.Fatalf("RunPass full: %v", err)
+	}
+	if log.count() != doneCalls {
+		t.Fatalf("%d new model calls; a same-digest revisit must not "+
+			"re-extract", log.count()-doneCalls)
+	}
+	if result.Sessions != 0 || result.Failed != 0 {
+		t.Fatalf("result = %+v, want a settled revisit", result)
+	}
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("ListRecallEntries: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected extracted entries")
+	}
+	for _, entry := range entries {
+		if entry.Project != "proj-2" || entry.GitBranch != "feature" {
+			t.Fatalf("entry %s context = %s/%s, want proj-2/feature",
+				entry.ID, entry.Project, entry.GitBranch)
+		}
+	}
+}
+
 func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()

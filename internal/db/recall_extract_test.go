@@ -383,6 +383,108 @@ func TestMarkExtractProgressFailedRejectsDoneRow(t *testing.T) {
 	assert.Empty(t, progress.LastError)
 }
 
+func TestMarkExtractProgressFailedReopensDoneOnRequest(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "digest-1", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.AdvanceExtractCursor(ctx, "sess-1", "fp-a", "digest-1", 2))
+
+	// The optimistic guards still apply to a reopen: a stale cursor means
+	// another writer moved the row, whose view wins.
+	err = d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 1,
+		LastError:      "count mismatch",
+		ReopenDone:     true,
+	})
+	require.ErrorIs(t, err, ErrStaleExtractProgress)
+
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID:      "sess-1",
+		Fingerprint:    "fp-a",
+		ExpectedDigest: "digest-1",
+		ExpectedCursor: 2,
+		LastError:      "count mismatch",
+		ReopenDone:     true,
+	}))
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", "fp-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ExtractProgressFailed, progress.State)
+	assert.Zero(t, progress.UnitCursor,
+		"a reopened row restarts from zero: its completed-units claim was "+
+			"judged against an inconsistent session, and the strictly "+
+			"monotonic cursor could otherwise never reach done again")
+	assert.Equal(t, "count mismatch", progress.LastError)
+}
+
+func TestSyncExtractedEntryContextRefreshesGeneratedEntries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedExtractSession(t, d, "sess-1")
+	seedExtractSession(t, d, "sess-2")
+
+	entry := func(id, sessionID, fp, reviewState string) RecallEntry {
+		return RecallEntry{
+			ID: id, Type: "fact", ReviewState: reviewState,
+			Title: "t", Body: "b",
+			Project: "proj", CWD: "/old", GitBranch: "main", Agent: "claude",
+			SourceSessionID: sessionID, SourceRunID: fp,
+			Evidence: []RecallEvidence{{
+				SessionID: sessionID, MessageEndOrdinal: 1,
+			}},
+		}
+	}
+	_, err := d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		entry("e-auto", "sess-1", "fp-a", "unreviewed_auto"),
+		entry("e-reviewed", "sess-1", "fp-a", "human_reviewed"),
+		entry("e-other-fp", "sess-1", "fp-b", "unreviewed_auto"),
+		entry("e-other-sess", "sess-2", "fp-a", "unreviewed_auto"),
+	})
+	require.NoError(t, err)
+
+	session := &Session{
+		ID: "sess-1", Project: "proj-2", Cwd: "/new",
+		GitBranch: "feature", Agent: "codex",
+	}
+	updated, err := d.SyncExtractedEntryContext(ctx, "fp-a", session)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated)
+
+	got, err := d.GetRecallEntry(ctx, "e-auto")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "proj-2", got.Project)
+	assert.Equal(t, "/new", got.CWD)
+	assert.Equal(t, "feature", got.GitBranch)
+	assert.Equal(t, "codex", got.Agent)
+
+	// Human-touched entries and other generations or sessions stay as they
+	// were.
+	for _, id := range []string{"e-reviewed", "e-other-fp", "e-other-sess"} {
+		got, err := d.GetRecallEntry(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got, id)
+		assert.Equal(t, "proj", got.Project, id)
+		assert.Equal(t, "main", got.GitBranch, id)
+	}
+
+	updated, err = d.SyncExtractedEntryContext(ctx, "fp-a", session)
+	require.NoError(t, err)
+	assert.Zero(t, updated, "an already-synchronized corpus must be a no-op")
+}
+
 func TestExtractMutationsWaitForDBMutex(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

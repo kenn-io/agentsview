@@ -508,10 +508,11 @@ func (m *Manager) extractSession(
 	if err != nil {
 		return outcome, err
 	}
-	if progress.State == db.ExtractProgressDone {
-		return outcome, nil
-	}
 	if countMismatch {
+		// Checked before the done short-circuit: a same-digest upsert
+		// preserves done and settles the stamp, which would claim the
+		// inconsistent state as covered forever. ReopenDone demotes such a
+		// row back into the retry queue.
 		if markErr := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
 			SessionID:      sessionID,
 			Fingerprint:    m.fingerprint,
@@ -521,10 +522,25 @@ func (m *Manager) extractSession(
 				"transcript has %d messages but the session row claims %d",
 				len(rows), session.MessageCount,
 			),
+			ReopenDone: true,
 		}); markErr != nil && !errors.Is(markErr, db.ErrStaleExtractProgress) {
 			return outcome, markErr
 		}
 		outcome.failed = true
+		return outcome, nil
+	}
+	if found && previous.ContentDigest == digest {
+		// A same-digest revisit skips the model, but entries copied their
+		// project, cwd, branch, and agent from the session row at insert
+		// time — a metadata-only update would otherwise settle the stamp
+		// while the corpus kept matching filters for the old context.
+		if _, err := m.cfg.DB.SyncExtractedEntryContext(
+			ctx, m.fingerprint, session,
+		); err != nil {
+			return outcome, err
+		}
+	}
+	if progress.State == db.ExtractProgressDone {
 		return outcome, nil
 	}
 	for i := progress.UnitCursor; i < len(units); i++ {
