@@ -418,9 +418,22 @@ func probeDuckDBMirrorForServe(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	return duckDBMirrorServeProbeError(probe)
+}
+
+// duckDBMirrorServeProbeError converts a failed serve-time probe into an
+// actionable error: a lock conflict means another process is serving the
+// file (not a damaged mirror), so the remedy differs from the rebuild case.
+func duckDBMirrorServeProbeError(probe duckdbsync.MirrorProbe) error {
 	reason := duckDBMirrorProbeFailureReason(probe)
 	if reason == "" {
 		return nil
+	}
+	if probe.LockConflict {
+		return fmt.Errorf(
+			"%s; the mirror is already open in another process (the error names "+
+				"its PID) - stop that process or serve a different path", reason,
+		)
 	}
 	return fmt.Errorf("%s; rebuild with 'agentsview duckdb push --full'", reason)
 }

@@ -145,6 +145,14 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 			want: "duckdb mirror schema version",
 		},
 		{
+			name: "lock conflict",
+			probe: duckdbsync.MirrorProbe{
+				FileExists: true, ShapeOK: false, LockConflict: true,
+				ShapeIssue: "Conflicting lock is held in pid 123",
+			},
+			want: "Conflicting lock",
+		},
+		{
 			name: "compatible",
 			probe: duckdbsync.MirrorProbe{
 				FileExists: true, ShapeOK: true, SchemaVersion: duckdbsync.SchemaVersion,
@@ -160,6 +168,16 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 				return
 			}
 			assert.Contains(t, got, tt.want)
+			t.Run("serve error remedy", func(t *testing.T) {
+				err := duckDBMirrorServeProbeError(tt.probe)
+				require.Error(t, err)
+				if tt.probe.LockConflict {
+					assert.Contains(t, err.Error(), "already open in another process")
+					assert.NotContains(t, err.Error(), "push --full")
+				} else {
+					assert.Contains(t, err.Error(), "push --full")
+				}
+			})
 		})
 	}
 }
