@@ -32,6 +32,11 @@
       "matchManagers": ["npm"],
       "groupName": "JavaScript dependencies",
       "groupSlug": "javascript-dependencies"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "!/^(7\\.0\\.)/"
     }
   ]
 }
