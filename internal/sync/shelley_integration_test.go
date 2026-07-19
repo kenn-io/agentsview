@@ -407,9 +407,10 @@ func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 }
 
 // TestSyncShelleyStoresRealTimestamp guards against a synthetic future
-// file_mtime. ListSessionsModifiedBetween filters file_mtime <= now for
-// PG/DuckDB push, so a Shelley row whose stored mtime drifted past its
-// updated_at second could be dropped from a same-second push. The stored
+// file_mtime. A Shelley row whose stored mtime drifted past its updated_at
+// second would inflate the trigger-maintained sync_marker, making it a
+// perpetual PG/DuckDB push candidate, and the parse-diff engine's bounded
+// ListSessionsModifiedBetween would treat it as future. The stored
 // file_mtime must equal the conversation's real updated_at instant.
 func TestSyncShelleyStoresRealTimestamp(t *testing.T) {
 	dir := t.TempDir()

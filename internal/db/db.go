@@ -2317,11 +2317,12 @@ END;
 `
 
 // backfillSyncMarkerSQL computes sync_marker for rows written before
-// the column existed. It is the SQL twin of the trigger bodies above and of
-// the max-of-signals sync marker computation the PostgreSQL push performs
-// in Go (see internal/postgres): the max of created_at, local_modified_at,
-// ended_at, started_at, and file_mtime, normalized to ms-precision UTC
-// text. Every field, including created_at, falls back to the empty string
+// the column existed. It is the SQL twin of the trigger bodies above:
+// the max of created_at, local_modified_at, ended_at, started_at, and
+// file_mtime, normalized to ms-precision UTC text; both the PostgreSQL and
+// DuckDB pushes select their candidates against it (see
+// ListSessionsForMirrorWindow).
+// Every field, including created_at, falls back to the empty string
 // when missing or unparseable; see syncMarkerSchemaSQL for why created_at
 // must not fall back to its raw value (a malformed string would poison the
 // MAX and permanently advance the push cutoff past every real timestamp).

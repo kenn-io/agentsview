@@ -127,9 +127,9 @@ type ShelleyConversationMeta struct {
 	RawID       string
 	VirtualPath string
 	// FileMtime is the conversation's updated_at as a nanosecond
-	// timestamp. It stays a real (whole-second) timestamp so the
-	// modified-between range queries that drive PG/DuckDB push never
-	// see a Shelley row as "future"; see shelleyChangeMtime.
+	// timestamp. It stays a real (whole-second) timestamp so no
+	// change-detection query ever sees a Shelley row as "future";
+	// see shelleyChangeMtime.
 	FileMtime int64
 	// Fingerprint is a digest over every parser-observed conversation and
 	// message field. It is stored in file_hash and compared in the sync
@@ -145,10 +145,11 @@ type ShelleyConversationMeta struct {
 //
 //   - File.Mtime / ShelleyConversationMeta.FileMtime is the conversation's
 //     updated_at as a real nanosecond timestamp. The sync skip compares it
-//     for equality, but it must also stay a true timestamp because
-//     ListSessionsModifiedBetween filters file_mtime <= now for PG/DuckDB
-//     push; a synthetic future value would drop a just-synced Shelley row
-//     from a same-second push until a later run.
+//     for equality, but it must also stay a true timestamp: a synthetic
+//     future value would inflate the trigger-maintained sync_marker and
+//     make the row a perpetual PG/DuckDB push candidate (the mirror window
+//     is unbounded above), and the parse-diff engine's bounded
+//     ListSessionsModifiedBetween would treat it as future.
 //   - Fingerprint, a digest stored in file_hash, distinguishes any
 //     same-second parser-visible change the timestamp cannot: metadata
 //     edits, appends, in-place rewrites, and even length-preserving edits

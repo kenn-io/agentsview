@@ -576,19 +576,6 @@ func TestReadPushBoundaryStateValidity(t *testing.T) {
 	}
 }
 
-func TestLocalSessionSyncMarkerNormalizesSecondPrecisionTimestamps(t *testing.T) {
-	startedAt := "2026-03-11T12:34:56Z"
-	endedAt := "2026-03-11T12:34:56.123Z"
-
-	got := localSessionSyncMarker(db.Session{
-		CreatedAt: "2026-03-11T12:34:55Z",
-		StartedAt: &startedAt,
-		EndedAt:   &endedAt,
-	})
-
-	require.Equal(t, endedAt, got)
-}
-
 func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
 	query, args := pgExcludedSessionIDsQuery([]string{
 		"sess-001",

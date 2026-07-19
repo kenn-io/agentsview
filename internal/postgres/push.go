@@ -272,12 +272,20 @@ func (s *Sync) Push(
 	}
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
-	allSessions, err := s.local.ListSessionsModifiedBetween(
-		ctx, lastPush, cutoff, s.projects, s.excludeProjects,
+	// Candidate selection shares ListSessionsForMirrorWindow with the
+	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
+	// deliberately unbounded above. An upper bound at cutoff would let a
+	// clock-skewed future file_mtime push a session's marker past now and
+	// mask its later real changes until wall time caught up. The inclusive
+	// lower bound also covers boundary-equal sessions (marker == lastPush),
+	// which the prior-fingerprint comparison below skips cheaply when
+	// unchanged, so no separate boundary re-query is needed.
+	allSessions, err := s.local.ListSessionsForMirrorWindow(
+		ctx, lastPush, s.projects, s.excludeProjects,
 	)
 	if err != nil {
 		return result, fmt.Errorf(
-			"listing modified sessions: %w", err,
+			"listing sessions for push window: %w", err,
 		)
 	}
 
@@ -297,37 +305,6 @@ func (s *Sync) Push(
 		)
 		if bErr != nil {
 			return result, bErr
-		}
-	}
-
-	if lastPush != "" {
-		windowStart, err := PreviousLocalSyncTimestamp(
-			lastPush,
-		)
-		if err != nil {
-			return result, fmt.Errorf(
-				"computing push boundary window before %s: %w",
-				lastPush, err,
-			)
-		}
-		boundarySessions, err := s.local.ListSessionsModifiedBetween(
-			ctx, windowStart, lastPush, s.projects, s.excludeProjects,
-		)
-		if err != nil {
-			return result, fmt.Errorf(
-				"listing push boundary sessions: %w", err,
-			)
-		}
-
-		for _, sess := range boundarySessions {
-			marker := localSessionSyncMarker(sess)
-			if marker != lastPush {
-				continue
-			}
-			if _, exists := sessionByID[sess.ID]; exists {
-				continue
-			}
-			sessionByID[sess.ID] = sess
 		}
 	}
 
@@ -1430,55 +1407,6 @@ func mapKeys(m map[string]db.Session) []string {
 		keys = append(keys, k)
 	}
 	return keys
-}
-
-func localSessionSyncMarker(sess db.Session) string {
-	marker, err := NormalizeLocalSyncTimestamp(sess.CreatedAt)
-	if err != nil || marker == "" {
-		if err != nil {
-			log.Printf(
-				"pgsync: normalizing CreatedAt %q for "+
-					"session %s: %v (skipping non-RFC3339 "+
-					"value)",
-				sess.CreatedAt, sess.ID, err,
-			)
-		}
-		marker = ""
-	}
-	for _, value := range []*string{
-		sess.LocalModifiedAt,
-		sess.EndedAt,
-		sess.StartedAt,
-	} {
-		if value == nil {
-			continue
-		}
-		normalized, err := NormalizeLocalSyncTimestamp(*value)
-		if err != nil {
-			continue
-		}
-		if normalized > marker {
-			marker = normalized
-		}
-	}
-	if sess.FileMtime != nil {
-		fileMtime := time.Unix(
-			0, *sess.FileMtime,
-		).UTC().Format(LocalSyncTimestampLayout)
-		if fileMtime > marker {
-			marker = fileMtime
-		}
-	}
-	if marker == "" {
-		log.Printf(
-			"pgsync: session %s: all timestamps failed "+
-				"normalization, falling back to raw "+
-				"CreatedAt %q",
-			sess.ID, sess.CreatedAt,
-		)
-		marker = sess.CreatedAt
-	}
-	return marker
 }
 
 func readPGExcludedSessionIDs(

@@ -119,8 +119,8 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 }
 
 // TestPushSessionNameViaPushPath verifies session_name survives the REAL push
-// path (Push -> ListSessionsModifiedBetween read), not just a direct
-// pushSession call. ListSessionsModifiedBetween reads sessionFullCols, so a
+// path (Push -> ListSessionsForMirrorWindow read), not just a direct
+// pushSession call. ListSessionsForMirrorWindow reads sessionFullCols, so a
 // missing session_name there would silently drop the value on every real push.
 func TestPushSessionNameViaPushPath(t *testing.T) {
 	pgURL := testPGURL(t)

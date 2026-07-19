@@ -144,20 +144,6 @@ func TestNormalizeLocalSyncTimestamp(t *testing.T) {
 	}
 }
 
-func TestPreviousLocalSyncTimestamp(t *testing.T) {
-	got, err := PreviousLocalSyncTimestamp(
-		"2026-03-11T12:34:56.124Z",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
-}
-
-func TestPreviousLocalSyncTimestampEmpty(t *testing.T) {
-	got, err := PreviousLocalSyncTimestamp("")
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
 func TestNormalizeLocalSyncStateTimestamps(t *testing.T) {
 	local, err := db.Open(t.TempDir() + "/test.db")
 	require.NoError(t, err)

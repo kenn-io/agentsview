@@ -76,24 +76,6 @@ func NormalizeLocalSyncTimestamp(
 	return ts.UTC().Format(LocalSyncTimestampLayout), nil
 }
 
-// PreviousLocalSyncTimestamp returns the timestamp 1ms before
-// the given value, formatted at millisecond precision. This
-// creates a non-overlapping boundary for incremental sync
-// queries against SQLite.
-func PreviousLocalSyncTimestamp(
-	value string,
-) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-	ts, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "", err
-	}
-	prev := ts.Add(-time.Millisecond)
-	return prev.UTC().Format(LocalSyncTimestampLayout), nil
-}
-
 // SyncStateStore is the interface needed for normalizing local
 // sync timestamps stored in SQLite.
 type SyncStateStore interface {
