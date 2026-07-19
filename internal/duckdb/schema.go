@@ -652,10 +652,13 @@ var mirrorTables = []tableSpec{
 	},
 }
 
-// EnsureSchema creates the DuckDB mirror schema. Deprecated: mirror schema
-// v3 is create-only, so this is now a thin alias for createSchema kept for
-// 'agentsview duckdb push' cmd callers and Sync.Push; Task 5/6 remove it once
-// those callers stop creating schema directly on a possibly-existing file.
+// EnsureSchema creates the DuckDB mirror schema. It has no production
+// callers: Sync.Push always goes through ProbeMirror to pick rebuildMirror
+// (create-only, via createSchema) or incrementalPush against an
+// already-valid mirror, and 'duckdb serve'/'duckdb quack serve' probe
+// instead of migrating (see ProbeMirror, WatchMirrorReplacement). It is
+// kept exported as a convenient fixture builder for tests that need a
+// fresh, schema-compatible, empty mirror file to seed with raw INSERTs.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	return createSchema(ctx, db)
 }

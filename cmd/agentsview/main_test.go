@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/server"
@@ -219,15 +220,30 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
 	t.Helper()
 	dataDir := t.TempDir()
+	mirrorPath := filepath.Join(dataDir, "mirror.duckdb")
+	buildEmptyDuckDBMirrorFixture(t, mirrorPath)
 	return runRuntimeWarningHelperProcess(
 		t, "DuckDB", "TestRunDuckDBRuntimeWarningHelperProcess",
 		[]string{
 			"AGENTSVIEW_RUN_DUCKDB_RUNTIME_WARNING_HELPER=1",
 			"AGENTSVIEW_DATA_DIR=" + dataDir,
-			"AGENTSVIEW_DUCKDB_RUNTIME_WARNING_PATH=" + filepath.Join(dataDir, "mirror.duckdb"),
+			"AGENTSVIEW_DUCKDB_RUNTIME_WARNING_PATH=" + mirrorPath,
 		},
 		"could not write daemon runtime record",
 	)
+}
+
+// buildEmptyDuckDBMirrorFixture creates a schema-compatible, empty DuckDB
+// mirror file at path. 'duckdb serve' now probes instead of migrating (see
+// probeDuckDBMirrorForServe), so it fatally refuses to serve a missing or
+// bare file; tests that just need serve to reach its normal startup path
+// must seed a valid mirror first instead of relying on serve to create one.
+func buildEmptyDuckDBMirrorFixture(t *testing.T, path string) {
+	t.Helper()
+	conn, err := duckdbsync.Open(path)
+	require.NoError(t, err)
+	require.NoError(t, duckdbsync.EnsureSchema(context.Background(), conn))
+	require.NoError(t, conn.Close())
 }
 
 func runPGRuntimeWarningHelper(t *testing.T) ([]byte, error) {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -25,9 +26,22 @@ import (
 // Compile-time check: *Store satisfies db.Store.
 var _ db.Store = (*Store)(nil)
 
-// Store wraps a DuckDB connection for read-mostly serve mode.
+// Store wraps a DuckDB connection for read-mostly serve mode. path and
+// handleMu support live reopening after a mirror rebuild swaps in a new
+// file (see WatchMirrorReplacement in mirror_watch.go): handleMu guards
+// duck, fileInfo, and aliasPath so an in-flight query never observes a
+// handle mid-swap. path is empty for NewStoreFromDB and remote/Quack
+// stores, which have no local file to watch. aliasPath is the hardlink
+// path.reopen-N that duck is actually opened against once the Store has
+// reopened at least once (see openMirrorAlias); it is "" for the original
+// connection NewStore opens directly on path.
 type Store struct {
-	duck           *sql.DB
+	path      string
+	handleMu  sync.RWMutex
+	duck      *sql.DB
+	fileInfo  os.FileInfo
+	aliasPath string
+
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
 	cursorMu       sync.RWMutex
@@ -41,28 +55,57 @@ func NewStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{duck: conn}, nil
+	info, err := os.Stat(path)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
+	}
+	return &Store{path: path, duck: conn, fileInfo: info}, nil
 }
 
 // NewStoreFromDB wraps an existing DuckDB connection.
 func NewStoreFromDB(conn *sql.DB) *Store { return &Store{duck: conn} }
 
-func (s *Store) DB() *sql.DB { return s.duck }
+// DB returns the current handle under a read lock. Callers that hold onto
+// the returned *sql.DB across a mirror replacement keep using the old
+// handle until they call DB() again; this is acceptable for the existing
+// callers, which only use DB() once at startup for compat checks.
+func (s *Store) DB() *sql.DB {
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	return s.duck
+}
 
-func (s *Store) Close() error { return s.duck.Close() }
+func (s *Store) Close() error {
+	s.handleMu.Lock()
+	defer s.handleMu.Unlock()
+	err := s.duck.Close()
+	removeMirrorAlias(s.aliasPath)
+	return err
+}
+
+// handle returns a consistent snapshot of the fields queryContext and
+// queryRowContext need, taken under a single read lock so a concurrent
+// mirror-replacement swap can never mix an old duck with a new quack (or
+// vice versa).
+func (s *Store) handle() (*sql.DB, duckDBConnectionKind, *quackClient) {
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	return s.duck, s.connectionKind, s.quack
+}
 
 func (s *Store) queryContext(
 	ctx context.Context, query string, args ...any,
 ) (*sql.Rows, error) {
-	return queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
+	duck, connectionKind, quack := s.handle()
+	return queryDuckDBContext(ctx, duck, connectionKind, quack, query, args...)
 }
 
 func (s *Store) queryRowContext(
 	ctx context.Context, query string, args ...any,
 ) interface{ Scan(...any) error } {
-	return queryDuckDBRowContext(
-		ctx, s.duck, s.connectionKind, s.quack, query, args...,
-	)
+	duck, connectionKind, quack := s.handle()
+	return queryDuckDBRowContext(ctx, duck, connectionKind, quack, query, args...)
 }
 
 func queryDuckDBContext(
@@ -706,7 +749,7 @@ func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomate
 }
 
 func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
-	rows, err := s.duck.QueryContext(ctx,
+	rows, err := s.queryContext(ctx,
 		`SELECT DISTINCT project, git_branch FROM sessions WHERE `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
 			` ORDER BY project, git_branch`,

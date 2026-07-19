@@ -251,46 +251,13 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		fatal("duckdb serve: path or url not configured")
 	}
 
-	applyClassifierConfig(appCfg)
-	store, err := duckdbsync.NewStoreFromConfig(duckCfg)
-	if err != nil {
-		fatal("duckdb serve: %v", err)
-	}
-	defer store.Close()
-	if len(appCfg.CustomModelPricing) > 0 {
-		store.SetCustomPricing(appCfg.CustomModelPricing)
-	}
-	if appCfg.CursorSecret != "" {
-		secret, decErr := base64.StdEncoding.DecodeString(appCfg.CursorSecret)
-		if decErr != nil {
-			fatal("invalid cursor secret: %v", decErr)
-		}
-		store.SetCursorSecret(secret)
-	}
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
-	if duckCfg.URL == "" {
-		if err := duckdbsync.EnsureSchema(ctx, store.DB()); err != nil {
-			fatal("duckdb serve: schema migration failed: %v", err)
-		}
-	}
-	var schemaErr error
-	if duckCfg.URL == "" {
-		schemaErr = duckdbsync.CheckSchemaCompat(ctx, store.DB())
-	} else {
-		schemaErr = duckdbsync.CheckSchemaCompatViaQuack(ctx, store.DB())
-	}
-	if schemaErr != nil {
-		if duckCfg.URL == "" {
-			fatal("duckdb serve: schema incompatible: %v\n"+
-				"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
-		}
-		fatal("duckdb serve: schema incompatible: %v", schemaErr)
-	}
+	store := openDuckDBServeStore(ctx, appCfg, duckCfg)
+	defer store.Close()
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "duckdb-serve",
@@ -355,6 +322,96 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 	}
 }
 
+// openDuckDBServeStore probes (local mirrors only), opens, and validates the
+// DuckDB store runDuckDBServe hands to server.New: applying pricing/cursor
+// secret config, checking schema compatibility, and starting the
+// mirror-replacement watcher for local mirrors. It calls fatal (which exits
+// the process) on any setup failure, so a returned store is always usable.
+func openDuckDBServeStore(
+	ctx context.Context, appCfg config.Config, duckCfg config.DuckDBConfig,
+) *duckdbsync.Store {
+	if duckCfg.URL == "" {
+		if err := probeDuckDBMirrorForServe(ctx, duckCfg.Path); err != nil {
+			fatal("duckdb serve: %v", err)
+		}
+	}
+
+	applyClassifierConfig(appCfg)
+	store, err := duckdbsync.NewStoreFromConfig(duckCfg)
+	if err != nil {
+		fatal("duckdb serve: %v", err)
+	}
+	if len(appCfg.CustomModelPricing) > 0 {
+		store.SetCustomPricing(appCfg.CustomModelPricing)
+	}
+	if appCfg.CursorSecret != "" {
+		secret, decErr := base64.StdEncoding.DecodeString(appCfg.CursorSecret)
+		if decErr != nil {
+			fatal("invalid cursor secret: %v", decErr)
+		}
+		store.SetCursorSecret(secret)
+	}
+
+	var schemaErr error
+	if duckCfg.URL == "" {
+		schemaErr = duckdbsync.CheckSchemaCompat(ctx, store.DB())
+	} else {
+		schemaErr = duckdbsync.CheckSchemaCompatViaQuack(ctx, store.DB())
+	}
+	if schemaErr != nil {
+		if duckCfg.URL == "" {
+			fatal("duckdb serve: schema incompatible: %v\n"+
+				"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
+		}
+		fatal("duckdb serve: schema incompatible: %v", schemaErr)
+	}
+	if duckCfg.URL == "" {
+		store.WatchMirrorReplacement(ctx, 2*time.Second, func(err error) {
+			log.Printf("duckdb serve: mirror replacement: %v", err)
+		})
+	}
+	return store
+}
+
+// probeDuckDBMirrorForServe checks that the local DuckDB mirror file exists
+// and is schema-compatible before serve opens a live handle on it. Mirror
+// schema v3 has no in-place migration path (see internal/duckdb.SchemaVersion),
+// so a missing, malformed, or version-mismatched mirror is a fatal
+// configuration error rather than something serve can fix by migrating.
+func probeDuckDBMirrorForServe(ctx context.Context, path string) error {
+	probe, err := duckdbsync.ProbeMirror(ctx, path)
+	if err != nil {
+		return err
+	}
+	reason := duckDBMirrorProbeFailureReason(probe)
+	if reason == "" {
+		return nil
+	}
+	return fmt.Errorf("%s; rebuild with 'agentsview duckdb push --full'", reason)
+}
+
+// duckDBMirrorProbeFailureReason reports why probe is not safe to serve
+// as-is, or "" when it is. It does not check push scope (probe.Scope): that
+// is a push-time concern, not a serve-time one.
+func duckDBMirrorProbeFailureReason(probe duckdbsync.MirrorProbe) string {
+	switch {
+	case !probe.FileExists:
+		return "duckdb mirror file does not exist"
+	case !probe.ShapeOK:
+		if probe.ShapeIssue != "" {
+			return probe.ShapeIssue
+		}
+		return "duckdb mirror shape incompatible"
+	case probe.SchemaVersion != duckdbsync.SchemaVersion:
+		return fmt.Sprintf(
+			"duckdb mirror schema version %d does not match this build's %d",
+			probe.SchemaVersion, duckdbsync.SchemaVersion,
+		)
+	default:
+		return ""
+	}
+}
+
 func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
@@ -385,52 +442,179 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 		fatal("duckdb quack serve: %v", err)
 	}
 
-	conn, err := duckdbsync.Open(duckCfg.Path)
-	if err != nil {
-		fatal("duckdb quack serve: %v", err)
-	}
-	defer conn.Close()
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
-	if err := duckdbsync.EnsureSchema(ctx, conn); err != nil {
-		fatal("duckdb quack serve: schema migration failed: %v", err)
+	runDuckDBQuackServeLoop(ctx, duckCfg, cfg, token)
+}
+
+// Reopen tuning for runDuckDBQuackServeLoop: how often it stat-polls the
+// mirror file for a rebuild-driven replacement while idle, and the
+// exponential backoff it uses when a *replacement* file fails to open or
+// compat-check (the initial open failure is still fatal; see the
+// everServed check below).
+const (
+	quackServeReplacementPollInterval = 2 * time.Second
+	quackServeReopenMinBackoff        = 5 * time.Second
+	quackServeReopenMaxBackoff        = 60 * time.Second
+)
+
+// runDuckDBQuackServeLoop opens the mirror and serves it over Quack, then
+// reopens whenever a rebuild swaps a new file into duckCfg.Path (detected
+// by polling the file's identity), so a long-running quack serve process
+// never gets stuck serving a stale inode. The very first open must
+// succeed, matching the previous fatal-on-bad-file startup behavior; once
+// serving has started at least once, a bad replacement file is logged and
+// retried with backoff instead of exiting the process, mirroring 'duckdb
+// serve's WatchMirrorReplacement.
+func runDuckDBQuackServeLoop(
+	ctx context.Context,
+	duckCfg config.DuckDBConfig,
+	cfg DuckDBQuackServeConfig,
+	token string,
+) {
+	everServed := false
+	backoff := quackServeReopenMinBackoff
+	for {
+		session, err := serveQuackOnce(ctx, duckCfg, cfg, token)
+		if err != nil {
+			if !everServed {
+				fatal("duckdb quack serve: %v", err)
+			}
+			log.Printf(
+				"duckdb quack serve: %v; retrying in %s", err, backoff,
+			)
+			if !sleepOrShutdown(ctx, backoff) {
+				return
+			}
+			backoff = nextQuackServeBackoff(backoff)
+			continue
+		}
+		everServed = true
+		backoff = quackServeReopenMinBackoff
+
+		replaced := waitForReplacementOrShutdown(
+			ctx, duckCfg.Path, session.info, quackServeReplacementPollInterval,
+		)
+		session.stop()
+		if !replaced {
+			return
+		}
+	}
+}
+
+// quackServeSession is one open-mirror, quack_serve-listening generation.
+type quackServeSession struct {
+	info os.FileInfo
+	stop func()
+}
+
+// serveQuackOnce probes and opens duckCfg.Path, installs/loads the quack
+// extension, identifies this node, and starts quack_serve. It prints the
+// same startup banner on every successful call, including reopens, so an
+// operator watching the log can see when a rebuild swapped the mirror out
+// from under a running serve (the listen URI can also change on reopen).
+func serveQuackOnce(
+	ctx context.Context,
+	duckCfg config.DuckDBConfig,
+	cfg DuckDBQuackServeConfig,
+	token string,
+) (quackServeSession, error) {
+	if err := probeDuckDBMirrorForServe(ctx, duckCfg.Path); err != nil {
+		return quackServeSession{}, err
+	}
+	info, err := os.Stat(duckCfg.Path)
+	if err != nil {
+		return quackServeSession{}, fmt.Errorf("statting duckdb mirror: %w", err)
+	}
+	conn, err := duckdbsync.Open(duckCfg.Path)
+	if err != nil {
+		return quackServeSession{}, err
 	}
 	if err := duckdbsync.CheckSchemaCompat(ctx, conn); err != nil {
-		fatal("duckdb quack serve: schema incompatible: %v", err)
+		_ = conn.Close()
+		return quackServeSession{}, fmt.Errorf("schema incompatible: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, "INSTALL quack"); err != nil {
-		fatal("duckdb quack serve: installing quack: %v", err)
+		_ = conn.Close()
+		return quackServeSession{}, fmt.Errorf("installing quack: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, "LOAD quack"); err != nil {
-		fatal("duckdb quack serve: loading quack: %v", err)
+		_ = conn.Close()
+		return quackServeSession{}, fmt.Errorf("loading quack: %w", err)
 	}
 	identifyQuackNode(ctx, conn, duckCfg.MachineName)
 
-	info, err := startQuackServer(
-		ctx, conn, cfg.Bind, token, duckCfg.AllowInsecure,
-	)
+	quackInfo, err := startQuackServer(ctx, conn, cfg.Bind, token, duckCfg.AllowInsecure)
 	if err != nil {
-		fatal("duckdb quack serve: %v", err)
+		_ = conn.Close()
+		return quackServeSession{}, fmt.Errorf("starting quack server: %w", err)
 	}
-	defer func() {
+	writeDuckDBQuackServeStartup(os.Stdout, duckDBQuackServeStartup{
+		Path: duckCfg.Path,
+		Bind: cfg.Bind,
+		Info: quackInfo,
+	})
+
+	stop := func() {
 		if _, stopErr := conn.ExecContext(
 			context.Background(), `CALL quack_stop(?)`, cfg.Bind,
 		); stopErr != nil {
 			log.Printf("warning: could not stop Quack server: %v", stopErr)
 		}
-	}()
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Printf("warning: could not close duckdb quack mirror: %v", closeErr)
+		}
+	}
+	return quackServeSession{info: info, stop: stop}, nil
+}
 
-	writeDuckDBQuackServeStartup(os.Stdout, duckDBQuackServeStartup{
-		Path: duckCfg.Path,
-		Bind: cfg.Bind,
-		Info: info,
-	})
+// waitForReplacementOrShutdown polls path every interval until either ctx
+// is done (returns false: caller should stop serving) or the file's
+// identity no longer matches currentInfo (returns true: caller should
+// reopen). A stat error (the file briefly missing mid-rename) is treated
+// as no change yet.
+func waitForReplacementOrShutdown(
+	ctx context.Context, path string, currentInfo os.FileInfo, interval time.Duration,
+) bool {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			if !os.SameFile(currentInfo, info) {
+				return true
+			}
+		}
+	}
+}
 
-	<-ctx.Done()
+// sleepOrShutdown waits d, returning false early if ctx ends first.
+func sleepOrShutdown(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextQuackServeBackoff(cur time.Duration) time.Duration {
+	next := cur * 2
+	if next > quackServeReopenMaxBackoff {
+		return quackServeReopenMaxBackoff
+	}
+	return next
 }
 
 type duckDBQuackServeStartup struct {

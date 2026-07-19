@@ -4131,7 +4131,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 		where, args = appendDuckUsageMatchingActivityClauses(where, args, f)
 
 		var count int
-		err := s.duck.QueryRowContext(ctx, `
+		err := s.queryRowContext(ctx, `
 			SELECT COUNT(*)
 			FROM sessions s WHERE `+where, args...).Scan(&count)
 		if err != nil {
@@ -4141,7 +4141,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 	}
 
 	query, args := duckMatchingUsageRawSQL(f)
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
