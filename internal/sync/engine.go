@@ -914,6 +914,10 @@ func providerVirtualSourceBackedByEvent(sourcePath, eventPath string) bool {
 		dbPath = filepath.Clean(sourcePath[:idx])
 	}
 	eventPath = filepath.Clean(eventPath)
+	// The workspace.json branch is keyed on the VS Code style state store
+	// basename, which Windsurf and Trae both use, so it covers every
+	// provider whose container is a "state.vscdb" sibling of the workspace
+	// label file rather than Windsurf alone.
 	return eventPath == dbPath ||
 		eventPath == dbPath+"-wal" ||
 		eventPath == dbPath+"-shm" ||

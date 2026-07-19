@@ -206,7 +206,7 @@ func traeParseMember(
 		return nil, nil
 	}
 	result, err := traeParseRecord(src, record, req)
-	if err != nil || !ok {
+	if err != nil {
 		return nil, err
 	}
 	return result, nil
