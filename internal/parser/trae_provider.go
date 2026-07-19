@@ -28,6 +28,7 @@ func newTraeProviderFactory(def AgentDef) ProviderFactory {
 			WithContainerParseOutcome(traeParseContainerOutcome),
 			WithMemberParse(traeParseMember),
 			WithMemberPresence(traeMemberPresent),
+			WithBatchMemberPresence(traeBatchMemberPresent),
 		)
 	})
 }
@@ -114,7 +115,7 @@ func traeMatch(dbPath, id string) multiSessionMatch {
 
 func traeFindMember(root, rawID string) (multiSessionMatch, bool) {
 	for _, db := range traeDBs(root) {
-		snapshot, err := loadTraeSessionSnapshot(db.path)
+		snapshot, err := traeLoadSessionSnapshot(db.path)
 		if err != nil {
 			continue
 		}
@@ -149,7 +150,7 @@ func traeParseContainerOutcome(
 	src multiSessionSource,
 	req ParseRequest,
 ) (ParseOutcome, error) {
-	snapshot, err := loadTraeSessionSnapshot(src.Container)
+	snapshot, err := traeLoadSessionSnapshot(src.Container)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -190,7 +191,7 @@ func traeParseMember(
 	src multiSessionSource,
 	req ParseRequest,
 ) (*ParseResult, error) {
-	snapshot, err := loadTraeSessionSnapshot(src.Container)
+	snapshot, err := traeLoadSessionSnapshot(src.Container)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +233,7 @@ func traeMemberPresent(src multiSessionSource) bool {
 	if !IsRegularFile(src.Container) {
 		return false
 	}
-	snapshot, err := loadTraeSessionSnapshot(src.Container)
+	snapshot, err := traeLoadSessionSnapshot(src.Container)
 	if err != nil {
 		return true
 	}
@@ -241,6 +242,25 @@ func traeMemberPresent(src multiSessionSource) bool {
 	}
 	_, ok := snapshot.ids[strings.TrimPrefix(src.MemberID, "trae:")]
 	return ok
+}
+
+func traeBatchMemberPresent(
+	container multiSessionSource,
+	members []multiSessionSource,
+) map[string]bool {
+	present := make(map[string]bool, len(members))
+	snapshot, err := traeLoadSessionSnapshot(container.Container)
+	if err != nil || !snapshot.authoritative || !snapshot.complete {
+		for _, member := range members {
+			present[member.Path] = true
+		}
+		return present
+	}
+	for _, member := range members {
+		_, ok := snapshot.ids[strings.TrimPrefix(member.MemberID, "trae:")]
+		present[member.Path] = ok
+	}
+	return present
 }
 
 func traeDBPathForEvent(root, path string) (string, bool) {
@@ -297,6 +317,8 @@ func (s traeSessionSnapshot) record(id string) (traeSessionRecord, bool) {
 	}
 	return traeSessionRecord{}, false
 }
+
+var traeLoadSessionSnapshot = loadTraeSessionSnapshot
 
 func loadTraeSessionSnapshot(path string) (traeSessionSnapshot, error) {
 	value, err := readTraeValue(path)

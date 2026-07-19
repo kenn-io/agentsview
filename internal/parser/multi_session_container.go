@@ -78,6 +78,10 @@ type multiSessionConfig struct {
 	// memberPresent reports whether a source still exists for RequireFreshSource
 	// lookups. Optional; the default treats every source as present.
 	memberPresent func(src multiSessionSource) bool
+	// batchMemberPresence reports current membership for the stored members of one
+	// changed container during a single tombstone pass. Optional; when nil the
+	// base falls back to calling memberPresent per member.
+	batchMemberPresence func(container multiSessionSource, members []multiSessionSource) map[string]bool
 	// freshStoredMember reports whether a stored member source still resolves to
 	// the requested raw session ID under RequireFreshSource. Providers with
 	// positional member IDs (Aider's run index) set this so a stored path whose
@@ -169,6 +173,12 @@ func WithMemberParse(
 
 func WithMemberPresence(fn func(src multiSessionSource) bool) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.memberPresent = fn }
+}
+
+func WithBatchMemberPresence(
+	fn func(container multiSessionSource, members []multiSessionSource) map[string]bool,
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.batchMemberPresence = fn }
 }
 
 func WithFreshStoredMember(
@@ -314,6 +324,7 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 	containerExists := IsRegularFile(changed.Container)
 	var tombstones []SourceRef
 	seen := make(map[string]struct{})
+	var members []multiSessionMatch
 	for _, stored := range storedPaths {
 		match, ok := s.cfg.classifyPath(root, stored, true)
 		if !ok || match.MemberID == "" {
@@ -335,7 +346,18 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 				tombstones = append(tombstones, s.sourceRef(root, current))
 				continue
 			}
-		} else if s.memberPresent(match.toSource(root)) {
+			if _, dup := seen[match.Path]; dup {
+				continue
+			}
+			seen[match.Path] = struct{}{}
+			tombstones = append(tombstones, s.sourceRef(root, match))
+			continue
+		}
+		members = append(members, match)
+	}
+	present := s.batchMemberPresence(changed.toSource(root), members)
+	for _, match := range members {
+		if s.memberPresentForTombstone(match.toSource(root), present) {
 			continue
 		}
 		if _, dup := seen[match.Path]; dup {
@@ -345,6 +367,32 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 		tombstones = append(tombstones, s.sourceRef(root, match))
 	}
 	return tombstones
+}
+
+func (s multiSessionContainerSourceSet) batchMemberPresence(
+	container multiSessionSource,
+	members []multiSessionMatch,
+) map[string]bool {
+	if s.cfg.batchMemberPresence == nil || len(members) == 0 {
+		return nil
+	}
+	batch := make([]multiSessionSource, 0, len(members))
+	for _, member := range members {
+		batch = append(batch, member.toSource(container.Root))
+	}
+	return s.cfg.batchMemberPresence(container, batch)
+}
+
+func (s multiSessionContainerSourceSet) memberPresentForTombstone(
+	src multiSessionSource,
+	present map[string]bool,
+) bool {
+	if present != nil {
+		if ok, found := present[src.Path]; found {
+			return ok
+		}
+	}
+	return s.memberPresent(src)
 }
 
 func multiSessionMatchOwnsContainer(

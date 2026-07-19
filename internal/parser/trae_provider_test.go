@@ -491,6 +491,68 @@ func TestTraeChangedPathTombstonesRefreshWarmMemberPresenceCache(t *testing.T) {
 	assert.Equal(t, virtual, tombstone.Key)
 }
 
+func TestTraeChangedPathTombstonesDecodeSnapshotOncePerContainer(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "globalStorage", traeStateDBName)
+	writeTraeDB(t, dbPath, traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "session-1",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "one"}},
+		},
+		map[string]any{
+			"sessionId": "session-2",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "two"}},
+		},
+		map[string]any{
+			"sessionId": "session-3",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "three"}},
+		},
+	}), "memento/unrelated-chat-storage")
+
+	setTraeDBValue(t, dbPath, traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "session-1",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "one"}},
+		},
+	}))
+
+	orig := traeLoadSessionSnapshot
+	defer func() { traeLoadSessionSnapshot = orig }()
+	var decodes int
+	traeLoadSessionSnapshot = func(path string) (traeSessionSnapshot, error) {
+		decodes++
+		return orig(path)
+	}
+
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
+	stored := []string{
+		traeVirtualPath(dbPath, "session-1"),
+		traeVirtualPath(dbPath, "session-2"),
+		traeVirtualPath(dbPath, "session-3"),
+	}
+
+	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		WatchRoot:         filepath.Join(root, "globalStorage"),
+		Path:              dbPath,
+		StoredSourcePaths: stored,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, decodes)
+	require.Len(t, sources, 3)
+	assert.Equal(t, dbPath, sources[0].Key)
+	assert.ElementsMatch(t, []string{
+		dbPath,
+		traeVirtualPath(dbPath, "session-2"),
+		traeVirtualPath(dbPath, "session-3"),
+	}, []string{sources[0].Key, sources[1].Key, sources[2].Key})
+}
+
 func TestTraeAssistantFallbackVariants(t *testing.T) {
 	assert.Equal(t, "plain text", traeAssistantFallback(json.RawMessage(`"plain text"`)))
 	assert.Equal(t, "text field", traeAssistantFallback(json.RawMessage(`{"text":"text field"}`)))
