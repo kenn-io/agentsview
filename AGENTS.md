@@ -114,9 +114,11 @@ Instructions for autonomous coding agents working in this repository.
 
 ## Provider Format Provenance
 
-When adding a provider or changing a provider's on-disk format or usage/cost
-accounting, consult `docs/internal/session-format-sources.md` and update its
-evidence entry in the same change.
+When adding a provider, changing its format or usage/cost accounting, or
+investigating a provider release, new artifact generation, parser bug, or usage
+discrepancy, consult `docs/internal/session-format-sources.md` and reverify or
+update its evidence entry in the same change. Grok remains temporarily excluded
+only until its separately owned format-alignment work lands.
 
 ## Localization
 

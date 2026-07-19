@@ -18,6 +18,35 @@ computes later with its pricing catalog. A compatible upstream implementation is
 useful evidence for a shared format family, but is called out when it is not the
 product's own producer source.
 
+All entries were last verified on 2026-07-19. A pinned revision is a
+reproducible research snapshot, not a claim that it produced every historical
+artifact that Agentsview accepts. Where an entry covers several generations, its
+**Format** and **Agentsview** fields identify that boundary; the parser, its
+colocated tests, and `internal/parser/testdata` remain the implementation
+evidence for observed legacy or closed-source artifacts. Add a producer release
+or format-version range when one can be tied confidently to an artifact.
+
+An evidence class names the strongest public authority in an entry, not every
+claim in that section. Source links may prove a current producer or migration
+while an explicitly labeled limitation remains based on observed files. Generic
+standards or documentation that only proves an export exists do not establish
+the complete persisted schema.
+
+For `no-public-source` entries, the repeatable search used the first-party
+pages, organizations, or pinned public repositories named in the entry, plus
+repository and code searches for `<display name> session format`,
+`<display name> persistence`, and `<display name> token usage cost`, including
+likely JSONL and SQLite names. Reverify an entry during provider-release
+investigations, when a new artifact generation appears, for parser or
+usage-accounting bug reports, and during periodic inventory review. Record newly
+discovered exact URLs, releases, and queries in the provider entry. If a
+repository or document disappears, retain its original URL and commit hash and
+add an archived or maintained mirror without replacing the original identity.
+
+Grok is temporarily excluded at the user's request because a separate
+format-alignment change owns that provider. Once that alignment lands, add a
+Grok section and remove the explicit registry exception in the coverage test.
+
 ## Claude Code (`claude`)
 
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
@@ -79,8 +108,11 @@ product's own producer source.
   [protocol types](https://github.com/openai/codex/blob/3e2f79727a4e8ddfc8e3acb838d496b121094b9e/codex-rs/protocol/src/protocol.rs).
 - **Usage and cost:** `token_count` records include total and last usage with
   input, cached input, cache-write input, output, reasoning output, and total
-  tokens. Input includes cached input upstream, so Agentsview subtracts the
-  cached portion before recording uncached input. Cost is catalog-derived.
+  tokens. Agentsview currently consumes input, cached input, and output only:
+  it subtracts cached input from upstream's inclusive input total, maps cached
+  input to cache-read, and ignores cache-write and reasoning-output fields.
+  Catalog pricing therefore covers only the normalized fields the parser
+  emits.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals.
@@ -175,15 +207,16 @@ product's own producer source.
 
 - **Format:** A CLI conversation directory containing `base_state.json`,
   `TASKS.json`, and one JSON file per event under `events/`.
-- **Evidence:** `source`.
+- **Evidence:** `no-public-source`.
 - **Upstream:** Clone `https://github.com/OpenHands/OpenHands.git` at
-  `93c0871951f9247cc87a63940972ae7e25d46b6f`; current storage infrastructure
-  is represented by
+  `93c0871951f9247cc87a63940972ae7e25d46b6f` was checked 2026-07-19. Current
+  storage infrastructure is represented by
   [event_store.py](https://github.com/OpenHands/OpenHands/blob/93c0871951f9247cc87a63940972ae7e25d46b6f/openhands/app_server/event/event_store.py)
   and the
   [local file store](https://github.com/OpenHands/OpenHands/blob/93c0871951f9247cc87a63940972ae7e25d46b6f/openhands/app_server/file_store/local.py).
-  The exact legacy CLI directory is no longer specified by one current
-  schema, so repository history remains relevant.
+  These are supplemental current source: the exact legacy CLI directory
+  consumed by Agentsview is no longer specified by a public producer or
+  schema.
 - **Usage and cost:** The consumed event format is used for transcript content;
   Agentsview currently exposes no token, cache, reasoning, or cost events for
   OpenHands.
@@ -254,13 +287,14 @@ product's own producer source.
 
 - **Format:** OpenTelemetry JSONL spans exported by Visual Studio's GitHub
   Copilot integration.
-- **Evidence:** `documentation`.
+- **Evidence:** `no-public-source`.
 - **Upstream:** GitHub's
   [Copilot usage metrics documentation](https://docs.github.com/en/copilot/reference/copilot-usage-metrics)
   and the OpenTelemetry
   [generative-AI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
-  were checked 2026-07-19. Visual Studio's emitting implementation and its
-  on-disk exporter configuration are not public.
+  were checked 2026-07-19. They are supplemental usage-semantics references;
+  Visual Studio's emitting implementation, persisted exporter format, and
+  on-disk configuration are not public.
 - **Usage and cost:** Spans persist `gen_ai.usage.input_tokens` and
   `gen_ai.usage.output_tokens`, with model attributes when emitted. Cache and
   reasoning splits are absent in the consumed data. Copilot credits are not

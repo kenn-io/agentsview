@@ -26,8 +26,14 @@ repositories, and first-party vendor documentation.
 - Classify evidence as `source`, `documentation`, or `no-public-source`.
 - Source-backed entries use an HTTPS clone URL, a full 40-character commit hash,
   and permanent file links verified at that revision.
+- Treat a pinned revision as a reproducible research snapshot, not proof that it
+  produced every historical artifact. Record producer or format-version ranges
+  when they can be tied confidently to observed files.
 - Documentation-backed entries use first-party URLs and record the check date as
   `2026-07-19`.
+- Give every evidence class a last-verified date and reverify during provider
+  release investigations, new artifact generations, parser or accounting bug
+  reports, and periodic inventory review.
 - Distinguish persisted token/cost data from Agentsview-computed pricing.
 - State explicitly when token usage, cost, cache, reasoning, aggregate, or
   credit data is absent or ambiguous.
@@ -204,7 +210,7 @@ Use this exact field order in every provider section:
 
 - [ ] **Step 2: Add all canonical provider headings before research**
 
-Add one section, in registry order, for each of these exact IDs:
+Add one section, in this canonical reading order, for each of these exact IDs:
 
 ```text
 claude
@@ -261,6 +267,10 @@ reasonix
 
 Do not add a `grok` heading.
 
+Research and review the entries in provider-family batches. After each batch,
+check format-generation boundaries, evidence authority, and usage/cost mappings
+before proceeding; the complete registry-coverage test remains the final gate.
+
 - [ ] **Step 3: Build an implementation-derived format map**
 
 For each heading, inspect its parser and provider source with:
@@ -295,7 +305,9 @@ entry unchanged. At minimum, compare these known families:
 For every provider with a plausible public producer repository:
 
 1. Prefer the first-party repository over forks or reverse-engineering tools.
-1. Resolve a full revision with `git ls-remote <https-clone-url> HEAD`.
+1. Prefer a release-tag commit tied to an observed artifact. When only current
+   `HEAD` is usable, resolve it with `git ls-remote <https-clone-url> HEAD`
+   and record that applicability limitation.
 1. Inspect the repository tree or a filtered clone for persistence/schema files.
 1. Verify each cited path with `git cat-file -e <revision>:<path>`.
 1. Cite a permanent `blob/<full-revision>/<path>` link.
@@ -329,6 +341,12 @@ documentation sites, or product pages checked, then describe current parser
 behavior as Agentsview implementation evidence. Do not elevate fixtures,
 third-party blog posts, or inferred field names to upstream authority.
 
+Record a repeatable search log: exact first-party URLs or organizations, pinned
+public repository revisions when available, the search terms used for session
+format/persistence and token/cost fields, and the verification date. Retain an
+original URL and commit hash if evidence disappears, adding an archive or mirror
+without replacing the original identity.
+
 - [ ] **Step 7: Audit token and cost semantics provider by provider**
 
 For every section, answer all applicable questions explicitly:
@@ -349,7 +367,15 @@ rg -n 'TokenUsage|UsageEvents|InputTokens|OutputTokens|ContextTokens|CostUSD|cos
   internal/parser --glob '*.go' --glob '!**/*_test.go'
 ```
 
-- [ ] **Step 8: Run the focused coverage test to reach green**
+- [ ] **Step 8: Enforce section structure and run the focused test to reach
+  green**
+
+Extend the inventory test with malformed literal sections proving that it
+rejects missing, duplicate, or misordered required fields; invalid evidence
+classes; source entries without an HTTPS clone URL, full revision, or pinned
+file link; and documentation or negative-source entries without a check date.
+This validates the maintained contract without attempting to freeze prose
+conclusions.
 
 Run:
 
@@ -467,8 +493,9 @@ git diff -- AGENTS.md docs/internal/session-format-sources.md \
   internal/parser/format_sources_test.go
 ```
 
-Expected: no whitespace errors, only the three intended implementation files, no
-private data, no absolute local paths, and no Grok section.
+Expected: no whitespace errors, only implementation-owned changes beyond any
+pre-existing user changes recorded at the start, no private data, no absolute
+local paths, and no Grok section.
 
 - [ ] **Step 5: Stage only implementation files**
 
@@ -508,4 +535,5 @@ push or open a pull request unless the user explicitly requests those actions.
   inventory.
 - [ ] Go formatting, Go vet, focused tests, Markdown checks, and practical
   broader tests have recorded results.
-- [ ] The worktree is clean after the implementation commit.
+- [ ] No implementation-owned changes remain uncommitted; unrelated changes
+  present at the start are preserved and reported.

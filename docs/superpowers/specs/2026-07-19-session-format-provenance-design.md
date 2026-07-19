@@ -32,6 +32,9 @@ Each provider section records:
 - a cloneable upstream repository URL when public source exists;
 - a full pinned commit hash and permanent links to relevant files at that
   commit;
+- the producer release or format-version range tied to the consumed artifact
+  when that relationship can be established, otherwise an explicit statement
+  that the revision is only a research snapshot;
 - the upstream fields and semantics relevant to input, output, cache, reasoning,
   aggregate, credit, or reported-cost accounting;
 - the Agentsview parser files that consume the format; and
@@ -57,6 +60,9 @@ or migration code over examples and downstream consumers. Use the repository's
 HTTPS clone URL, a full 40-character commit hash, and file links pinned to that
 hash. Verify that every cited path exists at the pinned revision. When one file
 defines the session shape and another defines usage accounting, cite both.
+Prefer a release-tag commit that can be tied to an observed artifact. A current
+`HEAD` revision is acceptable only when its snapshot-only applicability and any
+known legacy-generation boundary are stated.
 
 For `documentation` entries, prefer first-party vendor documentation and record
 the URL plus the date it was checked. Do not imply that a moving documentation
@@ -68,7 +74,18 @@ For `no-public-source` entries, state that no usable public format source was
 found and summarize the first-party repositories or documentation surfaces that
 were checked. Sanitized local observations and the Agentsview parser may explain
 current behavior, but must be labeled as implementation evidence rather than
-upstream authority.
+upstream authority. Record exact URLs or organizations, useful pinned revisions,
+the repeated format/persistence and token/cost search terms, and the check date
+so the negative conclusion can be reproduced.
+
+Treat the evidence class as the strongest public authority present, not blanket
+support for every claim in a section. Generic standards and documentation that
+only establishes an export artifact are supplemental rather than proof of a
+complete persisted schema. Give every entry a last-verified date and reverify it
+during provider-release investigations, new artifact generations, parser or
+usage-accounting bug reports, and periodic inventory review. If evidence
+disappears, retain its original URL and commit identity while adding an archive
+or maintained mirror.
 
 Token and cost notes must distinguish fields directly persisted by the provider
 from values Agentsview derives later using its pricing catalog. Explicitly state
@@ -82,17 +99,23 @@ inventory's second-level headings and compares them with
 `internal/parser.Registry` in both directions after excluding `AgentGrok`. The
 test fails for missing entries, unknown entries, and duplicate provider IDs.
 
-The test enforces inventory membership only. It does not parse or freeze prose,
-URLs, repository paths, or evidence conclusions. Research quality remains a
-review concern, while the automated check prevents new providers from silently
-bypassing the inventory.
+The test also enforces exactly one of each required field in the prescribed
+order, the evidence-class vocabulary, full source revisions and pinned links,
+and check dates for documentation or negative-source entries. It does not parse
+or freeze prose conclusions. Research quality remains a review concern, while
+the automated contract prevents structurally incomplete entries from appearing
+covered.
 
 ## Maintainer Rule
 
-Add a one-line rule to the root `AGENTS.md` requiring implementers who add or
-change a provider to consult `docs/internal/session-format-sources.md` and
-update its evidence entry in the same change. The wording must cover new
-providers and format or usage-accounting changes to existing providers.
+Add a rule to the root `AGENTS.md` requiring implementers who add or change a
+provider, or investigate a provider release, new artifact generation, parser
+bug, or usage discrepancy, to consult `docs/internal/session-format-sources.md`
+and reverify or update its evidence entry in the same change.
+
+Grok remains temporarily excluded because its separately owned format-alignment
+work is in progress. The exit criterion is that work landing: then add Grok to
+the inventory and remove the explicit registry exception.
 
 Do not modify the frontend-specific `AGENTS.md`; the rule concerns parser and
 provider maintenance across the repository.
