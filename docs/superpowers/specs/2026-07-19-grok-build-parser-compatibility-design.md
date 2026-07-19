@@ -112,10 +112,26 @@ snapshot and can decrease after compaction, so treating it as a peak creates a
 false aggregate. `userMessageCount` remains the summary-only fallback because it
 is the only persisted count available when chat history is absent.
 
-## Tests
+## Golden samples and tests
 
-Tests will use literal JSON/JSONL fixtures shaped from upstream serialization
-examples and call the public provider parse boundary. Each behavior change will
+The compatibility suite will include a checked-in, sanitized golden session
+generated with the pinned Grok Build source rather than transcribed by hand. A
+temporary Rust generator compiled inside the upstream checkout will serialize
+the actual `Summary`, `SessionSignals`, and format 1 `ConversationItem` types.
+Grok Build's own `chat-history-downgrade` binary will convert the same format 1
+history into format 0 rows. The golden fixture directory will record the
+upstream commit, generator source, and exact generation commands so its
+provenance can be audited or reproduced without making Rust part of AgentsView's
+normal test toolchain.
+
+The golden bytes are inputs, not expected results. Go tests will call the public
+provider parse boundary and compare the resulting session and messages with
+hand-authored literal expectations. This separation ensures the source-derived
+sample catches schema drift without using AgentsView's parser to generate its
+own answers.
+
+Small, hand-written JSON/JSONL fixtures will remain appropriate for isolated
+branches that would be obscured by a full session. Each behavior change will
 follow red-green-refactor:
 
 1. format 0 user, assistant, tool call, tool result, model, and reasoning;
