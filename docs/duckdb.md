@@ -170,10 +170,19 @@ Environment variables override the config file:
   from scratch (temp file, atomic swap) when the file is missing or damaged,
   `--full` is passed, the mirror's schema version does not match the running
   binary, the local SQLite data version has changed (for example after a
-  resync), or the project-filter scope has changed. Otherwise push applies a
-  bounded incremental update that replaces only changed sessions, applies
-  recorded deletions, and removes previously mirrored sessions whose project
-  has since moved out of the configured scope.
+  resync), the mirror was built from a different SQLite archive than the one
+  pushing now, or the project-filter scope has changed. Otherwise push
+  applies a bounded incremental update that replaces only changed sessions,
+  applies recorded deletions, and removes previously mirrored sessions whose
+  project has since moved out of the configured scope.
+- **The first push after a resync is always a full rebuild** — the mirror
+  records the `database_id` of the SQLite archive generation it was built
+  from, and a resync builds a fresh archive with a new `database_id`. A push
+  whose local archive id no longer matches the mirror's recorded id rebuilds
+  from scratch instead of applying an incremental update whose cutoff and
+  journal cursors describe a different archive's history. This parallels the
+  PostgreSQL push, whose sync cursors are scoped by `database_id` in the
+  same way.
 - **Scope changes rebuild the mirror** — `--projects` / `--exclude-projects`
   (or the configured `projects` / `exclude_projects`) scope is a property of
   the whole mirror file. Changing it rebuilds the mirror to contain exactly

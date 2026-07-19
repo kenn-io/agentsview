@@ -190,6 +190,11 @@ func isGeneratedSweepName(name, prefix string) bool {
 type rebuildSnapshot struct {
 	cutoff           string
 	deletionRevision int64
+	// sourceDatabaseID identifies the archive generation this rebuild reads
+	// from (see mirrorMetadata.SourceDatabaseID). It cannot change while the
+	// rebuild's *db.DB handle is open, so capturing it here is a convenience
+	// rather than a race guard.
+	sourceDatabaseID string
 }
 
 // captureRebuildSnapshot reads the state tokens rebuildMirror needs to seed
@@ -200,9 +205,16 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 	if err != nil {
 		return rebuildSnapshot{}, err
 	}
+	sourceDatabaseID, err := local.GetDatabaseID(ctx)
+	if err != nil {
+		return rebuildSnapshot{}, fmt.Errorf(
+			"reading local archive database id: %w", err,
+		)
+	}
 	return rebuildSnapshot{
 		cutoff:           time.Now().UTC().Format(localSyncTimestampLayout),
 		deletionRevision: deletionRevision,
+		sourceDatabaseID: sourceDatabaseID,
 	}, nil
 }
 
@@ -354,6 +366,7 @@ func (s *Sync) writeRebuildMetadata(
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
+		SourceDatabaseID: snapshot.sourceDatabaseID,
 		Scope:            scope,
 		LastPushCutoff:   snapshot.cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),

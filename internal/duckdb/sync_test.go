@@ -852,6 +852,85 @@ func TestPushRebuildsWhenMirrorDeletionCursorAheadOfLocal(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+// TestPushRebuildsWhenMirrorBuiltFromDifferentArchive covers the
+// source-database-id gate: a mirror records which SQLite archive generation
+// built it, and pointing a push at a mirror built from a DIFFERENT archive —
+// same machine, scope, schema/data versions, and a deletion revision that is
+// not behind — must run a full rebuild. Without the gate the push takes the
+// incremental path: sessions unique to the old archive persist forever, and
+// the new archive's sessions whose sync_markers sit below the mirror's
+// stored cutoff are never copied.
+func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
+	ctx := context.Background()
+	archiveA := newLocalDB(t)
+	require.NoError(t, archiveA.SetDatabaseIDForTest(ctx, "archive-a"))
+	tsA := "2026-02-01T00:00:00.000Z"
+	_, err := archiveA.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         syncSession("a-only-1", "alpha", "a1", tsA, 1),
+			Messages:        []db.Message{syncMessage("a-only-1", 0, "user", "a1", tsA)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         syncSession("a-only-2", "alpha", "a2", tsA, 1),
+			Messages:        []db.Message{syncMessage("a-only-2", 0, "user", "a2", tsA)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	resA, err := Push(ctx, path, archiveA, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	require.True(t, resA.Diagnostics.Full, "first push against a fresh path is a rebuild")
+
+	// An independent archive whose scope, machine, and versions all coincide
+	// with what the mirror records, and whose deletion revision (0) is not
+	// behind the mirror's. Only the database id differs.
+	archiveB := newLocalDB(t)
+	require.NoError(t, archiveB.SetDatabaseIDForTest(ctx, "archive-b"))
+	tsB := "2026-02-02T00:00:00.000Z"
+	_, err = archiveB.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         syncSession("b-old", "alpha", "b old", tsB, 1),
+			Messages:        []db.Message{syncMessage("b-old", 0, "user", "b old", tsB)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         syncSession("b-new", "alpha", "b new", tsB, 1),
+			Messages:        []db.Message{syncMessage("b-new", 0, "user", "b new", tsB)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	// Pin one B session's sync_marker strictly below the cutoff archive A's
+	// push stored: an incremental push's window can never select it, so only
+	// a full rebuild ever copies it into the mirror.
+	setSessionSignalsTo(t, archiveB, "b-old", "2020-01-01T00:00:00.000Z")
+
+	res, err := Push(ctx, path, archiveB, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full,
+		"a mirror built from a different archive must be fully rebuilt")
+	assert.Contains(t, res.Diagnostics.RebuildReason, "different archive",
+		"the rebuild reason must name the source archive change")
+
+	assertMirrorSessionAbsent(t, path, "a-only-1")
+	assertMirrorSessionAbsent(t, path, "a-only-2")
+	assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "b-old", 1)
+	assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "b-new", 1)
+
+	// The rebuilt mirror now records archive B's id, so the next push from
+	// the same archive proceeds incrementally again.
+	resAgain, err := Push(ctx, path, archiveB, "test-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, resAgain.Diagnostics.Full,
+		"a matching source database id must allow the incremental path")
+}
+
 // TestPushRebuildsWhenMachineNameChanges is the FIX1 regression: mirror rows
 // are machine-stamped, and an incremental push only re-pushes sessions whose
 // LOCAL content changed within the current window. A session that has not

@@ -74,12 +74,16 @@ type MirrorProbe struct {
 	MarkerIdentityMismatch bool
 	SchemaVersion          int
 	DataVersion            int
-	Scope                  string // canonical scope string, see canonicalPushScope
-	LastPushCutoff         string
-	LastPushAt             string
-	LastPushMachine        string
-	DeletionRevision       int64
-	IdentityRevision       int64
+	// SourceDatabaseID is the database_id of the SQLite archive generation
+	// the mirror was built from (see mirrorMetadata.SourceDatabaseID). "" on
+	// mirrors written before the id was recorded.
+	SourceDatabaseID string
+	Scope            string // canonical scope string, see canonicalPushScope
+	LastPushCutoff   string
+	LastPushAt       string
+	LastPushMachine  string
+	DeletionRevision int64
+	IdentityRevision int64
 }
 
 // ProbeMirror inspects the mirror file at path without creating or mutating
@@ -234,6 +238,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB, path string) MirrorProbe
 	probe.ShapeOK = true
 	probe.SchemaVersion = meta.SchemaVersion
 	probe.DataVersion = meta.DataVersion
+	probe.SourceDatabaseID = meta.SourceDatabaseID
 	probe.Scope = meta.Scope
 	probe.LastPushCutoff = meta.LastPushCutoff
 	probe.LastPushAt = meta.LastPushAt
@@ -327,15 +332,34 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // can proceed. It is the diagnostic/logging counterpart to NeedsRebuild:
 // every condition NeedsRebuild's bool contract covers (missing/damaged
 // file, schema/data version drift, scope change) is reported here with the
-// specific "why", plus three conditions NeedsRebuild does not see: a
+// specific "why", plus four conditions NeedsRebuild does not see: a
 // cross-process lock conflict (LockConflict), the mirror having been last
-// pushed by a different machine name than the one pushing now, and the
+// pushed by a different machine name than the one pushing now, the mirror
+// having been built from a different SQLite archive generation than the one
+// pushing now (see the source-database-id paragraph below), and the
 // mirror's deletion journal cursor sitting ahead of the local archive's own
 // counter, which happens when the local archive was rebuilt or replaced
 // (e.g. by a resync) and its deletion journal no longer covers the range
 // the mirror already advanced past — applying a delta in that state would
 // otherwise fail with an invalid publication window rather than just
 // rebuilding.
+//
+// The source-database-id check exists because every incremental bookkeeping
+// token the mirror stores (push cutoff, deletion and identity revisions) is
+// only meaningful relative to the archive that produced it. A mirror built
+// from a DIFFERENT archive whose versions, scope, and machine happen to
+// coincide — and whose deletion revision is not behind — would otherwise
+// take the incremental path: sessions unique to the old archive persist
+// forever, and the new archive's sessions with sync_markers below the
+// stored cutoff are never copied. A resync deliberately generates a new
+// database_id for the fresh archive (internal/db/orphaned.go excludes the
+// key from the metadata it carries over), so the first push after ANY
+// resync is a full rebuild — paralleling the PostgreSQL push's
+// database_id-scoped cursors and superseding reliance on deletion-journal
+// continuity across a resync (the deletion-cursor check below remains as
+// defense in depth for same-archive paths). A recorded EMPTY id also
+// rebuilds: identity-less mirrors only come from earlier builds of this
+// unreleased branch, so they simply rebuild once and record the id.
 //
 // The machine-change check exists because mirror rows are machine-stamped
 // (see the sessions.machine column and duckSessionFingerprintFields): an
@@ -348,11 +372,12 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // re-pushes every session under the new machine name instead.
 //
 // localDeletionRevision is the caller's local.SessionDeletionPublicationRevision
-// read, passed in rather than threaded through NeedsRebuild's pure
-// scope/version signature.
+// read, and localDatabaseID the caller's local.GetDatabaseID read; both are
+// passed in rather than threaded through NeedsRebuild's pure scope/version
+// signature.
 func rebuildReason(
 	probe MirrorProbe, scope string, sourceDataVersion int, full bool,
-	localDeletionRevision int64, machine string,
+	localDeletionRevision int64, machine string, localDatabaseID string,
 ) string {
 	switch {
 	case full:
@@ -379,6 +404,8 @@ func rebuildReason(
 		return fmt.Sprintf(
 			"machine name changed from %s to %s", probe.LastPushMachine, machine,
 		)
+	case probe.SourceDatabaseID != localDatabaseID:
+		return "mirror was built from a different archive (source database id changed)"
 	case probe.DeletionRevision > localDeletionRevision:
 		return "mirror deletion cursor ahead of archive; archive was rebuilt"
 	default:

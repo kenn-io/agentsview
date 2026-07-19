@@ -210,9 +210,14 @@ func Push(
 	if err != nil {
 		return PushResult{}, err
 	}
+	localDatabaseID, err := local.GetDatabaseID(ctx)
+	if err != nil {
+		return PushResult{}, fmt.Errorf("reading local archive database id: %w", err)
+	}
 
 	reason := rebuildReason(
-		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision, machine,
+		probe, scope, db.CurrentDataVersion(), full, localDeletionRevision,
+		machine, localDatabaseID,
 	)
 	var result PushResult
 	if deferred, ok := deferLockedRebuild(opts, full, probe); ok {
@@ -691,9 +696,19 @@ func (s *Sync) finalizeIncrementalPush(
 	ctx context.Context, opts SyncOptions, cutoff string,
 	deletionRevision, identityRevision int64,
 ) error {
+	// The source database id is re-read rather than copied from the probe:
+	// an incremental push only runs when the probe's recorded id already
+	// matches the local archive (see rebuildReason), so the two are
+	// interchangeable, and reading local state keeps this symmetric with
+	// writeRebuildMetadata.
+	sourceDatabaseID, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return fmt.Errorf("reading local archive database id: %w", err)
+	}
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
 		SchemaVersion:    SchemaVersion,
 		DataVersion:      db.CurrentDataVersion(),
+		SourceDatabaseID: sourceDatabaseID,
 		Scope:            canonicalPushScope(opts.Projects, opts.ExcludeProjects),
 		LastPushCutoff:   cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),

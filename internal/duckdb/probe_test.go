@@ -35,7 +35,8 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, createSchema(context.Background(), conn))
 	require.NoError(t, writeMirrorMetadata(context.Background(), conn, mirrorMetadata{
-		SchemaVersion: SchemaVersion, DataVersion: 68, Scope: "",
+		SchemaVersion: SchemaVersion, DataVersion: 68,
+		SourceDatabaseID: "archive-1", Scope: "",
 		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a"}))
 	require.NoError(t, conn.Close())
 
@@ -45,6 +46,7 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	assert.True(t, p.ShapeOK)
 	assert.Equal(t, SchemaVersion, p.SchemaVersion)
 	assert.Equal(t, 68, p.DataVersion)
+	assert.Equal(t, "archive-1", p.SourceDatabaseID)
 	assert.Equal(t, "2026-07-18T00:00:00.000Z", p.LastPushCutoff)
 	assert.Equal(t, "machine-a", p.LastPushMachine)
 
@@ -297,6 +299,7 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 		full    bool
 		localDR int64
 		machine string
+		localID string
 		want    string
 	}{
 		{
@@ -357,6 +360,32 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 			want: "",
 		},
 		{
+			name: "source database id changed",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.SourceDatabaseID = "archive-a"
+				return p
+			}(),
+			dataVer: 1, localID: "archive-b",
+			want: "mirror was built from a different archive (source database id changed)",
+		},
+		{
+			name:    "recorded empty source database id rebuilds once",
+			probe:   baseProbe(),
+			dataVer: 1, localID: "archive-b",
+			want: "mirror was built from a different archive (source database id changed)",
+		},
+		{
+			name: "matching source database id does not force a rebuild",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.SourceDatabaseID = "archive-a"
+				return p
+			}(),
+			dataVer: 1, localID: "archive-a",
+			want: "",
+		},
+		{
 			name: "deletion cursor ahead of local archive",
 			probe: func() MirrorProbe {
 				p := baseProbe()
@@ -374,7 +403,8 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := rebuildReason(
-				tt.probe, tt.scope, tt.dataVer, tt.full, tt.localDR, tt.machine,
+				tt.probe, tt.scope, tt.dataVer, tt.full, tt.localDR,
+				tt.machine, tt.localID,
 			)
 			assert.Equal(t, tt.want, got)
 		})
