@@ -68,5 +68,8 @@ func ensureMirrorMarker(path, machine string) error {
 
 func mirrorMarkerExists(path string) bool {
 	info, err := os.Stat(MirrorMarkerPath(path))
-	return err == nil && info.Mode().IsRegular()
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
