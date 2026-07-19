@@ -375,44 +375,6 @@ func duckFallbackPricingRows() []db.ModelPricing {
 	return out
 }
 
-// replaceStarredSessions rewrites starred_sessions for exactly the given
-// mirror-resident session IDs. With scope-as-mirror-property (the mirror
-// only ever holds rows in opts.Projects/ExcludeProjects) this is always the
-// unfiltered "replace all for machine, reinsert in-scope" path: there are
-// no out-of-scope rows left to protect.
-func (s *Sync) replaceStarredSessions(
-	ctx context.Context, tx *sql.Tx, sessionIDs []string,
-) error {
-	ids, err := s.local.ListStarredSessionIDs(ctx)
-	if err != nil {
-		return err
-	}
-	allowed := make(map[string]bool, len(sessionIDs))
-	for _, id := range sessionIDs {
-		allowed[id] = true
-	}
-	if err := s.execMutation(ctx, tx, `
-		DELETE FROM starred_sessions
-		WHERE session_id IN (
-			SELECT id FROM sessions WHERE machine = ?
-		)`, s.machine); err != nil {
-		return fmt.Errorf("clearing duckdb starred_sessions: %w", err)
-	}
-	for _, id := range ids {
-		if !allowed[id] {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO starred_sessions (session_id, created_at)
-			 VALUES (?, current_timestamp)`,
-			id,
-		); err != nil {
-			return fmt.Errorf("syncing starred session %s: %w", id, err)
-		}
-	}
-	return nil
-}
-
 // applyDeletionDelta removes every mirror session tombstoned in the local
 // deletion journal within (after, through]. This is the mirror-resident
 // replacement for the old local-scan hard-delete reconciliation: the
@@ -423,9 +385,12 @@ func (s *Sync) replaceStarredSessions(
 // project is the session's LAST project, so a session that moved out of
 // the push scope and was then hard-deleted would be invisible to a
 // scope-filtered delta, leaving its mirror row (pushed while it was still
-// in scope) behind forever. The residency probe keeps the work bounded by
-// the delta: only tombstones whose sessions actually exist in the mirror
-// cost a delete cascade, and only those count as DeletedStaleSessions.
+// in scope) behind forever. In-scope tombstones are applied and counted
+// unconditionally exactly as before (deleting an already-absent session is
+// a cheap no-op); out-of-scope tombstones — the transition case — only
+// cost, and only count, when the session is actually still mirror-resident,
+// so a never-mirrored out-of-scope deletion stays invisible to filtered
+// diagnostics. Work stays bounded by the delta either way.
 func (s *Sync) applyDeletionDelta(
 	ctx context.Context, after, through int64, result *PushResult,
 ) error {
@@ -435,71 +400,146 @@ func (s *Sync) applyDeletionDelta(
 	if err != nil {
 		return fmt.Errorf("loading duckdb session deletion delta: %w", err)
 	}
-	if len(tombstones) == 0 {
-		return nil
-	}
-	ids := make([]string, len(tombstones))
-	for i, tombstone := range tombstones {
-		ids[i] = tombstone.SessionID
-	}
-	resident, err := s.mirrorResidentSessionIDs(ctx, ids)
+	apply, err := s.selectTombstonesToApply(ctx, tombstones)
 	if err != nil {
 		return err
 	}
-	if len(resident) == 0 {
+	if len(apply) == 0 {
 		return nil
 	}
 	if err := s.withDuckTx(ctx, "apply session deletion delta", func(tx *sql.Tx) error {
-		deleted := make(map[string]bool, len(resident))
-		for _, tombstone := range tombstones {
-			if !resident[tombstone.SessionID] || deleted[tombstone.SessionID] {
-				continue
-			}
-			if err := s.deleteMirrorSession(ctx, tx, tombstone.SessionID); err != nil {
+		for _, sessionID := range apply {
+			if err := s.deleteMirrorSession(ctx, tx, sessionID); err != nil {
 				return err
 			}
-			deleted[tombstone.SessionID] = true
 		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	result.Diagnostics.DeletedStaleSessions += len(resident)
+	result.Diagnostics.DeletedStaleSessions += len(apply)
 	return nil
 }
 
-// replaceCuration rewrites starred_sessions and pinned_messages for every
-// session currently in the mirror. Scope-as-mirror-property means the
-// mirror's own sessions table is the authoritative in-scope ID list, so
-// this reads it directly rather than requiring a full local session listing.
-// It is an O(mirror) delete+reinsert; callers on the incremental push path
-// should go through refreshCurationIfChanged instead of calling this
-// directly, so a push where curation did not change skips the O(mirror)
-// cost.
+// selectTombstonesToApply dedupes the delta and picks the session IDs
+// applyDeletionDelta acts on: every in-scope tombstone, plus out-of-scope
+// tombstones whose sessions are still mirror-resident. The residency probe
+// only runs when out-of-scope tombstones exist, so unfiltered pushes never
+// pay for it.
+func (s *Sync) selectTombstonesToApply(
+	ctx context.Context, tombstones []db.SessionDeletionTombstone,
+) ([]string, error) {
+	seen := make(map[string]bool, len(tombstones))
+	var apply, outOfScope []string
+	for _, tombstone := range tombstones {
+		if tombstone.SessionID == "" || seen[tombstone.SessionID] {
+			continue
+		}
+		seen[tombstone.SessionID] = true
+		if projectMatchesPushScope(tombstone.Project, s.projects, s.excludeProjects) {
+			apply = append(apply, tombstone.SessionID)
+		} else {
+			outOfScope = append(outOfScope, tombstone.SessionID)
+		}
+	}
+	if len(outOfScope) == 0 {
+		return apply, nil
+	}
+	resident, err := s.mirrorResidentSessionIDs(ctx, outOfScope)
+	if err != nil {
+		return nil, err
+	}
+	for _, sessionID := range outOfScope {
+		if resident[sessionID] {
+			apply = append(apply, sessionID)
+		}
+	}
+	return apply, nil
+}
+
+// replaceCuration rewrites starred_sessions and pinned_messages from the
+// local in-scope curation state. All work is bounded by curation size, not
+// mirror size: the starred/pinned session ID lists are curation-bounded
+// local queries, mirror membership is validated for exactly those IDs (one
+// batched lookup, see mirrorResidentSessionIDs), and the pin rows are
+// loaded with one batched local query (PinnedMessagesBySession, chunked at
+// 900 IDs). Only curation rows whose sessions actually exist in the mirror
+// are inserted — a star or pin for a session that was never mirrored (out
+// of scope, not yet pushed) is skipped, and pin notes are preserved. The
+// delete side stays the machine-scoped clear of both tables, so removed
+// stars/pins disappear without enumerating them.
 func (s *Sync) replaceCuration(ctx context.Context) error {
-	ids, err := s.mirrorSessionIDs(ctx)
+	starred, err := s.local.ListStarredSessionIDsForScope(
+		ctx, s.projects, s.excludeProjects,
+	)
+	if err != nil {
+		return fmt.Errorf("loading starred sessions for curation refresh: %w", err)
+	}
+	pinnedSessions, err := s.local.ListPinnedSessionIDsForScope(
+		ctx, s.projects, s.excludeProjects,
+	)
+	if err != nil {
+		return fmt.Errorf("loading pinned session ids for curation refresh: %w", err)
+	}
+	resident, err := s.mirrorResidentSessionIDs(
+		ctx, append(append([]string(nil), starred...), pinnedSessions...),
+	)
 	if err != nil {
 		return err
 	}
-	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
-		if err := s.replaceAllPinnedMessages(ctx, tx, ids); err != nil {
-			return err
+	residentPinned := make([]string, 0, len(pinnedSessions))
+	for _, id := range pinnedSessions {
+		if resident[id] {
+			residentPinned = append(residentPinned, id)
 		}
-		return s.replaceStarredSessions(ctx, tx, ids)
+	}
+	pinsBySession, err := s.local.PinnedMessagesBySession(ctx, residentPinned)
+	if err != nil {
+		return fmt.Errorf("loading local pinned messages for curation refresh: %w", err)
+	}
+
+	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
+		for _, table := range []string{"pinned_messages", "starred_sessions"} {
+			if err := s.execMutation(ctx, tx, `
+				DELETE FROM `+table+`
+				WHERE session_id IN (
+					SELECT id FROM sessions WHERE machine = ?
+				)`, s.machine); err != nil {
+				return fmt.Errorf("clearing duckdb %s: %w", table, err)
+			}
+		}
+		for _, id := range residentPinned {
+			if err := insertPinnedMessages(ctx, tx, pinsBySession[id]); err != nil {
+				return err
+			}
+		}
+		for _, id := range starred {
+			if !resident[id] {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO starred_sessions (session_id, created_at)
+				 VALUES (?, current_timestamp)`,
+				id,
+			); err != nil {
+				return fmt.Errorf("syncing starred session %s: %w", id, err)
+			}
+		}
+		return nil
 	})
 }
 
-// refreshCurationIfChanged skips replaceCuration's O(mirror) delete+reinsert
-// when the LOCAL in-scope curation state (starred session ids, pinned
-// message ids) has not changed since the last push that actually refreshed
-// it, tracked via a fingerprint stored in mirror sync_metadata
+// refreshCurationIfChanged skips replaceCuration's delete+reinsert when
+// the LOCAL in-scope curation state (starred session ids, pinned message
+// ids) has not changed since the last push that actually refreshed it,
+// tracked via a fingerprint stored in mirror sync_metadata
 // (curationFingerprintMetadataKey). This runs on every incremental push
 // regardless of whether any session content changed, so curation edits
-// (star/pin/unstar/unpin with no session content change) still propagate on
-// the very next push exactly as before; the added cost of a push that
-// changed nothing at all is two small local queries bounded by curation
-// size (ListStarredSessionIDsForScope, ListPinnedMessageIDsForScope), not
-// the O(mirror) refresh itself. It reports whether it actually refreshed.
+// (star/pin/unstar/unpin with no session content change) still propagate
+// on the very next push exactly as before; the cost of a push that changed
+// nothing at all is two small local queries bounded by curation size, and
+// even a refresh that does run is curation-bounded (see replaceCuration).
+// It reports whether it actually refreshed.
 func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 	fingerprint, err := s.curationFingerprint(ctx)
 	if err != nil {
@@ -550,25 +590,6 @@ func (s *Sync) curationFingerprint(ctx context.Context) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-func (s *Sync) mirrorSessionIDs(ctx context.Context) ([]string, error) {
-	rows, err := s.duck.QueryContext(ctx,
-		`SELECT id FROM sessions WHERE machine = ?`, s.machine,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing duckdb mirror session ids: %w", err)
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning duckdb mirror session id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 
 // pushSession fully replaces one mirror session row and all of its
@@ -1063,8 +1084,8 @@ func (s *Sync) replacePinnedMessages(
 // insertPinnedMessages inserts pins already loaded from the local archive.
 // It is the shared write side for both the single-session push path
 // (replacePinnedMessages, one local query per pushed session) and the
-// bulk curation refresh (replaceAllPinnedMessages, one batched local query
-// for every in-scope session).
+// curation refresh (replaceCuration, one batched local query for the
+// curation-sized pinned session set).
 func insertPinnedMessages(
 	ctx context.Context, exec duckMutationExecutor, pins []db.PinnedMessage,
 ) error {
@@ -1078,38 +1099,6 @@ func insertPinnedMessages(
 		); err != nil {
 			return fmt.Errorf("inserting duckdb pinned_message %s/%d: %w",
 				p.SessionID, p.MessageID, err)
-		}
-	}
-	return nil
-}
-
-// replaceAllPinnedMessages rewrites pinned_messages for exactly the given
-// mirror-resident session IDs. See replaceStarredSessions for why this is
-// always the unfiltered machine-scoped replace under scope-as-mirror-property.
-//
-// Pins are loaded with one batched local query (PinnedMessagesBySession,
-// chunked at 900 IDs per round trip) instead of one local ListPinnedMessages
-// round trip per mirror session: a machine-wide curation refresh runs on
-// every incremental push, so a per-session local query here would scale
-// local round trips with total mirror size instead of with the small set of
-// starred/pinned rows curation actually touches.
-func (s *Sync) replaceAllPinnedMessages(
-	ctx context.Context, tx *sql.Tx, sessionIDs []string,
-) error {
-	if err := s.execMutation(ctx, tx, `
-		DELETE FROM pinned_messages
-		WHERE session_id IN (
-			SELECT id FROM sessions WHERE machine = ?
-		)`, s.machine); err != nil {
-		return fmt.Errorf("clearing duckdb pinned_messages: %w", err)
-	}
-	pinsBySession, err := s.local.PinnedMessagesBySession(ctx, sessionIDs)
-	if err != nil {
-		return fmt.Errorf("loading local pinned messages for curation refresh: %w", err)
-	}
-	for _, id := range sessionIDs {
-		if err := insertPinnedMessages(ctx, tx, pinsBySession[id]); err != nil {
-			return err
 		}
 	}
 	return nil

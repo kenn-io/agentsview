@@ -2,7 +2,6 @@ package duckdb
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -266,7 +265,7 @@ func (s *Sync) pushEverything(
 	result.Diagnostics.PushedSessions = countPushSessions(pushed)
 
 	if result.Errors == 0 {
-		// The fingerprint is captured BEFORE pushEverythingCuration copies
+		// The fingerprint is captured BEFORE replaceCuration copies
 		// curation into the mirror, mirroring rebuildSnapshot's pre-capture
 		// principle (see the comment there): a star/pin change that lands
 		// after this read is either already reflected by the copy below
@@ -281,11 +280,16 @@ func (s *Sync) pushEverything(
 		// mirrored, and the stored fingerprint then matches all future local
 		// state until another curation edit happens, so refreshCurationIfChanged
 		// skips forever.
+		//
+		// replaceCuration validates curation session IDs against the mirror's
+		// own sessions table, which at this point holds exactly the batches
+		// the loop above committed, so rebuilds and incremental pushes share
+		// one curation write path.
 		fingerprint, err := s.curationFingerprint(ctx)
 		if err != nil {
 			return result, err
 		}
-		if err := s.pushEverythingCuration(ctx, sessions); err != nil {
+		if err := s.replaceCuration(ctx); err != nil {
 			return result, err
 		}
 		if err := recordMetadataKey(
@@ -297,16 +301,6 @@ func (s *Sync) pushEverything(
 	}
 
 	return result, nil
-}
-
-func (s *Sync) pushEverythingCuration(ctx context.Context, sessions []db.Session) error {
-	ids := sessionIDs(sessions)
-	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
-		if err := s.replaceAllPinnedMessages(ctx, tx, ids); err != nil {
-			return err
-		}
-		return s.replaceStarredSessions(ctx, tx, ids)
-	})
 }
 
 // writeRebuildMetadata records the mirrorMetadata a probe reads back:

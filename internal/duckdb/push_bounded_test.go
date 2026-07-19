@@ -303,14 +303,14 @@ func moveSessionToProject(t *testing.T, local *db.DB, sessionID, project string)
 }
 
 // TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize is the
-// cardinality-scaling regression for replaceCuration/replaceAllPinnedMessages
-// (push.go): before this change, every incremental push refreshed curation
-// by listing every mirror session id and then issuing one local
-// ListPinnedMessages query per id, so the local SQLite round-trip count
-// scaled with total mirror size regardless of how many sessions were
-// actually starred or pinned. replaceAllPinnedMessages now loads pins with
-// one batched local query (db.PinnedMessagesBySession, chunked at 900 ids)
-// keyed off the same mirror-resident id list.
+// cardinality-scaling regression for replaceCuration (push.go): before
+// this change, every refresh listed every mirror session id and validated
+// the whole set, so the work scaled with total mirror size regardless of
+// how many sessions were actually starred or pinned. replaceCuration now
+// loads the curation-sized local starred/pinned session ID lists, validates
+// only those against the mirror (mirrorResidentSessionIDs, batched), and
+// loads pins with one batched local query (db.PinnedMessagesBySession,
+// chunked at 900 ids).
 //
 // What this test can observe from a black-box *testing.T: curation ends up
 // byte-correct (exactly the local starred/pinned rows, and only those) at
@@ -320,9 +320,8 @@ func moveSessionToProject(t *testing.T, local *db.DB, sessionID, project string)
 // those would require either instrumenting db.DB's driver or a timing-based
 // assertion, and timing assertions on shared CI runners are exactly the kind
 // of flake AGENTS.md's CI guidance warns against. The boundedness claim
-// itself rests on the code path (replaceAllPinnedMessages calling
-// PinnedMessagesBySession once instead of ListPinnedMessages per session),
-// not on a measurement in this test.
+// itself rests on the code path (curation-sized queries plus a
+// curation-sized membership probe), not on a measurement in this test.
 func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 	ctx := context.Background()
 	for _, size := range []int{20, 400} {
@@ -415,6 +414,92 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 	fourth, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, fourth.Diagnostics.CurationRefreshed)
+}
+
+// TestCurationSkipsSessionsAbsentFromMirror pins replaceCuration's
+// membership rule: stars and pins are only mirrored for sessions that
+// actually exist in the mirror. A star/pin on an out-of-scope session (or
+// any session the mirror does not hold) must be skipped, not inserted as a
+// dangling curation row.
+func TestCurationSkipsSessionsAbsentFromMirror(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local) // alpha + beta project sessions
+	path := filepath.Join(t.TempDir(), "curation-scope.duckdb")
+	opts := SyncOptions{Projects: []string{"alpha"}}
+
+	_, err := Push(ctx, path, local, "test-machine", opts, false, nil)
+	require.NoError(t, err)
+
+	// Star the out-of-scope beta session and pin one of its messages; the
+	// filtered mirror does not contain it.
+	ok, err := local.StarSession("duck-sync-beta")
+	require.NoError(t, err)
+	require.True(t, ok)
+	msgs, err := local.GetAllMessages(ctx, "duck-sync-beta")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	_, err = local.PinMessage("duck-sync-beta", msgs[0].ID, nil)
+	require.NoError(t, err)
+
+	res, err := Push(ctx, path, local, "test-machine", opts, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+
+	assertMirrorTableCountWhere(t, path,
+		"starred_sessions", "session_id = ?", "duck-sync-beta", 0)
+	assertMirrorTableCountWhere(t, path,
+		"pinned_messages", "session_id = ?", "duck-sync-beta", 0)
+	// The in-scope alpha curation from the fixture is still mirrored.
+	assertMirrorTableCountWhere(t, path,
+		"starred_sessions", "session_id = ?", "duck-sync-alpha", 1)
+	assertMirrorTableCountWhere(t, path,
+		"pinned_messages", "session_id = ?", "duck-sync-alpha", 1)
+}
+
+// TestReplaceCurationSkipsStarForSessionAbsentFromMirror drives
+// replaceCuration directly against a mirror that holds only one of two
+// in-scope local sessions: curation rows for the unmirrored session must
+// be skipped by the mirror-membership check even though its star and pin
+// are fully in scope locally.
+func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
+	ctx := context.Background()
+	local, _ := newPushFixture(t, 2)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+
+	// Mirror only sess-1; sess-2 stays local-only.
+	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", "", nil, nil)
+	require.NoError(t, err)
+	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
+	require.NoError(t, err)
+	for _, sess := range sessions {
+		if sess.ID != "sess-1" {
+			continue
+		}
+		_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID])
+		require.NoError(t, err)
+	}
+
+	for _, id := range []string{"sess-1", "sess-2"} {
+		ok, err := local.StarSession(id)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+	msgs, err := local.GetAllMessages(ctx, "sess-2")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	_, err = local.PinMessage("sess-2", msgs[0].ID, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, syncer.replaceCuration(ctx))
+
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"starred_sessions", "session_id = ?", "sess-1", 1)
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"starred_sessions", "session_id = ?", "sess-2", 0)
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"pinned_messages", "session_id = ?", "sess-2", 0)
 }
 
 // TestCurationFingerprintDetectsNoteOnlyEdit guards the specific gap a

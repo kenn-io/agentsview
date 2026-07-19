@@ -206,6 +206,38 @@ func (db *DB) ListPinCurationForScope(
 	return entries, rows.Err()
 }
 
+// ListPinnedSessionIDsForScope returns the distinct session IDs that have
+// at least one pinned message, restricted to the given project scope and
+// sorted for deterministic output. Like ListStarredSessionIDsForScope,
+// cost is bounded by the number of pinned rows, not archive size; mirror
+// pushes use it to load the pin side of the curation set without listing
+// every mirror session.
+func (db *DB) ListPinnedSessionIDsForScope(
+	ctx context.Context, projects, excludeProjects []string,
+) ([]string, error) {
+	where, args := curationScopeWhere("s", projects, excludeProjects)
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT DISTINCT pm.session_id FROM pinned_messages pm
+		 JOIN sessions s ON s.id = pm.session_id`+where+
+			` ORDER BY pm.session_id`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped pinned session ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning scoped pinned session id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // GetPinnedMessageIDs returns message IDs that are pinned for a session.
 func (db *DB) GetPinnedMessageIDs(
 	ctx context.Context, sessionID string,

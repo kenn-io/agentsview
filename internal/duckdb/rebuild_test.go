@@ -390,7 +390,7 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 // TestRebuildCurationFingerprintCapturedBeforeCurationCopy is the FIX5
 // regression, mirroring TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration's
 // approach: the curation fingerprint a rebuild stores must be captured
-// BEFORE pushEverythingCuration copies curation into the mirror, the same
+// BEFORE replaceCuration copies curation into the mirror, the same
 // pre-capture principle rebuildSnapshot documents for the cutoff/deletion
 // revision. Capturing it AFTER the copy instead (as the code previously
 // did) can permanently strand a curation edit that races the copy: the
@@ -403,7 +403,7 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 // There is no hook into the middle of a running rebuild here, so — exactly
 // like the session-enumeration regression test — the race is reproduced by
 // calling the same building blocks pushEverything composes
-// (curationFingerprint, pushEverythingCuration, recordMetadataKey) directly
+// (curationFingerprint, replaceCuration, recordMetadataKey) directly
 // in the fixed order, with a curation mutation landing between the
 // fingerprint capture and the copy.
 func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
@@ -432,12 +432,12 @@ func TestRebuildCurationFingerprintCapturedBeforeCurationCopy(t *testing.T) {
 
 	// A star lands after the fingerprint capture but before the curation
 	// copy below runs — standing in for a curation edit racing an
-	// in-flight rebuild's pushEverythingCuration call.
+	// in-flight rebuild's replaceCuration call.
 	ok, err := local.StarSession(ids[1])
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	require.NoError(t, s.pushEverythingCuration(ctx, sessions))
+	require.NoError(t, s.replaceCuration(ctx))
 	require.NoError(t, recordMetadataKey(
 		ctx, s.DB(), curationFingerprintMetadataKey, fingerprint,
 	))

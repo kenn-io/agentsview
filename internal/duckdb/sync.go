@@ -66,10 +66,11 @@ type PushDiagnostics struct {
 	CandidateSessions        PushSessionCounts
 	SkippedUnchangedSessions PushSessionCounts
 	PushedSessions           PushSessionCounts
-	// DeletedStaleSessions counts mirror session rows an incremental push
-	// removed: deletion-journal tombstones that were still mirror-resident
-	// plus window candidates whose project moved out of the push scope
-	// (see applyDeletionDelta and deleteOutOfScopeMirrorSessions).
+	// DeletedStaleSessions counts sessions an incremental push removed
+	// from the mirror: applied in-scope deletion-journal tombstones,
+	// out-of-scope tombstones that were still mirror-resident, and window
+	// candidates whose project moved out of the push scope (see
+	// applyDeletionDelta and deleteOutOfScopeMirrorSessions).
 	DeletedStaleSessions int
 	// CurationRefreshed reports whether this push actually rewrote
 	// starred_sessions/pinned_messages, as opposed to skipping the refresh

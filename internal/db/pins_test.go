@@ -53,6 +53,40 @@ func TestListPinCurationForScope(t *testing.T) {
 	assert.Equal(t, note, excludeAlpha[0].Note)
 }
 
+func TestListPinnedSessionIDsForScope(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "alpha")
+	insertSession(t, d, "s2", "beta")
+	insertSession(t, d, "s3", "alpha")
+	insertMessages(t, d,
+		userMsg("s1", 0, "hello from alpha"),
+		userMsg("s1", 1, "second alpha message"))
+	insertMessages(t, d, userMsg("s2", 0, "hello from beta"))
+	insertMessages(t, d, userMsg("s3", 0, "unpinned alpha"))
+	// Two pins in s1 must still yield one distinct session id.
+	pinFirstMessage(t, d, "s1")
+	msgs, err := d.GetMessages(ctx, "s1", 0, 2, true)
+	require.NoError(t, err, "GetMessages")
+	require.Len(t, msgs, 2)
+	_, err = d.PinMessage("s1", msgs[1].ID, nil)
+	require.NoError(t, err, "PinMessage second pin")
+	pinFirstMessage(t, d, "s2")
+
+	all, err := d.ListPinnedSessionIDsForScope(ctx, nil, nil)
+	require.NoError(t, err, "unfiltered scope")
+	assert.Equal(t, []string{"s1", "s2"}, all)
+
+	alphaOnly, err := d.ListPinnedSessionIDsForScope(ctx, []string{"alpha"}, nil)
+	require.NoError(t, err, "include alpha")
+	assert.Equal(t, []string{"s1"}, alphaOnly)
+
+	excludeAlpha, err := d.ListPinnedSessionIDsForScope(ctx, nil, []string{"alpha"})
+	require.NoError(t, err, "exclude alpha")
+	assert.Equal(t, []string{"s2"}, excludeAlpha)
+}
+
 // TestListPinCurationForScopeCapturesIdentityAndNoteNullability is the
 // FIX6 regression: a curation fingerprint entry built only from
 // (message_id, note-COALESCE'd-to-empty-string) is unchanged by an unpin followed by a
