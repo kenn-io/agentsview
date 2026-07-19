@@ -68,6 +68,21 @@ func TestGrokProviderGoldenCurrentTranscriptSemantics(t *testing.T) {
 	assert.Equal(t, "also keep interjections", result.Messages[4].Content)
 }
 
+func TestGrokProviderGoldenCurrentMetadata(t *testing.T) {
+	result := parseGrokGolden(t, "current")
+	session := result.Session
+	assert.Equal(t, "/workspace/grok-worktrees/parser-audit", session.Cwd)
+	assert.Equal(t, "agentsview", session.Project)
+	assert.Equal(
+		t,
+		"grok:019f5000-0000-7000-8000-000000000000",
+		session.ParentSessionID,
+	)
+	assert.Equal(t, RelFork, session.RelationshipType)
+	assert.False(t, session.HasPeakContextTokens)
+	assert.Zero(t, session.PeakContextTokens)
+}
+
 func TestGrokProviderGoldenLegacyTranscript(t *testing.T) {
 	result := parseGrokGolden(t, "legacy")
 	assert.Equal(t, TranscriptFidelityFull, result.Session.TranscriptFidelity)
@@ -354,8 +369,8 @@ func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {
 	assert.Equal(t, "grok-summary-v1", session.SourceVersion)
 	assert.Equal(t, 104, session.MessageCount)
 	assert.Equal(t, 7, session.UserMessageCount)
-	assert.Equal(t, 106663, session.PeakContextTokens)
-	assert.True(t, session.HasPeakContextTokens)
+	assert.Zero(t, session.PeakContextTokens)
+	assert.False(t, session.HasPeakContextTokens)
 	assert.False(t, session.HasTotalOutputTokens)
 	require.Len(t, outcome.Results[0].Result.Messages, 1)
 	assert.Equal(t, RoleUser, outcome.Results[0].Result.Messages[0].Role)

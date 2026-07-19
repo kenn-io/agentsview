@@ -13,18 +13,20 @@ import (
 )
 
 type grokSummaryFields struct {
-	Summary       string
-	FirstPrompt   string
-	ModelID       string
-	CreatedAt     string
-	UpdatedAt     string
-	LastActiveAt  string
-	Hostname      string
-	NumMessages   int
-	WorktreeLabel string
-	GitRootDir    string
-	Cwd           string
-	HeadBranch    string
+	Summary            string
+	FirstPrompt        string
+	ModelID            string
+	CreatedAt          string
+	UpdatedAt          string
+	LastActiveAt       string
+	Hostname           string
+	NumMessages        int
+	WorktreeLabel      string
+	GitRootDir         string
+	Cwd                string
+	HeadBranch         string
+	ParentSessionID    string
+	SourceWorkspaceDir string
 }
 
 type grokSignalMetrics struct {
@@ -63,6 +65,12 @@ func ParseGrokSummary(
 	project, cwd := grokProjectAndCwd(summary, projectHint)
 	startedAt := grokParseTime(summary.CreatedAt)
 	endedAt := grokEndedAt(summary)
+	parentSessionID := strings.TrimSpace(summary.ParentSessionID)
+	relationshipType := RelNone
+	if parentSessionID != "" {
+		parentSessionID = "grok:" + parentSessionID
+		relationshipType = RelFork
+	}
 
 	messages, malformed, transcriptErr := parseGrokChatHistory(
 		filepath.Join(sessionDir, "chat_history.jsonl"),
@@ -130,6 +138,8 @@ func ParseGrokSummary(
 			Project:            project,
 			Machine:            machine,
 			Agent:              AgentGrok,
+			ParentSessionID:    parentSessionID,
+			RelationshipType:   relationshipType,
 			Cwd:                cwd,
 			GitBranch:          summary.HeadBranch,
 			SourceSessionID:    rawID,
@@ -682,6 +692,12 @@ func decodeGrokSummary(data []byte) grokSummaryFields {
 			strings.TrimSpace(root.Get("headBranch").String()),
 			strings.TrimSpace(root.Get("git.branch").String()),
 		),
+		ParentSessionID: strings.TrimSpace(
+			root.Get("parent_session_id").String(),
+		),
+		SourceWorkspaceDir: strings.TrimSpace(
+			root.Get("source_workspace_dir").String(),
+		),
 	}
 }
 
@@ -692,8 +708,12 @@ func grokProjectAndCwd(
 		strings.TrimSpace(summary.Cwd),
 		strings.TrimSpace(summary.GitRootDir),
 	)
-	if cwd != "" {
-		if p := ExtractProjectFromCwdWithBranch(cwd, summary.HeadBranch); p != "" {
+	projectCwd := firstNonEmptyJSONLString(
+		strings.TrimSpace(summary.SourceWorkspaceDir),
+		cwd,
+	)
+	if projectCwd != "" {
+		if p := ExtractProjectFromCwdWithBranch(projectCwd, summary.HeadBranch); p != "" {
 			return p, cwd
 		}
 	}
@@ -744,8 +764,6 @@ func parseGrokSignals(path string) (grokSignalMetrics, error) {
 			"tokenUsage.peakContextTokens",
 			"usage.peakContextTokens",
 			"peakContextTokens",
-			"contextTokens",
-			"contextTokensUsed",
 		),
 	}
 	if userCount := root.Get("userMessageCount"); userCount.Exists() {
