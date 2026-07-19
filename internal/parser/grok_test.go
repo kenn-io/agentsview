@@ -129,6 +129,22 @@ func TestGrokProviderParsesMixedTranscriptFormats(t *testing.T) {
 	assert.Equal(t, "current answer", messages[1].Content)
 }
 
+func TestParseGrokChatHistoryUnknownTypeFallsBackToLegacyRole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat_history.jsonl")
+	writeGrokFixtureFile(
+		t,
+		path,
+		`{"type":"future_metadata","role":"user","content":"legacy question"}`+"\n",
+	)
+
+	messages, malformed, err := parseGrokChatHistory(path)
+	require.NoError(t, err)
+	assert.Zero(t, malformed)
+	require.Len(t, messages, 1)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, "legacy question", messages[0].Content)
+}
+
 func TestParseGrokChatHistoryReasoningShapes(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -217,6 +233,34 @@ func TestParseGrokChatHistoryDeduplicatesRawBackendToolCalls(t *testing.T) {
 	require.Len(t, messages[0].ToolCalls, 1)
 	assert.Equal(t, "ws_same", messages[0].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "answer", messages[1].Content)
+}
+
+func TestParseGrokChatHistoryPreservesCodeInterpreterInput(t *testing.T) {
+	code := strings.Repeat("print('counterfactual')\n", 20)
+	codeJSON, err := json.Marshal(code)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "chat_history.jsonl")
+	writeGrokFixtureFile(
+		t,
+		path,
+		`{"type":"backend_tool_call","kind":{"tool_type":"code_interpreter","code":`+
+			string(codeJSON)+
+			`,"container_id":"container_counterfactual","id":"ci_counterfactual","outputs":[{"type":"logs","logs":"finished"}],"status":"completed"}}`+"\n",
+	)
+
+	messages, malformed, err := parseGrokChatHistory(path)
+	require.NoError(t, err)
+	assert.Zero(t, malformed)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	var input struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(
+		[]byte(messages[0].ToolCalls[0].InputJSON),
+		&input,
+	))
+	assert.Equal(t, code, input.Code)
 }
 
 func TestParseGrokChatHistoryDropsOrphanReasoning(t *testing.T) {

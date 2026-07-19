@@ -341,7 +341,8 @@ func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {
 }
 
 func grokChatRowKind(root gjson.Result) string {
-	if kind := strings.TrimSpace(root.Get("type").Str); kind != "" {
+	switch kind := strings.TrimSpace(root.Get("type").Str); kind {
+	case "system", "user", "reasoning", "backend_tool_call", "assistant", "tool_result":
 		return kind
 	}
 	switch strings.TrimSpace(root.Get("role").Str) {
@@ -389,6 +390,9 @@ func grokBackendToolMessage(
 		} else {
 			inputJSON = input.Raw
 		}
+	}
+	if inputJSON == "" {
+		inputJSON = payload.Raw
 	}
 	content := grokBackendToolSummary(toolName, payload)
 	call := ParsedToolCall{
