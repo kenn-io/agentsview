@@ -79,7 +79,8 @@ func TestDuckMessageHydratesToolCallFilePathAndCallIndex(t *testing.T) {
 	}}), "insert messages")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to duckdb mirror")
 	store := NewStoreFromDB(syncer.DB())
 

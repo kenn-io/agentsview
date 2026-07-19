@@ -3359,6 +3359,44 @@ func (db *DB) ListSessionsForMirrorWindow(
 	return sessions, rows.Err()
 }
 
+// CountSessionsForMirrorScope returns the number of sessions in the given
+// project scope, matching ListSessionsForMirrorWindow's project filtering
+// with no time bound. Mirror pushes use this for a cheap diagnostics count
+// (Diagnostics.LocalSessionCount) without materializing every session.
+func (db *DB) CountSessionsForMirrorScope(
+	ctx context.Context, projects, excludeProjects []string,
+) (int, error) {
+	query := "SELECT COUNT(*) FROM sessions"
+	var (
+		args  []any
+		where []string
+	)
+	if len(projects) > 0 {
+		placeholders := make([]string, len(projects))
+		for i, p := range projects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(excludeProjects) > 0 {
+		placeholders := make([]string, len(excludeProjects))
+		for i, p := range excludeProjects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	var count int
+	if err := db.getReader().QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting sessions for mirror scope: %w", err)
+	}
+	return count, nil
+}
+
 // normalizeMirrorWindowBound parses an RFC3339Nano timestamp and formats it
 // as ms-precision UTC text matching the sync_marker column format, so the
 // bound compares correctly against trigger-maintained markers.

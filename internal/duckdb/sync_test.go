@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,167 +24,192 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestPushIncrementalReplacesOnlyChangedSessions is the core incremental
+// contract: after an initial push, only a session whose content actually
+// changed is re-pushed on the next call.
+func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 3)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	appendMessage(t, local, "sess-2")
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+	assert.LessOrEqual(t, res.Diagnostics.CandidateSessions.Total, 2)
+	assertMirrorMessageCount(t, path, "sess-2", 3)
+}
+
+// TestPushBoundaryEqualSessionIsNotLost regression-tests the inclusive
+// mirror window: an update whose sync_marker equals the stored cutoff must
+// still be selected and pushed when its fingerprint differs, not skipped
+// forever because the window boundary was treated as exclusive.
+func TestPushBoundaryEqualSessionIsNotLost(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+
+	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
+	mutateSessionContent(t, local, "sess-1")
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+}
+
+func TestPushAppliesDeletionJournalDelta(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 2)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, local.DeleteSession("sess-1"))
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions)
+	assertMirrorSessionAbsent(t, path, "sess-1")
+}
+
+// TestPushRebuildTriggers verifies every probe condition that forces a
+// rebuild instead of an incremental push, and that the rebuilt mirror is
+// coherent afterward.
+func TestPushRebuildTriggers(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name   string
+		mangle func(t *testing.T, path string)
+	}{
+		{
+			name: "schema version too old",
+			mangle: func(t *testing.T, path string) {
+				setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "2")
+			},
+		},
+		{
+			name: "schema version too new",
+			mangle: func(t *testing.T, path string) {
+				setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "99")
+			},
+		},
+		{
+			name: "data version drift",
+			mangle: func(t *testing.T, path string) {
+				setMirrorMetadataValue(t, path, dataVersionMetadataKey, "999999")
+			},
+		},
+		{
+			name: "scope drift",
+			mangle: func(t *testing.T, path string) {
+				setMirrorMetadataValue(t, path, pushScopeMetadataKey, `{"projects":["other"]}`)
+			},
+		},
+		{
+			name: "deleted sync_metadata row",
+			mangle: func(t *testing.T, path string) {
+				conn, err := Open(path)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Exec(
+					`DELETE FROM sync_metadata WHERE key = ?`, schemaVersionMetadataKey,
+				)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "deleted mirror file",
+			mangle: func(t *testing.T, path string) {
+				require.NoError(t, os.Remove(path))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			local, path := newPushFixture(t, 1)
+			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			require.NoError(t, err)
+
+			tt.mangle(t, path)
+
+			res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			require.NoError(t, err)
+			assert.True(t, res.Diagnostics.Full)
+			assertMirrorMessageCount(t, path, "sess-1", 2)
+		})
+	}
+}
+
+// TestPushDoesNotAdvanceStateOnError injects a session that fails to push
+// and verifies the mirror's cutoff/last-push-at metadata are left exactly
+// as they were: a partially failed incremental push must not let the
+// failed session silently fall out of the next window.
+func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	before, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	require.NotEmpty(t, before.LastPushCutoff)
+
+	badID := "sess-bad"
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(badID, "alpha", "bad first", "2026-02-02T00:00:00.000Z", 1),
+		Messages: []db.Message{
+			syncMessage(badID, 0, "user", "bad first", "not-a-timestamp"),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Errors)
+
+	after, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, before.LastPushCutoff, after.LastPushCutoff)
+	assert.Equal(t, before.LastPushAt, after.LastPushAt)
+	assert.Equal(t, before.DeletionRevision, after.DeletionRevision)
+	assertMirrorSessionAbsent(t, path, badID)
+}
+
 func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	path := filepath.Join(t.TempDir(), "full.duckdb")
 
-	result, err := syncer.Push(ctx, true, nil)
+	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, result.SessionsPushed)
 	assert.Equal(t, 3, result.MessagesPushed)
 	assert.Equal(t, 0, result.Errors)
-	assertDuckDBCount(t, syncer.DB(), "sessions", 2)
-	assertDuckDBCount(t, syncer.DB(), "messages", 3)
-	assertDuckDBCount(t, syncer.DB(), "tool_calls", 1)
-	assertDuckDBCount(t, syncer.DB(), "tool_result_events", 1)
-	assertDuckDBCount(t, syncer.DB(), "usage_events", 1)
-	assertDuckDBCount(t, syncer.DB(), "secret_findings", 1)
-	assertDuckDBCount(t, syncer.DB(), "model_pricing", 1)
-	assertDuckDBCount(t, syncer.DB(), "starred_sessions", 1)
-	assertDuckDBCount(t, syncer.DB(), "pinned_messages", 1)
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	assertDuckDBCount(t, conn, "sessions", 2)
+	assertDuckDBCount(t, conn, "messages", 3)
+	assertDuckDBCount(t, conn, "tool_calls", 1)
+	assertDuckDBCount(t, conn, "tool_result_events", 1)
+	assertDuckDBCount(t, conn, "usage_events", 1)
+	assertDuckDBCount(t, conn, "secret_findings", 1)
+	assertDuckDBCount(t, conn, "model_pricing", 1)
+	assertDuckDBCount(t, conn, "starred_sessions", 1)
+	assertDuckDBCount(t, conn, "pinned_messages", 1)
 
 	var firstMessage string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+	require.NoError(t, conn.QueryRowContext(ctx,
 		`SELECT first_message FROM sessions WHERE id = ?`,
 		fixture.alphaID,
 	).Scan(&firstMessage))
 	assert.Equal(t, "alpha first", firstMessage)
-}
-
-func TestSyncPushContinuesAfterSessionError(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
-		{
-			Session: syncSession(
-				"duck-bad", "alpha", "bad first",
-				"2026-01-10T00:00:00.000Z", 1,
-			),
-			Messages: []db.Message{
-				syncMessage(
-					"duck-bad", 0, "user", "bad first",
-					"not-a-timestamp",
-				),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-			IdentityObservation: export.ProjectIdentityObservation{
-				SessionID: "duck-bad", Project: "alpha", Machine: "local",
-				RootPath: "/repo/alpha", ObservedAt: time.Now().UTC(),
-			},
-		},
-		{
-			Session: syncSession(
-				"duck-good", "alpha", "good first",
-				"2026-01-11T00:00:00.000Z", 1,
-			),
-			Messages: []db.Message{
-				syncMessage(
-					"duck-good", 0, "user", "good first",
-					"2026-01-11T00:00:00.000Z",
-				),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-			IdentityObservation: export.ProjectIdentityObservation{
-				SessionID: "duck-good", Project: "alpha", Machine: "local",
-				RootPath: "/repo/alpha", ObservedAt: time.Now().UTC(),
-			},
-		},
-	})
-	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	var progress []PushProgress
-
-	result, err := syncer.Push(ctx, true, func(p PushProgress) {
-		progress = append(progress, p)
-	})
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, result.SessionsPushed)
-	assert.Equal(t, 1, result.MessagesPushed)
-	assert.Equal(t, 1, result.Errors)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-good", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-bad", 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", "duck-good", 1)
-	assertDuckDBCount(t, syncer.DB(), "source_project_identity_observations", 0)
-	assertDuckDBCount(t, syncer.DB(), "source_session_project_identity_snapshots", 0)
-	require.NotEmpty(t, progress)
-	last := progress[len(progress)-1]
-	assert.Equal(t, 2, last.SessionsDone)
-	assert.Equal(t, 2, last.SessionsTotal)
-	assert.Equal(t, 1, last.MessagesDone)
-	assert.Equal(t, 1, last.Errors)
-
-	watermark, err := local.GetSyncState(lastPushStateKey)
-	require.NoError(t, err)
-	assert.Empty(t, watermark)
-
-	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session: syncSession(
-			"duck-bad", "alpha", "bad repaired",
-			"2026-01-10T00:00:00.000Z", 1,
-		),
-		Messages: []db.Message{
-			syncMessage(
-				"duck-bad", 0, "user", "bad repaired",
-				"2026-01-10T00:00:00.000Z",
-			),
-		},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.Errors)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-bad", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", "duck-bad", 1)
-	watermark, err = local.GetSyncState(lastPushStateKey)
-	require.NoError(t, err)
-	assert.NotEmpty(t, watermark)
-}
-
-func TestSyncPushSkipsCurationRefreshAfterSessionError(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	sessionID := "duck-bad-curation"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session: syncSession(
-			sessionID, "alpha", "bad curation",
-			"2026-01-10T00:00:00.000Z", 1,
-		),
-		Messages: []db.Message{
-			syncMessage(
-				sessionID, 0, "user", "bad curation",
-				"not-a-timestamp",
-			),
-		},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	ok, err := local.StarSession(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	msgs, err := local.GetAllMessages(ctx, sessionID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	note := "bad pin"
-	_, err = local.PinMessage(sessionID, msgs[0].ID, &note)
-	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	result, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Errors)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", sessionID, 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "pinned_messages", "session_id = ?", sessionID, 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "starred_sessions", "session_id = ?", sessionID, 0)
 }
 
 func TestPushSessionBatchReturnsContextCancellation(t *testing.T) {
@@ -284,23 +310,24 @@ func TestSyncPushReportsSessionDiagnosticsByAgent(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	path := filepath.Join(t.TempDir(), "diagnostics.duckdb")
 
-	result, err := syncer.Push(ctx, true, nil)
+	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 
 	wantByAgent := map[string]int{"claude": 2, "codex": 1}
 	assert.True(t, result.Diagnostics.Full)
-	assert.Empty(t, result.Diagnostics.LastPushAt)
-	assert.Equal(t, 3, result.Diagnostics.LocalSessions.Total)
-	assert.Equal(t, wantByAgent, result.Diagnostics.LocalSessions.ByAgent)
+	assert.Equal(t, 3, result.Diagnostics.LocalSessionCount)
 	assert.Equal(t, 3, result.Diagnostics.CandidateSessions.Total)
 	assert.Equal(t, wantByAgent, result.Diagnostics.CandidateSessions.ByAgent)
 	assert.Equal(t, 0, result.Diagnostics.SkippedUnchangedSessions.Total)
 	assert.Empty(t, result.Diagnostics.SkippedUnchangedSessions.ByAgent)
 	assert.Equal(t, 3, result.Diagnostics.PushedSessions.Total)
 	assert.Equal(t, wantByAgent, result.Diagnostics.PushedSessions.ByAgent)
-	assert.NotEmpty(t, result.Diagnostics.Cutoff)
+	// A full/rebuild push has no incremental window, so Diagnostics.Cutoff
+	// (which only pushChangedSessions populates) is left empty; the mirror's
+	// own LastPushCutoff metadata is still written by writeRebuildMetadata.
+	assert.Empty(t, result.Diagnostics.Cutoff)
 }
 
 func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
@@ -326,12 +353,14 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 	}
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	path := filepath.Join(t.TempDir(), "progress.duckdb")
 	var progress []PushProgress
 
-	result, err := syncer.Push(ctx, true, func(p PushProgress) {
-		progress = append(progress, p)
-	})
+	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true,
+		func(p PushProgress) {
+			progress = append(progress, p)
+		},
+	)
 	require.NoError(t, err)
 
 	assert.Equal(t, count, result.SessionsPushed)
@@ -342,26 +371,6 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].SessionsDone)
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].SessionsTotal)
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].MessagesDone)
-}
-
-func TestSessionFingerprintsStoreDigestOnly(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	session, err := local.GetSession(ctx, fixture.alphaID)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-
-	got, err := syncer.sessionFingerprints(ctx, []db.Session{*session})
-	require.NoError(t, err)
-
-	fp := got[fixture.alphaID]
-	assert.Len(t, fp, 64)
-	assert.False(t, strings.Contains(fp, "alpha first"))
-	assert.False(t, strings.Contains(fp, "secret token sk-duckdb"))
-	assert.False(t, strings.Contains(fp, "duck result"))
-	assert.False(t, strings.Contains(fp, "pin alpha"))
 }
 
 func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
@@ -432,91 +441,40 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 	}
 }
 
-func TestTranscriptRevisionBackfillForcesOneFullDuckDBPush(t *testing.T) {
+// TestSessionFingerprintsWriteColumn asserts the volatile-exclusion
+// contract at the point where it actually matters: the fingerprint column
+// persisted in the mirror, not just the value sessionFingerprints computes.
+func TestSessionFingerprintsWriteColumn(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{
-		SyncStateTarget: "target-a",
-	})
-	backfillKey := "duckdb_transcript_revision_backfill_v1:target-a"
+	path := filepath.Join(t.TempDir(), "fingerprint-column.duckdb")
 
-	_, err := syncer.Push(ctx, true, nil)
+	_, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 
-	msgs, err := local.GetAllMessages(ctx, fixture.alphaID)
+	conn, err := Open(path)
 	require.NoError(t, err)
-	require.NotEmpty(t, msgs)
-	msgs[0].Content = "revised transcript"
-	require.NoError(t, local.ReplaceSessionMessages(fixture.alphaID, msgs))
-	localSession, err := local.GetSession(ctx, fixture.alphaID)
-	require.NoError(t, err)
-	require.NotNil(t, localSession)
-	require.NotNil(t, localSession.TranscriptRevision)
-	require.NoError(t, local.SetSyncState(
-		backfillKey, "",
-	))
-
-	backfill, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.True(t, backfill.Diagnostics.Full)
-	assert.Equal(t, 2, backfill.SessionsPushed)
-
-	var revision string
-	require.NoError(t, syncer.DB().QueryRowContext(
-		ctx,
-		`SELECT transcript_revision FROM sessions WHERE id = ?`,
+	defer conn.Close()
+	var fp string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT agentsview_push_fingerprint FROM sessions WHERE id = ?`,
 		fixture.alphaID,
-	).Scan(&revision))
-	assert.Equal(t, *localSession.TranscriptRevision, revision)
-
-	done, err := local.GetSyncState(backfillKey)
-	require.NoError(t, err)
-	assert.Equal(t, "1", done)
-
-	incremental, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.False(t, incremental.Diagnostics.Full)
-}
-
-func TestWriteSyncFingerprintsNormalizesRetainedLegacyValues(t *testing.T) {
-	local := newLocalDB(t)
-	legacy := `{"Messages":[{"content":"secret token sk-legacy"}]}`
-
-	require.NoError(t, writeSyncFingerprints(
-		local,
-		lastPushBoundaryStateKey,
-		"2026-01-10T00:00:00.000Z",
-		nil,
-		map[string]string{"unchanged": legacy},
-		nil,
-	))
-
-	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
-	require.NoError(t, err)
-	require.NotContains(t, raw, "secret token sk-legacy")
-	var state syncState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	fp := state.Fingerprints["unchanged"]
-	require.Len(t, fp, 64)
-	assert.NotEqual(t, legacy, fp)
+	).Scan(&fp))
+	assert.Len(t, fp, 64)
+	assert.False(t, strings.Contains(fp, "alpha first"))
+	assert.False(t, strings.Contains(fp, "secret token sk-duckdb"))
+	assert.False(t, strings.Contains(fp, "duck result"))
+	assert.False(t, strings.Contains(fp, "pin alpha"))
 }
 
 func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
-	sessionID := "duck-sync-fallback-pricing"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session:         syncSession(sessionID, "alpha", "pricing", "2026-01-10T00:00:00.000Z", 1),
-		Messages:        []db.Message{syncMessage(sessionID, 0, "assistant", "pricing", "2026-01-10T00:00:00.000Z")},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 
-	_, err = syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
+	require.NoError(t, syncer.syncModelPricing(ctx))
 
 	var count int
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
@@ -529,25 +487,16 @@ func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
-	sessionID := "duck-sync-preserve-pricing"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session:         syncSession(sessionID, "alpha", "pricing", "2026-01-10T00:00:00.000Z", 1),
-		Messages:        []db.Message{syncMessage(sessionID, 0, "assistant", "pricing", "2026-01-10T00:00:00.000Z")},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	_, err = syncer.DB().ExecContext(ctx, `
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_per_mtok, output_per_mtok,
 			cache_creation_per_mtok, cache_read_per_mtok, updated_at
 		) VALUES ('other-machine-model', 1, 2, 3, 4, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 
-	_, err = syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
+	require.NoError(t, syncer.syncModelPricing(ctx))
 
 	var input, output float64
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
@@ -557,6 +506,35 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	).Scan(&input, &output))
 	assert.Equal(t, 1.0, input)
 	assert.Equal(t, 2.0, output)
+}
+
+func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:         "claude-test",
+		InputPerMTok:         3,
+		OutputPerMTok:        15,
+		CacheCreationPerMTok: 1,
+		CacheReadPerMTok:     0.5,
+	}}))
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	_, err := syncer.DB().ExecContext(ctx,
+		`UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
+		"kept", "claude-test",
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	var updatedAt string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		"claude-test",
+	).Scan(&updatedAt))
+	assert.Equal(t, "kept", updatedAt)
 }
 
 func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
@@ -585,8 +563,9 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false)
+	require.NoError(t, err)
 
 	var gotArchive, gotGeneration, gotSession, gotRemote string
 	var gotRelationship export.WorktreeRelationship
@@ -613,13 +592,17 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		SET git_remote = 'sentinel'
 		WHERE source_session_id = ?`, "snapshot-session")
 	require.NoError(t, err)
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	rev2, err := syncer.syncProjectIdentityObservations(ctx, rev, false)
+	require.NoError(t, err)
+	assert.Equal(t, rev, rev2, "unchanged local revision should not advance")
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
 		SELECT git_remote FROM source_session_project_identity_snapshots
 		WHERE source_session_id = ?`, "snapshot-session").Scan(&gotRemote))
 	assert.Equal(t, "sentinel", gotRemote,
 		"unchanged local revision should skip mirror publication")
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, true))
+
+	rev3, err := syncer.syncProjectIdentityObservations(ctx, rev, true)
+	require.NoError(t, err)
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
 		SELECT git_remote FROM source_session_project_identity_snapshots
 		WHERE source_session_id = ?`, "snapshot-session").Scan(&gotRemote))
@@ -627,7 +610,8 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		"forced publication should rebuild mirror identity rows")
 
 	require.NoError(t, local.DeleteSession("snapshot-session"))
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	_, err = syncer.syncProjectIdentityObservations(ctx, rev3, false)
+	require.NoError(t, err)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"source_session_project_identity_snapshots",
 		"source_archive_id = ?", archiveID, 0,
@@ -654,8 +638,9 @@ func TestSyncPreservesAmbiguousIdentityAlongsideResolvedRemote(t *testing.T) {
 	))
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, true))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true)
+	require.NoError(t, err)
 
 	got, err := NewStoreFromDB(syncer.DB()).BuildProjectIdentityMap(
 		ctx, []string{"app"},
@@ -689,9 +674,10 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	filtered := newTestSync(t, target, local, SyncOptions{
 		Projects: []string{"alpha"},
 	})
-	require.NoError(t, filtered.EnsureSchema(ctx))
-	require.NoError(t, filtered.syncProjectIdentityObservations(ctx, false))
-	_, err := filtered.DB().ExecContext(ctx, `
+	require.NoError(t, createSchema(ctx, filtered.DB()))
+	rev, err := filtered.syncProjectIdentityObservations(ctx, 0, false)
+	require.NoError(t, err)
+	_, err = filtered.DB().ExecContext(ctx, `
 		UPDATE source_project_identity_observations
 		SET git_remote_name = 'sentinel'
 		WHERE project = 'alpha'`)
@@ -706,7 +692,8 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 			ObservedAt:       time.Date(2026, 7, 11, 13, 0, 0, 0, time.UTC),
 		},
 	))
-	require.NoError(t, filtered.syncProjectIdentityObservations(ctx, false))
+	_, err = filtered.syncProjectIdentityObservations(ctx, rev, false)
+	require.NoError(t, err)
 	var alphaRemoteName string
 	require.NoError(t, filtered.DB().QueryRowContext(ctx, `
 		SELECT git_remote_name FROM source_project_identity_observations
@@ -716,8 +703,9 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	require.NoError(t, filtered.Close())
 
 	unfiltered := newTestSync(t, target, local, SyncOptions{})
-	require.NoError(t, unfiltered.EnsureSchema(ctx))
-	require.NoError(t, unfiltered.syncProjectIdentityObservations(ctx, false))
+	require.NoError(t, createSchema(ctx, unfiltered.DB()))
+	_, err = unfiltered.syncProjectIdentityObservations(ctx, 0, false)
+	require.NoError(t, err)
 	assertDuckDBCountWhere(t, unfiltered.DB(),
 		"source_session_project_identity_snapshots",
 		"project = ?", "beta", 1,
@@ -759,9 +747,10 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	))
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
-	_, err := syncer.DB().ExecContext(ctx, `
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false)
+	require.NoError(t, err)
+	_, err = syncer.DB().ExecContext(ctx, `
 		UPDATE source_project_identity_observations
 		SET git_remote_name = 'sentinel'
 		WHERE project = 'beta'`)
@@ -787,7 +776,8 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 			ObservedAt:       observedAt.Add(time.Hour),
 		},
 	))
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	rev, err = syncer.syncProjectIdentityObservations(ctx, rev, false)
+	require.NoError(t, err)
 
 	var alphaRemoteName, betaRemoteName string
 	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
@@ -811,246 +801,21 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	assert.Equal(t, 1, gammaRemotes)
 
 	require.NoError(t, local.DeleteSession("identity-alpha"))
-	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	_, err = syncer.syncProjectIdentityObservations(ctx, rev, false)
+	require.NoError(t, err)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"source_session_project_identity_snapshots",
 		"source_session_id = ?", "identity-alpha", 0,
 	)
 }
 
-func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern:         "claude-test",
-		InputPerMTok:         3,
-		OutputPerMTok:        15,
-		CacheCreationPerMTok: 1,
-		CacheReadPerMTok:     0.5,
-	}}))
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, syncer.syncModelPricing(ctx))
-	_, err := syncer.DB().ExecContext(ctx,
-		`UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
-		"kept", "claude-test",
-	)
-	require.NoError(t, err)
-
-	require.NoError(t, syncer.syncModelPricing(ctx))
-
-	var updatedAt string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
-		"claude-test",
-	).Scan(&updatedAt))
-	assert.Equal(t, "kept", updatedAt)
-}
-
-func TestSyncIncrementalSkipsUnchangedAndPushesChangedSessions(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.SessionsPushed)
-	assert.Equal(t, 0, second.MessagesPushed)
-
-	time.Sleep(time.Millisecond)
-	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	updateSession(t, local, fixture.alphaID, "alpha changed", modifiedAt)
-	third, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, third.SessionsPushed)
-	assert.Equal(t, 1, third.MessagesPushed)
-
-	var content string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT content FROM messages WHERE session_id = ? AND ordinal = 0`,
-		fixture.alphaID,
-	).Scan(&content))
-	assert.Equal(t, "alpha changed", content)
-}
-
-func TestSyncIncrementalPushesSameLengthContentChange(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	sessionID := "duck-sync-same-length"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session:         syncSession(sessionID, "alpha", "first", "2026-01-18T00:00:00.000Z", 1),
-		Messages:        []db.Message{syncMessage(sessionID, 0, "user", "abcde", "2026-01-18T00:00:00.000Z")},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, first.SessionsPushed)
-
-	time.Sleep(time.Millisecond)
-	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	updateSession(t, local, sessionID, "vwxyz", modifiedAt)
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, second.SessionsPushed)
-
-	var content string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT content FROM messages WHERE session_id = ? AND ordinal = 0`,
-		sessionID,
-	).Scan(&content))
-	assert.Equal(t, "vwxyz", content)
-}
-
-func TestSyncIncrementalRechecksLastPushBoundary(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-
-	boundary := time.Now().UTC().Format(localSyncTimestampLayout)
-	updateSession(t, local, fixture.alphaID, "alpha boundary", boundary)
-	require.NoError(t, local.SetSyncState(lastPushStateKey, boundary))
-	require.NoError(t, local.SetSyncState(lastPushBoundaryStateKey, ""))
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, second.SessionsPushed)
-	assert.Equal(t, 1, second.MessagesPushed)
-
-	var content string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT content FROM messages WHERE session_id = ? AND ordinal = 0`,
-		fixture.alphaID,
-	).Scan(&content))
-	assert.Equal(t, "alpha boundary", content)
-}
-
-func TestSyncResetTargetForcesFullPushWhenWatermarkExists(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-
-	_, err = syncer.DB().ExecContext(ctx, `DELETE FROM sessions`)
-	require.NoError(t, err)
-
-	reset, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, reset.SessionsPushed)
-	assertDuckDBCount(t, syncer.DB(), "sessions", 2)
-}
-
-func TestSyncResetTargetIgnoresOtherMachineRows(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	insertOtherMachineDuckSession(t, syncer.DB())
-	require.NoError(t, local.SetSyncState(
-		lastPushStateKey,
-		time.Now().UTC().Format(localSyncTimestampLayout),
-	))
-
-	reset, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-
-	assert.Equal(t, 2, reset.SessionsPushed)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "machine = ?", "test-machine", 2)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "machine = ?", "other-machine", 1)
-}
-
-func TestSyncFullPushRemovesHardDeletedSessions(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-
-	require.NoError(t, local.SoftDeleteSession(fixture.betaID))
-	deleted, err := local.DeleteSessionIfTrashed(fixture.betaID)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-
-	second, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, second.SessionsPushed)
-	assertDuckDBCount(t, syncer.DB(), "sessions", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", fixture.betaID, 0)
-	assertDuckDBCount(t, syncer.DB(), "messages", 2)
-}
-
-func TestSyncFullPushPreservesOtherMachineRows(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-	insertOtherMachineDuckSession(t, syncer.DB())
-
-	second, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-
-	assert.Equal(t, 2, second.SessionsPushed)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "other-session", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", "other-session", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "starred_sessions", "session_id = ?", "other-session", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "pinned_messages", "session_id = ?", "other-session", 1)
-}
-
-func TestSyncIncrementalPushRemovesHardDeletedSessions(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-
-	require.NoError(t, local.SoftDeleteSession(fixture.betaID))
-	deleted, err := local.DeleteSessionIfTrashed(fixture.betaID)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.SessionsPushed)
-	assertDuckDBCount(t, syncer.DB(), "sessions", 1)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", fixture.betaID, 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", fixture.betaID, 0)
-}
-
 func TestSyncIncrementalUpdatesPinsWithoutSessionChange(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	path := filepath.Join(t.TempDir(), "pins.duckdb")
 
-	first, err := syncer.Push(ctx, true, nil)
+	first, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, first.SessionsPushed)
 
@@ -1061,12 +826,15 @@ func TestSyncIncrementalUpdatesPinsWithoutSessionChange(t *testing.T) {
 	_, err = local.PinMessage(fixture.alphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
 
-	second, err := syncer.Push(ctx, false, nil)
+	second, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, second.SessionsPushed)
 
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
 	var got string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+	require.NoError(t, conn.QueryRowContext(ctx,
 		`SELECT note FROM pinned_messages WHERE session_id = ? AND message_id = ?`,
 		fixture.alphaID, msgs[0].ID,
 	).Scan(&got))
@@ -1078,8 +846,8 @@ func TestClearSessionTablesRollsBackWithTransaction(t *testing.T) {
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 
 	tx, err := syncer.DB().BeginTx(ctx, nil)
@@ -1114,197 +882,39 @@ func TestSyncProjectFiltersMatchPushScope(t *testing.T) {
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
 
-	include := newInMemoryTestSync(t, local, SyncOptions{Projects: []string{"alpha"}})
-	result, err := include.Push(ctx, true, nil)
+	includePath := filepath.Join(t.TempDir(), "include.duckdb")
+	result, err := Push(ctx, includePath, local, "test-machine",
+		SyncOptions{Projects: []string{"alpha"}}, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
-	assertDuckDBCount(t, include.DB(), "sessions", 1)
-	assertDuckDBCountWhere(t, include.DB(), "sessions", "project = ?", "alpha", 1)
+	includeConn, err := Open(includePath)
+	require.NoError(t, err)
+	defer includeConn.Close()
+	assertDuckDBCount(t, includeConn, "sessions", 1)
+	assertDuckDBCountWhere(t, includeConn, "sessions", "project = ?", "alpha", 1)
 
-	exclude := newInMemoryTestSync(t, local, SyncOptions{ExcludeProjects: []string{"alpha"}})
-	result, err = exclude.Push(ctx, true, nil)
+	excludePath := filepath.Join(t.TempDir(), "exclude.duckdb")
+	result, err = Push(ctx, excludePath, local, "test-machine",
+		SyncOptions{ExcludeProjects: []string{"alpha"}}, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
-	assertDuckDBCount(t, exclude.DB(), "sessions", 1)
-	assertDuckDBCountWhere(t, exclude.DB(), "sessions", "project = ?", "beta", 1)
-}
-
-func TestSyncFilteredFullClearsGlobalWatermarkForLaterUnfilteredPush(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	ok, err := local.StarSession(fixture.betaID)
+	excludeConn, err := Open(excludePath)
 	require.NoError(t, err)
-	require.True(t, ok)
-	require.NoError(t, local.SetSyncState(lastPushStateKey, time.Now().UTC().Format(localSyncTimestampLayout)))
-	require.NoError(t, local.SetSyncState(lastPushBoundaryStateKey, `{"fingerprints":{"stale":"stale"}}`))
-
-	target := filepath.Join(t.TempDir(), "filtered.duckdb")
-	filtered := newTestSync(t, target, local, SyncOptions{Projects: []string{"alpha"}})
-	first, err := filtered.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, first.SessionsPushed)
-	assertDuckDBCountWhere(t, filtered.DB(), "sessions", "id = ?", fixture.alphaID, 1)
-	assertDuckDBCountWhere(t, filtered.DB(), "sessions", "id = ?", fixture.betaID, 0)
-	assertDuckDBCount(t, filtered.DB(), "starred_sessions", 1)
-	assertDuckDBCountWhere(t, filtered.DB(), "starred_sessions", "session_id = ?", fixture.betaID, 0)
-
-	watermark, err := local.GetSyncState(lastPushStateKey)
-	require.NoError(t, err)
-	assert.Empty(t, watermark)
-	fingerprints, err := readSyncFingerprintsWithKey(local, lastPushBoundaryStateKey)
-	require.NoError(t, err)
-	assert.Contains(t, fingerprints, fixture.alphaID)
-	assert.NotContains(t, fingerprints, "stale")
-	require.NoError(t, filtered.Close())
-
-	unfiltered := newTestSync(t, target, local, SyncOptions{})
-	second, err := unfiltered.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, second.SessionsPushed)
-	assertDuckDBCountWhere(t, unfiltered.DB(), "sessions", "id = ?", fixture.betaID, 1)
-}
-
-func TestSyncFilteredFullPushKeepsNextFilteredPushIncremental(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{Projects: []string{"alpha"}})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, first.SessionsPushed)
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.SessionsPushed)
-	assert.Equal(t, 0, second.MessagesPushed)
-
-	watermark, err := local.GetSyncState(lastPushStateKey)
-	require.NoError(t, err)
-	assert.Empty(t, watermark)
-}
-
-func TestSyncFilteredIncrementalPersistsFingerprintsWithoutAdvancingWatermark(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	target := filepath.Join(t.TempDir(), "filtered-watermark.duckdb")
-
-	unfiltered := newTestSync(t, target, local, SyncOptions{})
-	first, err := unfiltered.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-	require.NoError(t, unfiltered.Close())
-
-	watermark, err := local.GetSyncState(lastPushStateKey)
-	require.NoError(t, err)
-	require.NotEmpty(t, watermark)
-
-	time.Sleep(time.Millisecond)
-	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	updateSession(t, local, fixture.alphaID, "alpha filtered change", modifiedAt)
-
-	filtered := newTestSync(t, target, local, SyncOptions{Projects: []string{"alpha"}})
-	second, err := filtered.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, second.SessionsPushed)
-
-	got, err := local.GetSyncState(lastPushStateKey)
-	require.NoError(t, err)
-	assert.Equal(t, watermark, got)
-
-	third, err := filtered.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, third.SessionsPushed)
-}
-
-func TestSyncFilteredIncrementalUpdatesPinsWithoutSessionChange(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{Projects: []string{"alpha"}})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, first.SessionsPushed)
-	require.NoError(t, local.SetSyncState(lastPushStateKey, time.Now().UTC().Format(localSyncTimestampLayout)))
-
-	msgs, err := local.GetAllMessages(ctx, fixture.alphaID)
-	require.NoError(t, err)
-	note := "filtered updated pin"
-	_, err = local.PinMessage(fixture.alphaID, msgs[0].ID, &note)
-	require.NoError(t, err)
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.SessionsPushed)
-
-	var got string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT note FROM pinned_messages WHERE session_id = ? AND message_id = ?`,
-		fixture.alphaID, msgs[0].ID,
-	).Scan(&got))
-	assert.Equal(t, note, got)
-}
-
-func TestSyncFilteredIncrementalRemovesHardDeletedSessions(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{Projects: []string{"alpha"}})
-
-	first, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, first.SessionsPushed)
-	require.NoError(t, local.SetSyncState(lastPushStateKey, time.Now().UTC().Format(localSyncTimestampLayout)))
-
-	require.NoError(t, local.SoftDeleteSession(fixture.alphaID))
-	deleted, err := local.DeleteSessionIfTrashed(fixture.alphaID)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-
-	second, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, second.SessionsPushed)
-	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", fixture.alphaID, 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "tool_calls", "session_id = ?", fixture.alphaID, 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "tool_result_events", "session_id = ?", fixture.alphaID, 0)
-	assertDuckDBCountWhere(t, syncer.DB(), "starred_sessions", "session_id = ?", fixture.alphaID, 0)
-}
-
-func TestSyncFilteredPushPreservesOutOfScopeStarredSessions(t *testing.T) {
-	ctx := context.Background()
-	local := newLocalDB(t)
-	fixture := seedDuckDBSyncFixture(t, local)
-	ok, err := local.StarSession(fixture.betaID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	target := filepath.Join(t.TempDir(), "filtered-stars.duckdb")
-
-	unfiltered := newTestSync(t, target, local, SyncOptions{})
-	first, err := unfiltered.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, first.SessionsPushed)
-	assertDuckDBCount(t, unfiltered.DB(), "starred_sessions", 2)
-	require.NoError(t, unfiltered.Close())
-
-	filtered := newTestSync(t, target, local, SyncOptions{Projects: []string{"alpha"}})
-	second, err := filtered.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assertDuckDBCount(t, filtered.DB(), "starred_sessions", 2)
-	assertDuckDBCountWhere(t, filtered.DB(), "starred_sessions", "session_id = ?", fixture.betaID, 1)
-	assert.Equal(t, 0, second.SessionsPushed)
+	defer excludeConn.Close()
+	assertDuckDBCount(t, excludeConn, "sessions", 1)
+	assertDuckDBCountWhere(t, excludeConn, "sessions", "project = ?", "beta", 1)
 }
 
 func TestSyncStatusCountsDuckDBRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	path := filepath.Join(t.TempDir(), "status.duckdb")
 
-	_, err := syncer.Push(ctx, true, nil)
+	_, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
+
+	syncer := newTestSync(t, path, local, SyncOptions{})
 	insertOtherMachineDuckSession(t, syncer.DB())
 
 	status, err := syncer.Status(ctx)
@@ -1320,12 +930,13 @@ func TestReadStatusFromConfigCountsMachineScopedDuckDBRows(t *testing.T) {
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
 	target := filepath.Join(t.TempDir(), "status.duckdb")
-	syncer := newTestSync(t, target, local, SyncOptions{})
 
-	_, err := syncer.Push(ctx, true, nil)
+	_, err := Push(ctx, target, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
-	insertOtherMachineDuckSession(t, syncer.DB())
-	require.NoError(t, syncer.Close())
+	conn, err := Open(target)
+	require.NoError(t, err)
+	insertOtherMachineDuckSession(t, conn)
+	require.NoError(t, conn.Close())
 
 	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
 		Path:        target,
@@ -1354,9 +965,6 @@ func newTestSync(
 	t.Helper()
 	syncer, err := New(path, local, "test-machine", opts)
 	require.NoError(t, err)
-	require.NoError(t, local.SetSyncState(
-		syncer.transcriptRevisionBackfillKey(), "1",
-	))
 	t.Cleanup(func() {
 		require.NoError(t, syncer.Close())
 	})
@@ -1368,6 +976,116 @@ func newInMemoryTestSync(t *testing.T, local *db.DB, opts SyncOptions) *Sync {
 	return newTestSync(t, ":memory:", local, opts)
 }
 
+// newPushFixture seeds n local sessions (sess-1..sess-N), each with two
+// messages, and returns the local db plus a fresh temp-file mirror path
+// that has not been pushed yet.
+func newPushFixture(t *testing.T, n int) (*db.DB, string) {
+	t.Helper()
+	local := newLocalDB(t)
+	writes := make([]db.SessionBatchWrite, 0, n)
+	for i := 1; i <= n; i++ {
+		id := fmt.Sprintf("sess-%d", i)
+		ts := fmt.Sprintf("2026-02-01T00:%02d:00.000Z", i%60)
+		writes = append(writes, db.SessionBatchWrite{
+			Session: syncSession(id, "alpha", "first "+id, ts, 2),
+			Messages: []db.Message{
+				syncMessage(id, 0, "user", "first "+id, ts),
+				syncMessage(id, 1, "assistant", "reply "+id, ts),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		})
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	return local, path
+}
+
+// appendMessage appends one more message to sessionID through the normal
+// local write path, bumping local_modified_at (and so sync_marker) so the
+// next Push selects it as a candidate.
+func appendMessage(t *testing.T, local *db.DB, sessionID string) {
+	t.Helper()
+	ctx := context.Background()
+	sess, err := local.GetSession(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	msgs, err := local.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	ordinal := len(msgs)
+	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
+	sess.LocalModifiedAt = &modifiedAt
+	sess.MessageCount = ordinal + 1
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: *sess,
+		Messages: []db.Message{
+			syncMessage(sessionID, ordinal, "assistant", "appended", modifiedAt),
+		},
+	}})
+	require.NoError(t, err)
+}
+
+// mutateSessionContent changes a session's first message content via a raw
+// UPDATE that never touches the sessions table, so sync_marker is left
+// exactly as it was: the fingerprint changes without the marker moving.
+func mutateSessionContent(t *testing.T, local *db.DB, sessionID string) {
+	t.Helper()
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`UPDATE messages SET content = 'mutated content'
+			 WHERE session_id = ? AND ordinal = 0`,
+			sessionID,
+		)
+		return err
+	}))
+}
+
+// setSessionSignalsTo forces sessionID's sync_marker directly, bypassing
+// the triggers that normally derive it from the session's signal columns,
+// so a test can pin it exactly at a mirror's stored cutoff.
+func setSessionSignalsTo(t *testing.T, local *db.DB, sessionID, marker string) {
+	t.Helper()
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`UPDATE sessions SET sync_marker = ? WHERE id = ?`, marker, sessionID,
+		)
+		return err
+	}))
+}
+
+// setMirrorMetadataValue writes directly into a closed mirror file's
+// sync_metadata table, for tests that need to tamper with probe-visible
+// state between two Push calls.
+func setMirrorMetadataValue(t *testing.T, path, key, value string) {
+	t.Helper()
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Exec(`
+		INSERT INTO sync_metadata (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	require.NoError(t, err)
+}
+
+func assertMirrorMessageCount(t *testing.T, path, sessionID string, want int) {
+	t.Helper()
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	assertDuckDBCountWhere(t, conn, "messages", "session_id = ?", sessionID, want)
+}
+
+func assertMirrorSessionAbsent(t *testing.T, path, sessionID string) {
+	t.Helper()
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", sessionID, 0)
+}
+
 // TestDuckGetAnalyticsSkillsIgnoresCrossSessionDuplicateIDs guards the
 // skill join: DuckDB mirrors SQLite row IDs from many machines, so
 // messages.id is not globally unique. A tool call must join only to a
@@ -1376,8 +1094,7 @@ func TestDuckGetAnalyticsSkillsIgnoresCrossSessionDuplicateIDs(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	duck := syncer.DB()
 	store := NewStoreFromDB(duck)
 
@@ -1616,20 +1333,6 @@ func syncMessage(
 	return msg
 }
 
-func updateSession(t *testing.T, local *db.DB, sessionID, content, modifiedAt string) {
-	t.Helper()
-	sess := syncSession(sessionID, "alpha", content, "2026-01-10T00:00:00.000Z", 1)
-	localModifiedAt := modifiedAt
-	sess.LocalModifiedAt = &localModifiedAt
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
-		Session:         sess,
-		Messages:        []db.Message{syncMessage(sessionID, 0, "user", content, modifiedAt)},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-}
-
 func assertDuckDBCount(t *testing.T, conn *sql.DB, table string, want int) {
 	t.Helper()
 	var got int
@@ -1652,9 +1355,9 @@ func TestSyncResultDurationIsSet(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	path := filepath.Join(t.TempDir(), "duration.duckdb")
 
-	result, err := syncer.Push(ctx, true, nil)
+	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 	assert.Greater(t, result.Duration, time.Duration(0))
 }

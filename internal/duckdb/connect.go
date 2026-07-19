@@ -2,9 +2,7 @@ package duckdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -14,7 +12,6 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 const quackAttachmentName = "agentsview_remote"
@@ -38,62 +35,6 @@ func Open(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
-}
-
-// ReadLastPushAt reads the local DuckDB push watermark for the optional
-// PG-compatible target scope.
-func ReadLastPushAt(local *db.DB, syncStateTarget string) (string, error) {
-	if local == nil {
-		return "", fmt.Errorf("local sync state is required")
-	}
-	return local.GetSyncState(
-		scopedDuckDBSyncStateKey(lastPushStateKey, syncStateTarget),
-	)
-}
-
-// SyncStateTargetForConfig returns the local sync-state scope for a DuckDB
-// target. Local file mirrors keep the historical unscoped watermark; remote
-// Quack targets get a non-secret URL fingerprint so distinct remotes cannot
-// reuse each other's push watermark.
-func SyncStateTargetForConfig(cfg config.DuckDBConfig) string {
-	if strings.TrimSpace(cfg.URL) == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(canonicalDuckDBSyncTarget(cfg.URL)))
-	encoded := hex.EncodeToString(sum[:])
-	return "url-" + encoded[:16]
-}
-
-func canonicalDuckDBSyncTarget(rawURL string) string {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return ""
-	}
-	if !strings.HasPrefix(rawURL, "quack:") {
-		return rawURL
-	}
-	transport := strings.TrimPrefix(rawURL, "quack:")
-	if strings.HasPrefix(transport, "http://") ||
-		strings.HasPrefix(transport, "https://") {
-		if u, err := neturl.Parse(transport); err == nil {
-			u.User = nil
-			q := u.Query()
-			for key := range q {
-				if isSecretURLQueryKey(key) {
-					q.Del(key)
-				}
-			}
-			u.RawQuery = q.Encode()
-			u.Fragment = ""
-			return "quack:" + u.String()
-		}
-	}
-	transport = strings.SplitN(transport, "#", 2)[0]
-	transport = strings.SplitN(transport, "?", 2)[0]
-	if at := strings.LastIndex(transport, "@"); at >= 0 {
-		transport = transport[at+1:]
-	}
-	return "quack:" + transport
 }
 
 func isSecretURLQueryKey(key string) bool {

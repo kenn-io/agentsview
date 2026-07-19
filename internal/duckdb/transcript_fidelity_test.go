@@ -33,7 +33,8 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newTestSync(t, filepath.Join(t.TempDir(), "fidelity.duckdb"), local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 
 	store := NewStoreFromDB(syncer.DB())

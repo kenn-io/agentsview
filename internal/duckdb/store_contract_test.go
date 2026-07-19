@@ -42,7 +42,8 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	}}), "insert open-session message")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
 	store := NewStoreFromDB(syncer.DB())
 
@@ -82,7 +83,8 @@ func TestSessionIdentity(t *testing.T) {
 	}), "upsert identity session")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
 	store := NewStoreFromDB(syncer.DB())
 
@@ -207,7 +209,8 @@ func TestDuckDBFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
 		}), "upsert %q", id)
 	}
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -530,7 +533,8 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows
 	require.NoError(t, err, "seed copilot session")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -597,7 +601,8 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestam
 	require.NoError(t, err, "seed copilot sessions")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -657,7 +662,8 @@ func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 	require.NoError(t, err, "seed mixed-model copilot session")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -706,7 +712,8 @@ func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 	require.NoError(t, err, "seed no-model copilot session")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -798,7 +805,8 @@ func TestDuckDBGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 	require.NoError(t, local.SoftDeleteSession("duck-copilot-trashed"))
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 

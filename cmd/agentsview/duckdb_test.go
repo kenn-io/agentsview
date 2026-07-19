@@ -223,14 +223,12 @@ func TestWriteDuckDBPushPlanDescribesLocalTarget(t *testing.T) {
 		DuckDBPushConfig{Full: true},
 		[]string{"alpha", "beta"},
 		nil,
-		"url-abc123",
 	)
 
 	got := out.String()
 	assert.Contains(t, got, "DuckDB push target: local file /data/agentsview.duckdb")
 	assert.Contains(t, got, `machine "workstation"`)
 	assert.Contains(t, got, "mode full")
-	assert.Contains(t, got, "sync scope url-abc123")
 	assert.Contains(t, got, "DuckDB push filters: include projects alpha, beta")
 }
 
@@ -241,11 +239,8 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 		SessionsPushed: 3,
 		MessagesPushed: 7,
 		Diagnostics: duckdbsync.PushDiagnostics{
-			Cutoff: "2026-07-01T12:00:00.000Z",
-			LocalSessions: duckdbsync.PushSessionCounts{
-				Total:   3,
-				ByAgent: map[string]int{"codex": 1, "claude": 2},
-			},
+			Cutoff:            "2026-07-01T12:00:00.000Z",
+			LocalSessionCount: 3,
 			CandidateSessions: duckdbsync.PushSessionCounts{
 				Total:   3,
 				ByAgent: map[string]int{"codex": 1, "claude": 2},
@@ -262,7 +257,7 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 	})
 
 	got := out.String()
-	assert.Contains(t, got, "DuckDB push source: local 3 (claude=2, codex=1); candidates 3 (claude=2, codex=1); skipped unchanged 0; stale deleted 1")
+	assert.Contains(t, got, "DuckDB push source: local 3; candidates 3 (claude=2, codex=1); skipped unchanged 0; stale deleted 1")
 	assert.Contains(t, got, "DuckDB push wrote: sessions 3 (claude=2, codex=1), messages 7")
 }
 

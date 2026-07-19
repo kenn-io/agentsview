@@ -2,13 +2,9 @@ package duckdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,40 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
-
-const projectIdentityPublicationStateKey = "duckdb_project_identity_publication_revision_v2"
-
-func (s *Sync) projectIdentityStateKey(databaseGeneration string) string {
-	key := projectIdentityPublicationStateKey + ":" + databaseGeneration
-	if !s.isFiltered() {
-		return s.syncStateKey(key)
-	}
-	projects := append([]string(nil), s.projects...)
-	excludes := append([]string(nil), s.excludeProjects...)
-	sort.Strings(projects)
-	sort.Strings(excludes)
-	projects = slices.Compact(projects)
-	excludes = slices.Compact(excludes)
-
-	sum := sha256.New()
-	writeField := func(value string) {
-		_, _ = fmt.Fprintf(sum, "%d:", len(value))
-		_, _ = sum.Write([]byte(value))
-	}
-	writeField("include")
-	writeField(strconv.Itoa(len(projects)))
-	for _, project := range projects {
-		writeField(project)
-	}
-	writeField("exclude")
-	writeField(strconv.Itoa(len(excludes)))
-	for _, project := range excludes {
-		writeField(project)
-	}
-	return s.syncStateKey(
-		key + ":project-filter:" + hex.EncodeToString(sum.Sum(nil)[:8]),
-	)
-}
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
@@ -196,93 +158,134 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	return nil
 }
 
+// syncProjectIdentityObservations publishes project identity observations
+// and per-session snapshots up through the local archive's current
+// revision, using priorRevision (normally probe.IdentityRevision) as the
+// cursor instead of local pg_sync_state. It performs a full publication
+// when force is set, priorRevision predates any real publication, or the
+// mirror's source_archives scope looks stale; otherwise it applies the
+// compact (priorRevision, revision] delta. It returns the revision just
+// published so the caller can persist it as mirror metadata's
+// IdentityRevision.
 func (s *Sync) syncProjectIdentityObservations(
-	ctx context.Context, force bool,
-) error {
+	ctx context.Context, priorRevision int64, force bool,
+) (int64, error) {
 	revision, err := s.local.ProjectIdentityPublicationRevision(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	databaseGeneration, err := s.local.GetDatabaseID(ctx)
 	if err != nil {
-		return fmt.Errorf("loading source database generation: %w", err)
-	}
-	revisionValue := strconv.FormatInt(revision, 10)
-	stateKey := s.projectIdentityStateKey(databaseGeneration)
-	publishedRevisionValue, err := s.local.GetSyncState(stateKey)
-	if err != nil {
-		return fmt.Errorf("reading duckdb project identity publication revision: %w", err)
+		return 0, fmt.Errorf("loading source database generation: %w", err)
 	}
 	archiveID, err := s.local.GetArchiveID(ctx)
 	if err != nil {
-		return fmt.Errorf("loading source archive id: %w", err)
-	}
-	fullPublication := force || publishedRevisionValue == ""
-	var publishedRevision int64
-	if !fullPublication {
-		publishedRevision, err = strconv.ParseInt(publishedRevisionValue, 10, 64)
-		if err != nil || publishedRevision < 0 || publishedRevision > revision {
-			fullPublication = true
-		} else if publishedRevision == revision {
-			var archivePresent bool
-			if err := s.duck.QueryRowContext(ctx, `
-			SELECT count(*) > 0 FROM source_archives
-			WHERE source_archive_id = ?`, archiveID).Scan(&archivePresent); err != nil {
-				return fmt.Errorf("checking duckdb project identity publication: %w", err)
-			}
-			if archivePresent {
-				return nil
-			}
-			fullPublication = true
-		}
+		return 0, fmt.Errorf("loading source archive id: %w", err)
 	}
 
-	var observations []export.ProjectIdentityObservation
-	var snapshots []export.ProjectIdentityObservation
-	var delta db.ProjectIdentityPublicationDelta
-	if fullPublication {
-		observations, err = s.local.ListProjectIdentityObservations(ctx, nil)
+	fullPublication := force || priorRevision <= 0 || priorRevision > revision
+	if !fullPublication && priorRevision == revision {
+		present, err := s.identityArchivePresent(ctx, archiveID)
 		if err != nil {
-			return fmt.Errorf("loading project identity observations: %w", err)
+			return 0, err
 		}
-		if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
-			out := observations[:0]
-			for _, obs := range observations {
-				if projectInSyncScope(obs.Project, s.projects, s.excludeProjects) {
-					out = append(out, obs)
-				}
-			}
-			observations = out
+		if present {
+			return revision, nil
 		}
-		snapshots, err = s.local.ListSessionProjectIdentitySnapshots(ctx)
-		if err != nil {
-			return fmt.Errorf("loading session project identity snapshots: %w", err)
-		}
-		if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
-			out := snapshots[:0]
-			for _, snapshot := range snapshots {
-				if projectInSyncScope(
-					snapshot.Project, s.projects, s.excludeProjects,
-				) {
-					out = append(out, snapshot)
-				}
-			}
-			snapshots = out
-		}
-	} else {
-		delta, err = s.local.LoadProjectIdentityPublicationDelta(
-			ctx, publishedRevision, revision, s.projects, s.excludeProjects,
-		)
-		if err != nil {
-			return err
-		}
-		observations = delta.Observations
-		snapshots = delta.Snapshots
+		fullPublication = true
+	}
+
+	observations, snapshots, delta, err := s.loadIdentityPublicationScope(
+		ctx, fullPublication, priorRevision, revision,
+	)
+	if err != nil {
+		return 0, err
 	}
 	archiveSalt, err := s.local.GetArchiveSalt(ctx)
 	if err != nil {
-		return fmt.Errorf("loading source archive salt: %w", err)
+		return 0, fmt.Errorf("loading source archive salt: %w", err)
 	}
+	if err := s.writeIdentityPublication(
+		ctx, archiveID, archiveSalt, databaseGeneration,
+		fullPublication, delta, observations, snapshots,
+	); err != nil {
+		return 0, err
+	}
+	return revision, nil
+}
+
+func (s *Sync) identityArchivePresent(
+	ctx context.Context, archiveID string,
+) (bool, error) {
+	var present bool
+	if err := s.duck.QueryRowContext(ctx, `
+		SELECT count(*) > 0 FROM source_archives
+		WHERE source_archive_id = ?`, archiveID).Scan(&present); err != nil {
+		return false, fmt.Errorf("checking duckdb project identity publication: %w", err)
+	}
+	return present, nil
+}
+
+// loadIdentityPublicationScope loads either the full in-scope identity
+// publication (observations plus session snapshots) or the compact delta
+// for (priorRevision, revision], depending on fullPublication.
+func (s *Sync) loadIdentityPublicationScope(
+	ctx context.Context, fullPublication bool, priorRevision, revision int64,
+) (
+	observations, snapshots []export.ProjectIdentityObservation,
+	delta db.ProjectIdentityPublicationDelta, err error,
+) {
+	if !fullPublication {
+		delta, err = s.local.LoadProjectIdentityPublicationDelta(
+			ctx, priorRevision, revision, s.projects, s.excludeProjects,
+		)
+		return delta.Observations, delta.Snapshots, delta, err
+	}
+	observations, err = s.local.ListProjectIdentityObservations(ctx, nil)
+	if err != nil {
+		return nil, nil, delta, fmt.Errorf("loading project identity observations: %w", err)
+	}
+	observations = filterIdentityScope(observations, s.projects, s.excludeProjects)
+	snapshots, err = s.local.ListSessionProjectIdentitySnapshots(ctx)
+	if err != nil {
+		return nil, nil, delta, fmt.Errorf("loading session project identity snapshots: %w", err)
+	}
+	snapshots = filterIdentityScope(snapshots, s.projects, s.excludeProjects)
+	return observations, snapshots, delta, nil
+}
+
+// filterIdentityScope restricts a full-publication listing to the push
+// scope. The delta path does not need this: LoadProjectIdentityPublicationDelta
+// applies projects/excludeProjects in SQL.
+func filterIdentityScope(
+	items []export.ProjectIdentityObservation, projects, excludeProjects []string,
+) []export.ProjectIdentityObservation {
+	if len(projects) == 0 && len(excludeProjects) == 0 {
+		return items
+	}
+	out := items[:0]
+	for _, item := range items {
+		if projectMatchesPushScope(item.Project, projects, excludeProjects) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func projectMatchesPushScope(project string, projects, excludeProjects []string) bool {
+	if len(projects) > 0 && !slices.Contains(projects, project) {
+		return false
+	}
+	return !slices.Contains(excludeProjects, project)
+}
+
+func (s *Sync) writeIdentityPublication(
+	ctx context.Context,
+	archiveID, archiveSalt, databaseGeneration string,
+	fullPublication bool,
+	delta db.ProjectIdentityPublicationDelta,
+	observations, snapshots []export.ProjectIdentityObservation,
+) error {
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb project identity sync: %w", err)
@@ -349,9 +352,6 @@ func (s *Sync) syncProjectIdentityObservations(
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb project identity sync: %w", err)
 	}
-	if err := s.local.SetSyncState(stateKey, revisionValue); err != nil {
-		return fmt.Errorf("recording duckdb project identity publication revision: %w", err)
-	}
 	return nil
 }
 
@@ -372,33 +372,28 @@ func duckFallbackPricingRows() []db.ModelPricing {
 	return out
 }
 
+// replaceStarredSessions rewrites starred_sessions for exactly the given
+// mirror-resident session IDs. With scope-as-mirror-property (the mirror
+// only ever holds rows in opts.Projects/ExcludeProjects) this is always the
+// unfiltered "replace all for machine, reinsert in-scope" path: there are
+// no out-of-scope rows left to protect.
 func (s *Sync) replaceStarredSessions(
-	ctx context.Context, tx *sql.Tx, sessions []db.Session,
+	ctx context.Context, tx *sql.Tx, sessionIDs []string,
 ) error {
 	ids, err := s.local.ListStarredSessionIDs(ctx)
 	if err != nil {
 		return err
 	}
-	allowed := make(map[string]bool, len(sessions))
-	for _, sess := range sessions {
-		allowed[sess.ID] = true
+	allowed := make(map[string]bool, len(sessionIDs))
+	for _, id := range sessionIDs {
+		allowed[id] = true
 	}
-	if s.isFiltered() {
-		for _, sess := range sessions {
-			if err := s.execMutation(ctx, tx,
-				`DELETE FROM starred_sessions WHERE session_id = ?`, sess.ID,
-			); err != nil {
-				return fmt.Errorf("clearing duckdb starred session %s: %w", sess.ID, err)
-			}
-		}
-	} else {
-		if err := s.execMutation(ctx, tx, `
-			DELETE FROM starred_sessions
-			WHERE session_id IN (
-				SELECT id FROM sessions WHERE machine = ?
-			)`, s.machine); err != nil {
-			return fmt.Errorf("clearing duckdb starred_sessions: %w", err)
-		}
+	if err := s.execMutation(ctx, tx, `
+		DELETE FROM starred_sessions
+		WHERE session_id IN (
+			SELECT id FROM sessions WHERE machine = ?
+		)`, s.machine); err != nil {
+		return fmt.Errorf("clearing duckdb starred_sessions: %w", err)
 	}
 	for _, id := range ids {
 		if !allowed[id] {
@@ -415,13 +410,82 @@ func (s *Sync) replaceStarredSessions(
 	return nil
 }
 
+// applyDeletionDelta removes every mirror session tombstoned in the local
+// deletion journal within (after, through], scoped to this Sync's project
+// filters. This is the mirror-resident replacement for the old local-scan
+// hard-delete reconciliation: the journal already tells us exactly which
+// sessions to remove, so there is no need to diff the full local/mirror
+// session ID sets on every push.
+func (s *Sync) applyDeletionDelta(
+	ctx context.Context, after, through int64, result *PushResult,
+) error {
+	tombstones, err := s.local.LoadSessionDeletionDelta(
+		ctx, after, through, s.projects, s.excludeProjects,
+	)
+	if err != nil {
+		return fmt.Errorf("loading duckdb session deletion delta: %w", err)
+	}
+	if len(tombstones) == 0 {
+		return nil
+	}
+	if err := s.withDuckTx(ctx, "apply session deletion delta", func(tx *sql.Tx) error {
+		for _, tombstone := range tombstones {
+			if err := s.deleteMirrorSession(ctx, tx, tombstone.SessionID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	result.Diagnostics.DeletedStaleSessions = len(tombstones)
+	return nil
+}
+
+// replaceCuration rewrites starred_sessions and pinned_messages for every
+// session currently in the mirror. Scope-as-mirror-property means the
+// mirror's own sessions table is the authoritative in-scope ID list, so
+// this reads it directly rather than requiring a full local session listing.
+func (s *Sync) replaceCuration(ctx context.Context) error {
+	ids, err := s.mirrorSessionIDs(ctx)
+	if err != nil {
+		return err
+	}
+	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
+		if err := s.replaceAllPinnedMessages(ctx, tx, ids); err != nil {
+			return err
+		}
+		return s.replaceStarredSessions(ctx, tx, ids)
+	})
+}
+
+func (s *Sync) mirrorSessionIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.duck.QueryContext(ctx,
+		`SELECT id FROM sessions WHERE machine = ?`, s.machine,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing duckdb mirror session ids: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning duckdb mirror session id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// pushSession fully replaces one mirror session row and all of its
+// dependent rows (messages, tool calls/results, usage events, secret
+// findings, pins) with the current local content, then writes the
+// fingerprint used to detect future changes. rebuildMirror and
+// incrementalPush share this single write path: on a freshly created
+// rebuild file the pre-delete below is simply a no-op.
 func (s *Sync) pushSession(
-	ctx context.Context,
-	exec duckMutationExecutor,
-	target duckQueryer,
-	sess db.Session,
-	fingerprint string,
-	full bool,
+	ctx context.Context, exec duckMutationExecutor, sess db.Session, fingerprint string,
 ) (int, error) {
 	if err := s.upsertSession(ctx, exec, sess, fingerprint); err != nil {
 		return 0, err
@@ -429,53 +493,6 @@ func (s *Sync) pushSession(
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
-	}
-
-	if !full {
-		action, err := s.duckMessagePushAction(ctx, target, sess.ID, msgs)
-		if err != nil {
-			return 0, err
-		}
-		switch action.kind {
-		case duckMessagePushSkip:
-			if err := s.replaceSessionSecretFindings(ctx, exec, sess.ID); err != nil {
-				return 0, err
-			}
-			if err := s.replaceSessionPinnedMessages(ctx, exec, sess.ID); err != nil {
-				return 0, err
-			}
-			return 0, nil
-		case duckMessagePushAppend:
-			suffix := messagesAfterDuckOrdinal(msgs, action.maxOrdinal)
-			if len(suffix) == 0 {
-				return 0, fmt.Errorf(
-					"duckdb append %s: no local suffix after ordinal %d",
-					sess.ID, action.maxOrdinal,
-				)
-			}
-			if err := s.replaceUsageEvents(ctx, exec, sess.ID); err != nil {
-				return 0, err
-			}
-			if err := insertMessages(ctx, exec, suffix); err != nil {
-				return 0, err
-			}
-			if err := insertToolCalls(ctx, exec, suffix); err != nil {
-				return 0, err
-			}
-			if err := insertToolResultEvents(ctx, exec, suffix); err != nil {
-				return 0, err
-			}
-			if err := s.replaceSessionSecretFindings(ctx, exec, sess.ID); err != nil {
-				return 0, err
-			}
-			if err := s.replaceSessionPinnedMessages(ctx, exec, sess.ID); err != nil {
-				return 0, err
-			}
-			return len(suffix), nil
-		case duckMessagePushReplace:
-		default:
-			return 0, fmt.Errorf("unknown duckdb message push action %d", action.kind)
-		}
 	}
 
 	if err := s.replaceSessionDependents(ctx, exec, sess.ID); err != nil {
@@ -515,50 +532,6 @@ func (s *Sync) replaceSessionDependents(
 	return nil
 }
 
-func (s *Sync) deleteHardDeletedMirrorSessions(
-	ctx context.Context, tx *sql.Tx, localSessions []db.Session,
-	machine string, projects, excludeProjects []string,
-) ([]string, map[string]bool, error) {
-	localIDs := make(map[string]bool, len(localSessions))
-	for _, sess := range localSessions {
-		localIDs[sess.ID] = true
-	}
-	mirrorIDs := make(map[string]bool)
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, project FROM sessions WHERE machine = ?`,
-		machine,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("listing duckdb sessions for deletion reconciliation: %w", err)
-	}
-	defer rows.Close()
-	var stale []string
-	for rows.Next() {
-		var id, project string
-		if err := rows.Scan(&id, &project); err != nil {
-			return nil, nil, fmt.Errorf("scanning duckdb session for deletion reconciliation: %w", err)
-		}
-		mirrorIDs[id] = true
-		if !projectInSyncScope(project, projects, excludeProjects) {
-			continue
-		}
-		if !localIDs[id] {
-			stale = append(stale, id)
-			delete(mirrorIDs, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	sort.Strings(stale)
-	for _, id := range stale {
-		if err := s.deleteMirrorSession(ctx, tx, id); err != nil {
-			return nil, nil, err
-		}
-	}
-	return stale, mirrorIDs, nil
-}
-
 func (s *Sync) deleteMirrorSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
@@ -577,16 +550,6 @@ func (s *Sync) deleteMirrorSession(
 		}
 	}
 	return nil
-}
-
-func projectInSyncScope(project string, projects, excludeProjects []string) bool {
-	if len(projects) > 0 {
-		found := slices.Contains(projects, project)
-		if !found {
-			return false
-		}
-	}
-	return !slices.Contains(excludeProjects, project)
 }
 
 func (s *Sync) execMutation(
@@ -993,30 +956,6 @@ func (s *Sync) replaceSecretFindings(
 	return nil
 }
 
-func (s *Sync) replaceSessionSecretFindings(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM secret_findings WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb secret_findings for %s: %w", sessionID, err)
-	}
-	return s.replaceSecretFindings(ctx, exec, sessionID)
-}
-
-func (s *Sync) replaceSessionPinnedMessages(
-	ctx context.Context, exec duckMutationExecutor, sessionID string,
-) error {
-	if err := s.execMutation(ctx, exec,
-		`DELETE FROM pinned_messages WHERE session_id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("clearing duckdb pinned_messages for %s: %w", sessionID, err)
-	}
-	return s.replacePinnedMessages(ctx, exec, sessionID)
-}
-
 func (s *Sync) replacePinnedMessages(
 	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
@@ -1039,8 +978,11 @@ func (s *Sync) replacePinnedMessages(
 	return nil
 }
 
+// replaceAllPinnedMessages rewrites pinned_messages for exactly the given
+// mirror-resident session IDs. See replaceStarredSessions for why this is
+// always the unfiltered machine-scoped replace under scope-as-mirror-property.
 func (s *Sync) replaceAllPinnedMessages(
-	ctx context.Context, tx *sql.Tx, sessions []db.Session,
+	ctx context.Context, tx *sql.Tx, sessionIDs []string,
 ) error {
 	if err := s.execMutation(ctx, tx, `
 		DELETE FROM pinned_messages
@@ -1049,19 +991,8 @@ func (s *Sync) replaceAllPinnedMessages(
 		)`, s.machine); err != nil {
 		return fmt.Errorf("clearing duckdb pinned_messages: %w", err)
 	}
-	for _, sess := range sessions {
-		if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Sync) replaceScopedPinnedMessages(
-	ctx context.Context, tx *sql.Tx, sessions []db.Session,
-) error {
-	for _, sess := range sessions {
-		if err := s.replaceSessionPinnedMessages(ctx, tx, sess.ID); err != nil {
+	for _, id := range sessionIDs {
+		if err := s.replacePinnedMessages(ctx, tx, id); err != nil {
 			return err
 		}
 	}

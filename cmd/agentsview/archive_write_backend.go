@@ -197,7 +197,7 @@ func (b daemonArchiveWriteBackend) DuckDBPush(
 	projects []string,
 	excludeProjects []string,
 ) (duckdbsync.PushResult, error) {
-	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects, "")
+	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects)
 }
 
 func (b daemonArchiveWriteBackend) DuckDBPushWatch(
@@ -274,7 +274,6 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	cfg DuckDBPushConfig,
 	projects []string,
 	excludeProjects []string,
-	syncStateTarget string,
 ) (duckdbsync.PushResult, error) {
 	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
 		return duckdbsync.PushResult{}, err
@@ -282,9 +281,6 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	duckCfg, err := absolutizeDuckDBPath(duckCfg)
 	if err != nil {
 		return duckdbsync.PushResult{}, err
-	}
-	if syncStateTarget == "" {
-		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
 	}
 	onProgress, finish := daemonPushProgress(
 		"DuckDB", func(p duckdbsync.PushProgress) {
@@ -302,7 +298,6 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 			Projects:        projects,
 			ExcludeProjects: excludeProjects,
 			DuckDB:          &duckCfg,
-			SyncStateTarget: syncStateTarget,
 		},
 		onProgress,
 	)
@@ -481,9 +476,7 @@ func (b *localArchiveWriteBackend) DuckDBPush(
 	projects []string,
 	excludeProjects []string,
 ) (duckdbsync.PushResult, error) {
-	return b.duckDBPush(
-		ctx, duckCfg, cfg, projects, excludeProjects, "",
-	)
+	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects)
 }
 
 func (b *localArchiveWriteBackend) duckDBPush(
@@ -492,7 +485,6 @@ func (b *localArchiveWriteBackend) duckDBPush(
 	cfg DuckDBPushConfig,
 	projects []string,
 	excludeProjects []string,
-	syncStateTarget string,
 ) (duckdbsync.PushResult, error) {
 	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
 		return duckdbsync.PushResult{}, err
@@ -502,40 +494,14 @@ func (b *localArchiveWriteBackend) duckDBPush(
 		return duckdbsync.PushResult{}, err
 	}
 	forceFull := cfg.Full || didResync
-	if syncStateTarget == "" {
-		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
-	}
 
-	fmt.Println("Opening DuckDB mirror...")
-	connectStart := time.Now()
+	fmt.Println("Starting DuckDB push...")
 	opts := duckdbsync.SyncOptions{
 		Projects:        projects,
 		ExcludeProjects: excludeProjects,
-		SyncStateTarget: syncStateTarget,
 	}
-	syncer, err := duckdbsync.New(
-		duckCfg.Path, b.database, duckCfg.MachineName, opts,
-	)
-	if err != nil {
-		return duckdbsync.PushResult{}, err
-	}
-	defer syncer.Close()
-	fmt.Printf(
-		"Opened DuckDB mirror in %s\n",
-		time.Since(connectStart).Round(time.Millisecond),
-	)
-
-	fmt.Println("Preparing DuckDB schema...")
-	schemaStart := time.Now()
-	if err := syncer.EnsureSchema(ctx); err != nil {
-		return duckdbsync.PushResult{}, fmt.Errorf("schema: %w", err)
-	}
-	fmt.Printf(
-		"DuckDB schema ready in %s\n",
-		time.Since(schemaStart).Round(time.Millisecond),
-	)
-	fmt.Println("Starting DuckDB push...")
-	result, err := syncer.Push(ctx, forceFull,
+	result, err := duckdbsync.Push(
+		ctx, duckCfg.Path, b.database, duckCfg.MachineName, opts, forceFull,
 		func(p duckdbsync.PushProgress) {
 			fmt.Printf(
 				"\rPushing... %d/%d sessions, %d messages\x1b[K",
@@ -607,8 +573,8 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 func logDuckDBWatchPushResult(res duckdbsync.PushResult, reason pushReason) {
 	if res.Diagnostics.Cutoff != "" {
 		log.Printf(
-			"duckdb watch: source local %s; candidates %s; skipped unchanged %s; stale deleted %d; wrote sessions %s, messages %d (%s)",
-			formatDuckDBPushSessionCounts(res.Diagnostics.LocalSessions),
+			"duckdb watch: source local %d; candidates %s; skipped unchanged %s; stale deleted %d; wrote sessions %s, messages %d (%s)",
+			res.Diagnostics.LocalSessionCount,
 			formatDuckDBPushSessionCounts(res.Diagnostics.CandidateSessions),
 			formatDuckDBPushSessionCounts(res.Diagnostics.SkippedUnchangedSessions),
 			res.Diagnostics.DeletedStaleSessions,

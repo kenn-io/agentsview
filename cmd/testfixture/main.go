@@ -132,17 +132,10 @@ func writeDuckDBMirror(database *db.DB, path string) error {
 		!errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing existing DuckDB mirror: %w", err)
 	}
-	syncer, err := duckdbsync.New(path, database, "test-machine", duckdbsync.SyncOptions{})
-	if err != nil {
-		return err
-	}
-	defer syncer.Close()
-
 	ctx := context.Background()
-	if err := syncer.EnsureSchema(ctx); err != nil {
-		return err
-	}
-	result, err := syncer.Push(ctx, true, nil)
+	result, err := duckdbsync.Push(
+		ctx, path, database, "test-machine", duckdbsync.SyncOptions{}, true, nil,
+	)
 	if err != nil {
 		return err
 	}

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -18,33 +17,19 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const (
-	lastPushStateKey                   = "duckdb_last_push_at"
-	lastPushBoundaryStateKey           = "duckdb_last_push_boundary_state"
-	transcriptRevisionBackfillStateKey = "duckdb_transcript_revision_backfill_v1"
-	localSyncTimestampLayout           = "2006-01-02T15:04:05.000Z"
-)
-
-type syncState struct {
-	Cutoff       string            `json:"cutoff"`
-	Fingerprints map[string]string `json:"fingerprints"`
-}
+const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
 
 // Sync manages push-only mirroring from the SQLite primary archive to DuckDB.
 type Sync struct {
-	duck                *sql.DB
-	local               *db.DB
-	machine             string
-	syncStateScope      string
-	backfillTargetScope string
-	projects            []string
-	excludeProjects     []string
-	maintenance         duckDBMaintenance
+	duck            *sql.DB
+	local           *db.DB
+	machine         string
+	projects        []string
+	excludeProjects []string
+	maintenance     duckDBMaintenance
 
 	closeOnce sync.Once
 	closeErr  error
-	schemaMu  sync.Mutex
-	schemaOK  bool
 }
 
 type duckDBConnectionKind int
@@ -58,7 +43,6 @@ const (
 type SyncOptions struct {
 	Projects        []string
 	ExcludeProjects []string
-	SyncStateTarget string
 }
 
 // PushResult summarizes a DuckDB push operation.
@@ -73,9 +57,8 @@ type PushResult struct {
 // PushDiagnostics summarizes how a DuckDB push selected sessions.
 type PushDiagnostics struct {
 	Full                     bool
-	LastPushAt               string
 	Cutoff                   string
-	LocalSessions            PushSessionCounts
+	LocalSessionCount        int
 	CandidateSessions        PushSessionCounts
 	SkippedUnchangedSessions PushSessionCounts
 	PushedSessions           PushSessionCounts
@@ -104,7 +87,10 @@ type SyncStatus struct {
 	DuckDBMessages int    `json:"duckdb_messages"`
 }
 
-// New opens a DuckDB mirror file and returns a Sync instance.
+// New opens a DuckDB mirror file and returns a Sync instance. It never
+// creates or migrates schema: callers reach New only from rebuildMirror
+// (which creates schema itself on a fresh file) and incrementalPush (which
+// requires an already-valid mirror, verified by ProbeMirror beforehand).
 func New(
 	path string, local *db.DB, machine string, opts SyncOptions,
 ) (*Sync, error) {
@@ -115,19 +101,13 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	backfillTargetScope := opts.SyncStateTarget
-	if backfillTargetScope == "" {
-		backfillTargetScope = localDuckDBBackfillTargetScope(path)
-	}
 	return &Sync{
-		duck:                duck,
-		local:               local,
-		machine:             machine,
-		syncStateScope:      opts.SyncStateTarget,
-		backfillTargetScope: backfillTargetScope,
-		projects:            opts.Projects,
-		excludeProjects:     opts.ExcludeProjects,
-		maintenance:         duckDBCheckpointMaintenance{},
+		duck:            duck,
+		local:           local,
+		machine:         machine,
+		projects:        opts.Projects,
+		excludeProjects: opts.ExcludeProjects,
+		maintenance:     duckDBCheckpointMaintenance{},
 	}, nil
 }
 
@@ -156,305 +136,259 @@ func (s *Sync) isFiltered() bool {
 	return len(s.projects) > 0 || len(s.excludeProjects) > 0
 }
 
-func (s *Sync) syncStateKey(key string) string {
-	if s.syncStateScope == "" {
-		return key
-	}
-	return key + ":" + s.syncStateScope
-}
-
-func (s *Sync) transcriptRevisionBackfillKey() string {
-	key := transcriptRevisionBackfillStateKey
-	scope := s.backfillTargetScope
-	if scope == "" {
-		scope = s.syncStateScope
-	}
-	if scope != "" {
-		key += ":" + scope
-	}
-	if !s.isFiltered() {
-		return key
-	}
-	projects := append([]string(nil), s.projects...)
-	excluded := append([]string(nil), s.excludeProjects...)
-	sort.Strings(projects)
-	sort.Strings(excluded)
-	filterScope := strings.Join(projects, "\x00") + "\x01" +
-		strings.Join(excluded, "\x00")
-	sum := sha256.Sum256([]byte(filterScope))
-	return key + ":filter:" + hex.EncodeToString(sum[:])
-}
-
-func localDuckDBBackfillTargetScope(path string) string {
-	canonical := filepath.Clean(path)
-	if absolute, err := filepath.Abs(canonical); err == nil {
-		canonical = absolute
-	}
-	sum := sha256.Sum256([]byte(canonical))
-	return "path-" + hex.EncodeToString(sum[:8])
-}
-
-// EnsureSchema creates the DuckDB mirror schema if it does not already
-// exist. Deprecated: mirror schema v3 is create-only; Task 5/6 remove this
-// method once Sync.Push and cmd callers stop invoking schema creation
-// directly on a possibly-existing file.
-func (s *Sync) EnsureSchema(ctx context.Context) error {
-	s.schemaMu.Lock()
-	defer s.schemaMu.Unlock()
-	if s.schemaOK {
-		return nil
-	}
-	if err := createSchema(ctx, s.duck); err != nil {
-		return err
-	}
-	s.schemaOK = true
-	return nil
-}
-
-// Status returns current DuckDB mirror row counts.
+// Status returns current DuckDB mirror row counts. It tolerates a mirror
+// with no metadata yet (fresh or pre-v3 file): readMirrorMetadata and
+// readMachineStatus both degrade to zero values instead of erroring.
 func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
-	lastPushKey := s.syncStateKey(lastPushStateKey)
-	lastPush, err := s.local.GetSyncState(lastPushKey)
+	meta, err := readMirrorMetadata(ctx, s.duck)
 	if err != nil {
-		log.Printf("warning: reading %s: %v", lastPushKey, err)
-	}
-	status := SyncStatus{Machine: s.machine, LastPushAt: lastPush}
-	if err := s.EnsureSchema(ctx); err != nil {
-		return SyncStatus{}, err
+		log.Printf("warning: reading duckdb mirror metadata: %v", err)
 	}
 	return readMachineStatus(
-		ctx, s.duck, duckDBBaseConnection, nil, s.machine, status.LastPushAt,
+		ctx, s.duck, duckDBBaseConnection, nil, s.machine, meta.LastPushAt,
 	)
 }
 
-// Push syncs local sessions and dependent rows to DuckDB.
-func (s *Sync) Push(
-	ctx context.Context, full bool, onProgress func(PushProgress),
+// Push builds or updates the local DuckDB mirror. It probes the existing
+// file read-only, rebuilds from scratch when full is set or the probe
+// demands it (missing/damaged file, schema or data version drift, scope
+// change), and otherwise runs a bounded session-replace incremental push.
+func Push(
+	ctx context.Context, path string, local *db.DB, machine string,
+	opts SyncOptions, full bool, onProgress func(PushProgress),
+) (PushResult, error) {
+	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
+	probe, err := ProbeMirror(ctx, path)
+	if err != nil {
+		return PushResult{}, err
+	}
+	if full || probe.NeedsRebuild(scope, db.CurrentDataVersion()) {
+		return rebuildMirror(ctx, path, local, machine, opts, onProgress)
+	}
+	return incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
+}
+
+// incrementalPush applies a bounded session-replace update against an
+// already-valid mirror: apply the deletion journal delta, push sessions
+// whose fingerprint changed within [probe.LastPushCutoff, cutoff], refresh
+// curation and identity publication, then advance mirror metadata only if
+// nothing failed.
+func incrementalPush(
+	ctx context.Context, path string, local *db.DB, machine string,
+	opts SyncOptions, probe MirrorProbe, onProgress func(PushProgress),
+) (PushResult, error) {
+	s, err := New(path, local, machine, opts)
+	if err != nil {
+		return PushResult{}, err
+	}
+	defer func() { _ = s.Close() }()
+	return s.runIncrementalPush(ctx, opts, probe, onProgress)
+}
+
+// runIncrementalPush is incrementalPush's algorithm, split out as a *Sync
+// method so tests can construct a Sync with a stubbed maintenance policy
+// (see checkpointSpy in sync_fastpath_test.go) and drive it directly instead
+// of only through the free Push entry point.
+func (s *Sync) runIncrementalPush(
+	ctx context.Context, opts SyncOptions, probe MirrorProbe,
+	onProgress func(PushProgress),
 ) (PushResult, error) {
 	start := time.Now()
 	var result PushResult
-	if err := s.EnsureSchema(ctx); err != nil {
-		return result, err
-	}
+
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
-	lastPushKey := s.syncStateKey(lastPushStateKey)
-	lastPush, err := s.local.GetSyncState(lastPushKey)
-	if err != nil {
-		return result, fmt.Errorf("reading %s: %w", lastPushKey, err)
-	}
-	if full {
-		lastPush = ""
-	}
-	transcriptRevisionBackfillKey := s.transcriptRevisionBackfillKey()
-	transcriptRevisionBackfillDone, err := s.local.GetSyncState(
-		transcriptRevisionBackfillKey,
-	)
-	if err != nil {
-		return result, fmt.Errorf(
-			"reading %s: %w", transcriptRevisionBackfillKey, err,
-		)
-	}
-	transcriptRevisionBackfillNeeded :=
-		transcriptRevisionBackfillDone != "1"
-	if transcriptRevisionBackfillNeeded {
-		log.Printf(
-			"duckdbsync: transcript revision backfill marker missing; forcing full push",
-		)
-		lastPush = ""
-		full = true
-	}
-	if lastPush == "" && !s.isFiltered() {
-		full = true
-	}
-	if lastPush != "" {
-		count, err := s.sessionCount(ctx)
-		if err != nil {
-			return result, err
-		}
-		if count == 0 {
-			log.Printf("duckdbsync: local watermark set but DuckDB is empty; forcing full push")
-			lastPush = ""
-			full = true
-		}
-	}
 
-	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
-	result.Diagnostics.Full = full
-	result.Diagnostics.LastPushAt = lastPush
-	result.Diagnostics.Cutoff = cutoff
-	sessions, err := s.local.ListSessionsModifiedBetween(
-		ctx, lastPush, cutoff, s.projects, s.excludeProjects,
-	)
-	if err != nil {
-		return result, fmt.Errorf("listing modified sessions: %w", err)
-	}
-	sessionByID := make(map[string]db.Session, len(sessions))
-	for _, sess := range sessions {
-		sessionByID[sess.ID] = sess
-	}
-	if lastPush != "" {
-		windowStart, err := previousLocalSyncTimestamp(lastPush)
-		if err != nil {
-			return result, fmt.Errorf("computing duckdb boundary window before %s: %w", lastPush, err)
-		}
-		boundarySessions, err := s.local.ListSessionsModifiedBetween(
-			ctx, windowStart, lastPush, s.projects, s.excludeProjects,
-		)
-		if err != nil {
-			return result, fmt.Errorf("listing duckdb boundary sessions: %w", err)
-		}
-		for _, sess := range boundarySessions {
-			if localSessionSyncMarker(sess) != lastPush {
-				continue
-			}
-			if _, ok := sessionByID[sess.ID]; !ok {
-				sessionByID[sess.ID] = sess
-				sessions = append(sessions, sess)
-			}
-		}
-	}
-	allLocalSessions, err := s.local.ListSessionsModifiedBetween(
-		ctx, "", "", s.projects, s.excludeProjects,
-	)
-	if err != nil {
-		return result, fmt.Errorf("listing local sessions: %w", err)
-	}
-	allLocalSessionByID := make(map[string]db.Session, len(allLocalSessions))
-	for _, sess := range allLocalSessions {
-		allLocalSessionByID[sess.ID] = sess
-	}
-	result.Diagnostics.LocalSessions = countPushSessions(allLocalSessions)
-	priorFingerprints := map[string]string{}
-	if !full {
-		priorFingerprints, err = readSyncFingerprintsWithKey(
-			s.local,
-			s.syncStateKey(lastPushBoundaryStateKey),
-		)
-		if err != nil {
-			return result, err
-		}
-	}
-
-	var staleIDs []string
-	var mirrorSessionIDs map[string]bool
-	err = s.withDuckTx(ctx, "delete hard-deleted sessions", func(tx *sql.Tx) error {
-		var txErr error
-		staleIDs, mirrorSessionIDs, txErr = s.deleteHardDeletedMirrorSessions(
-			ctx, tx, allLocalSessions, s.machine, s.projects, s.excludeProjects,
-		)
-		return txErr
-	})
+	through, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
 		return result, err
 	}
-	for _, id := range staleIDs {
-		delete(priorFingerprints, id)
+	if err := s.applyDeletionDelta(ctx, probe.DeletionRevision, through, &result); err != nil {
+		return result, err
 	}
-	result.Diagnostics.DeletedStaleSessions = len(staleIDs)
-	if !full {
-		missingMirrorIDs := pruneMissingMirrorFingerprints(
-			priorFingerprints, mirrorSessionIDs,
-		)
-		sessions = appendMissingMirrorRepairCandidates(
-			sessions, sessionByID, allLocalSessionByID, missingMirrorIDs,
-		)
-	}
-	sessionFingerprints, err := s.sessionFingerprints(ctx, sessions)
+
+	result.Diagnostics.LocalSessionCount, err = s.local.CountSessionsForMirrorScope(
+		ctx, s.projects, s.excludeProjects,
+	)
 	if err != nil {
 		return result, err
 	}
-	candidateSessions := append([]db.Session(nil), sessions...)
-	result.Diagnostics.CandidateSessions = countPushSessions(candidateSessions)
-	if !full {
-		sessions = filterUnchangedSessions(sessions, priorFingerprints, sessionFingerprints)
-		result.Diagnostics.SkippedUnchangedSessions = skippedPushSessions(
-			candidateSessions, sessions,
-		)
-	}
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].ID < sessions[j].ID
-	})
 
-	pushed := make([]db.Session, 0, len(sessions))
-	for start := 0; start < len(sessions); start += duckSessionPushBatchSize {
-		end := min(start+duckSessionPushBatchSize, len(sessions))
-		if err := s.pushSessionBatchForMode(
-			ctx, sessions[start:end], start, len(sessions),
-			&result, &pushed, onProgress, full, sessionFingerprints,
-		); err != nil {
-			return result, err
-		}
+	pushed, err := s.pushChangedSessions(ctx, probe, onProgress, &result)
+	if err != nil {
+		return result, err
 	}
-	result.Diagnostics.PushedSessions = countPushSessions(pushed)
+
+	identityRevision := probe.IdentityRevision
 	if result.Errors == 0 {
-		err = s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
-			if !s.isFiltered() {
-				if err := s.replaceAllPinnedMessages(ctx, tx, allLocalSessions); err != nil {
-					return err
-				}
-			} else {
-				if err := s.replaceScopedPinnedMessages(ctx, tx, allLocalSessions); err != nil {
-					return err
-				}
-			}
-			return s.replaceStarredSessions(ctx, tx, allLocalSessions)
-		})
+		if err := s.replaceCuration(ctx); err != nil {
+			return result, err
+		}
+		identityRevision, err = s.syncProjectIdentityObservations(
+			ctx, probe.IdentityRevision, false,
+		)
 		if err != nil {
 			return result, err
 		}
 	} else {
 		log.Printf(
-			"duckdbsync: skipping curation refresh after %d session push errors",
+			"duckdbsync: skipping curation and identity refresh after %d session push errors",
 			result.Errors,
 		)
 	}
-	if result.Errors == 0 {
-		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
-			return result, err
-		}
-	} else {
-		log.Printf(
-			"duckdbsync: skipping project identity publication after %d session push errors",
-			result.Errors,
-		)
-	}
-	if len(pushed) > 0 || len(staleIDs) > 0 {
+
+	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 {
 		if err := s.checkpointAfterMutatingPush(ctx); err != nil {
 			return result, err
 		}
 	}
-	if full && s.isFiltered() {
-		// Clear the global watermark so the next unfiltered push
-		// starts from scratch; finalizeState then persists fresh
-		// fingerprints keyed at cutoff for later filtered runs.
-		if err := clearDuckDBSyncState(s.local, s.syncStateScope); err != nil {
+
+	if result.Errors == 0 {
+		if err := s.finalizeIncrementalPush(
+			ctx, opts, result.Diagnostics.Cutoff, through, identityRevision,
+		); err != nil {
 			return result, err
 		}
 	}
-	advanceWatermark := result.Errors == 0
-	if err := s.finalizeState(
-		lastPush, cutoff, pushed, priorFingerprints,
-		sessionFingerprints, advanceWatermark,
-	); err != nil {
-		return result, err
-	}
-	if transcriptRevisionBackfillNeeded && result.Errors == 0 {
-		if err := s.local.SetSyncState(
-			transcriptRevisionBackfillKey, "1",
-		); err != nil {
-			return result, fmt.Errorf(
-				"updating %s: %w",
-				transcriptRevisionBackfillKey, err,
-			)
-		}
-	}
+
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// pushChangedSessions selects candidates in [probe.LastPushCutoff, cutoff],
+// splits them into changed/unchanged by comparing local and mirror
+// fingerprints, and pushes the changed ones in batches.
+func (s *Sync) pushChangedSessions(
+	ctx context.Context, probe MirrorProbe, onProgress func(PushProgress),
+	result *PushResult,
+) ([]db.Session, error) {
+	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
+	result.Diagnostics.Cutoff = cutoff
+	candidates, err := s.local.ListSessionsForMirrorWindow(
+		ctx, probe.LastPushCutoff, cutoff, s.projects, s.excludeProjects,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions for duckdb incremental push: %w", err)
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
+	result.Diagnostics.CandidateSessions = countPushSessions(candidates)
+
+	changed, unchanged, fingerprints, err := s.selectChangedSessions(ctx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	result.Diagnostics.SkippedUnchangedSessions = countPushSessions(unchanged)
+
+	pushed := make([]db.Session, 0, len(changed))
+	for batchStart := 0; batchStart < len(changed); batchStart += duckSessionPushBatchSize {
+		end := min(batchStart+duckSessionPushBatchSize, len(changed))
+		if err := s.pushSessionBatchForMode(
+			ctx, changed[batchStart:end], batchStart, len(changed),
+			result, &pushed, onProgress, fingerprints,
+		); err != nil {
+			return nil, err
+		}
+	}
+	result.Diagnostics.PushedSessions = countPushSessions(pushed)
+	return pushed, nil
+}
+
+// selectChangedSessions compares each candidate's freshly computed local
+// fingerprint against what the mirror currently stores. A missing mirror
+// row reads back as "", which never equals a real fingerprint, so a session
+// whose mirror row disappeared (deleted directly, corrupted, never pushed)
+// is treated as changed and repaired here instead of needing a separate
+// orphan-repair pass.
+func (s *Sync) selectChangedSessions(
+	ctx context.Context, candidates []db.Session,
+) (changed, unchanged []db.Session, fingerprints map[string]string, err error) {
+	fingerprints, err = s.sessionFingerprints(ctx, candidates)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	mirrorFPs, err := s.readMirrorFingerprints(ctx, sessionIDs(candidates))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	changed = make([]db.Session, 0, len(candidates))
+	unchanged = make([]db.Session, 0, len(candidates))
+	for _, sess := range candidates {
+		if fingerprints[sess.ID] != mirrorFPs[sess.ID] {
+			changed = append(changed, sess)
+		} else {
+			unchanged = append(unchanged, sess)
+		}
+	}
+	return changed, unchanged, fingerprints, nil
+}
+
+// readMirrorFingerprints fetches stored fingerprints for exactly the
+// candidate IDs, in batches of 500, so lookup cost tracks the candidate
+// window rather than mirror size.
+func (s *Sync) readMirrorFingerprints(
+	ctx context.Context, ids []string,
+) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	const batchSize = 500
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		if err := s.readMirrorFingerprintBatch(ctx, ids[start:end], out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Sync) readMirrorFingerprintBatch(
+	ctx context.Context, batch []string, out map[string]string,
+) error {
+	placeholders := make([]string, len(batch))
+	args := make([]any, len(batch))
+	for i, id := range batch {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.duck.QueryContext(ctx,
+		`SELECT id, agentsview_push_fingerprint FROM sessions WHERE id IN (`+
+			strings.Join(placeholders, ",")+`)`, args...,
+	)
+	if err != nil {
+		return fmt.Errorf("reading duckdb mirror fingerprints: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var fp sql.NullString
+		if err := rows.Scan(&id, &fp); err != nil {
+			return fmt.Errorf("scanning duckdb mirror fingerprint: %w", err)
+		}
+		out[id] = fp.String
+	}
+	return rows.Err()
+}
+
+// finalizeIncrementalPush advances mirror metadata to reflect a completed
+// push. Callers must only invoke this after confirming result.Errors == 0:
+// advancing the cutoff/revisions past a partially failed push would let the
+// failed sessions silently fall out of the next incremental window.
+func (s *Sync) finalizeIncrementalPush(
+	ctx context.Context, opts SyncOptions, cutoff string,
+	deletionRevision, identityRevision int64,
+) error {
+	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
+		SchemaVersion:    SchemaVersion,
+		DataVersion:      db.CurrentDataVersion(),
+		Scope:            canonicalPushScope(opts.Projects, opts.ExcludeProjects),
+		LastPushCutoff:   cutoff,
+		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
+		LastPushMachine:  s.machine,
+		DeletionRevision: deletionRevision,
+		IdentityRevision: identityRevision,
+	})
 }
 
 func (s *Sync) checkpointAfterMutatingPush(ctx context.Context) error {
@@ -493,7 +427,7 @@ func (s *Sync) pushSessionBatch(
 	onProgress func(PushProgress),
 ) error {
 	return s.pushSessionBatchForMode(
-		ctx, sessions, offset, total, result, pushed, onProgress, false, nil,
+		ctx, sessions, offset, total, result, pushed, onProgress, nil,
 	)
 }
 
@@ -505,16 +439,15 @@ func (s *Sync) pushSessionBatchForMode(
 	result *PushResult,
 	pushed *[]db.Session,
 	onProgress func(PushProgress),
-	full bool,
 	fingerprints map[string]string,
 ) error {
 	return pushSessionBatchWith(
 		ctx, sessions, offset, total, result, pushed, onProgress,
 		func(ctx context.Context, sessions []db.Session) ([]int, error) {
-			return s.tryPushSessionBatch(ctx, sessions, fingerprints, full)
+			return s.tryPushSessionBatch(ctx, sessions, fingerprints)
 		},
 		func(ctx context.Context, sess db.Session) (int, error) {
-			return s.pushSingleSession(ctx, sess, fingerprints[sess.ID], full)
+			return s.pushSingleSession(ctx, sess, fingerprints[sess.ID])
 		},
 	)
 }
@@ -627,7 +560,7 @@ func reportDuckPushProgress(
 }
 
 func (s *Sync) tryPushSessionBatch(
-	ctx context.Context, sessions []db.Session, fingerprints map[string]string, full bool,
+	ctx context.Context, sessions []db.Session, fingerprints map[string]string,
 ) ([]int, error) {
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
@@ -637,7 +570,7 @@ func (s *Sync) tryPushSessionBatch(
 	messagesBySession := make([]int, len(sessions))
 
 	for i, sess := range sessions {
-		messages, err := s.pushSession(ctx, tx, tx, sess, fingerprints[sess.ID], full)
+		messages, err := s.pushSession(ctx, tx, sess, fingerprints[sess.ID])
 		if err != nil {
 			return nil, fmt.Errorf("pushing duckdb session %s: %w", sess.ID, err)
 		}
@@ -650,14 +583,14 @@ func (s *Sync) tryPushSessionBatch(
 }
 
 func (s *Sync) pushSingleSession(
-	ctx context.Context, sess db.Session, fingerprint string, full bool,
+	ctx context.Context, sess db.Session, fingerprint string,
 ) (int, error) {
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin duckdb session tx %s: %w", sess.ID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	messages, err := s.pushSession(ctx, tx, tx, sess, fingerprint, full)
+	messages, err := s.pushSession(ctx, tx, sess, fingerprint)
 	if err != nil {
 		return 0, err
 	}
@@ -683,261 +616,19 @@ func countPushSessions(sessions []db.Session) PushSessionCounts {
 	return counts
 }
 
-func skippedPushSessions(
-	candidates []db.Session,
-	pushed []db.Session,
-) PushSessionCounts {
-	pushedIDs := make(map[string]struct{}, len(pushed))
-	for _, sess := range pushed {
-		pushedIDs[sess.ID] = struct{}{}
+func sessionIDs(sessions []db.Session) []string {
+	ids := make([]string, len(sessions))
+	for i, sess := range sessions {
+		ids[i] = sess.ID
 	}
-	skipped := make([]db.Session, 0, len(candidates)-len(pushed))
-	for _, sess := range candidates {
-		if _, ok := pushedIDs[sess.ID]; ok {
-			continue
-		}
-		skipped = append(skipped, sess)
-	}
-	return countPushSessions(skipped)
-}
-
-func (s *Sync) sessionCount(ctx context.Context) (int, error) {
-	var count int
-	if err := s.duck.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
-		s.machine,
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("counting duckdb sessions: %w", err)
-	}
-	return count, nil
-}
-
-func (s *Sync) finalizeState(
-	lastPush, cutoff string,
-	pushed []db.Session,
-	priorFingerprints map[string]string,
-	sessionFingerprints map[string]string,
-	advanceWatermark bool,
-) error {
-	if s.isFiltered() {
-		// Filtered pushes must not advance the global watermark
-		// past sessions from other projects, but still persist
-		// fingerprints so repeated filtered runs stay incremental.
-		// Use cutoff as the boundary key when lastPush is empty
-		// (--full or mirror reset) so the next filtered run can
-		// match fingerprints, mirroring the PostgreSQL push.
-		boundaryKey := lastPush
-		if boundaryKey == "" {
-			boundaryKey = cutoff
-		}
-		return writeSyncFingerprints(
-			s.local, s.syncStateKey(lastPushBoundaryStateKey),
-			boundaryKey, pushed, priorFingerprints, sessionFingerprints,
-		)
-	}
-	lastPushKey := s.syncStateKey(lastPushStateKey)
-	if advanceWatermark {
-		if err := s.local.SetSyncState(lastPushKey, cutoff); err != nil {
-			return fmt.Errorf("updating %s: %w", lastPushKey, err)
-		}
-	}
-	return writeSyncFingerprints(
-		s.local, s.syncStateKey(lastPushBoundaryStateKey),
-		cutoff, pushed, priorFingerprints, sessionFingerprints,
-	)
-}
-
-func clearDuckDBSyncState(local *db.DB, scope string) error {
-	lastPushKey := scopedDuckDBSyncStateKey(lastPushStateKey, scope)
-	if err := local.SetSyncState(lastPushKey, ""); err != nil {
-		return fmt.Errorf("clearing %s: %w", lastPushKey, err)
-	}
-	boundaryKey := scopedDuckDBSyncStateKey(lastPushBoundaryStateKey, scope)
-	if err := local.SetSyncState(boundaryKey, ""); err != nil {
-		return fmt.Errorf("clearing %s: %w", boundaryKey, err)
-	}
-	return nil
-}
-
-func readSyncFingerprintsWithKey(
-	local *db.DB, key string,
-) (map[string]string, error) {
-	raw, err := local.GetSyncState(key)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", key, err)
-	}
-	if raw == "" {
-		return map[string]string{}, nil
-	}
-	var state syncState
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return map[string]string{}, nil
-	}
-	if state.Fingerprints == nil {
-		return map[string]string{}, nil
-	}
-	return state.Fingerprints, nil
-}
-
-func writeSyncFingerprints(
-	local *db.DB,
-	key string,
-	cutoff string,
-	sessions []db.Session,
-	priorFingerprints map[string]string,
-	sessionFingerprints map[string]string,
-) error {
-	state := syncState{
-		Cutoff:       cutoff,
-		Fingerprints: make(map[string]string, len(priorFingerprints)+len(sessions)),
-	}
-	for id, fp := range priorFingerprints {
-		state.Fingerprints[id] = normalizeStoredFingerprint(fp)
-	}
-	for _, sess := range sessions {
-		fp, ok := sessionFingerprints[sess.ID]
-		if !ok {
-			return fmt.Errorf("missing session fingerprint for %s", sess.ID)
-		}
-		state.Fingerprints[sess.ID] = fp
-	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("encoding %s: %w", key, err)
-	}
-	if err := local.SetSyncState(key, string(data)); err != nil {
-		return fmt.Errorf("writing %s: %w", key, err)
-	}
-	return nil
-}
-
-func scopedDuckDBSyncStateKey(key, scope string) string {
-	if scope == "" {
-		return key
-	}
-	return key + ":" + scope
-}
-
-func normalizeStoredFingerprint(value string) string {
-	if len(value) == sha256.Size*2 {
-		if _, err := hex.DecodeString(value); err == nil {
-			return value
-		}
-	}
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
-}
-
-func filterUnchangedSessions(
-	sessions []db.Session,
-	priorFingerprints map[string]string,
-	sessionFingerprints map[string]string,
-) []db.Session {
-	out := sessions[:0]
-	for _, sess := range sessions {
-		if priorFingerprints[sess.ID] == sessionFingerprints[sess.ID] {
-			continue
-		}
-		out = append(out, sess)
-	}
-	return out
-}
-
-func pruneMissingMirrorFingerprints(
-	priorFingerprints map[string]string,
-	mirrorSessionIDs map[string]bool,
-) []string {
-	var missing []string
-	for id := range priorFingerprints {
-		if !mirrorSessionIDs[id] {
-			delete(priorFingerprints, id)
-			missing = append(missing, id)
-		}
-	}
-	sort.Strings(missing)
-	return missing
-}
-
-func appendMissingMirrorRepairCandidates(
-	sessions []db.Session,
-	sessionByID map[string]db.Session,
-	allLocalSessionByID map[string]db.Session,
-	missingMirrorIDs []string,
-) []db.Session {
-	for _, id := range missingMirrorIDs {
-		sess, ok := allLocalSessionByID[id]
-		if !ok {
-			continue
-		}
-		if _, ok := sessionByID[id]; ok {
-			continue
-		}
-		sessionByID[id] = sess
-		sessions = append(sessions, sess)
-	}
-	return sessions
-}
-
-func previousLocalSyncTimestamp(value string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-	ts, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "", err
-	}
-	return ts.Add(-time.Millisecond).UTC().Format(localSyncTimestampLayout), nil
-}
-
-func normalizeLocalSyncTimestamp(value string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-	ts, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "", err
-	}
-	return ts.UTC().Format(localSyncTimestampLayout), nil
-}
-
-func localSessionSyncMarker(sess db.Session) string {
-	marker, err := normalizeLocalSyncTimestamp(sess.CreatedAt)
-	if err != nil || marker == "" {
-		marker = sess.CreatedAt
-	}
-	for _, value := range []*string{
-		sess.LocalModifiedAt,
-		sess.EndedAt,
-		sess.StartedAt,
-	} {
-		if value == nil {
-			continue
-		}
-		normalized, err := normalizeLocalSyncTimestamp(*value)
-		if err != nil {
-			continue
-		}
-		if normalized > marker {
-			marker = normalized
-		}
-	}
-	if sess.FileMtime != nil {
-		fileMtime := time.Unix(0, *sess.FileMtime).UTC().Format(localSyncTimestampLayout)
-		if fileMtime > marker {
-			marker = fileMtime
-		}
-	}
-	return marker
+	return ids
 }
 
 func (s *Sync) sessionFingerprints(
 	ctx context.Context,
 	sessions []db.Session,
 ) (map[string]string, error) {
-	ids := make([]string, len(sessions))
-	for i, sess := range sessions {
-		ids[i] = sess.ID
-	}
+	ids := sessionIDs(sessions)
 	usage, err := s.local.UsageEventFingerprints(ids)
 	if err != nil {
 		return nil, fmt.Errorf("computing usage fingerprints: %w", err)

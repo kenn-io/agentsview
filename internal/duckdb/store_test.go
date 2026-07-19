@@ -194,7 +194,7 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, syncer.EnsureSchema(ctx))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	duck := syncer.DB()
 	store := NewStoreFromDB(duck)
 
@@ -423,7 +423,8 @@ func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -468,7 +469,8 @@ func TestSearchContentOrdinalRangeSelfRange(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -522,7 +524,8 @@ func TestSearchContentRedactsSecretsUnlessRevealed(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -575,7 +578,8 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -602,7 +606,8 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 
 	renamed := "needle override rename"
 	require.NoError(t, local.RenameSession("duck-search-name", &renamed))
-	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	overridden, err := store.Search(ctx, db.SearchFilter{Query: "override", Limit: 10})
 	require.NoError(t, err)
@@ -632,7 +637,8 @@ func TestSearchOperatorTokenNoError(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -672,7 +678,8 @@ func TestSearchMultiTermAND(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1088,7 +1095,8 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 
 	_, err = syncer.DB().ExecContext(ctx, `
@@ -1214,7 +1222,8 @@ func TestAnalyticsTopSessionsDurationUsesActiveDuration(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 
 	store := NewStoreFromDB(syncer.DB())
@@ -1267,7 +1276,8 @@ func TestAnalyticsProjectsPopulateDailyTrendAndSortByMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1308,7 +1318,8 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1342,7 +1353,8 @@ func TestAnalyticsVelocitySingleMessageSessionsReturnArrays(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1383,7 +1395,8 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1427,7 +1440,8 @@ func TestGetAllMessagesDoesNotTruncateAtDefaultLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1503,7 +1517,8 @@ func TestSearchContentRegexOrdersBySessionRecency(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1551,7 +1566,8 @@ func TestSearchContentGitBranchFilter(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1625,7 +1641,8 @@ func TestSearchContentToolResultEmptyToolUseIDNotSuppressedByEvents(t *testing.T
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1684,7 +1701,8 @@ func TestSearchContentLegacyToolResultsUseCallIndexTieBreaker(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1759,7 +1777,8 @@ func TestSearchContentToolResultEventsUseCallIndexTieBreaker(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1839,7 +1858,8 @@ func TestAnalyticsActivityCountsToolCallRows(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	_, err = syncer.DB().ExecContext(ctx,
 		`UPDATE messages SET has_tool_use = FALSE WHERE session_id = ?`,
@@ -1874,7 +1894,8 @@ func TestAnalyticsActivitySkipsSystemUserMessages(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1912,7 +1933,8 @@ func TestAnalyticsSessionFiltersUseMessageTimeForHourAndDay(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1965,7 +1987,8 @@ func TestAnalyticsTerminationFilterUsesSharedStateSemantics(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -1997,7 +2020,8 @@ func TestAnalyticsActiveSinceParsesEquivalentOffsets(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2028,7 +2052,8 @@ func TestAnalyticsHourOfWeekRespectsSessionFilters(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2061,7 +2086,8 @@ func TestAnalyticsHourOfWeekIncludesOvernightMessages(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2103,7 +2129,8 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 	})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2143,7 +2170,8 @@ func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2178,7 +2206,8 @@ func TestDailyUsageActiveSinceUsesSessionActivity(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2226,7 +2255,8 @@ func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T)
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2287,7 +2317,8 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
@@ -2362,7 +2393,8 @@ func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
@@ -2429,7 +2461,8 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
@@ -2492,7 +2525,8 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
@@ -2551,7 +2585,8 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
@@ -2614,7 +2649,8 @@ func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
@@ -2683,7 +2719,8 @@ func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2717,7 +2754,8 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 	}}), "InsertCursorUsageEvents")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	assertDuckDBCount(t, syncer.DB(), "cursor_usage_events", 1)
 
@@ -2759,7 +2797,8 @@ func TestTrendsTermsWordBoundaryAndOverlapParity(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -2835,7 +2874,8 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	_, err = syncer.DB().ExecContext(ctx, `
 		UPDATE sessions
@@ -2907,7 +2947,8 @@ func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {
 	require.NoError(t, local.SoftDeleteSession("duck-child-deleted"))
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -3073,7 +3114,8 @@ func TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -3131,7 +3173,8 @@ func TestDuckGetAnalyticsSkillsFiltersByMessageDate(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -3161,7 +3204,8 @@ func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	local := newLocalDB(t)
 	fixture := seedDuckDBSyncFixture(t, local)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB()), fixture
 }
@@ -3212,7 +3256,8 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 

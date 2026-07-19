@@ -59,10 +59,7 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
 		fatal("duckdb push: %v", err)
 	}
-	syncStateTarget := duckdbsync.SyncStateTargetForConfig(duckCfg)
-	writeDuckDBPushPlan(
-		os.Stdout, duckCfg, cfg, projects, excludeProjects, syncStateTarget,
-	)
+	writeDuckDBPushPlan(os.Stdout, duckCfg, cfg, projects, excludeProjects)
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(), duckDBLongRunningSignals()...,
@@ -114,21 +111,16 @@ func writeDuckDBPushPlan(
 	cfg DuckDBPushConfig,
 	projects []string,
 	excludeProjects []string,
-	syncStateTarget string,
 ) {
 	target := "local file " + duckCfg.Path
 	mode := "incremental"
 	if cfg.Full {
 		mode = "full"
 	}
-	scope := "default"
-	if syncStateTarget != "" {
-		scope = syncStateTarget
-	}
 	fmt.Fprintf(
 		w,
-		"DuckDB push target: %s; machine %q; mode %s; sync scope %s\n",
-		target, duckCfg.MachineName, mode, scope,
+		"DuckDB push target: %s; machine %q; mode %s\n",
+		target, duckCfg.MachineName, mode,
 	)
 	fmt.Fprintf(
 		w, "DuckDB push filters: %s\n",
@@ -142,8 +134,8 @@ func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
 	}
 	fmt.Fprintf(
 		w,
-		"DuckDB push source: local %s; candidates %s; skipped unchanged %s; stale deleted %d\n",
-		formatDuckDBPushSessionCounts(result.Diagnostics.LocalSessions),
+		"DuckDB push source: local %d; candidates %s; skipped unchanged %s; stale deleted %d\n",
+		result.Diagnostics.LocalSessionCount,
 		formatDuckDBPushSessionCounts(result.Diagnostics.CandidateSessions),
 		formatDuckDBPushSessionCounts(result.Diagnostics.SkippedUnchangedSessions),
 		result.Diagnostics.DeletedStaleSessions,
@@ -201,28 +193,19 @@ func runDuckDBStatus() {
 	if err != nil {
 		fatal("duckdb status: %v", err)
 	}
-	lastPush := ""
-	syncStateTarget := duckdbsync.SyncStateTargetForConfig(duckCfg)
-	database, err := openReadOnlyDB(appCfg)
-	if err != nil {
-		if duckCfg.URL == "" {
-			fatal("opening database: %v", err)
-		}
-		log.Printf(
-			"warning: reading local duckdb status watermark: %v",
-			err,
-		)
-	} else {
-		defer database.Close()
-		lastPush, err = duckdbsync.ReadLastPushAt(database, syncStateTarget)
-		if err != nil {
-			log.Printf("warning: reading duckdb last push: %v", err)
-			lastPush = ""
-		}
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	lastPush := ""
+	if duckCfg.URL == "" {
+		probe, err := duckdbsync.ProbeMirror(ctx, duckCfg.Path)
+		if err != nil {
+			log.Printf("warning: reading duckdb last push: %v", err)
+		} else {
+			lastPush = probe.LastPushAt
+		}
+	}
 
 	status, err := duckdbsync.ReadStatusFromConfig(ctx, duckCfg, lastPush)
 	if err != nil {

@@ -252,14 +252,10 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 		t, local, "alpha", "duck-sync-edit",
 		0, 0, "src/main.go", "2026-01-10T02:00:00Z",
 	)
-	syncer, err := New(path, local, "quack-client", SyncOptions{})
-	require.NoError(t, err, "open local duckdb mirror")
-	require.NoError(t, syncer.EnsureSchema(ctx), "prepare mirror schema")
-	result, err := syncer.Push(ctx, true, nil)
+	result, err := Push(ctx, path, local, "quack-client", SyncOptions{}, true, nil)
 	require.NoError(t, err, "push analytics fixture into local mirror")
 	assert.Equal(t, 3, result.SessionsPushed)
 	assert.Equal(t, 4, result.MessagesPushed)
-	require.NoError(t, syncer.Close(), "close local mirror before serving")
 
 	openQuackMirrorServer(t, ctx, path, uri, token)
 

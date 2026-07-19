@@ -2,7 +2,6 @@ package duckdb
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -96,18 +95,6 @@ func TestValidatePushTargetRejectsRemoteURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
 	assert.Contains(t, err.Error(), "quack serve")
 	assert.NoError(t, ValidatePushTarget(config.DuckDBConfig{Path: "/tmp/x.duckdb"}))
-}
-
-func TestLocalDuckDBBackfillTargetScopeUsesCanonicalPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mirror.duckdb")
-	samePath := filepath.Join(dir, ".", "mirror.duckdb")
-	otherPath := filepath.Join(dir, "other.duckdb")
-
-	got := localDuckDBBackfillTargetScope(path)
-	assert.Equal(t, got, localDuckDBBackfillTargetScope(samePath))
-	assert.NotEqual(t, got, localDuckDBBackfillTargetScope(otherPath))
-	assert.NotContains(t, got, dir)
 }
 
 func TestIsStaleQuackConnectionError(t *testing.T) {
@@ -314,38 +301,6 @@ func TestRedactQuackClientErrorScrubsEncodedCredentialValues(t *testing.T) {
 	assert.NotContains(t, msg, "s%2Bcret")
 	assert.NotContains(t, msg, "s+cret")
 	assert.Contains(t, msg, "duck.example.com")
-}
-
-func TestSyncStateTargetForConfigScopesRemoteURLWithoutSecrets(t *testing.T) {
-	base := config.DuckDBConfig{
-		URL:   "quack:https://user:secret@duck.example.com/db?token=secret&x=1#frag",
-		Token: "first-token",
-	}
-	sameTargetDifferentSecrets := config.DuckDBConfig{
-		URL:   "quack:https://other:changed@duck.example.com/db?token=changed&x=1#other",
-		Token: "second-token",
-	}
-
-	got := SyncStateTargetForConfig(base)
-	require.NotEmpty(t, got)
-	assert.Equal(t, got, SyncStateTargetForConfig(sameTargetDifferentSecrets))
-	assert.NotEqual(t, got, SyncStateTargetForConfig(config.DuckDBConfig{
-		URL: "quack:https://duck-other.example.com/db?x=1",
-	}))
-	assert.NotEqual(t, got, SyncStateTargetForConfig(config.DuckDBConfig{
-		URL: "quack:https://duck.example.com/other-db?x=1",
-	}))
-	assert.NotEqual(t, SyncStateTargetForConfig(config.DuckDBConfig{
-		URL: "quack:https://duck.example.com/db?keyspace=alpha",
-	}), SyncStateTargetForConfig(config.DuckDBConfig{
-		URL: "quack:https://duck.example.com/db?keyspace=beta",
-	}))
-	assert.NotContains(t, got, "secret")
-	assert.NotContains(t, got, "first-token")
-	assert.NotContains(t, got, "second-token")
-	assert.Empty(t, SyncStateTargetForConfig(config.DuckDBConfig{
-		Path: "/tmp/agentsview.duckdb",
-	}))
 }
 
 func TestValidateQuackServeURI(t *testing.T) {

@@ -23,7 +23,8 @@ func newUnitsStore(t *testing.T, writes []db.SessionBatchWrite) *Store {
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB())
 }

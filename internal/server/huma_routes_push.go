@@ -198,18 +198,10 @@ func (s *Server) duckDBPushConfig(
 	return s.cfg.ResolveDuckDB()
 }
 
-func duckDBPushSyncOptions(
-	req daemonPushRequest,
-	duckCfg config.DuckDBConfig,
-) duckdbsync.SyncOptions {
-	syncStateTarget := req.SyncStateTarget
-	if syncStateTarget == "" {
-		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
-	}
+func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
 	return duckdbsync.SyncOptions{
 		Projects:        req.Projects,
 		ExcludeProjects: req.ExcludeProjects,
-		SyncStateTarget: syncStateTarget,
 	}
 }
 
@@ -306,7 +298,7 @@ func (s *Server) humaDuckDBPush(
 	}
 
 	engine := s.syncEngineForLocal(local)
-	opts := duckDBPushSyncOptions(in.Body, duckCfg)
+	opts := duckDBPushSyncOptions(in.Body)
 	body := in.Body
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		runPushStream(hctx, func(
@@ -318,18 +310,12 @@ func (s *Server) humaDuckDBPush(
 			var result duckdbsync.PushResult
 			_, err := engine.SyncThenRun(ctx, body.Full, nil,
 				func(forceFull bool) error {
-					syncer, err := duckdbsync.New(
-						duckCfg.Path, local, duckCfg.MachineName, opts,
+					var pushErr error
+					result, pushErr = duckdbsync.Push(
+						ctx, duckCfg.Path, local, duckCfg.MachineName,
+						opts, forceFull, onProgress,
 					)
-					if err != nil {
-						return err
-					}
-					defer syncer.Close()
-					if err := syncer.EnsureSchema(ctx); err != nil {
-						return err
-					}
-					result, err = syncer.Push(ctx, forceFull, onProgress)
-					return err
+					return pushErr
 				})
 			return result, err
 		})

@@ -76,7 +76,8 @@ func newDuckRecentEditsStore(
 	local := newLocalDB(t)
 	setup(local)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "Push to DuckDB mirror")
 	return NewStoreFromDB(syncer.DB())
 }

@@ -129,8 +129,8 @@ func (s *Sync) pushEverything(
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].ID < sessions[j].ID
 	})
-	result.Diagnostics.LocalSessions = countPushSessions(sessions)
-	result.Diagnostics.CandidateSessions = result.Diagnostics.LocalSessions
+	result.Diagnostics.LocalSessionCount = len(sessions)
+	result.Diagnostics.CandidateSessions = countPushSessions(sessions)
 
 	fingerprints, err := s.sessionFingerprints(ctx, sessions)
 	if err != nil {
@@ -142,7 +142,7 @@ func (s *Sync) pushEverything(
 		end := min(batchStart+duckSessionPushBatchSize, len(sessions))
 		if err := s.pushSessionBatchForMode(
 			ctx, sessions[batchStart:end], batchStart, len(sessions),
-			&result, &pushed, onProgress, true, fingerprints,
+			&result, &pushed, onProgress, fingerprints,
 		); err != nil {
 			return result, err
 		}
@@ -153,7 +153,7 @@ func (s *Sync) pushEverything(
 		if err := s.pushEverythingCuration(ctx, sessions); err != nil {
 			return result, err
 		}
-		if err := s.syncProjectIdentityObservations(ctx, true); err != nil {
+		if _, err := s.syncProjectIdentityObservations(ctx, 0, true); err != nil {
 			return result, err
 		}
 	}
@@ -163,15 +163,12 @@ func (s *Sync) pushEverything(
 }
 
 func (s *Sync) pushEverythingCuration(ctx context.Context, sessions []db.Session) error {
+	ids := sessionIDs(sessions)
 	return s.withDuckTx(ctx, "replace curation rows", func(tx *sql.Tx) error {
-		if !s.isFiltered() {
-			if err := s.replaceAllPinnedMessages(ctx, tx, sessions); err != nil {
-				return err
-			}
-		} else if err := s.replaceScopedPinnedMessages(ctx, tx, sessions); err != nil {
+		if err := s.replaceAllPinnedMessages(ctx, tx, ids); err != nil {
 			return err
 		}
-		return s.replaceStarredSessions(ctx, tx, sessions)
+		return s.replaceStarredSessions(ctx, tx, ids)
 	})
 }
 

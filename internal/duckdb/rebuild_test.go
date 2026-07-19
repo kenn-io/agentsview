@@ -85,7 +85,7 @@ func TestRebuildMirrorReplacesPreExistingTargetFileContent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
 	stale := newTestSync(t, path, local, SyncOptions{})
-	require.NoError(t, stale.EnsureSchema(ctx))
+	require.NoError(t, createSchema(ctx, stale.DB()))
 	_, err := stale.DB().ExecContext(ctx, `
 		INSERT INTO sessions (id, project, machine, agent, created_at)
 		VALUES ('stale-session', 'alpha', 'test-machine', 'claude', current_timestamp)`)
