@@ -276,3 +276,124 @@ func TestPiProviderFingerprintIncludesContentHash(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
 }
+
+func ompMainFixture(id string) string {
+	return strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-07-14T06:45:53.798Z","cwd":"/home/u/repos/x","title":"Main task"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-07-14T06:45:54Z","message":{"role":"user","content":"do it"}}`,
+	}, "\n") + "\n"
+}
+
+func ompSubagentFixture(id string) string {
+	return strings.Join([]string{
+		`{"type":"title","v":1,"title":"","updatedAt":"2026-07-14T06:48:08.907Z","pad":"   "}`,
+		`{"type":"session","version":3,"id":"` + id + `","timestamp":"2026-07-14T06:48:08.907Z","cwd":"/home/u/repos/x"}`,
+		`{"type":"message","id":"s1","timestamp":"2026-07-14T06:48:09Z","message":{"role":"user","content":"scout task"}}`,
+	}, "\n") + "\n"
+}
+
+// TestOMPProviderDiscoversNestedSubagents verifies that OMP subagent
+// transcripts, which live one directory deeper than the main session
+// (<project>/<session>/<agent>.jsonl) and nest recursively, are discovered
+// and parsed as subagent sessions whose parent is recovered from the sibling
+// parent transcript. Non-.jsonl companions (.md, .bash.log) are ignored.
+func TestOMPProviderDiscoversNestedSubagents(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "-repos-x")
+	stem := "2026-07-14T06-45-53-798Z_parent-uuid"
+	mainPath := filepath.Join(proj, stem+".jsonl")
+	subPath := filepath.Join(proj, stem, "Scout.jsonl")
+	subSubPath := filepath.Join(proj, stem, "Scout", "DeepScout.jsonl")
+	writeSourceFile(t, mainPath, ompMainFixture("parent-uuid"))
+	writeSourceFile(t, subPath, ompSubagentFixture("child-uuid"))
+	writeSourceFile(t, subSubPath, ompSubagentFixture("grandchild-uuid"))
+	// Companions that sit beside a subagent transcript must not be discovered.
+	writeSourceFile(t, filepath.Join(proj, stem, "Scout.md"), "notes")
+	writeSourceFile(t, filepath.Join(proj, stem, "0.bash.log"), "log output")
+
+	provider, ok := NewProvider(AgentOMP, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	paths := make([]string, len(discovered))
+	for i, d := range discovered {
+		paths[i] = d.DisplayPath
+	}
+	assert.ElementsMatch(t, []string{mainPath, subPath, subSubPath}, paths)
+
+	byPath := make(map[string]ParsedSession, len(discovered))
+	for _, d := range discovered {
+		outcome, err := provider.Parse(context.Background(), ParseRequest{
+			Source:  d,
+			Machine: "devbox",
+		})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		byPath[d.DisplayPath] = outcome.Results[0].Result.Session
+	}
+
+	main := byPath[mainPath]
+	assert.Equal(t, "omp:parent-uuid", main.ID)
+	assert.Empty(t, main.ParentSessionID, "main session has no parent")
+	assert.Empty(t, string(main.RelationshipType), "main session has no relationship")
+
+	sub := byPath[subPath]
+	assert.Equal(t, "omp:child-uuid", sub.ID)
+	assert.Equal(t, "omp:parent-uuid", sub.ParentSessionID)
+	assert.Equal(t, RelSubagent, sub.RelationshipType)
+	assert.Equal(t, "Scout", sub.SessionName, "subagent named after its transcript file")
+
+	deep := byPath[subSubPath]
+	assert.Equal(t, "omp:grandchild-uuid", deep.ID)
+	assert.Equal(t, "omp:child-uuid", deep.ParentSessionID, "nested subagent parent")
+	assert.Equal(t, RelSubagent, deep.RelationshipType)
+	assert.Equal(t, "DeepScout", deep.SessionName)
+}
+
+// TestOMPProviderMapsSubagentChangedPath verifies a filesystem event on a
+// nested subagent transcript resolves back to that subagent source so live
+// updates re-parse it.
+func TestOMPProviderMapsSubagentChangedPath(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "-repos-x")
+	stem := "2026-07-14T06-45-53-798Z_parent-uuid"
+	subPath := filepath.Join(proj, stem, "Scout.jsonl")
+	writeSourceFile(t, filepath.Join(proj, stem+".jsonl"), ompMainFixture("parent-uuid"))
+	writeSourceFile(t, subPath, ompSubagentFixture("child-uuid"))
+
+	provider, ok := NewProvider(AgentOMP, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: subPath, EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, subPath, changed[0].DisplayPath)
+}
+
+// TestPiProviderRejectsNestedSubagents pins that the depth relaxation is
+// OMP-only: upstream pi keeps the strict <project>/<session>.jsonl layout and
+// never discovers a nested transcript.
+func TestPiProviderRejectsNestedSubagents(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "encoded-cwd")
+	stem := "session-123"
+	writeSourceFile(t, filepath.Join(proj, stem+".jsonl"), piProviderFixture(stem))
+	writeSourceFile(t, filepath.Join(proj, stem, "nested.jsonl"), piProviderFixture("nested"))
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1, "pi ignores nested transcripts")
+	assert.Equal(t, filepath.Join(proj, stem+".jsonl"), discovered[0].DisplayPath)
+}
