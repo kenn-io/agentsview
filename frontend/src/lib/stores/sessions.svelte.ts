@@ -19,7 +19,11 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import { SESSION_ANALYTICS_WINDOW_PARAM } from "./sessionRouteParams.js";
+import {
+  SESSION_ANALYTICS_WINDOW_PARAM,
+  parseWindowDaysParam,
+} from "./sessionRouteParams.js";
+import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 type SidebarIndexParams = Parameters<
@@ -121,19 +125,32 @@ function defaultFilters(): Filters {
 }
 
 const SESSION_FILTERS_KEY = "session-filters";
-// v2 marks entries whose date bounds carry provenance: rolling-derived
-// bounds are never persisted (see saveFilters). Unversioned entries predate
-// that guarantee and may hold rolling bounds saved as if explicit (#1086).
+// v2 marks entries whose date bounds carry provenance: rolling bounds are
+// persisted as intent (`windowDays`) and rematerialized on load, never as
+// pinned dates. Unversioned entries predate that guarantee and may hold
+// rolling bounds saved as if explicit (#1086).
 const SESSION_FILTERS_VERSION = 2;
 
-function loadSavedFilters(): Filters {
+interface SavedFilters {
+  filters: Filters;
+  windowDays: number | null;
+}
+
+function validWindowDays(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function loadSavedFilters(): SavedFilters {
   try {
     const raw = localStorage.getItem(SESSION_FILTERS_KEY);
     if (raw) {
-      const { version, ...saved } = JSON.parse(raw) as Partial<Filters> & {
-        version?: unknown;
-      };
+      const { version, windowDays, ...saved } = JSON.parse(
+        raw,
+      ) as Partial<Filters> & { version?: unknown; windowDays?: unknown };
       const filters = { ...defaultFilters(), ...saved };
+      // Deliberately `!==`, not `<`: an entry written by a newer (or older)
+      // format is not trusted either way — dropping date bounds is the
+      // fail-safe direction in both.
       if (version !== SESSION_FILTERS_VERSION) {
         // Legacy bounds have unknown provenance. Dropping them once is the
         // safe direction: an intentional range is re-picked in one click,
@@ -142,23 +159,34 @@ function loadSavedFilters(): Filters {
         filters.dateFrom = "";
         filters.dateTo = "";
         saveFilters(filters);
+        return { filters, windowDays: null };
       }
-      return filters;
+      if (validWindowDays(windowDays)) {
+        // Rolling intent survives restarts; its bounds are recomputed
+        // against the current date so the window keeps rolling forward.
+        const range = rollingRange(windowDays);
+        filters.date = "";
+        filters.dateFrom = range.from;
+        filters.dateTo = range.to;
+        return { filters, windowDays };
+      }
+      return { filters, windowDays: null };
     }
   } catch {
     // Corrupted localStorage — fall back to defaults.
   }
-  return defaultFilters();
+  return { filters: defaultFilters(), windowDays: null };
 }
 
-function saveFilters(f: Filters, omitDates = false): void {
-  // Date bounds materialized from a rolling window must not be persisted:
-  // restoring them verbatim on the next launch pins the window to the day
-  // it was saved, silently hiding newer sessions (#1086). Only explicitly
-  // chosen fixed ranges survive a restart.
-  const toSave = omitDates
-    ? { ...f, date: "", dateFrom: "", dateTo: "" }
-    : f;
+function saveFilters(f: Filters, windowDays: number | null = null): void {
+  // Rolling bounds are persisted as intent (windowDays) and rematerialized
+  // on load; the materialized dates themselves are session-scoped. Storing
+  // them verbatim would pin the window to the day it was saved, silently
+  // hiding newer sessions (#1086).
+  const toSave =
+    windowDays !== null
+      ? { ...f, date: "", dateFrom: "", dateTo: "", windowDays }
+      : f;
   try {
     localStorage.setItem(
       SESSION_FILTERS_KEY,
@@ -273,11 +301,14 @@ class SessionsStore {
   nextCursor: string | null = $state(null);
   total: number = $state(0);
   loading: boolean = $state(false);
-  filters: Filters = $state(loadSavedFilters());
-  /** True when the current date bounds were materialized from a rolling
-   *  window rather than chosen explicitly; such bounds are session-scoped
-   *  and excluded from persistence (#1086). */
-  dateFiltersDerived = false;
+  #savedFilters = loadSavedFilters();
+  filters: Filters = $state(this.#savedFilters.filters);
+  /** Rolling window (in days) behind the current date bounds, or null when
+   *  the bounds were chosen explicitly. Persisted as intent and
+   *  rematerialized on load so the window keeps rolling forward (#1086). */
+  dateFiltersWindowDays: number | null = $state(
+    this.#savedFilters.windowDays,
+  );
 
   private signalDetailCache = new Map<
     string,
@@ -387,20 +418,21 @@ class SessionsStore {
     };
   }
 
-  /** Set date filters materialized from a panel date state. `derived` marks
-   *  bounds that came from a rolling window and must not be persisted. */
+  /** Set date filters materialized from a panel date state. `windowDays`
+   *  carries the rolling intent behind the bounds (null for explicitly
+   *  chosen fixed ranges). */
   applyPanelDateFilters(
     dateParams: Record<string, string>,
-    derived: boolean,
+    windowDays: number | null,
   ): void {
     this.filters.date = dateParams["date"] ?? "";
     this.filters.dateFrom = dateParams["date_from"] ?? "";
     this.filters.dateTo = dateParams["date_to"] ?? "";
-    this.dateFiltersDerived = derived;
+    this.dateFiltersWindowDays = windowDays;
     // Persist immediately: a provenance flip with identical bounds does
     // not register as a filter change, so callers that diff serialized
     // filters may never trigger a load() and its save.
-    saveFilters(this.filters, derived);
+    saveFilters(this.filters, windowDays);
   }
 
   initFromParams(params: Record<string, string>) {
@@ -408,8 +440,9 @@ class SessionsStore {
     const prevAutomated = this.filters.includeAutomated;
     const next = parseFiltersFromParams(params);
     this.filters = next;
-    this.dateFiltersDerived =
-      params[SESSION_ANALYTICS_WINDOW_PARAM] !== undefined;
+    this.dateFiltersWindowDays = parseWindowDaysParam(
+      params[SESSION_ANALYTICS_WINDOW_PARAM],
+    );
     if (prevOneShot !== next.includeOneShot ||
         prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
@@ -418,7 +451,7 @@ class SessionsStore {
   }
 
   async load(options: LoadOptions = {}) {
-    saveFilters(this.filters, this.dateFiltersDerived);
+    saveFilters(this.filters, this.dateFiltersWindowDays);
 
     const params = {
       ...this.apiParams,
@@ -971,7 +1004,7 @@ class SessionsStore {
   setProjectFilter(project: string) {
     const prev = this.filters;
     this.filters = { ...defaultFilters(), project, agent: prev.agent };
-    this.dateFiltersDerived = false;
+    this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
     if (prev.includeOneShot !== this.filters.includeOneShot ||
         prev.includeAutomated !== this.filters.includeAutomated) {
@@ -1134,7 +1167,7 @@ class SessionsStore {
       yokedDates.clear();
     }
     this.filters = { ...defaultFilters(), project };
-    this.dateFiltersDerived = false;
+    this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
     if (wasOneShot !== this.filters.includeOneShot || wasAutomated) {
       this.invalidateFilterCaches();

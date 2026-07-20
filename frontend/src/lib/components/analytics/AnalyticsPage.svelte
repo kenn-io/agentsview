@@ -142,12 +142,6 @@
     return JSON.stringify({ mode: "none" });
   }
 
-  function clearSessionDateFilters(): void {
-    sessions.filters.date = "";
-    sessions.filters.dateFrom = "";
-    sessions.filters.dateTo = "";
-  }
-
   function sessionDateFiltersAreClear(): boolean {
     return !sessions.filters.date &&
       !sessions.filters.dateFrom &&
@@ -169,9 +163,11 @@
     state: PanelDateState,
   ): boolean {
     const before = JSON.stringify(filtersToParams(sessions.filters));
-    clearSessionDateFilters();
     const params = panelDateToSessionFilterParams(state);
-    sessions.applyPanelDateFilters(params, state.mode === "rolling");
+    sessions.applyPanelDateFilters(
+      params,
+      state.mode === "rolling" ? state.windowDays ?? null : null,
+    );
     const after = JSON.stringify(filtersToParams(sessions.filters));
     return before !== after;
   }

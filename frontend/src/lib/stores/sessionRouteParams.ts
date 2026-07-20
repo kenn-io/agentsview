@@ -53,10 +53,18 @@ export function sessionDateIntentCleared(
     !hasSessionDateIntent(nextParams);
 }
 
-function isValidWindowDaysParam(raw: string | undefined): raw is string {
-  if (!raw) return false;
+/** Parses a window_days param; null unless a canonical positive integer. */
+export function parseWindowDaysParam(
+  raw: string | undefined,
+): number | null {
+  if (!raw) return null;
   const n = Number.parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 && String(n) === raw;
+  if (!Number.isInteger(n) || n <= 0 || String(n) !== raw) return null;
+  return n;
+}
+
+function isValidWindowDaysParam(raw: string | undefined): raw is string {
+  return parseWindowDaysParam(raw) !== null;
 }
 
 function fixedSessionDateParamsEqual(

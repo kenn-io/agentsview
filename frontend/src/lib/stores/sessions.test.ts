@@ -19,6 +19,7 @@ import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { callGenerated } from "../api/runtime.js";
+import { rollingRange } from "../utils/dates.js";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -362,11 +363,11 @@ describe("SessionsStore", () => {
       expect(saved.version).toBe(2);
     });
 
-    it("does not persist rolling-derived date bounds", async () => {
+    it("persists rolling bounds as windowDays intent, not dates", async () => {
       sessions.filters.project = "myproj";
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
-        true,
+        365,
       );
       await sessions.load();
 
@@ -376,16 +377,40 @@ describe("SessionsStore", () => {
       expect(saved.dateFrom).toBe("");
       expect(saved.dateTo).toBe("");
       expect(saved.date).toBe("");
+      expect(saved.windowDays).toBe(365);
       expect(saved.project).toBe("myproj");
       // The current tab still queries with the materialized bounds.
       expect(sessions.filters.dateFrom).toBe("2025-07-07");
       expect(sessions.filters.dateTo).toBe("2026-07-06");
     });
 
+    it("rematerializes a persisted rolling window on load", () => {
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({ version: 2, project: "p", windowDays: 30 }),
+      );
+      const store = createSessionsStore();
+      const range = rollingRange(30);
+      expect(store.filters.dateFrom).toBe(range.from);
+      expect(store.filters.dateTo).toBe(range.to);
+      expect(store.dateFiltersWindowDays).toBe(30);
+      expect(store.filters.project).toBe("p");
+    });
+
+    it("ignores an invalid persisted windowDays", () => {
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({ version: 2, windowDays: -5 }),
+      );
+      const store = createSessionsStore();
+      expect(store.filters.dateFrom).toBe("");
+      expect(store.dateFiltersWindowDays).toBe(null);
+    });
+
     it("persists explicitly chosen fixed date bounds", async () => {
       sessions.applyPanelDateFilters(
         { date_from: "2026-01-01", date_to: "2026-01-31" },
-        false,
+        null,
       );
       await sessions.load();
 
@@ -394,9 +419,10 @@ describe("SessionsStore", () => {
       );
       expect(saved.dateFrom).toBe("2026-01-01");
       expect(saved.dateTo).toBe("2026-01-31");
+      expect(saved.windowDays).toBeUndefined();
     });
 
-    it("treats deep-linked window_days date bounds as derived", async () => {
+    it("treats deep-linked window_days date bounds as rolling intent", async () => {
       sessions.initFromParams({
         window_days: "365",
         date_from: "2025-07-07",
@@ -409,18 +435,34 @@ describe("SessionsStore", () => {
       );
       expect(saved.dateFrom).toBe("");
       expect(saved.dateTo).toBe("");
+      expect(saved.windowDays).toBe(365);
       expect(sessions.filters.dateFrom).toBe("2025-07-07");
     });
 
-    it("resumes persisting when a derived range is replaced by an explicit one", async () => {
+    it("treats an invalid deep-linked window_days as explicit bounds", async () => {
+      sessions.initFromParams({
+        window_days: "abc",
+        date_from: "2026-01-01",
+        date_to: "2026-01-31",
+      });
+      expect(sessions.dateFiltersWindowDays).toBe(null);
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("2026-01-01");
+    });
+
+    it("resumes persisting dates when a rolling range is replaced by an explicit one", async () => {
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
-        true,
+        365,
       );
       await sessions.load();
       sessions.applyPanelDateFilters(
         { date_from: "2026-01-01", date_to: "2026-01-31" },
-        false,
+        null,
       );
       await sessions.load();
 
@@ -429,6 +471,7 @@ describe("SessionsStore", () => {
       );
       expect(saved.dateFrom).toBe("2026-01-01");
       expect(saved.dateTo).toBe("2026-01-31");
+      expect(saved.windowDays).toBeUndefined();
     });
 
     it("persists a provenance flip even when the bounds are identical", async () => {
@@ -437,12 +480,12 @@ describe("SessionsStore", () => {
       // change and skip load(), so the store must persist on apply.
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
-        false,
+        null,
       );
       await sessions.load();
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
-        true,
+        365,
       );
 
       const saved = JSON.parse(
@@ -450,22 +493,23 @@ describe("SessionsStore", () => {
       );
       expect(saved.dateFrom).toBe("");
       expect(saved.dateTo).toBe("");
+      expect(saved.windowDays).toBe(365);
     });
 
-    it("clears the derived flag on wholesale filter resets", async () => {
+    it("clears the rolling intent on wholesale filter resets", async () => {
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
-        true,
+        365,
       );
       sessions.clearSessionFilters();
-      expect(sessions.dateFiltersDerived).toBe(false);
+      expect(sessions.dateFiltersWindowDays).toBe(null);
 
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
-        true,
+        365,
       );
       sessions.setProjectFilter("myproj");
-      expect(sessions.dateFiltersDerived).toBe(false);
+      expect(sessions.dateFiltersWindowDays).toBe(null);
     });
 
     it("persists deep-linked explicit date bounds", async () => {
