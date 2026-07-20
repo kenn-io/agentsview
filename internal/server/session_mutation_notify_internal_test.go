@@ -81,4 +81,20 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	w = do(http.MethodDelete, "/api/v1/trash", "")
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(5), notified.Load(), "emptying trash must notify")
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "sess-2", Project: "proj", Machine: "local", Agent: "claude",
+	}))
+	w = do(http.MethodDelete, "/api/v1/sessions/sess-2", "")
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, int32(6), notified.Load(),
+		"single-session deletion must notify")
+
+	// A daemon-delegated secret scan changes eligibility in both
+	// directions: new findings retract generated entries, and fresh clean
+	// stamps make sessions extractable.
+	w = do(http.MethodPost, "/api/v1/secrets/scan", "")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, int32(7), notified.Load(),
+		"a completed daemon scan must notify")
 }

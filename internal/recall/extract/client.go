@@ -3,6 +3,7 @@ package extract
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -323,10 +324,7 @@ func (c *Client) distill(
 		}
 	}
 	if response.StatusCode == http.StatusBadRequest {
-		detail := string(raw)
-		if len(detail) > 200 {
-			detail = detail[:200]
-		}
+		detail := c.responseDetail(raw)
 		// Chat servers answer 400 both for prompts that exceed the context
 		// window (character budgets overshoot because token density varies
 		// across content) and for genuinely bad requests; only the former
@@ -353,13 +351,9 @@ func (c *Client) distill(
 				),
 			}
 		}
-		detail := string(raw)
-		if len(detail) > 200 {
-			detail = detail[:200]
-		}
 		return nil, Usage{}, fmt.Errorf(
 			"%w (HTTP %d): %s", errPermanentRequest,
-			response.StatusCode, detail,
+			response.StatusCode, c.responseDetail(raw),
 		)
 	}
 
@@ -422,6 +416,47 @@ func (c *Client) distill(
 		)
 	}
 	return entries, parsed.Usage, nil
+}
+
+// responseDetail prepares a response-body excerpt for error text. Bodies
+// are attacker-influenced and can echo the request back — the URI with its
+// query values (raw or URL-escaped) and the Basic-auth header the endpoint
+// userinfo becomes — and these errors reach doctor stderr, CI logs, and
+// stored failure rows, so every credential-bearing component of the
+// configured endpoint is masked in each form a reflection would carry
+// before the excerpt is capped. Values shorter than four bytes are not
+// treated as secrets; masking them would shred the detail on every
+// coincidental match.
+func (c *Client) responseDetail(raw []byte) string {
+	detail := string(raw)
+	endpoint, err := url.Parse(c.BaseURL)
+	if err == nil {
+		var secrets []string
+		if endpoint.User != nil {
+			username := endpoint.User.Username()
+			password, _ := endpoint.User.Password()
+			secrets = append(secrets, username, password,
+				base64.StdEncoding.EncodeToString(
+					[]byte(username+":"+password)))
+		}
+		if values, err := url.ParseQuery(endpoint.RawQuery); err == nil {
+			for _, list := range values {
+				secrets = append(secrets, list...)
+			}
+		}
+		for _, secret := range secrets {
+			if len(secret) < 4 {
+				continue
+			}
+			detail = strings.ReplaceAll(detail, secret, "REDACTED")
+			detail = strings.ReplaceAll(
+				detail, url.QueryEscape(secret), "REDACTED")
+		}
+	}
+	if len(detail) > 200 {
+		detail = detail[:200]
+	}
+	return detail
 }
 
 // parseEntries decodes and validates distilled content against the same

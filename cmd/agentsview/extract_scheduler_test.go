@@ -72,7 +72,15 @@ func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 1, mgr.callCount(), "burst must coalesce into one pass")
 	calls := mgr.callsSnapshot()
-	assert.False(t, calls[0].Full, "event-driven passes are incremental")
+	assert.True(t, calls[0].Full,
+		"the lifetime's first pass carries the startup full top-up")
+
+	s.Notify()
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() == 2 },
+		"second debounced pass never ran")
+	calls = mgr.callsSnapshot()
+	assert.False(t, calls[1].Full,
+		"event-driven passes after the startup pass are incremental")
 }
 
 func TestExtractSchedulerBackstopTickRunsFullPass(t *testing.T) {
@@ -91,6 +99,7 @@ func TestExtractSchedulerBackstopTickRunsFullPass(t *testing.T) {
 
 func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 	mgr := &fakePassManager{results: []fakeTryPassResult{
+		{started: true},  // startup pass clears the initial full carry
 		{started: false}, // backstop tick collides with a running pass
 		{started: true},
 	}}
@@ -99,14 +108,14 @@ func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 	go s.Run(ctx)
 	defer s.Stop()
 
-	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 1 },
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 2 },
 		"backstop tick never fired")
 	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 2 },
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 3 },
 		"debounced pass never ran")
 	calls := mgr.callsSnapshot()
-	require.GreaterOrEqual(t, len(calls), 2)
-	assert.True(t, calls[1].Full,
+	require.GreaterOrEqual(t, len(calls), 3)
+	assert.True(t, calls[2].Full,
 		"a dropped backstop must carry into the next debounced pass")
 }
 
@@ -287,4 +296,10 @@ func TestExtractSchedulerRunsStartupPass(t *testing.T) {
 
 	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 1 },
 		"startup pass never ran without a Notify")
+	calls := mgr.callsSnapshot()
+	assert.True(t, calls[0].Full,
+		"the startup pass must be full: a detached daemon idles out "+
+			"before the backstop interval, so a completed session whose "+
+			"transcript grew between daemon lifetimes is only revisited "+
+			"here")
 }

@@ -290,20 +290,23 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   never faster than once a minute) runs incremental passes instead: sessions
   become eligible only after the quiet period, long after the last sync-driven
   debounce fired, so sync signals alone cannot guarantee eventual extraction;
-- every daemon lifetime begins with one pass (the debounce timer starts armed):
-  a detached daemon self-reaps after its idle timeout (20 m default), which is
-  shorter than the backstop interval, so work deferred past a daemon's exit —
-  a session whose quiet period elapsed with no daemon running, retraction for
-  a session trashed in between — must not depend on sync activity or a tick
-  arriving before the next lifetime idles out too. Passes hold an idle-tracker
-  work lease, so a pass in flight is never cut off by the reaper, but pending
-  future work deliberately does not pin the daemon alive — the startup pass of
-  the next lifetime owns it;
-- the server's trash, restore, and permanent-delete routes signal the scheduler
-  directly (they change extraction eligibility and no sync activity follows
-  them), so retraction runs a debounce later instead of waiting for the
-  backstop. Secret scans run in a separate CLI process and cannot signal
-  in-process; their eligibility changes ride the next pass;
+- every daemon lifetime begins with one *full* pass (the debounce timer starts
+  armed and the full carry starts set): a detached daemon self-reaps after its
+  idle timeout (20 m default), which is shorter than the backstop interval, so
+  work deferred past a daemon's exit — a session whose quiet period elapsed
+  with no daemon running, retraction for a session trashed in between, a
+  completed session whose transcript grew — must not depend on sync activity
+  or a full tick arriving before the next lifetime idles out too. The full
+  revisit stays bounded: only done sessions written to since their coverage
+  stamp reload. Passes hold an idle-tracker work lease, so a pass in flight is
+  never cut off by the reaper, but pending future work deliberately does not
+  pin the daemon alive — the startup pass of the next lifetime owns it;
+- the server's trash, restore, delete, and secret-scan routes signal the
+  scheduler directly (they change extraction eligibility and no sync activity
+  follows them), so retraction and newly clean sessions ride a pass one
+  debounce later instead of waiting for the backstop. Scans run directly by
+  the `secrets scan` CLI against an unlocked archive cannot signal the daemon;
+  their eligibility changes ride the next lifetime's startup pass or tick;
 - passes drop instead of queueing when one is already running, and a dropped
   backstop carries into the next debounced pass.
 

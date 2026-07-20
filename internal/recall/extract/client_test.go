@@ -2,10 +2,13 @@ package extract
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -531,6 +534,55 @@ func TestClientAcceptsEmptyEntriesArray(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("entries = %+v, want none", entries)
+	}
+}
+
+// TestClientErrorDetailRedactsReflectedCredentials pins that response-body
+// excerpts embedded in non-transient errors cannot leak the configured
+// endpoint's credentials: proxies and gateways echo the request back —
+// the URI with its query values (raw or URL-escaped) and the Basic-auth
+// header the userinfo becomes — and these error strings reach doctor
+// stderr and stored failure rows.
+func TestClientErrorDetailRedactsReflectedCredentials(t *testing.T) {
+	const user, pass, keyValue = "tester", "hunter2pass", "sekret-value"
+	basic := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+	reflected := fmt.Sprintf(
+		`{"error":"denied for http://%s:%s@upstream/v1?api_key=%s "+
+			"escaped=%s auth=Basic %s"}`,
+		user, pass, keyValue, url.QueryEscape(keyValue), basic,
+	)
+	for name, status := range map[string]int{
+		"bad request": http.StatusBadRequest,
+		"not found":   http.StatusNotFound,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{
+				{status: status, errorBody: reflected},
+			}, &requests)
+			defer server.Close()
+
+			endpoint, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatalf("parsing test server URL: %v", err)
+			}
+			endpoint.User = url.UserPassword(user, pass)
+			endpoint.RawQuery = "api_key=" + keyValue
+			client := testClient(endpoint.String())
+
+			_, _, derr := client.DistillWithRecovery(
+				context.Background(), "p", "text", 1,
+			)
+			if derr == nil {
+				t.Fatal("scripted failure must surface an error")
+			}
+			for _, secret := range []string{pass, keyValue, basic} {
+				if strings.Contains(derr.Error(), secret) {
+					t.Fatalf("error leaks reflected credential %q: %v",
+						secret, derr)
+				}
+			}
+		})
 	}
 }
 

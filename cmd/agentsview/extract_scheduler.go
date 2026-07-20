@@ -115,8 +115,14 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// another pass was already running (typically a manual `recall extract
 	// run`): without it, the digest top-up that tick carried would be
 	// silently deferred until the next backstop tick instead of running on
-	// the next debounced pass. Single-goroutine state, no locking needed.
-	var pendingFull bool
+	// the next debounced pass. It starts set so the startup pass doubles as
+	// the lifetime's full pass: a detached daemon idles out before the
+	// backstop interval, so completed sessions whose transcripts grew
+	// between daemon lifetimes would otherwise wait for a lifetime that
+	// happens to survive a full backstop tick. The revisit is bounded — it
+	// only reloads done sessions written to since their coverage stamp.
+	// Single-goroutine state, no locking needed.
+	pendingFull := true
 
 	for {
 		select {

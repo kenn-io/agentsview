@@ -725,6 +725,7 @@ func (s *Server) humaDeleteSession(
 		}
 		return nil, internalError("soft delete session", err)
 	}
+	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
