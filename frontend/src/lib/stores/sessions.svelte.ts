@@ -19,6 +19,7 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
+import { SESSION_ANALYTICS_WINDOW_PARAM } from "./sessionRouteParams.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 type SidebarIndexParams = Parameters<
@@ -134,9 +135,16 @@ function loadSavedFilters(): Filters {
   return defaultFilters();
 }
 
-function saveFilters(f: Filters): void {
+function saveFilters(f: Filters, omitDates = false): void {
+  // Date bounds materialized from a rolling window must not be persisted:
+  // restoring them verbatim on the next launch pins the window to the day
+  // it was saved, silently hiding newer sessions (#1086). Only explicitly
+  // chosen fixed ranges survive a restart.
+  const toSave = omitDates
+    ? { ...f, date: "", dateFrom: "", dateTo: "" }
+    : f;
   try {
-    localStorage.setItem(SESSION_FILTERS_KEY, JSON.stringify(f));
+    localStorage.setItem(SESSION_FILTERS_KEY, JSON.stringify(toSave));
   } catch {
     // localStorage full or unavailable — silently skip.
   }
@@ -247,6 +255,10 @@ class SessionsStore {
   total: number = $state(0);
   loading: boolean = $state(false);
   filters: Filters = $state(loadSavedFilters());
+  /** True when the current date bounds were materialized from a rolling
+   *  window rather than chosen explicitly; such bounds are session-scoped
+   *  and excluded from persistence (#1086). */
+  dateFiltersDerived = false;
 
   private signalDetailCache = new Map<
     string,
@@ -356,11 +368,25 @@ class SessionsStore {
     };
   }
 
+  /** Set date filters materialized from a panel date state. `derived` marks
+   *  bounds that came from a rolling window and must not be persisted. */
+  applyPanelDateFilters(
+    dateParams: Record<string, string>,
+    derived: boolean,
+  ): void {
+    this.filters.date = dateParams["date"] ?? "";
+    this.filters.dateFrom = dateParams["date_from"] ?? "";
+    this.filters.dateTo = dateParams["date_to"] ?? "";
+    this.dateFiltersDerived = derived;
+  }
+
   initFromParams(params: Record<string, string>) {
     const prevOneShot = this.filters.includeOneShot;
     const prevAutomated = this.filters.includeAutomated;
     const next = parseFiltersFromParams(params);
     this.filters = next;
+    this.dateFiltersDerived =
+      params[SESSION_ANALYTICS_WINDOW_PARAM] !== undefined;
     if (prevOneShot !== next.includeOneShot ||
         prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
@@ -369,7 +395,7 @@ class SessionsStore {
   }
 
   async load(options: LoadOptions = {}) {
-    saveFilters(this.filters);
+    saveFilters(this.filters, this.dateFiltersDerived);
 
     const params = {
       ...this.apiParams,

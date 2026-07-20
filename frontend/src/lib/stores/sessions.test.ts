@@ -313,6 +313,70 @@ describe("SessionsStore", () => {
       expect(store.filters.project).toBe("");
       expect(store.filters.includeOneShot).toBe(true);
     });
+
+    it("does not persist rolling-derived date bounds", async () => {
+      sessions.filters.project = "myproj";
+      sessions.applyPanelDateFilters(
+        { date_from: "2025-07-07", date_to: "2026-07-06" },
+        true,
+      );
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("");
+      expect(saved.dateTo).toBe("");
+      expect(saved.date).toBe("");
+      expect(saved.project).toBe("myproj");
+      // The current tab still queries with the materialized bounds.
+      expect(sessions.filters.dateFrom).toBe("2025-07-07");
+      expect(sessions.filters.dateTo).toBe("2026-07-06");
+    });
+
+    it("persists explicitly chosen fixed date bounds", async () => {
+      sessions.applyPanelDateFilters(
+        { date_from: "2026-01-01", date_to: "2026-01-31" },
+        false,
+      );
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("2026-01-01");
+      expect(saved.dateTo).toBe("2026-01-31");
+    });
+
+    it("treats deep-linked window_days date bounds as derived", async () => {
+      sessions.initFromParams({
+        window_days: "365",
+        date_from: "2025-07-07",
+        date_to: "2026-07-06",
+      });
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("");
+      expect(saved.dateTo).toBe("");
+      expect(sessions.filters.dateFrom).toBe("2025-07-07");
+    });
+
+    it("persists deep-linked explicit date bounds", async () => {
+      sessions.initFromParams({
+        date_from: "2026-01-01",
+        date_to: "2026-01-31",
+      });
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("2026-01-01");
+      expect(saved.dateTo).toBe("2026-01-31");
+    });
   });
 
   describe("sidebar loading", () => {

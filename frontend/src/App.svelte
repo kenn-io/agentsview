@@ -317,9 +317,7 @@
   ): Record<string, string> | null {
     const dateParams = panelDateToSessionFilterParams(state);
     if (Object.keys(dateParams).length === 0) return null;
-    sessions.filters.date = dateParams["date"] ?? "";
-    sessions.filters.dateFrom = dateParams["date_from"] ?? "";
-    sessions.filters.dateTo = dateParams["date_to"] ?? "";
+    sessions.applyPanelDateFilters(dateParams, state.mode === "rolling");
     const params = { ...routeParams };
     for (const key of [
       "date",

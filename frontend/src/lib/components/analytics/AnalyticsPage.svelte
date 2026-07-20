@@ -171,9 +171,7 @@
     const before = JSON.stringify(filtersToParams(sessions.filters));
     clearSessionDateFilters();
     const params = panelDateToSessionFilterParams(state);
-    sessions.filters.date = params["date"] ?? "";
-    sessions.filters.dateFrom = params["date_from"] ?? "";
-    sessions.filters.dateTo = params["date_to"] ?? "";
+    sessions.applyPanelDateFilters(params, state.mode === "rolling");
     const after = JSON.stringify(filtersToParams(sessions.filters));
     return before !== after;
   }
