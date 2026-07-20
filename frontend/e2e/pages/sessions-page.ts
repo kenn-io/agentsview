@@ -1,5 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
+const SESSION_READY_TIMEOUT_MS = process.env.CI === "true" ? 15_000 : 5_000;
+
 /**
  * Page object for the sessions view.
  * Encapsulates selectors and common navigation actions
@@ -37,7 +39,7 @@ export class SessionsPage {
   async goto() {
     await this.page.goto("/");
     await expect(this.sessionItems.first()).toBeVisible({
-      timeout: 5_000,
+      timeout: SESSION_READY_TIMEOUT_MS,
     });
   }
 

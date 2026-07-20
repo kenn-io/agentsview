@@ -37,7 +37,18 @@ test.describe("Runtime stability", () => {
       const monitor = new RuntimeErrorMonitor(page);
       const sp = new SessionsPage(page);
 
-      await sp.goto();
+      try {
+        await sp.goto();
+      } catch (error) {
+        const startupErrors = monitor.all();
+        if (startupErrors.length === 0) {
+          throw error;
+        }
+        throw new Error(
+          `session startup failed after browser errors:\n${startupErrors.join("\n")}`,
+          { cause: error },
+        );
+      }
 
       // Exercise the highest-churn flows: session open,
       // sort toggle, and project filtering.
