@@ -121,13 +121,29 @@ function defaultFilters(): Filters {
 }
 
 const SESSION_FILTERS_KEY = "session-filters";
+// v2 marks entries whose date bounds carry provenance: rolling-derived
+// bounds are never persisted (see saveFilters). Unversioned entries predate
+// that guarantee and may hold rolling bounds saved as if explicit (#1086).
+const SESSION_FILTERS_VERSION = 2;
 
 function loadSavedFilters(): Filters {
   try {
     const raw = localStorage.getItem(SESSION_FILTERS_KEY);
     if (raw) {
-      const saved = JSON.parse(raw) as Partial<Filters>;
-      return { ...defaultFilters(), ...saved };
+      const { version, ...saved } = JSON.parse(raw) as Partial<Filters> & {
+        version?: unknown;
+      };
+      const filters = { ...defaultFilters(), ...saved };
+      if (version !== SESSION_FILTERS_VERSION) {
+        // Legacy bounds have unknown provenance. Dropping them once is the
+        // safe direction: an intentional range is re-picked in one click,
+        // while a poisoned one keeps silently hiding new sessions.
+        filters.date = "";
+        filters.dateFrom = "";
+        filters.dateTo = "";
+        saveFilters(filters);
+      }
+      return filters;
     }
   } catch {
     // Corrupted localStorage — fall back to defaults.
@@ -144,7 +160,10 @@ function saveFilters(f: Filters, omitDates = false): void {
     ? { ...f, date: "", dateFrom: "", dateTo: "" }
     : f;
   try {
-    localStorage.setItem(SESSION_FILTERS_KEY, JSON.stringify(toSave));
+    localStorage.setItem(
+      SESSION_FILTERS_KEY,
+      JSON.stringify({ ...toSave, version: SESSION_FILTERS_VERSION }),
+    );
   } catch {
     // localStorage full or unavailable — silently skip.
   }

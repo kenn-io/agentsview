@@ -314,6 +314,54 @@ describe("SessionsStore", () => {
       expect(store.filters.includeOneShot).toBe(true);
     });
 
+    it("clears date bounds from legacy unversioned entries", () => {
+      // Entries written before provenance tracking may hold rolling bounds
+      // persisted as if explicit; only their date fields are dropped.
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({
+          project: "saved-proj",
+          dateFrom: "2025-07-07",
+          dateTo: "2026-07-06",
+          date: "2025-07-07",
+        }),
+      );
+      const store = createSessionsStore();
+      expect(store.filters.project).toBe("saved-proj");
+      expect(store.filters.dateFrom).toBe("");
+      expect(store.filters.dateTo).toBe("");
+      expect(store.filters.date).toBe("");
+      // Migration is written back so it runs only once.
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.version).toBe(2);
+      expect(saved.dateFrom).toBe("");
+    });
+
+    it("keeps date bounds from versioned entries", () => {
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({
+          version: 2,
+          dateFrom: "2026-01-01",
+          dateTo: "2026-01-31",
+        }),
+      );
+      const store = createSessionsStore();
+      expect(store.filters.dateFrom).toBe("2026-01-01");
+      expect(store.filters.dateTo).toBe("2026-01-31");
+    });
+
+    it("stamps the storage version when persisting", async () => {
+      sessions.filters.project = "myproj";
+      await sessions.load();
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.version).toBe(2);
+    });
+
     it("does not persist rolling-derived date bounds", async () => {
       sessions.filters.project = "myproj";
       sessions.applyPanelDateFilters(
