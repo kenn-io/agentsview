@@ -119,6 +119,9 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.Client == nil {
 		return nil, fmt.Errorf("extraction manager requires a client")
 	}
+	if err := cfg.Client.ValidateRequestShape(); err != nil {
+		return nil, err
+	}
 	if cfg.Segmenter.MaxWindowChars <= 0 {
 		return nil, fmt.Errorf(
 			"extraction manager requires a positive max window, got %d",

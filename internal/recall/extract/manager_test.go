@@ -742,6 +742,15 @@ func TestNewManagerValidatesConfig(t *testing.T) {
 		{"missing model identity", func(c *ManagerConfig) {
 			c.Identity = ModelIdentity{}
 		}},
+		// Request-shape faults must fail construction, not the first
+		// model call: a manager that constructs cleanly and then fails
+		// every distill would mark the whole candidate backlog failed.
+		{"non-positive max tokens", func(c *ManagerConfig) {
+			c.Client.Request.MaxTokens = 0
+		}},
+		{"reserved extra body key", func(c *ManagerConfig) {
+			c.Client.Request.ExtraBody = map[string]any{"model": "other"}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

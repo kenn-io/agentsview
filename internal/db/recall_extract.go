@@ -232,6 +232,51 @@ func (db *DB) ActivateExtractGeneration(
 	); err != nil {
 		return fmt.Errorf("archiving retired generation entries: %w", err)
 	}
+	// Sessions in transient flux — reopened, back inside the quiet
+	// period, or awaiting rescan after a write — pass the hard-
+	// ineligibility screen but are no longer approvable, and the done-
+	// staleness gate only sees done rows (a failed session's staged
+	// partial output slips past every gate). Their staged output and
+	// progress rows are cleared, not merely skipped: an archived entry
+	// under a surviving progress row would never be promoted or
+	// rediscovered once the generation is active, while a cleared session
+	// is rediscovered and re-extracted from scratch when it settles.
+	// Hard-ineligible sessions keep their archived entries for the
+	// retraction pass, exactly as before.
+	versionMarks := strings.TrimSuffix(
+		strings.Repeat("?,", len(scanVersions)), ",")
+	fluxSessionSQL := `SELECT 1 FROM sessions s
+			WHERE s.id = %s
+			  AND NOT (` + extractSessionIneligibleSQL + `)
+			  AND NOT (` +
+		fmt.Sprintf(extractEligibleSessionSQL, versionMarks) + `)`
+	fluxArgs := make([]any, 0, len(scanVersions)+2)
+	fluxArgs = append(fluxArgs, fingerprint)
+	for _, version := range scanVersions {
+		fluxArgs = append(fluxArgs, version)
+	}
+	fluxArgs = append(fluxArgs, quietCutoff.UTC().Format(extractTimeLayout))
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM recall_entries
+		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
+		  AND source_run_id = ?
+		  AND EXISTS (`+
+		fmt.Sprintf(fluxSessionSQL, "recall_entries.source_session_id")+`)`,
+		fluxArgs...,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing staged entries of sessions in flux: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM recall_extract_progress
+		WHERE generation_fingerprint = ?
+		  AND EXISTS (`+
+		fmt.Sprintf(fluxSessionSQL, "recall_extract_progress.session_id")+`)`,
+		fluxArgs...,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing progress of sessions in flux: %w", err)
+	}
 	// Promotion re-verifies eligibility inside the activation transaction:
 	// a session trashed, flagged automated, or scanned into findings after
 	// its entries were staged must not start serving on activation. Its

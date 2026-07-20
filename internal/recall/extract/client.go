@@ -71,7 +71,8 @@ func (e *requestStatusError) Unwrap() error { return e.err }
 // backoff apiece. A 400 stays input-scoped — the same endpoint answers
 // other units fine when only this request's content is refused.
 func endpointScopedRejection(err error) bool {
-	if errors.Is(err, errProtocolViolation) {
+	if errors.Is(err, errProtocolViolation) ||
+		errors.Is(err, errRedirectRefused) {
 		return true
 	}
 	var rejection *requestStatusError
@@ -85,6 +86,27 @@ func endpointScopedRejection(err error) bool {
 		return true
 	}
 	return false
+}
+
+// errRedirectRefused marks a refused redirect. Deterministic: the same
+// endpoint redirects every identical request, so it is endpoint-scoped.
+var errRedirectRefused = errors.New("extraction requests do not follow redirects")
+
+// RefuseRedirects is the CheckRedirect policy for extraction HTTP clients:
+// redirects are never followed. A 307/308 replays the extraction POST —
+// transcript content included — to whatever destination the endpoint
+// names, letting a compromised endpoint exfiltrate the request or aim it
+// at loopback services that trust local callers. A name-based same-origin
+// allowance would not close this: the redirect target is re-resolved, so a
+// rebinding hostname passes any string comparison while the connection
+// lands elsewhere. Endpoints must be configured with their final URL.
+func RefuseRedirects(req *http.Request, _ []*http.Request) error {
+	// The target is redacted: a redirect can name a URL carrying
+	// credentials or signed tokens, and this message reaches stderr and
+	// stored failure rows.
+	return fmt.Errorf(
+		"%w: refusing redirect to %q; configure the endpoint's final URL",
+		errRedirectRefused, config.RedactedEndpoint(req.URL.String()))
 }
 
 // transientError marks a failure worth retrying: network errors, timeouts,
@@ -225,6 +247,28 @@ func (c *Client) retryBackoff() time.Duration {
 	return 500 * time.Millisecond
 }
 
+// ValidateRequestShape rejects a request configuration that would fail
+// every model call identically. Manager construction calls it so a bad
+// profile fails daemon or CLI setup outright, before any progress rows are
+// created; DistillWithRecovery re-checks as a backstop for direct callers.
+func (c *Client) ValidateRequestShape() error {
+	if c.Request.MaxTokens <= 0 {
+		return fmt.Errorf(
+			"extraction request max_tokens must be positive; the profile or "+
+				"configuration must set it (got %d)", c.Request.MaxTokens,
+		)
+	}
+	for _, key := range reservedRequestKeys {
+		if _, ok := c.Request.ExtraBody[key]; ok {
+			return fmt.Errorf(
+				"extra body must not set reserved request field %q; use the "+
+					"dedicated configuration for it", key,
+			)
+		}
+	}
+	return nil
+}
+
 // DistillWithRecovery runs one unit through the model with the recovery
 // ladder: transient failures (network errors, timeouts, rate limits,
 // server errors) are retried up to maxAttempts with exponential backoff
@@ -237,19 +281,8 @@ func (c *Client) DistillWithRecovery(
 	ctx context.Context, systemPrompt, text string, maxAttempts int,
 ) ([]Entry, Usage, error) {
 	var total Usage
-	if c.Request.MaxTokens <= 0 {
-		return nil, total, fmt.Errorf(
-			"extraction request max_tokens must be positive; the profile or "+
-				"configuration must set it (got %d)", c.Request.MaxTokens,
-		)
-	}
-	for _, key := range reservedRequestKeys {
-		if _, ok := c.Request.ExtraBody[key]; ok {
-			return nil, total, fmt.Errorf(
-				"extra body must not set reserved request field %q; use the "+
-					"dedicated configuration for it", key,
-			)
-		}
+	if err := c.ValidateRequestShape(); err != nil {
+		return nil, total, err
 	}
 	var lastErr error
 	for attempt := range maxAttempts {
@@ -354,10 +387,14 @@ func (c *Client) distill(
 		if errors.As(err, &urlErr) {
 			cause = urlErr.Err
 		}
-		return nil, Usage{}, &transientError{
-			err: fmt.Errorf("posting distill request to %s: %w",
-				config.RedactedEndpoint(endpoint.String()), cause),
+		wrapped := fmt.Errorf("posting distill request to %s: %w",
+			config.RedactedEndpoint(endpoint.String()), cause)
+		if errors.Is(cause, errRedirectRefused) {
+			// Deterministic for every request against the same
+			// configuration: fail fast, endpoint-scoped, no retries.
+			return nil, Usage{}, wrapped
 		}
+		return nil, Usage{}, &transientError{err: wrapped}
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
@@ -384,6 +421,17 @@ func (c *Client) distill(
 				"%w (HTTP 400): %s", errPermanentRequest, detail,
 			),
 		}
+	}
+	if response.StatusCode == http.StatusRequestEntityTooLarge {
+		// The transport-level twin of an in-band context-overflow 400:
+		// the request body is too big, and only splitting the unit can
+		// shrink it. A permanent failure here would retry the session
+		// unchanged after every backoff, forever.
+		return nil, Usage{}, fmt.Errorf(
+			"%d-char unit: %w (HTTP 413): %s",
+			utf8.RuneCountInString(text), ErrContextOverflow,
+			c.responseDetail(raw),
+		)
 	}
 	if response.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf(

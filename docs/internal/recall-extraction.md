@@ -342,7 +342,14 @@ blocked activation changes nothing and the next pass retries after
 re-extraction. Promotion also re-verifies eligibility inside the same
 transaction: entries whose source session was trashed, flagged automated, or
 scanned into findings after staging are left archived (the retraction pass
-deletes them) instead of being served.
+deletes them) instead of being served. Sessions in transient flux — reopened,
+back inside the quiet period, or awaiting rescan after a write — pass that
+hard-ineligibility screen but are no longer approvable, and only their done rows
+are caught by the staleness gate (a failed session's staged partial output slips
+past every gate); promotion deletes their staged entries and progress rows so
+the session is rediscovered and re-extracted from scratch once it settles,
+rather than serving stale partial output or stranding it archived forever under
+the active generation.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;

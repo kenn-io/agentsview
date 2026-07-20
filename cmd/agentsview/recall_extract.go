@@ -91,25 +91,9 @@ func resolveExtractDistillation(
 	if err != nil {
 		return dist, fmt.Errorf("parsing backstop_interval: %w", err)
 	}
-	// Redirects are never followed. A 307/308 replays the extraction POST
-	// — transcript content included — to whatever destination the endpoint
-	// names, letting a compromised endpoint exfiltrate the request or aim
-	// it at loopback services that trust local callers. A name-based
-	// same-origin allowance would not close this: the redirect target is
-	// re-resolved, so a rebinding hostname passes any string comparison
-	// while the connection lands elsewhere. Endpoints must be configured
-	// with their final URL.
 	httpClient := &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			// The target is redacted: a redirect can name a URL carrying
-			// credentials or signed tokens, and this message reaches
-			// stderr and stored failure rows.
-			return fmt.Errorf(
-				"refusing redirect to %q: extraction requests do not "+
-					"follow redirects; configure the endpoint's final URL",
-				config.RedactedEndpoint(req.URL.String()))
-		},
+		Timeout:       timeout,
+		CheckRedirect: extract.RefuseRedirects,
 	}
 	return extractDistillation{
 		Client: &extract.Client{

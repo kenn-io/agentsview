@@ -849,6 +849,58 @@ func TestClientBoundsUnknownKeyDetail(t *testing.T) {
 	}
 }
 
+// TestClientRedirectRefusalIsEndpointScoped pins that a refused redirect —
+// deterministic for every request against the same configuration — fails
+// on the first attempt and classifies as endpoint-scoped, so the manager
+// aborts the pass instead of retrying three times per unit and marking
+// every session failed.
+func TestClientRedirectRefusalIsEndpointScoped(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			http.Redirect(w, r, "http://127.0.0.1:1/elsewhere",
+				http.StatusTemporaryRedirect)
+		}))
+	defer server.Close()
+
+	client := testClient(server.URL)
+	client.HTTPClient = &http.Client{CheckRedirect: RefuseRedirects}
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if err == nil {
+		t.Fatal("a refused redirect must surface an error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1: a deterministic redirect must "+
+			"not consume transient retries", got)
+	}
+	if !endpointScopedRejection(err) {
+		t.Fatalf("error must classify as endpoint-scoped: %v", err)
+	}
+}
+
+// TestClientRequestEntityTooLargeSplits pins that HTTP 413 — the transport
+// telling us the request body is too big — surfaces as ErrContextOverflow
+// so the caller splits the unit, exactly like an in-band context-overflow
+// 400. As a permanent failure the session would retry unchanged after
+// every backoff, forever.
+func TestClientRequestEntityTooLargeSplits(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{status: http.StatusRequestEntityTooLarge},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	if !errors.Is(err, ErrContextOverflow) {
+		t.Fatalf("err = %v, want ErrContextOverflow", err)
+	}
+}
+
 // TestClientRejectsOversizedContent pins the local resource bounds: a
 // configured or compromised endpoint can answer within the transport size
 // limit yet carry tens of thousands of entries or multi-megabyte fields,
