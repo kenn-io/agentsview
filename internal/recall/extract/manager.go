@@ -494,6 +494,13 @@ func (m *Manager) extractSession(
 	// failure, because a silent skip would let the discovery watermarks
 	// advance past the session's writes and exclude it forever.
 	countMismatch := len(rows) != session.MessageCount
+	// The stamp the eligibility check trusted is a claim recorded by a past
+	// write, and archives written by older binaries can carry a
+	// current-looking clean stamp over content the scan never saw (an
+	// incremental append whose deferred rescan crashed before it landed).
+	// Re-scanning the content this function is about to send makes the
+	// boundary independent of that history.
+	secretMatches := transcriptSecretMatches(rows)
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
 		messages = append(messages, Message{
@@ -517,7 +524,8 @@ func (m *Manager) extractSession(
 		return outcome, err
 	}
 	var progress db.ExtractProgress
-	if !countMismatch && found && previous.ContentDigest == digest {
+	if !countMismatch && secretMatches == 0 && found &&
+		previous.ContentDigest == digest {
 		// A same-digest revisit skips the model, but its entries still
 		// need work: context fields copied at insert time go stale on
 		// metadata-only updates, and evidence digests cover rows the units
@@ -571,6 +579,26 @@ func (m *Manager) extractSession(
 		if err != nil {
 			return outcome, err
 		}
+	}
+	if secretMatches > 0 {
+		// Fail closed: entries distilled from this transcript are suspect,
+		// so they are dropped with the row reopened behind the failure
+		// backoff. Recording findings stays the scanner's job — a rescan
+		// either lands the findings (excluding the session from discovery
+		// outright) or re-stamps a genuinely clean transcript, and either
+		// way the retry settles.
+		if derr := m.discardSessionOutput(
+			ctx, sessionID, digest, progress.UnitCursor,
+			fmt.Sprintf(
+				"transcript matches %d secret rule pattern(s) despite a "+
+					"current scan stamp; run 'agentsview secrets scan "+
+					"--backfill'", secretMatches,
+			),
+		); derr != nil {
+			return outcome, derr
+		}
+		outcome.failed = true
+		return outcome, nil
 	}
 	if countMismatch {
 		// Checked before the done short-circuit: a same-digest upsert
@@ -751,18 +779,40 @@ func (m *Manager) recheckExtraction(
 func (m *Manager) discardIneligibleSession(
 	ctx context.Context, sessionID, digest string, cursor int,
 ) error {
+	return m.discardSessionOutput(
+		ctx, sessionID, digest, cursor,
+		"session became ineligible during extraction",
+	)
+}
+
+func (m *Manager) discardSessionOutput(
+	ctx context.Context, sessionID, digest string, cursor int,
+	lastError string,
+) error {
 	err := m.cfg.DB.DiscardExtractedSessionOutput(ctx, db.ExtractFailure{
 		SessionID:      sessionID,
 		Fingerprint:    m.fingerprint,
 		ExpectedDigest: digest,
 		ExpectedCursor: cursor,
-		LastError:      "session became ineligible during extraction",
+		LastError:      lastError,
 		Reopen:         true,
 	})
 	if err != nil && !errors.Is(err, db.ErrStaleExtractProgress) {
 		return err
 	}
 	return nil
+}
+
+// transcriptSecretMatches counts matches from the full secret ruleset over
+// the message content extraction sends to the model. Only Content reaches
+// the segmenter, so scanning it covers exactly the outbound material; tool
+// inputs and results stay the stored scan's concern.
+func transcriptSecretMatches(rows []db.Message) int {
+	matches := 0
+	for _, row := range rows {
+		matches += len(secrets.Scan(row.Content))
+	}
+	return matches
 }
 
 // distillSplit distills one text, halving it recursively when the model

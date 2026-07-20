@@ -15,6 +15,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/secrets"
 )
@@ -1900,4 +1903,76 @@ func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
 			t.Fatalf("entry %s evidence was not rebound", entry.ID)
 		}
 	}
+}
+
+// TestManagerRunPassRefusesTranscriptMatchingSecretRules covers the stale
+// scan stamp: archives written by older binaries can carry a current-looking
+// clean stamp over content the scan never saw (an incremental append whose
+// deferred rescan crashed before it landed). The stamp is only a claim; the
+// boundary must re-check the content it actually sends.
+func TestManagerRunPassRefusesTranscriptMatchingSecretRules(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	secret := "ghp_" + "9KxT2mQ7Rw4ZpL8sVn3JdY6bF1cH5gAe0UqM"
+	// seedSession stamps a clean current full scan regardless of content —
+	// exactly the stale-stamp shape.
+	seedSession(t, d, "sess-1",
+		turnMessages("here is my token "+secret, "acknowledged"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, log.count(),
+		"secret-bearing transcript must never reach the model")
+	assert.Equal(t, 1, result.Failed)
+	assert.Zero(t, result.Sessions)
+	assert.Zero(t, result.Entries)
+
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, db.ExtractProgressFailed, progress.State)
+	assert.Contains(t, progress.LastError, "secrets scan --backfill")
+}
+
+// TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets grows an already
+// extracted session with secret-bearing content under a restored clean stamp
+// (growSession re-stamps, modeling the interrupted-rescan archive). The full
+// pass revisit must drop the session's generated entries and fail it closed
+// instead of topping it up.
+func TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	seedSession(t, d, "sess-1", turnMessages("fix the bug", "done"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Sessions)
+	cleanCalls := log.count()
+	require.Positive(t, cleanCalls)
+
+	secret := "ghp_" + "Vn3JdY6bF1cH5gAe0UqM9KxT2mQ7Rw4ZpL8s"
+	growSession(t, d, "sess-1",
+		turnMessages("new token is "+secret, "noted"), 2)
+
+	result, err = m.RunPass(ctx, PassOptions{Full: true})
+	require.NoError(t, err)
+	assert.Equal(t, cleanCalls, log.count(),
+		"the grown secret-bearing transcript must not reach the model")
+	assert.Equal(t, 1, result.Failed)
+	assert.Zero(t, result.Entries)
+
+	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"entries extracted before the secret appeared must be discarded")
+
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, db.ExtractProgressFailed, progress.State)
+	assert.Contains(t, progress.LastError, "secrets scan --backfill")
 }
