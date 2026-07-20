@@ -231,13 +231,15 @@ func (s RecallExtractServerConfig) validate(name string) error {
 
 // RedactedEndpoint returns an endpoint URL safe for errors, logs, and
 // display: userinfo can carry Basic-auth credentials (the username alone
-// can be an API key), and query values and fragments can carry keys, and
-// these strings land on stderr, in CI logs, and in stored failure messages.
-// The host, path, and allowlisted parameters stay visible for debugging.
-// Anything that does not parse as an http(s) URL with a host fails closed
-// to a constant: url.Parse accepts malformed absolute URLs as relative
-// paths, which can carry the credentials in a component no field-level
-// masking covers.
+// can be an API key), query values and fragments can carry keys, and
+// capability-style URLs carry bearer tokens in path segments — and these
+// strings land on stderr, in CI logs, and in stored failure messages. The
+// scheme, host, and allowlisted parameters stay visible: they identify
+// which endpoint failed, which is the diagnostic value, while the path is
+// masked whole. Anything that does not parse as an http(s) URL with a
+// host fails closed to a constant: url.Parse accepts malformed absolute
+// URLs as relative paths, which can carry the credentials in a component
+// no field-level masking covers.
 func RedactedEndpoint(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -252,6 +254,10 @@ func redactedEndpointURL(u *url.URL) string {
 	}
 	redacted := *u
 	redacted.User = nil
+	if redacted.Path != "" && redacted.Path != "/" {
+		redacted.Path = "/REDACTED"
+		redacted.RawPath = ""
+	}
 	if redacted.RawQuery != "" {
 		redacted.RawQuery = redactedEndpointQuery(redacted.RawQuery)
 	}

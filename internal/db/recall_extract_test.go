@@ -911,8 +911,9 @@ func TestActivateExtractGenerationSkipsIneligibleSessions(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// The session is trashed between staging and activation: promotion
-	// must not start serving its entries. They stay archived for the
-	// retraction pass to delete.
+	// must not start serving its entries — it deletes them, since an
+	// archived entry under the active generation is stranded if the
+	// session is restored before a retraction pass runs.
 	require.NoError(t, d.SoftDeleteSession("sess-trashed"))
 	// The eligible session is covered; the trashed one is ineligible and
 	// needs no coverage. Settle first: seeding bumps local_modified_at,
@@ -932,9 +933,8 @@ func TestActivateExtractGenerationSkipsIneligibleSessions(t *testing.T) {
 	assert.Equal(t, "accepted", ok.Status)
 	trashed, err := d.GetRecallEntry(ctx, "e-trashed")
 	require.NoError(t, err)
-	require.NotNil(t, trashed)
-	assert.Equal(t, "archived", trashed.Status,
-		"activation must not promote entries of an ineligible session")
+	assert.Nil(t, trashed,
+		"activation must delete entries of an ineligible session")
 }
 
 func TestDiscardExtractedSessionOutputIsAtomic(t *testing.T) {
@@ -2532,6 +2532,46 @@ func TestActivateExtractGenerationResetsTransientlyIneligibleStagedOutput(
 					"and re-extracted once it settles")
 		})
 	}
+}
+
+// TestActivateExtractGenerationClearsHardIneligibleStagedOutput pins that
+// activation deletes — not merely skips — the staged output and progress
+// of hard-ineligible sessions: leaving them archived relies on a later
+// retraction pass, and a session restored before that pass runs keeps its
+// progress row (blocking rediscovery) while nothing ever promotes its
+// archived entries under the now-active generation.
+func TestActivateExtractGenerationClearsHardIneligibleStagedOutput(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-ok", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-ok", "e-ok")
+	seedCoveredExtractSession(t, d, "sess-gone", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-gone", "e-gone")
+	require.NoError(t, d.SoftDeleteSession("sess-gone"))
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	okEntry, err := d.GetRecallEntry(ctx, "e-ok")
+	require.NoError(t, err)
+	require.NotNil(t, okEntry)
+	assert.Equal(t, "accepted", okEntry.Status)
+
+	goneEntry, err := d.GetRecallEntry(ctx, "e-gone")
+	require.NoError(t, err)
+	assert.Nil(t, goneEntry,
+		"a trashed session's staged output must be deleted at activation; "+
+			"archived-until-retraction strands it if the session is "+
+			"restored first")
+	_, found, err := d.ExtractProgress(ctx, "sess-gone", "fp-a")
+	require.NoError(t, err)
+	assert.False(t, found,
+		"the progress row must go so a restored session is rediscovered")
 }
 
 // TestActivateExtractGenerationRefusesDriftedDoneCoverage pins the in-tx

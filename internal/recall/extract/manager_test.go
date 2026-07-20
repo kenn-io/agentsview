@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1902,6 +1903,46 @@ func TestBoundedLastErrorCapsStoredText(t *testing.T) {
 	}
 	if short := boundedLastError(errors.New("plain cause")); short != "plain cause" {
 		t.Fatalf("short error must pass through, got %q", short)
+	}
+}
+
+// TestManagerReconcilesBeforeAbortingOnEndpointRejection pins that
+// privacy retraction is not schedulable away by a broken endpoint: an
+// endpoint-scoped abort must not return before reconciliation has deleted
+// the corpus and progress of sessions that lost eligibility, or a
+// persistently rejecting endpoint defers retraction indefinitely.
+func TestManagerReconcilesBeforeAbortingOnEndpointRejection(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	var broken atomic.Bool
+	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
+		if broken.Load() {
+			return http.StatusUnauthorized, `{"error":"bad api key"}`
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("first RunPass: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := d.SoftDeleteSession("sess-a"); err != nil {
+		t.Fatalf("trashing sess-a: %v", err)
+	}
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	broken.Store(true)
+
+	if _, err := m.RunPass(ctx, PassOptions{}); err == nil {
+		t.Fatal("an endpoint-scoped rejection must abort the pass")
+	}
+	_, found, err := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
+	if err != nil {
+		t.Fatalf("ExtractProgress: %v", err)
+	}
+	if found {
+		t.Fatal("the trashed session's progress row must be reconciled " +
+			"away even when the pass aborts on an endpoint failure")
 	}
 }
 

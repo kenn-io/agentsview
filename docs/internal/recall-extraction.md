@@ -118,10 +118,13 @@ on every pass.
 
 Eligibility loss *after* extraction is reconciled on every scheduled pass —
 incremental ones included, because with the backstop disabled no full pass ever
-runs and privacy retraction must not be schedulable away. Sessions since
-trashed, flagged automated, or carrying secret findings or leaks get their
-`unreviewed_auto` entries deleted across *all* registered generations (a retired
-generation keeps serving until the next activation, so retraction is
+runs and privacy retraction must not be schedulable away. Reconciliation runs
+before any model work (so an endpoint-scoped abort against a persistently broken
+endpoint cannot defer retraction) and again after the extraction loop (so
+eligibility lost while units were at the model is retracted in the same pass).
+Sessions since trashed, flagged automated, or carrying secret findings or leaks
+get their `unreviewed_auto` entries deleted across *all* registered generations
+(a retired generation keeps serving until the next activation, so retraction is
 generation-independent) and their progress rows removed, so an excluded
 session's corpus stops serving, a lingering pending or partial row cannot block
 activation forever, and a session that becomes eligible again is rediscovered
@@ -339,17 +342,16 @@ no progress row at all (a single-session run, or a session ending after the
 caller's checks, is uncovered work no progress-based gate can see), or if
 promotion would leave zero servable (accepted, provenance-verified) entries — a
 blocked activation changes nothing and the next pass retries after
-re-extraction. Promotion also re-verifies eligibility inside the same
-transaction: entries whose source session was trashed, flagged automated, or
-scanned into findings after staging are left archived (the retraction pass
-deletes them) instead of being served. Sessions in transient flux — reopened,
-back inside the quiet period, or awaiting rescan after a write — pass that
-hard-ineligibility screen but are no longer approvable, and only their done rows
-are caught by the staleness gate (a failed session's staged partial output slips
-past every gate); promotion deletes their staged entries and progress rows so
-the session is rediscovered and re-extracted from scratch once it settles,
-rather than serving stale partial output or stranding it archived forever under
-the active generation.
+re-extraction. Promotion also re-verifies full eligibility inside the same
+transaction, and clears what fails it: any session no longer fully eligible —
+trashed, flagged automated, carrying findings, reopened, back inside the quiet
+period, or awaiting rescan after a write — has its staged entries and progress
+rows deleted before the rest are promoted. Skipping instead of deleting would
+strand the output: an archived entry under a surviving progress row is never
+promoted or rediscovered once the generation is active, and deferring
+hard-ineligible rows to the scheduled retraction pass loses the race against a
+session restored before that pass runs. A cleared session is rediscovered and
+re-extracted from scratch when it settles or returns.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;

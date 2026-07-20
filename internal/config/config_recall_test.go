@@ -238,26 +238,26 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 	cases := map[string]struct{ in, want string }{
 		"userinfo dropped": {
 			"https://user:pass@models.example:8443/v1",
-			"https://models.example:8443/v1",
+			"https://models.example:8443/REDACTED",
 		},
 		"sensitive query values masked": {
 			"https://models.example/v1?api_key=sekret&api-version=2024-06-01",
-			"https://models.example/v1?api-version=2024-06-01&api_key=REDACTED",
+			"https://models.example/REDACTED?api-version=2024-06-01&api_key=REDACTED",
 		},
 		"signature masked": {
 			"https://models.example/v1?sig=abc123",
-			"https://models.example/v1?sig=REDACTED",
+			"https://models.example/REDACTED?sig=REDACTED",
 		},
 		// Credentials travel under too many vendor-specific names for a
 		// deny-list to anticipate; every value not explicitly known safe
 		// must be masked.
 		"unrecognized credential names masked": {
 			"https://models.example/v1?code=hunter2&sas=sekret2",
-			"https://models.example/v1?code=REDACTED&sas=REDACTED",
+			"https://models.example/REDACTED?code=REDACTED&sas=REDACTED",
 		},
 		"api-version stays visible among masked values": {
 			"https://models.example/v1?API-Version=2024-06-01&tenant=acme",
-			"https://models.example/v1?API-Version=2024-06-01&tenant=REDACTED",
+			"https://models.example/REDACTED?API-Version=2024-06-01&tenant=REDACTED",
 		},
 		// url.Values drops unparseable segments, so masking the parsed
 		// form of a malformed query would pass the original RawQuery —
@@ -268,23 +268,34 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 		// credential itself — visible, so the whole query is masked.
 		"key-only credential masks whole query": {
 			"https://models.example/v1?opaque-capability-token",
-			"https://models.example/v1?REDACTED",
+			"https://models.example/REDACTED?REDACTED",
 		},
 		"key-only credential beside safe param masks whole query": {
 			"https://models.example/v1?opaque-token&api-version=2024",
-			"https://models.example/v1?REDACTED",
+			"https://models.example/REDACTED?REDACTED",
 		},
 		"malformed separator masks whole query": {
 			"https://models.example/v1?sig=secret;api-version=2024",
-			"https://models.example/v1?REDACTED",
+			"https://models.example/REDACTED?REDACTED",
 		},
 		"invalid escape masks whole query": {
 			"https://models.example/v1?api_key=sekret&bad=%zz",
-			"https://models.example/v1?REDACTED",
+			"https://models.example/REDACTED?REDACTED",
 		},
-		"plain endpoint unchanged": {
+		// Capability-style endpoints carry bearer tokens in path
+		// segments; the path is masked whole — the scheme and host
+		// identify the endpoint for debugging.
+		"path masked": {
+			"https://models.example/cap-4bcdefgh1jklmn0pqrstuvwx/v1",
+			"https://models.example/REDACTED",
+		},
+		"hostless path stays empty": {
+			"http://127.0.0.1:11434",
+			"http://127.0.0.1:11434",
+		},
+		"plain endpoint path still masked": {
 			"http://127.0.0.1:11434/v1",
-			"http://127.0.0.1:11434/v1",
+			"http://127.0.0.1:11434/REDACTED",
 		},
 		// url.Parse accepts a single-slash absolute URL as scheme + path:
 		// the credentials land in the path with no host and no userinfo to
@@ -304,7 +315,7 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 		},
 		"fragment masked": {
 			"https://models.example/v1#access_token=abc123",
-			"https://models.example/v1#REDACTED",
+			"https://models.example/REDACTED#REDACTED",
 		},
 	}
 	for name, tc := range cases {

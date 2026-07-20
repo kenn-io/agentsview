@@ -232,66 +232,58 @@ func (db *DB) ActivateExtractGeneration(
 	); err != nil {
 		return fmt.Errorf("archiving retired generation entries: %w", err)
 	}
-	// Sessions in transient flux — reopened, back inside the quiet
-	// period, or awaiting rescan after a write — pass the hard-
-	// ineligibility screen but are no longer approvable, and the done-
-	// staleness gate only sees done rows (a failed session's staged
-	// partial output slips past every gate). Their staged output and
-	// progress rows are cleared, not merely skipped: an archived entry
-	// under a surviving progress row would never be promoted or
-	// rediscovered once the generation is active, while a cleared session
-	// is rediscovered and re-extracted from scratch when it settles.
-	// Hard-ineligible sessions keep their archived entries for the
-	// retraction pass, exactly as before.
+	// Promotion re-verifies full eligibility inside the activation
+	// transaction, and clears — not merely skips — what fails it. Any
+	// session no longer fully eligible (trashed, flagged automated,
+	// carrying findings, reopened, back inside the quiet period, awaiting
+	// rescan, or gone entirely) has its staged output and progress rows
+	// deleted: an archived entry under a surviving progress row would
+	// never be promoted or rediscovered once the generation is active —
+	// deferring hard-ineligible rows to the retraction pass loses the
+	// race against a restore that arrives first — while a cleared session
+	// is rediscovered and re-extracted from scratch when it settles or
+	// returns.
 	versionMarks := strings.TrimSuffix(
 		strings.Repeat("?,", len(scanVersions)), ",")
-	fluxSessionSQL := `SELECT 1 FROM sessions s
+	staleSessionSQL := `NOT EXISTS (SELECT 1 FROM sessions s
 			WHERE s.id = %s
-			  AND NOT (` + extractSessionIneligibleSQL + `)
-			  AND NOT (` +
+			  AND ` +
 		fmt.Sprintf(extractEligibleSessionSQL, versionMarks) + `)`
-	fluxArgs := make([]any, 0, len(scanVersions)+2)
-	fluxArgs = append(fluxArgs, fingerprint)
+	staleArgs := make([]any, 0, len(scanVersions)+2)
+	staleArgs = append(staleArgs, fingerprint)
 	for _, version := range scanVersions {
-		fluxArgs = append(fluxArgs, version)
+		staleArgs = append(staleArgs, version)
 	}
-	fluxArgs = append(fluxArgs, quietCutoff.UTC().Format(extractTimeLayout))
+	staleArgs = append(staleArgs, quietCutoff.UTC().Format(extractTimeLayout))
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM recall_entries
 		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
 		  AND source_run_id = ?
-		  AND EXISTS (`+
-		fmt.Sprintf(fluxSessionSQL, "recall_entries.source_session_id")+`)`,
-		fluxArgs...,
+		  AND `+
+		fmt.Sprintf(staleSessionSQL, "recall_entries.source_session_id"),
+		staleArgs...,
 	); err != nil {
 		return fmt.Errorf(
-			"clearing staged entries of sessions in flux: %w", err)
+			"clearing staged entries of ineligible sessions: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM recall_extract_progress
 		WHERE generation_fingerprint = ?
-		  AND EXISTS (`+
-		fmt.Sprintf(fluxSessionSQL, "recall_extract_progress.session_id")+`)`,
-		fluxArgs...,
+		  AND `+
+		fmt.Sprintf(staleSessionSQL, "recall_extract_progress.session_id"),
+		staleArgs...,
 	); err != nil {
 		return fmt.Errorf(
-			"clearing progress of sessions in flux: %w", err)
+			"clearing progress of ineligible sessions: %w", err)
 	}
-	// Promotion re-verifies eligibility inside the activation transaction:
-	// a session trashed, flagged automated, or scanned into findings after
-	// its entries were staged must not start serving on activation. Its
-	// entries stay archived for the retraction pass to delete.
+	// Everything still staged has a fully eligible session: the deletes
+	// above removed the rest in this same transaction.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
 		SET status = 'accepted',
 		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
-		  AND source_run_id = ?
-		  AND NOT EXISTS (
-			SELECT 1 FROM sessions s
-			WHERE s.id = recall_entries.source_session_id
-			  AND (`+extractSessionIneligibleSQL+`)
-		  )`,
+		  AND source_run_id = ?`,
 		fingerprint,
 	); err != nil {
 		return fmt.Errorf("promoting activated generation entries: %w", err)

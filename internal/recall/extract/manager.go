@@ -209,6 +209,25 @@ func (m *Manager) runPassLocked(
 	if err := m.ensureGeneration(ctx); err != nil {
 		return result, err
 	}
+	// Every scheduled pass reconciles eligibility loss before any model
+	// work: sessions since trashed, flagged automated, or carrying secret
+	// findings get their generated entries deleted (across all registered
+	// generations — a retired generation keeps serving until the next
+	// activation) and their progress rows removed, so an excluded
+	// session's corpus stops serving and a lingering pending or partial
+	// row cannot block activation forever. Running it first means privacy
+	// retraction cannot be deferred by extraction failures — an
+	// endpoint-scoped abort with a persistently broken endpoint would
+	// otherwise defer it indefinitely — and it is not gated on full
+	// passes: with the backstop disabled only incremental passes run, and
+	// retraction must not be schedulable away.
+	if opts.SessionID == "" {
+		if _, _, err := m.cfg.DB.ReconcileIneligibleExtractSessions(
+			ctx, m.reconcileWatermark,
+		); err != nil {
+			return result, err
+		}
+	}
 	sessionIDs, err := m.passSessions(ctx, opts)
 	if err != nil {
 		return result, err
@@ -253,15 +272,13 @@ func (m *Manager) runPassLocked(
 			result.Sessions++
 		}
 	}
-	// Every scheduled pass reconciles eligibility loss that happened after
-	// extraction: sessions since trashed, flagged automated, or carrying
-	// secret findings get their generated entries deleted (across all
-	// registered generations — a retired generation keeps serving until
-	// the next activation) and their progress rows removed, so an
-	// excluded session's corpus stops serving and a lingering pending or
-	// partial row cannot block activation forever. Not gated on full
-	// passes: with the backstop disabled only incremental passes run, and
-	// privacy retraction must not be schedulable away.
+	// A second reconciliation after the loop catches eligibility lost
+	// while units were at the model — the mid-extraction discard reopens
+	// the row, and this removes it so a restored session rediscovers
+	// through the no-progress discovery arm. Reachable only when the loop
+	// completed; an aborted pass is covered by the next pass's pre-loop
+	// reconciliation, which runs even against a persistently broken
+	// endpoint.
 	if opts.SessionID == "" {
 		if _, _, err := m.cfg.DB.ReconcileIneligibleExtractSessions(
 			ctx, m.reconcileWatermark,

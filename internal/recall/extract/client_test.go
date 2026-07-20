@@ -30,7 +30,7 @@ func newScriptedServer(
 	var index atomic.Int64
 	return httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/chat/completions" {
+			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 				t.Errorf("request path = %q, want /chat/completions", r.URL.Path)
 			}
 			var payload map[string]any
@@ -822,6 +822,36 @@ func TestClientWithholdsSuccessDiagnosticsForCredentialedEndpoints(t *testing.T)
 				t.Fatalf("error reflects the endpoint credential: %v", err)
 			}
 		})
+	}
+}
+
+// TestClientWithholdsBodyForPathTokenEndpoints pins that a path segment
+// long enough to hold a capability token counts as credential material:
+// webhook-style gateways authenticate through high-entropy path tokens,
+// and a body echoing the request URI would otherwise carry the token into
+// persisted errors and logs through the kept excerpt.
+func TestClientWithholdsBodyForPathTokenEndpoints(t *testing.T) {
+	const token = "cap-4bcdefgh1jklmn0pqrst"
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{{
+		status:    http.StatusForbidden,
+		errorBody: `{"error":"denied for /` + token + `/v1"}`,
+	}}, &requests)
+	defer server.Close()
+
+	client := testClient(server.URL + "/" + token + "/v1")
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("scripted failure must surface an error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error reflects the path capability token: %v", err)
+	}
+	if strings.Contains(err.Error(), "denied") {
+		t.Fatalf("error carries attacker-controlled body content from a "+
+			"credentialed endpoint: %v", err)
 	}
 }
 

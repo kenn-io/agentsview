@@ -554,6 +554,17 @@ func (c *Client) credentialedEndpoint() bool {
 			return true
 		}
 	}
+	// A path segment long enough to hold a capability token counts too:
+	// webhook-style gateways authenticate through high-entropy path
+	// tokens, and entropy needs length. Short segments are API-surface
+	// vocabulary (v1, openai, deployment names) whose loss would gut
+	// every kept diagnostic; 20 characters catches the shortest common
+	// capability tokens (Slack's webhook token is 24).
+	for segment := range strings.SplitSeq(endpoint.Path, "/") {
+		if len(segment) >= 20 {
+			return true
+		}
+	}
 	return false
 }
 
