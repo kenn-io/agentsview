@@ -80,6 +80,23 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 			layout.paths.localDirs = append(layout.paths.localDirs, local)
 		}
 	}
+	// Extra files (e.g. a Hermes profile's state.db and its SQLite
+	// companions) are transferred alongside the transcript dirs but are
+	// not enumerated in Dirs. Without an exact mapping here, the archive's
+	// authoritative fingerprint path (state.db) has no remote translation:
+	// the skip-cache entry is discarded after every import, forcing a full
+	// re-fingerprint, and the fallback path rewriter stores synthetic
+	// paths like /__drive_C/... instead of the original remote path on
+	// Windows/UNC remotes. Registering each extra file as its own
+	// remote->local pair fixes both the skip cache and the rewriter.
+	for _, remoteFile := range targets.ExtraFiles {
+		local, err := safeRemappedRemotePath(root, remoteFile)
+		if err != nil {
+			return importLayout{}, err
+		}
+		layout.paths.remoteDirs = append(layout.paths.remoteDirs, remoteFile)
+		layout.paths.localDirs = append(layout.paths.localDirs, local)
+	}
 	return layout, nil
 }
 

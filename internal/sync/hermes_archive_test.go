@@ -118,6 +118,34 @@ func TestHermesProviderFingerprintChangesWhenTranscriptRemoved(t *testing.T) {
 	assert.Equal(t, stateInfo.Size(), after.Size)
 }
 
+func TestHermesProfileCreatedAfterEngineInitializationIsDiscovered(t *testing.T) {
+	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {profilesRoot},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	before := engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, before.Synced)
+
+	profileRoot := filepath.Join(profilesRoot, "research")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	writeHermesArchiveStateDB(t, profileRoot)
+
+	after := engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, after.Synced)
+	session, err := database.GetSession(context.Background(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.FirstMessage)
+	assert.Equal(t, "state db message", *session.FirstMessage)
+}
+
 // TestProcessFileHermesArchiveSkipCacheUsesAggregateMtime confirms the
 // provider-authoritative processFile path keys the skip cache on the aggregate
 // archive mtime (state.db plus direct transcripts), so a cached entry stamped
@@ -246,6 +274,65 @@ func TestSyncPathsHermesArchiveTranscriptPersistsAggregateFingerprint(t *testing
 	require.True(t, found)
 	assert.Equal(t, wantSize, storedSize)
 	assert.Equal(t, wantMtime, storedMtime)
+}
+
+func TestSyncPathsHermesArchiveWALCommitRefreshesMetadata(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writer := openHermesArchiveWALWriter(t, stateDB)
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	initial := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, initial.Synced)
+	stateBefore, err := os.Stat(stateDB)
+	require.NoError(t, err)
+
+	_, err = writer.Exec(`UPDATE sessions SET title = 'WAL-only title' WHERE id = 'child'`)
+	require.NoError(t, err)
+	walPath := stateDB + "-wal"
+	walInfo, err := os.Stat(walPath)
+	require.NoError(t, err)
+	stateAfter, err := os.Stat(stateDB)
+	require.NoError(t, err)
+	assert.Equal(t, stateBefore.Size(), stateAfter.Size())
+	assert.Equal(t, stateBefore.ModTime(), stateAfter.ModTime(),
+		"the committed update must remain WAL-only for this regression")
+	walTime := stateAfter.ModTime().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+
+	engine.SyncPaths([]string{walPath})
+
+	session, err := database.GetSession(context.Background(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.DisplayName)
+	assert.Equal(t, "WAL-only title", *session.DisplayName)
+	storedSize, storedMtime, found := database.GetFileInfoByPath(stateDB)
+	require.True(t, found)
+	assert.Equal(t, stateAfter.Size()+walInfo.Size(), storedSize)
+	assert.Equal(t, walTime.UnixNano(), storedMtime)
+}
+
+func openHermesArchiveWALWriter(t *testing.T, stateDB string) *sql.DB {
+	t.Helper()
+	writer, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	writer.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+
+	var journalMode string
+	require.NoError(t, writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
+	assert.Equal(t, "wal", journalMode)
+	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
+	require.NoError(t, err)
+	return writer
 }
 
 func writeHermesArchiveStateDB(t *testing.T, root string) string {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -134,6 +135,12 @@ func runSSHScriptStream(
 				Host:   host,
 				Stderr: strings.TrimSpace(stderr.String()),
 				Err:    waitErr,
+			}
+		}
+		for line := range strings.SplitSeq(strings.TrimSpace(stderr.String()), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				fmt.Fprintf(os.Stderr, "  SSH %s: %s\n", host, line)
 			}
 		}
 		return nil

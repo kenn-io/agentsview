@@ -163,8 +163,8 @@ concurrent syncs of that host from the same data directory.
 The mirror adds an on-disk copy of the remote session sources to the collector,
 in addition to the indexed database. Budget roughly the size of each remote
 host's syncable source corpus for it. Incremental transfer applies only to the
-HTTP transport; SSH remote sync continues to copy a full session tree on each
-run.
+HTTP transport. SSH remote sync is deprecated, receives only critical fixes,
+and continues to copy a full session tree on each run.
 
 ### How A Sync Works
 

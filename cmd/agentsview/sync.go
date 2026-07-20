@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	stdsync "sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -365,6 +366,12 @@ func runRemoteSyncTransportWithCleanup(
 ) (remotesync.SyncStats, error) {
 	switch rh.Transport {
 	case "", config.RemoteTransportSSH:
+		sshRemoteSyncDeprecationWarningOnce.Do(func() {
+			log.Printf(
+				"warning: SSH remote sync is deprecated and receives only critical fixes; " +
+					"use HTTP remote sync instead",
+			)
+		})
 		return runSSHRemoteSync(ctx, appCfg, database, rh, full)
 	case config.RemoteTransportHTTP:
 		if !acquireHTTPCleanup {
@@ -379,6 +386,8 @@ func runRemoteSyncTransportWithCleanup(
 		)
 	}
 }
+
+var sshRemoteSyncDeprecationWarningOnce = new(stdsync.Once)
 
 var httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
 

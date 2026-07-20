@@ -141,6 +141,57 @@ func buildResolveScript() string {
 			"fi; " +
 			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
 			"}\n" +
+			"av_emit_extra_file() { " +
+			"file=\"$1\"; " +
+			"[ -f \"$file\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
+			"}\n" +
+			"av_has_hermes_transcript() { " +
+			"av_hermes_transcript_dir=\"$1\"; " +
+			"[ -d \"$av_hermes_transcript_dir\" ] || return 1; " +
+			"for av_hermes_transcript in \"$av_hermes_transcript_dir\"/*.jsonl \"$av_hermes_transcript_dir\"/session_*.json; do " +
+			"[ -f \"$av_hermes_transcript\" ] && return 0; done; return 1; " +
+			"}\n" +
+			"av_emit_hermes_target() { " +
+			"target=\"$1\"; " +
+			"av_hermes_allow_flat=\"${2:-1}\"; " +
+			"while [ \"$target\" != \"/\" ] && [ \"${target%/}\" != \"$target\" ]; do target=\"${target%/}\"; done; " +
+			"av_hermes_parent=\"${target%/*}\"; av_hermes_grandparent=\"${av_hermes_parent%/*}\"; " +
+			"if [ \"${av_hermes_parent##*/}\" = profiles ] && [ \"${av_hermes_grandparent##*/}\" = .hermes ]; then av_hermes_allow_flat=0; fi; " +
+			"if [ \"$av_hermes_allow_flat\" -eq 0 ]; then " +
+			"av_hermes_root=\"$target\"; av_hermes_sessions=\"$target/sessions\"; " +
+			"else case \"$target\" in " +
+			"*/sessions) av_hermes_root=\"${target%/*}\"; av_hermes_sessions=\"$target\";; " +
+			"*/state.db) av_hermes_root=\"${target%/*}\"; av_hermes_sessions=\"$av_hermes_root/sessions\";; " +
+			"*) av_hermes_root=\"$target\"; av_hermes_sessions=\"$target/sessions\";; " +
+			"esac; fi; " +
+			"av_hermes_state=\"$av_hermes_root/state.db\"; " +
+			"if [ -d \"$av_hermes_sessions\" ]; then " +
+			"av_emit_target \"" + string(parser.AgentHermes) + "\" \"$av_hermes_sessions\"; " +
+			"for av_hermes_file in \"$av_hermes_state\" \"$av_hermes_state-wal\" \"$av_hermes_state-shm\" \"$av_hermes_state-journal\"; do " +
+			"av_emit_extra_file \"$av_hermes_file\"; done; " +
+			"elif [ -f \"$av_hermes_state\" ]; then " +
+			"printf '%s\\000' \"" + string(parser.AgentHermes) + ":$av_hermes_state\"; " +
+			"for av_hermes_file in \"$av_hermes_state-wal\" \"$av_hermes_state-shm\" \"$av_hermes_state-journal\"; do " +
+			"av_emit_extra_file \"$av_hermes_file\"; done; " +
+			"elif [ \"$av_hermes_allow_flat\" -eq 1 ] && av_has_hermes_transcript \"$target\"; then " +
+			"av_emit_target \"" + string(parser.AgentHermes) + "\" \"$target\"; fi; " +
+			"}\n" +
+			"av_emit_hermes_profiles() { " +
+			"av_hermes_profiles=\"$1\"; " +
+			"for av_hermes_prof in \"$av_hermes_profiles\"/*; do " +
+			"[ -L \"$av_hermes_prof\" ] && continue; " +
+			"[ -d \"$av_hermes_prof\" ] || continue; " +
+			"av_emit_hermes_target \"$av_hermes_prof\" 0; " +
+			"done; " +
+			"}\n" +
+			"av_emit_hermes_dir() { " +
+			"dir=\"$1\"; [ -n \"$dir\" ] || dir=\"$2\"; " +
+			"while [ \"$dir\" != \"/\" ] && [ \"${dir%/}\" != \"$dir\" ]; do dir=\"${dir%/}\"; done; " +
+			"av_hermes_parent=\"${dir%/*}\"; " +
+			"if [ \"${dir##*/}\" = profiles ] && [ \"${av_hermes_parent##*/}\" = .hermes ]; then " +
+			"av_emit_hermes_profiles \"$dir\"; return; fi; " +
+			"av_emit_hermes_target \"$dir\"; " +
+			"}\n" +
 			"av_emit_dir() { " +
 			"dir=\"$1\"; " +
 			"[ -n \"$dir\" ] || dir=\"$2\"; " +
@@ -181,6 +232,13 @@ func buildResolveScript() string {
 		}
 		for _, rel := range def.DefaultDirs {
 			defaultDir := "$HOME/" + rel
+			if def.Type == parser.AgentHermes {
+				fmt.Fprintf(&b,
+					"av_emit_hermes_dir \"%s\" \"%s\"\n",
+					remoteEnvExpansion(def.EnvVar), defaultDir,
+				)
+				continue
+			}
 			if def.DefaultRootEnvVar != "" {
 				rootTail := remoteDefaultRootTail(rel)
 				rootSuffix := ""
@@ -207,6 +265,16 @@ func buildResolveScript() string {
 			if def.Type == parser.AgentCodex {
 				b.WriteString("av_emit_codex_index\n")
 			}
+		}
+		// Hermes named defaults are replacements, not additions, when the
+		// sessions override is set. Each emitted profile includes its state DB
+		// and live SQLite companions as well as transcript sessions.
+		if def.Type == parser.AgentHermes {
+			fmt.Fprintf(&b,
+				"if [ -z \"%s\" ]; then "+
+					"av_emit_hermes_profiles \"$HOME/.hermes/profiles\"; fi\n",
+				remoteEnvExpansion(def.EnvVar),
+			)
 		}
 	}
 	// Ensure exit 0 — the last [ -d ]/[ -f ] test may fail if that

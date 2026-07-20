@@ -21,6 +21,18 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			continue
 		}
 		for _, dir := range cfg.ResolveDirs(def.Type) {
+			if def.Type == parser.AgentHermes {
+				hermesDirs, hermesFiles := resolveHermesTargets(dir)
+				if len(hermesDirs) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], hermesDirs...)
+				}
+				for _, file := range hermesFiles {
+					if !slices.Contains(extra, file) {
+						extra = append(extra, file)
+					}
+				}
+				continue
+			}
 			if def.Type == parser.AgentAider {
 				targets := resolveAiderTargets(dir)
 				if len(targets) > 0 {
@@ -59,6 +71,97 @@ func ResolveTargets(cfg config.Config) TargetSet {
 		}
 	}
 	return TargetSet{Dirs: dirs, Files: files, ExtraFiles: extra}
+}
+
+func resolveHermesTargets(root string) ([]string, []string) {
+	root = filepath.Clean(root)
+	if filepath.Base(root) != "profiles" ||
+		filepath.Base(filepath.Dir(root)) != ".hermes" {
+		return resolveHermesArchiveTarget(root, !isHermesNamedProfileRoot(root))
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, nil
+	}
+	var dirs []string
+	var files []string
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		profileDirs, profileFiles := resolveHermesArchiveTarget(
+			filepath.Join(root, entry.Name()), false,
+		)
+		dirs = append(dirs, profileDirs...)
+		files = append(files, profileFiles...)
+	}
+	return dirs, files
+}
+
+func isHermesNamedProfileRoot(root string) bool {
+	parent := filepath.Dir(filepath.Clean(root))
+	return filepath.Base(parent) == "profiles" &&
+		filepath.Base(filepath.Dir(parent)) == ".hermes"
+}
+
+func resolveHermesArchiveTarget(root string, allowFlat bool) ([]string, []string) {
+	root = filepath.Clean(root)
+	sessionsDir := filepath.Join(root, "sessions")
+	stateDB := filepath.Join(root, "state.db")
+	if allowFlat {
+		switch filepath.Base(root) {
+		case "sessions":
+			sessionsDir = root
+			stateDB = filepath.Join(filepath.Dir(root), "state.db")
+		case "state.db":
+			sessionsDir = filepath.Join(filepath.Dir(root), "sessions")
+			stateDB = root
+		}
+	}
+
+	if info, err := os.Stat(sessionsDir); err == nil && info.IsDir() {
+		return []string{sessionsDir}, hermesStateFiles(stateDB, true)
+	}
+	if regularRemoteSyncFile(stateDB) {
+		return []string{stateDB}, hermesStateFiles(stateDB, false)
+	}
+	if allowFlat && hasHermesTranscriptFile(root) {
+		return []string{root}, nil
+	}
+	return nil, nil
+}
+
+func hasHermesTranscriptFile(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".jsonl") &&
+			(!strings.HasPrefix(name, "session_") || !strings.HasSuffix(name, ".json")) {
+			continue
+		}
+		if regularRemoteSyncFile(filepath.Join(root, name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// hermesStateFiles returns stable, narrowly scoped allowlist paths. SQLite
+// companions are transient, so their presence must not change the target set
+// between the targets, manifest, and archive requests. Archive and manifest
+// writers treat absent entries as optional.
+func hermesStateFiles(stateDB string, includeDB bool) []string {
+	files := []string{stateDB + "-wal", stateDB + "-shm", stateDB + "-journal"}
+	if includeDB {
+		files = append([]string{stateDB}, files...)
+	}
+	return files
 }
 
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {

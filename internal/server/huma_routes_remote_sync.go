@@ -126,7 +126,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if deltaMode {
-		err = remotesync.WriteArchiveFiles(out, allowed.DeltaAllowedRoots(), files)
+		err = remotesync.WriteArchiveFiles(out, allowed, files)
 	} else {
 		err = remotesync.WriteArchive(out, archiveTargets)
 	}

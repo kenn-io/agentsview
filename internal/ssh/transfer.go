@@ -2,10 +2,13 @@ package ssh
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,41 +28,191 @@ func buildTarCommand(
 	files map[parser.AgentType][]string,
 	extraFiles []string,
 ) string {
-	var paths []string
+	hermesStateDBs := hermesSSHStateDBs(dirs, extraFiles)
+	hermesSQLite := make(map[string]struct{}, len(hermesStateDBs)*4)
+	for _, stateDB := range hermesStateDBs {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			hermesSQLite[path.Clean(stateDB+suffix)] = struct{}{}
+		}
+	}
+	paths := make([]string, 0)
+	addPath := func(remotePath string) {
+		if _, isHermesSQLite := hermesSQLite[path.Clean(remotePath)]; isHermesSQLite {
+			return
+		}
+		if archivePath := tarListPath(remotePath); archivePath != "" {
+			paths = append(paths, archivePath)
+		}
+	}
 	for agent, agentDirs := range dirs {
 		if _, fileScoped := files[agent]; fileScoped {
 			continue
 		}
 		for _, d := range agentDirs {
-			if path := tarListPath(d); path != "" {
-				paths = append(paths, shellQuote(path))
-			}
+			addPath(d)
 		}
 	}
 	for _, agentFiles := range files {
 		for _, f := range agentFiles {
-			if path := tarListPath(f); path != "" {
-				paths = append(paths, shellQuote(path))
-			}
+			addPath(f)
 		}
 	}
 	for _, f := range extraFiles {
-		if path := tarListPath(f); path != "" {
-			paths = append(paths, shellQuote(path))
-		}
+		addPath(f)
 	}
+	if len(hermesStateDBs) > 0 {
+		return buildPythonSnapshotTarCommand(paths, hermesStateDBs)
+	}
+	return buildPlainTarCommand(paths)
+}
+
+func buildPlainTarCommand(paths []string) string {
 	var b strings.Builder
 	b.WriteString("set -e\n")
 	b.WriteString("av_emit_tar_path() { [ -e \"/$1\" ] || return 0; printf '%s\\n' \"$1\"; }\n")
 	b.WriteString("{\n")
 	b.WriteString(":\n")
-	for _, path := range paths {
+	for _, archivePath := range paths {
 		b.WriteString("av_emit_tar_path ")
-		b.WriteString(path)
+		b.WriteString(shellQuote(archivePath))
 		b.WriteByte('\n')
 	}
 	b.WriteString("} | tar cf - -C / -T -\n")
 	return b.String()
+}
+
+func hermesSSHStateDBs(
+	dirs map[parser.AgentType][]string,
+	extraFiles []string,
+) []string {
+	extra := make(map[string]struct{}, len(extraFiles))
+	for _, remotePath := range extraFiles {
+		extra[path.Clean(remotePath)] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	for _, remotePath := range dirs[parser.AgentHermes] {
+		clean := path.Clean(remotePath)
+		switch path.Base(clean) {
+		case "state.db":
+			seen[clean] = struct{}{}
+		case "sessions":
+			stateDB := path.Join(path.Dir(clean), "state.db")
+			if _, ok := extra[stateDB]; ok {
+				seen[stateDB] = struct{}{}
+			}
+		}
+	}
+	stateDBs := make([]string, 0, len(seen))
+	for stateDB := range seen {
+		stateDBs = append(stateDBs, stateDB)
+	}
+	sort.Strings(stateDBs)
+	return stateDBs
+}
+
+func buildPythonSnapshotTarCommand(paths, stateDBs []string) string {
+	type sqliteArchivePath struct {
+		Source  string `json:"source"`
+		Archive string `json:"archive"`
+	}
+	databases := make([]sqliteArchivePath, 0, len(stateDBs))
+	for _, stateDB := range stateDBs {
+		archivePath := tarListPath(stateDB)
+		if archivePath == "" {
+			continue
+		}
+		databases = append(databases, sqliteArchivePath{
+			Source: stateDB, Archive: archivePath,
+		})
+	}
+	pathsJSON, _ := json.Marshal(paths)
+	databasesJSON, _ := json.Marshal(databases)
+	fallback := buildPlainTarCommand(paths)
+	var fallbackWarnings strings.Builder
+	for _, database := range databases {
+		fallbackWarnings.WriteString("  printf '%s\\n' ")
+		fallbackWarnings.WriteString(shellQuote(
+			"warning: skipped Hermes state.db snapshot: " + database.Source +
+				": Python 3 with SQLite backup support is unavailable",
+		))
+		fallbackWarnings.WriteString(" >&2\n")
+	}
+	return fmt.Sprintf(`set -e
+av_python=$(command -v python3 || true)
+if [ -n "$av_python" ] && "$av_python" -c 'import json, os, pathlib, sqlite3, stat, sys, tarfile, tempfile; raise SystemExit(0 if sys.version_info >= (3, 7) and hasattr(sqlite3.Connection, "backup") else 1)' >/dev/null 2>&1; then
+"$av_python" - <<'PY'
+import json
+import os
+import pathlib
+import sqlite3
+import stat
+import sys
+import tarfile
+import tempfile
+
+paths = json.loads(%q)
+databases = json.loads(%q)
+
+def warn_skipped(source_path, reason):
+    print("warning: skipped Hermes state.db snapshot: {}: {}".format(source_path, reason), file=sys.stderr)
+
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
+    for archive_path in paths:
+        source_path = "/" + archive_path[2:] if archive_path.startswith("./") else archive_path
+        if not os.path.lexists(source_path):
+            continue
+        try:
+            archive.add(source_path, arcname=archive_path, recursive=True)
+        except FileNotFoundError:
+            continue
+    for item in databases:
+        source_path = item["source"]
+        try:
+            source_info = os.lstat(source_path)
+        except OSError as exc:
+            warn_skipped(source_path, exc)
+            continue
+        if not stat.S_ISREG(source_info.st_mode):
+            warn_skipped(source_path, "not a regular file")
+            continue
+        sidecars = []
+        unsafe_sidecar = None
+        for suffix in ("-wal", "-shm", "-journal"):
+            try:
+                sidecar_info = os.lstat(source_path + suffix)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                unsafe_sidecar = "cannot inspect {}: {}".format(source_path + suffix, exc)
+                break
+            if not stat.S_ISREG(sidecar_info.st_mode):
+                unsafe_sidecar = "{} is not a regular file".format(source_path + suffix)
+                break
+            sidecars.append((suffix, sidecar_info))
+        if unsafe_sidecar:
+            warn_skipped(source_path, unsafe_sidecar)
+            continue
+        try:
+            with tempfile.TemporaryDirectory(prefix="agentsview-hermes-snapshot-") as tmp:
+                snapshot_path = os.path.join(tmp, "state.db")
+                source_uri = pathlib.Path(source_path).as_uri() + "?mode=ro"
+                with sqlite3.connect(source_uri, uri=True) as source_db:
+                    with sqlite3.connect(snapshot_path) as snapshot_db:
+                        source_db.backup(snapshot_db)
+                        snapshot_db.execute("PRAGMA journal_mode = DELETE")
+                mtime_ns = source_info.st_mtime_ns
+                for suffix, sidecar_info in sidecars:
+                    if suffix in ("-wal", "-journal"):
+                        mtime_ns = max(mtime_ns, sidecar_info.st_mtime_ns)
+                os.utime(snapshot_path, ns=(mtime_ns, mtime_ns))
+                archive.add(snapshot_path, arcname=item["archive"], recursive=False)
+        except (OSError, sqlite3.Error, tarfile.TarError, ValueError) as exc:
+            warn_skipped(source_path, exc)
+            continue
+PY
+else
+%s%sfi
+`, string(pathsJSON), string(databasesJSON), fallbackWarnings.String(), fallback)
 }
 
 func tarListPath(path string) string {

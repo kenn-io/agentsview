@@ -1387,8 +1387,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 	}
 	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
 
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	unlockStart := holdExternalDaemonStartLock(t, dir)
 	oldHost, oldPort := testPingServer(t)
 	errCh := make(chan error, 1)
 	go func() {
@@ -1398,7 +1397,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 			withRuntimeVersion("1.0.0"),
 			withRuntimeAPIVersion(0),
 		))
-		UnmarkDaemonStarting(dir)
+		unlockStart()
 		errCh <- err
 	}()
 
@@ -1509,8 +1508,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 		RemoveDaemonRuntime(dir)
 	})
 
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	unlockStart := holdExternalDaemonStartLock(t, dir)
 	oldHost, oldPort := testPingServer(t)
 	errCh := make(chan error, 1)
 	go func() {
@@ -1520,7 +1518,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 			withRuntimeVersion("1.0.0"),
 			withRuntimeAPIVersion(0),
 		))
-		UnmarkDaemonStarting(dir)
+		unlockStart()
 		errCh <- err
 	}()
 

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -860,7 +861,7 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			}
 			if req.DeltaFiles != nil {
 				require.NoError(t, WriteArchiveFiles(
-					w, remote.targets.DeltaAllowedRoots(), req.DeltaFiles))
+					w, remote.targets, req.DeltaFiles))
 			} else {
 				require.NoError(t, WriteArchive(w, req.TargetSet))
 			}
@@ -974,6 +975,148 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, remote.archiveRequests, 2)
 	assert.Equal(t, 0, stats.SessionsSynced)
+}
+
+func TestHTTPSyncMirrorRemovesSidecarThatVanishesDuringDeltaArchive(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
+	remote.writeSession(t, "a.jsonl", base, "session a")
+	remote.writeSession(t, "b.jsonl", base, "session b")
+	remote.writeSession(t, "c.jsonl", base, "session c")
+	wal := filepath.Join(filepath.Dir(remote.dir), "state.db-wal")
+	require.NoError(t, os.WriteFile(wal, []byte("first wal"), 0o644))
+	require.NoError(t, os.Chtimes(wal, base, base))
+	remote.targets.ExtraFiles = []string{wal}
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+
+	prepared, err := hs.Prepare(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, prepared.Close())
+	localWAL, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), wal)
+	require.NoError(t, err)
+	require.FileExists(t, localWAL)
+
+	require.NoError(t, os.WriteFile(wal, []byte("second wal"), 0o644))
+	require.NoError(t, os.Chtimes(wal, base.Add(time.Second), base.Add(time.Second)))
+	remote.onArchive = func(req ArchiveRequest) {
+		if assert.Equal(t, []string{wal}, req.DeltaFiles) {
+			assert.NoError(t, os.Remove(wal))
+		}
+	}
+
+	prepared, err = hs.Prepare(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, prepared.Close())
+	assert.NoFileExists(t, localWAL)
+}
+
+func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	profileRoot := filepath.Join(filepath.Dir(remote.dir), "hermes-profile")
+	sessionsDir := filepath.Join(profileRoot, "sessions")
+	stateDB := filepath.Join(profileRoot, "state.db")
+	stateWAL := stateDB + "-wal"
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	writeHermesImportStateDB(t, stateDB)
+	for i := range 3 {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(sessionsDir, fmt.Sprintf("padding-%d.txt", i)),
+			[]byte("manifest padding\n"),
+			0o644,
+		))
+	}
+	remote.targets = TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir},
+		},
+		ExtraFiles: []string{stateDB, stateWAL},
+	}
+
+	writer, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	writer.SetMaxOpenConns(1)
+	var writerCloseOnce stdsync.Once
+	var writerCloseErr error
+	closeWriter := func() error {
+		writerCloseOnce.Do(func() { writerCloseErr = writer.Close() })
+		return writerCloseErr
+	}
+	t.Cleanup(func() { require.NoError(t, closeWriter()) })
+	var journalMode string
+	require.NoError(t, writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
+	assert.Equal(t, "wal", journalMode)
+	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`PRAGMA user_version = 1`)
+	require.NoError(t, err)
+	require.FileExists(t, stateWAL)
+
+	dataDir := t.TempDir()
+	database, hs := newMirrorSync(t, remote, dataDir)
+	stats, err := hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	baseline, err := database.GetSession(
+		context.Background(), "devbox~hermes:database-only",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, baseline)
+	require.NotNil(t, baseline.DisplayName)
+	assert.Equal(t, "Database-only profile", *baseline.DisplayName)
+
+	stateBefore, err := os.Stat(stateDB)
+	require.NoError(t, err)
+	_, err = writer.Exec(`
+		UPDATE sessions
+		SET title = 'Checkpointed profile'
+		WHERE id = 'database-only'
+	`)
+	require.NoError(t, err)
+	require.FileExists(t, stateWAL)
+	stateAfter, err := os.Stat(stateDB)
+	require.NoError(t, err)
+	assert.Equal(t, stateBefore.Size(), stateAfter.Size())
+	assert.Equal(t, stateBefore.ModTime(), stateAfter.ModTime(),
+		"the metadata update must remain WAL-only before the second manifest")
+
+	checkpointResult := make(chan error, 1)
+	remote.onArchive = func(ArchiveRequest) {
+		_, checkpointErr := writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		checkpointErr = errors.Join(checkpointErr, closeWriter())
+		if removeErr := os.Remove(stateWAL); !os.IsNotExist(removeErr) {
+			checkpointErr = errors.Join(checkpointErr, removeErr)
+		}
+		checkpointResult <- checkpointErr
+	}
+
+	stats, err = hs.Run(context.Background())
+	require.NoError(t, err)
+	select {
+	case checkpointErr := <-checkpointResult:
+		require.NoError(t, checkpointErr)
+	case <-time.After(backgroundWaitTimeout):
+		require.FailNow(t, "archive hook did not checkpoint the Hermes database")
+	}
+	require.Len(t, remote.archiveRequests, 2)
+	assert.Equal(t, []string{stateDB}, remote.archiveRequests[1].DeltaFiles)
+	localWAL, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), stateWAL)
+	require.NoError(t, err)
+	assert.NoFileExists(t, localWAL)
+
+	refreshed, err := database.GetSession(
+		context.Background(), "devbox~hermes:database-only",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed)
+	require.NotNil(t, refreshed.DisplayName)
+	assert.Equal(t, "Checkpointed profile", *refreshed.DisplayName)
+
+	stats, err = hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, stats.SessionsSynced)
+	assert.Len(t, remote.archiveRequests, 2,
+		"an unchanged standalone snapshot must match the consolidated manifest")
 }
 
 func TestHTTPSyncFallsBackToLegacyWhenManifestMissing(t *testing.T) {

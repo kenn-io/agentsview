@@ -14,12 +14,33 @@ import (
 
 func WriteArchive(w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
+	hermesSQLite := make(map[string]string)
+	for _, stateDB := range hermesStateDBTargets(targets) {
+		for _, path := range hermesSQLitePaths(stateDB) {
+			hermesSQLite[path] = stateDB
+		}
+	}
+	writtenHermesState := make(map[string]struct{})
+	writePath := func(path string, optional bool) error {
+		clean := filepath.Clean(path)
+		if stateDB, ok := hermesSQLite[clean]; ok {
+			if _, written := writtenHermesState[stateDB]; written {
+				return nil
+			}
+			writtenHermesState[stateDB] = struct{}{}
+			return writeHermesStateDBSnapshot(tw, stateDB)
+		}
+		if optional {
+			return writeOptionalArchiveFile(tw, path)
+		}
+		return writeArchivePath(tw, path)
+	}
 	for agent, dirs := range targets.Dirs {
 		if _, fileScoped := targets.Files[agent]; fileScoped {
 			continue
 		}
 		for _, root := range dirs {
-			if err := writeArchivePath(tw, root); err != nil {
+			if err := writePath(root, false); err != nil {
 				return err
 			}
 		}
@@ -36,13 +57,13 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			// missing: the archive races live agents deleting tasks,
 			// and validation deliberately authorizes session-shaped
 			// files that vanished after target resolution.
-			if err := writeOptionalArchivePath(tw, path); err != nil {
+			if err := writePath(path, true); err != nil {
 				return err
 			}
 		}
 	}
 	for _, path := range targets.ExtraFiles {
-		if err := writeArchivePath(tw, path); err != nil {
+		if err := writePath(path, true); err != nil {
 			return err
 		}
 	}
@@ -51,6 +72,32 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	}
 	return nil
 }
+
+func writeHermesStateDBSnapshot(tw *tar.Writer, stateDB string) error {
+	_, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
+	if !exists {
+		return nil
+	}
+	tmpDir, err := os.MkdirTemp("", "agentsview-hermes-snapshot-*")
+	if err != nil {
+		return fmt.Errorf("create hermes snapshot dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	snapshotPath := filepath.Join(tmpDir, "state.db")
+	if err := writeHermesSnapshotFile(snapshotPath, stateDB); err != nil {
+		return fmt.Errorf("snapshot hermes database %q: %w", stateDB, err)
+	}
+	if err := os.Chtimes(snapshotPath, modTime, modTime); err != nil {
+		return fmt.Errorf("stamp hermes database snapshot: %w", err)
+	}
+	info, err := os.Stat(snapshotPath)
+	if err != nil {
+		return fmt.Errorf("stat hermes database snapshot: %w", err)
+	}
+	return writeArchiveFileAs(tw, stateDB, snapshotPath, info)
+}
+
+var writeHermesSnapshotFile = writeSQLiteSnapshot
 
 func writeWindsurfArchiveFiles(tw *tar.Writer, files []string) error {
 	seen := make(map[string]struct{}, len(files))
@@ -68,7 +115,7 @@ func writeWindsurfArchiveFiles(tw *tar.Writer, files []string) error {
 			parser.WindsurfStateDBName + "-shm":
 			continue
 		case "workspace.json":
-			if err := writeOptionalArchivePath(tw, path); err != nil {
+			if err := writeOptionalArchiveFile(tw, path); err != nil {
 				return err
 			}
 		default:
@@ -126,7 +173,7 @@ func windsurfArchiveModTime(info os.FileInfo, dbPath string) time.Time {
 	return mtime
 }
 
-func writeOptionalArchivePath(tw *tar.Writer, path string) error {
+func writeOptionalArchiveFile(tw *tar.Writer, path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -134,13 +181,10 @@ func writeOptionalArchivePath(tw *tar.Writer, path string) error {
 		}
 		return fmt.Errorf("stat archive path %q: %w", path, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
+	if !info.Mode().IsRegular() {
 		return nil
 	}
-	if !info.IsDir() {
-		return writeArchiveFile(tw, path, info)
-	}
-	return writeArchivePath(tw, path)
+	return writeArchiveFile(tw, path, info)
 }
 
 func writeArchivePath(tw *tar.Writer, root string) error {
@@ -285,18 +329,36 @@ func writeArchiveHeader(
 // the next manifest. writeArchivePath is unsuitable here because it
 // fails on a missing root.
 //
-// The allowedRoots re-resolution is defense in depth: callers validate
+// The allowed-target re-resolution is defense in depth: callers validate
 // the file list before reaching here, but the path handed to the
 // filesystem is rebuilt from the trusted root plus a filepath.IsLocal
 // validated relative component, so a client-supplied string can never
 // escape the resolved targets, even if a future caller forgets to
 // validate.
-func WriteArchiveFiles(w io.Writer, allowedRoots, files []string) error {
+func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 	tw := tar.NewWriter(w)
+	allowedRoots := allowed.DeltaAllowedRoots()
+	hermesStateDBs := make(map[string]struct{})
+	for _, stateDB := range hermesStateDBTargets(allowed) {
+		hermesStateDBs[filepath.Clean(stateDB)] = struct{}{}
+	}
+	writtenHermesState := make(map[string]struct{})
 	for _, path := range files {
 		local, ok := resolveDeltaFilePath(allowedRoots, path)
 		if !ok {
 			continue
+		}
+		if stateDB, isHermesSQLite := hermesStateDBForArchivePath(local); isHermesSQLite {
+			stateDB = filepath.Clean(stateDB)
+			if _, allowed := hermesStateDBs[stateDB]; allowed {
+				if _, written := writtenHermesState[stateDB]; !written {
+					writtenHermesState[stateDB] = struct{}{}
+					if err := writeHermesStateDBSnapshot(tw, stateDB); err != nil {
+						return err
+					}
+				}
+				continue
+			}
 		}
 		info, err := os.Lstat(local)
 		if err != nil {

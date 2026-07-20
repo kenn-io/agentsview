@@ -16,6 +16,9 @@ type SyncStats = remotesync.SyncStats
 
 // RemoteSync orchestrates pulling session data from a remote
 // host over SSH, parsing it, and writing it to the local DB.
+//
+// SSH remote sync is a deprecated compatibility transport that receives only
+// critical fixes. New configurations should use HTTP remote sync.
 type RemoteSync struct {
 	Host                    string
 	User                    string

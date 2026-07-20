@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	stdsync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -80,6 +81,33 @@ func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	return cfg, database
+}
+
+func TestRunRemoteSyncTransportWarnsOnceForDeprecatedSSH(t *testing.T) {
+	logs := captureLogOutput(t)
+	originalOnce := sshRemoteSyncDeprecationWarningOnce
+	sshRemoteSyncDeprecationWarningOnce = new(stdsync.Once)
+	t.Cleanup(func() { sshRemoteSyncDeprecationWarningOnce = originalOnce })
+
+	originalSSH := runSSHRemoteSync
+	runSSHRemoteSync = func(
+		context.Context, config.Config, *db.DB, config.RemoteHost, bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{}, nil
+	}
+	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
+
+	for range 2 {
+		_, err := runRemoteSyncTransport(
+			context.Background(), config.Config{}, nil,
+			config.RemoteHost{Host: "legacy-host"}, false,
+		)
+		require.NoError(t, err)
+	}
+
+	const warning = "SSH remote sync is deprecated"
+	assert.Equal(t, 1, strings.Count(logs.String(), warning))
+	assert.Contains(t, logs.String(), "use HTTP remote sync instead")
 }
 
 func isolateDirectCLISources(t *testing.T) {
@@ -626,7 +654,7 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 			var err error
 			if requested.DeltaFiles != nil {
 				err = remotesync.WriteArchiveFiles(
-					w, targets.DeltaAllowedRoots(), requested.DeltaFiles,
+					w, targets, requested.DeltaFiles,
 				)
 			} else {
 				err = remotesync.WriteArchive(w, requested.TargetSet)

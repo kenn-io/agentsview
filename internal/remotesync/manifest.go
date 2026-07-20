@@ -41,6 +41,13 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			"manifest not supported for sanitized file-scoped agents")
 	}
 	m := Manifest{Files: []ManifestEntry{}}
+	hermesStateDBs := hermesStateDBTargets(targets)
+	hermesSQLite := make(map[string]struct{}, len(hermesStateDBs)*4)
+	for _, stateDB := range hermesStateDBs {
+		for _, path := range hermesSQLitePaths(stateDB) {
+			hermesSQLite[path] = struct{}{}
+		}
+	}
 	add := func(path string, info os.FileInfo) {
 		m.Files = append(m.Files, ManifestEntry{
 			Path:    path,
@@ -66,6 +73,9 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			continue
 		}
 		for _, root := range dirs {
+			if _, ok := hermesSQLite[filepath.Clean(root)]; ok {
+				continue
+			}
 			if err := manifestWalk(root, add); err != nil {
 				return Manifest{}, err
 			}
@@ -73,14 +83,28 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 	}
 	for _, files := range targets.Files {
 		for _, path := range files {
+			if _, ok := hermesSQLite[filepath.Clean(path)]; ok {
+				continue
+			}
 			if err := addLstat(path); err != nil {
 				return Manifest{}, err
 			}
 		}
 	}
 	for _, path := range targets.ExtraFiles {
+		if _, ok := hermesSQLite[filepath.Clean(path)]; ok {
+			continue
+		}
 		if err := addLstat(path); err != nil {
 			return Manifest{}, err
+		}
+	}
+	for _, stateDB := range hermesStateDBs {
+		size, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
+		if exists {
+			m.Files = append(m.Files, ManifestEntry{
+				Path: stateDB, Size: size, MtimeNS: modTime.UnixNano(),
+			})
 		}
 	}
 	sort.Slice(m.Files, func(i, j int) bool {

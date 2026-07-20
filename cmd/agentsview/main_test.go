@@ -1072,6 +1072,24 @@ func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
 	assert.Equal(t, []string{sessionsDir}, roots[1].dirs)
 }
 
+func TestCollectWatchRootsWatchesHermesProfilesContainerRecursively(t *testing.T) {
+	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {profilesRoot},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs)
+	require.Len(t, roots, 1)
+	assert.Equal(t, profilesRoot, roots[0].root)
+	assert.False(t, roots[0].shallow)
+	assert.Equal(t, []string{profilesRoot}, roots[0].dirs)
+}
+
 func TestCollectWatchRootsUsesCoworkProviderRecursiveRoot(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{

@@ -215,10 +215,64 @@ func newHermesSourceSet(roots []string) hermesSourceSet {
 	return hermesSourceSet{roots: cleanJSONLRoots(roots)}
 }
 
+// The default Hermes roots include the stable profiles container rather than
+// its current children. Expanding direct children during discovery lets a
+// long-running provider see profiles created after initialization.
+func isHermesProfilesContainer(root string) bool {
+	root = filepath.Clean(root)
+	return filepath.Base(root) == "profiles" &&
+		filepath.Base(filepath.Dir(root)) == ".hermes"
+}
+
+func hermesProfileArchiveRoots(profilesRoot string) []string {
+	entries, err := os.ReadDir(profilesRoot)
+	if err != nil {
+		return nil
+	}
+	roots := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		roots = append(roots, filepath.Join(profilesRoot, entry.Name()))
+	}
+	return roots
+}
+
+func (s hermesSourceSet) expandedRoots() []string {
+	var roots []string
+	for _, root := range s.roots {
+		if isHermesProfilesContainer(root) {
+			roots = append(roots, hermesProfileArchiveRoots(root)...)
+			continue
+		}
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func hermesProfileRootForPath(profilesRoot, changedPath string) (string, bool) {
+	profilesRoot = filepath.Clean(profilesRoot)
+	changedPath = filepath.Clean(changedPath)
+	rel, err := filepath.Rel(profilesRoot, changedPath)
+	if err != nil || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	name := rel
+	if before, _, ok := strings.Cut(rel, string(filepath.Separator)); ok {
+		name = before
+	}
+	if name == "" || name == "." || name == ".." {
+		return "", false
+	}
+	return filepath.Join(profilesRoot, name), true
+}
+
 func (s hermesSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	for _, root := range s.roots {
+	for _, root := range s.expandedRoots() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -237,6 +291,15 @@ func (s hermesSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
+		if isHermesProfilesContainer(root) {
+			roots = append(roots, WatchRoot{
+				Path:         root,
+				Recursive:    true,
+				IncludeGlobs: []string{"state.db", "state.db-wal", "*.jsonl", "session_*.json"},
+				DebounceKey:  string(AgentHermes) + ":profiles:" + root,
+			})
+			continue
+		}
 		roots = append(roots, hermesWatchRoots(root)...)
 	}
 	return WatchPlan{Roots: roots}, nil
@@ -253,6 +316,19 @@ func (s hermesSourceSet) SourcesForChangedPath(
 	if req.WatchRoot != "" {
 		watchRoot := filepath.Clean(req.WatchRoot)
 		for _, root := range s.roots {
+			if isHermesProfilesContainer(root) && samePath(root, watchRoot) {
+				profileRoot, ok := hermesProfileRootForPath(root, req.Path)
+				if !ok {
+					return nil, nil
+				}
+				source, ok := s.sourceForChangedPath(
+					profileRoot, req.Path, allowMissing,
+				)
+				if ok {
+					return []SourceRef{source}, nil
+				}
+				return nil, nil
+			}
 			if !hermesWatchRootMatches(root, watchRoot) {
 				continue
 			}
@@ -264,6 +340,19 @@ func (s hermesSourceSet) SourcesForChangedPath(
 		return nil, nil
 	}
 	for _, root := range s.roots {
+		if isHermesProfilesContainer(root) {
+			profileRoot, ok := hermesProfileRootForPath(root, req.Path)
+			if !ok {
+				continue
+			}
+			source, ok := s.sourceForChangedPath(
+				profileRoot, req.Path, allowMissing,
+			)
+			if ok {
+				return []SourceRef{source}, nil
+			}
+			continue
+		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if ok {
 			return []SourceRef{source}, nil
@@ -283,7 +372,7 @@ func (s hermesSourceSet) FindSource(
 		if path == "" {
 			continue
 		}
-		for _, root := range s.roots {
+		for _, root := range s.expandedRoots() {
 			if source, ok := s.sourceForPath(root, path); ok {
 				return source, true, nil
 			}
@@ -292,7 +381,7 @@ func (s hermesSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	for _, root := range s.roots {
+	for _, root := range s.expandedRoots() {
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
 			IsValidSessionID(req.RawSessionID) {
 			found, err := hermesStateDBHasSession(stateDB, req.RawSessionID)
@@ -405,7 +494,7 @@ func (s hermesSourceSet) pathFromSource(source SourceRef) (string, bool) {
 		source.FingerprintKey,
 		source.Key,
 	} {
-		for _, root := range s.roots {
+		for _, root := range s.expandedRoots() {
 			if ref, ok := s.sourceForPath(root, candidate); ok {
 				src := ref.Opaque.(hermesSource)
 				return src.Path, true
@@ -427,14 +516,16 @@ func (s hermesSourceSet) sourceForChangedPath(
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
-		if samePath(path, stateDB) || hermesPathInTranscriptDir(sessionsDir, path) {
+		if hermesStatePathAffectsArchive(path, stateDB) ||
+			hermesPathInTranscriptDir(sessionsDir, path) {
 			return hermesArchiveSourceRef(root, stateDB)
 		}
 		return SourceRef{}, false
 	}
 	if allowMissing {
 		if stateDB, sessionsDir, ok := hermesArchivePathsForEvent(root, path); ok &&
-			(samePath(path, stateDB) || hermesPathInTranscriptDir(sessionsDir, path)) {
+			(hermesStatePathAffectsArchive(path, stateDB) ||
+				hermesPathInTranscriptDir(sessionsDir, path)) {
 			return hermesArchiveSourceRef(root, stateDB)
 		}
 		transcriptRoot := hermesTranscriptRoot(root)
@@ -443,6 +534,10 @@ func (s hermesSourceSet) sourceForChangedPath(
 		}
 	}
 	return s.sourceRef(root, path)
+}
+
+func hermesStatePathAffectsArchive(path, stateDB string) bool {
+	return samePath(path, stateDB) || samePath(path, stateDB+"-wal")
 }
 
 func (s hermesSourceSet) sourceRef(root, path string) (SourceRef, bool) {
@@ -494,7 +589,7 @@ func hermesWatchRoots(root string) []WatchRoot {
 		watchRoots := []WatchRoot{{
 			Path:         filepath.Dir(stateDB),
 			Recursive:    false,
-			IncludeGlobs: []string{"state.db"},
+			IncludeGlobs: []string{"state.db", "state.db-wal"},
 			DebounceKey:  string(AgentHermes) + ":archive:" + root,
 		}}
 		watchRoots = append(watchRoots, WatchRoot{
@@ -508,7 +603,7 @@ func hermesWatchRoots(root string) []WatchRoot {
 	return []WatchRoot{{
 		Path:         root,
 		Recursive:    true,
-		IncludeGlobs: []string{"state.db", "*.jsonl", "session_*.json"},
+		IncludeGlobs: []string{"state.db", "state.db-wal", "*.jsonl", "session_*.json"},
 		DebounceKey:  string(AgentHermes) + ":sessions:" + root,
 	}}
 }
@@ -639,6 +734,21 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 	if err := addHermesFingerprintPart(h, "state", stateDB, stateInfo); err != nil {
 		return SourceFingerprint{}, err
 	}
+	walPath := stateDB + "-wal"
+	if walInfo, err := os.Stat(walPath); err == nil {
+		if walInfo.IsDir() {
+			return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", walPath)
+		}
+		fingerprint.Size += walInfo.Size()
+		if mtime := walInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
+			fingerprint.MTimeNS = mtime
+		}
+		if err := addHermesFingerprintPart(h, "wal", walPath, walInfo); err != nil {
+			return SourceFingerprint{}, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", walPath, err)
+	}
 	_, sessionsDir, _ := hermesStatePaths(stateDB)
 	for _, file := range discoverHermesTranscriptFiles(sessionsDir) {
 		info, err := os.Stat(file.Path)
@@ -658,10 +768,10 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 }
 
 // hermesArchiveEffectiveFileInfo returns the aggregate size and mtime of a
-// Hermes archive: the state.db plus every transcript file in its sessions
-// directory. It reproduces the legacy engine's hermesArchiveEffectiveInfo so a
-// transcript-only change shifts the stored archive freshness even though the
-// state.db itself is unchanged. The transcript set matches the legacy
+// Hermes archive: the state.db, its WAL, and every transcript file in its
+// sessions directory. WAL-only commits and transcript-only changes both shift
+// the stored archive freshness even though state.db itself is unchanged. The
+// transcript set matches the legacy
 // hermesArchiveTranscriptFiles: every .jsonl and session_*.json file directly
 // under the sessions directory, without the .jsonl/.json dedup used elsewhere.
 func hermesArchiveEffectiveFileInfo(stateDB string) (int64, int64) {
@@ -671,6 +781,12 @@ func hermesArchiveEffectiveFileInfo(stateDB string) (int64, int64) {
 	}
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
+	if walInfo, err := os.Stat(stateDB + "-wal"); err == nil && !walInfo.IsDir() {
+		size += walInfo.Size()
+		if walMtime := walInfo.ModTime().UnixNano(); walMtime > mtime {
+			mtime = walMtime
+		}
+	}
 	_, sessionsDir, ok := hermesStatePaths(stateDB)
 	if !ok {
 		return size, mtime

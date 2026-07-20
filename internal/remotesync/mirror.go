@@ -184,6 +184,31 @@ func RemoveMirrorTypeConflicts(mirrorRoot string, fetch []string) error {
 	return nil
 }
 
+// RemoveMirrorFetchFiles evicts the old mirror copy of each requested file
+// after its replacement archive has downloaded successfully. A live remote
+// file can disappear after the manifest advertised it; archive writers omit
+// that vanished file, and removing the old copy ensures it cannot remain as a
+// stale SQLite sidecar. The next extraction restores every file that was
+// actually present in the downloaded archive.
+func RemoveMirrorFetchFiles(mirrorRoot string, fetch []string) error {
+	for _, remotePath := range fetch {
+		local, err := safeRemappedRemotePath(mirrorRoot, remotePath)
+		if err != nil {
+			return fmt.Errorf("fetch path %q: %w", remotePath, err)
+		}
+		if local == mirrorRoot || !within(mirrorRoot, local) {
+			return fmt.Errorf(
+				"mirror fetch eviction %q escapes mirror root %q", local, mirrorRoot,
+			)
+		}
+		if err := os.Remove(local); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("evict mirror file %q: %w", local, err)
+		}
+		pruneEmptyMirrorDirs(mirrorRoot, filepath.Dir(local))
+	}
+	return nil
+}
+
 // pruneEmptyMirrorDirs best-effort removes now-empty directories from
 // dir upward, never including the mirror root itself. os.Remove fails
 // on a non-empty directory, which terminates the walk.

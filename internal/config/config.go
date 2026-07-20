@@ -417,12 +417,14 @@ type CustomModelRate struct {
 type RemoteTransport string
 
 const (
+	// RemoteTransportSSH is retained for compatibility but deprecated. New
+	// remote sync configurations should use RemoteTransportHTTP.
 	RemoteTransportSSH  RemoteTransport = "ssh"
 	RemoteTransportHTTP RemoteTransport = "http"
 )
 
 // RemoteHost describes one target for config-driven `agentsview sync`
-// fan-out. Host is required. SSH remotes may set User and Port
+// fan-out. Host is required. Deprecated SSH remotes may set User and Port
 // (Port 0 means the ssh default of 22). HTTP remotes must set URL
 // and Token. A zero/empty Interval disables periodic remote
 // sync for this host.
@@ -699,6 +701,15 @@ func Default() (Config, error) {
 				continue
 			}
 			dirs[i] = filepath.Join(home, rel)
+		}
+		// Keep the Hermes profiles container as a stable provider root. The
+		// provider enumerates its children on every discovery pass, so profiles
+		// created after startup become visible without rebuilding Config or the
+		// sync engine. Env/config overrides still replace all default roots.
+		if def.Type == parser.AgentHermes && root == "" {
+			dirs = append(dirs,
+				filepath.Join(home, ".hermes", "profiles"),
+			)
 		}
 		agentDirs[def.Type] = dirs
 		agentDirSource[def.Type] = dirDefault

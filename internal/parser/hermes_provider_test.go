@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,7 +31,7 @@ func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"state.db", "*.jsonl", "session_*.json"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, []string{"state.db", "state.db-wal", "*.jsonl", "session_*.json"}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -111,7 +112,7 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"state.db"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
 	assert.Equal(t, sessionsDir, plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
 	assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
@@ -216,7 +217,7 @@ func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 			require.Len(t, plan.Roots, 2)
 			assert.Equal(t, root, plan.Roots[0].Path)
 			assert.False(t, plan.Roots[0].Recursive)
-			assert.Equal(t, []string{"state.db"}, plan.Roots[0].IncludeGlobs)
+			assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
 			assert.Equal(t, sessionsDir, plan.Roots[1].Path)
 			assert.True(t, plan.Roots[1].Recursive)
 			assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
@@ -230,6 +231,103 @@ func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 			assert.Equal(t, stateDB, changed[0].DisplayPath)
 		})
 	}
+}
+
+func TestHermesProviderDiscoversProfileCreatedAfterInitialization(t *testing.T) {
+	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots:   []string{profilesRoot},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, profilesRoot, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+
+	before, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, before)
+
+	profileRoot := filepath.Join(profilesRoot, "research")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	createHermesStateDB(t, profileRoot)
+	stateDB := filepath.Join(profileRoot, "state.db")
+
+	after, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, stateDB, after[0].DisplayPath)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      stateDB,
+			EventKind: "create",
+			WatchRoot: profilesRoot,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, stateDB, changed[0].DisplayPath)
+
+	require.NoError(t, os.Remove(stateDB))
+	removed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      stateDB,
+			EventKind: "remove",
+			WatchRoot: profilesRoot,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+	assert.Equal(t, stateDB, removed[0].DisplayPath)
+}
+
+func TestHermesProfileChangedPathAllocationsStayBounded(t *testing.T) {
+	measure := func(t *testing.T, profileCount int) float64 {
+		t.Helper()
+		profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+		for i := range profileCount {
+			require.NoError(t, os.MkdirAll(filepath.Join(
+				profilesRoot, fmt.Sprintf("archive-%04d", i),
+			), 0o755))
+		}
+		targetRoot := filepath.Join(profilesRoot, "current")
+		targetPath := filepath.Join(targetRoot, "sessions", "child.jsonl")
+		writeSourceFile(t, targetPath, hermesProviderJSONLFixture("bounded"))
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{
+			Roots: []string{profilesRoot},
+		})
+		require.True(t, ok)
+
+		request := ChangedPathRequest{
+			Path: targetPath, EventKind: "write", WatchRoot: profilesRoot,
+		}
+		warm, err := provider.SourcesForChangedPath(context.Background(), request)
+		require.NoError(t, err)
+		require.Len(t, warm, 1)
+		assert.Equal(t, targetPath, warm[0].DisplayPath)
+
+		return testing.AllocsPerRun(20, func() {
+			sources, sourceErr := provider.SourcesForChangedPath(
+				context.Background(), request,
+			)
+			if sourceErr != nil || len(sources) != 1 {
+				panic("Hermes changed-path classification failed")
+			}
+		})
+	}
+
+	smallAllocs := measure(t, 10)
+	largeAllocs := measure(t, 1000)
+	assert.LessOrEqual(t, largeAllocs, smallAllocs*2,
+		"Hermes profile events must not scan unrelated profiles")
 }
 
 func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
@@ -252,7 +350,7 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 		require.Len(t, plan.Roots, 2)
 		assert.Equal(t, root, plan.Roots[0].Path)
 		assert.False(t, plan.Roots[0].Recursive)
-		assert.Equal(t, []string{"state.db"}, plan.Roots[0].IncludeGlobs)
+		assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
 		assert.Equal(t, sessionsDir, plan.Roots[1].Path)
 		assert.True(t, plan.Roots[1].Recursive)
 		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
@@ -283,7 +381,7 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 		require.Len(t, plan.Roots, 2)
 		assert.Equal(t, root, plan.Roots[0].Path)
 		assert.False(t, plan.Roots[0].Recursive)
-		assert.Equal(t, []string{"state.db"}, plan.Roots[0].IncludeGlobs)
+		assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
 		assert.Equal(t, sessionsDir, plan.Roots[1].Path)
 		assert.True(t, plan.Roots[1].Recursive)
 		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)
@@ -316,7 +414,7 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 		require.Len(t, plan.Roots, 2)
 		assert.Equal(t, root, plan.Roots[0].Path)
 		assert.False(t, plan.Roots[0].Recursive)
-		assert.Equal(t, []string{"state.db"}, plan.Roots[0].IncludeGlobs)
+		assert.Equal(t, []string{"state.db", "state.db-wal"}, plan.Roots[0].IncludeGlobs)
 		assert.Equal(t, sessionsDir, plan.Roots[1].Path)
 		assert.True(t, plan.Roots[1].Recursive)
 		assert.Equal(t, []string{"*.jsonl", "session_*.json"}, plan.Roots[1].IncludeGlobs)

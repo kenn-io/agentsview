@@ -226,6 +226,9 @@ func (hs HTTPSync) downloadIntoMirror(
 			)
 		}
 	}()
+	if err := RemoveMirrorFetchFiles(mirrorRoot, fetch); err != nil {
+		return err
+	}
 	if err := archive.extract(ctx, mirrorRoot, hs.Progress, extractLabel); err != nil {
 		return fmt.Errorf("extract archive into mirror: %w", err)
 	}

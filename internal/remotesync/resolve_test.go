@@ -98,6 +98,83 @@ func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	assert.Equal(t, []string{claudeRoot}, targets.Dirs[parser.AgentClaude])
 }
 
+func TestResolveTargetsExpandsHermesProfilesWithDatabaseFiles(t *testing.T) {
+	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+	withSessions := filepath.Join(profilesRoot, "research")
+	databaseOnly := filepath.Join(profilesRoot, "database-only")
+	require.NoError(t, os.MkdirAll(filepath.Join(withSessions, "sessions"), 0o755))
+	require.NoError(t, os.MkdirAll(databaseOnly, 0o755))
+	for _, path := range []string{
+		filepath.Join(withSessions, "state.db"),
+		filepath.Join(withSessions, "state.db-wal"),
+		filepath.Join(withSessions, "state.db-shm"),
+		filepath.Join(withSessions, "state.db-journal"),
+		filepath.Join(databaseOnly, "state.db"),
+	} {
+		require.NoError(t, os.WriteFile(path, []byte("sqlite"), 0o644))
+	}
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {profilesRoot},
+		},
+	})
+
+	assert.ElementsMatch(t, []string{
+		filepath.Join(withSessions, "sessions"),
+		filepath.Join(databaseOnly, "state.db"),
+	}, targets.Dirs[parser.AgentHermes])
+	assert.ElementsMatch(t, []string{
+		filepath.Join(withSessions, "state.db"),
+		filepath.Join(withSessions, "state.db-wal"),
+		filepath.Join(withSessions, "state.db-shm"),
+		filepath.Join(withSessions, "state.db-journal"),
+		filepath.Join(databaseOnly, "state.db-wal"),
+		filepath.Join(databaseOnly, "state.db-shm"),
+		filepath.Join(databaseOnly, "state.db-journal"),
+	}, targets.ExtraFiles)
+}
+
+func TestResolveTargetsIncludesFlatCustomHermesRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "custom", "hermes-archive")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "child.jsonl"), []byte("{}\n"), 0o644,
+	))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {root},
+		},
+	})
+
+	assert.Equal(t, []string{root}, targets.Dirs[parser.AgentHermes])
+	assert.Empty(t, targets.ExtraFiles)
+}
+
+func TestResolveTargetsSkipsSessionlessHermesProfileCredentials(t *testing.T) {
+	profileRoot := filepath.Join(t.TempDir(), ".hermes", "profiles", "sessions")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, ".env"), []byte("TOKEN=secret\n"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, "auth.json"), []byte(`{"token":"secret"}`), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, "debug.jsonl"), []byte("not a session\n"), 0o600,
+	))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {profileRoot},
+		},
+	})
+
+	assert.NotContains(t, targets.Dirs, parser.AgentHermes)
+	assert.Empty(t, targets.ExtraFiles)
+}
+
 func TestResolveTargetsSkipsAiderHomeRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("os.UserHomeDir does not use HOME on Windows")
@@ -502,7 +579,7 @@ func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	require.True(t, ok, "a curated transcript must validate as a delta request")
 	var delta bytes.Buffer
 	require.NoError(t, remotesync.WriteArchiveFiles(
-		&delta, targets.DeltaAllowedRoots(), files))
+		&delta, targets, files))
 	deltaNames := []string{}
 	dr := tar.NewReader(&delta)
 	for {
@@ -593,7 +670,7 @@ func TestRooCodeRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 		"a vanished session file must validate as a delta request")
 	var delta bytes.Buffer
 	require.NoError(t, remotesync.WriteArchiveFiles(
-		&delta, freshServerTargets.DeltaAllowedRoots(), files))
+		&delta, freshServerTargets, files))
 	dr := tar.NewReader(&delta)
 	_, err = dr.Next()
 	assert.Equal(t, io.EOF, err, "the vanished file streams nothing")

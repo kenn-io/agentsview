@@ -50,6 +50,12 @@ func setupTestEnv(t *testing.T) string {
 	return dir
 }
 
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 type configFixture struct {
 	Dir string
 }
@@ -321,6 +327,43 @@ func TestDefault_IncludesDevinLocalShareRoots(t *testing.T) {
 	assert.True(t, strings.HasSuffix(dirs[0], filepath.Join("Library", "Application Support", "devin")), "dirs[0] = %q", dirs[0])
 	assert.True(t, strings.HasSuffix(dirs[1], filepath.Join(".local", "share", "devin")), "dirs[1] = %q", dirs[1])
 	assert.False(t, cfg.IsUserConfigured(parser.AgentDevin))
+}
+
+func TestDefault_IncludesHermesProfilesRoot(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	dirs := cfg.ResolveDirs(parser.AgentHermes)
+
+	assert.Contains(t, dirs, filepath.Join(home, ".hermes", "sessions"))
+	assert.Contains(t, dirs, filepath.Join(home, ".hermes", "profiles"))
+}
+
+func TestDefault_HermesNoProfilesDirIsSafe(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
+	cfg, err := Default()
+	require.NoError(t, err)
+	dirs := cfg.ResolveDirs(parser.AgentHermes)
+	assert.Contains(t, dirs, filepath.Join(home, ".hermes", "sessions"))
+	assert.Contains(t, dirs, filepath.Join(home, ".hermes", "profiles"))
+}
+
+func TestDefault_HermesEnvReplacesDefaultAndProfilesRoots(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	custom := filepath.Join(t.TempDir(), "hermes-sessions")
+	t.Setenv("HERMES_SESSIONS_DIR", custom)
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.loadEnv()
+
+	assert.Equal(t, []string{custom}, cfg.ResolveDirs(parser.AgentHermes))
 }
 
 func TestLoadEnv_OverridesDataDir(t *testing.T) {

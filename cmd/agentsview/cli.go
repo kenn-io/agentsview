@@ -334,15 +334,15 @@ func newSyncCommand() *cobra.Command {
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
-		"SSH hostname for remote sync",
+		"SSH hostname for deprecated remote sync",
 	)
 	cmd.Flags().StringVar(
 		&cfg.User, "user", "",
-		"SSH user for remote sync",
+		"SSH user for deprecated remote sync",
 	)
 	cmd.Flags().IntVar(
 		&cfg.Port, "port", 0,
-		"SSH port for remote sync (default: 22)",
+		"SSH port for deprecated remote sync (default: 22)",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",

@@ -107,6 +107,239 @@ func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
 	}
 }
 
+func TestRemoteSyncHermesSessionlessProfileCannotExposeCredentials(t *testing.T) {
+	dir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "test.db"))
+	profileRoot := filepath.Join(dir, ".hermes", "profiles", "empty")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, ".env"), []byte("TOKEN=secret\n"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, "auth.json"), []byte(`{"token":"secret"}`), 0o600,
+	))
+	srv := New(config.Config{
+		Host:        "127.0.0.1",
+		Port:        8080,
+		DataDir:     dir,
+		DBPath:      filepath.Join(dir, "test.db"),
+		AuthToken:   "remote-token",
+		RequireAuth: false,
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {profileRoot},
+		},
+	}, database, nil)
+	handler := srv.Handler()
+
+	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	targetReq.Header.Set("Authorization", "Bearer remote-token")
+	targetW := httptest.NewRecorder()
+	handler.ServeHTTP(targetW, targetReq)
+	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
+	var targets remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	assert.NotContains(t, targets.Dirs, parser.AgentHermes)
+	assert.Empty(t, targets.ExtraFiles)
+
+	payload, err := json.Marshal(remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentHermes: {profileRoot}},
+	})
+	require.NoError(t, err)
+	archiveReq := httptest.NewRequest(
+		http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload),
+	)
+	archiveReq.Header.Set("Authorization", "Bearer remote-token")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveW := httptest.NewRecorder()
+	handler.ServeHTTP(archiveW, archiveReq)
+
+	assert.Equal(t, http.StatusForbidden, archiveW.Code)
+	assert.NotContains(t, archiveW.Body.String(), "secret")
+}
+
+func TestRemoteSyncHermesFlatCustomRootStreamsTranscripts(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	root := filepath.Join(dir, "custom", "hermes-archive")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	sessionPath := filepath.Join(root, "child.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte("{}\n"), 0o644))
+	srv := New(config.Config{
+		Host:        "127.0.0.1",
+		Port:        8080,
+		DataDir:     dir,
+		DBPath:      dbPath,
+		AuthToken:   "remote-token",
+		RequireAuth: false,
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {root},
+		},
+	}, database, nil)
+	handler := srv.Handler()
+
+	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	targetReq.Header.Set("Authorization", "Bearer remote-token")
+	targetW := httptest.NewRecorder()
+	handler.ServeHTTP(targetW, targetReq)
+	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
+	var targets remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	require.Equal(t, []string{root}, targets.Dirs[parser.AgentHermes])
+
+	payload, err := json.Marshal(targets)
+	require.NoError(t, err)
+	archiveReq := httptest.NewRequest(
+		http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload),
+	)
+	archiveReq.Header.Set("Authorization", "Bearer remote-token")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveW := httptest.NewRecorder()
+	handler.ServeHTTP(archiveW, archiveReq)
+
+	require.Equal(t, http.StatusOK, archiveW.Code, "body: %s", archiveW.Body.String())
+	assert.True(t, hasTarEntrySuffix(tarEntries(t, archiveW.Body.Bytes()), "child.jsonl"))
+}
+
+func TestRemoteSyncHermesSidecarRemovalRaces(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T, http.Handler, remotesync.TargetSet, string, func())
+	}{
+		{
+			name: "between targets and manifest",
+			run: func(
+				t *testing.T, handler http.Handler, targets remotesync.TargetSet,
+				_ string, removeWAL func(),
+			) {
+				removeWAL()
+				payload, err := json.Marshal(targets)
+				require.NoError(t, err)
+				req := httptest.NewRequest(
+					http.MethodPost, "/api/v1/remote-sync/manifest", bytes.NewReader(payload),
+				)
+				req.Header.Set("Authorization", "Bearer remote-token")
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			},
+		},
+		{
+			name: "between manifest and archive",
+			run: func(
+				t *testing.T, handler http.Handler, targets remotesync.TargetSet,
+				wal string, removeWAL func(),
+			) {
+				manifestPayload, err := json.Marshal(targets)
+				require.NoError(t, err)
+				manifestReq := httptest.NewRequest(
+					http.MethodPost, "/api/v1/remote-sync/manifest",
+					bytes.NewReader(manifestPayload),
+				)
+				manifestReq.Header.Set("Authorization", "Bearer remote-token")
+				manifestReq.Header.Set("Content-Type", "application/json")
+				manifestW := httptest.NewRecorder()
+				handler.ServeHTTP(manifestW, manifestReq)
+				require.Equal(t, http.StatusOK, manifestW.Code,
+					"body: %s", manifestW.Body.String())
+
+				removeWAL()
+				archivePayload, err := json.Marshal(remotesync.ArchiveRequest{
+					TargetSet:  targets,
+					DeltaFiles: []string{wal},
+				})
+				require.NoError(t, err)
+				archiveReq := httptest.NewRequest(
+					http.MethodPost, "/api/v1/remote-sync/archive",
+					bytes.NewReader(archivePayload),
+				)
+				archiveReq.Header.Set("Authorization", "Bearer remote-token")
+				archiveReq.Header.Set("Content-Type", "application/json")
+				archiveW := httptest.NewRecorder()
+				handler.ServeHTTP(archiveW, archiveReq)
+				assert.Equal(t, http.StatusOK, archiveW.Code,
+					"body: %s", archiveW.Body.String())
+				entries := tarEntries(t, archiveW.Body.Bytes())
+				assert.True(t, hasTarEntrySuffix(entries, "state.db"))
+				assert.False(t, hasTarEntrySuffix(entries, "state.db-wal"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, targets, wal, removeWAL := newHermesRemoteSyncServer(t)
+			assert.Contains(t, targets.ExtraFiles, wal)
+			tt.run(t, handler, targets, wal, removeWAL)
+		})
+	}
+}
+
+func newHermesRemoteSyncServer(
+	t *testing.T,
+) (http.Handler, remotesync.TargetSet, string, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	profileRoot := filepath.Join(dir, ".hermes", "profiles", "research")
+	sessionsDir := filepath.Join(profileRoot, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionsDir, "session.json"), []byte(`{}`), 0o644,
+	))
+	stateDB := filepath.Join(profileRoot, "state.db")
+	stateConn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	stateConn.SetMaxOpenConns(1)
+	stateConnClosed := false
+	t.Cleanup(func() {
+		if !stateConnClosed {
+			require.NoError(t, stateConn.Close())
+		}
+	})
+	_, err = stateConn.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = stateConn.Exec(`PRAGMA journal_mode=WAL`)
+	require.NoError(t, err)
+	_, err = stateConn.Exec(`PRAGMA wal_autocheckpoint=0`)
+	require.NoError(t, err)
+	_, err = stateConn.Exec(`INSERT INTO sessions (id) VALUES ('wal-session')`)
+	require.NoError(t, err)
+	wal := stateDB + "-wal"
+	require.FileExists(t, wal)
+	removeWAL := func() {
+		_, err := stateConn.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		require.NoError(t, err)
+		require.NoError(t, stateConn.Close())
+		stateConnClosed = true
+		if err := os.Remove(wal); !os.IsNotExist(err) {
+			require.NoError(t, err)
+		}
+	}
+	srv := New(config.Config{
+		Host:        "127.0.0.1",
+		Port:        8080,
+		DataDir:     dir,
+		DBPath:      dbPath,
+		AuthToken:   "remote-token",
+		RequireAuth: false,
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {profileRoot},
+		},
+	}, database, nil)
+	handler := srv.Handler()
+	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	targetReq.Header.Set("Authorization", "Bearer remote-token")
+	targetW := httptest.NewRecorder()
+	handler.ServeHTTP(targetW, targetReq)
+	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
+	var targets remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	return handler, targets, wal, removeWAL
+}
+
 // newWindsurfRemoteSyncServer builds a remote-sync server whose only
 // agent is Windsurf (a file-scoped, sanitized agent). It returns the
 // handler, the resolved targets the client would see, and the raw

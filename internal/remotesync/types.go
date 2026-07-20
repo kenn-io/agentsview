@@ -98,8 +98,8 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 // their raw directory is never a prefix root, so settings and caches
 // stay unreachable), plus the extra files. Sanitized file-scoped
 // agents (Windsurf) contribute nothing because their raw tree is
-// never delta-streamed. WriteArchiveFiles re-checks each requested
-// file against these roots before reading it.
+// never delta-streamed. WriteArchiveFiles uses these roots while
+// retaining the TargetSet's agent ownership information.
 func (t TargetSet) DeltaAllowedRoots() []string {
 	roots := make([]string, 0, len(t.Dirs)+len(t.Files)+len(t.ExtraFiles))
 	for agent, dirs := range t.Dirs {

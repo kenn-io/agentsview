@@ -188,9 +188,9 @@ agentsview sync [flags]
 | Flag     | Default | Description                                    |
 | -------- | ------- | ---------------------------------------------- |
 | `--full` | `false` | Force a full resync regardless of data version |
-| `--host` |         | SSH hostname for remote sync                   |
-| `--user` |         | SSH username for remote sync                   |
-| `--port` | `22`    | SSH port for remote sync                       |
+| `--host` |         | SSH hostname for deprecated remote sync        |
+| `--user` |         | SSH username for deprecated remote sync        |
+| `--port` | `22`    | SSH port for deprecated remote sync            |
 
 **Examples:**
 
@@ -208,7 +208,8 @@ error. If the local daemon has a matching configured `[[remote_hosts]]` entry,
 the daemon uses that stored entry and its configured transport. Otherwise,
 `--host` performs an ad hoc SSH sync: it resolves the supported agent session
 directories on the remote machine, transfers the source session data locally,
-and indexes it into your local archive.
+and indexes it into your local archive. SSH remote sync is deprecated and
+receives only critical fixes; use configured HTTP remote sync for new setups.
 
 Local sync can also read configured Claude and Codex roots from S3-compatible
 object storage. Add `s3://` entries to `claude_project_dirs` or
@@ -257,8 +258,9 @@ reporting, and the command exits non-zero if any host failed. See
 the local daemon knows a configured host with that identity, it uses the stored
 entry and transport so HTTP hosts can be selected by host name. Without a
 matching configured host, `--host` remains an ad hoc SSH sync. SSH remote sync
-is non-interactive in both forms — it requires key-based passwordless SSH and
-never prompts for a password.
+is deprecated and receives only critical fixes. It remains non-interactive in
+both forms — it requires key-based passwordless SSH and never prompts for a
+password. Prefer configured HTTP remote sync.
 
 HTTP remote sync requires a reachable remote daemon, preferably over a private
 network such as Tailscale, and remote archive endpoints always require bearer

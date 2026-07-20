@@ -3,6 +3,7 @@ package ssh
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -143,6 +144,207 @@ func hasSuffix(paths []string, suffix string) bool {
 		}
 	}
 	return false
+}
+
+// TestResolveScriptIncludesHermesNamedProfiles verifies the remote resolve
+// script discovers Hermes named-profile session dirs and database files, not
+// just the default profile.
+func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(home, ".hermes", "state.db"), []byte("sqlite"), 0o644,
+	))
+	orchestratorRoot := filepath.Join(home, ".hermes", "profiles", "orchestrator")
+	researchRoot := filepath.Join(home, ".hermes", "profiles", "research")
+	require.NoError(t, os.MkdirAll(filepath.Join(orchestratorRoot, "sessions"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(researchRoot, "sessions"), 0o755))
+	for _, path := range []string{
+		filepath.Join(orchestratorRoot, "state.db"),
+		filepath.Join(orchestratorRoot, "state.db-wal"),
+		filepath.Join(orchestratorRoot, "state.db-shm"),
+		filepath.Join(orchestratorRoot, "state.db-journal"),
+		filepath.Join(researchRoot, "state.db"),
+	} {
+		require.NoError(t, os.WriteFile(path, []byte("sqlite"), 0o644))
+	}
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.Truef(t, hasSuffix(dirs[parser.AgentHermes], ".hermes/sessions"),
+		"default profile sessions dir should resolve, got %v", dirs[parser.AgentHermes])
+	assert.Truef(t, hasSuffix(dirs[parser.AgentHermes], ".hermes/profiles/orchestrator/sessions"),
+		"orchestrator profile sessions dir should resolve, got %v", dirs[parser.AgentHermes])
+	assert.Truef(t, hasSuffix(dirs[parser.AgentHermes], ".hermes/profiles/research/sessions"),
+		"research profile sessions dir should resolve, got %v", dirs[parser.AgentHermes])
+	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/orchestrator/state.db"))
+	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/orchestrator/state.db-wal"))
+	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/orchestrator/state.db-shm"))
+	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/orchestrator/state.db-journal"))
+	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/research/state.db"))
+	assert.True(t, hasSuffix(extraFiles, ".hermes/state.db"))
+}
+
+func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {
+	home := filepath.ToSlash(t.TempDir())
+	profileSessions := path.Join(
+		home, ".hermes", "profiles", "research", "sessions",
+	)
+	customRoot := path.Join(home, "custom-hermes")
+	customSessions := path.Join(customRoot, "sessions")
+	require.NoError(t, os.MkdirAll(profileSessions, 0o755))
+	require.NoError(t, os.MkdirAll(customSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		path.Join(customRoot, "state.db"), []byte("sqlite"), 0o644,
+	))
+
+	out := runResolveScriptForTest(t,
+		"HOME="+home,
+		"HERMES_SESSIONS_DIR="+customSessions,
+	)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.Equal(t, []string{customSessions}, dirs[parser.AgentHermes])
+	assert.Equal(t, []string{path.Join(customRoot, "state.db")}, extraFiles)
+}
+
+func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testing.T) {
+	home := filepath.ToSlash(t.TempDir())
+	profilesRoot := path.Join(home, ".hermes", "profiles")
+	researchRoot := path.Join(profilesRoot, "research")
+	researchSessions := path.Join(researchRoot, "sessions")
+	researchStateDB := path.Join(researchRoot, "state.db")
+	databaseOnlyRoot := path.Join(profilesRoot, "database-only")
+	databaseOnlyStateDB := path.Join(databaseOnlyRoot, "state.db")
+	require.NoError(t, os.MkdirAll(researchSessions, 0o755))
+	require.NoError(t, os.MkdirAll(databaseOnlyRoot, 0o755))
+	require.NoError(t, os.WriteFile(researchStateDB, []byte("sqlite"), 0o644))
+	require.NoError(t, os.WriteFile(databaseOnlyStateDB, []byte("sqlite"), 0o644))
+
+	outsideRoot := filepath.ToSlash(path.Join(t.TempDir(), "outside-profile"))
+	require.NoError(t, os.MkdirAll(path.Join(outsideRoot, "sessions"), 0o755))
+	require.NoError(t, os.Symlink(outsideRoot, path.Join(profilesRoot, "linked")))
+
+	out := runResolveScriptForTest(t,
+		"HOME="+home,
+		"HERMES_SESSIONS_DIR="+profilesRoot,
+	)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.ElementsMatch(t, []string{researchSessions, databaseOnlyStateDB},
+		dirs[parser.AgentHermes])
+	assert.Equal(t, []string{researchStateDB}, extraFiles)
+}
+
+func TestResolveScriptHermesTrailingSlashOverrideIncludesStateDB(t *testing.T) {
+	home := filepath.ToSlash(t.TempDir())
+	customRoot := path.Join(home, "custom-hermes")
+	customSessions := path.Join(customRoot, "sessions")
+	require.NoError(t, os.MkdirAll(filepath.FromSlash(customSessions), 0o755))
+	stateDB := path.Join(customRoot, "state.db")
+	require.NoError(t, os.WriteFile(filepath.FromSlash(stateDB), []byte("sqlite"), 0o644))
+
+	out := runResolveScriptForTest(t,
+		"HOME="+home,
+		"HERMES_SESSIONS_DIR="+customSessions+"/",
+	)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.Equal(t, []string{customSessions}, dirs[parser.AgentHermes])
+	assert.Equal(t, []string{stateDB}, extraFiles)
+}
+
+func TestResolveScriptIncludesFlatCustomHermesRoot(t *testing.T) {
+	home := t.TempDir()
+	customRoot := filepath.Join(home, "custom", "hermes-archive")
+	require.NoError(t, os.MkdirAll(customRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(customRoot, "child.jsonl"), []byte("{}\n"), 0o644,
+	))
+
+	out := runResolveScriptForTest(t,
+		"HOME="+home,
+		"HERMES_SESSIONS_DIR="+customRoot,
+	)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.Equal(t, []string{customRoot}, dirs[parser.AgentHermes])
+	assert.Empty(t, extraFiles)
+}
+
+func TestResolveScriptIncludesHermesDatabaseOnlyProfile(t *testing.T) {
+	home := filepath.ToSlash(t.TempDir())
+	profileRoot := path.Join(home, ".hermes", "profiles", "database-only")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	stateDB := path.Join(profileRoot, "state.db")
+	require.NoError(t, os.WriteFile(stateDB, []byte("sqlite"), 0o644))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, _ := parseResolvedDirs(string(out))
+
+	assert.Truef(t, hasSuffix(
+		dirs[parser.AgentHermes], ".hermes/profiles/database-only/state.db",
+	), "database-only profile should resolve, got %v", dirs[parser.AgentHermes])
+}
+
+func TestResolveScriptSkipsSessionlessHermesProfileCredentials(t *testing.T) {
+	home := t.TempDir()
+	profileRoot := filepath.Join(home, ".hermes", "profiles", "sessions")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, ".env"), []byte("TOKEN=secret\n"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, "auth.json"), []byte(`{"token":"secret"}`), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(profileRoot, "debug.jsonl"), []byte("not a session\n"), 0o600,
+	))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.NotContains(t, dirs[parser.AgentHermes], profileRoot)
+	assert.NotContains(t, extraFiles, filepath.Join(profileRoot, ".env"))
+	assert.NotContains(t, extraFiles, filepath.Join(profileRoot, "auth.json"))
+}
+
+func TestResolveScriptSkipsSymlinkedHermesProfile(t *testing.T) {
+	home := t.TempDir()
+	profilesRoot := filepath.Join(home, ".hermes", "profiles")
+	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
+	outsideRoot := filepath.Join(t.TempDir(), "outside-profile")
+	outsideSessions := filepath.Join(outsideRoot, "sessions")
+	require.NoError(t, os.MkdirAll(outsideSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideSessions, "credential.jsonl"), []byte("secret\n"), 0o600,
+	))
+	profileLink := filepath.Join(profilesRoot, "linked")
+	require.NoError(t, os.Symlink(outsideRoot, profileLink))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, extraFiles := parseResolvedDirs(string(out))
+
+	assert.NotContains(t, dirs[parser.AgentHermes], filepath.Join(profileLink, "sessions"))
+	assert.Empty(t, extraFiles)
+}
+
+// TestResolveScriptSkipsMissingHermesProfiles verifies that when no profiles/
+// dir exists, the glob expands to nothing emittable (av_emit_target's [ -d ]
+// guard drops the non-existent path) — so only the default profile resolves.
+func TestResolveScriptSkipsMissingHermesProfiles(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, _ := parseResolvedDirs(string(out))
+
+	assert.Truef(t, hasSuffix(dirs[parser.AgentHermes], ".hermes/sessions"),
+		"default profile sessions dir should resolve, got %v", dirs[parser.AgentHermes])
+	// The unexpanded glob must never leak through as a literal path.
+	assert.Falsef(t, hasSuffix(dirs[parser.AgentHermes], "profiles/*/sessions"),
+		"unexpanded glob must not be emitted, got %v", dirs[parser.AgentHermes])
 }
 
 // TestResolveScriptSkipsMissingCodexIndex verifies that a missing index

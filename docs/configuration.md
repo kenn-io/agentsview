@@ -151,7 +151,9 @@ the same machine can duplicate sessions, while reusing it for another machine
 can reuse stale state. A configured HTTP host can be selected later with
 `agentsview sync --host <name>`, but ad hoc HTTP remotes are not supported;
 without a matching configured host, `--host` remains an SSH remote sync. HTTP
-failures are summarized with actionable messages for common cases such as token
+remote sync is the recommended transport. SSH remote sync is deprecated and
+receives only critical fixes. HTTP failures are summarized with actionable
+messages for common cases such as token
 rejection, missing remote archive endpoints, connection refusal, DNS failures,
 and timeouts.
 

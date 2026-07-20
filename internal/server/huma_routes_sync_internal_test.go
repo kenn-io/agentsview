@@ -619,7 +619,7 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 				err = remotesync.WriteArchive(w, request.TargetSet)
 			} else {
 				err = remotesync.WriteArchiveFiles(
-					w, targets.DeltaAllowedRoots(), request.DeltaFiles,
+					w, targets, request.DeltaFiles,
 				)
 			}
 			if err != nil {

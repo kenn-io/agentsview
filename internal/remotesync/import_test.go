@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -209,6 +210,219 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	require.NotNil(t, full)
 	require.NotNil(t, full.FilePath)
 	assert.Contains(t, *full.FilePath, "devbox:/home/wes/.claude/projects/test-project/session.jsonl")
+}
+
+func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	extracted := t.TempDir()
+	remoteSessionsDir := "/home/remote/.hermes/profiles/research/sessions"
+	remoteStateDB := "/home/remote/.hermes/profiles/research/state.db"
+	localStateDB := remappedRemotePath(extracted, remoteStateDB)
+	require.NoError(t, os.MkdirAll(filepath.Dir(localStateDB), 0o755))
+	require.NoError(t, os.MkdirAll(
+		remappedRemotePath(extracted, remoteSessionsDir), 0o755,
+	))
+	writeHermesImportStateDB(t, localStateDB)
+
+	stats, err := Importer{
+		Host: "devbox",
+		DB:   database,
+	}.ImportExtracted(context.Background(), TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {remoteSessionsDir},
+		},
+	}, extracted)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	session, err := database.GetSession(
+		context.Background(), "devbox~hermes:database-only",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.DisplayName)
+	assert.Equal(t, "Database-only profile", *session.DisplayName)
+	require.NotNil(t, session.ParentSessionID)
+	assert.Equal(t, "devbox~hermes:parent", *session.ParentSessionID)
+	assert.Equal(t, 70, session.TotalOutputTokens)
+	assert.Equal(t, 320, session.PeakContextTokens)
+}
+
+func writeHermesImportStateDB(t *testing.T, path string) {
+	t.Helper()
+	stateDB, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, stateDB.Close()) }()
+
+	_, err = stateDB.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			model TEXT,
+			parent_session_id TEXT,
+			started_at REAL NOT NULL,
+			ended_at REAL,
+			message_count INTEGER DEFAULT 0,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			cache_read_tokens INTEGER DEFAULT 0,
+			cache_write_tokens INTEGER DEFAULT 0,
+			reasoning_tokens INTEGER DEFAULT 0,
+			estimated_cost_usd REAL,
+			actual_cost_usd REAL,
+			cost_status TEXT,
+			cost_source TEXT,
+			title TEXT,
+			api_call_count INTEGER DEFAULT 0
+		);
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT,
+			tool_call_id TEXT,
+			tool_calls TEXT,
+			timestamp REAL NOT NULL,
+			finish_reason TEXT,
+			reasoning TEXT,
+			reasoning_content TEXT,
+			reasoning_details TEXT,
+			codex_reasoning_items TEXT,
+			codex_message_items TEXT
+		);
+		INSERT INTO sessions (
+			id, source, model, parent_session_id, started_at, ended_at,
+			message_count, input_tokens, output_tokens, cache_read_tokens,
+			title
+		) VALUES (
+			'database-only', 'cli', 'gpt-5.4', 'parent',
+			1778767200.0, 1778767800.0, 1, 300, 70, 20,
+			'Database-only profile'
+		);
+		INSERT INTO messages (session_id, role, content, timestamp)
+		VALUES ('database-only', 'user', 'database-only message', 1778767210.0);
+	`)
+	require.NoError(t, err)
+}
+
+// TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges verifies both
+// remote archive path translation and repeated-import freshness. A committed
+// WAL-only metadata update must invalidate the skip entry even though the main
+// state.db file remains unchanged.
+func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	extracted := t.TempDir()
+	remoteSessionsDir := "/home/remote/.hermes/profiles/research/sessions"
+	remoteStateDB := "/home/remote/.hermes/profiles/research/state.db"
+	localStateDB := remappedRemotePath(extracted, remoteStateDB)
+	require.NoError(t, os.MkdirAll(filepath.Dir(localStateDB), 0o755))
+	require.NoError(t, os.MkdirAll(
+		remappedRemotePath(extracted, remoteSessionsDir), 0o755,
+	))
+	writeHermesImportStateDB(t, localStateDB)
+	writer := openHermesImportWALWriter(t, localStateDB)
+	remoteStateWAL := remoteStateDB + "-wal"
+
+	targets := TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {remoteSessionsDir},
+		},
+		ExtraFiles: []string{remoteStateDB, remoteStateWAL},
+	}
+
+	stats, err := Importer{
+		Host: "devbox",
+		DB:   database,
+	}.ImportExtracted(context.Background(), targets, extracted)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+
+	full, err := database.GetSessionFull(
+		context.Background(), "devbox~hermes:database-only",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, full)
+	require.NotNil(t, full.FilePath)
+	assert.Equal(t, "devbox:"+remoteStateDB, *full.FilePath,
+		"state.db extra file must map to its original remote path")
+	assert.NotContains(t, *full.FilePath, extracted,
+		"the import must not leak the local extraction dir into FilePath")
+
+	// A second import of the unchanged archive must skip the state.db and
+	// persist its skip entry keyed by the remote path. Without the
+	// extra-file mapping the local temp path cannot be translated back, so
+	// the entry is silently dropped and the archive is re-fingerprinted on
+	// every subsequent sync.
+	second, err := Importer{
+		Host: "devbox",
+		DB:   database,
+	}.ImportExtracted(context.Background(), targets, extracted)
+	require.NoError(t, err)
+	assert.Zero(t, second.SessionsSynced,
+		"unchanged state.db must not re-sync on the second import")
+
+	remoteCache, err := database.LoadRemoteSkippedFiles("devbox")
+	require.NoError(t, err)
+	require.NotEmpty(t, remoteCache,
+		"the state.db skip entry must survive the import, not be discarded")
+	_, ok := remoteCache[remoteStateDB]
+	assert.True(t, ok,
+		"skip cache must key the state.db entry by its remote path, got %v",
+		remoteCache)
+
+	stateBefore, err := os.Stat(localStateDB)
+	require.NoError(t, err)
+	_, err = writer.Exec(`
+		UPDATE sessions
+		SET title = 'WAL-refreshed profile'
+		WHERE id = 'database-only'
+	`)
+	require.NoError(t, err)
+	localStateWAL := remappedRemotePath(extracted, remoteStateWAL)
+	require.FileExists(t, localStateWAL)
+	stateAfter, err := os.Stat(localStateDB)
+	require.NoError(t, err)
+	assert.Equal(t, stateBefore.Size(), stateAfter.Size())
+	assert.Equal(t, stateBefore.ModTime(), stateAfter.ModTime(),
+		"the committed update must remain WAL-only for this regression")
+	walTime := stateAfter.ModTime().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(localStateWAL, walTime, walTime))
+
+	changed, err := Importer{
+		Host: "devbox",
+		DB:   database,
+	}.ImportExtracted(context.Background(), targets, extracted)
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed.SessionsSynced,
+		"a WAL-only commit must invalidate the remote archive skip entry")
+	refreshed, err := database.GetSession(
+		context.Background(), "devbox~hermes:database-only",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed)
+	require.NotNil(t, refreshed.DisplayName)
+	assert.Equal(t, "WAL-refreshed profile", *refreshed.DisplayName)
+}
+
+func openHermesImportWALWriter(t *testing.T, stateDB string) *sql.DB {
+	t.Helper()
+	writer, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	writer.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+
+	var journalMode string
+	require.NoError(t, writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
+	assert.Equal(t, "wal", journalMode)
+	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
+	require.NoError(t, err)
+	return writer
 }
 
 func TestRemotePathMappingHandlesWindowsDrivePath(t *testing.T) {
