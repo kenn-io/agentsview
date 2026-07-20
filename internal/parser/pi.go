@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -100,6 +101,19 @@ func parsePiLikeSession(
 	} else if agent == AgentOMP {
 		if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" {
 			parentSessionID = idPrefix + parentSession
+		}
+	}
+
+	// OMP writes subagent transcripts inside a directory named after the
+	// parent's transcript file: <project>/<parent>.jsonl sits alongside
+	// <project>/<parent>/<agent>.jsonl. A subagent header carries neither
+	// branchedFrom nor parentSession, so lineage is recovered from the
+	// sibling parent transcript. This nests to arbitrary depth.
+	var isOMPSubagent bool
+	if agent == AgentOMP && parentSessionID == "" {
+		if parentID := ompParentHeaderSessionID(path); parentID != "" {
+			parentSessionID = idPrefix + parentID
+			isOMPSubagent = true
 		}
 	}
 
@@ -270,6 +284,12 @@ func parsePiLikeSession(
 		sessionName = headerTitle
 	}
 
+	// OMP subagent transcripts have an empty title slot and header title; the
+	// meaningful label is the agent name, which is the transcript's filename.
+	if isOMPSubagent && sessionName == "" {
+		sessionName = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	}
+
 	// V1 fallback: derive session ID from filename.
 	if isV1 || sessionID == "" {
 		sessionID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
@@ -308,6 +328,9 @@ func parsePiLikeSession(
 			Size:  info.Size(),
 			Mtime: info.ModTime().UnixNano(),
 		},
+	}
+	if isOMPSubagent {
+		sess.RelationshipType = RelSubagent
 	}
 
 	accumulateMessageTokenUsage(sess, messages)
@@ -617,4 +640,43 @@ func piTimestamp(line string) time.Time {
 		return time.UnixMilli(ms).UTC()
 	}
 	return time.Time{}
+}
+
+// ompParentHeaderSessionID returns the parent OMP session's header id for a
+// nested subagent transcript, or "" when childPath is not a nested subagent.
+// OMP stores subagents in a directory named after the parent transcript (minus
+// the .jsonl extension), so the parent transcript is the containing directory
+// plus ".jsonl".
+func ompParentHeaderSessionID(childPath string) string {
+	parent := filepath.Dir(childPath) + ".jsonl"
+	if !IsRegularFile(parent) {
+		return ""
+	}
+	return ompHeaderSessionID(parent)
+}
+
+// ompHeaderSessionID reads path's session header id, skipping a leading OMP
+// title slot line, and returns "" when the file is not a pi session file.
+func ompHeaderSessionID(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" {
+			continue
+		}
+		if gjson.Get(line, "type").Str == "title" {
+			continue
+		}
+		if gjson.Get(line, "type").Str != "session" {
+			return ""
+		}
+		return gjson.Get(line, "id").Str
+	}
+	return ""
 }

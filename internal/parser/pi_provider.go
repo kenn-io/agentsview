@@ -40,7 +40,7 @@ func (f piProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 
 type piProvider struct {
 	ProviderBase
-	sources DirectoryJSONLSourceSet
+	sources JSONLSourceSet
 }
 
 func (p *piProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -190,21 +190,59 @@ func (p *piProvider) filterDiscoveredSources(sources []SourceRef) []SourceRef {
 	return filtered
 }
 
-func newPiSourceSet(agent AgentType, roots []string) DirectoryJSONLSourceSet {
+func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
+	// OMP nests subagent transcripts one directory deeper than the main
+	// session (<project>/<session>/<agent>.jsonl), so it cannot use the
+	// strict two-segment DirectoryJSONLSourceSet layout the other pi-family
+	// agents rely on. It gets a recursive set that accepts any nested .jsonl.
+	if agent == AgentOMP {
+		return NewJSONLSourceSet(agent, roots,
+			WithRecursive(),
+			WithSymlinkFollowing(),
+			WithIncludePath(isOMPSourcePath),
+			WithProjectHint(func(root, path string) string { return "" }),
+			WithSessionIDFromPath(piSessionIDFromPath),
+			WithContentHashing(),
+		)
+	}
 	return NewDirectoryJSONLSourceSet(agent, roots,
 		WithSymlinkFollowing(),
 		WithIncludePath(isPiSourcePath),
 		WithProjectHint(func(root, path string) string { return "" }),
-		WithSessionIDFromPath(piSessionIDFromPath),
 		// Pi/OMP persisted a full-file content hash (file_hash) in the legacy
 		// per-agent parse. Without this the provider fingerprint hash is empty
 		// and a resync clears the stored file_hash to NULL.
+		WithSessionIDFromPath(piSessionIDFromPath),
 		WithContentHashing(),
-	)
+	).JSONLSourceSet
 }
 
 func isPiSourcePath(root, path string) bool {
 	return strings.HasSuffix(filepath.Base(path), ".jsonl")
+}
+
+// isOMPSourcePath accepts OMP transcripts at the main-session depth
+// (<project>/<session>.jsonl) and at any deeper subagent depth
+// (<project>/<session>/<agent>.jsonl and further nesting). Non-.jsonl
+// companions (.md, .bash.log) and root-level files are rejected.
+func isOMPSourcePath(root, path string) bool {
+	if !strings.HasSuffix(filepath.Base(path), ".jsonl") {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func piSessionIDFromPath(root, path string) string {
