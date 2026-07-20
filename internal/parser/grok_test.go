@@ -355,6 +355,118 @@ func TestGrokProviderSummarySource(t *testing.T) {
 	assert.Equal(t, "Investigate the failing Grok session import", outcome.Results[0].Result.Messages[0].Content)
 }
 
+func parseGrokUsageFixture(t *testing.T, updates string) ParseResult {
+	t.Helper()
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "sess-1")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"summary":"Usage fixture",
+		"firstPrompt":"test usage",
+		"modelId":"grok-summary",
+		"createdAt":"2026-07-08T10:00:00Z",
+		"updatedAt":"2026-07-08T10:30:00Z"
+	}`)
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), updates)
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "cwd-key", "local",
+	)
+	require.NoError(t, err)
+	return result
+}
+
+func parseGrokUsageFixtureWithSummary(
+	t *testing.T, summaryJSON, updates string,
+) ParseResult {
+	t.Helper()
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "sess-1")
+	writeGrokFixtureFile(
+		t, filepath.Join(sessionDir, "summary.json"), summaryJSON,
+	)
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), updates)
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "cwd-key", "local",
+	)
+	require.NoError(t, err)
+	return result
+}
+
+func TestGrokProviderLatestUsageSnapshot(t *testing.T) {
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"params":{"update":{"usage":{"inputTokens":100,"outputTokens":20,"cachedReadTokens":10,"reasoningTokens":4}}}}`,
+		`{"params":{"update":{"usage":{"inputTokens":8,"outputTokens":3,"cachedReadTokens":13,"reasoningTokens":1}}}}`,
+		`not json`,
+	}, "\n"))
+
+	require.Len(t, result.UsageEvents, 1)
+	event := result.UsageEvents[0]
+	assert.Equal(t, 0, event.InputTokens)
+	assert.Equal(t, 13, event.CacheReadInputTokens)
+	assert.Equal(t, 3, event.OutputTokens)
+	assert.Equal(t, 1, event.ReasoningTokens)
+	assert.Equal(t, "grok-summary", event.Model)
+	assert.Equal(t, "session:grok:sess-1:grok-summary", event.DedupKey)
+}
+
+func TestGrokProviderUpdatesWithoutUsageEmitNoEvents(t *testing.T) {
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"type":"unrelated"}`,
+		`not json`,
+	}, "\n"))
+
+	assert.Empty(t, result.UsageEvents)
+	assert.Equal(t, "Usage fixture", result.Session.SessionName)
+}
+
+func TestGrokProviderRetainsUsageAcrossUnrelatedJSON(t *testing.T) {
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"params":{"update":{"usage":{"inputTokens":100,"outputTokens":20,"cachedReadTokens":10,"reasoningTokens":4}}}}`,
+		`{"type":"unrelated","payload":{"ok":true}}`,
+	}, "\n"))
+
+	require.Len(t, result.UsageEvents, 1)
+	event := result.UsageEvents[0]
+	assert.Equal(t, 90, event.InputTokens)
+	assert.Equal(t, 10, event.CacheReadInputTokens)
+	assert.Equal(t, 20, event.OutputTokens)
+	assert.Equal(t, 4, event.ReasoningTokens)
+	assert.Equal(t, "grok-summary", event.Model)
+}
+
+func TestGrokProviderUpdatesUsageByModel(t *testing.T) {
+	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":999,"outputTokens":999,"modelUsage":{"grok-a":{"inputTokens":10,"outputTokens":2},"grok-b":{"inputTokens":20,"outputTokens":3}}}}}}`)
+
+	require.Len(t, result.UsageEvents, 2)
+	models := map[string]ParsedUsageEvent{}
+	for _, event := range result.UsageEvents {
+		models[event.Model] = event
+	}
+	assert.Equal(t, 2, models["grok-a"].OutputTokens)
+	assert.Equal(t, 3, models["grok-b"].OutputTokens)
+	assert.NotContains(t, models, "grok-summary")
+}
+
+func TestGrokProviderUpdatesUsageTopLevelFallback(t *testing.T) {
+	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":12,"outputTokens":4,"modelUsage":{}}}}}`)
+
+	require.Len(t, result.UsageEvents, 1)
+	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
+	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
+}
+
+func TestGrokProviderUpdatesUsageTopLevelFallbackWithoutSummaryModel(t *testing.T) {
+	result := parseGrokUsageFixtureWithSummary(t, `{
+		"summary":"Usage fixture",
+		"firstPrompt":"test usage",
+		"createdAt":"2026-07-08T10:00:00Z",
+		"updatedAt":"2026-07-08T10:30:00Z"
+	}`, `{"params":{"update":{"usage":{"inputTokens":12,"outputTokens":4,"modelUsage":{}}}}}`)
+
+	require.Len(t, result.UsageEvents, 1)
+	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
+	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
+}
+
 func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {
 	root := t.TempDir()
 	cwdKey := "%2FUsers%2Fdev%2Frepos%2Fwp-devops"
@@ -668,7 +780,7 @@ func TestGrokProviderFingerprintTracksParsedFiles(t *testing.T) {
 	writeGrokFixtureFile(t, updates, "{\"delta\":1}\n")
 	afterUpdates, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.Equal(t, afterChat.Hash, afterUpdates.Hash)
+	assert.NotEqual(t, afterChat.Hash, afterUpdates.Hash)
 
 	writeGrokFixtureFile(t, unrelated, "still ignored")
 	afterUnrelated, err := provider.Fingerprint(context.Background(), source)
@@ -695,7 +807,21 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 		Path: filepath.Join(root, "cwd-key", "sess-1", "updates.jsonl"),
 	})
 	require.NoError(t, err)
-	assert.Empty(t, changed)
+	require.Len(t, changed, 1)
+	assert.Equal(t, filepath.Clean(summary), filepath.Clean(changed[0].FingerprintKey))
+}
+
+func TestGrokProviderWatchPlanIncludesUpdates(t *testing.T) {
+	root := t.TempDir()
+	provider := newGrokTestProvider(t, root)
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.ElementsMatch(t,
+		[]string{"summary.json", "signals.json", "chat_history.jsonl", "updates.jsonl"},
+		plan.Roots[0].IncludeGlobs,
+	)
 }
 
 func TestGrokProviderArtifactBoundaries(t *testing.T) {
@@ -750,4 +876,6 @@ func TestGrokProviderRegistry(t *testing.T) {
 	mode, ok := ProviderMigrationModes()[AgentGrok]
 	require.True(t, ok)
 	assert.Equal(t, ProviderMigrationProviderAuthoritative, mode)
+	assert.Equal(t, CapabilitySupported,
+		factory.Capabilities().Content.AggregateUsageEvents)
 }

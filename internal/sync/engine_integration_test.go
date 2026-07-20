@@ -314,6 +314,9 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 		"numMessages":6,
 		"worktreeLabel":"agentsview"
 	}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(
+		root, "cwd-key", "sess-1", "updates.jsonl",
+	), []byte(`{"params":{"update":{"usage":{"inputTokens":131966,"outputTokens":326,"totalTokens":132292,"cachedReadTokens":131456,"reasoningTokens":122,"modelCalls":1,"apiDurationMs":7493,"costUsdTicks":424128000,"modelUsage":{"grok-4.5-build":{"inputTokens":131966,"outputTokens":326,"totalTokens":132292,"cachedReadTokens":131456,"reasoningTokens":122,"modelCalls":1,"apiDurationMs":7493,"costUsdTicks":424128000}},"numTurns":1}}}}`+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -347,6 +350,51 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, nameSearch.Results, 1)
 	assert.Equal(t, "grok:sess-1", nameSearch.Results[0].SessionID)
+
+	daily, err := database.GetDailyUsage(context.Background(), db.UsageFilter{
+		From: "2026-07-08", To: "2026-07-08", Agent: "grok",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 510, daily.Totals.InputTokens)
+	assert.Equal(t, 131456, daily.Totals.CacheReadTokens)
+	assert.Equal(t, 326, daily.Totals.OutputTokens)
+
+	usage, err := database.GetSessionUsage(
+		context.Background(), "grok:sess-1", true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Contains(t, usage.Models, "grok-4.5-build")
+	require.Len(t, usage.Breakdown, 1)
+	assert.Equal(t, 510, usage.Breakdown[0].InputTokens)
+	assert.Equal(t, 131456, usage.Breakdown[0].CacheReadInputTokens)
+	assert.Equal(t, 326, usage.Breakdown[0].OutputTokens)
+
+	events, err := database.GetUsageEvents(
+		context.Background(), "grok:sess-1",
+	)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, 122, events[0].ReasoningTokens)
+
+	exported, err := database.ExportSessionSummaries(
+		context.Background(),
+		db.SessionExportOptions{
+			Filter: db.SessionFilter{Agent: "grok"},
+			Limit:  10,
+			Format: "json",
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, exported.Rows, 1)
+	require.NotNil(t, exported.Rows[0].ModelUsage)
+	assert.Equal(t, 122, exported.Rows[0].ModelUsage.ReasoningTokens)
+	require.Contains(t,
+		exported.Rows[0].ModelUsage.ByModel, "grok-4.5-build",
+	)
+	assert.Equal(t, 122,
+		exported.Rows[0].ModelUsage.ByModel["grok-4.5-build"].ReasoningTokens,
+	)
 }
 
 type openCodeFamilySQLiteCase struct {

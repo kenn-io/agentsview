@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -172,10 +173,79 @@ func ParseGrokSummary(
 		result.Session.PeakContextTokens = signals.PeakContextTokens
 		result.Session.HasPeakContextTokens = true
 	}
+	result.UsageEvents, err = parseGrokUsageEvents(
+		filepath.Join(sessionDir, "updates.jsonl"),
+		result.Session.ID, summary.ModelID, startedAt, endedAt,
+	)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	applyUsageEventTokenTotals(&result.Session, result.UsageEvents)
 	result.Session.aggregateTokenPresenceKnown =
 		result.Session.HasTotalOutputTokens ||
 			result.Session.HasPeakContextTokens
 	return result, nil
+}
+
+func parseGrokUsageEvents(
+	path, sessionID, summaryModel string,
+	startedAt, endedAt time.Time,
+) ([]ParsedUsageEvent, error) {
+	var usage gjson.Result
+	_, err := readJSONLFrom(path, 0, func(line string) {
+		candidate := gjson.Get(line, "params.update.usage")
+		if candidate.Exists() && candidate.IsObject() {
+			usage = candidate
+		}
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !usage.Exists() {
+		return nil, nil
+	}
+
+	occurredAt := timeString(endedAt, startedAt)
+	modelUsage := usage.Get("modelUsage")
+	var events []ParsedUsageEvent
+	if modelUsage.IsObject() {
+		modelUsage.ForEach(func(model, modelData gjson.Result) bool {
+			events = append(events, grokUsageEvent(
+				sessionID, model.Str, modelData, occurredAt,
+			))
+			return true
+		})
+	}
+	if len(events) > 0 {
+		return events, nil
+	}
+	if summaryModel == "" {
+		summaryModel = "grok-summary"
+	}
+	return []ParsedUsageEvent{grokUsageEvent(
+		sessionID, summaryModel, usage, occurredAt,
+	)}, nil
+}
+
+func grokUsageEvent(
+	sessionID, model string, usage gjson.Result, occurredAt string,
+) ParsedUsageEvent {
+	input := int(usage.Get("inputTokens").Int())
+	cachedRead := int(usage.Get("cachedReadTokens").Int())
+	return ParsedUsageEvent{
+		SessionID:            sessionID,
+		Source:               "session",
+		Model:                model,
+		InputTokens:          max(input-cachedRead, 0),
+		OutputTokens:         int(usage.Get("outputTokens").Int()),
+		CacheReadInputTokens: cachedRead,
+		ReasoningTokens:      int(usage.Get("reasoningTokens").Int()),
+		OccurredAt:           occurredAt,
+		DedupKey:             "session:" + sessionID + ":" + model,
+	}
 }
 
 func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {

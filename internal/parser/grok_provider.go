@@ -65,7 +65,7 @@ func grokWatchRoots(roots []string) []WatchRoot {
 		out = append(out, WatchRoot{
 			Path:         root,
 			Recursive:    true,
-			IncludeGlobs: []string{"summary.json", "signals.json", "chat_history.jsonl"},
+			IncludeGlobs: []string{"summary.json", "signals.json", "chat_history.jsonl", "updates.jsonl"},
 			DebounceKey:  string(AgentGrok) + ":sessions:" + root,
 		})
 	}
@@ -140,7 +140,7 @@ func grokStrictMatch(root, path string) (singleFileMatch, bool) {
 
 func grokTrackedFileName(name string) bool {
 	switch name {
-	case "summary.json", "signals.json", "chat_history.jsonl":
+	case "summary.json", "signals.json", "chat_history.jsonl", "updates.jsonl":
 		return true
 	default:
 		return false
@@ -202,6 +202,7 @@ func grokCompanionFiles(summaryPath string) map[string]string {
 	return map[string]string{
 		"signals":      filepath.Join(dir, "signals.json"),
 		"chat_history": filepath.Join(dir, "chat_history.jsonl"),
+		"updates":      filepath.Join(dir, "updates.jsonl"),
 	}
 }
 
@@ -228,10 +229,11 @@ func grokProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
-			FirstMessage:       CapabilitySupported,
-			SessionName:        CapabilitySupported,
-			TerminationStatus:  CapabilityNotApplicable,
-			MalformedLineCount: CapabilityNotApplicable,
+			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
+			TerminationStatus:    CapabilityNotApplicable,
+			MalformedLineCount:   CapabilityNotApplicable,
+			AggregateUsageEvents: CapabilitySupported,
 		},
 	}
 }
