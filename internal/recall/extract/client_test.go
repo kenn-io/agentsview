@@ -634,6 +634,154 @@ func TestClientErrorDetailRedactsRawQueryForms(t *testing.T) {
 	}
 }
 
+// TestClientErrorDetailWithholdsBodyForCredentialedEndpoints pins that a
+// response body from an endpoint whose URL carries credential material is
+// never excerpted at all: literal scrubbing loses against an endpoint that
+// re-encodes the credential (JSON \u escapes turn sekret into
+// se\u006bret) or against secrets shorter than any masking floor.
+func TestClientErrorDetailWithholdsBodyForCredentialedEndpoints(t *testing.T) {
+	cases := map[string]struct {
+		mutate  func(u *url.URL)
+		echo    string
+		secrets []string
+	}{
+		"short password": {
+			mutate: func(u *url.URL) {
+				u.User = url.UserPassword("tester", "zq7")
+			},
+			echo:    `{"error":"denied for http://tester:zq7@upstream/v1"}`,
+			secrets: []string{"zq7"},
+		},
+		"json unicode escape": {
+			mutate: func(u *url.URL) {
+				u.RawQuery = "api_key=sekret-value"
+			},
+			echo:    `{"error":"denied for /v1?api_key=se\u006bret-value"}`,
+			secrets: []string{`se\u006bret-value`},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{
+				{status: http.StatusForbidden, errorBody: tc.echo},
+			}, &requests)
+			defer server.Close()
+
+			endpoint, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatalf("parsing test server URL: %v", err)
+			}
+			tc.mutate(endpoint)
+			client := testClient(endpoint.String())
+
+			_, _, derr := client.DistillWithRecovery(
+				context.Background(), "p", "text", 1,
+			)
+			if derr == nil {
+				t.Fatal("scripted failure must surface an error")
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(derr.Error(), secret) {
+					t.Fatalf("error leaks reflected credential %q: %v",
+						secret, derr)
+				}
+			}
+			if strings.Contains(derr.Error(), "denied") {
+				t.Fatalf("error carries attacker-controlled body content "+
+					"from a credentialed endpoint: %v", derr)
+			}
+		})
+	}
+}
+
+// TestClientErrorDetailStripsControlCharacters pins that a kept response
+// excerpt (credential-free endpoint) cannot smuggle terminal escapes or
+// carriage returns into doctor stderr and CI logs.
+func TestClientErrorDetailStripsControlCharacters(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{
+			status:    http.StatusNotFound,
+			errorBody: "{\"error\":\"\x1b]0;pwned\x07\rbad model\"}",
+		},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("scripted failure must surface an error")
+	}
+	if !strings.Contains(err.Error(), "bad model") {
+		t.Fatalf("error must keep the printable server detail: %v", err)
+	}
+	for _, banned := range []string{"\x1b", "\x07", "\r"} {
+		if strings.Contains(err.Error(), banned) {
+			t.Fatalf("error carries control byte %q: %q", banned, err.Error())
+		}
+	}
+}
+
+// TestClientBoundsUnknownFinishReasonDetail pins that a hostile 200 whose
+// finish_reason approaches the transport limit cannot balloon the error —
+// the manager persists error text into a failure row per session.
+func TestClientBoundsUnknownFinishReasonDetail(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: strings.Repeat("x", 1<<20), content: `{"entries":[]}`},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("an unknown finish reason must surface an error")
+	}
+	if len(err.Error()) > 500 {
+		t.Fatalf("error carries %d bytes of endpoint-controlled text, "+
+			"want a bounded excerpt", len(err.Error()))
+	}
+}
+
+// TestClientDeterministicStatusesAreEndpointScoped pins that statuses a
+// same-configured endpoint answers identically for every request — wrong
+// method or media type on the route (405, 415), unimplemented route (501)
+// — fail fast without transient retries and classify as endpoint-scoped,
+// so the manager aborts the pass instead of burning one doomed call per
+// session.
+func TestClientDeterministicStatusesAreEndpointScoped(t *testing.T) {
+	for _, status := range []int{
+		http.StatusMethodNotAllowed,
+		http.StatusUnsupportedMediaType,
+		http.StatusNotImplemented,
+	} {
+		t.Run(fmt.Sprintf("HTTP %d", status), func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{
+				{status: status}, {status: status}, {status: status},
+			}, &requests)
+			defer server.Close()
+
+			_, _, err := testClient(server.URL).DistillWithRecovery(
+				context.Background(), "p", "text", 3,
+			)
+			if err == nil {
+				t.Fatal("scripted failure must surface an error")
+			}
+			if len(requests) != 1 {
+				t.Fatalf("requests = %d, want 1: a deterministic status "+
+					"must not consume transient retries", len(requests))
+			}
+			if !endpointScopedRejection(err) {
+				t.Fatalf("error must classify as endpoint-scoped: %v", err)
+			}
+		})
+	}
+}
+
 // TestClientRejectsOversizedContent pins the local resource bounds: a
 // configured or compromised endpoint can answer within the transport size
 // limit yet carry tens of thousands of entries or multi-megabyte fields,

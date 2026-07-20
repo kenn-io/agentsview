@@ -1845,6 +1845,57 @@ func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 	}
 }
 
+// TestManagerAbortsPassOnSchemaViolation pins that a schema-violating 200
+// aborts the pass like an endpoint rejection: the server was asked for
+// constrained decoding, so a violation means it does not enforce
+// json_schema — an endpoint property that dooms every unit, not a fact
+// about this transcript.
+func TestManagerAbortsPassOnSchemaViolation(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, `{"wrong":"shape"}`)
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	_, err := m.RunPass(ctx, PassOptions{})
+	if err == nil {
+		t.Fatal("a schema violation must abort the pass")
+	}
+	if calls := log.count(); calls != 1 {
+		t.Fatalf("model calls = %d, want 1: a non-enforcing server dooms "+
+			"every unit", calls)
+	}
+	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
+	if perr != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, perr)
+	}
+	if progress.State != db.ExtractProgressPending {
+		t.Fatalf("state = %s (%q), want pending: an endpoint failure must "+
+			"not consume the session's backoff",
+			progress.State, progress.LastError)
+	}
+}
+
+// TestBoundedLastErrorCapsStoredText pins the persistence-side bound on
+// externally derived error text: whatever the client lets through, a
+// failure row must not store megabytes per session.
+func TestBoundedLastErrorCapsStoredText(t *testing.T) {
+	long := boundedLastError(errors.New(strings.Repeat("y", 100_000)))
+	if len(long) > maxStoredErrorBytes {
+		t.Fatalf("stored error is %d bytes, cap is %d",
+			len(long), maxStoredErrorBytes)
+	}
+	if !strings.Contains(long, "truncated") {
+		t.Fatalf("capped error must say it was truncated: %.80q", long)
+	}
+	if short := boundedLastError(errors.New("plain cause")); short != "plain cause" {
+		t.Fatalf("short error must pass through, got %q", short)
+	}
+}
+
 // TestManagerBadRequestStaysSessionScoped pins the other half of the
 // endpoint-scoped contract: a 400 indicts this request's content, not the
 // endpoint — the same server answers other units fine — so the pass must

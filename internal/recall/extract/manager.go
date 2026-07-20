@@ -698,7 +698,7 @@ func (m *Manager) extractSession(
 				Fingerprint:    m.fingerprint,
 				ExpectedDigest: digest,
 				ExpectedCursor: i,
-				LastError:      err.Error(),
+				LastError:      boundedLastError(err),
 			}); markErr != nil && !errors.Is(markErr, db.ErrStaleExtractProgress) {
 				return outcome, markErr
 			}
@@ -753,7 +753,7 @@ func (m *Manager) extractSession(
 						Fingerprint:    m.fingerprint,
 						ExpectedDigest: digest,
 						ExpectedCursor: i,
-						LastError:      err.Error(),
+						LastError:      boundedLastError(err),
 					},
 				); markErr != nil &&
 					!errors.Is(markErr, db.ErrStaleExtractProgress) {
@@ -818,6 +818,24 @@ func (m *Manager) discardIneligibleSession(
 		ctx, sessionID, digest, cursor,
 		"session became ineligible during extraction",
 	)
+}
+
+// maxStoredErrorBytes caps externally derived error text persisted into
+// failure rows: a row is written per session, so a hostile endpoint must
+// not grow the archive by megabytes per pass through error strings.
+const maxStoredErrorBytes = 2048
+
+func boundedLastError(err error) string {
+	msg := err.Error()
+	const marker = " …(truncated)"
+	if len(msg) <= maxStoredErrorBytes {
+		return msg
+	}
+	cut := maxStoredErrorBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + marker
 }
 
 func (m *Manager) discardSessionOutput(

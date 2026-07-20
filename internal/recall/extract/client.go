@@ -3,7 +3,6 @@ package extract
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +43,14 @@ var errTruncated = errors.New("model output truncated")
 // field).
 var errPermanentRequest = errors.New("model server rejected the request")
 
+// errProtocolViolation marks a 200 whose content violates the
+// constrained-decoding contract: the server was asked to enforce
+// json_schema and did not. That is an endpoint property, not a fact about
+// the submitted transcript, so it classifies as endpoint-scoped.
+var errProtocolViolation = errors.New(
+	"distill response violates the extraction protocol",
+)
+
 // requestStatusError carries the HTTP status of a permanent server
 // rejection so callers can tell endpoint-scoped failures from
 // input-specific ones.
@@ -55,21 +62,29 @@ type requestStatusError struct {
 func (e *requestStatusError) Error() string { return e.err.Error() }
 func (e *requestStatusError) Unwrap() error { return e.err }
 
-// endpointScopedRejection reports whether err is a permanent rejection
-// whose status indicts the endpoint or configuration rather than the
-// submitted unit: authentication (401), authorization (403), and
-// unknown-route-or-model (404) rejections fail every request equally, so
-// visiting further sessions burns one doomed model call and one failure
+// endpointScopedRejection reports whether err is a permanent failure that
+// indicts the endpoint or configuration rather than the submitted unit:
+// authentication (401), authorization (403), unknown route or model (404),
+// wrong method or media type on the route (405, 415), an unimplemented
+// route (501), and schema-violating 200s all fail every request equally,
+// so visiting further sessions burns one doomed model call and one failure
 // backoff apiece. A 400 stays input-scoped — the same endpoint answers
 // other units fine when only this request's content is refused.
 func endpointScopedRejection(err error) bool {
+	if errors.Is(err, errProtocolViolation) {
+		return true
+	}
 	var rejection *requestStatusError
 	if !errors.As(err, &rejection) {
 		return false
 	}
-	return rejection.status == http.StatusUnauthorized ||
-		rejection.status == http.StatusForbidden ||
-		rejection.status == http.StatusNotFound
+	switch rejection.status {
+	case http.StatusUnauthorized, http.StatusForbidden,
+		http.StatusNotFound, http.StatusMethodNotAllowed,
+		http.StatusUnsupportedMediaType, http.StatusNotImplemented:
+		return true
+	}
+	return false
 }
 
 // transientError marks a failure worth retrying: network errors, timeouts,
@@ -427,7 +442,8 @@ func (c *Client) distill(
 		// Deterministic for the same input, so it fails fast.
 		return nil, parsed.Usage, fmt.Errorf(
 			"distill response finished with %q instead of completing; "+
-				"refusing possibly incomplete entries", choice.FinishReason,
+				"refusing possibly incomplete entries",
+			boundedToken(choice.FinishReason, 60),
 		)
 	}
 	if choice.Message.Content == "" {
@@ -445,74 +461,83 @@ func (c *Client) distill(
 		// means it did not enforce the schema; at temperature zero that is
 		// deterministic and not worth retrying.
 		return nil, parsed.Usage, fmt.Errorf(
-			"distilled content violates the response schema (does the "+
-				"server enforce json_schema?): %w", err,
+			"%w: distilled content violates the response schema (does "+
+				"the server enforce json_schema?): %w",
+			errProtocolViolation, err,
 		)
 	}
 	return entries, parsed.Usage, nil
 }
 
 // responseDetail prepares a response-body excerpt for error text. Bodies
-// are attacker-influenced and can echo the request back — the URI with its
-// query values and the Basic-auth header the endpoint userinfo becomes —
-// and these errors reach doctor stderr, CI logs, and stored failure rows,
-// so every credential-bearing component of the configured endpoint is
-// masked in each form a reflection would carry before the excerpt is
-// capped. The query is taken apart without a parser: the raw wire
-// substrings are what an echoed URI contains, url.ParseQuery would reject
-// exactly the malformed queries that still travel verbatim, and a
-// rejection must not fail open. Values shorter than four bytes are not
-// treated as secrets; masking them would shred the detail on every
-// coincidental match.
+// are attacker-influenced and these errors reach doctor stderr, CI logs,
+// and stored failure rows. When the configured endpoint URL carries
+// credential material — userinfo, or any query parameter that does not
+// merely select the API surface — the body is withheld outright: an
+// endpoint that knows the credential can echo it back in arbitrary
+// re-encodings (JSON \u escapes, chunked across fields), and literal
+// replacement cannot enumerate those. A credential-free endpoint keeps a
+// control-stripped, length-capped excerpt, which is where the diagnostic
+// value lives (wrong model name, malformed field).
 func (c *Client) responseDetail(raw []byte) string {
+	const withheld = "(response body withheld: endpoint URL carries " +
+		"credential material)"
 	endpoint, err := url.Parse(c.BaseURL)
 	if err != nil {
-		// The endpoint's secrets cannot be enumerated; withhold the body
-		// rather than risk echoing them.
 		return "(response body withheld: unparseable endpoint)"
 	}
-	secrets := make(map[string]struct{})
-	addForms := func(value string) {
-		if len(value) < 4 {
-			return
-		}
-		secrets[value] = struct{}{}
-		secrets[url.QueryEscape(value)] = struct{}{}
-		if decoded, err := url.QueryUnescape(value); err == nil {
-			secrets[decoded] = struct{}{}
-			secrets[url.QueryEscape(decoded)] = struct{}{}
-		}
-	}
 	if endpoint.User != nil {
-		username := endpoint.User.Username()
-		password, _ := endpoint.User.Password()
-		addForms(username)
-		addForms(password)
-		addForms(base64.StdEncoding.EncodeToString(
-			[]byte(username + ":" + password)))
+		return withheld
 	}
+	// Raw wire substrings, no parser: url.ParseQuery would reject exactly
+	// the malformed queries that still travel verbatim, and a rejection
+	// must not fail open.
 	for _, segment := range strings.FieldsFunc(
 		endpoint.RawQuery,
 		func(r rune) bool { return r == '&' || r == ';' },
 	) {
-		if _, value, found := strings.Cut(segment, "="); found {
-			addForms(value)
-		} else {
-			// A key-only segment can itself be a bare credential.
-			addForms(segment)
+		key, _, _ := strings.Cut(segment, "=")
+		// Mirrors the config redactor's allowlist: only parameters that
+		// select the API surface are credential-free; everything else
+		// (api_key, sig, code, sas, ...) fails closed.
+		if !strings.EqualFold(key, "api-version") {
+			return withheld
 		}
 	}
-	detail := string(raw)
-	for secret := range secrets {
-		if len(secret) < 4 {
-			continue
-		}
-		detail = strings.ReplaceAll(detail, secret, "REDACTED")
-	}
+	detail := stripControls(string(raw))
 	if len(detail) > 200 {
-		detail = detail[:200]
+		cut := 200
+		for cut > 0 && !utf8.RuneStart(detail[cut]) {
+			cut--
+		}
+		detail = detail[:cut]
 	}
 	return detail
+}
+
+// stripControls replaces C0/C1 control characters and invalid UTF-8 with
+// spaces: response bytes reach terminals and logs, where an escape
+// sequence or carriage return forges or hides output.
+func stripControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) ||
+			r == utf8.RuneError {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// boundedToken caps an endpoint-supplied token for error text: a hostile
+// finish_reason or entry field can approach the transport limit, and these
+// errors persist into per-session failure rows.
+func boundedToken(value string, maxRunes int) string {
+	value = stripControls(value)
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes]) + "…(truncated)"
 }
 
 // parseEntries decodes and validates distilled content against the same
@@ -550,7 +575,8 @@ func parseEntries(content string) ([]Entry, error) {
 		if !slices.Contains(entryTypes, entry.Type) {
 			return nil, fmt.Errorf(
 				"entry %d: type %q is not one of %s",
-				i, entry.Type, strings.Join(entryTypes, ", "),
+				i, boundedToken(entry.Type, 60),
+				strings.Join(entryTypes, ", "),
 			)
 		}
 		if entry.Title, err = strictString(fields["title"], "title"); err != nil {
@@ -667,6 +693,11 @@ func isJSONNull(data json.RawMessage) bool {
 // (auth failures, missing routes, validation rejections) are deterministic
 // for the same request and fail fast.
 func isTransientStatus(status int) bool {
+	if status == http.StatusNotImplemented {
+		// 501 is deterministic: the route itself is unimplemented, and
+		// retrying the identical request cannot implement it.
+		return false
+	}
 	return status == http.StatusRequestTimeout ||
 		status == http.StatusTooManyRequests ||
 		status >= 500
