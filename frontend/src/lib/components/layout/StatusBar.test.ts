@@ -11,6 +11,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import StatusBar from "./StatusBar.svelte";
 import { sync } from "../../stores/sync.svelte.js";
+import { formatTimestamp } from "../../utils/format.js";
 
 describe("StatusBar", () => {
   beforeEach(() => {
@@ -50,15 +51,10 @@ describe("StatusBar", () => {
     const syncLabel = document.querySelector(
       ".kit-status-bar__section--right span[title]",
     );
-    const expectedTitle = new Date(sync.lastSync!).toLocaleString(
-      undefined,
-      {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      },
-    );
+    // Compute the expected title through the same i18n path the component
+    // uses. toLocaleString(undefined, ...) resolves to the OS locale, which
+    // diverges from the Paraglide app locale on non-English systems (#1195).
+    const expectedTitle = formatTimestamp(sync.lastSync!);
 
     expect(document.body.textContent).toContain(
       "synced just now",
