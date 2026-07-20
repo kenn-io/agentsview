@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -190,6 +191,12 @@ func (c RecallExtractConfig) Validate() error {
 			"[recall.extract] failure_backoff must not be negative, got %q",
 			c.FailureBackoff)
 	}
+	if backoff == 0 {
+		return fmt.Errorf(
+			"[recall.extract] failure_backoff must not be zero; a failed " +
+				"session would retry a model call on every pass — omit it " +
+				"for the 1h default")
+	}
 	return nil
 }
 
@@ -202,18 +209,62 @@ func (s RecallExtractServerConfig) validate(name string) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf(
 			"[recall.extract.servers.%s] endpoint %q must be an http(s) URL",
-			name, s.Endpoint)
+			name, RedactedEndpoint(s.Endpoint))
 	}
 	if err := ValidateExtractTransport(u, s.AllowHTTP); err != nil {
 		return fmt.Errorf("[recall.extract.servers.%s] %w", name, err)
 	}
-	if _, err := time.ParseDuration(s.Timeout); err != nil {
+	timeout, err := time.ParseDuration(s.Timeout)
+	if err != nil {
 		return fmt.Errorf(
 			"[recall.extract.servers.%s] invalid timeout %q: %w",
 			name, s.Timeout, err)
 	}
+	if timeout <= 0 {
+		return fmt.Errorf(
+			"[recall.extract.servers.%s] timeout must be positive, got %q: "+
+				"without an HTTP deadline one hung request stalls "+
+				"extraction indefinitely", name, s.Timeout)
+	}
 	return nil
 }
+
+// RedactedEndpoint returns an endpoint URL safe for errors, logs, and
+// display: userinfo can carry Basic-auth credentials (the username alone
+// can be an API key) and query values can carry keys, and these strings
+// land on stderr, in CI logs, and in stored failure messages. The host,
+// path, and non-sensitive parameters stay visible for debugging.
+func RedactedEndpoint(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable endpoint>"
+	}
+	return redactedEndpointURL(parsed)
+}
+
+func redactedEndpointURL(u *url.URL) string {
+	redacted := *u
+	redacted.User = nil
+	query := redacted.Query()
+	masked := false
+	for key, values := range query {
+		if !sensitiveEndpointParam.MatchString(key) {
+			continue
+		}
+		for i := range values {
+			values[i] = "REDACTED"
+		}
+		query[key] = values
+		masked = true
+	}
+	if masked {
+		redacted.RawQuery = query.Encode()
+	}
+	return redacted.String()
+}
+
+var sensitiveEndpointParam = regexp.MustCompile(
+	`(?i)key|token|secret|password|credential|sig|auth`)
 
 // ValidateExtractTransport enforces the extraction transport privacy rule
 // shared by config validation and the model client's redirect policy:
@@ -228,7 +279,7 @@ func ValidateExtractTransport(u *url.URL, allowHTTP bool) error {
 	case "http":
 	default:
 		return fmt.Errorf(
-			"endpoint %q must use http or https", u.String())
+			"endpoint %q must use http or https", redactedEndpointURL(u))
 	}
 	if allowHTTP {
 		return nil
@@ -243,7 +294,7 @@ func ValidateExtractTransport(u *url.URL, allowHTTP bool) error {
 	return fmt.Errorf(
 		"endpoint %q sends transcript content over plaintext http to a "+
 			"non-loopback host; use https, or set allow_http = true to "+
-			"accept that risk explicitly", u.String())
+			"accept that risk explicitly", redactedEndpointURL(u))
 }
 
 // normalizedRecallExtractServers fills each named server's unset timeout

@@ -135,6 +135,31 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 			wantErr: "failure_backoff",
 		},
 		{
+			name: "zero failure_backoff",
+			mutate: func(c *RecallExtractConfig) {
+				c.FailureBackoff = "0s"
+			},
+			wantErr: "failure_backoff must not be zero",
+		},
+		{
+			name: "zero server timeout",
+			mutate: func(c *RecallExtractConfig) {
+				s := c.Servers["local"]
+				s.Timeout = "0s"
+				c.Servers["local"] = s
+			},
+			wantErr: "timeout must be positive",
+		},
+		{
+			name: "negative server timeout",
+			mutate: func(c *RecallExtractConfig) {
+				s := c.Servers["local"]
+				s.Timeout = "-5s"
+				c.Servers["local"] = s
+			},
+			wantErr: "timeout must be positive",
+		},
+		{
 			name:    "negative max_tokens",
 			mutate:  func(c *RecallExtractConfig) { c.MaxTokens = -1 },
 			wantErr: "max_tokens",
@@ -185,6 +210,52 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestRecallExtractValidationRedactsEndpointCredentials pins that
+// validation errors never echo endpoint credentials: config errors land on
+// stderr and in CI logs, and endpoints may carry Basic-auth userinfo or
+// API keys in query parameters.
+func TestRecallExtractValidationRedactsEndpointCredentials(t *testing.T) {
+	cfg := validRecallExtractConfig()
+	s := cfg.Servers["local"]
+	s.Endpoint = "http://tester:hunter2@lan-host:9000/v1?api_key=sekret"
+	s.AllowHTTP = false
+	cfg.Servers["local"] = s
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lan-host",
+		"the host stays visible for diagnostics")
+	assert.NotContains(t, err.Error(), "hunter2")
+	assert.NotContains(t, err.Error(), "tester:")
+	assert.NotContains(t, err.Error(), "sekret")
+}
+
+func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
+	cases := map[string]struct{ in, want string }{
+		"userinfo dropped": {
+			"https://user:pass@models.example:8443/v1",
+			"https://models.example:8443/v1",
+		},
+		"sensitive query values masked": {
+			"https://models.example/v1?api_key=sekret&api-version=2024-06-01",
+			"https://models.example/v1?api-version=2024-06-01&api_key=REDACTED",
+		},
+		"signature masked": {
+			"https://models.example/v1?sig=abc123",
+			"https://models.example/v1?sig=REDACTED",
+		},
+		"plain endpoint unchanged": {
+			"http://127.0.0.1:11434/v1",
+			"http://127.0.0.1:11434/v1",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, RedactedEndpoint(tc.in))
 		})
 	}
 }

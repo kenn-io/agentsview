@@ -9,11 +9,14 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"go.kenn.io/agentsview/internal/config"
 )
 
 // ErrContextOverflow reports a prompt the server rejected as too large for
@@ -250,10 +253,17 @@ func (c *Client) distill(
 	if err != nil {
 		return nil, Usage{}, fmt.Errorf("encoding distill request: %w", err)
 	}
+	// The route joins the parsed endpoint path so query parameters
+	// (Azure-style ?api-version=...) survive; string concatenation would
+	// land the route inside the query value.
+	endpoint, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return nil, Usage{}, fmt.Errorf(
+			"invalid endpoint %s", config.RedactedEndpoint(c.BaseURL))
+	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/chat/completions"
 	request, err := http.NewRequestWithContext(
-		ctx, http.MethodPost,
-		strings.TrimRight(c.BaseURL, "/")+"/chat/completions",
-		bytes.NewReader(body),
+		ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body),
 	)
 	if err != nil {
 		return nil, Usage{}, fmt.Errorf("building distill request: %w", err)
@@ -262,8 +272,19 @@ func (c *Client) distill(
 
 	response, err := c.httpClient().Do(request)
 	if err != nil {
+		// url.Error echoes the request URL with only the password masked:
+		// the username (which can itself be an API key) and the query
+		// string still leak, and this message reaches doctor output and
+		// stored failure rows. Report the redacted endpoint and keep the
+		// underlying cause on the chain.
+		cause := err
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			cause = urlErr.Err
+		}
 		return nil, Usage{}, &transientError{
-			err: fmt.Errorf("posting distill request: %w", err),
+			err: fmt.Errorf("posting distill request to %s: %w",
+				config.RedactedEndpoint(endpoint.String()), cause),
 		}
 	}
 	defer func() { _ = response.Body.Close() }()

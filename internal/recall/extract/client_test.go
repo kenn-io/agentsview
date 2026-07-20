@@ -542,3 +542,55 @@ func TestSplitFloorChars(t *testing.T) {
 		t.Fatalf("SplitFloorChars(800) = %d, want 100", got)
 	}
 }
+
+// TestClientEndpointWithQueryRoutesCorrectly pins URL construction for
+// endpoints carrying query parameters (Azure-style ?api-version=...):
+// string concatenation would land the route inside the query value and hit
+// the bare endpoint path instead.
+func TestClientEndpointWithQueryRoutesCorrectly(t *testing.T) {
+	var gotPath, gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotQuery = r.URL.Query().Get("api-version")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(completionBody(t, entriesJSON(t, "one"))))
+		}))
+	defer server.Close()
+
+	client := testClient(server.URL + "/v1?api-version=2024-06-01")
+	entries, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("request path = %q, want /v1/chat/completions", gotPath)
+	}
+	if gotQuery != "2024-06-01" {
+		t.Fatalf("api-version = %q; the endpoint query must survive "+
+			"route joining", gotQuery)
+	}
+}
+
+// TestClientTransportErrorRedactsEndpoint pins that connection failures do
+// not echo endpoint credentials: these errors land in doctor output and in
+// stored progress rows, and endpoints may carry Basic-auth userinfo or API
+// keys in query parameters. (Go's url.Error already masks the password but
+// keeps the username and the query string.)
+func TestClientTransportErrorRedactsEndpoint(t *testing.T) {
+	client := testClient(
+		"http://tester:hunter2@127.0.0.1:1/v1?api_key=sekret")
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("expected a connection error against a closed port")
+	}
+	for _, secret := range []string{"hunter2", "sekret", "tester"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("transport error leaks %q: %v", secret, err)
+		}
+	}
+}
