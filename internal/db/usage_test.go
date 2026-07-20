@@ -3412,6 +3412,8 @@ func TestGetSessionUsage_ExplicitCostOnly(t *testing.T) {
 	requireNoError(t, err, "GetSessionUsage")
 	assert.True(t, u.HasCost, "HasCost = false, want true (explicit cost)")
 	assert.InDelta(t, 0.02, u.CostUSD, 1e-9, "CostUSD")
+	assert.False(t, u.CostIsAuthoritative,
+		"provider-reported estimate is not a session settlement")
 	assert.Equal(t, []string{"gpt-5.4"}, u.Models, "Models")
 	require.Len(t, u.Breakdown, 1, "Breakdown")
 	entry := u.Breakdown[0]
@@ -3650,6 +3652,7 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	require.NotNil(t, session)
 	assert.True(t, session.HasCost)
 	assert.InDelta(t, reportedCost, session.CostUSD, 1e-12)
+	assert.True(t, session.CostIsAuthoritative)
 	assert.InDelta(t, reportedCost/0.01, session.AICredits, 1e-9)
 	require.Len(t, session.Breakdown, 2)
 	assert.InDelta(t, 0.0175, session.Breakdown[0].CostUSD, 1e-12)

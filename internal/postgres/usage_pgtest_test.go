@@ -1188,6 +1188,7 @@ func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 	require.NotNil(t, u, "usage is nil")
 	assert.True(t, u.HasCost, "HasCost")
 	assert.Equal(t, 0.10, u.CostUSD, "CostUSD")
+	assert.False(t, u.CostIsAuthoritative)
 	assert.Equal(t, 10.0, u.AICredits, "AICredits")
 }
 
@@ -1220,6 +1221,7 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.InDelta(t, 0.0275, usage.CostUSD, 1e-12)
+	assert.True(t, usage.CostIsAuthoritative)
 	assert.InDelta(t, 0.0275/0.01, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
 	assert.NotEqual(t, usage.CostUSD, usage.Breakdown[1].CostUSD)

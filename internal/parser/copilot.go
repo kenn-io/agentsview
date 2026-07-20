@@ -253,10 +253,12 @@ func (b *copilotSessionBuilder) handleShutdown(
 	useReportedCost := !b.startedAt.IsZero() &&
 		!b.startedAt.Before(copilotUsageBasedPricingStartedAt)
 	totalNanoAiu := data.Get("totalNanoAiu")
+	hasReportedCost := useReportedCost && totalNanoAiu.Type == gjson.Number &&
+		totalNanoAiu.Num >= 0
 
 	// totalNanoAiu is cumulative. Keep its authoritative cost on only the
 	// latest shutdown, including when that final value is zero.
-	if useReportedCost && totalNanoAiu.Exists() {
+	if hasReportedCost {
 		for i := range b.usageEvents {
 			if b.usageEvents[i].CostSource == copilotReportedCostSource {
 				b.usageEvents[i].CostUSD = nil
@@ -303,7 +305,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 		return events[i].Model < events[j].Model
 	})
 
-	if useReportedCost && totalNanoAiu.Exists() {
+	if hasReportedCost {
 		if len(events) == 0 {
 			events = append(events, ParsedUsageEvent{
 				Source:     "shutdown",
