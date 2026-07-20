@@ -997,20 +997,34 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 			AND (s.local_modified_at IS NULL OR s.local_modified_at >= ?)`)
 		args = append(args, q.ChangedSince.UTC().Format(extractTimeLayout))
 	}
+	// The failed-retry arm is a separate UNION member, not an OR term:
+	// inside an OR the planner falls back to the bare fingerprint prefix
+	// of idx_recall_extract_progress_retry, fetching every failed row —
+	// backoff included — on each pass. As its own arm it gets the tight
+	// (fingerprint, state, updated_at <= cutoff) range.
 	sb.WriteString(`
 		UNION
 		SELECT s.id AS id, s.ended_at AS ended_at
 		FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
 		WHERE p.generation_fingerprint = ?
-			AND (
-				p.state IN (?, ?)
-				OR (p.state = ? AND p.updated_at <= ?)
-			)
+			AND p.state IN (?, ?)
+			AND ` + eligible + `
+		UNION
+		SELECT s.id AS id, s.ended_at AS ended_at
+		FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ?
+			AND p.state = ?
+			AND p.updated_at <= ?
 			AND ` + eligible)
 	args = append(args,
 		q.Fingerprint,
 		ExtractProgressPending, ExtractProgressPartial,
+	)
+	args = append(args, eligibleArgs...)
+	args = append(args,
+		q.Fingerprint,
 		ExtractProgressFailed,
 		q.FailedRetryCutoff.UTC().Format(extractTimeLayout),
 	)

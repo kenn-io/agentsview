@@ -782,6 +782,73 @@ func TestClientDeterministicStatusesAreEndpointScoped(t *testing.T) {
 	}
 }
 
+// TestClientWithholdsSuccessDiagnosticsForCredentialedEndpoints pins that
+// HTTP 200 error paths get the same treatment as non-200 bodies: a server
+// that knows the credential can reflect it through finish_reason, unknown
+// keys, or any schema-violating field, and those errors reach persisted
+// failure rows, scheduler logs, and doctor output.
+func TestClientWithholdsSuccessDiagnosticsForCredentialedEndpoints(t *testing.T) {
+	const secret = "sekret-value"
+	cases := map[string]scriptedResponse{
+		"finish reason": {
+			finishReason: secret, content: `{"entries":[]}`,
+		},
+		"unknown key": {
+			finishReason: "stop",
+			content:      `{"entries":[],"` + secret + `":true}`,
+		},
+		"entry type": {
+			finishReason: "stop",
+			content: `{"entries":[{"type":"` + secret +
+				`","title":"t","body":"b","entities":[]}]}`,
+		},
+	}
+	for name, response := range cases {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(
+				t, []scriptedResponse{response}, &requests,
+			)
+			defer server.Close()
+
+			client := testClient(server.URL + "?api_key=" + secret)
+			_, _, err := client.DistillWithRecovery(
+				context.Background(), "p", "text", 1,
+			)
+			if err == nil {
+				t.Fatal("scripted violation must surface an error")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("error reflects the endpoint credential: %v", err)
+			}
+		})
+	}
+}
+
+// TestClientBoundsUnknownKeyDetail pins that an unknown JSON key — which a
+// hostile 200 can grow toward the transport limit — reaches error text
+// only as a bounded token.
+func TestClientBoundsUnknownKeyDetail(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{{
+		finishReason: "stop",
+		content: `{"entries":[],"` + strings.Repeat("x", 1<<20) +
+			`":true}`,
+	}}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("an unknown key must surface an error")
+	}
+	if len(err.Error()) > 500 {
+		t.Fatalf("error carries %d bytes of endpoint-controlled text, "+
+			"want a bounded excerpt", len(err.Error()))
+	}
+}
+
 // TestClientRejectsOversizedContent pins the local resource bounds: a
 // configured or compromised endpoint can answer within the transport size
 // limit yet carry tens of thousands of entries or multi-megabyte fields,

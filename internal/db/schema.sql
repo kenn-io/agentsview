@@ -460,8 +460,11 @@ CREATE TABLE IF NOT EXISTS recall_extract_progress (
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     PRIMARY KEY (session_id, generation_fingerprint)
 );
-CREATE INDEX IF NOT EXISTS idx_recall_extract_progress_state
-    ON recall_extract_progress(generation_fingerprint, state);
+-- The trailing updated_at bounds failed-retry discovery: without it every
+-- failed row of a generation, backoff included, is fetched and filtered on
+-- each scheduler pass.
+CREATE INDEX IF NOT EXISTS idx_recall_extract_progress_retry
+    ON recall_extract_progress(generation_fingerprint, state, updated_at);
 
 -- Pinned messages table
 CREATE TABLE IF NOT EXISTS pinned_messages (

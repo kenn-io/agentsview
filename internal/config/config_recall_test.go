@@ -263,6 +263,17 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 		// form of a malformed query would pass the original RawQuery —
 		// credentials included — through untouched. An unaccountable
 		// query is masked whole.
+		// A bare token (?opaque-capability-token) parses as a key with an
+		// empty value: masking values alone leaves the key — the
+		// credential itself — visible, so the whole query is masked.
+		"key-only credential masks whole query": {
+			"https://models.example/v1?opaque-capability-token",
+			"https://models.example/v1?REDACTED",
+		},
+		"key-only credential beside safe param masks whole query": {
+			"https://models.example/v1?opaque-token&api-version=2024",
+			"https://models.example/v1?REDACTED",
+		},
 		"malformed separator masks whole query": {
 			"https://models.example/v1?sig=secret;api-version=2024",
 			"https://models.example/v1?REDACTED",

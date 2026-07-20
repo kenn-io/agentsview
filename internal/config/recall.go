@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -275,6 +276,13 @@ func redactedEndpointQuery(rawQuery string) string {
 	for key, values := range query {
 		if safeEndpointParams[strings.ToLower(key)] {
 			continue
+		}
+		// A bare token (?opaque-capability-token) parses as a key with an
+		// empty value: the key itself is the credential, and masking
+		// values cannot hide it. An explicit empty value (?api_key=) is
+		// indistinguishable after parsing, so both mask the whole query.
+		if slices.Contains(values, "") {
+			return "REDACTED"
 		}
 		for i := range values {
 			values[i] = "REDACTED"

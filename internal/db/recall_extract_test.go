@@ -1375,6 +1375,40 @@ func seedExtractCandidate(
 	require.NoError(t, d.ReplaceSessionSecretFindings(id, nil, 0, "rules-v1"))
 }
 
+// TestExtractCandidateRetryArmUsesUpdatedAtIndex pins that failed-row
+// retry discovery is index-bounded: without an updated_at range in the
+// index probe, every failed row of a generation — including rows still in
+// backoff — is fetched and filtered on each scheduler pass, so pass cost
+// grows with the archive's failure history instead of with actionable
+// work. The plan assertion stands in for a cardinality benchmark: it is
+// deterministic where timing comparisons flake.
+func TestExtractCandidateRetryArmUsesUpdatedAtIndex(t *testing.T) {
+	d := testDB(t)
+	query, args, err := extractCandidateSQL(ExtractCandidateQuery{
+		Fingerprint:       "fp-a",
+		QuietCutoff:       time.Now().Add(-30 * time.Minute),
+		FailedRetryCutoff: time.Now().Add(-time.Hour),
+		ScanVersions:      []string{"rules-v1"},
+	})
+	require.NoError(t, err)
+	rows, err := d.getWriter().Query("EXPLAIN QUERY PLAN "+query, args...)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		plan.WriteString(detail)
+		plan.WriteString("\n")
+	}
+	require.NoError(t, rows.Err())
+	if !strings.Contains(plan.String(), "updated_at<") {
+		t.Fatalf("failed-retry arm is not bounded by updated_at:\n%s",
+			plan.String())
+	}
+}
+
 func TestExtractCandidatesFiltersIneligibleSessions(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

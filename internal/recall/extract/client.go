@@ -418,9 +418,12 @@ func (c *Client) distill(
 	// A 200 with an unreadable or choiceless body is a glitch in transit or
 	// in the serving layer, not a property of the input, so it retries.
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, Usage{}, &transientError{
-			err: fmt.Errorf("parsing distill response: %w", err),
+		cause := fmt.Errorf("parsing distill response: %w", err)
+		if c.credentialedEndpoint() {
+			cause = fmt.Errorf("parsing distill response failed %s",
+				detailWithheld)
 		}
+		return nil, Usage{}, &transientError{err: cause}
 	}
 	if len(parsed.Choices) == 0 {
 		// The body parsed, so its usage is real cost even without choices.
@@ -443,7 +446,7 @@ func (c *Client) distill(
 		return nil, parsed.Usage, fmt.Errorf(
 			"distill response finished with %q instead of completing; "+
 				"refusing possibly incomplete entries",
-			boundedToken(choice.FinishReason, 60),
+			c.responseToken(choice.FinishReason),
 		)
 	}
 	if choice.Message.Content == "" {
@@ -460,49 +463,72 @@ func (c *Client) distill(
 		// The server was asked for constrained decoding, so a violation
 		// means it did not enforce the schema; at temperature zero that is
 		// deterministic and not worth retrying.
-		return nil, parsed.Usage, fmt.Errorf(
+		violation := fmt.Errorf(
 			"%w: distilled content violates the response schema (does "+
 				"the server enforce json_schema?): %w",
 			errProtocolViolation, err,
 		)
+		if c.credentialedEndpoint() {
+			// The violating content is endpoint-supplied; its detail
+			// (unknown keys, field values) can reflect the credential.
+			violation = fmt.Errorf(
+				"%w: distilled content violates the response schema "+
+					"(does the server enforce json_schema?); detail %s",
+				errProtocolViolation, detailWithheld,
+			)
+		}
+		return nil, parsed.Usage, violation
 	}
 	return entries, parsed.Usage, nil
 }
 
-// responseDetail prepares a response-body excerpt for error text. Bodies
-// are attacker-influenced and these errors reach doctor stderr, CI logs,
-// and stored failure rows. When the configured endpoint URL carries
-// credential material — userinfo, or any query parameter that does not
-// merely select the API surface — the body is withheld outright: an
-// endpoint that knows the credential can echo it back in arbitrary
-// re-encodings (JSON \u escapes, chunked across fields), and literal
-// replacement cannot enumerate those. A credential-free endpoint keeps a
-// control-stripped, length-capped excerpt, which is where the diagnostic
-// value lives (wrong model name, malformed field).
-func (c *Client) responseDetail(raw []byte) string {
-	const withheld = "(response body withheld: endpoint URL carries " +
-		"credential material)"
+// credentialedEndpoint reports whether the configured endpoint URL
+// carries credential material: userinfo, or any raw query segment whose
+// key is not the api-version surface selector (mirroring the config
+// redactor's fail-closed allowlist). Raw wire segments, no parser:
+// url.ParseQuery would reject exactly the malformed queries that still
+// travel verbatim, and a rejection must not fail open. An unparseable URL
+// counts as credentialed for the same reason.
+func (c *Client) credentialedEndpoint() bool {
 	endpoint, err := url.Parse(c.BaseURL)
 	if err != nil {
-		return "(response body withheld: unparseable endpoint)"
+		return true
 	}
 	if endpoint.User != nil {
-		return withheld
+		return true
 	}
-	// Raw wire substrings, no parser: url.ParseQuery would reject exactly
-	// the malformed queries that still travel verbatim, and a rejection
-	// must not fail open.
 	for _, segment := range strings.FieldsFunc(
 		endpoint.RawQuery,
 		func(r rune) bool { return r == '&' || r == ';' },
 	) {
 		key, _, _ := strings.Cut(segment, "=")
-		// Mirrors the config redactor's allowlist: only parameters that
-		// select the API surface are credential-free; everything else
-		// (api_key, sig, code, sas, ...) fails closed.
 		if !strings.EqualFold(key, "api-version") {
-			return withheld
+			return true
 		}
+	}
+	return false
+}
+
+// detailWithheld replaces every endpoint-derived detail in error text when
+// the endpoint URL carries credential material: a server that knows the
+// credential can reflect it through any response field — body,
+// finish_reason, a schema-violating key — in re-encodings no replacement
+// list can enumerate, and these errors reach persisted failure rows,
+// scheduler logs, doctor stderr, and CI logs.
+const detailWithheld = "(withheld: endpoint URL carries credential material)"
+
+// responseDetail prepares a response-body excerpt for error text. Bodies
+// are attacker-influenced; for credentialed endpoints they are withheld
+// outright, and otherwise kept as a control-stripped, length-capped
+// excerpt, which is where the diagnostic value lives (wrong model name,
+// malformed field).
+func (c *Client) responseDetail(raw []byte) string {
+	if _, err := url.Parse(c.BaseURL); err != nil {
+		return "(response body withheld: unparseable endpoint)"
+	}
+	if c.credentialedEndpoint() {
+		return "(response body withheld: endpoint URL carries " +
+			"credential material)"
 	}
 	detail := stripControls(string(raw))
 	if len(detail) > 200 {
@@ -513,6 +539,15 @@ func (c *Client) responseDetail(raw []byte) string {
 		detail = detail[:cut]
 	}
 	return detail
+}
+
+// responseToken prepares a short endpoint-supplied token (a finish_reason)
+// for error text: withheld for credentialed endpoints, bounded otherwise.
+func (c *Client) responseToken(value string) string {
+	if c.credentialedEndpoint() {
+		return detailWithheld
+	}
+	return boundedToken(value, 60)
 }
 
 // stripControls replaces C0/C1 control characters and invalid UTF-8 with
@@ -652,7 +687,9 @@ func strictObject(
 	}
 	for key := range object {
 		if !slices.Contains(keys, key) {
-			return nil, fmt.Errorf("unknown key %q", key)
+			// The key is endpoint-supplied and can approach the transport
+			// limit; bound it before it reaches logs and failure rows.
+			return nil, fmt.Errorf("unknown key %q", boundedToken(key, 60))
 		}
 	}
 	return object, nil

@@ -2345,6 +2345,13 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 	); err != nil {
 		return fmt.Errorf("dropping legacy usage index: %w", err)
 	}
+	// Superseded by idx_recall_extract_progress_retry (schema.sql), whose
+	// trailing updated_at column serves the same prefix.
+	if _, err := w.Exec(
+		`DROP INDEX IF EXISTS idx_recall_extract_progress_state`,
+	); err != nil {
+		return fmt.Errorf("dropping legacy extract progress index: %w", err)
+	}
 	// Rebuild the insight lookup index so it covers date_to (added for
 	// range-aware lookups). DROP/CREATE only touches the index, never the
 	// insights rows, so this is non-destructive.
