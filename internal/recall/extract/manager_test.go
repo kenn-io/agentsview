@@ -1809,6 +1809,82 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 	}
 }
 
+// TestManagerAbortsPassOnEndpointScopedRejection pins that a rejection
+// indicting the endpoint rather than the unit — bad credentials, wrong
+// route or model — stops the pass: every remaining session would burn one
+// doomed model call and a failure backoff apiece, and the pass would still
+// report success while marking the whole backlog failed.
+func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusUnauthorized, `{"error":"bad api key"}`
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	_, err := m.RunPass(ctx, PassOptions{})
+	if err == nil {
+		t.Fatal("an endpoint-scoped rejection must abort the pass")
+	}
+	if calls := log.count(); calls != 1 {
+		t.Fatalf("model calls = %d, want 1: every further request against "+
+			"a rejecting endpoint is doomed", calls)
+	}
+	// The visited session keeps its resumable row without burning the
+	// failure backoff: the endpoint, not the transcript, refused.
+	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
+	if perr != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, perr)
+	}
+	if progress.State != db.ExtractProgressPending {
+		t.Fatalf("state = %s (%q), want pending: an endpoint failure must "+
+			"not consume the session's backoff",
+			progress.State, progress.LastError)
+	}
+}
+
+// TestManagerBadRequestStaysSessionScoped pins the other half of the
+// endpoint-scoped contract: a 400 indicts this request's content, not the
+// endpoint — the same server answers other units fine — so the pass must
+// mark the row failed for per-session backoff and keep going instead of
+// aborting.
+func TestManagerBadRequestStaysSessionScoped(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, func(_ string, call int) (int, string) {
+		if call == 1 {
+			return http.StatusBadRequest, `{"error":"content refused"}`
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Failed != 1 || result.Sessions != 1 {
+		t.Fatalf("result = %+v, want the refused session failed and the "+
+			"other completed", result)
+	}
+	if calls := log.count(); calls < 2 {
+		t.Fatalf("model calls = %d, want the pass to continue past the "+
+			"refused session", calls)
+	}
+	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
+	if perr != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, perr)
+	}
+	if progress.State != db.ExtractProgressFailed {
+		t.Fatalf("state = %s (%q), want failed with backoff",
+			progress.State, progress.LastError)
+	}
+}
+
 // TestManagerRepairsFailedZeroUnitSession pins that a zero-unit session
 // reopened as failed converges back to done once the failure cause is gone:
 // with zero units the extraction loop never commits a cursor advance, so

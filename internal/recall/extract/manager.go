@@ -686,6 +686,13 @@ func (m *Manager) extractSession(
 				// resumable instead of burning the failure backoff.
 				return outcome, err
 			}
+			if endpointScopedRejection(err) {
+				// The endpoint, not this transcript, refused: abort the
+				// pass instead of marching every remaining session into
+				// the same rejection, and leave the row resumable — it
+				// picks up where it stopped once the configuration works.
+				return outcome, err
+			}
 			if markErr := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
 				SessionID:      sessionID,
 				Fingerprint:    m.fingerprint,

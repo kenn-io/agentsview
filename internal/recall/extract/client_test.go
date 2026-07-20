@@ -586,6 +586,54 @@ func TestClientErrorDetailRedactsReflectedCredentials(t *testing.T) {
 	}
 }
 
+// TestClientErrorDetailRedactsRawQueryForms pins the two ways decoded-form
+// masking alone fails: a query url.ParseQuery rejects (masking must not
+// fail open with it), and a noncanonically encoded value whose exact wire
+// bytes — what a body echoing the request URI carries — differ from both
+// the decoded and the canonically re-encoded form.
+func TestClientErrorDetailRedactsRawQueryForms(t *testing.T) {
+	cases := map[string]struct {
+		rawQuery string
+		echo     string
+		secrets  []string
+	}{
+		"malformed separator": {
+			rawQuery: "sig=hunter2secret;api-version=2024",
+			echo:     `{"error":"denied: /v1?sig=hunter2secret;api-version=2024"}`,
+			secrets:  []string{"hunter2secret"},
+		},
+		"noncanonical escape": {
+			rawQuery: "api_key=se%6Bret-value",
+			echo: `{"error":"denied for /v1?api_key=se%6Bret-value ` +
+				`(decoded sekret-value)"}`,
+			secrets: []string{"se%6Bret-value", "sekret-value"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{
+				{status: http.StatusForbidden, errorBody: tc.echo},
+			}, &requests)
+			defer server.Close()
+
+			client := testClient(server.URL + "?" + tc.rawQuery)
+			_, _, err := client.DistillWithRecovery(
+				context.Background(), "p", "text", 1,
+			)
+			if err == nil {
+				t.Fatal("scripted failure must surface an error")
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("error leaks reflected credential %q: %v",
+						secret, err)
+				}
+			}
+		})
+	}
+}
+
 // TestClientRejectsOversizedContent pins the local resource bounds: a
 // configured or compromised endpoint can answer within the transport size
 // limit yet carry tens of thousands of entries or multi-megabyte fields,

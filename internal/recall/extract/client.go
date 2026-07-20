@@ -44,6 +44,34 @@ var errTruncated = errors.New("model output truncated")
 // field).
 var errPermanentRequest = errors.New("model server rejected the request")
 
+// requestStatusError carries the HTTP status of a permanent server
+// rejection so callers can tell endpoint-scoped failures from
+// input-specific ones.
+type requestStatusError struct {
+	status int
+	err    error
+}
+
+func (e *requestStatusError) Error() string { return e.err.Error() }
+func (e *requestStatusError) Unwrap() error { return e.err }
+
+// endpointScopedRejection reports whether err is a permanent rejection
+// whose status indicts the endpoint or configuration rather than the
+// submitted unit: authentication (401), authorization (403), and
+// unknown-route-or-model (404) rejections fail every request equally, so
+// visiting further sessions burns one doomed model call and one failure
+// backoff apiece. A 400 stays input-scoped — the same endpoint answers
+// other units fine when only this request's content is refused.
+func endpointScopedRejection(err error) bool {
+	var rejection *requestStatusError
+	if !errors.As(err, &rejection) {
+		return false
+	}
+	return rejection.status == http.StatusUnauthorized ||
+		rejection.status == http.StatusForbidden ||
+		rejection.status == http.StatusNotFound
+}
+
 // transientError marks a failure worth retrying: network errors, timeouts,
 // rate limits, and server errors. RetryAfter carries the server's requested
 // delay, zero when it gave none.
@@ -335,9 +363,12 @@ func (c *Client) distill(
 				utf8.RuneCountInString(text), ErrContextOverflow, detail,
 			)
 		}
-		return nil, Usage{}, fmt.Errorf(
-			"%w (HTTP 400): %s", errPermanentRequest, detail,
-		)
+		return nil, Usage{}, &requestStatusError{
+			status: http.StatusBadRequest,
+			err: fmt.Errorf(
+				"%w (HTTP 400): %s", errPermanentRequest, detail,
+			),
+		}
 	}
 	if response.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf(
@@ -351,10 +382,13 @@ func (c *Client) distill(
 				),
 			}
 		}
-		return nil, Usage{}, fmt.Errorf(
-			"%w (HTTP %d): %s", errPermanentRequest,
-			response.StatusCode, c.responseDetail(raw),
-		)
+		return nil, Usage{}, &requestStatusError{
+			status: response.StatusCode,
+			err: fmt.Errorf(
+				"%w (HTTP %d): %s", errPermanentRequest,
+				response.StatusCode, c.responseDetail(raw),
+			),
+		}
 	}
 
 	var parsed struct {
@@ -420,38 +454,60 @@ func (c *Client) distill(
 
 // responseDetail prepares a response-body excerpt for error text. Bodies
 // are attacker-influenced and can echo the request back — the URI with its
-// query values (raw or URL-escaped) and the Basic-auth header the endpoint
-// userinfo becomes — and these errors reach doctor stderr, CI logs, and
-// stored failure rows, so every credential-bearing component of the
-// configured endpoint is masked in each form a reflection would carry
-// before the excerpt is capped. Values shorter than four bytes are not
+// query values and the Basic-auth header the endpoint userinfo becomes —
+// and these errors reach doctor stderr, CI logs, and stored failure rows,
+// so every credential-bearing component of the configured endpoint is
+// masked in each form a reflection would carry before the excerpt is
+// capped. The query is taken apart without a parser: the raw wire
+// substrings are what an echoed URI contains, url.ParseQuery would reject
+// exactly the malformed queries that still travel verbatim, and a
+// rejection must not fail open. Values shorter than four bytes are not
 // treated as secrets; masking them would shred the detail on every
 // coincidental match.
 func (c *Client) responseDetail(raw []byte) string {
-	detail := string(raw)
 	endpoint, err := url.Parse(c.BaseURL)
-	if err == nil {
-		var secrets []string
-		if endpoint.User != nil {
-			username := endpoint.User.Username()
-			password, _ := endpoint.User.Password()
-			secrets = append(secrets, username, password,
-				base64.StdEncoding.EncodeToString(
-					[]byte(username+":"+password)))
+	if err != nil {
+		// The endpoint's secrets cannot be enumerated; withhold the body
+		// rather than risk echoing them.
+		return "(response body withheld: unparseable endpoint)"
+	}
+	secrets := make(map[string]struct{})
+	addForms := func(value string) {
+		if len(value) < 4 {
+			return
 		}
-		if values, err := url.ParseQuery(endpoint.RawQuery); err == nil {
-			for _, list := range values {
-				secrets = append(secrets, list...)
-			}
+		secrets[value] = struct{}{}
+		secrets[url.QueryEscape(value)] = struct{}{}
+		if decoded, err := url.QueryUnescape(value); err == nil {
+			secrets[decoded] = struct{}{}
+			secrets[url.QueryEscape(decoded)] = struct{}{}
 		}
-		for _, secret := range secrets {
-			if len(secret) < 4 {
-				continue
-			}
-			detail = strings.ReplaceAll(detail, secret, "REDACTED")
-			detail = strings.ReplaceAll(
-				detail, url.QueryEscape(secret), "REDACTED")
+	}
+	if endpoint.User != nil {
+		username := endpoint.User.Username()
+		password, _ := endpoint.User.Password()
+		addForms(username)
+		addForms(password)
+		addForms(base64.StdEncoding.EncodeToString(
+			[]byte(username + ":" + password)))
+	}
+	for _, segment := range strings.FieldsFunc(
+		endpoint.RawQuery,
+		func(r rune) bool { return r == '&' || r == ';' },
+	) {
+		if _, value, found := strings.Cut(segment, "="); found {
+			addForms(value)
+		} else {
+			// A key-only segment can itself be a bare credential.
+			addForms(segment)
 		}
+	}
+	detail := string(raw)
+	for secret := range secrets {
+		if len(secret) < 4 {
+			continue
+		}
+		detail = strings.ReplaceAll(detail, secret, "REDACTED")
 	}
 	if len(detail) > 200 {
 		detail = detail[:200]
