@@ -9,6 +9,33 @@ import { clickNavTab } from "./helpers/nav";
 const TOTAL_SESSIONS = 10;
 const ALPHA_SESSIONS = 2;
 const BETA_SESSIONS = 3;
+const SLOW_SESSION_RESPONSE_MS = 5_500;
+
+test("CI session startup tolerates a slow initial response", async ({
+  browserName,
+  page,
+}) => {
+  test.skip(process.env.CI !== "true", "exercises the CI timeout policy");
+  test.skip(browserName !== "webkit", "covers the observed WebKit failure");
+
+  let delayedRequests = 0;
+  await page.route(
+    /\/api\/v1\/sessions\/sidebar-index(?:\?|$)/,
+    async (route) => {
+      delayedRequests += 1;
+      await new Promise((resolve) =>
+        setTimeout(resolve, SLOW_SESSION_RESPONSE_MS),
+      );
+      await route.continue();
+    },
+  );
+
+  const sp = new SessionsPage(page);
+  await sp.goto();
+
+  expect(delayedRequests).toBeGreaterThan(0);
+  await expect(sp.sessionItems.first()).toBeVisible();
+});
 
 test.describe("Session list", () => {
   let sp: SessionsPage;
