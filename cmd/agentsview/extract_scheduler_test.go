@@ -272,3 +272,19 @@ func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
 	assert.Equal(t, 0, mgr.callCount(),
 		"a draining daemon must not start new extraction passes")
 }
+
+// TestExtractSchedulerRunsStartupPass pins that every daemon lifetime
+// begins with one pass, Notify or not: deferred work — a session whose
+// quiet period elapsed after the previous daemon exited, retraction for a
+// session trashed while no daemon ran — is otherwise only picked up if
+// sync activity or a backstop tick happens to arrive before the idle
+// timeout ends this lifetime too.
+func TestExtractSchedulerRunsStartupPass(t *testing.T) {
+	mgr := &fakePassManager{}
+	s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0, nil)
+	go s.Run(t.Context())
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 1 },
+		"startup pass never ran without a Notify")
+}

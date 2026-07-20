@@ -333,6 +333,13 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if src := newVectorPushSource(cfg); src != nil {
 		srvOpts = append(srvOpts, server.WithVectorPushSource(src))
 	}
+	if extractSched != nil {
+		// Trash, restore, and permanent-delete routes change extraction
+		// eligibility; the retraction pass must hear about them even when
+		// no sync activity follows. Notify never blocks.
+		srvOpts = append(srvOpts,
+			server.WithSessionMutationNotifier(extractSched.Notify))
+	}
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")

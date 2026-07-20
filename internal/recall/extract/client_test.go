@@ -534,6 +534,103 @@ func TestClientAcceptsEmptyEntriesArray(t *testing.T) {
 	}
 }
 
+// TestClientRejectsOversizedContent pins the local resource bounds: a
+// configured or compromised endpoint can answer within the transport size
+// limit yet carry tens of thousands of entries or multi-megabyte fields,
+// and accepting them would balloon the archive and hold its write lock
+// through the inserts. Violations are deterministic, so no retry.
+func TestClientRejectsOversizedContent(t *testing.T) {
+	makeEntries := func(count int, title, body string, entities []string) string {
+		t.Helper()
+		if entities == nil {
+			entities = []string{}
+		}
+		entry := map[string]any{
+			"type": "fact", "title": title, "body": body,
+			"entities": entities,
+		}
+		list := make([]map[string]any, count)
+		for i := range list {
+			list[i] = entry
+		}
+		raw, err := json.Marshal(map[string]any{"entries": list})
+		if err != nil {
+			t.Fatalf("marshaling scripted entries: %v", err)
+		}
+		return string(raw)
+	}
+	long := func(n int) string { return strings.Repeat("a", n) }
+	manyEntities := make([]string, maxEntryEntities+1)
+	for i := range manyEntities {
+		manyEntities[i] = "e"
+	}
+	cases := map[string]string{
+		"too many entries": makeEntries(
+			maxResponseEntries+1, "t", "b", nil),
+		"oversized title": makeEntries(
+			1, long(maxEntryTitleChars+1), "b", nil),
+		"oversized body": makeEntries(
+			1, "t", long(maxEntryBodyChars+1), nil),
+		"too many entities": makeEntries(1, "t", "b", manyEntities),
+		"oversized entity": makeEntries(
+			1, "t", "b", []string{long(maxEntityChars + 1)}),
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{
+				{finishReason: "stop", content: content},
+			}, &requests)
+			defer server.Close()
+
+			entries, _, err := testClient(server.URL).DistillWithRecovery(
+				context.Background(), "p", "text", 3,
+			)
+			if err == nil {
+				t.Fatalf("oversized content must be rejected, got %d entries",
+					len(entries))
+			}
+			if len(requests) != 1 {
+				t.Fatalf("requests = %d, want 1 (limit violations are "+
+					"deterministic)", len(requests))
+			}
+		})
+	}
+}
+
+// TestEntrySchemaMirrorsResponseLimits pins that the limits enforced locally
+// are also requested from the server: a compliant constrained-decoding
+// endpoint then never produces a response the client refuses.
+func TestEntrySchemaMirrorsResponseLimits(t *testing.T) {
+	entriesSchema, ok := entrySchema["properties"].(map[string]any)["entries"].(map[string]any)
+	if !ok {
+		t.Fatal("entry schema has no entries property")
+	}
+	if got := entriesSchema["maxItems"]; got != maxResponseEntries {
+		t.Fatalf("entries maxItems = %v, want %d", got, maxResponseEntries)
+	}
+	fields, ok := entriesSchema["items"].(map[string]any)["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("entry schema has no item properties")
+	}
+	if got := fields["title"].(map[string]any)["maxLength"]; got != maxEntryTitleChars {
+		t.Fatalf("title maxLength = %v, want %d", got, maxEntryTitleChars)
+	}
+	if got := fields["body"].(map[string]any)["maxLength"]; got != maxEntryBodyChars {
+		t.Fatalf("body maxLength = %v, want %d", got, maxEntryBodyChars)
+	}
+	entities, ok := fields["entities"].(map[string]any)
+	if !ok {
+		t.Fatal("entry schema has no entities property")
+	}
+	if got := entities["maxItems"]; got != maxEntryEntities {
+		t.Fatalf("entities maxItems = %v, want %d", got, maxEntryEntities)
+	}
+	if got := entities["items"].(map[string]any)["maxLength"]; got != maxEntityChars {
+		t.Fatalf("entity maxLength = %v, want %d", got, maxEntityChars)
+	}
+}
+
 func TestSplitFloorChars(t *testing.T) {
 	if got := SplitFloorChars(50000); got != 2000 {
 		t.Fatalf("SplitFloorChars(50000) = %d, want 2000", got)

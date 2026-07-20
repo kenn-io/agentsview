@@ -290,11 +290,30 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   never faster than once a minute) runs incremental passes instead: sessions
   become eligible only after the quiet period, long after the last sync-driven
   debounce fired, so sync signals alone cannot guarantee eventual extraction;
+- every daemon lifetime begins with one pass (the debounce timer starts armed):
+  a detached daemon self-reaps after its idle timeout (20 m default), which is
+  shorter than the backstop interval, so work deferred past a daemon's exit —
+  a session whose quiet period elapsed with no daemon running, retraction for
+  a session trashed in between — must not depend on sync activity or a tick
+  arriving before the next lifetime idles out too. Passes hold an idle-tracker
+  work lease, so a pass in flight is never cut off by the reaper, but pending
+  future work deliberately does not pin the daemon alive — the startup pass of
+  the next lifetime owns it;
+- the server's trash, restore, and permanent-delete routes signal the scheduler
+  directly (they change extraction eligibility and no sync activity follows
+  them), so retraction runs a debounce later instead of waiting for the
+  backstop. Secret scans run in a separate CLI process and cannot signal
+  in-process; their eligibility changes ride the next pass;
 - passes drop instead of queueing when one is already running, and a dropped
   backstop carries into the next debounced pass.
 
 Concurrency is one pass at a time, one session at a time, one unit per model
-call.
+call. Each response is bounded locally as well as by the transport size cap: the
+client refuses responses exceeding fixed limits on entries per call and on
+title, body, and entity lengths, and the requested JSON schema declares the same
+bounds (`maxItems`/`maxLength`), so a compliant constrained-decoding server
+never produces a refused response while a non-compliant one cannot balloon the
+archive or hold its write lock through oversized inserts.
 
 ## Activation
 

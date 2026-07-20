@@ -100,6 +100,14 @@ type Server struct {
 	basePath string
 	idle     *IdleTracker
 
+	// sessionMutationNotify, when set, is called after a route changes a
+	// session's lifecycle (trash, restore, permanent delete), so consumers
+	// that reconcile against session state — the recall-extraction
+	// scheduler's retraction pass — hear about changes that no sync
+	// activity would otherwise surface. Called synchronously; it must not
+	// block.
+	sessionMutationNotify func()
+
 	// pprofEnabled registers net/http/pprof handlers under
 	// /debug/pprof/ so a running daemon can be profiled. Off by
 	// default; enabled by the hidden serve --pprof flag.
@@ -297,6 +305,14 @@ func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
 
 func WithIdleTracker(t *IdleTracker) Option {
 	return func(s *Server) { s.idle = t }
+}
+
+// WithSessionMutationNotifier registers fn to run after a route changes a
+// session's lifecycle (trash, restore, permanent delete). fn is called
+// synchronously on the request path and must not block; a non-blocking
+// scheduler signal is the intended shape.
+func WithSessionMutationNotifier(fn func()) Option {
+	return func(s *Server) { s.sessionMutationNotify = fn }
 }
 
 // WithPprof enables the net/http/pprof handlers under

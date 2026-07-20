@@ -546,8 +546,14 @@ func (m *Manager) extractSession(
 		return outcome, err
 	}
 	var progress db.ExtractProgress
+	// Zero-unit sessions take the upsert path even on a same-digest
+	// revisit: they hold no entries for the refresh to maintain, and a row
+	// reopened as failed (say, by a corrected count mismatch) can only be
+	// repaired here — the loop below never advances a cursor over an empty
+	// unit list, and the upsert lands zero-unit rows in done by
+	// construction.
 	if !countMismatch && secretMatches == 0 && found &&
-		previous.ContentDigest == digest {
+		previous.ContentDigest == digest && len(units) > 0 {
 		// A same-digest revisit skips the model, but its entries still
 		// need work: context fields copied at insert time go stale on
 		// metadata-only updates, and evidence digests cover rows the units

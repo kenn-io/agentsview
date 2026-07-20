@@ -230,9 +230,13 @@ func (s RecallExtractServerConfig) validate(name string) error {
 
 // RedactedEndpoint returns an endpoint URL safe for errors, logs, and
 // display: userinfo can carry Basic-auth credentials (the username alone
-// can be an API key) and query values can carry keys, and these strings
-// land on stderr, in CI logs, and in stored failure messages. The host,
-// path, and allowlisted parameters stay visible for debugging.
+// can be an API key), and query values and fragments can carry keys, and
+// these strings land on stderr, in CI logs, and in stored failure messages.
+// The host, path, and allowlisted parameters stay visible for debugging.
+// Anything that does not parse as an http(s) URL with a host fails closed
+// to a constant: url.Parse accepts malformed absolute URLs as relative
+// paths, which can carry the credentials in a component no field-level
+// masking covers.
 func RedactedEndpoint(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -242,10 +246,17 @@ func RedactedEndpoint(raw string) string {
 }
 
 func redactedEndpointURL(u *url.URL) string {
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "<invalid endpoint>"
+	}
 	redacted := *u
 	redacted.User = nil
 	if redacted.RawQuery != "" {
 		redacted.RawQuery = redactedEndpointQuery(redacted.RawQuery)
+	}
+	if redacted.Fragment != "" {
+		redacted.Fragment = "REDACTED"
+		redacted.RawFragment = ""
 	}
 	return redacted.String()
 }

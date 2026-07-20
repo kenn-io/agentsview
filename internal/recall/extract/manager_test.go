@@ -1809,6 +1809,93 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 	}
 }
 
+// TestManagerRepairsFailedZeroUnitSession pins that a zero-unit session
+// reopened as failed converges back to done once the failure cause is gone:
+// with zero units the extraction loop never commits a cursor advance, so
+// nothing downstream repairs the row — the revisit itself must land it
+// done, or the session retries after every backoff forever.
+func TestManagerRepairsFailedZeroUnitSession(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// A single system message yields zero units: TurnsV1 skips system
+	// rows, so the session is done by construction with nothing to
+	// extract or ever advance a cursor over.
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "boot", IsSystem: true},
+	}, nil)
+
+	// The failure backoff shrinks to a millisecond so the repair pass can
+	// re-select the failed row without waiting out the default window.
+	shortBackoff := func(c *ManagerConfig) { c.FailureBackoff = time.Millisecond }
+	fingerprint := newManager(t, d, server.URL, shortBackoff).Fingerprint()
+	runPass := func(label string, opts PassOptions) db.ExtractProgress {
+		t.Helper()
+		time.Sleep(2 * time.Millisecond)
+		if _, err := newManager(t, d, server.URL, shortBackoff).RunPass(
+			ctx, opts,
+		); err != nil {
+			t.Fatalf("%s RunPass: %v", label, err)
+		}
+		progress, found, err := d.ExtractProgress(ctx, "sess-1", fingerprint)
+		if err != nil || !found {
+			t.Fatalf("%s ExtractProgress: found=%v err=%v", label, found, err)
+		}
+		return progress
+	}
+	setMessageCount := func(count int) {
+		t.Helper()
+		if _, err := side.Exec(
+			"UPDATE sessions SET message_count = ? WHERE id = 'sess-1'",
+			count,
+		); err != nil {
+			t.Fatalf("setting message_count: %v", err)
+		}
+		if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
+			t.Fatalf("BumpLocalModifiedAt: %v", err)
+		}
+	}
+
+	if progress := runPass("initial", PassOptions{}); progress.State != db.ExtractProgressDone {
+		t.Fatalf("state = %s, want done for a zero-unit session",
+			progress.State)
+	}
+	// The session row drifts to claim more messages than are stored (a
+	// sync writing the row before the transcript), which fails the row.
+	setMessageCount(2)
+	if progress := runPass("mismatch", PassOptions{Full: true}); progress.State != db.ExtractProgressFailed {
+		t.Fatalf("state = %s, want failed after the count mismatch",
+			progress.State)
+	}
+	// The mismatch is corrected without changing the unit digest; the
+	// revisit must repair the row instead of preserving the failure.
+	setMessageCount(1)
+	progress := runPass("repair", PassOptions{})
+	if progress.State != db.ExtractProgressDone || progress.LastError != "" {
+		t.Fatalf("progress = %s (%q), want done with a cleared error; a "+
+			"zero-unit session must not stay failed forever",
+			progress.State, progress.LastError)
+	}
+	if calls := log.count(); calls != 0 {
+		t.Fatalf("model calls = %d, want 0 for a zero-unit session", calls)
+	}
+}
+
 // TestManagerScheduledPassSkipsSessionsTrashedAfterSelection pins that
 // eligibility lost between candidate selection and the session's first
 // snapshot is drift, not a pass failure: selection only returns eligible

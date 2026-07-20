@@ -275,6 +275,26 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 			"http://127.0.0.1:11434/v1",
 			"http://127.0.0.1:11434/v1",
 		},
+		// url.Parse accepts a single-slash absolute URL as scheme + path:
+		// the credentials land in the path with no host and no userinfo to
+		// strip, so only failing closed on the missing host keeps them out
+		// of logs.
+		"single-slash URL with path credentials fails closed": {
+			"https:/user:secret@models.example/v1",
+			"<invalid endpoint>",
+		},
+		"scheme-relative URL fails closed": {
+			"models.example/v1",
+			"<invalid endpoint>",
+		},
+		"non-http scheme fails closed": {
+			"file:///etc/hosts",
+			"<invalid endpoint>",
+		},
+		"fragment masked": {
+			"https://models.example/v1#access_token=abc123",
+			"https://models.example/v1#REDACTED",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

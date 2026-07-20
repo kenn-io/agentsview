@@ -71,7 +71,24 @@ const maxRetryDelay = 30 * time.Second
 // extraction output for an identical configuration.
 // v2: minLength constraints on entry title and body.
 // v3: truncation always splits; the entry-capped compact retry is gone.
-const extractionProtocolVersion = 3
+// v4: maxItems/maxLength bounds on entries, fields, and entities.
+const extractionProtocolVersion = 4
+
+// Local resource bounds on a single distill response. The transport cap
+// only bounds bytes; within it a compromised or misconfigured endpoint
+// could return tens of thousands of entries or multi-megabyte fields, and
+// accepting them would balloon the archive (and its FTS index) and hold
+// the write lock through the inserts. entrySchema declares the same limits
+// (maxItems/maxLength), so a compliant constrained-decoding server never
+// produces a response the client refuses. Lengths count Unicode code
+// points to match JSON Schema maxLength semantics.
+const (
+	maxResponseEntries = 100
+	maxEntryTitleChars = 500
+	maxEntryBodyChars  = 5000
+	maxEntryEntities   = 50
+	maxEntityChars     = 200
+)
 
 // Entry is one distilled memory entry as the model produces it.
 type Entry struct {
@@ -100,7 +117,8 @@ var entrySchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"entries": map[string]any{
-			"type": "array",
+			"type":     "array",
+			"maxItems": maxResponseEntries,
 			"items": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -108,11 +126,21 @@ var entrySchema = map[string]any{
 						"type": "string",
 						"enum": entryTypes,
 					},
-					"title": map[string]any{"type": "string", "minLength": 1},
-					"body":  map[string]any{"type": "string", "minLength": 1},
+					"title": map[string]any{
+						"type": "string", "minLength": 1,
+						"maxLength": maxEntryTitleChars,
+					},
+					"body": map[string]any{
+						"type": "string", "minLength": 1,
+						"maxLength": maxEntryBodyChars,
+					},
 					"entities": map[string]any{
-						"type":  "array",
-						"items": map[string]any{"type": "string"},
+						"type":     "array",
+						"maxItems": maxEntryEntities,
+						"items": map[string]any{
+							"type":      "string",
+							"maxLength": maxEntityChars,
+						},
 					},
 				},
 				"required":             []string{"type", "title", "body", "entities"},
@@ -411,6 +439,12 @@ func parseEntries(content string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(rawEntries) > maxResponseEntries {
+		return nil, fmt.Errorf(
+			"response carries %d entries, limit %d",
+			len(rawEntries), maxResponseEntries,
+		)
+	}
 	entryKeys := []string{"type", "title", "body", "entities"}
 	entries := make([]Entry, 0, len(rawEntries))
 	for i, rawEntry := range rawEntries {
@@ -434,21 +468,45 @@ func parseEntries(content string) ([]Entry, error) {
 		if strings.TrimSpace(entry.Title) == "" {
 			return nil, fmt.Errorf("entry %d: title is blank", i)
 		}
+		if n := utf8.RuneCountInString(entry.Title); n > maxEntryTitleChars {
+			return nil, fmt.Errorf(
+				"entry %d: title is %d characters, limit %d",
+				i, n, maxEntryTitleChars,
+			)
+		}
 		if entry.Body, err = strictString(fields["body"], "body"); err != nil {
 			return nil, fmt.Errorf("entry %d: %w", i, err)
 		}
 		if strings.TrimSpace(entry.Body) == "" {
 			return nil, fmt.Errorf("entry %d: body is blank", i)
 		}
+		if n := utf8.RuneCountInString(entry.Body); n > maxEntryBodyChars {
+			return nil, fmt.Errorf(
+				"entry %d: body is %d characters, limit %d",
+				i, n, maxEntryBodyChars,
+			)
+		}
 		rawEntities, err := strictArray(fields["entities"], "entities")
 		if err != nil {
 			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		if len(rawEntities) > maxEntryEntities {
+			return nil, fmt.Errorf(
+				"entry %d: carries %d entities, limit %d",
+				i, len(rawEntities), maxEntryEntities,
+			)
 		}
 		entry.Entities = make([]string, 0, len(rawEntities))
 		for j, rawEntity := range rawEntities {
 			entity, err := strictString(rawEntity, "entity")
 			if err != nil {
 				return nil, fmt.Errorf("entry %d, entity %d: %w", i, j, err)
+			}
+			if n := utf8.RuneCountInString(entity); n > maxEntityChars {
+				return nil, fmt.Errorf(
+					"entry %d, entity %d: %d characters, limit %d",
+					i, j, n, maxEntityChars,
+				)
 			}
 			entry.Entities = append(entry.Entities, entity)
 		}

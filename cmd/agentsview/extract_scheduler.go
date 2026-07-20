@@ -90,8 +90,13 @@ func (s *extractScheduler) Stop() {
 func (s *extractScheduler) Run(ctx context.Context) {
 	defer close(s.done)
 
+	// The timer starts armed: every daemon lifetime begins with one pass,
+	// Notify or not. Work deferred past the previous daemon's exit — a
+	// session whose quiet period elapsed with no daemon running, retraction
+	// for a session trashed in between — is otherwise only picked up if
+	// sync activity or a backstop tick happens to arrive before the idle
+	// timeout ends this lifetime too.
 	debounceTimer := time.NewTimer(s.debounce)
-	stopTimer(debounceTimer)
 	defer debounceTimer.Stop()
 
 	var tickC <-chan time.Time
