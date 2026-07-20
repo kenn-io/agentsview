@@ -13,6 +13,7 @@ import { insights } from "./lib/stores/insights.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
 import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
+import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
 import { sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
@@ -189,6 +190,28 @@ describe("App session URL date state", () => {
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);
   });
 
+  it("carries rolling intent into the sessions URL write-back", async () => {
+    component = mount(App, { target: document.body });
+    await tick();
+    // Simulates a rolling window restored from localStorage (or applied
+    // from a panel): the URL write-back must include window_days, or the
+    // next route initialization re-reads the concrete dates as an
+    // explicit fixed range and the rolling intent is lost after one
+    // reload.
+    sessions.applyPanelDateFilters(
+      { date_from: "2026-03-10", date_to: "2026-04-08" },
+      30,
+    );
+    await tick();
+    await tick();
+    expect(router.params["window_days"]).toBe("30");
+    // The route round-trip rematerializes the window against the current
+    // date — the intent surviving is the contract, not the exact bounds.
+    const range = rollingRange(30);
+    expect(router.params["date_from"]).toBe(range.from);
+    expect(router.params["date_to"]).toBe(range.to);
+  });
+
   it("preserves rolling window dates when writing sessions URLs", () => {
     expect(source).toContain("sessionRouteParamsForFilters(");
     expect(source).toContain("router.navigateFromSession(nextParams)");
@@ -254,7 +277,9 @@ describe("App session URL date state", () => {
     expect(source).toContain(
       "let lastDetailFilterParamsSignature: string | null = $state(null);",
     );
-    expect(syncUrlBlock).toContain("const filterParams = filtersToParams(");
+    expect(syncUrlBlock).toContain(
+      "const filterParams = sessionFilterRouteParams();",
+    );
     expect(syncUrlBlock).toContain(
       "lastDetailFilterParamsSignature !== null &&",
     );
@@ -706,6 +731,10 @@ describe("App analytics date navigation", () => {
     sessions.filters.date = "";
     sessions.filters.dateFrom = "";
     sessions.filters.dateTo = "";
+    // Clearing dates now also means clearing the rolling intent — the
+    // store-level clear paths (clearSessionFilters, setProjectFilter) do
+    // both, and the URL write-back re-adds window_days otherwise.
+    sessions.dateFiltersWindowDays = null;
     router.params = {};
     await flushEffects();
 
