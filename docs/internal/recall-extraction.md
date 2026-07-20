@@ -71,7 +71,13 @@ mutation (append, replace, diff, tool-call relink) advances
 transaction, so a session whose transcript changed after its last scan is
 ineligible until a rescan re-stamps it — the inline sync rescan restores only
 the definite-only version, so extraction stays excluded until the next full
-scan. The atomic replace path re-stamps inside the same transaction.
+scan. The atomic replace path re-stamps inside the same transaction. Stamps
+written before this in-write revocation existed can cover less than the current
+transcript (an append whose deferred rescan failed kept its stamp), so the rules
+algorithm version was bumped alongside it: pre-existing stamps read as stale by
+value — including rows arriving later from machines running older binaries,
+which a one-time local migration could not catch — and every archive must rescan
+before becoming eligible.
 
 The eligibility check is also bound to the transcript actually sent: the manager
 re-reads the session row (full column set — the standard list omits

@@ -676,7 +676,16 @@ func looksLikePEMHeaderStart(body string) bool {
 // padding so the reported span matches the literal value, and updated
 // highEntropyValue to trim trailing '=' before measuring entropy/length
 // so the padding doesn't push a borderline body below the 3.5-bit floor.
-const rulesAlgorithmVersion = 6
+//
+// v7: no matching change — the scan stamp's meaning strengthened. Transcript
+// mutations now revoke the stamp in the same write, so a current stamp
+// attests the scan saw the entire current transcript (recall extraction's
+// privacy boundary depends on this). Stamps written by earlier binaries can
+// cover less than they claim when an append's deferred rescan failed or was
+// interrupted, and they can arrive later from machines still running old
+// binaries, so they must read as stale by value everywhere; a one-time
+// local migration could not invalidate either case.
+const rulesAlgorithmVersion = 7
 
 // Verify reports whether the named rule still produces a finding at exactly
 // [start:end) within source. Used by --reveal to confirm a stored finding's
