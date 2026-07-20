@@ -378,6 +378,10 @@ class SessionsStore {
     this.filters.dateFrom = dateParams["date_from"] ?? "";
     this.filters.dateTo = dateParams["date_to"] ?? "";
     this.dateFiltersDerived = derived;
+    // Persist immediately: a provenance flip with identical bounds does
+    // not register as a filter change, so callers that diff serialized
+    // filters may never trigger a load() and its save.
+    saveFilters(this.filters, derived);
   }
 
   initFromParams(params: Record<string, string>) {

@@ -383,6 +383,27 @@ describe("SessionsStore", () => {
       expect(saved.dateTo).toBe("2026-01-31");
     });
 
+    it("persists a provenance flip even when the bounds are identical", async () => {
+      // Fixed range persisted, then a rolling preset materializes to the
+      // exact same bounds. Callers that diff serialized filters see no
+      // change and skip load(), so the store must persist on apply.
+      sessions.applyPanelDateFilters(
+        { date_from: "2025-07-07", date_to: "2026-07-06" },
+        false,
+      );
+      await sessions.load();
+      sessions.applyPanelDateFilters(
+        { date_from: "2025-07-07", date_to: "2026-07-06" },
+        true,
+      );
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("");
+      expect(saved.dateTo).toBe("");
+    });
+
     it("clears the derived flag on wholesale filter resets", async () => {
       sessions.applyPanelDateFilters(
         { date_from: "2025-07-07", date_to: "2026-07-06" },
