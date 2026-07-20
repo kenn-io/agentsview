@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -233,7 +232,7 @@ func (s RecallExtractServerConfig) validate(name string) error {
 // display: userinfo can carry Basic-auth credentials (the username alone
 // can be an API key) and query values can carry keys, and these strings
 // land on stderr, in CI logs, and in stored failure messages. The host,
-// path, and non-sensitive parameters stay visible for debugging.
+// path, and allowlisted parameters stay visible for debugging.
 func RedactedEndpoint(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -248,7 +247,7 @@ func redactedEndpointURL(u *url.URL) string {
 	query := redacted.Query()
 	masked := false
 	for key, values := range query {
-		if !sensitiveEndpointParam.MatchString(key) {
+		if safeEndpointParams[strings.ToLower(key)] {
 			continue
 		}
 		for i := range values {
@@ -263,8 +262,14 @@ func redactedEndpointURL(u *url.URL) string {
 	return redacted.String()
 }
 
-var sensitiveEndpointParam = regexp.MustCompile(
-	`(?i)key|token|secret|password|credential|sig|auth`)
+// safeEndpointParams are the only query parameters shown unredacted: values
+// that select the API surface rather than authenticate the caller. Every
+// other value is masked — credentials travel under too many vendor-specific
+// names (api_key, sig, code, sas, ...) for a name pattern to stay ahead of,
+// so the redactor fails closed.
+var safeEndpointParams = map[string]bool{
+	"api-version": true,
+}
 
 // ValidateExtractTransport enforces the extraction transport privacy rule
 // shared by config validation and the model client's redirect policy:

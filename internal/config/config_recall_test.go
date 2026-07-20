@@ -248,6 +248,17 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 			"https://models.example/v1?sig=abc123",
 			"https://models.example/v1?sig=REDACTED",
 		},
+		// Credentials travel under too many vendor-specific names for a
+		// deny-list to anticipate; every value not explicitly known safe
+		// must be masked.
+		"unrecognized credential names masked": {
+			"https://models.example/v1?code=hunter2&sas=sekret2",
+			"https://models.example/v1?code=REDACTED&sas=REDACTED",
+		},
+		"api-version stays visible among masked values": {
+			"https://models.example/v1?API-Version=2024-06-01&tenant=acme",
+			"https://models.example/v1?API-Version=2024-06-01&tenant=REDACTED",
+		},
 		"plain endpoint unchanged": {
 			"http://127.0.0.1:11434/v1",
 			"http://127.0.0.1:11434/v1",

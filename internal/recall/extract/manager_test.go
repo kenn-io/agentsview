@@ -1809,6 +1809,72 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 	}
 }
 
+// TestManagerScheduledPassSkipsSessionsTrashedAfterSelection pins that
+// eligibility lost between candidate selection and the session's first
+// snapshot is drift, not a pass failure: selection only returns eligible
+// sessions, so one that reads back trashed was excluded concurrently.
+// Aborting would throw away the pass's remaining candidates; the session
+// must be skipped the way every later drift check skips.
+func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	server, _ := modelServer(t, func(_ string, call int) (int, string) {
+		if call == 1 {
+			// While the manager waits on sess-a's model call, the other
+			// two candidates — already selected — become ineligible:
+			// sess-b is trashed and sess-c's row vanishes entirely, so
+			// their first snapshots read as ineligible and missing.
+			if _, err := side.Exec("UPDATE sessions SET deleted_at = " +
+				"'2026-01-01T00:00:00.000Z' WHERE id = 'sess-b'"); err != nil {
+				t.Errorf("trashing session: %v", err)
+			}
+			if _, err := side.Exec(
+				"DELETE FROM sessions WHERE id = 'sess-c'"); err != nil {
+				t.Errorf("deleting session: %v", err)
+			}
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-c", turnMessages("try this", "tried"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v; a session trashed or deleted after "+
+			"selection is drift, not a pass failure", err)
+	}
+	if result.Sessions != 1 || result.Failed != 0 {
+		t.Fatalf("result = %+v; want the surviving session done and the "+
+			"trashed and deleted ones skipped silently", result)
+	}
+	for _, id := range []string{"sess-b", "sess-c"} {
+		if _, found, err := d.ExtractProgress(
+			ctx, id, m.Fingerprint(),
+		); err != nil || found {
+			t.Fatalf("ExtractProgress(%s) = found=%v err=%v; a session "+
+				"skipped before its snapshot must leave no progress row",
+				id, found, err)
+		}
+	}
+}
+
 // TestManagerExplicitActivateRefusesUncoveredSessions pins the reviewer
 // scenario for the in-tx discovery gate: extracting one session by hand and
 // then activating must not retire the served corpus while other eligible

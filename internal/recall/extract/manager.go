@@ -231,6 +231,16 @@ func (m *Manager) runPassLocked(
 		result.Units += outcome.units
 		result.Entries += outcome.entries
 		if err != nil {
+			// Ineligibility at the first snapshot is drift: selection
+			// only returned eligible sessions, so this one was excluded
+			// concurrently and the reconciliation below (and the next
+			// pass) own it. Aborting would drop the pass's remaining
+			// candidates. An explicit run keeps the error — the caller
+			// named the session and must hear why it was refused.
+			var ineligible *ineligibleSessionError
+			if opts.SessionID == "" && errors.As(err, &ineligible) {
+				continue
+			}
 			return result, err
 		}
 		switch {
@@ -337,6 +347,17 @@ func (m *Manager) passSessions(
 	return m.cfg.DB.ExtractCandidates(ctx, q)
 }
 
+// ineligibleSessionError marks a failure of the pre-extraction eligibility
+// phase: the session row is missing, a privacy predicate refuses it, or it
+// has recorded secret findings. Candidate selection only returns eligible
+// sessions, so reaching this from a scheduled pass means the session was
+// excluded concurrently — drift the pass skips, matching the later bracket
+// checks — while an explicit run surfaces the message unchanged.
+type ineligibleSessionError struct{ err error }
+
+func (e *ineligibleSessionError) Error() string { return e.err.Error() }
+func (e *ineligibleSessionError) Unwrap() error { return e.err }
+
 // refuseSecretFindings excludes sessions with recorded secret findings of any
 // confidence. The leak count only counts definite findings; a candidate
 // finding (a JWT, a high-entropy blob) is exactly the material that must not
@@ -349,10 +370,10 @@ func (m *Manager) refuseSecretFindings(
 		return err
 	}
 	if len(findings) > 0 {
-		return fmt.Errorf(
+		return &ineligibleSessionError{err: fmt.Errorf(
 			"session %s has %d recorded secret findings and is excluded "+
 				"from extraction", sessionID, len(findings),
-		)
+		)}
 	}
 	return nil
 }
@@ -459,10 +480,11 @@ func (m *Manager) extractSession(
 		return outcome, err
 	}
 	if session == nil {
-		return outcome, fmt.Errorf("session %s not found", sessionID)
+		return outcome, &ineligibleSessionError{
+			err: fmt.Errorf("session %s not found", sessionID)}
 	}
 	if err := extractableSession(sessionID, session); err != nil {
-		return outcome, err
+		return outcome, &ineligibleSessionError{err: err}
 	}
 	if err := m.refuseSecretFindings(ctx, sessionID); err != nil {
 		return outcome, err
