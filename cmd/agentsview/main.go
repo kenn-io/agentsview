@@ -206,7 +206,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}
 	}
 
-	extractSched, err := setupRecallExtraction(cfg, database)
+	extractSched, err := setupRecallExtraction(cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up recall extraction: %v", err)
 	}

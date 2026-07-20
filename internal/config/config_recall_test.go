@@ -259,6 +259,18 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 			"https://models.example/v1?API-Version=2024-06-01&tenant=acme",
 			"https://models.example/v1?API-Version=2024-06-01&tenant=REDACTED",
 		},
+		// url.Values drops unparseable segments, so masking the parsed
+		// form of a malformed query would pass the original RawQuery —
+		// credentials included — through untouched. An unaccountable
+		// query is masked whole.
+		"malformed separator masks whole query": {
+			"https://models.example/v1?sig=secret;api-version=2024",
+			"https://models.example/v1?REDACTED",
+		},
+		"invalid escape masks whole query": {
+			"https://models.example/v1?api_key=sekret&bad=%zz",
+			"https://models.example/v1?REDACTED",
+		},
 		"plain endpoint unchanged": {
 			"http://127.0.0.1:11434/v1",
 			"http://127.0.0.1:11434/v1",

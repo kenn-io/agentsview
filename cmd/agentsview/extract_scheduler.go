@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -33,6 +34,10 @@ type extractScheduler struct {
 	debounce time.Duration
 	backstop time.Duration
 	catchup  time.Duration
+	// idle is the daemon's idle tracker; every pass runs under a work
+	// lease so a detached daemon cannot idle out — cancelling the shared
+	// context — under a long model-backed pass. Nil in foreground mode.
+	idle *server.IdleTracker
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -48,12 +53,14 @@ type extractScheduler struct {
 // passes are a superset.
 func newExtractScheduler(
 	mgr extractPassManager, debounce, backstop, catchup time.Duration,
+	idle *server.IdleTracker,
 ) *extractScheduler {
 	return &extractScheduler{
 		mgr:      mgr,
 		debounce: debounce,
 		backstop: backstop,
 		catchup:  catchup,
+		idle:     idle,
 		dirty:    make(chan struct{}, 1),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
@@ -115,8 +122,13 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.dirty:
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			started, _, err := s.mgr.TryPass(ctx,
+			started, ok, err := s.tryPassWithLease(ctx,
 				extract.PassOptions{Full: pendingFull})
+			if !ok {
+				// Draining: the daemon is shutting down, so no new pass
+				// may start. Leave the loop parked on ctx/stop.
+				continue
+			}
 			if err != nil {
 				log.Printf("extract scheduler: pass failed: %v", err)
 			}
@@ -134,8 +146,11 @@ func (s *extractScheduler) Run(ctx context.Context) {
 				pendingFull = false
 			}
 		case <-tickC:
-			started, _, err := s.mgr.TryPass(ctx,
+			started, ok, err := s.tryPassWithLease(ctx,
 				extract.PassOptions{Full: tickFull})
+			if !ok {
+				continue
+			}
 			if err != nil {
 				log.Printf("extract scheduler: periodic pass failed: %v", err)
 			}
@@ -146,6 +161,23 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// tryPassWithLease runs one TryPass under an idle-tracker work lease, so a
+// detached daemon never reaps itself — cancelling the shared context — while
+// a model-backed pass is in flight. ok is false when the daemon is already
+// draining, in which case no pass was attempted: work started after the
+// idle decision would race the shutdown it triggered.
+func (s *extractScheduler) tryPassWithLease(
+	ctx context.Context, opts extract.PassOptions,
+) (started, ok bool, err error) {
+	release, ok := s.idle.BeginWork()
+	if !ok {
+		return false, false, nil
+	}
+	defer release()
+	started, _, err = s.mgr.TryPass(ctx, opts)
+	return started, true, err
 }
 
 // extractTeeEmitter fans a sync completion out to the wrapped emitter and

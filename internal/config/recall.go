@@ -244,8 +244,23 @@ func RedactedEndpoint(raw string) string {
 func redactedEndpointURL(u *url.URL) string {
 	redacted := *u
 	redacted.User = nil
-	query := redacted.Query()
-	masked := false
+	if redacted.RawQuery != "" {
+		redacted.RawQuery = redactedEndpointQuery(redacted.RawQuery)
+	}
+	return redacted.String()
+}
+
+// redactedEndpointQuery masks a raw query string, parsing it explicitly:
+// URL.Query() drops the segments it cannot parse along with the error, so
+// masking its output and keeping the original on "nothing masked" would
+// pass a malformed query — credentials included — through verbatim. A query
+// the parser cannot fully account for is masked whole, and a parsed one is
+// always re-encoded so no raw byte survives untranslated.
+func redactedEndpointQuery(rawQuery string) string {
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "REDACTED"
+	}
 	for key, values := range query {
 		if safeEndpointParams[strings.ToLower(key)] {
 			continue
@@ -254,12 +269,8 @@ func redactedEndpointURL(u *url.URL) string {
 			values[i] = "REDACTED"
 		}
 		query[key] = values
-		masked = true
 	}
-	if masked {
-		redacted.RawQuery = query.Encode()
-	}
-	return redacted.String()
+	return query.Encode()
 }
 
 // safeEndpointParams are the only query parameters shown unredacted: values

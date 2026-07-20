@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -153,7 +154,7 @@ func buildExtractManager(
 // setupRecallExtraction wires the daemon's extraction scheduler; nil when
 // the section is disabled.
 func setupRecallExtraction(
-	cfg config.Config, database *db.DB,
+	cfg config.Config, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
 	if !cfg.Recall.Extract.Enabled {
 		return nil, nil
@@ -172,7 +173,7 @@ func setupRecallExtraction(
 	// quiet period elapses after the last sync still gets extracted.
 	catchup := max(dist.Quiet, time.Minute)
 	return newExtractScheduler(
-		mgr, extractDebounceInterval, backstop, catchup,
+		mgr, extractDebounceInterval, backstop, catchup, idle,
 	), nil
 }
 

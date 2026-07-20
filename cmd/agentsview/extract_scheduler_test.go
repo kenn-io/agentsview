@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 // fakePassManager records every TryPass call and returns scripted
@@ -58,7 +59,7 @@ func (f *fakePassManager) callsSnapshot() []extract.PassOptions {
 
 func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0)
+	s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0, nil)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -76,7 +77,7 @@ func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 
 func TestExtractSchedulerBackstopTickRunsFullPass(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond, 0)
+	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond, 0, nil)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -93,7 +94,7 @@ func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 		{started: false}, // backstop tick collides with a running pass
 		{started: true},
 	}}
-	s := newExtractScheduler(mgr, 20*time.Millisecond, 30*time.Millisecond, 0)
+	s := newExtractScheduler(mgr, 20*time.Millisecond, 30*time.Millisecond, 0, nil)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -111,7 +112,7 @@ func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 
 func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 0, 0)
+	s := newExtractScheduler(mgr, time.Hour, 0, 0, nil)
 	go s.Run(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -126,7 +127,7 @@ func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
 }
 
 func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
-	s := newExtractScheduler(&fakePassManager{}, time.Hour, 0, 0)
+	s := newExtractScheduler(&fakePassManager{}, time.Hour, 0, 0, nil)
 	done := make(chan struct{})
 	go func() {
 		for range 100 {
@@ -143,7 +144,7 @@ func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
 
 func TestExtractTeeEmitterNotifiesScheduler(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0)
+	s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0, nil)
 	primary := &recordingEmitter{}
 	tee := extractTeeEmitter{primary: primary, scheduler: s}
 
@@ -164,7 +165,7 @@ func TestExtractSchedulerCatchupTicksWhenBackstopDisabled(t *testing.T) {
 	// becomes eligible after the quiet period, long after the last debounce
 	// fired. The catchup ticker keeps scanning incrementally.
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 0, 20*time.Millisecond)
+	s := newExtractScheduler(mgr, time.Hour, 0, 20*time.Millisecond, nil)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -178,7 +179,7 @@ func TestExtractSchedulerCatchupTicksWhenBackstopDisabled(t *testing.T) {
 
 func TestExtractSchedulerBackstopSupersedesCatchup(t *testing.T) {
 	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond, time.Millisecond)
+	s := newExtractScheduler(mgr, time.Hour, 20*time.Millisecond, time.Millisecond, nil)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -189,4 +190,85 @@ func TestExtractSchedulerBackstopSupersedesCatchup(t *testing.T) {
 		assert.True(t, call.Full,
 			"an enabled backstop replaces catchup ticks with full passes")
 	}
+}
+
+// blockingPassManager signals when TryPass begins and blocks it until
+// releaseOnce is called, so tests can hold a pass in flight deliberately.
+type blockingPassManager struct {
+	startedOnce sync.Once
+	releasedFn  sync.Once
+	started     chan struct{}
+	release     chan struct{}
+}
+
+func (b *blockingPassManager) TryPass(
+	_ context.Context, _ extract.PassOptions,
+) (bool, extract.PassResult, error) {
+	b.startedOnce.Do(func() { close(b.started) })
+	<-b.release
+	return true, extract.PassResult{}, nil
+}
+
+func (b *blockingPassManager) releaseOnce() {
+	b.releasedFn.Do(func() { close(b.release) })
+}
+
+// TestExtractSchedulerPassHoldsIdleWorkLease pins that a scheduled pass
+// counts as daemon work: a detached daemon's idle reaper firing mid-pass
+// cancels the shared context under a long model-backed extraction, so large
+// backlogs could never complete.
+func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
+	mgr := &blockingPassManager{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	idled := make(chan struct{})
+	tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
+	s := newExtractScheduler(mgr, 5*time.Millisecond, 0, 0, tracker)
+	ctx := t.Context()
+	go tracker.Run(ctx)
+	go s.Run(ctx)
+	defer s.Stop()
+	// Registered after s.Stop so it runs first: Stop waits for Run, and Run
+	// waits inside the blocked TryPass, so a failure exiting before the
+	// explicit release would deadlock the test.
+	defer mgr.releaseOnce()
+
+	s.Notify()
+	<-mgr.started
+	select {
+	case <-idled:
+		t.Fatal("daemon idled out while an extraction pass was in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+	mgr.releaseOnce()
+	select {
+	case <-idled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon never idled once the pass completed")
+	}
+}
+
+// TestExtractSchedulerStartsNoPassAfterDraining pins the other half of the
+// lease contract: once the idle reaper has begun draining, a queued Notify
+// must not start a fresh pass under a daemon that is shutting down.
+func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
+	mgr := &fakePassManager{}
+	idled := make(chan struct{})
+	tracker := server.NewIdleTracker(time.Millisecond, func() { close(idled) })
+	s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0, tracker)
+	ctx := t.Context()
+	go tracker.Run(ctx)
+	select {
+	case <-idled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tracker never went idle")
+	}
+	go s.Run(ctx)
+	defer s.Stop()
+
+	s.Notify()
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 0, mgr.callCount(),
+		"a draining daemon must not start new extraction passes")
 }
