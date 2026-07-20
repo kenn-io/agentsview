@@ -243,9 +243,12 @@ func (b localArchiveQueryBackend) SessionUsage(
 	applyCustomPricing(b.database, b.cfg)
 	ensureUsagePricing(b.database, b.offline, b.cfg.CustomModelPricing)
 
-	resolvedID, known := resolveRawSessionID(
+	resolvedID, known, err := resolveRawSessionIDDetailed(
 		ctx, b.database, b.cfg.AgentDirs, sessionID,
 	)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
 
 	if known && !b.skipFreshData {
 		engine := sync.NewEngine(b.database, sync.EngineConfig{

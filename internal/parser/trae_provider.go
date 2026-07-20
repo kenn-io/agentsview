@@ -114,16 +114,31 @@ func traeMatch(dbPath, id string) multiSessionMatch {
 }
 
 func traeFindMember(root, rawID string) (multiSessionMatch, bool) {
+	namespace, lookupID := traeLookupNamespace(rawID)
 	for _, db := range traeDBs(root) {
+		if namespace != "" {
+			got, err := traeStorageNamespace(db.path)
+			if err != nil || got != namespace {
+				continue
+			}
+		}
 		snapshot, err := traeLoadSessionSnapshot(db.path)
 		if err != nil {
 			continue
 		}
-		if _, ok := snapshot.ids[rawID]; ok {
-			return traeMatch(db.path, rawID), true
+		if _, ok := snapshot.ids[lookupID]; ok {
+			return traeMatch(db.path, lookupID), true
 		}
 	}
 	return multiSessionMatch{}, false
+}
+
+func traeLookupNamespace(rawID string) (string, string) {
+	if namespace, id, ok := strings.Cut(rawID, ":"); ok &&
+		(namespace == "workspaceStorage" || namespace == "globalStorage") && id != "" {
+		return namespace, id
+	}
+	return "", rawID
 }
 
 func traeFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
@@ -213,17 +228,33 @@ func traeParseMember(
 }
 
 func traeParseRecord(src multiSessionSource, record traeSessionRecord, req ParseRequest) (*ParseResult, error) {
+	namespace, err := traeStorageNamespace(src.Container)
+	if err != nil {
+		return nil, err
+	}
 	sess, msgs := parseTraeSessionRecord(
 		record.Session,
 		req.Source.ProjectHint,
 		req.Machine,
 		traeVirtualPath(src.Container, record.SessionID),
+		namespace,
 	)
 	if sess == nil {
 		return nil, nil
 	}
 	sess.File.Hash = traeRecordHash(record.Hash, req.Source.ProjectHint)
 	return &ParseResult{Session: *sess, Messages: msgs}, nil
+}
+
+func traeStorageNamespace(container string) (string, error) {
+	container = filepath.Clean(container)
+	if filepath.Base(filepath.Dir(container)) == "globalStorage" {
+		return "globalStorage", nil
+	}
+	if filepath.Base(filepath.Dir(filepath.Dir(container))) == "workspaceStorage" {
+		return "workspaceStorage", nil
+	}
+	return "", fmt.Errorf("trae container %s has no supported storage namespace", container)
 }
 
 func traeMemberPresent(src multiSessionSource) bool {
@@ -495,7 +526,7 @@ func (t *traeTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func parseTraeSessionRecord(selected traeSession, project, machine, virtualPath string) (*ParsedSession, []ParsedMessage) {
+func parseTraeSessionRecord(selected traeSession, project, machine, virtualPath, namespace string) (*ParsedSession, []ParsedMessage) {
 	var messages []ParsedMessage
 	first := ""
 	started := selected.CreatedAt.Time
@@ -534,7 +565,8 @@ func parseTraeSessionRecord(selected traeSession, project, machine, virtualPath 
 	if ended.IsZero() {
 		ended = messages[len(messages)-1].Timestamp
 	}
-	sess := &ParsedSession{ID: "trae:" + strings.TrimPrefix(selected.SessionID, "trae:"), Project: project, Machine: machine, Agent: AgentTrae, SourceSessionID: selected.SessionID, FirstMessage: first, StartedAt: started, EndedAt: ended, MessageCount: len(messages), File: FileInfo{Path: virtualPath}}
+	rawSessionID := strings.TrimSpace(selected.SessionID)
+	sess := &ParsedSession{ID: "trae:" + namespace + ":" + strings.TrimPrefix(rawSessionID, "trae:"), Project: project, Machine: machine, Agent: AgentTrae, SourceSessionID: rawSessionID, FirstMessage: first, StartedAt: started, EndedAt: ended, MessageCount: len(messages), File: FileInfo{Path: virtualPath}}
 	if started.IsZero() {
 		sess.StartedAt = messages[0].Timestamp
 	}

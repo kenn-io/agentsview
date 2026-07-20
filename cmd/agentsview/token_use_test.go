@@ -15,10 +15,29 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+const traeTestStorageKey = "memento/icube-ai-agent-storage"
+
 // newTestDB opens a fresh SQLite DB for a single test.
 func newTestDB(t *testing.T) *db.DB {
 	t.Helper()
 	return dbtest.OpenTestDB(t)
+}
+
+func writeTraeTestDB(t *testing.T, path, sessionID string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+	value := `{"list":[{"sessionId":"` + sessionID + `","createdAt":1715340600000,"messages":[{"role":"user","content":"hi"}]}]}`
+	_, err = conn.Exec(
+		`INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
+		traeTestStorageKey,
+		value,
+	)
+	require.NoError(t, err)
 }
 
 // upsertSession inserts a session with minimal required fields.
@@ -106,6 +125,83 @@ func TestResolveSessionID_Ambiguous_MostRecentWins(t *testing.T) {
 	got, known := resolveRawSessionID(ctx, d, nil, bare)
 	assert.Equal(t, "amp:"+bare, got, "most recent should win")
 	assert.True(t, known)
+}
+
+func TestResolveSessionIDDetailed_TraeNamespaceCollisionErrors(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	raw := "collision"
+	upsertSession(t, d,
+		"amp:"+raw,
+		"amp",
+		"2026-04-18T10:00:00Z",
+	)
+	upsertSession(t, d,
+		"trae:workspaceStorage:"+raw,
+		string(parser.AgentTrae),
+		"2026-04-16T10:00:00Z",
+	)
+	upsertSession(t, d,
+		"trae:globalStorage:"+raw,
+		string(parser.AgentTrae),
+		"2026-04-17T10:00:00Z",
+	)
+
+	got, known, err := resolveRawSessionIDDetailed(ctx, d, nil, raw)
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.False(t, known)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Contains(t, err.Error(), "trae:workspaceStorage:"+raw)
+	assert.Contains(t, err.Error(), "trae:globalStorage:"+raw)
+}
+
+func TestResolveSessionIDDetailed_TraeDiskLookupReturnsQualifiedNamespace(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	root := t.TempDir()
+	raw := "disk-session"
+	writeTraeTestDB(
+		t,
+		filepath.Join(root, "workspaceStorage", "hash", "state.vscdb"),
+		raw,
+	)
+
+	got, known, err := resolveRawSessionIDDetailed(ctx, d, map[parser.AgentType][]string{
+		parser.AgentTrae: {root},
+	}, raw)
+	require.NoError(t, err)
+	assert.Equal(t, "trae:workspaceStorage:"+raw, got)
+	assert.True(t, known)
+}
+
+func TestResolveSessionIDDetailed_TraeDiskLookupRejectsNamespaceCollision(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	root := t.TempDir()
+	raw := "disk-collision"
+	writeTraeTestDB(
+		t,
+		filepath.Join(root, "workspaceStorage", "hash", "state.vscdb"),
+		raw,
+	)
+	writeTraeTestDB(
+		t,
+		filepath.Join(root, "globalStorage", "state.vscdb"),
+		raw,
+	)
+
+	got, known, err := resolveRawSessionIDDetailed(ctx, d, map[parser.AgentType][]string{
+		parser.AgentTrae: {root},
+	}, raw)
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.False(t, known)
+	assert.Contains(t, err.Error(), "trae:workspaceStorage:"+raw)
+	assert.Contains(t, err.Error(), "trae:globalStorage:"+raw)
 }
 
 func TestResolveSessionID_NotInDB_FoundOnDisk(t *testing.T) {

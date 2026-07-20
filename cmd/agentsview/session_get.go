@@ -73,6 +73,12 @@ func resolveServiceSessionID(
 	if isCanonicalServiceSessionID(id) {
 		return "", fmt.Errorf("session not found: %s", id)
 	}
+	traeCandidate, traeErr, traeKnown := resolveTraeBareSessionID(
+		ctx, svc, id,
+	)
+	if traeErr != nil {
+		return "", traeErr
+	}
 	for _, def := range parser.Registry {
 		if def.IDPrefix == "" {
 			continue
@@ -85,6 +91,9 @@ func resolveServiceSessionID(
 		if detail != nil {
 			return candidate, nil
 		}
+	}
+	if traeKnown {
+		return traeCandidate, nil
 	}
 	return "", fmt.Errorf("session not found: %s", id)
 }
@@ -100,6 +109,65 @@ func isCanonicalServiceSessionID(id string) bool {
 		}
 	}
 	return false
+}
+
+var traeSessionLookupNamespaces = []string{
+	"workspaceStorage",
+	"globalStorage",
+}
+
+func resolveTraeRawSuffixAmbiguity(id string, matches []string) error {
+	workspaceID := string(parser.AgentTrae) + ":workspaceStorage:" + id
+	globalID := string(parser.AgentTrae) + ":globalStorage:" + id
+	hasWorkspace := false
+	hasGlobal := false
+	for _, match := range matches {
+		switch match {
+		case workspaceID:
+			hasWorkspace = true
+		case globalID:
+			hasGlobal = true
+		}
+	}
+	if hasWorkspace && hasGlobal {
+		return fmt.Errorf(
+			"session %s is ambiguous; use %s or %s",
+			id, workspaceID, globalID,
+		)
+	}
+	return nil
+}
+
+// resolveTraeBareSessionID restores bare-ID lookup for namespaced Trae
+// sessions when exactly one namespace matches, and rejects the ambiguous
+// dual-match case so callers do not silently pick a namespace.
+func resolveTraeBareSessionID(
+	ctx context.Context,
+	svc service.SessionService,
+	id string,
+) (string, error, bool) {
+	var match string
+	for _, ns := range traeSessionLookupNamespaces {
+		candidate := string(parser.AgentTrae) + ":" + ns + ":" + id
+		detail, err := svc.Get(ctx, candidate)
+		if err != nil {
+			return "", err, true
+		}
+		if detail == nil {
+			continue
+		}
+		if match != "" {
+			return "", fmt.Errorf(
+				"session %s is ambiguous; use trae:workspaceStorage:%s or trae:globalStorage:%s",
+				id, id, id,
+			), true
+		}
+		match = candidate
+	}
+	if match == "" {
+		return "", nil, false
+	}
+	return match, nil, true
 }
 
 // lookupSessionWithPrefixes fetches a session detail, trying agent

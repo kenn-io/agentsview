@@ -437,7 +437,7 @@ func TestParseDiffTraePartialRemovalUsesContainerPresenceSweep(t *testing.T) {
 	assert.Equal(t, sync.ParseDiffTotals{
 		Examined: 2, Identical: 1, Changed: 1,
 	}, report.Totals)
-	sd := findSessionDiff(report, "trae:trae-b")
+	sd := findSessionDiff(report, "trae:globalStorage:trae-b")
 	require.NotNil(t, sd, "removed Trae sibling must be listed")
 	assert.Equal(t, sync.DiffChanged, sd.Class)
 	assert.ElementsMatch(t, []string{sync.FieldPresence},

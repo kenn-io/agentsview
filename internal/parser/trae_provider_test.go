@@ -86,7 +86,9 @@ func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 	require.Len(t, sources, 2)
 
 	for _, source := range sources {
+		namespace := "globalStorage"
 		if strings.Contains(source.Key, "workspaceStorage") {
+			namespace = "workspaceStorage"
 			assert.Equal(t, "project", source.ProjectHint)
 		}
 		assert.NotContains(t, source.Key, "#session-1")
@@ -95,13 +97,65 @@ func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 		require.Len(t, outcome.Results, 1)
 		result := outcome.Results[0].Result
 		assert.Equal(t, AgentTrae, result.Session.Agent)
-		assert.Equal(t, "trae:session-1", result.Session.ID)
+		assert.Equal(t, "trae:"+namespace+":session-1", result.Session.ID)
+		assert.Equal(t, "session-1", result.Session.SourceSessionID)
+		assert.Equal(t, traeVirtualPath(source.Key, "session-1"), result.Session.File.Path)
 		assert.Equal(t, []string{"first", "fallback"}, []string{result.Messages[0].Content, result.Messages[1].Content})
 		assert.Equal(t, "trae-model", result.Messages[1].Model)
 		assert.Empty(t, result.UsageEvents)
 		assert.False(t, result.Messages[1].HasOutputTokens)
 		assert.Equal(t, RelationshipType(""), result.Session.RelationshipType)
 	}
+}
+
+func TestTraeStorageNamespaceRequiresSupportedContainer(t *testing.T) {
+	assert.Equal(t, "workspaceStorage", mustTraeStorageNamespace(t, filepath.Join("root", "workspaceStorage", "hash", traeStateDBName)))
+	assert.Equal(t, "globalStorage", mustTraeStorageNamespace(t, filepath.Join("root", "globalStorage", traeStateDBName)))
+	_, err := traeStorageNamespace(filepath.Join("root", "other", traeStateDBName))
+	assert.Error(t, err)
+}
+
+func TestTraeWorkspaceGlobalCollisionIdentity(t *testing.T) {
+	root := t.TempDir()
+	workspaceDB := filepath.Join(root, "workspaceStorage", "hash", traeStateDBName)
+	globalDB := filepath.Join(root, "globalStorage", traeStateDBName)
+	collision := func(content string) string {
+		return traeStoreValue(t, []any{map[string]any{
+			"sessionId": "collision",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": content}},
+		}})
+	}
+	writeTraeDB(t, workspaceDB, collision("workspace"), "memento/unrelated-chat-storage")
+	writeTraeDB(t, globalDB, collision("global"), "memento/unrelated-chat-storage")
+
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	ids := map[string]string{}
+	for _, source := range sources {
+		outcome, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Parse(context.Background(), ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		result := outcome.Results[0].Result
+		namespace := "globalStorage"
+		if strings.Contains(source.Key, "workspaceStorage") {
+			namespace = "workspaceStorage"
+		}
+		ids[namespace] = result.Session.ID
+		assert.Equal(t, "trae:"+namespace+":collision", result.Session.ID)
+		assert.Equal(t, "collision", result.Session.SourceSessionID)
+	}
+	assert.NotEqual(t, ids["workspaceStorage"], ids["globalStorage"])
+}
+
+func mustTraeStorageNamespace(t *testing.T, path string) string {
+	t.Helper()
+	namespace, err := traeStorageNamespace(path)
+	require.NoError(t, err)
+	return namespace
 }
 
 func TestTraeWatchChangedPathAndVirtualLookup(t *testing.T) {
@@ -360,7 +414,7 @@ func TestTraeMalformedSessionEntryKeepsContainerIncomplete(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
-	assert.Equal(t, "trae:good", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "trae:globalStorage:good", outcome.Results[0].Result.Session.ID)
 	assert.False(t, outcome.ResultSetComplete)
 
 	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
@@ -426,7 +480,7 @@ func TestTraeUnparseableSessionStatesKeepContainerIncomplete(t *testing.T) {
 			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
-			assert.Equal(t, "trae:good", outcome.Results[0].Result.Session.ID)
+			assert.Equal(t, "trae:globalStorage:good", outcome.Results[0].Result.Session.ID)
 			assert.False(t, outcome.ResultSetComplete)
 
 			virtual := traeVirtualPath(path, tc.session["sessionId"].(string))

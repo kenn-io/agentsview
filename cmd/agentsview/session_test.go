@@ -391,6 +391,26 @@ func TestSessionGetVariants(t *testing.T) {
 			project: "proj",
 			mut:     func(s *db.Session) { s.Agent = "codex" },
 		},
+		sessionSeed{
+			id:      "trae:workspaceStorage:rewrite",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = string(parser.AgentTrae) },
+		},
+		sessionSeed{
+			id:      "trae:workspaceStorage:collision",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = string(parser.AgentTrae) },
+		},
+		sessionSeed{
+			id:      "trae:globalStorage:collision",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = string(parser.AgentTrae) },
+		},
+		sessionSeed{
+			id:      "amp:collision",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = "amp" },
+		},
 	)
 
 	t.Run("json format", func(t *testing.T) {
@@ -441,6 +461,24 @@ func TestSessionGetVariants(t *testing.T) {
 
 		got := decodeCLIJSON[map[string]any](t, out)
 		assert.Equal(t, "codex:"+bareID, got["id"])
+	})
+
+	t.Run("bare trae id finds single namespaced session", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"session", "get", "rewrite", "--format", "json")
+		require.NoError(t, err)
+
+		got := decodeCLIJSON[map[string]any](t, out)
+		assert.Equal(t, "trae:workspaceStorage:rewrite", got["id"])
+	})
+
+	t.Run("bare trae id rejects ambiguous namespaces", func(t *testing.T) {
+		_, err := executeCommand(newRootCommand(),
+			"session", "get", "collision", "--format", "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ambiguous")
+		assert.Contains(t, err.Error(), "trae:workspaceStorage:collision")
+		assert.Contains(t, err.Error(), "trae:globalStorage:collision")
 	})
 }
 
@@ -1630,6 +1668,38 @@ func TestSessionUsage_PGFlagResolvesColonBearingRawSessionID(t *testing.T) {
 	assert.Equal(t, storedID, out.SessionID)
 	assert.Equal(t, "pg-project", out.Project)
 	assert.Equal(t, 84, out.TotalOutputTokens)
+}
+
+func TestSessionUsage_PGFlagRejectsAmbiguousTraeNamespaces(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+
+	rawID := "collision"
+	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
+	seedUsageSession(t, pgDB,
+		"trae:workspaceStorage:"+rawID,
+		"pg-project", string(parser.AgentTrae), 84,
+	)
+	seedUsageSession(t, pgDB,
+		"trae:globalStorage:"+rawID,
+		"pg-project", string(parser.AgentTrae), 84,
+	)
+	seedUsageSession(t, pgDB,
+		"amp:"+rawID,
+		"pg-project", "amp", 84,
+	)
+
+	stubPGReadStore(t, pgDB)
+
+	cmd := sessionUsageCommand(t, "session", "usage", rawID, "--pg")
+
+	out, code, err := sessionUsageDataForCommand(cmd, rawID)
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.Equal(t, tokenUseExitErr, code)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Contains(t, err.Error(), "trae:workspaceStorage:"+rawID)
+	assert.Contains(t, err.Error(), "trae:globalStorage:"+rawID)
 }
 
 // TestSessionSync_UnknownID_ReportsNoFilePath verifies that the

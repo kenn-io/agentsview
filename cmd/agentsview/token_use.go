@@ -21,7 +21,7 @@ const (
 	tokenUseExitErr           = 1
 	tokenUseExitNotFound      = 2
 	tokenUseExitNoTokenData   = 3
-	tokenUseResolveMatchLimit = 2
+	tokenUseResolveMatchLimit = 64
 )
 
 // resolveRawSessionID translates a user-supplied session ID into
@@ -58,8 +58,23 @@ func resolveRawSessionID(
 	agentDirs map[parser.AgentType][]string,
 	input string,
 ) (resolved string, known bool) {
+	resolved, known, _ = resolveRawSessionIDDetailed(
+		ctx, database, agentDirs, input,
+	)
+	return resolved, known
+}
+
+// resolveRawSessionIDDetailed mirrors resolveRawSessionID and also returns
+// a user-facing ambiguity error for raw IDs that collide across Trae's
+// workspaceStorage and globalStorage namespaces.
+func resolveRawSessionIDDetailed(
+	ctx context.Context,
+	database *db.DB,
+	agentDirs map[parser.AgentType][]string,
+	input string,
+) (resolved string, known bool, err error) {
 	if host, _ := parser.StripHostPrefix(input); host != "" {
-		return input, true
+		return input, true, nil
 	}
 
 	matches, err := database.FindSessionIDsByRawSuffix(
@@ -71,7 +86,10 @@ func resolveRawSessionID(
 	}
 	if len(matches) > 0 {
 		if matches[0] == input {
-			return input, true
+			return input, true, nil
+		}
+		if err := resolveTraeRawSuffixAmbiguity(input, matches); err != nil {
+			return "", false, err
 		}
 		if len(matches) > 1 {
 			fmt.Fprintf(os.Stderr,
@@ -80,7 +98,7 @@ func resolveRawSessionID(
 				input, matches[0],
 			)
 		}
-		return matches[0], true
+		return matches[0], true, nil
 	}
 
 	// Canonical disk probe: if the input starts with a known
@@ -98,7 +116,7 @@ func resolveRawSessionID(
 		bareID := strings.TrimPrefix(input, def.IDPrefix)
 		for _, dir := range agentDirs[def.Type] {
 			if findAgentSourceFile(def, dir, bareID) != "" {
-				return input, true
+				return input, true, nil
 			}
 		}
 	}
@@ -108,18 +126,65 @@ func resolveRawSessionID(
 	// the input via IsValidSessionID; agents that accept
 	// colon-bearing raw IDs (Kimi, OpenClaw, Kiro IDE) may
 	// match.
+	var diskMatches []string
+	seenDiskMatches := make(map[string]struct{})
 	for _, def := range parser.Registry {
 		if !agentHasDiskSourceLookup(def) {
 			continue
 		}
 		for _, dir := range agentDirs[def.Type] {
-			if findAgentSourceFile(def, dir, input) != "" {
-				return def.IDPrefix + input, true
+			if def.Type == parser.AgentTrae {
+				for _, namespace := range []string{
+					"workspaceStorage", "globalStorage",
+				} {
+					qualifiedRawID := namespace + ":" + input
+					sourcePath := findAgentSourceFile(def, dir, qualifiedRawID)
+					if sourcePath == "" {
+						continue
+					}
+					match := def.IDPrefix + qualifiedRawID
+					if _, ok := seenDiskMatches[match]; ok {
+						continue
+					}
+					seenDiskMatches[match] = struct{}{}
+					diskMatches = append(diskMatches, match)
+				}
+				continue
 			}
+			sourcePath := findAgentSourceFile(def, dir, input)
+			if sourcePath == "" {
+				continue
+			}
+			match := diskResolvedSessionID(def, sourcePath, input)
+			if _, ok := seenDiskMatches[match]; ok {
+				continue
+			}
+			seenDiskMatches[match] = struct{}{}
+			diskMatches = append(diskMatches, match)
 		}
 	}
+	if len(diskMatches) > 0 {
+		if err := resolveTraeRawSuffixAmbiguity(input, diskMatches); err != nil {
+			return "", false, err
+		}
+		if len(diskMatches) > 1 {
+			fmt.Fprintf(os.Stderr,
+				"warning: ambiguous session id %q matches "+
+					"multiple on-disk sessions, using first match (%s)\n",
+				input, diskMatches[0],
+			)
+		}
+		return diskMatches[0], true, nil
+	}
 
-	return input, false
+	return input, false, nil
+}
+
+func diskResolvedSessionID(
+	def parser.AgentDef, sourcePath, rawID string,
+) string {
+	_ = sourcePath
+	return def.IDPrefix + rawID
 }
 
 // agentHasDiskSourceLookup reports whether a session source can be located by

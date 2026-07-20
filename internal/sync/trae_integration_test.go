@@ -203,7 +203,7 @@ func TestProcessFileProviderTraeChangedContainerDropsUnchangedSibling(t *testing
 	})
 	require.NoError(t, second.err)
 	require.Len(t, second.results, 1)
-	assert.Equal(t, "trae:rewrite", second.results[0].Session.ID)
+	assert.Equal(t, "trae:globalStorage:rewrite", second.results[0].Session.ID)
 	assert.Equal(t, "bravo reply", second.results[0].Messages[1].Content)
 }
 
@@ -255,7 +255,7 @@ func TestProcessFileProviderTraeWALWatcherEventDropsUnchangedSibling(t *testing.
 	second := engine.processFile(context.Background(), classified[0])
 	require.NoError(t, second.err)
 	require.Len(t, second.results, 1)
-	assert.Equal(t, "trae:rewrite", second.results[0].Session.ID)
+	assert.Equal(t, "trae:globalStorage:rewrite", second.results[0].Session.ID)
 	assert.Equal(t, "bravo reply", second.results[0].Messages[1].Content)
 }
 
@@ -293,4 +293,126 @@ func TestProcessFileProviderTraeRemovedWALSidecarDoesNotForceParse(t *testing.T)
 	stats := engine.LastSyncStats()
 	assert.Equal(t, 0, stats.Synced)
 	assert.Equal(t, 0, stats.Failed)
+}
+
+func TestProcessFileProviderTraeCrossNamespaceIDsSurviveUpsert(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	globalPath := filepath.Join(root, "globalStorage", "state.vscdb")
+	writeTraeSyncDB(t, workspacePath, "workspace reply")
+	writeTraeSyncDB(t, globalPath, "global reply")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	for _, path := range []string{workspacePath, globalPath} {
+		processed := engine.processFile(context.Background(), parser.DiscoveredFile{Path: path, Agent: parser.AgentTrae})
+		require.NoError(t, processed.err)
+		require.Len(t, processed.results, 1)
+		written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+			sess:         processed.results[0].Session,
+			msgs:         processed.results[0].Messages,
+			forceReplace: processed.forceReplace,
+		}}, syncWriteDefault, false)
+		require.Equal(t, 1, written)
+		require.Equal(t, 0, failed)
+	}
+
+	workspace, err := database.GetSessionFull(context.Background(), "trae:workspaceStorage:rewrite")
+	require.NoError(t, err)
+	global, err := database.GetSessionFull(context.Background(), "trae:globalStorage:rewrite")
+	require.NoError(t, err)
+	require.NotNil(t, workspace)
+	require.NotNil(t, global)
+	assert.Equal(t, "rewrite", workspace.SourceSessionID)
+	assert.Equal(t, "rewrite", global.SourceSessionID)
+	require.NotNil(t, workspace.FilePath)
+	require.NotNil(t, global.FilePath)
+	assert.Equal(t, workspacePath+"#rewrite", *workspace.FilePath)
+	assert.Equal(t, globalPath+"#rewrite", *global.FilePath)
+
+	workspaceMessages, err := database.GetMessages(context.Background(), workspace.ID, 0, 10, true)
+	require.NoError(t, err)
+	globalMessages, err := database.GetMessages(context.Background(), global.ID, 0, 10, true)
+	require.NoError(t, err)
+	assert.Equal(t, "workspace reply", workspaceMessages[1].Content)
+	assert.Equal(t, "global reply", globalMessages[1].Content)
+}
+
+func TestProcessFileProviderTraeNamespaceLifecycleIsolation(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	globalPath := filepath.Join(root, "globalStorage", "state.vscdb")
+	writeTraeSyncDB(t, workspacePath, "workspace reply")
+	writeTraeSyncDB(t, globalPath, "global reply")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	for _, path := range []string{workspacePath, globalPath} {
+		processed := engine.processFile(context.Background(), parser.DiscoveredFile{Path: path, Agent: parser.AgentTrae})
+		require.NoError(t, processed.err)
+		require.Len(t, processed.results, 1)
+		written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+			sess:         processed.results[0].Session,
+			msgs:         processed.results[0].Messages,
+			forceReplace: processed.forceReplace,
+		}}, syncWriteDefault, false)
+		require.Equal(t, 1, written)
+		require.Equal(t, 0, failed)
+	}
+
+	info, err := os.Stat(workspacePath)
+	require.NoError(t, err)
+	rewriteTraeSyncDB(t, workspacePath, "workspace rewritten", info.ModTime())
+	processed := engine.processFile(context.Background(), parser.DiscoveredFile{Path: workspacePath, Agent: parser.AgentTrae})
+	require.NoError(t, processed.err)
+	require.Len(t, processed.results, 1)
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess:         processed.results[0].Session,
+		msgs:         processed.results[0].Messages,
+		forceReplace: processed.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	workspaceMessages, err := database.GetMessages(context.Background(), "trae:workspaceStorage:rewrite", 0, 10, true)
+	require.NoError(t, err)
+	globalMessages, err := database.GetMessages(context.Background(), "trae:globalStorage:rewrite", 0, 10, true)
+	require.NoError(t, err)
+	assert.Equal(t, "workspace rewritten", workspaceMessages[1].Content)
+	assert.Equal(t, "global reply", globalMessages[1].Content)
+}
+
+func TestFindSourceFileTraeRelocationUsesQualifiedRawID(t *testing.T) {
+	root := t.TempDir()
+	oldDB := filepath.Join(root, "workspaceStorage", "old-hash", "state.vscdb")
+	newDB := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	writeTraeSyncDB(t, oldDB, "old reply")
+	writeTraeSyncDB(t, newDB, "new reply")
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	processed := engine.processFile(context.Background(), parser.DiscoveredFile{Path: oldDB, Agent: parser.AgentTrae})
+	require.NoError(t, processed.err)
+	require.Len(t, processed.results, 1)
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess:         processed.results[0].Session,
+		msgs:         processed.results[0].Messages,
+		forceReplace: processed.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	info, err := os.Stat(oldDB)
+	require.NoError(t, err)
+	setTraeSyncDBSessions(t, oldDB, []any{traeSyncSession("other", "old moved")}, info.ModTime())
+	assert.Equal(t, newDB+"#rewrite", engine.FindSourceFile("trae:workspaceStorage:rewrite"))
 }

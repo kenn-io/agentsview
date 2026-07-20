@@ -254,6 +254,11 @@ func resolveStoreSessionID(
 			if matches[0] == sessionID {
 				return sessionID, nil
 			}
+			if err := resolveTraeRawSuffixAmbiguity(
+				sessionID, matches,
+			); err != nil {
+				return "", err
+			}
 			if len(matches) > 1 {
 				fmt.Fprintf(os.Stderr,
 					"warning: ambiguous session id %q matches "+
