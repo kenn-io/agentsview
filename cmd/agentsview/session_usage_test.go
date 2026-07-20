@@ -26,11 +26,11 @@ func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 	assert.Contains(t, s, "claude-opus-4-6", "output missing model")
 }
 
-func TestRenderSessionUsageHuman_ReportedCostIsNotEstimated(t *testing.T) {
+func TestRenderSessionUsageHuman_ReportedEstimateRemainsEstimated(t *testing.T) {
 	var out sessionUsageOutput
 	require.NoError(t, json.Unmarshal([]byte(`{
-		"session_id":"reported:s1",
-		"agent":"provider",
+		"session_id":"hermes:s1",
+		"agent":"hermes",
 		"cost_usd":0.03,
 		"has_cost":true,
 		"cost_source":"reported",
@@ -39,18 +39,20 @@ func TestRenderSessionUsageHuman_ReportedCostIsNotEstimated(t *testing.T) {
 
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, &out))
-	assert.Contains(t, b.String(), "$0.03 (model-a)")
-	assert.NotContains(t, b.String(), "~$0.03")
+	assert.Contains(t, b.String(), "~$0.03 (model-a)")
 }
 
-func TestRenderSessionUsageHuman_ReportedCostWithoutModelsOmitsParentheses(t *testing.T) {
+func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMarker(
+	t *testing.T,
+) {
 	var out sessionUsageOutput
 	require.NoError(t, json.Unmarshal([]byte(`{
-		"session_id":"reported:cost-only",
-		"agent":"provider",
+		"session_id":"copilot:cost-only",
+		"agent":"copilot",
 		"cost_usd":0.03,
 		"has_cost":true,
 		"cost_source":"reported",
+		"cost_is_authoritative":true,
 		"models":[]
 	}`), &out))
 

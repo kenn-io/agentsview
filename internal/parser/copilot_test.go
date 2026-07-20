@@ -820,6 +820,38 @@ func TestParseCopilotSession_MultiShutdown_MissingTotalPreservesReportedCost(
 	assert.Empty(t, usage[1].CostSource)
 }
 
+func TestParseCopilotSession_MultiShutdown_InvalidTotalPreservesReportedCost(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "null", value: "null"},
+		{name: "nonnumeric", value: `"invalid"`},
+		{name: "negative", value: "-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeCopilotJSONL(t,
+				`{"type":"session.start","data":{"sessionId":"multi-shut-invalid-total","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,
+				`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+				`{"type":"session.shutdown","data":{"totalNanoAiu":1250000000,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+				fmt.Sprintf(`{"type":"session.shutdown","data":{"totalNanoAiu":%s,"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":200,"outputTokens":80}}}},"timestamp":"2026-06-15T10:03:00Z"}`, tt.value),
+			)
+
+			_, _, usage := parseCopilotFull(t, path, "m")
+			require.Len(t, usage, 2)
+			require.NotNil(t, usage[0].CostUSD)
+			assert.InDelta(t, 0.0125, *usage[0].CostUSD, 1e-12)
+			assert.Equal(t, copilotReportedCostSource, usage[0].CostSource)
+			assert.Nil(t, usage[1].CostUSD)
+			assert.Empty(t, usage[1].CostSource)
+		})
+	}
+}
+
 func TestParseCopilotSession_MultiShutdown_LastZeroIsAuthoritative(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"multi-shut-zero","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2026-06-15T10:00:00Z"}`,

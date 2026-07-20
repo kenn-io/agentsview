@@ -2546,20 +2546,21 @@ func (db *DB) GetTopSessionsByCost(
 // (usage_events.cost_usd). CostUSD is non-zero only when HasCost is
 // true; a partial total (some models unpriced) is never emitted.
 type SessionUsage struct {
-	SessionID         string                       `json:"session_id"`
-	Agent             string                       `json:"agent"`
-	Project           string                       `json:"project"`
-	TotalOutputTokens int                          `json:"total_output_tokens"`
-	PeakContextTokens int                          `json:"peak_context_tokens"`
-	HasTokenData      bool                         `json:"has_token_data"`
-	CostUSD           float64                      `json:"cost_usd"`
-	HasCost           bool                         `json:"has_cost"`
-	CostSource        export.CostSource            `json:"cost_source,omitempty"`
-	AICredits         float64                      `json:"ai_credits,omitempty"`
-	Models            []string                     `json:"models"`
-	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
-	BreakdownCount    int                          `json:"breakdown_count"`
-	Breakdown         []SessionUsageBreakdownEntry `json:"breakdown"`
+	SessionID           string                       `json:"session_id"`
+	Agent               string                       `json:"agent"`
+	Project             string                       `json:"project"`
+	TotalOutputTokens   int                          `json:"total_output_tokens"`
+	PeakContextTokens   int                          `json:"peak_context_tokens"`
+	HasTokenData        bool                         `json:"has_token_data"`
+	CostUSD             float64                      `json:"cost_usd"`
+	HasCost             bool                         `json:"has_cost"`
+	CostSource          export.CostSource            `json:"cost_source,omitempty"`
+	CostIsAuthoritative bool                         `json:"cost_is_authoritative,omitempty"`
+	AICredits           float64                      `json:"ai_credits,omitempty"`
+	Models              []string                     `json:"models"`
+	UnpricedModels      []string                     `json:"unpriced_models,omitempty"`
+	BreakdownCount      int                          `json:"breakdown_count"`
+	Breakdown           []SessionUsageBreakdownEntry `json:"breakdown"`
 }
 
 type SessionUsageBreakdownEntry struct {
@@ -2781,6 +2782,7 @@ func (db *DB) GetSessionUsage(
 	if authoritativeCost != nil {
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
+		out.CostIsAuthoritative = true
 	} else if out.HasCost {
 		out.CostUSD = cost
 		out.CostSource = export.CombinedCostSource(

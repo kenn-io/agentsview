@@ -4341,6 +4341,7 @@ func (s *Store) GetSessionUsage(
 		out.HasCost = true
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
+		out.CostIsAuthoritative = true
 	} else if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)

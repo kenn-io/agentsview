@@ -1271,6 +1271,7 @@ func (s *Store) GetSessionUsage(
 	if authoritativeCost != nil {
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
+		out.CostIsAuthoritative = true
 	} else if out.HasCost {
 		out.CostUSD = cost
 		out.CostSource = export.CombinedCostSource(
