@@ -364,6 +364,41 @@ describe("SessionsStore", () => {
       expect(sessions.filters.dateFrom).toBe("2025-07-07");
     });
 
+    it("resumes persisting when a derived range is replaced by an explicit one", async () => {
+      sessions.applyPanelDateFilters(
+        { date_from: "2025-07-07", date_to: "2026-07-06" },
+        true,
+      );
+      await sessions.load();
+      sessions.applyPanelDateFilters(
+        { date_from: "2026-01-01", date_to: "2026-01-31" },
+        false,
+      );
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.dateFrom).toBe("2026-01-01");
+      expect(saved.dateTo).toBe("2026-01-31");
+    });
+
+    it("clears the derived flag on wholesale filter resets", async () => {
+      sessions.applyPanelDateFilters(
+        { date_from: "2025-07-07", date_to: "2026-07-06" },
+        true,
+      );
+      sessions.clearSessionFilters();
+      expect(sessions.dateFiltersDerived).toBe(false);
+
+      sessions.applyPanelDateFilters(
+        { date_from: "2025-07-07", date_to: "2026-07-06" },
+        true,
+      );
+      sessions.setProjectFilter("myproj");
+      expect(sessions.dateFiltersDerived).toBe(false);
+    });
+
     it("persists deep-linked explicit date bounds", async () => {
       sessions.initFromParams({
         date_from: "2026-01-01",

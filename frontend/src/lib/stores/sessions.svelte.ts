@@ -948,6 +948,7 @@ class SessionsStore {
   setProjectFilter(project: string) {
     const prev = this.filters;
     this.filters = { ...defaultFilters(), project, agent: prev.agent };
+    this.dateFiltersDerived = false;
     this.setActiveSession(null);
     if (prev.includeOneShot !== this.filters.includeOneShot ||
         prev.includeAutomated !== this.filters.includeAutomated) {
@@ -1110,6 +1111,7 @@ class SessionsStore {
       yokedDates.clear();
     }
     this.filters = { ...defaultFilters(), project };
+    this.dateFiltersDerived = false;
     this.setActiveSession(null);
     if (wasOneShot !== this.filters.includeOneShot || wasAutomated) {
       this.invalidateFilterCaches();
