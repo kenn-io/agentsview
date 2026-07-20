@@ -282,6 +282,30 @@ func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
 		"a draining daemon must not start new extraction passes")
 }
 
+// TestExtractSchedulerStartupPassSurvivesShortIdleTimeout pins that the
+// startup debounce holds a work lease: a daemon whose idle timeout is
+// shorter than the debounce would otherwise reap itself before the
+// lifetime's first pass, every lifetime, and extraction would never run.
+func TestExtractSchedulerStartupPassSurvivesShortIdleTimeout(t *testing.T) {
+	mgr := &fakePassManager{}
+	idled := make(chan struct{})
+	tracker := server.NewIdleTracker(20*time.Millisecond, func() { close(idled) })
+	s := newExtractScheduler(mgr, 100*time.Millisecond, 0, 0, tracker)
+	ctx := t.Context()
+	go tracker.Run(ctx)
+	go s.Run(ctx)
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 1 },
+		"startup pass never ran: the daemon idled out before the "+
+			"startup debounce elapsed")
+	select {
+	case <-idled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon never idled once the startup pass completed")
+	}
+}
+
 // TestExtractSchedulerRunsStartupPass pins that every daemon lifetime
 // begins with one pass, Notify or not: deferred work — a session whose
 // quiet period elapsed after the previous daemon exited, retraction for a

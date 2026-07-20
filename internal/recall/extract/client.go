@@ -554,18 +554,32 @@ func (c *Client) credentialedEndpoint() bool {
 			return true
 		}
 	}
-	// A path segment long enough to hold a capability token counts too:
-	// webhook-style gateways authenticate through high-entropy path
-	// tokens, and entropy needs length. Short segments are API-surface
-	// vocabulary (v1, openai, deployment names) whose loss would gut
-	// every kept diagnostic; 20 characters catches the shortest common
-	// capability tokens (Slack's webhook token is 24).
+	// Path segments outside the known API-surface vocabulary count too:
+	// webhook-style gateways authenticate through path tokens, which can
+	// be short or split across segments, so no length heuristic is safe.
+	// The allowlist covers the standard OpenAI-compatible shapes (local
+	// inference servers at /v1, gateways at /api/v1, Gemini's
+	// /v1beta/openai) — the doctor's main diagnostic targets. Anything
+	// else, Azure deployment names included, fails closed to withholding
+	// the endpoint-provided detail; the HTTP status always survives.
 	for segment := range strings.SplitSeq(endpoint.Path, "/") {
-		if len(segment) >= 20 {
+		if !safeEndpointPathSegments[strings.ToLower(segment)] {
 			return true
 		}
 	}
 	return false
+}
+
+// safeEndpointPathSegments are the only path segments that keep
+// endpoint-provided diagnostics flowing: names that select the API
+// surface, never credentials. The empty string covers leading, trailing,
+// and doubled slashes.
+var safeEndpointPathSegments = map[string]bool{
+	"":       true,
+	"v1":     true,
+	"v1beta": true,
+	"api":    true,
+	"openai": true,
 }
 
 // detailWithheld replaces every endpoint-derived detail in error text when

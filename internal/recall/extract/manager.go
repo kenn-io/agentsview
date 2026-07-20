@@ -565,6 +565,73 @@ func (m *Manager) extractSession(
 	if err != nil {
 		return outcome, err
 	}
+	if secretMatches > 0 || countMismatch {
+		// The failure transition must own any stamp movement. Writing the
+		// opening upsert first would advance a same-digest done row's
+		// coverage stamp in its own committed transaction; a crash or
+		// cancellation before the reopen below then leaves invalid
+		// coverage — possibly from a secret-bearing transcript — stamped
+		// current, unselectable by the done-revisit predicate and
+		// eligible for activation. A row already carrying this digest
+		// needs no upsert at all; a missing or digest-changed row is
+		// created or reset to pending, which a crash leaves retryable.
+		cursor := 0
+		if found && previous.ContentDigest == digest {
+			cursor = previous.UnitCursor
+		} else {
+			created, err := m.cfg.DB.UpsertExtractProgress(
+				ctx, db.ExtractProgressUpsert{
+					SessionID:     sessionID,
+					Fingerprint:   m.fingerprint,
+					ContentDigest: digest,
+					UnitsTotal:    len(units),
+					StampedAt:     readCutoff,
+				},
+			)
+			if err != nil {
+				return outcome, err
+			}
+			cursor = created.UnitCursor
+		}
+		if secretMatches > 0 {
+			// Fail closed: entries distilled from this transcript are
+			// suspect, so they are dropped with the row reopened behind
+			// the failure backoff. Recording findings stays the scanner's
+			// job — a rescan either lands the findings (excluding the
+			// session from discovery outright) or re-stamps a genuinely
+			// clean transcript, and either way the retry settles.
+			if derr := m.discardSessionOutput(
+				ctx, sessionID, digest, cursor,
+				fmt.Sprintf(
+					"transcript matches %d secret rule pattern(s) despite "+
+						"a current scan stamp; run 'agentsview secrets "+
+						"scan --backfill'", secretMatches,
+				),
+			); derr != nil {
+				return outcome, derr
+			}
+			outcome.failed = true
+			return outcome, nil
+		}
+		// A same-digest upsert preserves done and settles the stamp,
+		// which would claim the inconsistent state as covered forever.
+		// Reopen demotes such a row back into the retry queue.
+		if markErr := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
+			SessionID:      sessionID,
+			Fingerprint:    m.fingerprint,
+			ExpectedDigest: digest,
+			ExpectedCursor: cursor,
+			LastError: fmt.Sprintf(
+				"transcript has %d messages but the session row claims %d",
+				len(rows), session.MessageCount,
+			),
+			Reopen: true,
+		}); markErr != nil && !errors.Is(markErr, db.ErrStaleExtractProgress) {
+			return outcome, markErr
+		}
+		outcome.failed = true
+		return outcome, nil
+	}
 	var progress db.ExtractProgress
 	// Zero-unit sessions take the upsert path even on a same-digest
 	// revisit: they hold no entries for the refresh to maintain, and a row
@@ -572,8 +639,7 @@ func (m *Manager) extractSession(
 	// repaired here — the loop below never advances a cursor over an empty
 	// unit list, and the upsert lands zero-unit rows in done by
 	// construction.
-	if !countMismatch && secretMatches == 0 && found &&
-		previous.ContentDigest == digest && len(units) > 0 {
+	if found && previous.ContentDigest == digest && len(units) > 0 {
 		// A same-digest revisit skips the model, but its entries still
 		// need work: context fields copied at insert time go stale on
 		// metadata-only updates, and evidence digests cover rows the units
@@ -627,47 +693,6 @@ func (m *Manager) extractSession(
 		if err != nil {
 			return outcome, err
 		}
-	}
-	if secretMatches > 0 {
-		// Fail closed: entries distilled from this transcript are suspect,
-		// so they are dropped with the row reopened behind the failure
-		// backoff. Recording findings stays the scanner's job — a rescan
-		// either lands the findings (excluding the session from discovery
-		// outright) or re-stamps a genuinely clean transcript, and either
-		// way the retry settles.
-		if derr := m.discardSessionOutput(
-			ctx, sessionID, digest, progress.UnitCursor,
-			fmt.Sprintf(
-				"transcript matches %d secret rule pattern(s) despite a "+
-					"current scan stamp; run 'agentsview secrets scan "+
-					"--backfill'", secretMatches,
-			),
-		); derr != nil {
-			return outcome, derr
-		}
-		outcome.failed = true
-		return outcome, nil
-	}
-	if countMismatch {
-		// Checked before the done short-circuit: a same-digest upsert
-		// preserves done and settles the stamp, which would claim the
-		// inconsistent state as covered forever. Reopen demotes such a
-		// row back into the retry queue.
-		if markErr := m.cfg.DB.MarkExtractProgressFailed(ctx, db.ExtractFailure{
-			SessionID:      sessionID,
-			Fingerprint:    m.fingerprint,
-			ExpectedDigest: digest,
-			ExpectedCursor: progress.UnitCursor,
-			LastError: fmt.Sprintf(
-				"transcript has %d messages but the session row claims %d",
-				len(rows), session.MessageCount,
-			),
-			Reopen: true,
-		}); markErr != nil && !errors.Is(markErr, db.ErrStaleExtractProgress) {
-			return outcome, markErr
-		}
-		outcome.failed = true
-		return outcome, nil
 	}
 	if progress.State == db.ExtractProgressDone {
 		return outcome, nil

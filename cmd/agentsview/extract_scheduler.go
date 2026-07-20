@@ -99,6 +99,24 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	debounceTimer := time.NewTimer(s.debounce)
 	defer debounceTimer.Stop()
 
+	// The pending startup pass holds a work lease of its own: a daemon
+	// whose idle timeout is shorter than the debounce would otherwise
+	// reap itself before the lifetime's first pass, every lifetime, and
+	// extraction would never run. Released once any pass has started (the
+	// startup carry is delivered) or Run exits.
+	startupDone := func() {}
+	if release, ok := s.idle.BeginWork(); ok {
+		released := false
+		// Run is the only caller, so a plain bool guard suffices.
+		startupDone = func() {
+			if !released {
+				released = true
+				release()
+			}
+		}
+	}
+	defer startupDone()
+
 	var tickC <-chan time.Time
 	tickFull := s.backstop > 0
 	tickInterval := s.backstop
@@ -150,6 +168,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 				resetTimer(debounceTimer, s.debounce)
 				continue
 			}
+			startupDone()
 			// Only clear a carried full pass once it both started and
 			// succeeded; a started-but-failed pass never completed the
 			// top-up it carried.
@@ -164,6 +183,9 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if err != nil {
 				log.Printf("extract scheduler: periodic pass failed: %v", err)
+			}
+			if started {
+				startupDone()
 			}
 			if tickFull {
 				// A dropped incremental catchup tick needs no carry: the

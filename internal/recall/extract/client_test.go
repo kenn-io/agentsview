@@ -825,33 +825,71 @@ func TestClientWithholdsSuccessDiagnosticsForCredentialedEndpoints(t *testing.T)
 	}
 }
 
-// TestClientWithholdsBodyForPathTokenEndpoints pins that a path segment
-// long enough to hold a capability token counts as credential material:
-// webhook-style gateways authenticate through high-entropy path tokens,
-// and a body echoing the request URI would otherwise carry the token into
-// persisted errors and logs through the kept excerpt.
+// TestClientWithholdsBodyForPathTokenEndpoints pins that path segments
+// outside the known API-surface vocabulary count as credential material:
+// webhook-style gateways authenticate through path tokens — long or short,
+// possibly split across segments — and a body echoing the request URI
+// would otherwise carry them into persisted errors and logs through the
+// kept excerpt.
 func TestClientWithholdsBodyForPathTokenEndpoints(t *testing.T) {
-	const token = "cap-4bcdefgh1jklmn0pqrst"
-	var requests []map[string]any
-	server := newScriptedServer(t, []scriptedResponse{{
-		status:    http.StatusForbidden,
-		errorBody: `{"error":"denied for /` + token + `/v1"}`,
-	}}, &requests)
-	defer server.Close()
+	cases := map[string]string{
+		"long capability token": "cap-4bcdefgh1jklmn0pqrst",
+		"short path secret":     "zq7-hook",
+		"segmented secret":      "t0k/3n-p4rt",
+	}
+	for name, token := range cases {
+		t.Run(name, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{{
+				status:    http.StatusForbidden,
+				errorBody: `{"error":"denied for /` + token + `/v1"}`,
+			}}, &requests)
+			defer server.Close()
 
-	client := testClient(server.URL + "/" + token + "/v1")
-	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
-	)
-	if err == nil {
-		t.Fatal("scripted failure must surface an error")
+			client := testClient(server.URL + "/" + token + "/v1")
+			_, _, err := client.DistillWithRecovery(
+				context.Background(), "p", "text", 1,
+			)
+			if err == nil {
+				t.Fatal("scripted failure must surface an error")
+			}
+			if strings.Contains(err.Error(), token) {
+				t.Fatalf("error reflects the path token: %v", err)
+			}
+			if strings.Contains(err.Error(), "denied") {
+				t.Fatalf("error carries attacker-controlled body content "+
+					"from a credentialed endpoint: %v", err)
+			}
+		})
 	}
-	if strings.Contains(err.Error(), token) {
-		t.Fatalf("error reflects the path capability token: %v", err)
-	}
-	if strings.Contains(err.Error(), "denied") {
-		t.Fatalf("error carries attacker-controlled body content from a "+
-			"credentialed endpoint: %v", err)
+}
+
+// TestClientKeepsDiagnosticsForKnownAPIPaths pins the other side: the
+// standard OpenAI-compatible path shapes are API surface, not secrets,
+// and withholding their diagnostics would gut doctor output for every
+// local inference server.
+func TestClientKeepsDiagnosticsForKnownAPIPaths(t *testing.T) {
+	for _, path := range []string{"/v1", "/api/v1", "/v1beta/openai"} {
+		t.Run(path, func(t *testing.T) {
+			var requests []map[string]any
+			server := newScriptedServer(t, []scriptedResponse{{
+				status:    http.StatusNotFound,
+				errorBody: `{"error":"model not found"}`,
+			}}, &requests)
+			defer server.Close()
+
+			client := testClient(server.URL + path)
+			_, _, err := client.DistillWithRecovery(
+				context.Background(), "p", "text", 1,
+			)
+			if err == nil {
+				t.Fatal("scripted failure must surface an error")
+			}
+			if !strings.Contains(err.Error(), "model not found") {
+				t.Fatalf("error must keep the server detail for a "+
+					"vocabulary-only path: %v", err)
+			}
+		})
 	}
 }
 

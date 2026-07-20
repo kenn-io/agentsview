@@ -1946,6 +1946,79 @@ func TestManagerReconcilesBeforeAbortingOnEndpointRejection(t *testing.T) {
 	}
 }
 
+// TestManagerCountMismatchDoesNotAdvanceCoverageStamp pins the atomicity
+// of the failure transition: the mismatch path must not first commit an
+// upsert that advances a same-digest done row's coverage stamp and only
+// then reopen it — a crash between those transactions would leave invalid
+// coverage stamped current, permanently unselectable by the done-revisit
+// predicate and eligible for activation.
+func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-1", turnMessages("fix the bug", "done"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
+		t.Fatalf("first RunPass: %v", err)
+	}
+	readStamp := func() string {
+		t.Helper()
+		var stamp string
+		if err := side.QueryRow(
+			"SELECT content_stamped_at FROM recall_extract_progress " +
+				"WHERE session_id = 'sess-1'").Scan(&stamp); err != nil {
+			t.Fatalf("reading coverage stamp: %v", err)
+		}
+		return stamp
+	}
+	stamped := readStamp()
+
+	time.Sleep(2 * time.Millisecond)
+	// The session row claims more messages than the transcript holds; the
+	// digest is unchanged, so the revisit takes the same-digest arm.
+	if _, err := side.Exec(
+		"UPDATE sessions SET message_count = 5 WHERE id = 'sess-1'",
+	); err != nil {
+		t.Fatalf("forging count mismatch: %v", err)
+	}
+	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
+		t.Fatalf("bumping local write clock: %v", err)
+	}
+	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
+		t.Fatalf("revisit RunPass: %v", err)
+	}
+	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
+	if err != nil || !found {
+		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+	}
+	if progress.State != db.ExtractProgressFailed {
+		t.Fatalf("state = %s, want failed: the mismatch must reopen the "+
+			"row", progress.State)
+	}
+	if got := readStamp(); got != stamped {
+		t.Fatalf("coverage stamp advanced from %s to %s outside the "+
+			"failure transition; a crash between the two transactions "+
+			"leaves invalid coverage claimed as current", stamped, got)
+	}
+}
+
 // TestManagerBadRequestStaysSessionScoped pins the other half of the
 // endpoint-scoped contract: a 400 indicts this request's content, not the
 // endpoint — the same server answers other units fine — so the pass must
