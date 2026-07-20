@@ -788,15 +788,15 @@ func usageRowSelect() string {
 }
 
 func dailyUsageRowSelectFromRows(rowsSQL string) string {
-	return dailyUsageRowSelectFromRowsWithMachine(rowsSQL, false)
+	return dailyUsageRowSelectFromRowsWithBreakdowns(rowsSQL, false)
 }
 
-func dailyUsageRowSelectFromRowsWithMachine(
-	rowsSQL string, includeMachine bool,
+func dailyUsageRowSelectFromRowsWithBreakdowns(
+	rowsSQL string, includeBreakdowns bool,
 ) string {
-	machineColumn := ""
-	if includeMachine {
-		machineColumn = ",\n\tu.machine"
+	breakdownColumns := ""
+	if includeBreakdowns {
+		breakdownColumns = ",\n\tu.machine,\n\tu.git_branch"
 	}
 	return `
 SELECT
@@ -818,8 +818,7 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
-	u.agent` + machineColumn + `,
-	u.git_branch
+	u.agent` + breakdownColumns + `
 FROM (` + rowsSQL + `) u
 WHERE 1=1`
 }
@@ -1099,11 +1098,11 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 }
 
 func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
-	return scanDailyUsageRowWithMachine(rows, false)
+	return scanDailyUsageRowWithBreakdowns(rows, false)
 }
 
-func scanDailyUsageRowWithMachine(
-	rows *sql.Rows, includeMachine bool,
+func scanDailyUsageRowWithBreakdowns(
+	rows *sql.Rows, includeBreakdowns bool,
 ) (dailyUsageScanRow, error) {
 	var r dailyUsageScanRow
 	dest := []any{
@@ -1127,10 +1126,9 @@ func scanDailyUsageRowWithMachine(
 		&r.project,
 		&r.agent,
 	}
-	if includeMachine {
-		dest = append(dest, &r.machine)
+	if includeBreakdowns {
+		dest = append(dest, &r.machine, &r.gitBranch)
 	}
-	dest = append(dest, &r.gitBranch)
 	err := rows.Scan(dest...)
 	return r, err
 }
@@ -1923,7 +1921,7 @@ func (db *DB) GetDailyUsage(
 	// Pad by +/-14h to cover all timezone offsets; the actual
 	// date filtering happens post-query via localDate.
 	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f), db.hasCursorUsageTable())
-	query = dailyUsageRowSelectFromRowsWithMachine(query, f.Breakdowns)
+	query = dailyUsageRowSelectFromRowsWithBreakdowns(query, f.Breakdowns)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -1967,7 +1965,7 @@ func (db *DB) GetDailyUsage(
 	var totalSavings float64
 
 	for rows.Next() {
-		r, scanErr := scanDailyUsageRowWithMachine(rows, f.Breakdowns)
+		r, scanErr := scanDailyUsageRowWithBreakdowns(rows, f.Breakdowns)
 		if scanErr != nil {
 			return DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", scanErr)

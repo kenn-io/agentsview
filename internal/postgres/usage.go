@@ -596,15 +596,15 @@ func pgUsageRowSelect() string {
 }
 
 func pgDailyUsageRowSelectFromRows(rowsSQL string) string {
-	return pgDailyUsageRowSelectFromRowsWithMachine(rowsSQL, false)
+	return pgDailyUsageRowSelectFromRowsWithBreakdowns(rowsSQL, false)
 }
 
-func pgDailyUsageRowSelectFromRowsWithMachine(
-	rowsSQL string, includeMachine bool,
+func pgDailyUsageRowSelectFromRowsWithBreakdowns(
+	rowsSQL string, includeBreakdowns bool,
 ) string {
-	machineColumn := ""
-	if includeMachine {
-		machineColumn = ",\n\tu.machine"
+	breakdownColumns := ""
+	if includeBreakdowns {
+		breakdownColumns = ",\n\tu.machine,\n\tu.git_branch"
 	}
 	return `
 SELECT
@@ -626,8 +626,7 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
-	u.agent` + machineColumn + `,
-	u.git_branch
+	u.agent` + breakdownColumns + `
 FROM (` + rowsSQL + `) u
 WHERE 1=1`
 }
@@ -830,7 +829,7 @@ func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable boo
 			rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
 		}
 	}
-	return pgDailyUsageRowSelectFromRowsWithMachine(rowsSQL, f.Breakdowns)
+	return pgDailyUsageRowSelectFromRowsWithBreakdowns(rowsSQL, f.Breakdowns)
 }
 
 func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
@@ -871,11 +870,11 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 }
 
 func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
-	return scanPGDailyUsageRowWithMachine(rows, false)
+	return scanPGDailyUsageRowWithBreakdowns(rows, false)
 }
 
-func scanPGDailyUsageRowWithMachine(
-	rows *sql.Rows, includeMachine bool,
+func scanPGDailyUsageRowWithBreakdowns(
+	rows *sql.Rows, includeBreakdowns bool,
 ) (pgDailyUsageScanRow, error) {
 	var r pgDailyUsageScanRow
 	dest := []any{
@@ -899,10 +898,9 @@ func scanPGDailyUsageRowWithMachine(
 		&r.project,
 		&r.agent,
 	}
-	if includeMachine {
-		dest = append(dest, &r.machine)
+	if includeBreakdowns {
+		dest = append(dest, &r.machine, &r.gitBranch)
 	}
-	dest = append(dest, &r.gitBranch)
 	err := rows.Scan(dest...)
 	return r, err
 }
@@ -1364,7 +1362,7 @@ func (s *Store) GetDailyUsage(
 	var totalSavings float64
 
 	for rows.Next() {
-		r, scanErr := scanPGDailyUsageRowWithMachine(rows, f.Breakdowns)
+		r, scanErr := scanPGDailyUsageRowWithBreakdowns(rows, f.Breakdowns)
 		if scanErr != nil {
 			return db.DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", scanErr)
