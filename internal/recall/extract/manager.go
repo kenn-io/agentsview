@@ -107,7 +107,9 @@ type Status struct {
 	Fingerprint string                  `json:"fingerprint"`
 	Generations []db.ExtractGeneration  `json:"generations"`
 	Stats       db.ExtractProgressStats `json:"stats"`
-	// EligibleBacklog counts sessions currently eligible but not done.
+	// EligibleBacklog counts sessions currently eligible but not covered:
+	// never extracted, pending, partial, failed, or done with writes past
+	// their coverage stamp.
 	EligibleBacklog int `json:"eligible_backlog"`
 }
 

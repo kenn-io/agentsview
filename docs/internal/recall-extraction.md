@@ -147,10 +147,15 @@ the backoff) instead of skipped: a silent skip would let the discovery
 watermarks advance past the session's writes and exclude it forever. The rule
 holds for completed rows too — it is applied before the done short-circuit,
 because a same-digest revisit would otherwise preserve `done` and settle the
-coverage stamp, claiming the inconsistent state as covered. The failure mark
-demotes such a row (`Reopen`) and resets its cursor to zero: its completed-units
-claim was judged against the inconsistent session, and the strictly monotonic
-cursor could otherwise never reach `done` again.
+coverage stamp, claiming the inconsistent state as covered. The failure
+transition owns any stamp movement: a row already carrying the digest is failed
+or discarded directly with no opening upsert (whose same-digest rule would
+advance the stamp in its own committed transaction — a crash before the reopen
+would then leave invalid coverage stamped current and permanently unselectable),
+and a missing or digest-changed row is created as pending, which a crash leaves
+retryable. The failure mark demotes such a row (`Reopen`) and resets its cursor
+to zero: its completed-units claim was judged against the inconsistent session,
+and the strictly monotonic cursor could otherwise never reach `done` again.
 
 ## Progress and resume
 
@@ -302,8 +307,12 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   or a full tick arriving before the next lifetime idles out too. The full
   revisit stays bounded: only done sessions written to since their coverage
   stamp reload. Passes hold an idle-tracker work lease, so a pass in flight is
-  never cut off by the reaper, but pending future work deliberately does not
-  pin the daemon alive — the startup pass of the next lifetime owns it;
+  never cut off by the reaper, and the pending startup pass holds one too
+  until the lifetime's first pass has started — an idle timeout configured
+  shorter than the startup debounce would otherwise reap the daemon before
+  extraction ever ran, every lifetime. Other pending future work deliberately
+  does not pin the daemon alive — the startup pass of the next lifetime owns
+  it;
 - the server's trash, restore, delete, and secret-scan routes signal the
   scheduler directly (they change extraction eligibility and no sync activity
   follows them), so retraction and newly clean sessions ride a pass one

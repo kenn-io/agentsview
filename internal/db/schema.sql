@@ -452,8 +452,9 @@ CREATE TABLE IF NOT EXISTS recall_extract_progress (
     state          TEXT NOT NULL DEFAULT 'pending'
         CHECK (state IN ('pending', 'partial', 'done', 'failed')),
     content_digest TEXT NOT NULL DEFAULT '',
-    -- when content_digest was last derived; moves only on insert and digest
-    -- reset, so it marks the transcript snapshot the extraction covers
+    -- pre-read cutoff of the last coverage claim; advances on insert, digest
+    -- reset, and same-digest revisits alike, so it marks the transcript
+    -- snapshot the extraction was last verified against
     content_stamped_at TEXT NOT NULL DEFAULT '',
     last_error     TEXT NOT NULL DEFAULT '',
     updated_at     TEXT NOT NULL
