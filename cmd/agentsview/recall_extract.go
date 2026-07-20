@@ -456,6 +456,15 @@ func newRecallExtractRetireCommand() *cobra.Command {
 const extractDoctorProbeText = "USER MESSAGE (ordinal 0):\n" +
 	"Use port 8080 for the local server from now on."
 
+// extractProbeTimeout derives the doctor probe's context deadline from the
+// configured per-request timeout, so slow-model configurations that work
+// during normal extraction also pass diagnostics. The headroom keeps the
+// request timeout as the bound that fires: its error names the setting the
+// operator configured, where a context cancellation would not.
+func extractProbeTimeout(requestTimeout time.Duration) time.Duration {
+	return requestTimeout + 30*time.Second
+}
+
 func newRecallExtractDoctorCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -490,7 +499,8 @@ func newRecallExtractDoctorCommand() *cobra.Command {
 				dist.Segmenter.Name(), dist.Segmenter.MaxWindowChars)
 			fmt.Fprintf(out, "Fingerprint: %s\n", fingerprint)
 
-			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+			ctx, cancel := context.WithTimeout(cmd.Context(),
+				extractProbeTimeout(dist.Client.HTTPClient.Timeout))
 			defer cancel()
 			entries, usage, err := dist.Client.DistillWithRecovery(
 				ctx, dist.Prompts[extract.RoleIntent],

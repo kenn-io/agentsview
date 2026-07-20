@@ -281,16 +281,21 @@ func (db *DB) ActivateExtractGeneration(
 // lacks a progress row entirely (a single-session run, or a session ending
 // after the caller's checks, leaves uncovered work that no progress-based
 // gate can see). Failed sessions do not block (they retry and top the
-// corpus up later), and sessions that turned ineligible are ignored here:
-// promotion excludes their entries and the retraction pass removes them.
+// corpus up later), and sessions that turned ineligible are ignored by
+// every gate — including the unfinished count, since their extraction can
+// never finish and an explicit activation runs no retraction pass to clear
+// their rows first: promotion excludes their entries and the retraction
+// pass removes them.
 func verifyExtractActivationCoverageTx(
 	ctx context.Context, tx *sql.Tx, fingerprint string,
 	scanVersions []string, quietCutoff time.Time,
 ) error {
 	var building int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM recall_extract_progress
-		WHERE generation_fingerprint = ? AND state IN (?, ?)`,
+		SELECT COUNT(*) FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
+		  AND NOT (`+extractSessionIneligibleSQL+`)`,
 		fingerprint, ExtractProgressPending, ExtractProgressPartial,
 	).Scan(&building); err != nil {
 		return fmt.Errorf("counting unfinished coverage: %w", err)

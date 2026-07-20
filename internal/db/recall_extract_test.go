@@ -2337,6 +2337,52 @@ func TestActivateExtractGenerationRefusesUnfinishedCoverage(t *testing.T) {
 	assert.Equal(t, "archived", entry.Status)
 }
 
+// TestActivateExtractGenerationIgnoresIneligibleUnfinishedCoverage pins
+// that the unfinished-coverage gate only counts sessions activation could
+// still serve: a pending row whose session has since been trashed can never
+// finish — the extractor discards its output on the next visit — and an
+// explicit activation runs no retraction pass first, so counting it would
+// leave activation blocked until an unrelated scheduled pass happens to
+// clean the row up.
+func TestActivateExtractGenerationIgnoresIneligibleUnfinishedCoverage(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedExtractCandidate(t, d, "sess-1", 2*time.Hour, nil)
+	seedExtractCandidate(t, d, "sess-trashed", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-a")
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 0, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-trashed", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET deleted_at = '2026-01-01T00:00:00.000Z' " +
+			"WHERE id = 'sess-trashed'")
+	require.NoError(t, err)
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	states := generationStates(t, d)
+	assert.Equal(t, ExtractGenerationActive, states["fp-a"],
+		"an ineligible session's pending row must not block activation")
+	entry, err := d.GetRecallEntry(ctx, "e-a")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "accepted", entry.Status)
+}
+
 // TestActivateExtractGenerationRefusesDriftedDoneCoverage pins the in-tx
 // staleness gates: a transcript write since the coverage stamp, or a scan
 // stamp no longer current, means the staged entries describe a transcript

@@ -302,7 +302,9 @@ generation never activates, manually or automatically: activation retires the
 previously active generation, and replacing a working corpus with an empty one
 must not happen silently. All of these checks are advisory racing against
 concurrent writes, so the activation transaction re-verifies them before
-switching generations: it aborts if any session is pending or partial, if any
+switching generations: it aborts if any still-eligible session is pending or
+partial (a row whose session has since turned ineligible can never finish, and
+an explicit activation runs no retraction pass to clear it first), if any
 completed, still-eligible session has transcript writes past its coverage stamp
 or a scan stamp outside the current rules versions, if any eligible session has
 no progress row at all (a single-session run, or a session ending after the

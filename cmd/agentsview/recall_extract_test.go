@@ -185,6 +185,19 @@ func TestRecallExtractDoctorProbesTheModel(t *testing.T) {
 	assert.Contains(t, out, "probe: ok")
 }
 
+// TestExtractProbeTimeoutExceedsConfiguredRequestTimeout pins that the
+// doctor probe's context deadline is derived from the configured per-request
+// timeout rather than fixed: a fixed deadline shorter than the configured
+// timeout fails slow-model configurations during diagnostics even though
+// they work during normal extraction.
+func TestExtractProbeTimeoutExceedsConfiguredRequestTimeout(t *testing.T) {
+	for _, timeout := range []time.Duration{time.Second, 10 * time.Minute} {
+		assert.Greater(t, extractProbeTimeout(timeout), timeout,
+			"the context deadline must leave the configured request "+
+				"timeout as the bound that fires for %s", timeout)
+	}
+}
+
 func TestRecallExtractDoctorSanitizesEndpointErrors(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
