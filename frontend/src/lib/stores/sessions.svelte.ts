@@ -603,6 +603,12 @@ class SessionsStore {
             () => SessionsService.getApiV1SessionsId({ id }),
             signal,
           ) as unknown as Session;
+          // The active session's detail stays valid even if a concurrent
+          // reload superseded this hydration version: seed the cache first so
+          // the breadcrumb survives when the new index excludes the row.
+          if (hydrated.id === this.activeSessionId && !hydrated.is_index_only) {
+            this.activeSessionDetail = hydrated;
+          }
           if (
             version !== this.sidebarIndexVersion ||
             epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
@@ -1022,16 +1028,12 @@ class SessionsStore {
       // an unstarred session while starred-only filter is on) — jump to
       // an edge so the keyboard shortcut doesn't silently fail.
       const edge = delta > 0 ? 0 : list.length - 1;
-      const id = list[edge]!.id;
-      this.setActiveSession(id);
-      void this.hydrateSelectedIndexOnlySession(id);
+      this.selectSession(list[edge]!.id);
       return;
     }
     const next = idx + delta;
     if (next >= 0 && next < list.length) {
-      const id = list[next]!.id;
-      this.setActiveSession(id);
-      void this.hydrateSelectedIndexOnlySession(id);
+      this.selectSession(list[next]!.id);
     }
   }
 
