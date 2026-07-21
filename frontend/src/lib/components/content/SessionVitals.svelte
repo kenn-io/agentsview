@@ -713,7 +713,7 @@
 
   .session-context {
     display: grid;
-    gap: 7px;
+    gap: var(--space-2);
     margin-bottom: 12px;
     padding-bottom: 11px;
     border-bottom: 1px solid var(--border-muted);
