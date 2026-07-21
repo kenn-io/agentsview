@@ -1619,7 +1619,11 @@ func deletePGLegacyTraeSessionIfOwned(
 			}
 			if workspaceSibling != nil && globalSibling != nil {
 				if !pgTraeHasUniqueSiblingRevision(
-					currentNamespace, sess, *workspaceSibling, *globalSibling,
+					currentNamespace,
+					transcriptRevisionValue(legacyTranscriptRevision),
+					sess,
+					*workspaceSibling,
+					*globalSibling,
 				) {
 					return nil
 				}
@@ -1807,9 +1811,13 @@ revisionCheckDone:
 
 func pgTraeHasUniqueSiblingRevision(
 	currentNamespace string,
+	legacyRevision string,
 	current, workspaceSibling, globalSibling db.Session,
 ) bool {
 	currentRevision := transcriptRevisionValue(current.TranscriptRevision)
+	if currentRevision == "" || currentRevision != legacyRevision {
+		return false
+	}
 	switch currentNamespace {
 	case "workspaceStorage":
 		return currentRevision != transcriptRevisionValue(

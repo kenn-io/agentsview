@@ -87,6 +87,7 @@ func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
 
 	tests := []struct {
 		name             string
+		legacyRevision   string
 		currentNamespace string
 		current          db.Session
 		workspaceSibling db.Session
@@ -94,6 +95,7 @@ func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
 		want             bool
 	}{
 		{
+			legacyRevision:   "workspace-rev",
 			name:             "workspace revision differs from global",
 			currentNamespace: "workspaceStorage",
 			current:          db.Session{TranscriptRevision: rev("workspace-rev")},
@@ -102,14 +104,16 @@ func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
 			want:             true,
 		},
 		{
+			legacyRevision:   "workspace-rev",
 			name:             "global revision differs from workspace",
 			currentNamespace: "globalStorage",
 			current:          db.Session{TranscriptRevision: rev("global-rev")},
 			workspaceSibling: db.Session{TranscriptRevision: rev("workspace-rev")},
 			globalSibling:    db.Session{TranscriptRevision: rev("global-rev")},
-			want:             true,
+			want:             false,
 		},
 		{
+			legacyRevision:   "shared-rev",
 			name:             "shared revision stays ambiguous",
 			currentNamespace: "workspaceStorage",
 			current:          db.Session{TranscriptRevision: rev("shared-rev")},
@@ -118,12 +122,13 @@ func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
 			want:             false,
 		},
 		{
-			name:             "missing workspace revision still counts as unique",
+			legacyRevision:   "workspace-rev",
+			name:             "missing workspace revision cannot match legacy",
 			currentNamespace: "workspaceStorage",
 			current:          db.Session{},
 			workspaceSibling: db.Session{},
 			globalSibling:    db.Session{TranscriptRevision: rev("global-rev")},
-			want:             true,
+			want:             false,
 		},
 	}
 
@@ -131,6 +136,7 @@ func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, pgTraeHasUniqueSiblingRevision(
 				tt.currentNamespace,
+				tt.legacyRevision,
 				tt.current,
 				tt.workspaceSibling,
 				tt.globalSibling,
