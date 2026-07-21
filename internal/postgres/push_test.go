@@ -145,6 +145,74 @@ func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
 	}
 }
 
+func TestPGResolveTraeSiblingSessionPrefersBatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	local, err := db.Open(path)
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	localRevision := "local-rev"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:workspaceStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		TranscriptRevision: &localRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession local")
+
+	batchRevision := "batch-rev"
+	sess, err := pgResolveTraeSiblingSession(
+		context.Background(),
+		local,
+		map[string]db.Session{
+			"trae:workspaceStorage:collision": {
+				ID:                 "trae:workspaceStorage:collision",
+				TranscriptRevision: &batchRevision,
+			},
+		},
+		"trae:workspaceStorage:collision",
+	)
+
+	require.NoError(t, err, "pgResolveTraeSiblingSession")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, "batch-rev", *sess.TranscriptRevision)
+}
+
+func TestPGResolveTraeSiblingSessionFallsBackToLocal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	local, err := db.Open(path)
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	localRevision := "local-rev"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:globalStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		TranscriptRevision: &localRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession local")
+
+	sess, err := pgResolveTraeSiblingSession(
+		context.Background(),
+		local,
+		nil,
+		"trae:globalStorage:collision",
+	)
+
+	require.NoError(t, err, "pgResolveTraeSiblingSession")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, "local-rev", *sess.TranscriptRevision)
+}
+
 type pushAliasRoutingDriver struct{}
 
 type pushAliasRoutingConn struct{}

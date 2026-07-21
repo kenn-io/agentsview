@@ -1023,8 +1023,10 @@ func (s *Sync) pushBatchAttempt(
 	msgs := 0
 	skippedConflicts := 0
 	sessionIDs := make([]string, 0, len(batch))
+	batchSessions := make(map[string]db.Session, len(batch))
 	for _, sess := range batch {
 		sessionIDs = append(sessionIDs, sess.ID)
+		batchSessions[sess.ID] = sess
 	}
 	comparisons := (*pushMessageComparison)(nil)
 	if preloadComparisons && len(sessionIDs) > 0 {
@@ -1106,7 +1108,7 @@ func (s *Sync) pushBatchAttempt(
 			}
 		}
 		if err := deletePGLegacyTraeSessionIfOwned(
-			ctx, tx, s.local, sess, markerID,
+			ctx, tx, s.local, batchSessions, sess, markerID,
 			pushedSessionMachine(sess, s.machine),
 			legacyMarkerMachines,
 		); err != nil {
@@ -1561,6 +1563,7 @@ func deletePGLegacyTraeSessionIfOwned(
 	ctx context.Context,
 	tx *sql.Tx,
 	local *db.DB,
+	batchSessions map[string]db.Session,
 	sess db.Session,
 	markerID, pushedMachine string,
 	legacyMarkerMachines []string,
@@ -1603,14 +1606,18 @@ func deletePGLegacyTraeSessionIfOwned(
 			prefix := pgSessionIDPrefix(sess.ID)
 			workspaceSiblingID := prefix + "trae:workspaceStorage:" + rawID
 			globalSiblingID := prefix + "trae:globalStorage:" + rawID
-			workspaceSibling, err := local.GetSession(ctx, workspaceSiblingID)
+			workspaceSibling, err := pgResolveTraeSiblingSession(
+				ctx, local, batchSessions, workspaceSiblingID,
+			)
 			if err != nil {
 				return fmt.Errorf(
 					"loading namespaced trae sibling %s: %w",
 					workspaceSiblingID, err,
 				)
 			}
-			globalSibling, err := local.GetSession(ctx, globalSiblingID)
+			globalSibling, err := pgResolveTraeSiblingSession(
+				ctx, local, batchSessions, globalSiblingID,
+			)
 			if err != nil {
 				return fmt.Errorf(
 					"loading namespaced trae sibling %s: %w",
@@ -1807,6 +1814,24 @@ revisionCheckDone:
 		)
 	}
 	return nil
+}
+
+func pgResolveTraeSiblingSession(
+	ctx context.Context,
+	local *db.DB,
+	batchSessions map[string]db.Session,
+	id string,
+) (*db.Session, error) {
+	if batchSessions != nil {
+		if sess, ok := batchSessions[id]; ok {
+			copy := sess
+			return &copy, nil
+		}
+	}
+	if local == nil {
+		return nil, nil
+	}
+	return local.GetSession(ctx, id)
 }
 
 func pgTraeHasUniqueSiblingRevision(
