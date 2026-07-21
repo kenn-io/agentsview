@@ -320,7 +320,7 @@ func writePGVectorPushSummary(w io.Writer, v postgres.VectorPushResult) {
 	if v.SessionsDeferred > 0 {
 		fmt.Fprintf(
 			w,
-			"Warning: deferred vectors for %d session(s) whose session push failed; the next generation-wide reconciliation sends them\n",
+			"Warning: deferred vectors for %d session(s); the next generation-wide reconciliation sends them\n",
 			v.SessionsDeferred,
 		)
 	}

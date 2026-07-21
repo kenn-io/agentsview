@@ -96,9 +96,11 @@ type VectorPushResult struct {
 	SkippedReason     string
 	SessionsPushed    int
 	SessionsUnchanged int
-	// SessionsDeferred counts changed sessions whose vectors were withheld
-	// because their session-phase push failed this run; the delta state is
-	// untouched, so the next successful push sends them.
+	// SessionsDeferred counts sessions whose vector reconciliation was
+	// withheld this run — a failed session-phase push, an export hash
+	// that diverged mid-push, or an eviction abandoned because the local
+	// generation changed; the delta state is untouched, so the next
+	// generation-wide reconciliation sends them.
 	SessionsDeferred int
 	DocsPushed       int
 	ChunksPushed     int
