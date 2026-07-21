@@ -48,6 +48,7 @@ type AgentTotal struct {
 
 // BranchTotal holds range-wide token and cost totals per (project, branch).
 type BranchTotal struct {
+	ProjectKey          string  `json:"project_key"`
 	Project             string  `json:"project"`
 	Branch              string  `json:"branch"`
 	InputTokens         int     `json:"inputTokens"`
@@ -172,6 +173,7 @@ func branchTotalsFromService(in []service.BranchTotal) []BranchTotal {
 	out := make([]BranchTotal, 0, len(in))
 	for _, total := range in {
 		out = append(out, BranchTotal{
+			ProjectKey:          total.ProjectKey,
 			Project:             total.Project,
 			Branch:              total.Branch,
 			InputTokens:         total.InputTokens,

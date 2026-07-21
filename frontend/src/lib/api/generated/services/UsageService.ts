@@ -36,6 +36,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
   }: {
     /**
@@ -123,6 +124,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -151,6 +156,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
         'current_cost': currentCost,
       },
@@ -199,6 +205,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
   }: {
     /**
@@ -298,6 +305,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -326,6 +337,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
         'left_dimension': leftDimension,
         'left_value': leftValue,
@@ -373,6 +385,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
   }: {
     /**
@@ -456,6 +469,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -484,6 +501,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
       },
       errors: {
@@ -527,6 +545,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
     limit = 20,
   }: {
@@ -611,6 +630,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -643,6 +666,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
         'limit': limit,
       },

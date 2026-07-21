@@ -10,5 +10,6 @@ export type BranchTotal = {
   inputTokens: number;
   outputTokens: number;
   project: string;
+  project_key: string;
 };
 

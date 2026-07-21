@@ -2,8 +2,8 @@
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import type { DailyUsageEntry } from "../../api/types/usage.js";
   import {
+    branchLabel,
     branchFilterToken,
-    branchTokenLabel,
   } from "../../branchFilters.js";
   import { seriesColorMap } from "../../utils/projectColor.js";
   import { m } from "../../i18n/index.js";
@@ -29,10 +29,10 @@
         }));
       case "branch":
         return (day.branchBreakdowns ?? []).map((b) => {
-          const token = branchFilterToken(b.project, b.branch);
+          const token = branchFilterToken(b.project_key, b.branch);
           return {
             key: token,
-            label: branchTokenLabel(token, noBranchLabel),
+            label: branchLabel(b.project, b.branch, noBranchLabel),
             cost: b.cost,
           };
         });

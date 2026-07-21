@@ -71,6 +71,19 @@ func TestUsageSummaryResponseEmitsEmptyProjectsMap(t *testing.T) {
 	assert.Contains(t, string(b), `"projects":{}`)
 }
 
+func TestUsageSummaryResponsePreservesBranchProjectKey(t *testing.T) {
+	response := usageSummaryResponseFromService(&service.UsageSummaryResult{
+		BranchTotals: []service.BranchTotal{{
+			ProjectKey: "pl1:sha256:alpha",
+			Project:    "alpha",
+			Branch:     "main",
+		}},
+	})
+
+	require.Len(t, response.BranchTotals, 1)
+	assert.Equal(t, "pl1:sha256:alpha", response.BranchTotals[0].ProjectKey)
+}
+
 // assertUsageQueryCalls verifies how many times the usage handler
 // queried the daily-usage and session-count store methods.
 func assertUsageQueryCalls(

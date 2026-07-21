@@ -200,6 +200,7 @@ describe("CostTimeSeriesChart", () => {
     for (const day of summary.daily) {
       day.branchBreakdowns = [
         {
+          project_key: "pl1:sha256:agentsview",
           project: "agentsview",
           branch: "main",
           inputTokens: 80,
@@ -209,6 +210,7 @@ describe("CostTimeSeriesChart", () => {
           cost: 8,
         },
         {
+          project_key: "pl1:sha256:agentsview",
           project: "agentsview",
           branch: "",
           inputTokens: 20,
@@ -234,6 +236,32 @@ describe("CostTimeSeriesChart", () => {
     expect(legendText).toContain("agentsview/(no branch)");
     expect(document.body.textContent).not.toContain("\u001f");
 
+    unmount(component);
+  });
+
+  it("keeps colliding branch display labels as distinct series", async () => {
+    const summary = usageSummary();
+    summary.daily = [dailyEntry(0)];
+    summary.daily[0]!.branchBreakdowns = [
+      {
+        project_key: "pl1:sha256:first", project: "", branch: "main",
+        inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0,
+        cacheReadTokens: 0, cost: 6,
+      },
+      {
+        project_key: "pl1:sha256:second", project: "", branch: "main",
+        inputTokens: 40, outputTokens: 20, cacheCreationTokens: 0,
+        cacheReadTokens: 0, cost: 4,
+      },
+    ];
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mount(CostTimeSeriesChart, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+    expect(document.body.textContent).not.toContain("pl1:sha256:");
     unmount(component);
   });
 
@@ -337,6 +365,7 @@ describe("CostTimeSeriesChart", () => {
     const summary = usageSummary();
     summary.daily = [dailyEntry(0), dailyEntry(1)];
     summary.daily[0]!.branchBreakdowns = [{
+      project_key: "pl1:sha256:agentsview",
       project: "agentsview",
       branch: "main",
       inputTokens: 60,
@@ -367,6 +396,7 @@ describe("CostTimeSeriesChart", () => {
     const summary = usageSummary();
     summary.daily = [dailyEntry(0)];
     summary.daily[0]!.branchBreakdowns = [{
+      project_key: "pl1:sha256:agentsview",
       project: "agentsview",
       branch: "main",
       inputTokens: 60,

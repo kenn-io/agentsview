@@ -184,12 +184,12 @@ describe("Breakdowns", () => {
     const report = makeReport();
     report.by_branch = [
       {
-        project: "alpha", branch: "main", agent_minutes: 12, cost: 0,
+        project_key: "pl1:sha256:alpha", project: "alpha", branch: "main", agent_minutes: 12, cost: 0,
         interactive_agent_minutes: 12, automated_agent_minutes: 0,
         interactive_cost: 0, automated_cost: 0,
       },
       {
-        project: "alpha", branch: "", agent_minutes: 3, cost: 0,
+        project_key: "pl1:sha256:alpha", project: "alpha", branch: "", agent_minutes: 3, cost: 0,
         interactive_agent_minutes: 3, automated_agent_minutes: 0,
         interactive_cost: 0, automated_cost: 0,
       },
@@ -205,6 +205,36 @@ describe("Breakdowns", () => {
     expect(labels).toContain("alpha/(no branch)");
     expect(labels.some((l) => l.includes(BRANCH_TOKEN_SEP))).toBe(false);
     unmount(c);
+    target.remove();
+  });
+
+  it("keeps branch rows with colliding display labels distinct", async () => {
+    const report = makeReport();
+    report.by_branch = [
+      {
+        project_key: "pl1:sha256:first", project: "", branch: "main",
+        agent_minutes: 12, cost: 0, interactive_agent_minutes: 12,
+        automated_agent_minutes: 0, interactive_cost: 0, automated_cost: 0,
+      },
+      {
+        project_key: "pl1:sha256:second", project: "", branch: "main",
+        agent_minutes: 3, cost: 0, interactive_agent_minutes: 3,
+        automated_agent_minutes: 0, interactive_cost: 0, automated_cost: 0,
+      },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const branchPanel = Array.from(
+      target.querySelectorAll<HTMLElement>(".breakdown-panel"),
+    ).find((panel) =>
+      panel.querySelector(".panel-title")?.textContent === "Branch"
+    );
+    expect(branchPanel?.querySelectorAll(".bar-row")).toHaveLength(2);
+    expect(target.textContent).not.toContain("pl1:sha256:");
+    unmount(component);
     target.remove();
   });
 });

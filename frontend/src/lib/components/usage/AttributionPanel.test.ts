@@ -173,6 +173,7 @@ function usageSummary(): UsageSummaryResponse {
     agentTotals: [],
     branchTotals: [
       {
+        project_key: "pl1:sha256:alpha",
         project: "alpha",
         branch: "main",
         inputTokens: 60,
@@ -182,6 +183,7 @@ function usageSummary(): UsageSummaryResponse {
         cost: 8,
       },
       {
+        project_key: "pl1:sha256:alpha",
         project: "alpha",
         branch: "dev",
         inputTokens: 40,
@@ -315,7 +317,9 @@ describe("AttributionPanel branch mode", () => {
     row?.click();
     await tick();
 
-    expect(spy).toHaveBeenCalledWith(branchFilterToken("alpha", "dev"));
+    expect(spy).toHaveBeenCalledWith(
+      branchFilterToken("pl1:sha256:alpha", "dev"),
+    );
     unmount(component);
   });
 

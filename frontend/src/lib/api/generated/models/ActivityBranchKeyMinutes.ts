@@ -11,5 +11,6 @@ export type ActivityBranchKeyMinutes = {
   interactive_agent_minutes: number;
   interactive_cost: number;
   project: string;
+  project_key: string;
 };
 

@@ -53,7 +53,7 @@
       }));
     } else if (groupBy === "branch") {
       items = s.branchTotals.map((b) => ({
-        id: branchFilterToken(b.project, b.branch),
+        id: branchFilterToken(b.project_key, b.branch),
         label: branchLabel(b.project, b.branch, noBranchLabel),
         cost: b.cost,
       }));

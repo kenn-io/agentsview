@@ -48,6 +48,7 @@ export interface MachineBreakdown {
 }
 
 export interface BranchBreakdown {
+  project_key: string;
   project: string;
   branch: string;
   inputTokens: number;
@@ -101,6 +102,7 @@ export interface AgentTotal {
 }
 
 export interface BranchTotal {
+  project_key: string;
   project: string;
   branch: string;
   inputTokens: number;
