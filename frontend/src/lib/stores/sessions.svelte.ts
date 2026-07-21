@@ -1500,13 +1500,18 @@ class SessionsStore {
     // the name with a pre-rename snapshot. Cancel and advance the generation
     // even when the detail cache is empty (index-only row with hydration in
     // flight) — the cache-population paths all check the generation.
+    // The rename response is itself a full post-rename snapshot (the endpoint
+    // reads the session back), so commit it as the active detail: an
+    // index-only or out-of-list active session whose pending read was just
+    // cancelled has nothing else to back the breadcrumb until the next
+    // watcher refresh.
     if (this.activeSessionId === id) {
       this.cancelActiveDetailRead();
-    }
-    // The active session may be backed only by the detail cache (absent from
-    // the sidebar list); keep its name in sync so the breadcrumb updates too.
-    if (this.activeSessionDetail?.id === id) {
-      this.activeSessionDetail = applyRename(this.activeSessionDetail);
+      const base =
+        this.activeSessionDetail?.id === id
+          ? this.activeSessionDetail
+          : { ...updated, is_index_only: false };
+      this.activeSessionDetail = applyRename(base);
     }
   }
 
