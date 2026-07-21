@@ -1043,6 +1043,11 @@ func (s *Sync) pushBatchAttempt(
 	}
 
 	for _, sess := range batch {
+		if pgShouldSkipLegacyTraeBatchSession(
+			batchSessions, sess,
+		) {
+			continue
+		}
 		if err := s.pushSession(
 			ctx, tx, sess, markerID, legacyMarkerMachines,
 		); err != nil {
@@ -1820,6 +1825,39 @@ revisionCheckDone:
 		)
 	}
 	return nil
+}
+
+func pgShouldSkipLegacyTraeBatchSession(
+	batchSessions map[string]db.Session,
+	sess db.Session,
+) bool {
+	if sess.Agent != "trae" {
+		return false
+	}
+	if _, hasNamespace := pgTraeNamespacedSessionNamespace(sess.ID); hasNamespace {
+		return false
+	}
+	rawID := strings.TrimSpace(sess.SourceSessionID)
+	rawID = strings.TrimPrefix(rawID, "trae:")
+	rawID = strings.TrimPrefix(rawID, "trae:")
+	if rawID == "" {
+		rawID = strings.TrimPrefix(
+			strings.TrimPrefix(
+				strings.TrimPrefix(sess.ID, pgSessionIDPrefix(sess.ID)),
+				"trae:",
+			),
+			"trae:",
+		)
+	}
+	if rawID == "" {
+		return false
+	}
+	prefix := pgSessionIDPrefix(sess.ID)
+	workspaceID := prefix + "trae:workspaceStorage:" + rawID
+	globalID := prefix + "trae:globalStorage:" + rawID
+	_, hasWorkspace := batchSessions[workspaceID]
+	_, hasGlobal := batchSessions[globalID]
+	return hasWorkspace || hasGlobal
 }
 
 func pgPreferredTranscriptRevision(

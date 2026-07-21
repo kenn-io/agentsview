@@ -231,6 +231,57 @@ func TestPGPreferredTranscriptRevision(t *testing.T) {
 	assert.Equal(t, "legacy-rev", *preferred)
 }
 
+func TestPGShouldSkipLegacyTraeBatchSession(t *testing.T) {
+	t.Run("legacy skipped when namespaced sibling is in batch", func(t *testing.T) {
+		legacy := db.Session{
+			ID:              "trae:collision",
+			Agent:           "trae",
+			SourceSessionID: "collision",
+		}
+		shouldSkip := pgShouldSkipLegacyTraeBatchSession(
+			map[string]db.Session{
+				"trae:workspaceStorage:collision": {
+					ID: "trae:workspaceStorage:collision",
+				},
+			},
+			legacy,
+		)
+		assert.True(t, shouldSkip)
+	})
+
+	t.Run("legacy kept when batch has no namespaced sibling", func(t *testing.T) {
+		shouldSkip := pgShouldSkipLegacyTraeBatchSession(
+			map[string]db.Session{
+				"trae:collision": {
+					ID: "trae:collision",
+				},
+			},
+			db.Session{
+				ID:              "trae:collision",
+				Agent:           "trae",
+				SourceSessionID: "collision",
+			},
+		)
+		assert.False(t, shouldSkip)
+	})
+
+	t.Run("namespaced session is never skipped by this gate", func(t *testing.T) {
+		shouldSkip := pgShouldSkipLegacyTraeBatchSession(
+			map[string]db.Session{
+				"trae:workspaceStorage:collision": {
+					ID: "trae:workspaceStorage:collision",
+				},
+			},
+			db.Session{
+				ID:              "trae:workspaceStorage:collision",
+				Agent:           "trae",
+				SourceSessionID: "collision",
+			},
+		)
+		assert.False(t, shouldSkip)
+	})
+}
+
 type pushAliasRoutingDriver struct{}
 
 type pushAliasRoutingConn struct{}
