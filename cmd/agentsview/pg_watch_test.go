@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -194,13 +195,16 @@ type fakeTarget struct {
 	onPush     func()
 	pushes     int
 	closed     int
+	pushOpts   []postgres.PushOptions // options of each push, in order
 }
 
 func (f *fakeTarget) EnsureSchema(context.Context) error { return f.ensureErr }
-func (f *fakeTarget) Push(
-	context.Context, bool, func(postgres.PushProgress),
+func (f *fakeTarget) PushWithOptions(
+	_ context.Context, opts postgres.PushOptions,
+	_ func(postgres.PushProgress),
 ) (postgres.PushResult, error) {
 	f.pushes++
+	f.pushOpts = append(f.pushOpts, opts)
 	if f.onPush != nil {
 		f.onPush()
 	}
@@ -227,6 +231,55 @@ func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
 		},
 	}
 	return p, rec
+}
+
+// TestPGPusherScopesChangeVectorPushes pins the watch scoping policy: only
+// change-triggered pushes after a clean generation-wide vector
+// reconciliation scope their vector phase; startup and the interval floor
+// stay generation-wide, and a deferring vector phase forces the next push
+// back to generation-wide before scoping resumes.
+func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
+	target := &fakeTarget{}
+	pusher, _ := newTestPgPusher(target)
+	pusher.vectorReconcileNeeded = true
+	ctx := context.Background()
+
+	require.NoError(t, pusher.push(ctx, reasonStartup, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+	require.NoError(t, pusher.push(ctx, reasonInterval, false))
+	target.pushResult = postgres.PushResult{
+		Vectors: postgres.VectorPushResult{SessionsDeferred: 1},
+	}
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+	target.pushResult = postgres.PushResult{}
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+
+	scoped := make([]bool, 0, len(target.pushOpts))
+	for _, o := range target.pushOpts {
+		scoped = append(scoped, o.ScopeVectorsToChangedSessions)
+	}
+	assert.Equal(t,
+		[]bool{false, true, false, true, false, true}, scoped,
+		"startup full-read, scoped change, full interval, scoped change that defers, reconciling change, scoped change")
+}
+
+// TestPGPusherPushErrorForcesReconcile pins that any push error sends the
+// next push back to a generation-wide vector reconciliation.
+func TestPGPusherPushErrorForcesReconcile(t *testing.T) {
+	failing := &fakeTarget{pushErr: fmt.Errorf("boom")}
+	recovered := &fakeTarget{}
+	pusher, _ := newTestPgPusher(failing, recovered)
+	pusher.vectorReconcileNeeded = false
+	ctx := context.Background()
+
+	require.Error(t, pusher.push(ctx, reasonChange, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+
+	require.Len(t, failing.pushOpts, 1)
+	assert.True(t, failing.pushOpts[0].ScopeVectorsToChangedSessions)
+	require.Len(t, recovered.pushOpts, 1)
+	assert.False(t, recovered.pushOpts[0].ScopeVectorsToChangedSessions)
 }
 
 func TestPGPusherEnsuresPricingAfterLocalSyncBeforeConnect(t *testing.T) {

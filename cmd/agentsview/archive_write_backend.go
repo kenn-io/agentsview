@@ -333,6 +333,8 @@ func (b daemonArchiveWriteBackend) PGPush(
 			SyncStateTarget:        target.SyncStateTarget,
 			MigrateLegacySyncState: target.MigrateLegacySyncState,
 			NoVectors:              cfg.NoVectors,
+			ScopeVectorsToChangedSessions: cfg.
+				ScopeVectorsToChangedSessions,
 		},
 		onProgress,
 	)
@@ -483,9 +485,15 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 	if debounce <= 0 {
 		debounce = defaultWatchDebounce
 	}
+	// Daemon-delegated pushes build a fresh postgres.Sync per request,
+	// so the vector reconcile bit lives here, in the long-lived watch
+	// process, mirroring pgPusher's local-mode bit.
+	vectorReconcileNeeded := true
 	push := func(pctx context.Context, reason pushReason, full bool) error {
 		pushCfg := cfg
 		pushCfg.Full = full
+		scoped := scopedVectorPush(reason, full, vectorReconcileNeeded)
+		pushCfg.ScopeVectorsToChangedSessions = scoped
 		var res postgres.PushResult
 		var err error
 		if b.watchHooks != nil && b.watchHooks.pgPush != nil {
@@ -507,8 +515,12 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 			)
 		}
 		if err != nil {
+			vectorReconcileNeeded = true
 			return err
 		}
+		vectorReconcileNeeded = nextVectorReconcileNeeded(
+			vectorReconcileNeeded, scoped, res,
+		)
 		return completePGWatchPush(res, reason)
 	}
 	loop, stopLoop := newArchivePushLoop(
@@ -567,6 +579,9 @@ func (b *localArchiveWriteBackend) newPGPusher(
 		localSync:     localSync,
 		ensurePricing: b.ensureCurrentPricing,
 		connect:       connect,
+		// True until the startup push completes a clean
+		// generation-wide vector reconciliation.
+		vectorReconcileNeeded: true,
 	}
 }
 
@@ -621,7 +636,11 @@ func (b *localArchiveWriteBackend) PGPush(
 		time.Since(schemaStart).Round(time.Millisecond),
 	)
 	fmt.Println("Starting PostgreSQL push...")
-	result, err := ps.Push(ctx, forceFull, newPGPushProgressPrinter())
+	result, err := ps.PushWithOptions(ctx, postgres.PushOptions{
+		Full: forceFull,
+		ScopeVectorsToChangedSessions: cfg.
+			ScopeVectorsToChangedSessions,
+	}, newPGPushProgressPrinter())
 	fmt.Print("\r\033[K")
 	if err != nil {
 		return postgres.PushResult{}, err

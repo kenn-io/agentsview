@@ -78,51 +78,79 @@ func (ix *Index) ActiveExport(ctx context.Context) (ActiveExport, bool, error) {
 // Like Search, it fails closed with ErrMirrorVersionMismatch before touching
 // any table when ix was opened read-only against a mirror whose schema version
 // does not match this binary's.
+//
+// A nil sessionIDs covers every embedded session; non-nil limits the scan to
+// those sessions (empty returns an empty map without a scan), so change-scoped
+// pushes read hashes proportional to their changed set.
 func (ix *Index) SessionEmbeddedDocHashes(
-	ctx context.Context, genOrdinal int64,
+	ctx context.Context, genOrdinal int64, sessionIDs []string,
 ) (map[string]string, error) {
 	if ix.versionMismatch {
 		return nil, ErrMirrorVersionMismatch
 	}
-	rows, err := ix.db.QueryContext(ctx, `
+	out := make(map[string]string)
+	if sessionIDs != nil && len(sessionIDs) == 0 {
+		return out, nil
+	}
+	scan := func(where string, args []any) error {
+		rows, err := ix.db.QueryContext(ctx, `
 SELECT d.session_id, d.doc_key, d.source_uuid, d.ordinal, d.ordinal_end,
        d.subordinate, d.offsets, d.content_hash
   FROM `+ix.spec.DocsTable+` d
   JOIN `+ix.spec.stampsTable()+` st ON st.doc_key = d.doc_key
- WHERE st.ordinal = ? AND st.revision = d.content_hash AND d.ordinal >= 0
- ORDER BY d.session_id, d.doc_key`, genOrdinal)
-	if err != nil {
-		return nil, fmt.Errorf("scan embedded doc hashes: %w", err)
-	}
-	defer rows.Close()
+ WHERE st.ordinal = ? AND st.revision = d.content_hash AND d.ordinal >= 0`+
+			where+`
+ ORDER BY d.session_id, d.doc_key`, args...)
+		if err != nil {
+			return fmt.Errorf("scan embedded doc hashes: %w", err)
+		}
+		defer rows.Close()
 
-	out := make(map[string]string)
-	var cur string
-	h := sha256.New()
-	flush := func() {
-		if cur != "" {
-			out[cur] = hex.EncodeToString(h.Sum(nil))
-			h.Reset()
+		var cur string
+		h := sha256.New()
+		flush := func() {
+			if cur != "" {
+				out[cur] = hex.EncodeToString(h.Sum(nil))
+				h.Reset()
+			}
 		}
+		for rows.Next() {
+			var sessionID string
+			var d ExportDoc
+			if err := rows.Scan(&sessionID, &d.DocKey, &d.SourceUUID,
+				&d.Ordinal, &d.OrdinalEnd, &d.Subordinate, &d.OffsetsJSON,
+				&d.ContentHash); err != nil {
+				return fmt.Errorf("scan embedded doc hash row: %w", err)
+			}
+			if sessionID != cur {
+				flush()
+				cur = sessionID
+			}
+			writeEmbeddedDocIdentity(h, d)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		flush()
+		return nil
 	}
-	for rows.Next() {
-		var sessionID string
-		var d ExportDoc
-		if err := rows.Scan(&sessionID, &d.DocKey, &d.SourceUUID, &d.Ordinal,
-			&d.OrdinalEnd, &d.Subordinate, &d.OffsetsJSON,
-			&d.ContentHash); err != nil {
-			return nil, fmt.Errorf("scan embedded doc hash row: %w", err)
+	if sessionIDs == nil {
+		if err := scan("", []any{genOrdinal}); err != nil {
+			return nil, err
 		}
-		if sessionID != cur {
-			flush()
-			cur = sessionID
-		}
-		writeEmbeddedDocIdentity(h, d)
+		return out, nil
 	}
-	if err := rows.Err(); err != nil {
+	// Chunk the ID filter to stay under SQLite's bind-variable limit;
+	// sessions never span chunks because each chunk filters whole IDs.
+	if err := chunkKeys(sessionIDs, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		return scan(
+			" AND d.session_id IN "+placeholders,
+			append([]any{genOrdinal}, args...),
+		)
+	}); err != nil {
 		return nil, err
 	}
-	flush()
 	return out, nil
 }
 

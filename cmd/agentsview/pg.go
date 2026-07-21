@@ -29,6 +29,9 @@ type PGPushConfig struct {
 	Debounce        time.Duration
 	Interval        time.Duration
 	NoVectors       bool
+	// ScopeVectorsToChangedSessions is set internally by the watch
+	// loop for change-triggered pushes; it has no CLI flag.
+	ScopeVectorsToChangedSessions bool
 }
 
 type PGStatusConfig struct {
@@ -317,7 +320,7 @@ func writePGVectorPushSummary(w io.Writer, v postgres.VectorPushResult) {
 	if v.SessionsDeferred > 0 {
 		fmt.Fprintf(
 			w,
-			"Warning: deferred vectors for %d session(s) whose session push failed; the next successful push sends them\n",
+			"Warning: deferred vectors for %d session(s) whose session push failed; the next generation-wide reconciliation sends them\n",
 			v.SessionsDeferred,
 		)
 	}

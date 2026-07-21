@@ -192,7 +192,7 @@ func TestVectorPushToleratesMissingChunkTable(t *testing.T) {
 	fake.docs["S"] = []VectorPushDoc{
 		vdoc("S", "S#0", 0, "c0", "hc0", []float32{1, 0, 0, 0}),
 	}
-	res, err := sync.pushVectors(ctx, false, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
 	require.NoError(t, err, "push must not abort on a missing chunk table")
 	assert.Equal(t, 1, res.SessionsPushed)
 }

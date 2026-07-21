@@ -182,7 +182,7 @@ func (s *vectorPushSource) Generation(
 // empty (non-nil) map: no local sessions, so the push evicts any PG state this
 // pusher previously owned.
 func (s *vectorPushSource) SessionDocHashes(
-	ctx context.Context,
+	ctx context.Context, sessionIDs []string,
 ) (map[string]string, error) {
 	ix, err := s.openIndex(ctx)
 	if err != nil {
@@ -192,7 +192,7 @@ func (s *vectorPushSource) SessionDocHashes(
 	if ix == nil || !ok {
 		return map[string]string{}, nil
 	}
-	return ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal)
+	return ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, sessionIDs)
 }
 
 // SessionDocs implements postgres.VectorPushSource, exporting one session's

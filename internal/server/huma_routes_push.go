@@ -159,6 +159,10 @@ type daemonPushRequest struct {
 	// NoVectors carries the CLI --no-vectors flag, which has no daemon-side
 	// flag of its own, into the push handler's vector-source gate.
 	NoVectors bool `json:"no_vectors,omitempty"`
+	// ScopeVectorsToChangedSessions is set by change-triggered watch
+	// pushes so the vector phase reads state only for the changed
+	// relational sessions (see postgres.PushOptions).
+	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitempty"`
 	// Automatic is set by the CLI's watch-mode DuckDB pushes: a mirror
 	// held by a live serve process defers instead of rebuilding the whole
 	// archive on every changed batch, and archive-scale diagnostics are
@@ -366,7 +370,11 @@ func (s *Server) humaPGPush(
 					if err := ps.EnsureSchema(ctx); err != nil {
 						return err
 					}
-					result, err = ps.Push(ctx, forceFull, onProgress)
+					result, err = ps.PushWithOptions(ctx, postgres.PushOptions{
+						Full: forceFull,
+						ScopeVectorsToChangedSessions: body.
+							ScopeVectorsToChangedSessions,
+					}, onProgress)
 					return err
 				})
 			return result, err

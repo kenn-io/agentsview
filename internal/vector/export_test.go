@@ -84,7 +84,7 @@ func TestExportRoundTrip(t *testing.T) {
 	assert.Equal(t, 4, exp.Dimension)
 	assert.NotEmpty(t, exp.Model)
 
-	hashes, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal)
+	hashes, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, nil)
 	require.NoError(t, err)
 	require.Len(t, hashes, 2)
 
@@ -107,6 +107,39 @@ func TestExportRoundTrip(t *testing.T) {
 	assert.Empty(t, noDocs)
 	assert.Equal(t, "", emptyHash,
 		"an empty export hashes to \"\", matching absence from the hash map")
+}
+
+func TestSessionEmbeddedDocHashesScoped(t *testing.T) {
+	ctx := context.Background()
+	ix, _ := newBuiltTestIndex(t)
+
+	exp, ok, err := ix.ActiveExport(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	all, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, nil)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+
+	scoped, err := ix.SessionEmbeddedDocHashes(
+		ctx, exp.Ordinal, []string{"session-1"},
+	)
+	require.NoError(t, err)
+	require.Len(t, scoped, 1)
+	assert.Equal(t, all["session-1"], scoped["session-1"],
+		"a scoped read must produce the same aggregate as the full scan")
+
+	empty, err := ix.SessionEmbeddedDocHashes(
+		ctx, exp.Ordinal, []string{},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+
+	absent, err := ix.SessionEmbeddedDocHashes(
+		ctx, exp.Ordinal, []string{"absent"},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, absent)
 }
 
 func TestExportNoActiveGeneration(t *testing.T) {
@@ -137,7 +170,7 @@ func TestSessionEmbeddedDocHashesChangesWithContent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	before, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal)
+	before, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, nil)
 	require.NoError(t, err)
 	require.Contains(t, before, "session-1")
 	require.Contains(t, before, "session-2")
@@ -149,7 +182,7 @@ func TestSessionEmbeddedDocHashesChangesWithContent(t *testing.T) {
 	_, err = ix.Refresh(ctx, src, false, true)
 	require.NoError(t, err)
 
-	after, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal)
+	after, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, nil)
 	require.NoError(t, err)
 	require.Contains(t, after, "session-1",
 		"session-1's untouched run doc keeps it in the aggregate")
@@ -188,7 +221,7 @@ func TestSessionEmbeddedDocHashesChangesWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	before, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal)
+	before, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, nil)
 	require.NoError(t, err)
 	require.Contains(t, before, "session-1")
 	require.Contains(t, before, "session-2")
@@ -204,7 +237,7 @@ func TestSessionEmbeddedDocHashesChangesWithMetadata(t *testing.T) {
 	_, err = ix.Refresh(ctx, src, false, true)
 	require.NoError(t, err)
 
-	after, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal)
+	after, err := ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, nil)
 	require.NoError(t, err)
 	require.Contains(t, after, "session-1",
 		"a pure ordinal shift keeps the doc embedded (content_hash unchanged)")
@@ -232,7 +265,7 @@ func TestExportVersionMismatchReturnsSentinel(t *testing.T) {
 	_, _, err = ro.ActiveExport(ctx)
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
-	_, err = ro.SessionEmbeddedDocHashes(ctx, 1)
+	_, err = ro.SessionEmbeddedDocHashes(ctx, 1, nil)
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
 	_, _, err = ro.ExportSessionDocs(ctx, 1, "s1")

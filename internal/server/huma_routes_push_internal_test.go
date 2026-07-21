@@ -33,7 +33,7 @@ func (stubVectorPushSource) Generation(
 }
 
 func (stubVectorPushSource) SessionDocHashes(
-	context.Context,
+	context.Context, []string,
 ) (map[string]string, error) {
 	return nil, nil
 }

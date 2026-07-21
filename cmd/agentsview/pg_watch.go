@@ -19,8 +19,8 @@ import (
 // interface so the pusher can be tested without a live database.
 type pgTarget interface {
 	EnsureSchema(ctx context.Context) error
-	Push(
-		ctx context.Context, full bool,
+	PushWithOptions(
+		ctx context.Context, opts postgres.PushOptions,
 		onProgress func(postgres.PushProgress),
 	) (postgres.PushResult, error)
 	Close() error
@@ -34,6 +34,13 @@ type pgPusher struct {
 	ensurePricing func(context.Context) error
 	connect       func() (pgTarget, error)
 	target        pgTarget
+	// vectorReconcileNeeded is true until a generation-wide vector
+	// reconciliation succeeds in this watch process, and again after
+	// any push error or a vector phase that skipped or deferred work.
+	// While true, change pushes stay generation-wide so nothing waits
+	// on the interval floor unnecessarily; while false, change pushes
+	// scope their vector reads to the changed relational sessions.
+	vectorReconcileNeeded bool
 }
 
 // push performs one local-sync-then-push cycle. On any PG error it
@@ -68,11 +75,19 @@ func (p *pgPusher) push(
 		p.reset()
 		return fmt.Errorf("ensure schema: %w", err)
 	}
-	res, err := p.target.Push(ctx, full, nil)
+	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded)
+	res, err := p.target.PushWithOptions(ctx, postgres.PushOptions{
+		Full:                          full,
+		ScopeVectorsToChangedSessions: scoped,
+	}, nil)
 	if err != nil {
+		p.vectorReconcileNeeded = true
 		p.reset()
 		return fmt.Errorf("push: %w", err)
 	}
+	p.vectorReconcileNeeded = nextVectorReconcileNeeded(
+		p.vectorReconcileNeeded, scoped, res,
+	)
 	if res.Errors > 0 {
 		logPGWatchPushResult(res, reason)
 		log.Printf(
@@ -83,6 +98,35 @@ func (p *pgPusher) push(
 	}
 	logPGWatchPushResult(res, reason)
 	return nil
+}
+
+// scopedVectorPush reports whether a push may scope its vector phase
+// to the changed relational sessions: only change-triggered, non-full
+// pushes after a clean generation-wide reconciliation qualify.
+// Startup, interval-floor, shutdown, and full pushes always reconcile
+// generation-wide, which also owns eviction of PG-only state rows and
+// pickup of vector-only changes (e.g. an embeddings build finishing
+// with no relational change).
+func scopedVectorPush(
+	reason pushReason, full, reconcileNeeded bool,
+) bool {
+	return reason == reasonChange && !full && !reconcileNeeded
+}
+
+// nextVectorReconcileNeeded updates the reconcile bit after a
+// successful push. A skipped or deferring vector phase leaves work
+// behind, so the next push goes generation-wide; only a clean
+// generation-wide phase clears the bit.
+func nextVectorReconcileNeeded(
+	current, scoped bool, res postgres.PushResult,
+) bool {
+	if res.Vectors.Skipped || res.Vectors.SessionsDeferred > 0 {
+		return true
+	}
+	if !scoped {
+		return false
+	}
+	return current
 }
 
 func logPGWatchPushResult(res postgres.PushResult, reason pushReason) {

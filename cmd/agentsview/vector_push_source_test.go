@@ -145,7 +145,7 @@ func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
 	require.True(t, ok, "same adapter must pick up a later build")
 	assert.Equal(t, "fake-model", gen.Model)
 
-	hashes, err := src.SessionDocHashes(ctx)
+	hashes, err := src.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
 	assert.Len(t, hashes, 2)
 }
@@ -205,7 +205,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	assert.Equal(t, "fake-model", gen.Model)
 	assert.Equal(t, 4, gen.Dimension)
 
-	hashes, err := src.SessionDocHashes(ctx)
+	hashes, err := src.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, hashes, 2)
 	assert.Contains(t, hashes, "session-1")

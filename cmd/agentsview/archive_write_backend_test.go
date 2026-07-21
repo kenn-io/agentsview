@@ -549,8 +549,8 @@ type pushWatchPGTarget struct {
 }
 
 func (*pushWatchPGTarget) EnsureSchema(context.Context) error { return nil }
-func (t *pushWatchPGTarget) Push(
-	_ context.Context, _ bool, _ func(postgres.PushProgress),
+func (t *pushWatchPGTarget) PushWithOptions(
+	_ context.Context, _ postgres.PushOptions, _ func(postgres.PushProgress),
 ) (postgres.PushResult, error) {
 	attempt, partial := t.harness.nextPGAttempt()
 	if partial {
@@ -799,8 +799,8 @@ func testLocalArchivePushStopsAfterCanceledSync(
 type noopPGTarget struct{}
 
 func (noopPGTarget) EnsureSchema(context.Context) error { return nil }
-func (noopPGTarget) Push(
-	context.Context, bool, func(postgres.PushProgress),
+func (noopPGTarget) PushWithOptions(
+	context.Context, postgres.PushOptions, func(postgres.PushProgress),
 ) (postgres.PushResult, error) {
 	return postgres.PushResult{}, nil
 }

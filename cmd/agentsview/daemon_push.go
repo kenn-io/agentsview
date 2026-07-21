@@ -25,6 +25,10 @@ type daemonPushRequest struct {
 	// NoVectors mirrors the CLI --no-vectors flag into the daemon: it has no
 	// per-invocation flag of its own, so the gate must travel in the request.
 	NoVectors bool `json:"no_vectors,omitempty"`
+	// ScopeVectorsToChangedSessions is set by change-triggered watch
+	// pushes so the daemon's vector phase reads state only for the
+	// changed relational sessions (see postgres.PushOptions).
+	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitempty"`
 	// Automatic is set by the watch-mode DuckDB pushes so the daemon
 	// defers instead of rebuilding when a live serve process holds the
 	// mirror and skips archive-scale diagnostics (see

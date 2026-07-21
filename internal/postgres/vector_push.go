@@ -59,7 +59,12 @@ type VectorPushDoc struct {
 // vectors with a partial view.
 type VectorPushSource interface {
 	Generation(ctx context.Context) (VectorGenerationInfo, bool, error)
-	SessionDocHashes(ctx context.Context) (map[string]string, error)
+	// SessionDocHashes returns per-session aggregate hashes. A nil
+	// sessionIDs covers every locally embedded session; non-nil limits
+	// the read to those IDs (empty returns an empty map).
+	SessionDocHashes(
+		ctx context.Context, sessionIDs []string,
+	) (map[string]string, error)
 	SessionDocs(
 		ctx context.Context, sessionID string,
 	) ([]VectorPushDoc, string, error)
@@ -201,15 +206,25 @@ func (s *Sync) vectorOwnerIdentity(
 // current. failedSessions names sessions whose session-phase push failed this
 // run: their vectors are deferred (counted in SessionsDeferred) so pgvector
 // data never runs ahead of the corresponding sessions/messages rows.
+// scope, when non-nil, limits the local hash read and the PG state read to
+// those session IDs: reconciliation (including eviction) touches only the
+// scoped sessions, and everything else — PG-only rows, vector-only changes
+// from a later embeddings build — waits for the next generation-wide push.
+// An empty non-nil scope returns immediately without reading anything.
 // onProgress, when non-nil, receives Phase "vectors" reports so interactive
 // pushes are not silent through a long first vector push.
 func (s *Sync) pushVectors(
-	ctx context.Context, full bool, failedSessions map[string]struct{},
+	ctx context.Context, full bool, scope []string,
+	failedSessions map[string]struct{},
 	onProgress func(PushProgress),
 ) (VectorPushResult, error) {
 	var res VectorPushResult
 	if s.vectorSource == nil {
 		res.Skipped, res.SkippedReason = true, "no vector source configured"
+		return res, nil
+	}
+	if scope != nil && len(scope) == 0 {
+		log.Printf("vector push: no changed sessions; deferring reconciliation to the next generation-wide push")
 		return res, nil
 	}
 	gen, hasGen, err := s.vectorSource.Generation(ctx)
@@ -247,16 +262,28 @@ func (s *Sync) pushVectors(
 	if err != nil {
 		return res, err
 	}
-	local, err := s.vectorSource.SessionDocHashes(ctx)
+	local, err := s.vectorSource.SessionDocHashes(ctx, scope)
 	if err != nil {
 		return res, fmt.Errorf("reading local vector doc hashes: %w", err)
 	}
-	pgState, err := s.readVectorPushState(ctx, resolved.id)
+	var pgState map[string]vectorPushStateRow
+	if scope != nil {
+		pgState, err = s.readVectorPushStateForSessions(
+			ctx, resolved.id, scope,
+		)
+	} else {
+		pgState, err = s.readVectorPushState(ctx, resolved.id)
+	}
 	if err != nil {
 		return res, err
 	}
-	log.Printf("vector push: comparing %d local session(s) against %d PG state row(s) for generation %d",
-		len(local), len(pgState), resolved.id)
+	if scope != nil {
+		log.Printf("vector push: change-scoped reconciliation of %d candidate session(s): %d local hash(es), %d PG state row(s) for generation %d",
+			len(scope), len(local), len(pgState), resolved.id)
+	} else {
+		log.Printf("vector push: comparing %d local session(s) against %d PG state row(s) for generation %d",
+			len(local), len(pgState), resolved.id)
+	}
 	if err := s.applyVectorDeltas(
 		ctx, resolved, gen.Fingerprint, owner, full, local, pgState,
 		failedSessions, onProgress, &res,
@@ -669,7 +696,32 @@ SELECT ps.session_id, ps.doc_agg_hash, s.owner_marker, s.machine,
 		return nil, fmt.Errorf("reading vector push state: %w", err)
 	}
 	defer rows.Close()
+	return scanVectorPushState(rows)
+}
 
+// readVectorPushStateForSessions is readVectorPushState limited to the given
+// session IDs, so a change-scoped push reads state proportional to its
+// changed set instead of the whole generation.
+func (s *Sync) readVectorPushStateForSessions(
+	ctx context.Context, genID int64, sessionIDs []string,
+) (map[string]vectorPushStateRow, error) {
+	rows, err := s.pg.QueryContext(ctx, `
+SELECT ps.session_id, ps.doc_agg_hash, s.owner_marker, s.machine,
+       (s.id IS NOT NULL)
+  FROM vector_push_state ps
+  LEFT JOIN sessions s ON s.id = ps.session_id
+ WHERE ps.generation_id = $1
+   AND ps.session_id = ANY($2)`, genID, sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("reading scoped vector push state: %w", err)
+	}
+	defer rows.Close()
+	return scanVectorPushState(rows)
+}
+
+func scanVectorPushState(
+	rows *sql.Rows,
+) (map[string]vectorPushStateRow, error) {
 	state := make(map[string]vectorPushStateRow)
 	for rows.Next() {
 		var sessionID, aggHash string
