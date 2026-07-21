@@ -241,6 +241,7 @@ func parseKiloLegacySession(
 		hasCost          bool
 		provider         string
 		model            string
+		multiModel       bool
 		workspaceDir     string
 		minTS, maxTS     time.Time
 		totalCacheReads  int
@@ -269,7 +270,13 @@ func parseKiloLegacySession(
 		}
 		// The most-recent concrete model in the API history is the
 		// session's effective model for the aggregated usage event.
+		// If multiple distinct models were observed, omit the model
+		// from the usage event to avoid misattribution.
 		model = lastNonEmpty(apiModels)
+		multiModel = distinctModels(apiModels) > 1
+		if multiModel {
+			model = ""
+		}
 		var parseErr error
 		parsedMessages, totalOutputTok, totalInputTok, peakContextTok,
 			totalCost, hasCost, provider, minTS, maxTS,
@@ -444,10 +451,11 @@ func parseKiloLegacySession(
 		}
 		// Prefer the concrete model ID mined from the API history;
 		// fall back to the coarse inferenceProvider name when the
-		// history carries no model block.
+		// history carries no model block. Skip the fallback when
+		// multiple models were observed to avoid misattribution.
 		if model != "" {
 			event.Model = model
-		} else if provider != "" {
+		} else if !multiModel && provider != "" {
 			event.Model = provider
 		}
 		sess.UsageEvents = []ParsedUsageEvent{event}
@@ -638,11 +646,12 @@ func parseKiloLegacyMessages(
 				ContentLength: len(reasoning),
 			})
 			ordinal++
-			// Skip the regular-message emit: the [Thinking]
-			// block is the entire content for this message,
-			// so emitting another row would produce a noisy
-			// duplicate with empty content.
-			continue
+			// If the message had only reasoning and no content,
+			// skip the regular-message emit to avoid an empty row.
+			if content == "" && len(toolCalls) == 0 &&
+				len(toolResults) == 0 {
+				continue
+			}
 		}
 
 		// Pair command_output → preceding execute_command tool
@@ -841,6 +850,7 @@ func parseKiloLegacyMessages(
 			switch toolCalls[0].ToolName {
 			case "execute_command", "executeCommand":
 				pendingCmdMsgIdx = msgIdx
+				pendingCmdErrored = false
 			case "codebaseSearch":
 				pendingCodebaseSearchMsgIdx = msgIdx
 			case "newTask":
@@ -849,10 +859,11 @@ func parseKiloLegacyMessages(
 			// MCP calls use the mcp__<server>__<tool> name form,
 			// consistent with other agent harnesses, so pair the
 			// following mcp_server_response back to this call.
-			// Track by category to handle cases where serverName
-			// is missing and the name lacks the mcp__ prefix.
+			// Track by name prefix, category, or the original
+			// ask type to handle cases where serverName is missing.
 			if strings.HasPrefix(toolCalls[0].ToolName, "mcp__") ||
-				toolCalls[0].Category == "MCP" {
+				toolCalls[0].Category == "MCP" ||
+				msg.Ask == "use_mcp_server" {
 				pendingMcpMsgIdx = msgIdx
 			}
 			// Track every emitted tool call so a tool-specific
@@ -896,6 +907,13 @@ func parseKiloLegacyMessages(
 			ContentLength: len(content),
 		})
 		ordinal++
+		// A normal conversational message ends the most recent
+		// tool call's turn: a tool-specific error arriving after
+		// it belongs to whatever comes next, not to that call.
+		// The command and MCP trackers stay pending — their
+		// results arrive on dedicated say types that can
+		// legitimately trail other messages.
+		pendingToolMsgIdx = -1
 	}
 
 	// Attribute the concrete model ID mined from the API history to
@@ -971,6 +989,19 @@ func lastNonEmpty(s []string) string {
 		}
 	}
 	return ""
+}
+
+// distinctModels counts the number of distinct non-empty model strings
+// in s. Used to detect model-switching sessions where attributing all
+// usage to a single model would be incorrect.
+func distinctModels(s []string) int {
+	seen := make(map[string]bool, len(s))
+	for _, m := range s {
+		if m != "" {
+			seen[m] = true
+		}
+	}
+	return len(seen)
 }
 
 // classifyKiloLegacyMessage determines the role, tool calls, and

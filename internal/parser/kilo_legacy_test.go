@@ -592,11 +592,11 @@ func TestParseKiloLegacySessionModelFromAPIHistory(t *testing.T) {
 	sess, parsed, err := parseKiloLegacySession(taskDir, "", "h")
 	require.NoError(t, err)
 
-	// The concrete model from the API history wins over the coarse
-	// inferenceProvider name, and the most-recent model is used.
+	// When multiple distinct models are observed, the model is omitted
+	// from the usage event to avoid misattribution.
 	require.Len(t, sess.UsageEvents, 1)
-	assert.Equal(t, "moonshotai/kimi-k2.5:free", sess.UsageEvents[0].Model,
-		"usage event uses the concrete model ID, not inferenceProvider")
+	assert.Equal(t, "", sess.UsageEvents[0].Model,
+		"usage event omits model when multiple distinct models observed")
 	assert.Equal(t, 1000+2500, sess.UsageEvents[0].InputTokens,
 		"input tokens are summed across api_req_started events")
 
