@@ -642,13 +642,17 @@ class SessionsStore {
     const idx = this.sessions.findIndex((s) => s.id === hydrated.id);
     if (idx < 0) return;
     const current = this.sessions[idx]!;
-    this.sessions[idx] = {
+    const merged = {
       ...current,
       ...hydrated,
       display_name: hydrated.display_name ?? current.display_name,
       is_teammate: hydrated.is_teammate ?? current.is_teammate,
       is_index_only: false,
     };
+    this.sessions[idx] = merged;
+    // Keep the active-session cache in sync so the breadcrumb survives a later
+    // reload that drops this row from the filtered/first page.
+    if (merged.id === this.activeSessionId) this.activeSessionDetail = merged;
   }
 
   private invalidateHydratedSessionDetails() {
@@ -812,7 +816,17 @@ class SessionsStore {
 
   selectSession(id: string) {
     this.setActiveSession(id);
+    this.cacheActiveSessionDetailFromList(id);
     void this.hydrateSelectedIndexOnlySession(id);
+  }
+
+  // Seed activeSessionDetail from a hydrated sidebar row so the open session
+  // survives a later reload that drops it from the filtered/first page. Skips
+  // index-only stubs; hydration then seeds the cache via mergeHydratedSession.
+  private cacheActiveSessionDetailFromList(id: string) {
+    if (id !== this.activeSessionId) return;
+    const row = this.sessions.find((s) => s.id === id);
+    if (row && !row.is_index_only) this.activeSessionDetail = row;
   }
 
   /**
@@ -826,6 +840,7 @@ class SessionsStore {
     this.setActiveSession(id);
     const existing = this.sessions.find((s) => s.id === id);
     if (existing) {
+      this.cacheActiveSessionDetailFromList(id);
       await this.hydrateSelectedIndexOnlySession(id);
       return;
     }
