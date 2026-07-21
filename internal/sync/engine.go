@@ -3273,6 +3273,17 @@ func (e *Engine) discoveredFileEffectiveMtime(
 			return 0, err
 		}
 		_, mtime := kiloLegacyEffectiveStat(file.Path, info)
+		// Also consider the task directory mtime as a local cutoff
+		// signal to detect companion-file deletions. Deleting a file
+		// changes the directory's mtime even though surviving files'
+		// mtimes are unchanged. This is a local-only signal that does
+		// not affect the persisted fingerprint.
+		dir := filepath.Dir(file.Path)
+		if dirInfo, err := os.Stat(dir); err == nil {
+			if ts := dirInfo.ModTime().UnixNano(); ts > mtime {
+				mtime = ts
+			}
+		}
 		return mtime, nil
 	}
 	// Provider-authoritative sources resolve freshness through the provider
@@ -6538,22 +6549,10 @@ func roocodeEffectiveStat(historyPath string, info os.FileInfo) (int64, int64) {
 // what kiloLegacyFingerprintSource stamps on stored sessions (summed
 // size, max mtime), so a stat-only comparison against the stored row is
 // sufficient to detect any change to any of the three files.
-//
-// The task directory mtime is included in the composite to detect
-// companion-file deletions: deleting a file changes the directory's
-// mtime even though surviving files' mtimes are unchanged.
 func kiloLegacyEffectiveStat(metadataPath string, info os.FileInfo) (int64, int64) {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
 	dir := filepath.Dir(metadataPath)
-	// Include the task directory mtime to detect companion-file deletions.
-	// Deleting a file changes the directory's mtime even though
-	// surviving files' mtimes are unchanged.
-	if dirInfo, err := os.Stat(dir); err == nil {
-		if ts := dirInfo.ModTime().UnixNano(); ts > mtime {
-			mtime = ts
-		}
-	}
 	for _, name := range []string{
 		"ui_messages.json",
 		"api_conversation_history.json",
