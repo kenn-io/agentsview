@@ -464,6 +464,38 @@ func TestManagerRefusesSecretSplitAcrossUnits(t *testing.T) {
 	}
 }
 
+// TestManagerRefusesSecretSplitMidTokenAcrossMessages pins that the
+// aggregate scan catches a single-token credential split mid-token across
+// adjacent messages: a newline-joined aggregate breaks the token (a regex
+// needing contiguous characters cannot match), so the gate must also scan a
+// separator-free aggregate. The AWS key halves are separate literals so this
+// file never carries a contiguous key.
+func TestManagerRefusesSecretSplitMidTokenAcrossMessages(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	keyHi := "AKIA7QHWN2"
+	keyLo := "DKR4FYPLJM"
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "the deploy key is " + keyHi},
+		{Role: "user", Content: keyLo + " keep it safe"},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 0 {
+		t.Fatalf("model calls = %d, want 0: a key split mid-token across "+
+			"messages must never reach the model", log.count())
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", result.Failed)
+	}
+}
+
 // TestManagerBoundsOversizedUnitSplitWork pins the split budget: a single
 // oversized message becomes one unit (user messages are never packed), and
 // overflow recovery would otherwise fan out one model call per split leaf

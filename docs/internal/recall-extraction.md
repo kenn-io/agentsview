@@ -97,7 +97,10 @@ a secret whose structure spans messages — a private-key block split across
 adjacent messages, or across separate units the endpoint receives and can
 correlate — matches no per-message scan, and scanning the formatted unit texts
 would let the interposed formatting push a straddling key under the scanner's
-payload-purity gate. A match fails the session closed.
+payload-purity gate. Both a newline-joined and a separator-free aggregate are
+scanned: the first keeps multi-line structure, the second reconstructs a
+single-token credential split mid-token across messages that the newline would
+otherwise break. A match on either fails the session closed.
 
 The bracket does not end when distillation starts. Eligibility is re-validated —
 snapshot comparison, eligibility predicates, and a fresh secret-findings read (a

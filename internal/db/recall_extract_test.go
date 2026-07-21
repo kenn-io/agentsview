@@ -2816,6 +2816,49 @@ func TestActivateExtractGenerationAllowsFreshFailedCoverage(t *testing.T) {
 		"a fresh failed partial row's staged output promotes as designed")
 }
 
+// TestActivateExtractGenerationSkipsSupersededEntries pins that promotion
+// leaves a superseded generated entry archived: a reviewed replacement
+// archived the obsolete entry with a superseded_by link, and flipping every
+// archived unreviewed_auto entry back to accepted would serve both the
+// obsolete entry and its replacement.
+func TestActivateExtractGenerationSkipsSupersededEntries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-1", "fp-a")
+	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
+		{
+			ID: "e-live", Type: "fact", ReviewState: "unreviewed_auto",
+			Status: "archived", Title: "t", Body: "b",
+			SourceSessionID: "sess-1", SourceRunID: "fp-a", ProvenanceOK: true,
+		},
+		{
+			ID: "e-super", Type: "fact", ReviewState: "unreviewed_auto",
+			Status: "archived", Title: "old", Body: "old",
+			SourceSessionID: "sess-1", SourceRunID: "fp-a", ProvenanceOK: true,
+			SupersededByEntryID: "e-repl",
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+
+	live, err := d.GetRecallEntry(ctx, "e-live")
+	require.NoError(t, err)
+	require.NotNil(t, live)
+	assert.Equal(t, "accepted", live.Status,
+		"a live staged entry must promote")
+	super, err := d.GetRecallEntry(ctx, "e-super")
+	require.NoError(t, err)
+	require.NotNil(t, super)
+	assert.Equal(t, "archived", super.Status,
+		"a superseded entry must not be promoted back into service")
+}
+
 // TestActivateExtractGenerationRefusesEmptyPromotion pins the replacement
 // guarantee: when every staged entry's session lost eligibility after the
 // caller's checks, activation must abort instead of retiring the served

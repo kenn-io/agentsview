@@ -283,11 +283,15 @@ func (db *DB) ActivateExtractGeneration(
 	}
 	// Everything still staged has a fully eligible session: the deletes
 	// above removed the rest in this same transaction.
+	// Superseded entries stay archived: a reviewed replacement archived the
+	// obsolete entry with a superseded_by link, and promoting it back into
+	// service would serve both the obsolete entry and its replacement.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
 		SET status = 'accepted',
 		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
+		  AND superseded_by_entry_id = ''
 		  AND source_run_id = ?`,
 		fingerprint,
 	); err != nil {
@@ -302,6 +306,7 @@ func (db *DB) ActivateExtractGeneration(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM recall_entries
 		WHERE review_state = 'unreviewed_auto' AND status = 'accepted'
+		  AND superseded_by_entry_id = ''
 		  AND provenance_ok != 0 AND source_run_id = ?`,
 		fingerprint,
 	).Scan(&servable); err != nil {

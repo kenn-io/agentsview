@@ -973,13 +973,20 @@ func (m *Manager) discardSessionOutput(
 // aggregateTranscriptSecretMatches scans the raw message contents
 // concatenated in transcript order. See the call site for why per-message
 // scanning alone is not enough, and why the raw contents — not the
-// formatted unit texts — are the right aggregate to scan.
+// formatted unit texts — are the right aggregate to scan. Two joins are
+// scanned: newline-preserving keeps the structure of multi-line secrets (a
+// PEM block), and separator-free reconstructs a single-token credential
+// split mid-token across messages, which the newline would otherwise break
+// so a regex needing contiguous characters could not match. Either matching
+// means the material is present.
 func aggregateTranscriptSecretMatches(rows []db.Message) int {
 	texts := make([]string, len(rows))
 	for i, row := range rows {
 		texts[i] = row.Content
 	}
-	return len(secrets.Scan(strings.Join(texts, "\n")))
+	matches := len(secrets.Scan(strings.Join(texts, "\n")))
+	matches += len(secrets.Scan(strings.Join(texts, "")))
+	return matches
 }
 
 func transcriptSecretMatches(rows []db.Message) int {
