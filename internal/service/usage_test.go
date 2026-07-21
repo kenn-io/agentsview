@@ -202,6 +202,16 @@ func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	assert.True(t, f.ExcludeOneShot, "IncludeOneShot=false -> ExcludeOneShot=true")
 	assert.True(t, f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
 	assert.True(t, f.Breakdowns, "summary needs per-day breakdowns")
+	assert.False(t, f.BranchBreakdowns,
+		"branch aggregation is opt-in independently of ordinary breakdowns")
+
+	branchBreakdowns := true
+	f, err = service.BuildUsageFilter(service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-15",
+		BranchBreakdowns: &branchBreakdowns,
+	})
+	require.NoError(t, err)
+	assert.True(t, f.BranchBreakdowns)
 }
 
 func TestBuildUsageFilter_IncludeFlagsInvert(t *testing.T) {
@@ -335,25 +345,30 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 
 func TestHTTPBackend_UsageSummary_SerializesBranchFilters(t *testing.T) {
 	t.Parallel()
-	var gitBranch, excludeGitBranch string
+	var gitBranch, excludeGitBranch, branchBreakdowns string
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			gitBranch = r.URL.Query().Get("git_branch")
 			excludeGitBranch = r.URL.Query().Get("exclude_git_branch")
+			branchBreakdowns = r.URL.Query().Get("branch_breakdowns")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
 		}))
 	t.Cleanup(srv.Close)
 	svc := service.NewHTTPBackend(srv.URL, "", false)
+	includeBranchBreakdowns := true
 
 	_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
-		From: "2024-06-01", To: "2024-06-02",
+		From:             "2024-06-01",
+		To:               "2024-06-02",
 		GitBranch:        "alpha\x1fmain",
 		ExcludeGitBranch: "alpha\x1fdev",
+		BranchBreakdowns: &includeBranchBreakdowns,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "alpha\x1fmain", gitBranch)
 	assert.Equal(t, "alpha\x1fdev", excludeGitBranch)
+	assert.Equal(t, "true", branchBreakdowns)
 }
 
 // A read-only daemon (pg serve) returns 501 for usage; the HTTP backend
@@ -590,9 +605,11 @@ func TestDirectBackend_UsageSummary_FiltersProjectKeyQualifiedBranch(t *testing.
 	d := dbtest.OpenTestDB(t)
 	seedCollidingBranchProjectFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
+	branchBreakdowns := true
 	base := service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		IncludeOneShot: true,
+		IncludeOneShot:   true,
+		BranchBreakdowns: &branchBreakdowns,
 	}
 	summary, err := be.UsageSummary(context.Background(), base)
 	require.NoError(t, err)
@@ -621,10 +638,12 @@ func TestDirectBackend_UsageSummary_RejectsUnknownBranchProjectKey(t *testing.T)
 	d := dbtest.OpenTestDB(t)
 	seedCollidingBranchProjectFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
+	branchBreakdowns := true
 	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		IncludeOneShot: true,
-		GitBranch:      db.EncodeBranchFilterToken("pl1:sha256:missing", "main"),
+		IncludeOneShot:   true,
+		BranchBreakdowns: &branchBreakdowns,
+		GitBranch:        db.EncodeBranchFilterToken("pl1:sha256:missing", "main"),
 	})
 
 	var inputErr *service.UsageInputError

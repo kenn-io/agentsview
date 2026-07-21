@@ -44,6 +44,7 @@ type UsageFilterInput struct {
 	IncludeAutomated  bool   `query:"include_automated" doc:"Include automated sessions"`
 	NoDefaultRange    bool   `query:"no_default_range" doc:"Preserve omitted from/to without applying default range"`
 	Breakdowns        bool   `query:"breakdowns" default:"true" doc:"Include per-model, per-project, and per-agent breakdowns"`
+	BranchBreakdowns  bool   `query:"branch_breakdowns" default:"false" doc:"Include per-project branch breakdowns"`
 	SessionCounts     bool   `query:"session_counts" default:"true" doc:"Include distinct session counts"`
 }
 
@@ -89,6 +90,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		IncludeAutomated:  in.IncludeAutomated,
 		NoDefaultRange:    in.NoDefaultRange,
 		Breakdowns:        &in.Breakdowns,
+		BranchBreakdowns:  &in.BranchBreakdowns,
 		SessionCounts:     &in.SessionCounts,
 	}
 }

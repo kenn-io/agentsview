@@ -79,6 +79,7 @@ type UsageFilter struct {
 	ActiveSince       string // RFC3339 session recency cutoff
 	Termination       string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns        bool   // populate Project/AgentBreakdowns per day
+	BranchBreakdowns  bool   // populate BranchBreakdowns per day
 	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
 }
 
@@ -788,15 +789,18 @@ func usageRowSelect() string {
 }
 
 func dailyUsageRowSelectFromRows(rowsSQL string) string {
-	return dailyUsageRowSelectFromRowsWithBreakdowns(rowsSQL, false)
+	return dailyUsageRowSelectFromRowsWithBreakdowns(rowsSQL, false, false)
 }
 
 func dailyUsageRowSelectFromRowsWithBreakdowns(
-	rowsSQL string, includeBreakdowns bool,
+	rowsSQL string, includeBreakdowns, includeBranchBreakdowns bool,
 ) string {
 	breakdownColumns := ""
 	if includeBreakdowns {
-		breakdownColumns = ",\n\tu.machine,\n\tu.git_branch"
+		breakdownColumns += ",\n\tu.machine"
+	}
+	if includeBranchBreakdowns {
+		breakdownColumns += ",\n\tu.git_branch"
 	}
 	return `
 SELECT
@@ -1098,11 +1102,11 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 }
 
 func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
-	return scanDailyUsageRowWithBreakdowns(rows, false)
+	return scanDailyUsageRowWithBreakdowns(rows, false, false)
 }
 
 func scanDailyUsageRowWithBreakdowns(
-	rows *sql.Rows, includeBreakdowns bool,
+	rows *sql.Rows, includeBreakdowns, includeBranchBreakdowns bool,
 ) (dailyUsageScanRow, error) {
 	var r dailyUsageScanRow
 	dest := []any{
@@ -1127,7 +1131,10 @@ func scanDailyUsageRowWithBreakdowns(
 		&r.agent,
 	}
 	if includeBreakdowns {
-		dest = append(dest, &r.machine, &r.gitBranch)
+		dest = append(dest, &r.machine)
+	}
+	if includeBranchBreakdowns {
+		dest = append(dest, &r.gitBranch)
 	}
 	err := rows.Scan(dest...)
 	return r, err
@@ -1923,7 +1930,9 @@ func (db *DB) GetDailyUsage(
 	// Pad by +/-14h to cover all timezone offsets; the actual
 	// date filtering happens post-query via localDate.
 	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f), db.hasCursorUsageTable())
-	query = dailyUsageRowSelectFromRowsWithBreakdowns(query, f.Breakdowns)
+	query = dailyUsageRowSelectFromRowsWithBreakdowns(
+		query, f.Breakdowns, f.BranchBreakdowns,
+	)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -1967,7 +1976,9 @@ func (db *DB) GetDailyUsage(
 	var totalSavings float64
 
 	for rows.Next() {
-		r, scanErr := scanDailyUsageRowWithBreakdowns(rows, f.Breakdowns)
+		r, scanErr := scanDailyUsageRowWithBreakdowns(
+			rows, f.Breakdowns, f.BranchBreakdowns,
+		)
 		if scanErr != nil {
 			return DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", scanErr)
@@ -2014,7 +2025,7 @@ func (db *DB) GetDailyUsage(
 		// requested, so a plain totals query still sums one row per
 		// (date, project, agent, model) instead of splitting by branch too.
 		gitBranch := ""
-		branchAttributed := f.Breakdowns && r.usageSource != "cursor"
+		branchAttributed := f.BranchBreakdowns && r.usageSource != "cursor"
 		if branchAttributed {
 			gitBranch = r.gitBranch
 		}
@@ -2115,7 +2126,7 @@ func (db *DB) GetDailyUsage(
 	// grouping with no extra column reads. The breakdown path adds
 	// project/agent/branch dimensions and builds four decomposition slices.
 
-	if !f.Breakdowns {
+	if !f.Breakdowns && !f.BranchBreakdowns {
 		// Fast path: group by (date, model) only.
 		type dateModelKey struct {
 			date  string
@@ -2295,9 +2306,11 @@ func (db *DB) GetDailyUsage(
 		AddUsageBucket(dm.models, key.model, *b)
 		aggregateBucket := *b
 		aggregateBucket.Cost = b.AggregateCost
-		AddUsageBucket(dm.projects, key.project, aggregateBucket)
-		AddUsageBucket(dm.agents, key.agent, aggregateBucket)
-		AddUsageBucket(dm.machines, key.machine, aggregateBucket)
+		if f.Breakdowns {
+			AddUsageBucket(dm.projects, key.project, aggregateBucket)
+			AddUsageBucket(dm.agents, key.agent, aggregateBucket)
+			AddUsageBucket(dm.machines, key.machine, aggregateBucket)
+		}
 		if key.branchAttributed {
 			AddUsageBucket(dm.branches, branchMapKey{
 				project: key.project,

@@ -38,6 +38,7 @@ type UsageRequest struct {
 	IncludeAutomated  bool   `json:"include_automated,omitempty"`
 	NoDefaultRange    bool   `json:"no_default_range,omitempty"`
 	Breakdowns        *bool  `json:"breakdowns,omitempty"`
+	BranchBreakdowns  *bool  `json:"branch_breakdowns,omitempty"`
 	SessionCounts     *bool  `json:"session_counts,omitempty"`
 	// ProjectLabels and ExcludeProjectLabels carry exact internal labels
 	// resolved from opaque keys. Unlike the public string fields, they are
@@ -233,6 +234,10 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 	if req.Breakdowns != nil {
 		breakdowns = *req.Breakdowns
 	}
+	branchBreakdowns := false
+	if req.BranchBreakdowns != nil {
+		branchBreakdowns = *req.BranchBreakdowns
+	}
 	sessionCounts := true
 	if req.SessionCounts != nil {
 		sessionCounts = *req.SessionCounts
@@ -262,6 +267,7 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		ActiveSince:       req.ActiveSince,
 		Termination:       req.Termination,
 		Breakdowns:        breakdowns,
+		BranchBreakdowns:  branchBreakdowns,
 		SkipSessionCounts: !sessionCounts,
 	}, nil
 }
@@ -464,11 +470,14 @@ func buildUsageSummary(
 		out.ProjectTotals = foldProjectTotals(result.Daily)
 		out.ModelTotals = foldModelTotals(result.Daily)
 		out.AgentTotals = foldAgentTotals(result.Daily)
-		out.BranchTotals = foldBranchTotals(result.Daily)
 	} else {
 		out.ProjectTotals = []ProjectTotal{}
 		out.ModelTotals = []ModelTotal{}
 		out.AgentTotals = []AgentTotal{}
+	}
+	if f.BranchBreakdowns {
+		out.BranchTotals = foldBranchTotals(result.Daily)
+	} else {
 		out.BranchTotals = []BranchTotal{}
 	}
 	return out

@@ -108,14 +108,27 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 			 '{"input_tokens":500000,"output_tokens":250000}')`)
 	require.NoError(t, err, "insert messages")
 
-	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+	withoutBranches, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From:       "2026-03-12",
 		To:         "2026-03-12",
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
+	require.NoError(t, err, "GetDailyUsage without branch breakdowns")
+	require.Len(t, withoutBranches.Daily, 1)
+	assert.Empty(t, withoutBranches.Daily[0].BranchBreakdowns)
+	assert.NotEmpty(t, withoutBranches.Daily[0].ProjectBreakdowns)
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:             "2026-03-12",
+		To:               "2026-03-12",
+		Timezone:         "UTC",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
+	})
 	require.NoError(t, err, "GetDailyUsage")
 	require.Len(t, result.Daily, 1)
+	assert.Equal(t, withoutBranches.Totals, result.Totals)
 	day := result.Daily[0]
 	assert.Equal(t, 1500000, day.InputTokens)
 	assert.Equal(t, 750000, day.OutputTokens)
@@ -1355,10 +1368,11 @@ func TestStoreGetDailyUsageBranchBreakdowns(t *testing.T) {
 	require.NoError(t, err, "insert messages")
 
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From:       "2026-03-12",
-		To:         "2026-03-12",
-		Timezone:   "UTC",
-		Breakdowns: true,
+		From:             "2026-03-12",
+		To:               "2026-03-12",
+		Timezone:         "UTC",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
 	})
 	require.NoError(t, err, "GetDailyUsage")
 	require.Len(t, result.Daily, 1)

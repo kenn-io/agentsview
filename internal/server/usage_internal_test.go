@@ -140,6 +140,20 @@ func TestUsageSummaryDefaultsToBreakdowns(t *testing.T) {
 
 	require.Len(t, spy.filters, 1)
 	assert.True(t, spy.filters[0].Breakdowns)
+	assert.False(t, spy.filters[0].BranchBreakdowns)
+}
+
+func TestUsageSummaryCanIncludeBranchBreakdowns(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/summary?"+oneDayUsageRange+"&branch_breakdowns=true")
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.True(t, spy.filters[0].Breakdowns)
+	assert.True(t, spy.filters[0].BranchBreakdowns)
 }
 
 func TestUsageSummaryCanSkipBreakdowns(t *testing.T) {

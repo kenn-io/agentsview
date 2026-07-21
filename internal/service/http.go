@@ -544,6 +544,9 @@ func (b *httpBackend) UsageSummary(
 	if req.Breakdowns != nil {
 		q.Set("breakdowns", strconv.FormatBool(*req.Breakdowns))
 	}
+	if req.BranchBreakdowns != nil {
+		q.Set("branch_breakdowns", strconv.FormatBool(*req.BranchBreakdowns))
+	}
 	if req.SessionCounts != nil {
 		q.Set("session_counts", strconv.FormatBool(*req.SessionCounts))
 	}

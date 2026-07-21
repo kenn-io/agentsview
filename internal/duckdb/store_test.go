@@ -3674,8 +3674,16 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		"fork-only branch included when scope is all")
 
 	wide := db.UsageFilter{From: "2026-01-01", To: "2026-12-31", Breakdowns: true}
+	withoutBranches, err := store.GetDailyUsage(ctx, wide)
+	require.NoError(t, err)
+	require.NotEmpty(t, withoutBranches.Daily)
+	assert.Empty(t, withoutBranches.Daily[0].BranchBreakdowns)
+	assert.NotEmpty(t, withoutBranches.Daily[0].ProjectBreakdowns)
+
+	wide.BranchBreakdowns = true
 	daily, err := store.GetDailyUsage(ctx, wide)
 	require.NoError(t, err)
+	assert.Equal(t, withoutBranches.Totals, daily.Totals)
 	byKey := map[db.BranchInfo]int{}
 	for _, day := range daily.Daily {
 		for _, b := range day.BranchBreakdowns {

@@ -81,13 +81,25 @@ func TestGetDailyUsageBranchBreakdowns(t *testing.T) {
 	ctx := context.Background()
 	seedBranchUsageFixture(t, d)
 
-	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+	withoutBranches, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:       "2026-05-14",
 		To:         "2026-05-14",
 		Breakdowns: true,
 	})
+	require.NoError(t, err, "GetDailyUsage without branch breakdowns")
+	require.Len(t, withoutBranches.Daily, 1, "one day")
+	assert.Empty(t, withoutBranches.Daily[0].BranchBreakdowns)
+	assert.NotEmpty(t, withoutBranches.Daily[0].ProjectBreakdowns)
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Breakdowns:       true,
+		BranchBreakdowns: true,
+	})
 	require.NoError(t, err, "GetDailyUsage")
 	require.Len(t, daily.Daily, 1, "one day")
+	assert.Equal(t, withoutBranches.Totals, daily.Totals)
 
 	byKey := map[BranchInfo]BranchBreakdown{}
 	for _, b := range daily.Daily[0].BranchBreakdowns {

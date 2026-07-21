@@ -3622,6 +3622,8 @@ func (s *Store) dailyUsageAggregateRows(
 		machineSelect = "machine"
 		machineGroup = ", machine"
 		machineOrder = ", machine ASC"
+	}
+	if f.BranchBreakdowns {
 		branchSelect = "CASE WHEN source = 'cursor' THEN '' ELSE git_branch END AS git_branch"
 		branchAttributedSelect = "source != 'cursor' AS branch_attributed"
 		branchGroup = ", CASE WHEN source = 'cursor' THEN '' ELSE git_branch END, source != 'cursor'"
@@ -3837,18 +3839,18 @@ func (s *Store) GetDailyUsage(
 		modelBucket.AggregateCost = 0
 		db.AddUsageBucket(day.models, key.model, modelBucket)
 		day.totalCost += b.AggregateCost
+		aggregateBucket := *b
+		aggregateBucket.Cost = b.AggregateCost
 		if f.Breakdowns {
-			aggregateBucket := *b
-			aggregateBucket.Cost = b.AggregateCost
 			db.AddUsageBucket(day.projects, key.project, aggregateBucket)
 			db.AddUsageBucket(day.agents, key.agent, aggregateBucket)
 			db.AddUsageBucket(day.machines, key.machine, aggregateBucket)
-			if key.branchAttributed {
-				db.AddUsageBucket(day.branches, branchMapKey{
-					project: key.project,
-					branch:  key.gitBranch,
-				}, aggregateBucket)
-			}
+		}
+		if f.BranchBreakdowns && key.branchAttributed {
+			db.AddUsageBucket(day.branches, branchMapKey{
+				project: key.project,
+				branch:  key.gitBranch,
+			}, aggregateBucket)
 		}
 	}
 
@@ -3914,6 +3916,8 @@ func (s *Store) GetDailyUsage(
 					},
 				)
 			}
+		}
+		if f.BranchBreakdowns {
 			branchBreakdowns := make([]db.BranchBreakdown, 0, len(day.branches))
 			for bk, b := range day.branches {
 				branchBreakdowns = append(branchBreakdowns, db.BranchBreakdown{
