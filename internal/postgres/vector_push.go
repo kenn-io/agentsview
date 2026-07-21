@@ -444,6 +444,12 @@ func (s *Sync) applyVectorDeltas(
 		}
 	}
 	if len(evict) > 0 && !s.vectorSourceStillCurrent(ctx, scope.fingerprint) {
+		// Count the abandoned evictions as deferred: a change-scoped
+		// push cannot re-derive them (the sessions' fingerprints are
+		// already finalized), so the deferral must surface in the
+		// result to send the next watch push back to a generation-wide
+		// reconciliation.
+		res.SessionsDeferred += len(evict)
 		log.Printf(
 			"vector push: skipping eviction of %d session(s): local generation changed or became unready mid-push",
 			len(evict))

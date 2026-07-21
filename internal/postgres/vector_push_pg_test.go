@@ -974,6 +974,8 @@ func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
 	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
 	require.NoError(t, err, "push with mid-push rebuild")
 	assert.Equal(t, 0, res.SessionsEvicted, "eviction must be dropped")
+	assert.Equal(t, 1, res.SessionsDeferred,
+		"abandoned evictions must surface as deferred so the watch loop schedules a generation-wide reconciliation")
 	assert.Equal(t, 1, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`, "B"),
 		"B's docs survive the aborted eviction")

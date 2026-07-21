@@ -447,7 +447,7 @@ func TestWritePGPushSummaryVectorPhase(t *testing.T) {
 			},
 			wantContain: []string{
 				"Vectors: 1 session(s) pushed, 0 unchanged, 0 docs, 0 chunks",
-				"Warning: deferred vectors for 2 session(s) whose session push failed; the next successful push sends them",
+				"Warning: deferred vectors for 2 session(s) whose session push failed; the next generation-wide reconciliation sends them",
 			},
 		},
 	}
