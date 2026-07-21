@@ -790,7 +790,7 @@ func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
 	}
 
 	err := purgePGExcludedPushSessions(
-		context.Background(), pg, sessionByID,
+		context.Background(), pg, nil, sessionByID,
 	)
 
 	require.NoError(t, err, "purgePGExcludedPushSessions")

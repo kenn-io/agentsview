@@ -1064,6 +1064,16 @@ func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
 	pinNote := "legacy pin"
 	_, err = store.PinMessage(legacyID, 0, &pinNote)
 	require.NoError(t, err, "PinMessage legacy")
+	_, err = pg.Exec(
+		`UPDATE sessions
+		 SET display_name = $2,
+		     source_display_name = NULL,
+		     deleted_at = NOW(),
+		     source_deleted_at = NULL
+		 WHERE id = $1`,
+		legacyID, "Legacy PG name",
+	)
+	require.NoError(t, err, "simulate legacy PG curation")
 
 	const namespacedID = "trae:globalStorage:collision"
 	namespaced := legacy
@@ -1106,6 +1116,21 @@ func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
 	).Scan(&gotNote), "read migrated trae pin")
 	require.True(t, gotNote.Valid)
 	assert.Equal(t, pinNote, gotNote.String)
+
+	var gotDisplayName sql.NullString
+	var deletedAt sql.NullTime
+	var sourceDeletedAt sql.NullTime
+	require.NoError(t, pg.QueryRow(
+		`SELECT display_name, deleted_at, source_deleted_at
+		 FROM sessions WHERE id = $1`,
+		namespacedID,
+	).Scan(&gotDisplayName, &deletedAt, &sourceDeletedAt),
+		"read migrated trae curation")
+	require.True(t, gotDisplayName.Valid)
+	assert.Equal(t, "Legacy PG name", gotDisplayName.String)
+	assert.True(t, deletedAt.Valid, "legacy PG trash should survive migration")
+	assert.False(t, sourceDeletedAt.Valid,
+		"explicit legacy restore baseline must remain distinguishable")
 }
 
 func TestPushPurgesOwnedHostPrefixedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
@@ -1344,6 +1369,80 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 		sessionID,
 	).Scan(&count), "count skipped session")
 	assert.Zero(t, count)
+}
+
+func TestPushSkipsNamespacedTraeSessionWhenLegacyTombstoneMatchesUniquely(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_trae_legacy_excluded_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	sessionPath := filepath.Join(
+		t.TempDir(), "workspaceStorage", "legacy-excluded", "transcript.jsonl",
+	)
+	sess := db.Session{
+		ID:               "trae:workspaceStorage:legacy-excluded",
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-excluded",
+		FilePath:         &sessionPath,
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sess.ID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: len("hello"),
+	}}), "InsertMessages")
+
+	_, err = pg.Exec(
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+		"trae:legacy-excluded",
+	)
+	require.NoError(t, err, "insert legacy trae tombstone")
+
+	res, err := sync.Push(ctx, true, nil)
+	require.NoError(t, err, "Push with legacy tombstone")
+	assert.Zero(t, res.SessionsPushed)
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		sess.ID,
+	).Scan(&count), "count skipped namespaced session")
+	assert.Zero(t, count)
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM excluded_sessions
+		 WHERE id IN ($1, $2)`,
+		"trae:legacy-excluded", sess.ID,
+	).Scan(&count), "count propagated tombstones")
+	assert.Equal(t, 2, count, "legacy and namespaced tombstones should both remain")
 }
 
 func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {

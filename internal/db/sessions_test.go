@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
@@ -86,6 +88,113 @@ func TestMigrateLegacyTraeSessionStatePreservesLegacyWhenTargetMissing(t *testin
 		oldID,
 	).Scan(&starCount), "count legacy stars")
 	assert.Equal(t, 1, starCount, "legacy star should remain attached")
+}
+
+func TestMigrateLegacyTraeSessionStateMovesProjectIdentitySnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "openCopiedTestDB")
+	defer d.Close()
+
+	ctx := context.Background()
+	const oldID = "trae:legacy-snapshot"
+	const newID = "trae:workspaceStorage:legacy-snapshot"
+	legacyPath := filepath.Join(
+		t.TempDir(), "workspaceStorage", "legacy-snapshot", "transcript.jsonl",
+	)
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               oldID,
+		Project:          "proj",
+		Machine:          "mac",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-snapshot",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:00:00Z",
+		FilePath:         &legacyPath,
+	}), "UpsertSession legacy")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               newID,
+		Project:          "proj",
+		Machine:          "mac",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-snapshot",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:01:00Z",
+		FilePath:         &legacyPath,
+	}), "UpsertSession namespaced")
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID:     oldID,
+			Project:       "proj",
+			Machine:       "mac",
+			RootPath:      "/repo/app",
+			GitRemote:     "https://github.com/example/app.git",
+			ObservedAt:    time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
+			GitBranch:     "feature/legacy",
+			CheckoutState: export.CheckoutBranch,
+		},
+	), "UpsertProjectIdentityObservation")
+
+	require.NoError(t, d.MigrateLegacyTraeSessionState(
+		oldID, newID, "workspaceStorage",
+	), "MigrateLegacyTraeSessionState")
+
+	snapshots, err := d.listSessionProjectIdentitySnapshots(
+		ctx, []string{oldID, newID},
+	)
+	require.NoError(t, err, "listSessionProjectIdentitySnapshots")
+	assert.NotContains(t, snapshots, oldID)
+	require.Contains(t, snapshots, newID)
+	assert.Equal(t, "/repo/app", snapshots[newID].RootPath)
+	assert.Equal(t, "feature/legacy", snapshots[newID].GitBranch)
+}
+
+func TestMigrateAllLegacyTraeSessionsPreservesAmbiguousNamespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "openCopiedTestDB")
+	defer d.Close()
+
+	ctx := context.Background()
+	const oldID = "trae:legacy-ambiguous"
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               oldID,
+		Project:          "proj",
+		Machine:          "mac",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-ambiguous",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:00:00Z",
+	}), "UpsertSession legacy")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               "trae:workspaceStorage:legacy-ambiguous",
+		Project:          "proj",
+		Machine:          "mac",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-ambiguous",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:01:00Z",
+	}), "UpsertSession workspace")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               "trae:globalStorage:legacy-ambiguous",
+		Project:          "proj",
+		Machine:          "mac",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-ambiguous",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:02:00Z",
+	}), "UpsertSession global")
+
+	require.NoError(t, d.MigrateAllLegacyTraeSessions(), "MigrateAllLegacyTraeSessions")
+
+	legacy, err := d.GetSession(ctx, oldID)
+	require.NoError(t, err, "GetSession legacy")
+	require.NotNil(t, legacy, "ambiguous legacy state should be preserved")
 }
 
 func TestFindSessionIDsByPartial(t *testing.T) {

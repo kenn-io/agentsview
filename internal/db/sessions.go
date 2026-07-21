@@ -1419,6 +1419,9 @@ func (db *DB) MigrateLegacyTraeSessionState(
 	); err != nil {
 		return fmt.Errorf("applying legacy trae session state to %s: %w", newID, err)
 	}
+	if err := migrateSessionProjectIdentitySnapshotTx(tx, oldID, newID); err != nil {
+		return err
+	}
 	if err := restorePinsTx(tx, newID, pins); err != nil {
 		return fmt.Errorf("restoring migrated trae pins to %s: %w", newID, err)
 	}
@@ -1486,8 +1489,6 @@ func (db *DB) MigrateAllLegacyTraeSessions() error {
 				namespace = "workspaceStorage"
 			case globalCount > 0 && workspaceCount == 0:
 				namespace = "globalStorage"
-			case workspaceCount > 0:
-				namespace = "workspaceStorage"
 			}
 		}
 		if namespace == "" {
@@ -1515,6 +1516,52 @@ func (db *DB) MigrateAllLegacyTraeSessions() error {
 func nullStringValue(value sql.NullString) any {
 	if value.Valid {
 		return value.String
+	}
+	return nil
+}
+
+func migrateSessionProjectIdentitySnapshotTx(
+	tx *sql.Tx, oldID, newID string,
+) error {
+	if _, err := tx.Exec(
+		`INSERT INTO session_project_identity_snapshots (
+			session_id, project, machine, root_path, git_remote,
+			git_remote_name, repository_path, worktree_name,
+			worktree_root_path, worktree_relationship, checkout_state,
+			git_branch, remote_resolution, remote_candidate_count,
+			observed_at, normalized_remote, key_source, key
+		)
+		SELECT ?, project, machine, root_path, git_remote,
+			git_remote_name, repository_path, worktree_name,
+			worktree_root_path, worktree_relationship, checkout_state,
+			git_branch, remote_resolution, remote_candidate_count,
+			observed_at, normalized_remote, key_source, key
+		FROM session_project_identity_snapshots
+		WHERE session_id = ?
+		ON CONFLICT(session_id) DO UPDATE SET
+			project = excluded.project,
+			machine = excluded.machine,
+			root_path = excluded.root_path,
+			git_remote = excluded.git_remote,
+			git_remote_name = excluded.git_remote_name,
+			repository_path = excluded.repository_path,
+			worktree_name = excluded.worktree_name,
+			worktree_root_path = excluded.worktree_root_path,
+			worktree_relationship = excluded.worktree_relationship,
+			checkout_state = excluded.checkout_state,
+			git_branch = excluded.git_branch,
+			remote_resolution = excluded.remote_resolution,
+			remote_candidate_count = excluded.remote_candidate_count,
+			observed_at = excluded.observed_at,
+			normalized_remote = excluded.normalized_remote,
+			key_source = excluded.key_source,
+			key = excluded.key`,
+		newID, oldID,
+	); err != nil {
+		return fmt.Errorf(
+			"migrating legacy trae project identity snapshot %s: %w",
+			oldID, err,
+		)
 	}
 	return nil
 }

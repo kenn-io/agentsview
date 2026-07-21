@@ -981,6 +981,9 @@ func (d *DB) CopySessionMetadataFrom(
 					key = excluded.key`); err != nil {
 			return fmt.Errorf("copying session project identity snapshots: %w", err)
 		}
+		if err := copyLegacyTraeSessionProjectIdentitySnapshots(ctx, tx); err != nil {
+			return err
+		}
 	}
 
 	// Copy persistent worktree project mappings. Omit id so
@@ -1033,6 +1036,153 @@ func oldDBHasTable(
 		name,
 	).Scan(&n)
 	return err == nil && n == 1
+}
+
+func copyLegacyTraeSessionProjectIdentitySnapshots(
+	ctx context.Context, tx *sql.Tx,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT snap.session_id, old_s.file_path,
+			snap.project, snap.machine, snap.root_path, snap.git_remote,
+			snap.git_remote_name, snap.repository_path, snap.worktree_name,
+			snap.worktree_root_path, snap.worktree_relationship,
+			snap.checkout_state, snap.git_branch, snap.remote_resolution,
+			snap.remote_candidate_count, snap.observed_at,
+			snap.normalized_remote, snap.key_source, snap.key
+		FROM old_db.session_project_identity_snapshots snap
+		JOIN old_db.sessions old_s
+			ON old_s.id = snap.session_id
+		WHERE old_s.agent = 'trae'
+		  AND snap.session_id LIKE '%trae:%'
+		  AND snap.session_id NOT LIKE '%trae:workspaceStorage:%'
+		  AND snap.session_id NOT LIKE '%trae:globalStorage:%'`)
+	if err != nil {
+		return fmt.Errorf(
+			"querying legacy trae project identity snapshots: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			oldID                string
+			filePath             sql.NullString
+			project              string
+			machine              string
+			rootPath             string
+			gitRemote            string
+			gitRemoteName        string
+			repositoryPath       string
+			worktreeName         string
+			worktreeRootPath     string
+			worktreeRelationship string
+			checkoutState        string
+			gitBranch            string
+			remoteResolution     string
+			remoteCandidateCount int
+			observedAt           string
+			normalizedRemote     string
+			keySource            string
+			key                  string
+		)
+		if err := rows.Scan(
+			&oldID, &filePath,
+			&project, &machine, &rootPath, &gitRemote,
+			&gitRemoteName, &repositoryPath, &worktreeName,
+			&worktreeRootPath, &worktreeRelationship,
+			&checkoutState, &gitBranch, &remoteResolution,
+			&remoteCandidateCount, &observedAt,
+			&normalizedRemote, &keySource, &key,
+		); err != nil {
+			return fmt.Errorf(
+				"scanning legacy trae project identity snapshot: %w", err,
+			)
+		}
+		hostPrefix, strippedID := legacyTraeSessionPrefixAndStrippedID(oldID)
+		rawID := strings.TrimPrefix(strippedID, "trae:")
+		rawID = strings.TrimPrefix(rawID, "trae:")
+		if rawID == "" {
+			continue
+		}
+		namespace := traeSessionNamespaceFromPath(filePath.String)
+		if namespace == "" {
+			workspaceID := hostPrefix + "trae:workspaceStorage:" + rawID
+			globalID := hostPrefix + "trae:globalStorage:" + rawID
+			var workspaceCount, globalCount int
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM main.sessions WHERE id = ?`,
+				workspaceID,
+			).Scan(&workspaceCount); err != nil {
+				return fmt.Errorf(
+					"checking migrated trae snapshot target %s: %w",
+					workspaceID, err,
+				)
+			}
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM main.sessions WHERE id = ?`,
+				globalID,
+			).Scan(&globalCount); err != nil {
+				return fmt.Errorf(
+					"checking migrated trae snapshot target %s: %w",
+					globalID, err,
+				)
+			}
+			switch {
+			case workspaceCount > 0 && globalCount == 0:
+				namespace = "workspaceStorage"
+			case globalCount > 0 && workspaceCount == 0:
+				namespace = "globalStorage"
+			}
+		}
+		if namespace == "" {
+			continue
+		}
+		newID := hostPrefix + "trae:" + namespace + ":" + rawID
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_project_identity_snapshots (
+				session_id, project, machine, root_path, git_remote,
+				git_remote_name, repository_path, worktree_name,
+				worktree_root_path, worktree_relationship, checkout_state,
+				git_branch, remote_resolution, remote_candidate_count,
+				observed_at, normalized_remote, key_source, key
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(session_id) DO UPDATE SET
+				project = excluded.project,
+				machine = excluded.machine,
+				root_path = excluded.root_path,
+				git_remote = excluded.git_remote,
+				git_remote_name = excluded.git_remote_name,
+				repository_path = excluded.repository_path,
+				worktree_name = excluded.worktree_name,
+				worktree_root_path = excluded.worktree_root_path,
+				worktree_relationship = excluded.worktree_relationship,
+				checkout_state = excluded.checkout_state,
+				git_branch = excluded.git_branch,
+				remote_resolution = excluded.remote_resolution,
+				remote_candidate_count = excluded.remote_candidate_count,
+				observed_at = excluded.observed_at,
+				normalized_remote = excluded.normalized_remote,
+				key_source = excluded.key_source,
+				key = excluded.key`,
+			newID, project, machine, rootPath, gitRemote,
+			gitRemoteName, repositoryPath, worktreeName,
+			worktreeRootPath, worktreeRelationship, checkoutState,
+			gitBranch, remoteResolution, remoteCandidateCount,
+			observedAt, normalizedRemote, keySource, key,
+		); err != nil {
+			return fmt.Errorf(
+				"copying legacy trae project identity snapshot %s: %w",
+				oldID, err,
+			)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf(
+			"iterating legacy trae project identity snapshots: %w",
+			err,
+		)
+	}
+	return nil
 }
 
 // orphanSessionCols returns the comma-separated column list for

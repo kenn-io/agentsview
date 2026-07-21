@@ -46,9 +46,18 @@ func pgSessionAliasIDs(sess db.Session) []string {
 	return []string{aliasID}
 }
 
-func pgSessionTombstoneIDs(sess db.Session) []string {
+func pgSessionTombstoneIDs(
+	ctx context.Context, local *db.DB, sess db.Session,
+) ([]string, error) {
 	ids := append([]string{sess.ID}, pgSessionAliasIDs(sess)...)
-	return uniqueNonEmptyStrings(ids)
+	legacyID, includeLegacy, err := pgTraeLegacyTombstoneID(ctx, local, sess)
+	if err != nil {
+		return nil, err
+	}
+	if includeLegacy {
+		ids = append(ids, legacyID)
+	}
+	return uniqueNonEmptyStrings(ids), nil
 }
 
 func pgSessionIDPrefix(id string) string {
@@ -72,6 +81,86 @@ func pgTraeLegacySessionID(sess db.Session) string {
 		return ""
 	}
 	return legacyID
+}
+
+func pgTraeLegacyTombstoneID(
+	ctx context.Context, local *db.DB, sess db.Session,
+) (string, bool, error) {
+	legacyID := pgTraeLegacySessionID(sess)
+	if legacyID == "" {
+		return "", false, nil
+	}
+	currentNamespace, hasNamespace := pgTraeNamespacedSessionNamespace(sess.ID)
+	if !hasNamespace {
+		return legacyID, true, nil
+	}
+	if local == nil {
+		return "", false, nil
+	}
+	legacyLocal, err := local.GetSession(ctx, legacyID)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"loading legacy trae tombstone source %s: %w",
+			legacyID, err,
+		)
+	}
+	if legacyLocal != nil && legacyLocal.FilePath != nil {
+		legacyNamespace := pgTraeSessionNamespaceFromPath(*legacyLocal.FilePath)
+		if legacyNamespace != "" {
+			return legacyID, legacyNamespace == currentNamespace, nil
+		}
+	}
+	rawID := strings.TrimPrefix(sess.ID, pgSessionIDPrefix(sess.ID))
+	rawID = strings.TrimPrefix(rawID, "trae:workspaceStorage:")
+	rawID = strings.TrimPrefix(rawID, "trae:globalStorage:")
+	workspaceID := pgSessionIDPrefix(sess.ID) + "trae:workspaceStorage:" + rawID
+	globalID := pgSessionIDPrefix(sess.ID) + "trae:globalStorage:" + rawID
+	workspaceSibling, err := local.GetSession(ctx, workspaceID)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"loading namespaced trae sibling %s: %w",
+			workspaceID, err,
+		)
+	}
+	globalSibling, err := local.GetSession(ctx, globalID)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"loading namespaced trae sibling %s: %w",
+			globalID, err,
+		)
+	}
+	switch {
+	case workspaceSibling != nil && globalSibling == nil:
+		return legacyID, currentNamespace == "workspaceStorage", nil
+	case globalSibling != nil && workspaceSibling == nil:
+		return legacyID, currentNamespace == "globalStorage", nil
+	default:
+		return "", false, nil
+	}
+}
+
+func pgTraeNamespacedSessionNamespace(id string) (string, bool) {
+	stripped := strings.TrimPrefix(id, pgSessionIDPrefix(id))
+	switch {
+	case strings.HasPrefix(stripped, "trae:workspaceStorage:"):
+		return "workspaceStorage", true
+	case strings.HasPrefix(stripped, "trae:globalStorage:"):
+		return "globalStorage", true
+	default:
+		return "", false
+	}
+}
+
+func pgTraeSessionNamespaceFromPath(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	switch {
+	case strings.Contains(path, "/workspaceStorage/"):
+		return "workspaceStorage"
+	case strings.Contains(path, "/globalStorage/"):
+		return "globalStorage"
+	default:
+		return ""
+	}
 }
 
 func pgVibeFallbackAliasID(id, agent, filePath string) string {

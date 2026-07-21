@@ -309,7 +309,7 @@ func (s *Sync) Push(
 	}
 
 	if err := purgePGExcludedPushSessions(
-		ctx, s.pg, sessionByID,
+		ctx, s.pg, s.local, sessionByID,
 	); err != nil {
 		return result, err
 	}
@@ -1462,12 +1462,15 @@ func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 }
 
 func purgePGExcludedPushSessions(
-	ctx context.Context, pg *sql.DB, sessionByID map[string]db.Session,
+	ctx context.Context, pg *sql.DB, local *db.DB, sessionByID map[string]db.Session,
 ) error {
 	tombstoneIDsBySession := make(map[string][]string, len(sessionByID))
 	candidateIDs := []string{}
 	for id, sess := range sessionByID {
-		tombstoneIDs := pgSessionTombstoneIDs(sess)
+		tombstoneIDs, err := pgSessionTombstoneIDs(ctx, local, sess)
+		if err != nil {
+			return err
+		}
 		tombstoneIDsBySession[id] = tombstoneIDs
 		candidateIDs = append(candidateIDs, tombstoneIDs...)
 	}
@@ -1532,9 +1535,12 @@ func deletePGExcludedSessionRows(
 }
 
 func deletePGSessionIfExcluded(
-	ctx context.Context, tx *sql.Tx, sess db.Session,
+	ctx context.Context, tx *sql.Tx, local *db.DB, sess db.Session,
 ) (bool, error) {
-	ids := pgSessionTombstoneIDs(sess)
+	ids, err := pgSessionTombstoneIDs(ctx, local, sess)
+	if err != nil {
+		return false, err
+	}
 	excluded, err := readPGExcludedSessionIDs(ctx, tx, ids)
 	if err != nil {
 		return false, err
@@ -1564,12 +1570,29 @@ func deletePGLegacyTraeSessionIfOwned(
 		return nil
 	}
 	requireRevisionMatch := false
-	if stripped := strings.TrimPrefix(sess.ID, pgSessionIDPrefix(sess.ID)); strings.HasPrefix(stripped, "trae:workspaceStorage:") ||
-		strings.HasPrefix(stripped, "trae:globalStorage:") {
-		rawID := strings.TrimPrefix(stripped, "trae:workspaceStorage:")
-		rawID = strings.TrimPrefix(rawID, "trae:globalStorage:")
-		prefix := pgSessionIDPrefix(sess.ID)
-		if local != nil {
+	currentNamespace, hasNamespace := pgTraeNamespacedSessionNamespace(sess.ID)
+	if hasNamespace && local != nil {
+		legacyLocal, err := local.GetSession(ctx, legacyID)
+		if err != nil {
+			return fmt.Errorf(
+				"loading legacy trae session %s: %w",
+				legacyID, err,
+			)
+		}
+		if legacyLocal != nil && legacyLocal.FilePath != nil {
+			legacyNamespace := pgTraeSessionNamespaceFromPath(*legacyLocal.FilePath)
+			if legacyNamespace != "" && legacyNamespace != currentNamespace {
+				return nil
+			}
+		} else {
+			rawID := strings.TrimPrefix(
+				strings.TrimPrefix(
+					strings.TrimPrefix(sess.ID, pgSessionIDPrefix(sess.ID)),
+					"trae:workspaceStorage:",
+				),
+				"trae:globalStorage:",
+			)
+			prefix := pgSessionIDPrefix(sess.ID)
 			workspaceSiblingID := prefix + "trae:workspaceStorage:" + rawID
 			globalSiblingID := prefix + "trae:globalStorage:" + rawID
 			workspaceSibling, err := local.GetSession(ctx, workspaceSiblingID)
@@ -1586,8 +1609,9 @@ func deletePGLegacyTraeSessionIfOwned(
 					globalSiblingID, err,
 				)
 			}
-			requireRevisionMatch =
-				workspaceSibling != nil && globalSibling != nil
+			if workspaceSibling != nil && globalSibling != nil {
+				return nil
+			}
 		}
 	}
 	legacyTranscriptRevision := sess.TranscriptRevision
@@ -1597,6 +1621,43 @@ func deletePGLegacyTraeSessionIfOwned(
 	legacyMarkerMachinesJSON, err := json.Marshal(legacyMarkerMachines)
 	if err != nil {
 		return fmt.Errorf("encoding legacy marker machines: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE sessions target
+		   SET display_name = legacy_session.display_name,
+		       source_display_name = legacy_session.source_display_name,
+		       deleted_at = legacy_session.deleted_at,
+		       source_deleted_at = legacy_session.source_deleted_at,
+		       updated_at = NOW()
+		  FROM sessions legacy_session
+		 WHERE legacy_session.id = $1
+		   AND target.id = $2
+		   AND (
+				(
+					legacy_session.owner_marker = ''
+					AND (
+						legacy_session.machine = $3
+						OR legacy_session.machine = 'local'
+						OR legacy_session.machine = ''
+						OR legacy_session.machine IN (
+							SELECT jsonb_array_elements_text($5::jsonb)
+						)
+					)
+				)
+				OR legacy_session.owner_marker = $4
+		   )
+		   AND (
+				NOT $6
+				OR COALESCE(legacy_session.transcript_revision, '') = $7
+		   )`,
+		legacyID, sess.ID, pushedMachine, markerID,
+		string(legacyMarkerMachinesJSON),
+		requireRevisionMatch, legacyTranscriptRevision,
+	); err != nil {
+		return fmt.Errorf(
+			"migrating legacy trae curation state %s: %w",
+			legacyID, err,
+		)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO starred_sessions (session_id, created_at)
@@ -2180,7 +2241,7 @@ func (s *Sync) pushSession(
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess)
+		excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, s.local, sess)
 		if excludedErr != nil {
 			return excludedErr
 		}
@@ -2213,7 +2274,7 @@ func (s *Sync) pushSession(
 			return errSessionOwnershipConflict
 		}
 	}
-	excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess)
+	excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, s.local, sess)
 	if excludedErr != nil {
 		return excludedErr
 	}

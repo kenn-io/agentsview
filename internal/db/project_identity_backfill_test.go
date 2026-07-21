@@ -268,3 +268,73 @@ func TestProjectIdentityBackfillPersistsUnknownSnapshotForEmptyProject(
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status.State)
 }
+
+func TestCopySessionMetadataMigratesLegacyTraeProjectIdentitySnapshot(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	sourcePath := filepath.Join(dir, "source.db")
+
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	legacyPath := filepath.Join(
+		dir, "workspaceStorage", "legacy-trae", "transcript.jsonl",
+	)
+	require.NoError(t, source.UpsertSession(Session{
+		ID:               "trae:legacy-trae",
+		Project:          "app",
+		Machine:          "local",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-trae",
+		FilePath:         &legacyPath,
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:00:00Z",
+	}))
+	require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID:     "trae:legacy-trae",
+			Project:       "app",
+			Machine:       "local",
+			RootPath:      "/historical/app",
+			GitRemote:     "https://github.com/example/app.git",
+			ObservedAt:    time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
+			GitBranch:     "feature/migrated",
+			CheckoutState: export.CheckoutBranch,
+		}))
+	require.NoError(t, source.Close())
+
+	destination := testDB(t)
+	require.NoError(t, destination.UpsertSession(Session{
+		ID:               "trae:workspaceStorage:legacy-trae",
+		Project:          "app",
+		Machine:          "local",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-trae",
+		FilePath:         &legacyPath,
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:01:00Z",
+	}))
+
+	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+
+	snapshots, err := destination.listSessionProjectIdentitySnapshots(
+		ctx, []string{
+			"trae:legacy-trae",
+			"trae:workspaceStorage:legacy-trae",
+		},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, snapshots, "trae:legacy-trae")
+	require.Contains(t, snapshots, "trae:workspaceStorage:legacy-trae")
+	assert.Equal(t,
+		"/historical/app",
+		snapshots["trae:workspaceStorage:legacy-trae"].RootPath,
+	)
+	assert.Equal(t,
+		"feature/migrated",
+		snapshots["trae:workspaceStorage:legacy-trae"].GitBranch,
+	)
+}
