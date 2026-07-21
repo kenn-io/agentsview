@@ -17,7 +17,9 @@ tunnel/proxy.
 The DuckDB schema intentionally avoids `TIMESTAMP DEFAULT current_timestamp`
 columns because current Quack attach rejects catalogs with those dynamic
 defaults. Writers supply `current_timestamp` explicitly where the mirror needs a
-created timestamp. Existing mirrors are additively migrated by `EnsureSchema`.
+created timestamp. A schema-version change builds a fresh mirror, validates it,
+and swaps it into place atomically. `EnsureSchema` initializes fresh mirrors; it
+is not an in-place production migration path.
 
 Search currently keeps substring/regex fallback behavior. The DuckDB FTS
 extension is available locally in the pinned runtime, but BM25 lookup does not
