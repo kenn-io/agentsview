@@ -180,6 +180,7 @@
   ],
   "by_branch": [
     {
+      "project_key": "pl1:sha256:a998e358fa5132eaf9ac2cb16ee752c99400d52800c8e5c43eb8905909a05106",
       "project": "path-project",
       "branch": "",
       "agent_minutes": 3,
@@ -190,6 +191,7 @@
       "interactive_cost": 0.0125
     },
     {
+      "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
       "project": "remote-project",
       "branch": "feature/golden",
       "agent_minutes": 3,
