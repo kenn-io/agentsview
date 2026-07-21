@@ -296,7 +296,8 @@ func contentSnippetBudget(termWidth int, otherWidths []int) int {
 }
 
 // printContentMatchesTable writes one aligned row per match under a header
-// line: ID, MATCH (ordinal/range plus "sub" marker), SCORE (only when any
+// line: ID, MATCH (ordinal/range plus "sub" marker), AGE (relative bucket or
+// absolute date, em dash when unknown), SCORE (only when any
 // match is scored), PROJECT (capped), LOCATION (capped), and SNIPPET. The snippet
 // expands to fill the remaining terminal width when termWidth is known and
 // prints untruncated when it is 0. Every cell is terminal-sanitized.
