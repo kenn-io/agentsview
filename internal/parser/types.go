@@ -37,6 +37,7 @@ const (
 	AgentOpenClaw       AgentType = "openclaw"
 	AgentQClaw          AgentType = "qclaw"
 	AgentKimi           AgentType = "kimi"
+	AgentKimiWork       AgentType = "kimi-work"
 	AgentClaudeAI       AgentType = "claude-ai"
 	AgentChatGPT        AgentType = "chatgpt"
 	AgentKiro           AgentType = "kiro"
@@ -477,6 +478,29 @@ var Registry = []AgentDef{
 			".kimi-code/sessions",
 		},
 		IDPrefix:  "kimi:",
+		FileBased: true,
+	},
+	{
+		// Kimi Work (the kimi-desktop app's "daimon" runtime) stores
+		// conversations as kimi-code kernel sessions: wire.jsonl
+		// transcripts under <root>/wd_<workspace>_<hash>/<session>/
+		// agents/<agent>/wire.jsonl. Only conv-* session directories are
+		// user conversations; aux sessions (ctitle-*, sklsum-*, dvlt-*)
+		// are filtered out by the provider.
+		Type:        AgentKimiWork,
+		DisplayName: "Kimi Work",
+		EnvVar:      "KIMI_WORK_DIR",
+		ConfigKey:   "kimi_work_dirs",
+		DefaultDirs: []string{
+			// macOS
+			"Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+			// Linux
+			".config/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+			".local/share/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+			// Windows
+			"AppData/Roaming/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+		},
+		IDPrefix:  "kimi-work:",
 		FileBased: true,
 	},
 	{

@@ -49,6 +49,11 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   },
   { name: "iflow", color: "var(--accent-sky)", label: "iFlow" },
   { name: "kimi", color: "var(--accent-pink)", label: "Kimi" },
+  {
+    name: "kimi-work",
+    color: "var(--accent-pink)",
+    label: "Kimi Work",
+  },
   { name: "claude-ai", color: "var(--accent-violet)", label: "Claude.ai" },
   { name: "chatgpt", color: "var(--accent-lime)", label: "ChatGPT" },
   { name: "kiro", color: "var(--accent-lime)", label: "Kiro" },

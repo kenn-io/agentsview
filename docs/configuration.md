@@ -254,6 +254,7 @@ can still be parsed.
 | iFlow                 | `~/.iflow/projects/`                                                             | JSONL per session                                                                                                               |
 | Kilo                  | `~/.local/share/kilo/`                                                           | SQLite DB or `storage/` JSON files                                                                                              |
 | Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                 | JSONL per session                                                                                                               |
+| Kimi Work             | (platform-specific, see below)                                                   | JSONL per session (kimi-code kernel wire logs)                                                                                  |
 | Kiro CLI              | `~/.kiro/sessions/cli/` and `~/.local/share/kiro-cli/`                           | JSONL per session and SQLite database                                                                                           |
 | Kiro IDE              | (platform-specific, see below)                                                   | JSON / chat files                                                                                                               |
 | Kilo (legacy)         | (platform-specific, see below)                                                   | `tasks/<uuid>/{task_metadata.json,ui_messages.json,api_conversation_history.json}`                                              |
@@ -335,6 +336,19 @@ still disabled. A Trae root is a full user profile, and AgentsView does not
 archive or ship that profile wholesale. The follow-up path is Windsurf-style
 curated file targets only: `state.vscdb`, `state.vscdb-wal`, and
 `workspace.json` for each supported workspace store.
+
+**Kimi Work default directories** vary by platform. Kimi Work is the
+kimi-desktop app (the "daimon" runtime); it stores conversations as kimi-code
+kernel wire logs under `<root>/wd_<workspace>_<hash>/<session>/agents/<agent>/wire.jsonl`:
+
+- **macOS:** `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
+- **Linux:** `~/.config/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
+  (or `~/.local/share/...` on some installs)
+- **Windows:** `%APPDATA%/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
+
+Only `conv-*` session directories are user conversations; auxiliary internal
+sessions (`ctitle-*`, `sklsum-*`, `dvlt-*`) are excluded from discovery. Set
+`KIMI_WORK_DIR` or `kimi_work_dirs` if your installation stores them elsewhere.
 
 **Positron Assistant default directory** (macOS only):
 
@@ -560,6 +574,7 @@ export HERMES_SESSIONS_DIR=~/custom/hermes
 export IFLOW_DIR=~/custom/iflow
 export KILO_DIR=~/custom/kilo
 export KIMI_DIR=~/custom/kimi
+export KIMI_WORK_DIR=~/custom/kimi-work
 export KIRO_SESSIONS_DIR=~/custom/kiro
 export KIRO_IDE_DIR=~/custom/kiro-ide
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
@@ -611,10 +626,12 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `cowork_dirs`, `devin_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
 `copilot_dirs`, `cortex_dirs`, `cursor_project_dirs`,
 `deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `gptme_dirs`,
-`grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`, `kilo_legacy_dirs`, `kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`, `vibe_session_dirs`,
-`omp_dirs`, `openclaw_dirs`, `opencode_dirs`, `openhands_dirs`, `pi_dirs`,
-`piebald_dirs`, `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`,
-`qoder_project_dirs`, `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `roocode_dirs`,
+`grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
+`kilo_legacy_dirs`, `kimi_dirs`, `kimi_work_dirs`, `kiro_dirs`, `kiro_ide_dirs`,
+`mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`,
+`opencode_dirs`, `openhands_dirs`, `pi_dirs`, `piebald_dirs`,
+`posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`,
+`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `roocode_dirs`,
 `shelley_dirs`, `visualstudio_copilot_dirs`, `vscode_copilot_dirs`,
 `windsurf_dirs`, `warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`,
 `zed_dirs`, and `zencoder_dirs`. Each accepts an array of paths. When set,

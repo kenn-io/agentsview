@@ -35,6 +35,7 @@ describe("KNOWN_AGENTS", () => {
       "qclaw",
       "iflow",
       "kimi",
+      "kimi-work",
       "claude-ai",
       "chatgpt",
       "kiro",
@@ -191,6 +192,7 @@ describe("agentLabel", () => {
     expect(agentLabel("openclaw")).toBe("OpenClaw");
     expect(agentLabel("qclaw")).toBe("QClaw");
     expect(agentLabel("iflow")).toBe("iFlow");
+    expect(agentLabel("kimi-work")).toBe("Kimi Work");
     expect(agentLabel("workbuddy")).toBe("WorkBuddy");
     expect(agentLabel("piebald")).toBe("Piebald");
     expect(agentLabel("zed")).toBe("Zed");
