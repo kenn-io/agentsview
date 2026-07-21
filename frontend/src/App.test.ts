@@ -230,6 +230,53 @@ describe("App session URL date state", () => {
     expect(ui.pendingScrollSession).toBe("session-2");
   });
 
+  it("clears stale route-first scroll intent when the user selects another session", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+
+    router.route = "sessions";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    // Route-first navigation to B queues its scroll intent; B's
+    // hydration never lands (mocked), so the URL still names B when
+    // the user selects C from the sidebar.
+    router.navigateToSession("session-b");
+    ui.scrollToOrdinal(7, "session-b");
+    await flushEffects();
+    expect(ui.pendingScrollOrdinal).toBe(7);
+
+    sessions.activeSessionId = "session-c";
+    await flushEffects();
+
+    expect(ui.pendingScrollOrdinal).toBeNull();
+    expect(ui.pendingScrollSession).toBeNull();
+  });
+
   it("rehydrates the routed session when a sidebar rebuild drops its row", async () => {
     vi.stubGlobal(
       "ResizeObserver",

@@ -123,10 +123,13 @@
   // Load active session's messages when selection changes.
   // Only track activeSessionId — untrack the rest to prevent
   // reactive loops from messages.loading / messages.messages.
+  let lastMessageLoadSessionId: string | null = null;
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
     untrack(() => {
+      const idChanged = id !== lastMessageLoadSessionId;
+      lastMessageLoadSessionId = id;
       if (route !== "sessions") {
         sessions.cancelRouteReads();
         messages.cancelInFlight();
@@ -140,14 +143,17 @@
       // for this specific session. Route-first navigation
       // (search results, insight evidence) queues ordinal +
       // URL before the deep-link effect selects the target,
-      // so match the routed session as well as the active one.
+      // so also match the routed session — but only when this
+      // run wasn't triggered by a local selection change,
+      // otherwise a stale URL would preserve the previous
+      // navigation's intent across the user's new selection.
       // Clear if the pending scroll targets a different
       // session or there is no pending scroll.
       const pendingMatchesSession =
         ui.pendingScrollOrdinal !== null &&
         (ui.pendingScrollSession === null ||
           ui.pendingScrollSession === id ||
-          ui.pendingScrollSession === router.sessionId);
+          (!idChanged && ui.pendingScrollSession === router.sessionId));
       if (!pendingMatchesSession) {
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;

@@ -680,13 +680,22 @@ class SessionsStore {
         signal,
       ) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
-      this.sessions.push(
-        ...index.sessions.map((row) =>
-          sidebarIndexRowToSession(row, this.sessions.find(
-            (existing) => existing.id === row.id,
-          ))
-        ),
+      // Drop rows the incoming page supersedes: the active session's
+      // hydrated row is re-appended out of position by loadSidebarPage
+      // when its index page isn't loaded yet, and must move to its
+      // real position (carrying its hydrated fields) when pagination
+      // reaches it, not duplicate.
+      const incoming = new Set(index.sessions.map((row) => row.id));
+      const kept = this.sessions.filter((s) => !incoming.has(s.id));
+      const existingById = new Map(
+        this.sessions.map((session) => [session.id, session]),
       );
+      this.sessions = [
+        ...kept,
+        ...index.sessions.map((row) =>
+          sidebarIndexRowToSession(row, existingById.get(row.id))
+        ),
+      ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch (error) {

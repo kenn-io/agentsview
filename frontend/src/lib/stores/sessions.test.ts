@@ -777,6 +777,46 @@ describe("SessionsStore", () => {
       );
     });
 
+    it("moves the appended active row into place when pagination reaches it", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "listed" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "offpage",
+          first_message: "hydrated offpage detail",
+        }),
+      );
+
+      await sessions.load();
+      await sessions.navigateToSession("offpage");
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "offpage",
+      ]);
+
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [
+          makeSkinnyRow({ id: "middle" }),
+          makeSkinnyRow({ id: "offpage" }),
+        ],
+        total: 3,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "middle",
+        "offpage",
+      ]);
+      expect(sessions.activeSession?.first_message).toBe(
+        "hydrated offpage detail",
+      );
+    });
+
     it("refreshes hydrated agent identity fields from the sidebar index", async () => {
       mockSidebarIndex([
         makeSkinnyRow({
