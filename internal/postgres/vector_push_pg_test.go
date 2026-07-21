@@ -252,6 +252,10 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 		Content:       "A follow-up",
 		ContentLength: 11,
 	}}), "second message A")
+	// InsertMessages touches no sync_marker signal, so advance A's marker
+	// the way real ingestion does for a relational change; without this A
+	// stays below the baseline watermark and the scoped push selects nothing.
+	require.NoError(t, localDB.BumpLocalModifiedAt("A"), "advance A sync marker")
 	src.hashes = map[string]string{"A": "ha2", "B": "hb2"}
 	src.docs = map[string][]VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "c1b", "ha2", []float32{0, 0, 1, 0})},
