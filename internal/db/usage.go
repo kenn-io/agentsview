@@ -1659,6 +1659,7 @@ type MachineBreakdown struct {
 
 // BranchBreakdown is keyed by the raw (project, branch) pair.
 type BranchBreakdown struct {
+	ProjectKey          string  `json:"project_key"`
 	Project             string  `json:"project"`
 	Branch              string  `json:"branch"`
 	InputTokens         int     `json:"inputTokens"`
@@ -1723,10 +1724,11 @@ func SanitizeDailyUsageProjectLabelsWithCatalog(
 				export.SafeProjectDisplayLabel(raw)
 		}
 		for j := range result.Daily[i].BranchBreakdowns {
+			raw := result.Daily[i].BranchBreakdowns[j].Project
+			result.Daily[i].BranchBreakdowns[j].ProjectKey =
+				export.ProjectKeyForEntry(projects[raw])
 			result.Daily[i].BranchBreakdowns[j].Project =
-				export.SafeProjectDisplayLabel(
-					result.Daily[i].BranchBreakdowns[j].Project,
-				)
+				export.SafeProjectDisplayLabel(raw)
 		}
 	}
 	if result.SessionCounts.ByProject != nil {

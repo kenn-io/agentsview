@@ -52,24 +52,28 @@ func seedBranchUsageFixture(t *testing.T, d *DB) {
 	}
 }
 
-func TestSanitizeDailyUsageProjectLabelsSanitizesBranchBreakdowns(t *testing.T) {
-	raw := "/home/example/private/repo"
+func TestSanitizeDailyUsageProjectLabelsKeepsBranchIdentity(t *testing.T) {
+	first := "/Users/example/one/private/repo"
+	second := "/Users/example/two/private/repo"
 	result := DailyUsageResult{Daily: []DailyUsageEntry{{
-		BranchBreakdowns: []BranchBreakdown{{
-			Project: raw,
-			Branch:  "main",
-			Cost:    1,
-		}},
+		BranchBreakdowns: []BranchBreakdown{
+			{Project: first, Branch: "main", Cost: 1},
+			{Project: second, Branch: "main", Cost: 2},
+		},
 	}}}
 	projects := map[string]export.ProjectMapEntry{
-		raw: {ProjectKey: "pl1-path"},
+		first:  {ProjectKey: "pl1:sha256:first"},
+		second: {ProjectKey: "pl1:sha256:second"},
 	}
 
 	SanitizeDailyUsageProjectLabelsWithCatalog(&result, projects)
 
-	require.Len(t, result.Daily[0].BranchBreakdowns, 1)
+	require.Len(t, result.Daily, 1)
+	require.Len(t, result.Daily[0].BranchBreakdowns, 2)
+	assert.Equal(t, "pl1:sha256:first", result.Daily[0].BranchBreakdowns[0].ProjectKey)
+	assert.Equal(t, "pl1:sha256:second", result.Daily[0].BranchBreakdowns[1].ProjectKey)
 	assert.Empty(t, result.Daily[0].BranchBreakdowns[0].Project)
-	assert.Equal(t, "main", result.Daily[0].BranchBreakdowns[0].Branch)
+	assert.Empty(t, result.Daily[0].BranchBreakdowns[1].Project)
 }
 
 func TestGetDailyUsageBranchBreakdowns(t *testing.T) {

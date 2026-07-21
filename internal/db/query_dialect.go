@@ -767,6 +767,28 @@ func SplitBranchFilterTokens(s string) []BranchInfo {
 	return out
 }
 
+// RewriteQualifiedBranchFilterProjects rewrites only the project component of
+// project-qualified branch tokens. Plain branch names and sentinel values pass
+// through unchanged.
+func RewriteQualifiedBranchFilterProjects(
+	tokens string,
+	rewrite func(string) (string, error),
+) (string, error) {
+	parts := strings.Split(tokens, branchListSep)
+	for i, token := range parts {
+		project, branch, qualified := strings.Cut(token, branchFilterSep)
+		if !qualified {
+			continue
+		}
+		rewritten, err := rewrite(project)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = EncodeBranchFilterToken(rewritten, branch)
+	}
+	return strings.Join(parts, branchListSep), nil
+}
+
 // BranchPairPredicate accepts current branch-name values and legacy
 // (project, branch) tokens. Plain branch names match across the separately
 // applied project filter; legacy tokens retain old shared URLs precisely.

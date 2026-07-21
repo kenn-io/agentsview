@@ -53,23 +53,41 @@ type UsageRequest struct {
 func ResolveUsageProjectKeys(
 	ctx context.Context, store db.Store, req UsageRequest,
 ) (UsageRequest, error) {
-	if req.ExcludeProjectKey == "" {
+	if req.ExcludeProjectKey == "" &&
+		!strings.Contains(req.GitBranch, "pl1:sha256:") &&
+		!strings.Contains(req.ExcludeGitBranch, "pl1:sha256:") {
 		return req, nil
 	}
-	resolved, err := resolveUsageProjectKeyLabels(
-		ctx, store, req.ExcludeProjectKey,
+	byKey, err := usageProjectLabelsByKey(ctx, store)
+	if err != nil {
+		return UsageRequest{}, err
+	}
+	if req.ExcludeProjectKey != "" {
+		resolved, resolveErr := resolveUsageProjectKeyLabelsFromMap(
+			byKey, req.ExcludeProjectKey,
+		)
+		if resolveErr != nil {
+			return UsageRequest{}, resolveErr
+		}
+		req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+		req.ExcludeProjectKey = ""
+	}
+	req.GitBranch, err = resolveUsageBranchProjectKeys(req.GitBranch, byKey)
+	if err != nil {
+		return UsageRequest{}, err
+	}
+	req.ExcludeGitBranch, err = resolveUsageBranchProjectKeys(
+		req.ExcludeGitBranch, byKey,
 	)
 	if err != nil {
 		return UsageRequest{}, err
 	}
-	req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
-	req.ExcludeProjectKey = ""
 	return req, nil
 }
 
-func resolveUsageProjectKeyLabels(
-	ctx context.Context, store db.Store, keys string,
-) ([]string, error) {
+func usageProjectLabelsByKey(
+	ctx context.Context, store db.Store,
+) (map[string]string, error) {
 	labels, err := store.GetActiveProjectLabels(ctx)
 	if err != nil {
 		return nil, err
@@ -84,6 +102,22 @@ func resolveUsageProjectKeyLabels(
 			byKey[entry.ProjectKey] = label
 		}
 	}
+	return byKey, nil
+}
+
+func resolveUsageProjectKeyLabels(
+	ctx context.Context, store db.Store, keys string,
+) ([]string, error) {
+	byKey, err := usageProjectLabelsByKey(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return resolveUsageProjectKeyLabelsFromMap(byKey, keys)
+}
+
+func resolveUsageProjectKeyLabelsFromMap(
+	byKey map[string]string, keys string,
+) ([]string, error) {
 	resolved := make([]string, 0)
 	for _, key := range splitCSVTokens(keys) {
 		label, ok := byKey[key]
@@ -96,6 +130,27 @@ func resolveUsageProjectKeyLabels(
 		resolved = append(resolved, label)
 	}
 	return resolved, nil
+}
+
+func resolveUsageBranchProjectKeys(
+	tokens string, byKey map[string]string,
+) (string, error) {
+	return db.RewriteQualifiedBranchFilterProjects(
+		tokens,
+		func(project string) (string, error) {
+			if !strings.HasPrefix(project, "pl1:sha256:") {
+				return project, nil
+			}
+			label, ok := byKey[project]
+			if !ok {
+				return "", &UsageInputError{
+					Code: UsageErrorCodeUnknownProjectKey,
+					Msg:  "unknown project key",
+				}
+			}
+			return label, nil
+		},
+	)
 }
 
 func ResolveUsagePairwiseProjectKeys(
@@ -269,6 +324,7 @@ type AgentTotal struct {
 
 // BranchTotal holds range-wide token and cost totals per (project, branch).
 type BranchTotal struct {
+	ProjectKey          string  `json:"project_key"`
 	Project             string  `json:"project"`
 	Branch              string  `json:"branch"`
 	InputTokens         int     `json:"inputTokens"`
@@ -520,14 +576,18 @@ func foldAgentTotals(daily []db.DailyUsageEntry) []AgentTotal {
 // foldBranchTotals sums daily (project, branch) breakdowns into range-wide
 // totals sorted by cost descending.
 func foldBranchTotals(daily []db.DailyUsageEntry) []BranchTotal {
-	type key struct{ project, branch string }
+	type key struct{ projectKey, branch string }
 	m := make(map[key]*BranchTotal)
 	for _, d := range daily {
 		for _, bb := range d.BranchBreakdowns {
-			k := key{project: bb.Project, branch: bb.Branch}
+			k := key{projectKey: bb.ProjectKey, branch: bb.Branch}
 			bt, ok := m[k]
 			if !ok {
-				bt = &BranchTotal{Project: bb.Project, Branch: bb.Branch}
+				bt = &BranchTotal{
+					ProjectKey: bb.ProjectKey,
+					Project:    bb.Project,
+					Branch:     bb.Branch,
+				}
 				m[k] = bt
 			}
 			bt.InputTokens += bb.InputTokens
@@ -546,6 +606,9 @@ func foldBranchTotals(daily []db.DailyUsageEntry) []BranchTotal {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Cost != out[j].Cost {
 			return out[i].Cost > out[j].Cost
+		}
+		if out[i].ProjectKey != out[j].ProjectKey {
+			return out[i].ProjectKey < out[j].ProjectKey
 		}
 		if out[i].Project != out[j].Project {
 			return out[i].Project < out[j].Project

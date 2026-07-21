@@ -84,6 +84,43 @@ func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
 	}
 }
 
+func seedCollidingBranchProjectFixture(t *testing.T, d *db.DB) {
+	t.Helper()
+
+	seeds := []struct {
+		id      string
+		project string
+		input   int
+	}{
+		{id: "usage-private-first", project: "/Users/example/one/private/repo", input: 10},
+		{id: "usage-private-second", project: "/Users/example/two/private/repo", input: 20},
+	}
+	for i, seed := range seeds {
+		started := fmt.Sprintf("2024-06-01T1%d:00:00Z", i)
+		assistant := dbtest.AsstMsg(seed.id, 1, "done")
+		assistant.Timestamp = started
+		assistant.Model = "test-model"
+		assistant.TokenUsage = fmt.Appendf(nil, `{"input_tokens":%d}`, seed.input)
+		dbtest.SeedSessionWithMessages(
+			t,
+			d,
+			seed.id,
+			seed.project,
+			[]db.Message{
+				dbtest.UserMsg(seed.id, 0, "compare branch usage"),
+				assistant,
+			},
+			dbtest.WithMessageCounts(2, 1),
+			func(s *db.Session) {
+				s.Agent = "claude"
+				s.GitBranch = "main"
+				s.StartedAt = &started
+				s.EndedAt = &started
+			},
+		)
+	}
+}
+
 func seedCommaProjectUsageFixture(t *testing.T, d *db.DB) {
 	t.Helper()
 	started := "2024-06-01T09:00:00Z"
@@ -545,6 +582,54 @@ func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, filtered.ProjectTotals, 1)
 	assert.Equal(t, "alpha", filtered.ProjectTotals[0].Project)
+}
+
+func TestDirectBackend_UsageSummary_FiltersProjectKeyQualifiedBranch(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCollidingBranchProjectFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+	}
+	summary, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, summary.BranchTotals, 2)
+
+	var selected service.BranchTotal
+	for _, branch := range summary.BranchTotals {
+		if branch.InputTokens == 20 {
+			selected = branch
+		}
+	}
+	require.NotEmpty(t, selected.ProjectKey)
+	assert.Empty(t, selected.Project)
+
+	base.GitBranch = db.EncodeBranchFilterToken(selected.ProjectKey, selected.Branch)
+	filtered, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, filtered.BranchTotals, 1)
+	assert.Equal(t, selected.ProjectKey, filtered.BranchTotals[0].ProjectKey)
+	assert.Equal(t, 20, filtered.Totals.InputTokens)
+}
+
+func TestDirectBackend_UsageSummary_RejectsUnknownBranchProjectKey(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCollidingBranchProjectFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+		GitBranch:      db.EncodeBranchFilterToken("pl1:sha256:missing", "main"),
+	})
+
+	var inputErr *service.UsageInputError
+	require.ErrorAs(t, err, &inputErr)
+	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
 }
 
 func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T) {

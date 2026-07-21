@@ -29,15 +29,13 @@ func TestFoldBranchTotals(t *testing.T) {
 		{
 			Date: "2026-05-14",
 			BranchBreakdowns: []db.BranchBreakdown{
-				{Project: "proj-a", Branch: "main", InputTokens: 100, Cost: 1.0},
-				{Project: "proj-a", Branch: "", InputTokens: 10, Cost: 0.1},
+				{ProjectKey: "pl1:sha256:first", Project: "", Branch: "main", InputTokens: 10, OutputTokens: 4, Cost: 1},
 			},
 		},
 		{
 			Date: "2026-05-15",
 			BranchBreakdowns: []db.BranchBreakdown{
-				{Project: "proj-a", Branch: "main", InputTokens: 200, Cost: 2.0},
-				{Project: "proj-b", Branch: "main", InputTokens: 50, Cost: 0.5},
+				{ProjectKey: "pl1:sha256:second", Project: "", Branch: "main", InputTokens: 20, OutputTokens: 8, Cost: 2},
 			},
 		},
 	}
@@ -45,10 +43,9 @@ func TestFoldBranchTotals(t *testing.T) {
 	got := foldBranchTotals(daily)
 
 	assert.Equal(t, []BranchTotal{
-		{Project: "proj-a", Branch: "main", InputTokens: 300, Cost: 3.0},
-		{Project: "proj-b", Branch: "main", InputTokens: 50, Cost: 0.5},
-		{Project: "proj-a", Branch: "", InputTokens: 10, Cost: 0.1},
-	}, got, "sums per (project, branch) across days, sorted by cost desc")
+		{ProjectKey: "pl1:sha256:second", Project: "", Branch: "main", InputTokens: 20, OutputTokens: 8, Cost: 2},
+		{ProjectKey: "pl1:sha256:first", Project: "", Branch: "main", InputTokens: 10, OutputTokens: 4, Cost: 1},
+	}, got, "keeps colliding display labels distinct by project key")
 }
 
 func TestFoldBranchTotalsEmpty(t *testing.T) {
