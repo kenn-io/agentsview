@@ -213,6 +213,9 @@ func resolveTraeNamespacedSessionID(
 	if match == "" {
 		matches, err := svc.FindSessionIDsByPartial(ctx, id, 64)
 		if err != nil {
+			if strings.Contains(err.Error(), "http: not found") {
+				return "", nil, false
+			}
 			return "", err, true
 		}
 		filtered := make([]string, 0, len(matches))
