@@ -2626,6 +2626,31 @@ describe("SessionsStore", () => {
         "fetched during navigation",
       );
     });
+
+    it("keeps a search-navigated out-of-index session across a sidebar reload", async () => {
+      // Sidebar is filtered so the searched session never appears in the
+      // index. Opening it from search fetches and appends it; a later index
+      // reload (route/filter re-evaluation) must not drop the open session.
+      mockSidebarIndex([makeSkinnyRow({ id: "in-index", project: "proj-a" })]);
+      await sessions.load();
+
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "searched",
+          project: "proj-b",
+          first_message: "opened from search",
+        }),
+      );
+      await sessions.navigateToSession("searched");
+      expect(sessions.activeSession?.project).toBe("proj-b");
+
+      // The filtered index still excludes the searched session.
+      mockSidebarIndex([makeSkinnyRow({ id: "in-index", project: "proj-a" })]);
+      await sessions.load();
+
+      expect(sessions.activeSessionId).toBe("searched");
+      expect(sessions.activeSession?.project).toBe("proj-b");
+    });
   });
 
   describe("route cancellation", () => {

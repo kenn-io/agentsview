@@ -526,18 +526,19 @@ class SessionsStore {
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
-      this.sidebarIndexIds = new Set(index.sessions.map((row) => row.id));
-      // Keep the active session's hydrated row when the new index
-      // page doesn't contain it: navigateToSession appends deep-linked,
-      // cross-page, and subagent targets, and dropping them here would
-      // revert activeSession to undefined mid-view. It stays outside
-      // sidebarIndexIds, so later pages keep it at the tail until
-      // pagination reaches its real position.
+      // Preserve the open session when the (filtered) index omits it, e.g. one
+      // opened from search that falls outside the current sidebar filters.
+      // navigateToSession appended it to the list; dropping it on reload leaves
+      // activeSession undefined and strips the breadcrumb's project, name, and
+      // badges. Keep the previously resolved row so the detail view stays intact.
       const activeId = this.activeSessionId;
-      if (activeId && !this.sessions.some((s) => s.id === activeId)) {
-        const kept = existing.get(activeId);
-        if (kept && !kept.is_index_only) {
-          this.sessions = [...this.sessions, kept];
+      if (
+        activeId !== null &&
+        !index.sessions.some((row) => row.id === activeId)
+      ) {
+        const preserved = existing.get(activeId);
+        if (preserved && !preserved.is_index_only) {
+          this.sessions = [...this.sessions, preserved];
         }
       }
       this.nextCursor = index.next_cursor ?? null;
