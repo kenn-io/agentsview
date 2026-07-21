@@ -306,6 +306,67 @@ SELECT COUNT(*) FROM vector_push_state
 		"the generation-wide push evicts the orphan row")
 }
 
+// TestVectorPushGenerationSwitchPromotesScopedPush pins that a scoped push
+// whose last-reconciled fingerprint differs from the active generation
+// promotes to a generation-wide reconciliation. Without it a re-embed would
+// register the new generation and write only the changed session's chunks,
+// leaving search reading an incomplete generation until the interval floor.
+func TestVectorPushGenerationSwitchPromotesScopedPush(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_gen_switch_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+	require.Equal(t, 2, res.Vectors.SessionsPushed)
+	require.Equal(t, "fp1", res.Vectors.GenerationFingerprint)
+
+	// The embedding generation changes: a new fingerprint with fresh
+	// per-session docs across the whole corpus.
+	src.gen = VectorGenerationInfo{Fingerprint: "fp2", Model: "m", Dimension: 4}
+	src.hashes = map[string]string{"A": "a2", "B": "b2"}
+	src.docs = map[string][]VectorPushDoc{
+		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{0, 0, 1, 0})},
+		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 0, 0, 1})},
+	}
+	src.hashScopes = nil
+
+	// A scoped push limited to the one relationally changed session, still
+	// carrying the old fp1, must promote to generation-wide and fill the
+	// whole fp2 generation rather than register it with only A's chunks.
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, "fp1", nil, nil)
+	require.NoError(t, err, "scoped push across a generation switch")
+	assert.Equal(t, "fp2", vres.GenerationFingerprint)
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the whole new generation is reconciled, not just the changed session")
+
+	require.Len(t, src.hashScopes, 1, "one hash read")
+	assert.Nil(t, src.hashScopes[0],
+		"promotion reads the whole generation, not the changed subset")
+
+	var gen2 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp2",
+	).Scan(&gen2), "fp2 generation id")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
+		"both sessions have state rows under the new generation")
+}
+
 func TestVectorPushRoundTrip(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
@@ -431,13 +492,13 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
 	require.NoError(t, err, "corrupting chunk table")
 
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "delta pushVectors")
 	assert.Equal(t, 1, res.SessionsUnchanged, "delta push cannot see the loss")
 	assert.Equal(t, 0,
 		countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)))
 
-	res, err = sync.pushVectors(ctx, true, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, true, nil, "", nil, nil)
 	require.NoError(t, err, "full pushVectors")
 	assert.Equal(t, 1, res.SessionsPushed)
 	assert.Equal(t, 0, res.SessionsUnchanged)
@@ -479,7 +540,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 		vdoc("A", "A#0", 0, "new", "h-new", []float32{0, 1, 0, 0}),
 	}
 	res, err := sync.pushVectors(
-		ctx, false, nil, map[string]struct{}{"A": {}}, nil,
+		ctx, false, nil, "", map[string]struct{}{"A": {}}, nil,
 	)
 	require.NoError(t, err, "deferred pushVectors")
 	assert.Equal(t, 1, res.SessionsDeferred)
@@ -493,7 +554,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 	assert.Equal(t, "old", content, "deferred session keeps its prior vectors")
 
 	// Next push with no failures sends the deferred session.
-	res, err = sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "healing pushVectors")
 	assert.Equal(t, 0, res.SessionsDeferred)
 	assert.Equal(t, 1, res.SessionsPushed)
@@ -839,7 +900,7 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	fake.docs["A"] = []VectorPushDoc{
 		vdoc("A", "cA0", 0, "ca-new", "hca2", []float32{0, 1, 0, 0}),
 	}
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "push conflict")
 	assert.Equal(t, 1, res.Conflicts)
 	assert.Equal(t, 0, res.SessionsPushed)
@@ -853,7 +914,7 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	// session in place and count the conflict.
 	delete(fake.hashes, "A")
 	delete(fake.docs, "A")
-	res, err = sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "evict conflict")
 	assert.Equal(t, 1, res.Conflicts)
 	assert.Equal(t, 0, res.SessionsEvicted)
@@ -910,7 +971,7 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 	fake.docs["B"] = []VectorPushDoc{
 		vdoc("B", "lB0", 0, "cb-new", "hcb2", []float32{0, 0, 1, 0}),
 	}
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "legacy push")
 	assert.Equal(t, 1, res.Conflicts, "foreign legacy row is a conflict")
 	assert.Equal(t, 1, res.SessionsPushed, "owned legacy row self-heals")
@@ -927,7 +988,7 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 	// Both vanish locally: only B may be evicted.
 	fake.hashes = map[string]string{}
 	fake.docs = map[string][]VectorPushDoc{}
-	res, err = sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "legacy evict")
 	assert.Equal(t, 1, res.Conflicts, "foreign legacy row is not evicted")
 	assert.Equal(t, 1, res.SessionsEvicted)
@@ -975,7 +1036,7 @@ func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
 		return VectorGenerationInfo{}, false, fmt.Errorf(
 			"%w: rebuild started", ErrVectorSourceNotReady)
 	}
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "push with mid-push rebuild")
 	assert.Equal(t, 0, res.SessionsEvicted, "eviction must be dropped")
 	assert.Equal(t, 1, res.SessionsDeferred,
@@ -986,7 +1047,7 @@ func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
 
 	// The next healthy push evicts B.
 	fake.genOverride = nil
-	res, err = sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "healthy push")
 	assert.Equal(t, 1, res.SessionsEvicted)
 	assert.Equal(t, 0, countRows(t, pg,
@@ -1033,7 +1094,7 @@ func TestVectorPushProjectScope(t *testing.T) {
 		vdoc("beta", "beta#0", 0, "b-updated", "hb2", []float32{0, 1, 0, 0}),
 	}
 
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "filtered vector push")
 	assert.Equal(t, 1, res.SessionsPushed, "only in-scope alpha pushed")
 	assert.Equal(t, 0, res.Conflicts, "beta is out of scope, not a conflict")
@@ -1113,7 +1174,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 
 	// A push filtered to alpha must treat mover (now local beta) as out of scope.
 	sync.projects = []string{"alpha"}
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "filtered vector push after local move")
 	assert.Equal(t, 0, res.SessionsPushed, "moved-out session not pushed")
 	assert.Equal(t, 0, res.SessionsEvicted, "moved-out session not evicted")
@@ -1207,7 +1268,7 @@ func TestVectorPushOrphanStateEvicted(t *testing.T) {
 	delete(fake.hashes, "A")
 	delete(fake.docs, "A")
 
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "evict orphan")
 	assert.Equal(t, 1, res.SessionsEvicted)
 	assert.Equal(t, 0, res.Conflicts, "orphaned state is not a conflict")
@@ -1265,7 +1326,7 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 		"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{9, 9, 9, 9})},
 	}
 
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "diverged pushVectors")
 	assert.Equal(t, 1, res.SessionsDeferred, "diverged session must defer")
 	assert.Equal(t, 0, res.SessionsPushed)
@@ -1281,7 +1342,7 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 	// Once the local index settles (export hash matches the scan again), the
 	// deferred session is re-derived and pushed.
 	source.exportHashes = nil
-	res, err = sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "settled pushVectors")
 	assert.Equal(t, 1, res.SessionsPushed)
 	assert.Equal(t, 1,
@@ -1395,7 +1456,7 @@ func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
 	fake.docs = map[string][]VectorPushDoc{}
 
 	res, err := sync.pushVectors(
-		ctx, false, nil, map[string]struct{}{"A": {}}, nil,
+		ctx, false, nil, "", map[string]struct{}{"A": {}}, nil,
 	)
 	require.NoError(t, err, "failed-session pushVectors")
 	assert.Equal(t, 0, res.SessionsEvicted, "failed session must not be evicted")
@@ -1407,7 +1468,7 @@ func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
 		SELECT COUNT(*) FROM vector_push_state
 		 WHERE generation_id = $1 AND session_id = 'A'`, genID))
 
-	res, err = sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err = sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "clean pushVectors")
 	assert.Equal(t, 1, res.SessionsEvicted, "next clean push evicts")
 	assert.Equal(t, 0,
@@ -1463,7 +1524,7 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 	fake.docs = map[string][]VectorPushDoc{}
 
 	sync.projects = []string{"alpha"}
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "filtered pushVectors")
 
 	assert.Equal(t, 1, res.SessionsEvicted,
@@ -1564,7 +1625,7 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 		hashes: map[string]string{},
 	}
 
-	res, err := sync.pushVectors(ctx, false, nil, nil, nil)
+	res, err := sync.pushVectors(ctx, false, nil, "", nil, nil)
 	require.NoError(t, err, "privilege failure must skip, not fail the push")
 	assert.True(t, res.Skipped)
 	assert.Contains(t, res.SkippedReason, "privileges")

@@ -29,6 +29,10 @@ type daemonPushRequest struct {
 	// pushes so the daemon's vector phase reads state only for the
 	// changed relational sessions (see postgres.PushOptions).
 	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitempty"`
+	// LastReconciledVectorFingerprint travels with a scoped push so the
+	// daemon's fresh Sync can promote to generation-wide when the active
+	// generation fingerprint has changed (see postgres.PushOptions).
+	LastReconciledVectorFingerprint string `json:"last_reconciled_vector_fingerprint,omitempty"`
 	// Automatic is set by the watch-mode DuckDB pushes so the daemon
 	// defers instead of rebuilding when a live serve process holds the
 	// mirror and skips archive-scale diagnostics (see

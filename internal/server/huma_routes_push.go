@@ -163,6 +163,10 @@ type daemonPushRequest struct {
 	// pushes so the vector phase reads state only for the changed
 	// relational sessions (see postgres.PushOptions).
 	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitempty"`
+	// LastReconciledVectorFingerprint travels with a scoped push so this
+	// request's fresh Sync can promote to generation-wide when the active
+	// generation fingerprint has changed (see postgres.PushOptions).
+	LastReconciledVectorFingerprint string `json:"last_reconciled_vector_fingerprint,omitempty"`
 	// Automatic is set by the CLI's watch-mode DuckDB pushes: a mirror
 	// held by a live serve process defers instead of rebuilding the whole
 	// archive on every changed batch, and archive-scale diagnostics are
@@ -374,6 +378,8 @@ func (s *Server) humaPGPush(
 						Full: forceFull,
 						ScopeVectorsToChangedSessions: body.
 							ScopeVectorsToChangedSessions,
+						LastReconciledVectorFingerprint: body.
+							LastReconciledVectorFingerprint,
 					}, onProgress)
 					return err
 				})

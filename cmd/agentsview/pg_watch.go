@@ -41,6 +41,12 @@ type pgPusher struct {
 	// on the interval floor unnecessarily; while false, change pushes
 	// scope their vector reads to the changed relational sessions.
 	vectorReconcileNeeded bool
+	// lastReconciledVectorFingerprint is the generation fingerprint of
+	// the last clean generation-wide reconciliation in this process.
+	// A scoped push carrying it lets the vector phase promote itself to
+	// generation-wide when the active fingerprint has changed, so a
+	// re-embed never leaves a new generation partially populated.
+	lastReconciledVectorFingerprint string
 }
 
 // push performs one local-sync-then-push cycle. On any PG error it
@@ -77,17 +83,20 @@ func (p *pgPusher) push(
 	}
 	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded)
 	res, err := p.target.PushWithOptions(ctx, postgres.PushOptions{
-		Full:                          full,
-		ScopeVectorsToChangedSessions: scoped,
+		Full:                            full,
+		ScopeVectorsToChangedSessions:   scoped,
+		LastReconciledVectorFingerprint: p.lastReconciledVectorFingerprint,
 	}, nil)
 	if err != nil {
 		p.vectorReconcileNeeded = true
 		p.reset()
 		return fmt.Errorf("push: %w", err)
 	}
-	p.vectorReconcileNeeded = nextVectorReconcileNeeded(
-		p.vectorReconcileNeeded, scoped, res,
-	)
+	p.vectorReconcileNeeded, p.lastReconciledVectorFingerprint =
+		nextVectorReconcile(
+			p.vectorReconcileNeeded,
+			p.lastReconciledVectorFingerprint, scoped, res,
+		)
 	if res.Errors > 0 {
 		logPGWatchPushResult(res, reason)
 		log.Printf(
@@ -113,20 +122,34 @@ func scopedVectorPush(
 	return reason == reasonChange && !full && !reconcileNeeded
 }
 
-// nextVectorReconcileNeeded updates the reconcile bit after a
-// successful push. A skipped or deferring vector phase leaves work
-// behind, so the next push goes generation-wide; only a clean
-// generation-wide phase clears the bit.
-func nextVectorReconcileNeeded(
-	current, scoped bool, res postgres.PushResult,
-) bool {
+// nextVectorReconcile folds the post-push update of the reconcile bit
+// and the last-reconciled generation fingerprint. A skipped or deferring
+// vector phase leaves work behind, so the next push goes generation-wide
+// and the fingerprint is unchanged; a clean generation-wide phase clears
+// the bit and records the fingerprint it reconciled; a clean scoped phase
+// leaves both as they were.
+//
+// The phase ran generation-wide when the caller did not scope it, or when
+// it scoped but the active fingerprint differed from the last reconciled
+// one — pushVectors promotes exactly that case, so the same predicate
+// recovers it here without a separate result flag.
+func nextVectorReconcile(
+	current bool, lastFingerprint string,
+	scoped bool, res postgres.PushResult,
+) (bool, string) {
 	if res.Vectors.Skipped || res.Vectors.SessionsDeferred > 0 {
-		return true
+		return true, lastFingerprint
 	}
-	if !scoped {
-		return false
+	fingerprint := res.Vectors.GenerationFingerprint
+	generationWide := !scoped ||
+		(fingerprint != "" && fingerprint != lastFingerprint)
+	if generationWide {
+		if fingerprint != "" {
+			lastFingerprint = fingerprint
+		}
+		return false, lastFingerprint
 	}
-	return current
+	return current, lastFingerprint
 }
 
 func logPGWatchPushResult(res postgres.PushResult, reason pushReason) {

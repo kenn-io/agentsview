@@ -335,6 +335,8 @@ func (b daemonArchiveWriteBackend) PGPush(
 			NoVectors:              cfg.NoVectors,
 			ScopeVectorsToChangedSessions: cfg.
 				ScopeVectorsToChangedSessions,
+			LastReconciledVectorFingerprint: cfg.
+				LastReconciledVectorFingerprint,
 		},
 		onProgress,
 	)
@@ -486,14 +488,18 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 		debounce = defaultWatchDebounce
 	}
 	// Daemon-delegated pushes build a fresh postgres.Sync per request,
-	// so the vector reconcile bit lives here, in the long-lived watch
-	// process, mirroring pgPusher's local-mode bit.
+	// so the vector reconcile bit and the last-reconciled generation
+	// fingerprint live here, in the long-lived watch process, mirroring
+	// pgPusher's local-mode state.
 	vectorReconcileNeeded := true
+	lastReconciledVectorFingerprint := ""
 	push := func(pctx context.Context, reason pushReason, full bool) error {
 		pushCfg := cfg
 		pushCfg.Full = full
 		scoped := scopedVectorPush(reason, full, vectorReconcileNeeded)
 		pushCfg.ScopeVectorsToChangedSessions = scoped
+		pushCfg.LastReconciledVectorFingerprint =
+			lastReconciledVectorFingerprint
 		var res postgres.PushResult
 		var err error
 		if b.watchHooks != nil && b.watchHooks.pgPush != nil {
@@ -518,9 +524,11 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 			vectorReconcileNeeded = true
 			return err
 		}
-		vectorReconcileNeeded = nextVectorReconcileNeeded(
-			vectorReconcileNeeded, scoped, res,
-		)
+		vectorReconcileNeeded, lastReconciledVectorFingerprint =
+			nextVectorReconcile(
+				vectorReconcileNeeded,
+				lastReconciledVectorFingerprint, scoped, res,
+			)
 		return completePGWatchPush(res, reason)
 	}
 	loop, stopLoop := newArchivePushLoop(
@@ -640,6 +648,8 @@ func (b *localArchiveWriteBackend) PGPush(
 		Full: forceFull,
 		ScopeVectorsToChangedSessions: cfg.
 			ScopeVectorsToChangedSessions,
+		LastReconciledVectorFingerprint: cfg.
+			LastReconciledVectorFingerprint,
 	}, newPGPushProgressPrinter())
 	fmt.Print("\r\033[K")
 	if err != nil {

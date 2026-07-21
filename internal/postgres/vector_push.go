@@ -107,6 +107,14 @@ type VectorPushResult struct {
 	DocsDeleted      int
 	SessionsEvicted  int
 	Conflicts        int
+	// GenerationFingerprint is the fingerprint of the generation this
+	// phase reconciled, empty when the phase was skipped or found no
+	// active generation. The watch orchestrator records it after a clean
+	// generation-wide pass so a later fingerprint change (a re-embed)
+	// promotes the next scoped push to a generation-wide reconciliation
+	// instead of registering a new generation with only the changed
+	// sessions' chunks.
+	GenerationFingerprint string
 }
 
 // vectorChunkInsertBatch caps rows per multi-row INSERT so parameter counts
@@ -217,6 +225,7 @@ func (s *Sync) vectorOwnerIdentity(
 // pushes are not silent through a long first vector push.
 func (s *Sync) pushVectors(
 	ctx context.Context, full bool, scope []string,
+	lastReconciledFingerprint string,
 	failedSessions map[string]struct{},
 	onProgress func(PushProgress),
 ) (VectorPushResult, error) {
@@ -241,6 +250,18 @@ func (s *Sync) pushVectors(
 	if !hasGen {
 		res.Skipped, res.SkippedReason = true, "no active local generation"
 		return res, nil
+	}
+	res.GenerationFingerprint = gen.Fingerprint
+	// A scoped push registers the generation and writes only its changed
+	// sessions' chunks. If this generation's fingerprint differs from the
+	// last one reconciled generation-wide, it may be newly active (a
+	// re-embed), and scoping would leave search reading an incomplete
+	// generation until the interval-floor reconciliation. Promote to a
+	// generation-wide read so the new generation is fully populated at
+	// first contact.
+	if scope != nil && gen.Fingerprint != lastReconciledFingerprint {
+		log.Printf("vector push: generation fingerprint changed since the last generation-wide reconciliation; promoting scoped push to generation-wide")
+		scope = nil
 	}
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, s.pg)
 	if err != nil {

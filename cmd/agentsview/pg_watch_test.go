@@ -282,6 +282,53 @@ func TestPGPusherPushErrorForcesReconcile(t *testing.T) {
 	assert.False(t, recovered.pushOpts[0].ScopeVectorsToChangedSessions)
 }
 
+// TestPGPusherThreadsGenerationFingerprint pins the fingerprint memo that
+// keeps a scoped push from exposing an incomplete generation: the watch
+// process threads the last generation-wide fingerprint into every push and
+// advances it whenever a push reconciles a different generation, so a later
+// scoped push always carries the current fingerprint for the vector phase to
+// compare against.
+func TestPGPusherThreadsGenerationFingerprint(t *testing.T) {
+	target := &fakeTarget{}
+	pusher, _ := newTestPgPusher(target)
+	pusher.vectorReconcileNeeded = true
+	ctx := context.Background()
+
+	// Startup reconciles generation fp1 generation-wide.
+	target.pushResult = postgres.PushResult{
+		Vectors: postgres.VectorPushResult{GenerationFingerprint: "fp1"},
+	}
+	require.NoError(t, pusher.push(ctx, reasonStartup, false))
+
+	// A scoped change push carries fp1 and leaves the memo unchanged.
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+
+	// The active generation switches to fp2. The phase promotes itself and
+	// reconciles it generation-wide, reported by the differing fingerprint,
+	// so the memo advances to fp2 while the reconcile bit stays clear.
+	target.pushResult = postgres.PushResult{
+		Vectors: postgres.VectorPushResult{GenerationFingerprint: "fp2"},
+	}
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+
+	// The next scoped change push now carries fp2.
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+
+	require.Len(t, target.pushOpts, 4)
+	assert.Equal(t, "", target.pushOpts[0].LastReconciledVectorFingerprint,
+		"startup carries no prior fingerprint")
+	assert.False(t, target.pushOpts[0].ScopeVectorsToChangedSessions)
+	assert.Equal(t, "fp1", target.pushOpts[1].LastReconciledVectorFingerprint,
+		"the scoped change push carries the startup fingerprint")
+	assert.True(t, target.pushOpts[1].ScopeVectorsToChangedSessions)
+	assert.Equal(t, "fp1", target.pushOpts[2].LastReconciledVectorFingerprint,
+		"the switch push still carries fp1 so the phase can detect the change")
+	assert.True(t, target.pushOpts[2].ScopeVectorsToChangedSessions)
+	assert.Equal(t, "fp2", target.pushOpts[3].LastReconciledVectorFingerprint,
+		"once fp2 is reconciled the next scoped push carries it")
+	assert.True(t, target.pushOpts[3].ScopeVectorsToChangedSessions)
+}
+
 func TestPGPusherEnsuresPricingAfterLocalSyncBeforeConnect(t *testing.T) {
 	var events []string
 	target := &fakeTarget{
