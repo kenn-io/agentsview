@@ -538,6 +538,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -550,14 +554,16 @@ func (d *DB) CopySessionMetadataFrom(
 					deleted_at
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id,
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id,
 					display_name,
 					deleted_at
 				FROM legacy
@@ -579,6 +585,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -589,14 +599,16 @@ func (d *DB) CopySessionMetadataFrom(
 					END AS raw_id
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
 				FROM legacy
 				WHERE namespace <> '' AND raw_id <> ''
 			)
@@ -615,6 +627,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -625,14 +641,16 @@ func (d *DB) CopySessionMetadataFrom(
 					END AS raw_id
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
 				FROM legacy
 				WHERE namespace <> '' AND raw_id <> ''
 			)
@@ -658,6 +676,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -668,14 +690,16 @@ func (d *DB) CopySessionMetadataFrom(
 					END AS raw_id
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
 				FROM legacy
 				WHERE namespace <> '' AND raw_id <> ''
 			)
@@ -693,6 +717,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -703,14 +731,16 @@ func (d *DB) CopySessionMetadataFrom(
 					END AS raw_id
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
 				FROM legacy
 				WHERE namespace <> '' AND raw_id <> ''
 			)
@@ -730,6 +760,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -740,14 +774,16 @@ func (d *DB) CopySessionMetadataFrom(
 					END AS raw_id
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
 				FROM legacy
 				WHERE namespace <> '' AND raw_id <> ''
 			)
@@ -766,6 +802,10 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT
 					id AS legacy_id,
 					CASE
+						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
+						ELSE ''
+					END AS host_prefix,
+					CASE
 						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
 						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
 						ELSE ''
@@ -776,14 +816,16 @@ func (d *DB) CopySessionMetadataFrom(
 					END AS raw_id
 				FROM old_db.sessions
 				WHERE agent = 'trae'
-					AND id LIKE 'trae:%'
+					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
 					AND id NOT LIKE 'trae:workspaceStorage:%'
 					AND id NOT LIKE 'trae:globalStorage:%'
+					AND id NOT LIKE '%~trae:workspaceStorage:%'
+					AND id NOT LIKE '%~trae:globalStorage:%'
 			),
 			mapped AS (
 				SELECT
 					legacy_id,
-					'trae:' || namespace || ':' || raw_id AS namespaced_id
+					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
 				FROM legacy
 				WHERE namespace <> '' AND raw_id <> ''
 			)

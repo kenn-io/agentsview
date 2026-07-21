@@ -51,6 +51,13 @@ func pgSessionTombstoneIDs(sess db.Session) []string {
 	return uniqueNonEmptyStrings(ids)
 }
 
+func pgSessionIDPrefix(id string) string {
+	if idx := strings.Index(id, "~"); idx > 0 {
+		return id[:idx+1]
+	}
+	return ""
+}
+
 func pgTraeLegacySessionID(sess db.Session) string {
 	if sess.Agent != "trae" {
 		return ""
@@ -59,7 +66,8 @@ func pgTraeLegacySessionID(sess db.Session) string {
 	if rawID == "" {
 		return ""
 	}
-	legacyID := "trae:" + strings.TrimPrefix(rawID, "trae:")
+	legacyID := pgSessionIDPrefix(sess.ID) + "trae:" +
+		strings.TrimPrefix(rawID, "trae:")
 	if legacyID == sess.ID {
 		return ""
 	}

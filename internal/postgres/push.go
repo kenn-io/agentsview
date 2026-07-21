@@ -1561,6 +1561,23 @@ func deletePGLegacyTraeSessionIfOwned(
 	if legacyID == "" {
 		return nil
 	}
+	requireRevisionMatch := false
+	if stripped := strings.TrimPrefix(sess.ID, pgSessionIDPrefix(sess.ID)); strings.HasPrefix(stripped, "trae:workspaceStorage:") ||
+		strings.HasPrefix(stripped, "trae:globalStorage:") {
+		rawID := strings.TrimPrefix(stripped, "trae:workspaceStorage:")
+		rawID = strings.TrimPrefix(rawID, "trae:globalStorage:")
+		prefix := pgSessionIDPrefix(sess.ID)
+		var siblingCount int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sessions WHERE id = $1 OR id = $2`,
+			prefix+"trae:workspaceStorage:"+rawID,
+			prefix+"trae:globalStorage:"+rawID,
+		).Scan(&siblingCount); err != nil {
+			return fmt.Errorf("counting namespaced trae siblings for %s: %w", sess.ID, err)
+		}
+		requireRevisionMatch = siblingCount > 1
+	}
+	legacyTranscriptRevision := sess.TranscriptRevision
 	if legacyMarkerMachines == nil {
 		legacyMarkerMachines = []string{}
 	}
@@ -1589,8 +1606,14 @@ func deletePGLegacyTraeSessionIfOwned(
 				)
 				OR legacy_session.owner_marker = $4
 			)
+			AND (
+				NOT $6
+				OR COALESCE(legacy_session.transcript_revision, '') = $7
+			)
 		ON CONFLICT (session_id) DO NOTHING`,
-		legacyID, sess.ID, pushedMachine, markerID, string(legacyMarkerMachinesJSON),
+		legacyID, sess.ID, pushedMachine, markerID,
+		string(legacyMarkerMachinesJSON),
+		requireRevisionMatch, legacyTranscriptRevision,
 	); err != nil {
 		return fmt.Errorf("migrating legacy trae stars %s: %w", legacyID, err)
 	}
@@ -1631,9 +1654,13 @@ func deletePGLegacyTraeSessionIfOwned(
 								SELECT jsonb_array_elements_text($5::jsonb)
 							)
 						)
-					)
-					OR legacy_session.owner_marker = $4
 				)
+				OR legacy_session.owner_marker = $4
+			)
+			AND (
+				NOT $6
+				OR COALESCE(legacy_session.transcript_revision, '') = $7
+			)
 			ORDER BY p.id,
 				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
 				m.ordinal
@@ -1649,7 +1676,9 @@ func deletePGLegacyTraeSessionIfOwned(
 			note = EXCLUDED.note,
 			ordinal = EXCLUDED.ordinal,
 			source_uuid = EXCLUDED.source_uuid`,
-		legacyID, sess.ID, pushedMachine, markerID, string(legacyMarkerMachinesJSON),
+		legacyID, sess.ID, pushedMachine, markerID,
+		string(legacyMarkerMachinesJSON),
+		requireRevisionMatch, legacyTranscriptRevision,
 	); err != nil {
 		return fmt.Errorf("migrating legacy trae pins %s: %w", legacyID, err)
 	}
@@ -1674,8 +1703,13 @@ func deletePGLegacyTraeSessionIfOwned(
 		       )
 		     )
 		     OR owner_marker = $4
+		   )
+		   AND (
+		     NOT $5
+		     OR COALESCE(transcript_revision, '') = $6
 		   )`,
 		legacyID, pushedMachine, string(legacyMarkerMachinesJSON), markerID,
+		requireRevisionMatch, legacyTranscriptRevision,
 	); err != nil {
 		return fmt.Errorf(
 			"deleting owned legacy trae session %s: %w", legacyID, err,

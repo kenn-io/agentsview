@@ -239,6 +239,24 @@ func TestResolveSessionIDDetailed_LegacyTraeCanonicalRejectsNamespaceCollision(t
 	assert.Contains(t, err.Error(), "trae:globalStorage:"+raw)
 }
 
+func TestResolveSessionIDDetailed_HostPrefixedLegacyTraeCanonicalResolvesToQualifiedNamespace(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	raw := "remote-rewrite"
+	upsertSession(
+		t, d, "laptop~trae:workspaceStorage:"+raw,
+		string(parser.AgentTrae), "2026-04-17T10:00:00Z",
+	)
+
+	got, known, err := resolveRawSessionIDDetailed(
+		ctx, d, nil, "laptop~trae:"+raw,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "laptop~trae:workspaceStorage:"+raw, got)
+	assert.True(t, known)
+}
+
 func TestResolveSessionIDDetailed_TraeDiskLookupRejectsNamespaceCollision(t *testing.T) {
 	d := newTestDB(t)
 	ctx := context.Background()

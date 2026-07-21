@@ -73,6 +73,11 @@ func resolveRawSessionIDDetailed(
 	agentDirs map[parser.AgentType][]string,
 	input string,
 ) (resolved string, known bool, err error) {
+	if hostPrefix, legacyRaw, ok := splitLegacyTraeSessionID(input); ok {
+		return resolveLegacyTraeSessionIDDetailed(
+			ctx, database, agentDirs, input, hostPrefix, legacyRaw,
+		)
+	}
 	if host, _ := parser.StripHostPrefix(input); host != "" {
 		return input, true, nil
 	}
@@ -100,12 +105,6 @@ func resolveRawSessionIDDetailed(
 		}
 		return matches[0], true, nil
 	}
-	if hostPrefix, legacyRaw, ok := splitLegacyTraeSessionID(input); ok {
-		return resolveLegacyTraeSessionIDDetailed(
-			ctx, database, agentDirs, input, hostPrefix, legacyRaw,
-		)
-	}
-
 	// Canonical disk probe: if the input starts with a known
 	// agent prefix, trust that interpretation first and strip
 	// before resolving the source (which rejects IDs with

@@ -1271,12 +1271,17 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 }
 
 func isLegacyTraeSessionID(id string) bool {
-	if idx := strings.Index(id, "~"); idx > 0 {
-		id = id[idx+1:]
-	}
+	_, id = legacyTraeSessionPrefixAndStrippedID(id)
 	return strings.HasPrefix(id, "trae:") &&
 		!strings.HasPrefix(id, "trae:workspaceStorage:") &&
 		!strings.HasPrefix(id, "trae:globalStorage:")
+}
+
+func legacyTraeSessionPrefixAndStrippedID(id string) (string, string) {
+	if idx := strings.Index(id, "~"); idx > 0 {
+		return id[:idx+1], id[idx+1:]
+	}
+	return "", id
 }
 
 func traeSessionNamespaceFromPath(path string) string {
@@ -1447,15 +1452,16 @@ func (db *DB) MigrateAllLegacyTraeSessions() error {
 		if err := rows.Scan(&id, &filePath); err != nil {
 			return fmt.Errorf("scanning legacy trae session: %w", err)
 		}
+		hostPrefix, strippedID := legacyTraeSessionPrefixAndStrippedID(id)
 		namespace := traeSessionNamespaceFromPath(filePath.String)
-		rawID := strings.TrimPrefix(id, "trae:")
+		rawID := strings.TrimPrefix(strippedID, "trae:")
 		rawID = strings.TrimPrefix(rawID, "trae:")
 		if rawID == "" {
 			continue
 		}
 		if namespace == "" {
-			workspaceID := "trae:workspaceStorage:" + rawID
-			globalID := "trae:globalStorage:" + rawID
+			workspaceID := hostPrefix + "trae:workspaceStorage:" + rawID
+			globalID := hostPrefix + "trae:globalStorage:" + rawID
 			var workspaceCount, globalCount int
 			_ = db.getReader().QueryRow(
 				"SELECT COUNT(*) FROM sessions WHERE id = ?",
@@ -1479,7 +1485,7 @@ func (db *DB) MigrateAllLegacyTraeSessions() error {
 		}
 		migrations = append(migrations, migration{
 			oldID:     id,
-			newID:     "trae:" + namespace + ":" + rawID,
+			newID:     hostPrefix + "trae:" + namespace + ":" + rawID,
 			namespace: namespace,
 		})
 	}

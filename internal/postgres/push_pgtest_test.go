@@ -1108,6 +1108,190 @@ func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
 	assert.Equal(t, pinNote, gotNote.String)
 }
 
+func TestPushPurgesOwnedHostPrefixedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_trae_host_legacy_purge_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+	store := &Store{pg: pg}
+	legacyRev := "legacy-rev"
+
+	const legacyID = "laptop~trae:collision"
+	legacy := db.Session{
+		ID:                 legacyID,
+		Project:            "test-proj",
+		Machine:            "test-machine",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(legacy), "UpsertSession legacy")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     legacyID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "legacy",
+		ContentLength: len("legacy"),
+	}}), "InsertMessages legacy")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "initial Push")
+	starred, err := store.StarSession(legacyID)
+	require.NoError(t, err, "StarSession legacy")
+	require.True(t, starred)
+	pinNote := "legacy host pin"
+	_, err = store.PinMessage(legacyID, 0, &pinNote)
+	require.NoError(t, err, "PinMessage legacy")
+
+	const namespacedID = "laptop~trae:globalStorage:collision"
+	namespaced := legacy
+	namespaced.ID = namespacedID
+	namespaced.TranscriptRevision = &legacyRev
+	require.NoError(t, localDB.UpsertSession(namespaced), "UpsertSession namespaced")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     namespacedID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "namespaced",
+		ContentLength: len("namespaced"),
+	}}), "InsertMessages namespaced")
+
+	_, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push after namespace migration")
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		legacyID,
+	).Scan(&count), "count legacy trae session")
+	assert.Zero(t, count, "host-prefixed legacy trae row should be purged")
+
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = $1`,
+		namespacedID,
+	).Scan(&count), "count migrated trae star")
+	assert.Equal(t, 1, count)
+}
+
+func TestPushMigratesLegacyTraeStateToMatchingNamespaceOnly(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_trae_collision_guard_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+	store := &Store{pg: pg}
+	workspaceRev := "workspace-rev"
+	globalRev := "global-rev"
+
+	const legacyID = "trae:collision"
+	legacy := db.Session{
+		ID:                 legacyID,
+		Project:            "test-proj",
+		Machine:            "test-machine",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &workspaceRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(legacy), "UpsertSession legacy")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     legacyID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "workspace body",
+		ContentLength: len("workspace body"),
+	}}), "InsertMessages legacy")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "initial Push")
+	starred, err := store.StarSession(legacyID)
+	require.NoError(t, err, "StarSession legacy")
+	require.True(t, starred)
+	pinNote := "workspace pin"
+	_, err = store.PinMessage(legacyID, 0, &pinNote)
+	require.NoError(t, err, "PinMessage legacy")
+
+	workspace := legacy
+	workspace.ID = "trae:workspaceStorage:collision"
+	workspace.TranscriptRevision = &workspaceRev
+	global := legacy
+	global.ID = "trae:globalStorage:collision"
+	global.TranscriptRevision = &globalRev
+	require.NoError(t, localDB.UpsertSession(workspace), "UpsertSession workspace")
+	require.NoError(t, localDB.UpsertSession(global), "UpsertSession global")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     workspace.ID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "workspace body",
+		ContentLength: len("workspace body"),
+	}, {
+		SessionID:     global.ID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "global body",
+		ContentLength: len("global body"),
+	}}), "InsertMessages namespaced")
+
+	_, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push after split namespace migration")
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = $1`,
+		global.ID,
+	).Scan(&count), "count migrated trae star on global")
+	assert.Zero(t, count, "global namespace must not steal legacy curation")
+
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = $1`,
+		workspace.ID,
+	).Scan(&count), "count migrated trae star on workspace")
+	assert.Equal(t, 1, count, "matching namespace receives legacy curation")
+}
+
 func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 	pgURL := testPGURL(t)
 
