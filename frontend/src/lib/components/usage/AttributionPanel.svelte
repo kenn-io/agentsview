@@ -11,6 +11,7 @@
   import { seriesColorMap } from "../../utils/projectColor.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
+  import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
 
   function fmtCost(v: number): string {
     if (v >= 100) return `$${v.toFixed(0)}`;
@@ -85,6 +86,27 @@
       pct: total > 0 ? d.cost / total : 0,
     }));
   });
+
+  const RAIL_ROW_HEIGHT = 24;
+  const LIST_ROW_HEIGHT = 42;
+  let railScrollElement: HTMLDivElement | undefined = $state();
+  let listScrollElement: HTMLDivElement | undefined = $state();
+
+  const railVirtualizer = createVirtualizer(() => ({
+    count: rows.length,
+    getScrollElement: () => railScrollElement ?? null,
+    estimateSize: () => RAIL_ROW_HEIGHT,
+    overscan: 6,
+    getItemKey: (index) => rows[index]?.id ?? index,
+  }));
+
+  const listVirtualizer = createVirtualizer(() => ({
+    count: rows.length,
+    getScrollElement: () => listScrollElement ?? null,
+    estimateSize: () => LIST_ROW_HEIGHT,
+    overscan: 6,
+    getItemKey: (index) => rows[index]?.id ?? index,
+  }));
 
   // One SVG group is drawn per tile, and branch grouping can produce
   // thousands of (project, branch) rows whose tiles would be sub-pixel;
@@ -222,57 +244,66 @@
             ariaLabelFor={rowAriaLabel}
           />
         </div>
-        <div class="side-rail">
-          {#each rows as row, i (row.id)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="rail-row"
-              title={rowTitle(row.id, row.label)}
-              onclick={() => handleSelect(row.id)}
-            >
-              <span class="rail-rank">{i + 1}</span>
-              <span
-                class="rail-dot"
-                style="background: {row.color}"
-              ></span>
-              <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">{fmtCost(row.cost)}</span>
-            </div>
-          {/each}
+        <div class="side-rail" bind:this={railScrollElement}>
+          <div
+            class="rail-virtual-spacer"
+            style="height: {railVirtualizer.instance?.getTotalSize() ?? 0}px; position: relative;"
+          >
+            {#each railVirtualizer.instance?.getVirtualItems() ?? [] as virtualRow (virtualRow.key)}
+              {@const row = rows[virtualRow.index]}
+              {#if row}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="rail-row"
+                  title={rowTitle(row.id, row.label)}
+                  style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
+                  onclick={() => handleSelect(row.id)}
+                >
+                  <span class="rail-rank">{virtualRow.index + 1}</span>
+                  <span class="rail-dot" style="background: {row.color}"></span>
+                  <span class="rail-label">{row.label}</span>
+                  <span class="rail-cost">{fmtCost(row.cost)}</span>
+                </div>
+              {/if}
+            {/each}
+          </div>
         </div>
       </div>
     {:else}
-      <div class="list-view">
-        {#each rows as row, i (row.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="list-row"
-            title={rowTitle(row.id, row.label)}
-            onclick={() => handleSelect(row.id)}
-          >
-            <span class="list-rank">{i + 1}</span>
-            <span
-              class="list-dot"
-              style="background: {row.color}"
-            ></span>
-            <div class="list-info">
-              <span class="list-label">{row.label}</span>
-              <div class="list-bar-track">
-                <div
-                  class="list-bar-fill"
-                  style="width: {Math.max(row.pct * 100, 1)}%;
-                         background: {row.color};"
-                ></div>
+      <div class="list-view" bind:this={listScrollElement}>
+        <div
+          class="list-virtual-spacer"
+          style="height: {listVirtualizer.instance?.getTotalSize() ?? 0}px; position: relative;"
+        >
+          {#each listVirtualizer.instance?.getVirtualItems() ?? [] as virtualRow (virtualRow.key)}
+            {@const row = rows[virtualRow.index]}
+            {#if row}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="list-row"
+                title={rowTitle(row.id, row.label)}
+                style="position: absolute; top: 0; left: 0; width: 100%; height: {virtualRow.size}px; transform: translateY({virtualRow.start}px);"
+                onclick={() => handleSelect(row.id)}
+              >
+                <span class="list-rank">{virtualRow.index + 1}</span>
+                <span class="list-dot" style="background: {row.color}"></span>
+                <div class="list-info">
+                  <span class="list-label">{row.label}</span>
+                  <div class="list-bar-track">
+                    <div
+                      class="list-bar-fill"
+                      style="width: {Math.max(row.pct * 100, 1)}%; background: {row.color};"
+                    ></div>
+                  </div>
+                </div>
+                <span class="list-pct">{(row.pct * 100).toFixed(1)}%</span>
+                <span class="list-cost">{fmtCost(row.cost)}</span>
               </div>
-            </div>
-            <span class="list-pct">
-              {(row.pct * 100).toFixed(1)}%
-            </span>
-            <span class="list-cost">{fmtCost(row.cost)}</span>
-          </div>
-        {/each}
+            {/if}
+          {/each}
+        </div>
       </div>
     {/if}
   {/if}
@@ -345,9 +376,6 @@
   }
 
   .side-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
     overflow-y: auto;
     max-height: 280px;
   }
@@ -360,6 +388,7 @@
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background 0.1s;
+    box-sizing: border-box;
   }
 
   .rail-row:hover {
@@ -400,9 +429,8 @@
 
   /* List view */
   .list-view {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    max-height: 420px;
+    overflow-y: auto;
   }
 
   .list-row {
@@ -413,6 +441,7 @@
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background 0.1s;
+    box-sizing: border-box;
   }
 
   .list-row:hover {

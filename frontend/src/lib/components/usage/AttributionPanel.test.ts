@@ -19,6 +19,32 @@ vi.mock("../../api/generated/index", () => ({
   UsageService: usageServiceMocks,
 }));
 
+vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
+  createVirtualizer: (
+    options: () => {
+      count: number;
+      estimateSize: (index: number) => number;
+      getItemKey?: (index: number) => string | number;
+    },
+  ) => ({
+    get instance() {
+      const opts = options();
+      const count = Math.min(opts.count, 12);
+      const size = opts.estimateSize(0);
+      return {
+        getTotalSize: () => opts.count * size,
+        getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
+          index,
+          key: opts.getItemKey?.(index) ?? index,
+          start: index * size,
+          size,
+          end: (index + 1) * size,
+        })),
+      };
+    },
+  }),
+}));
+
 import AttributionPanel from "./AttributionPanel.svelte";
 import { usage } from "../../stores/usage.svelte.js";
 import { branchFilterToken } from "../../branchFilters.js";
@@ -385,6 +411,59 @@ describe("AttributionPanel branch mode", () => {
 
     unmount(component);
     vi.unstubAllGlobals();
+  });
+
+  it("virtualizes a large branch list without losing exact selection", async () => {
+    usage.summary = usageSummary();
+    usage.summary.branchTotals = Array.from({ length: 1000 }, (_, index) => ({
+      project_key: `pl1:sha256:${index}`,
+      project: `project-${index}`,
+      branch: `branch-${index}`,
+      inputTokens: index,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 1000 - index,
+    }));
+    const spy = vi.spyOn(usage, "toggleBranch").mockImplementation(() => {});
+
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll(".list-row")).toHaveLength(12);
+    expect(
+      document.querySelector<HTMLElement>(".list-virtual-spacer")?.style.height,
+    ).toBe("42000px");
+    document.querySelector<HTMLElement>(".list-row")?.click();
+    expect(spy).toHaveBeenCalledWith(
+      branchFilterToken("pl1:sha256:0", "branch-0"),
+    );
+    unmount(component);
+  });
+
+  it("virtualizes the large treemap rail while retaining the tile cap", async () => {
+    usage.summary = usageSummary();
+    usage.summary.branchTotals = Array.from({ length: 1000 }, (_, index) => ({
+      project_key: `pl1:sha256:${index}`,
+      project: `project-${index}`,
+      branch: `branch-${index}`,
+      inputTokens: index,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 1000 - index,
+    }));
+    usage.toggles.attribution.view = "treemap";
+
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll("g.tile").length).toBeLessThanOrEqual(40);
+    expect(document.querySelectorAll(".rail-row")).toHaveLength(12);
+    expect(
+      document.querySelector<HTMLElement>(".rail-virtual-spacer")?.style.height,
+    ).toBe("24000px");
+    unmount(component);
   });
 });
 
