@@ -3,6 +3,9 @@ import {
   MetadataService,
   SessionsService,
 } from "../api/generated/index";
+// Imported from core rather than the index barrel so instanceof keeps the
+// real class identity in tests that mock "../api/generated/index".
+import { ApiError as GeneratedApiError } from "../api/generated/core/ApiError";
 import {
   callGenerated,
   configureGeneratedClient,
@@ -945,8 +948,19 @@ class SessionsStore {
         // breadcrumb.
         this.activeSessionDetail = session;
       }
-    } catch {
-      // Session may have been deleted
+    } catch (e) {
+      // The session may have been deleted, locally or on another machine. On
+      // a definitive not-found drop the cached detail so the breadcrumb
+      // empties instead of showing a ghost session; transient failures keep
+      // the cache and the next watcher refresh retries.
+      if (
+        e instanceof GeneratedApiError &&
+        e.status === 404 &&
+        this.activeSessionId === id &&
+        this.activeDetailRead.isCurrent(signal)
+      ) {
+        this.activeSessionDetail = null;
+      }
     } finally {
       this.activeDetailRead.finish(signal);
     }

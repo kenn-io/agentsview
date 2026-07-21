@@ -14,6 +14,7 @@ import {
   splitExcludeProjectParam,
 } from "./sessions.svelte.js";
 import { SessionsService } from "../api/generated/index";
+import { ApiError } from "../api/generated/core/ApiError";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
@@ -103,6 +104,15 @@ function mockSidebarPage(
     total: 0,
     ...overrides,
   });
+}
+
+function makeNotFoundError(id: string): ApiError {
+  const url = `/api/v1/sessions/${id}`;
+  return new ApiError(
+    { method: "GET", url },
+    { url, ok: false, status: 404, statusText: "Not Found", body: null },
+    "Not Found",
+  );
 }
 
 function rejectGeneratedRequestOnAbort(
@@ -2901,6 +2911,38 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("renamed");
     });
 
+    it("clears the cached detail when the active session was deleted", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-b", first_message: "detail" }),
+      );
+      await sessions.navigateToSession("gone");
+      expect(sessions.activeSession?.id).toBe("gone");
+
+      // The session is deleted elsewhere; a watcher-driven refresh 404s. The
+      // breadcrumb must empty rather than keep showing the ghost session.
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession).toBeUndefined();
+    });
+
+    it("keeps the cached detail when a refresh fails transiently", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "flaky", project: "proj-b", first_message: "detail" }),
+      );
+      await sessions.navigateToSession("flaky");
+
+      // A non-404 failure (server restart, network) must not blank the
+      // breadcrumb; only a definitive not-found may clear the cache.
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network down"));
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession?.first_message).toBe("detail");
+    });
   });
 
   describe("route cancellation", () => {
