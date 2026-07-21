@@ -765,7 +765,7 @@ describe("SessionsStore", () => {
       );
     });
 
-    it("keeps the active appended row when the reloaded index omits it", async () => {
+    it("keeps the open off-page session when the reloaded index omits it", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
       vi.mocked(api.getSession).mockResolvedValue(
         makeSession({
@@ -782,16 +782,16 @@ describe("SessionsStore", () => {
 
       await sessions.load();
 
-      expect(sessions.sessions.map((s) => s.id)).toEqual([
-        "listed",
-        "offpage",
-      ]);
+      // The open session is backed by the detail cache, not injected into
+      // the filtered sidebar collection, so the reload neither drops the
+      // breadcrumb nor grows the list.
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
       expect(sessions.activeSession?.first_message).toBe(
         "hydrated offpage detail",
       );
     });
 
-    it("moves the appended active row into place when pagination reaches it", async () => {
+    it("keeps the open session through pagination reaching its real row", async () => {
       vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
         sessions: [makeSkinnyRow({ id: "listed" })],
         total: 2,
@@ -806,13 +806,10 @@ describe("SessionsStore", () => {
 
       await sessions.load();
       await sessions.navigateToSession("offpage");
-      expect(sessions.sessions.map((s) => s.id)).toEqual([
-        "listed",
-        "offpage",
-      ]);
+      // The off-page target backs activeSession from the detail cache
+      // without being injected into the sidebar collection.
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
 
-      // A page that doesn't contain the appended row keeps it at the
-      // tail, preserving index order for keyboard navigation.
       vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
         sessions: [makeSkinnyRow({ id: "middle" })],
         total: 4,
@@ -822,9 +819,14 @@ describe("SessionsStore", () => {
       expect(sessions.sessions.map((s) => s.id)).toEqual([
         "listed",
         "middle",
-        "offpage",
       ]);
+      expect(sessions.activeSession?.first_message).toBe(
+        "hydrated offpage detail",
+      );
 
+      // Pagination reaches the open session's real row: it appears in its
+      // index position exactly once, and the breadcrumb keeps the cached
+      // detail while the row arrives as an index-only stub.
       vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
         sessions: [
           makeSkinnyRow({ id: "offpage" }),
@@ -844,6 +846,44 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe(
         "hydrated offpage detail",
       );
+    });
+
+    it("merges a re-listed row in place when a later page repeats it", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [
+          makeSkinnyRow({ id: "first" }),
+          makeSkinnyRow({ id: "shifted" }),
+        ],
+        total: 3,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "shifted", first_message: "hydrated shifted" }),
+      );
+      await sessions.hydrateVisibleSessions(["shifted"]);
+
+      // The index shifted while paginating and page 2 re-lists a row from
+      // page 1: it must move to its new position once, not duplicate, and
+      // carry its hydrated fields.
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [
+          makeSkinnyRow({ id: "shifted" }),
+          makeSkinnyRow({ id: "last" }),
+        ],
+        total: 3,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "first",
+        "shifted",
+        "last",
+      ]);
+      expect(
+        sessions.sessions.find((s) => s.id === "shifted")?.first_message,
+      ).toBe("hydrated shifted");
     });
 
     it("refreshes hydrated agent identity fields from the sidebar index", async () => {
