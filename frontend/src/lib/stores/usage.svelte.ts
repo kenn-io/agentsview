@@ -246,6 +246,8 @@ class UsageStore {
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
+  private summaryHasBranchBreakdowns = $state(false);
+  private branchBreakdownRequestPending = false;
   pairwiseComparison =
     $state<UsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(
@@ -314,6 +316,8 @@ class UsageStore {
             Date.now() - 24 * 60 * 60 * 1000,
           ).toISOString()
         : undefined,
+      branchBreakdowns:
+        this.toggles.attribution.groupBy === "branch" ? true : undefined,
     };
     if (
       sessionFilters.hideUnknownProject &&
@@ -641,6 +645,7 @@ class UsageStore {
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
+    if (g === "branch") void this.ensureBranchBreakdowns();
   }
 
   setTimeSeriesView(v: TimeSeriesView) {
@@ -652,6 +657,7 @@ class UsageStore {
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
+    if (g === "branch") void this.ensureBranchBreakdowns();
   }
 
   setAttributionView(v: AttributionView) {
@@ -713,10 +719,12 @@ class UsageStore {
       loadComparison?: boolean;
       params?: UsageParams;
       recoverProjectScope?: boolean;
+      preserveRelatedState?: boolean;
     } = {},
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
     const recoverProjectScope = options.recoverProjectScope ?? true;
+    const preserveRelatedState = options.preserveRelatedState ?? false;
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
     this.abortPanel("pairwise");
@@ -739,9 +747,12 @@ class UsageStore {
       ) as unknown as UsageSummaryResponse;
       if (this.versions.summary === v) {
         this.summary = data;
+        this.summaryHasBranchBreakdowns = params.branchBreakdowns === true;
         this.errors.summary = null;
-        this.ensurePairwiseSelection();
-        this.clearPairwiseComparisonState();
+        if (!preserveRelatedState) {
+          this.ensurePairwiseSelection();
+          this.clearPairwiseComparisonState();
+        }
         const loaded = {
           version: v,
           summary: data,
@@ -802,6 +813,24 @@ class UsageStore {
       }
     }
     return null;
+  }
+
+  private async ensureBranchBreakdowns(): Promise<void> {
+    if (
+      this.summary === null ||
+      this.summaryHasBranchBreakdowns ||
+      this.branchBreakdownRequestPending
+    ) return;
+    this.branchBreakdownRequestPending = true;
+    try {
+      await this.fetchSummary({
+        loadComparison: false,
+        preserveRelatedState: true,
+        params: { ...this.baseParams(), branchBreakdowns: true },
+      });
+    } finally {
+      this.branchBreakdownRequestPending = false;
+    }
   }
 
   private async fetchComparison(

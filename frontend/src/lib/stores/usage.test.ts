@@ -508,6 +508,80 @@ describe("UsageStore group-by linking", () => {
   });
 });
 
+describe("UsageStore lazy branch breakdowns", () => {
+  beforeEach(() => {
+    installStorage();
+    localStorage.removeItem(TOGGLES_KEY);
+    vi.clearAllMocks();
+  });
+
+  it("omits branch breakdowns from the ordinary summary", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchSummary();
+
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ branchBreakdowns: true }),
+    );
+  });
+
+  it("fetches once when Branch is first selected and reuses the rich summary", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchSummary();
+    await Promise.resolve();
+    const summaryCalls = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    const comparisonCalls = usageServiceMocks.getApiV1UsageComparison.mock.calls.length;
+    const pairwiseCalls = usageServiceMocks.getApiV1UsagePairwiseComparison.mock.calls.length;
+    const topSessionCalls = usageServiceMocks.getApiV1UsageTopSessions.mock.calls.length;
+
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ branchBreakdowns: true }),
+      )
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(
+      summaryCalls + 1,
+    );
+    expect(usageServiceMocks.getApiV1UsageComparison).toHaveBeenCalledTimes(
+      comparisonCalls,
+    );
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenCalledTimes(pairwiseCalls);
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(
+      topSessionCalls,
+    );
+
+    usage.setTimeSeriesGroupBy("model");
+    usage.setTimeSeriesGroupBy("branch");
+    await Promise.resolve();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(
+      summaryCalls + 1,
+    );
+  });
+
+  it("drops retained branch data on a non-Branch full refresh", async () => {
+    const { usage } = await loadStore();
+    usage.setAttributionGroupBy("branch");
+    await usage.fetchSummary();
+    usage.setAttributionGroupBy("model");
+
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ branchBreakdowns: true }),
+    );
+
+    const before = usageServiceMocks.getApiV1UsageSummary.mock.calls.length;
+    usage.setAttributionGroupBy("branch");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(
+        before + 1,
+      )
+    );
+  });
+});
+
 describe("UsageStore session filter params", () => {
   beforeEach(() => {
     installStorage();
