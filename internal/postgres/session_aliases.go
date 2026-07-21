@@ -51,6 +51,21 @@ func pgSessionTombstoneIDs(sess db.Session) []string {
 	return uniqueNonEmptyStrings(ids)
 }
 
+func pgTraeLegacySessionID(sess db.Session) string {
+	if sess.Agent != "trae" {
+		return ""
+	}
+	rawID := strings.TrimSpace(sess.SourceSessionID)
+	if rawID == "" {
+		return ""
+	}
+	legacyID := "trae:" + strings.TrimPrefix(rawID, "trae:")
+	if legacyID == sess.ID {
+		return ""
+	}
+	return legacyID
+}
+
 func pgVibeFallbackAliasID(id, agent, filePath string) string {
 	if agent != "vibe" || filePath == "" {
 		return ""

@@ -1538,6 +1538,50 @@ func deletePGSessionIfExcluded(
 	return true, nil
 }
 
+func deletePGLegacyTraeSessionIfOwned(
+	ctx context.Context,
+	tx *sql.Tx,
+	sess db.Session,
+	markerID, pushedMachine string,
+	legacyMarkerMachines []string,
+) error {
+	legacyID := pgTraeLegacySessionID(sess)
+	if legacyID == "" {
+		return nil
+	}
+	if legacyMarkerMachines == nil {
+		legacyMarkerMachines = []string{}
+	}
+	legacyMarkerMachinesJSON, err := json.Marshal(legacyMarkerMachines)
+	if err != nil {
+		return fmt.Errorf("encoding legacy marker machines: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM sessions
+		 WHERE id = $1
+		   AND (
+		     (
+		       owner_marker = ''
+		       AND (
+		         machine = $2
+		         OR machine = 'local'
+		         OR machine = ''
+		         OR machine IN (
+		           SELECT jsonb_array_elements_text($3::jsonb)
+		         )
+		       )
+		     )
+		     OR owner_marker = $4
+		   )`,
+		legacyID, pushedMachine, string(legacyMarkerMachinesJSON), markerID,
+	); err != nil {
+		return fmt.Errorf(
+			"deleting owned legacy trae session %s: %w", legacyID, err,
+		)
+	}
+	return nil
+}
+
 // sessionPushFingerprint builds the change-detection fingerprint for a
 // session. pushedMachine is the value pushSession actually writes to PG
 // (pushedSessionMachine), not the raw sess.Machine: a "local"/empty sentinel
@@ -2028,6 +2072,11 @@ func (s *Sync) pushSession(
 		return errSessionExcluded
 	}
 	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
+		return err
+	}
+	if err := deletePGLegacyTraeSessionIfOwned(
+		ctx, tx, sess, markerID, pushedMachine, legacyMarkerMachines,
+	); err != nil {
 		return err
 	}
 	return nil

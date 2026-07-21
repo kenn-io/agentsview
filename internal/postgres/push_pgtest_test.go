@@ -1011,6 +1011,87 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 	assert.Zero(t, count, "excluded session row should be purged")
 }
 
+func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_trae_legacy_purge_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const legacyID = "trae:collision"
+	legacy := db.Session{
+		ID:               legacyID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "trae",
+		SourceSessionID:  "collision",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(legacy), "UpsertSession legacy")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     legacyID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "legacy",
+		ContentLength: len("legacy"),
+	}}), "InsertMessages legacy")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "initial Push")
+
+	deleted, err := localDB.DeleteParserExcludedSessions([]string{legacyID})
+	require.NoError(t, err, "DeleteParserExcludedSessions legacy")
+	assert.Equal(t, 1, deleted)
+
+	const namespacedID = "trae:globalStorage:collision"
+	namespaced := legacy
+	namespaced.ID = namespacedID
+	require.NoError(t, localDB.UpsertSession(namespaced), "UpsertSession namespaced")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     namespacedID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "namespaced",
+		ContentLength: len("namespaced"),
+	}}), "InsertMessages namespaced")
+
+	_, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push after namespace migration")
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		legacyID,
+	).Scan(&count), "count legacy trae session")
+	assert.Zero(t, count, "legacy trae row should be purged")
+
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		namespacedID,
+	).Scan(&count), "count namespaced trae session")
+	assert.Equal(t, 1, count, "namespaced trae row should remain")
+}
+
 func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 	pgURL := testPGURL(t)
 
