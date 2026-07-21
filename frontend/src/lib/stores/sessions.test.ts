@@ -2859,17 +2859,50 @@ describe("SessionsStore", () => {
       );
       await sessions.renameSession("sel", "renamed");
       expect(sessions.sessions[0]?.display_name).toBe("renamed");
+      // The rename response backs the breadcrumb: the row is still index-only
+      // and its in-flight hydration was invalidated by the rename.
+      expect(sessions.activeSession?.display_name).toBe("renamed");
 
-      // The pre-rename hydration snapshot must not overwrite the row or seed
-      // the breadcrumb cache with the old name.
+      // The pre-rename hydration snapshot must not overwrite the row or the
+      // breadcrumb cache with the old name.
       resolveHydration(
         makeSession({ id: "sel", project: "proj-a", display_name: "stale" }),
       );
       await hydration;
 
       expect(sessions.sessions[0]?.display_name).toBe("renamed");
-      expect(sessions.activeSession?.display_name).not.toBe("stale");
-      expect(sessions.activeSessionDetail?.display_name).not.toBe("stale");
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+    });
+
+    it("commits the rename response when it lands during the navigation fetch", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      // Navigation fetch for an out-of-list session stays in flight, so the
+      // detail cache is still empty when the rename resolves.
+      let resolveNavigate!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveNavigate = r;
+        }),
+      );
+      const nav = sessions.navigateToSession("sel");
+      await Promise.resolve();
+
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "sel", display_name: "renamed" }),
+      );
+      await sessions.renameSession("sel", "renamed");
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+
+      // The cancelled pre-rename navigation response must not replace the
+      // committed rename snapshot.
+      resolveNavigate(
+        makeSession({ id: "sel", display_name: "stale" }),
+      );
+      await nav;
+
+      expect(sessions.activeSession?.display_name).toBe("renamed");
     });
 
     it("seeds the cache from a hydration already in flight at selection", async () => {
