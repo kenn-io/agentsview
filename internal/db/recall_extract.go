@@ -547,37 +547,6 @@ func copyRecallExtractStateFromAttachedTx(
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `
-		WITH legacy_trae_map AS (
-			SELECT
-				id AS legacy_id,
-				CASE
-					WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-					ELSE ''
-				END AS host_prefix,
-				CASE
-					WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-					WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-					ELSE ''
-				END AS namespace,
-				CASE
-					WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-					ELSE source_session_id
-				END AS raw_id
-			FROM old_db.sessions
-			WHERE agent = 'trae'
-			  AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-			  AND id NOT LIKE 'trae:workspaceStorage:%'
-			  AND id NOT LIKE 'trae:globalStorage:%'
-			  AND id NOT LIKE '%~trae:workspaceStorage:%'
-			  AND id NOT LIKE '%~trae:globalStorage:%'
-		),
-		mapped_legacy_trae AS (
-			SELECT
-				legacy_id,
-				host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-			FROM legacy_trae_map
-			WHERE namespace <> '' AND raw_id <> ''
-		)
 		INSERT OR IGNORE INTO recall_extract_progress (
 			session_id, generation_fingerprint, unit_cursor, units_total,
 			state, content_digest, last_error, updated_at
@@ -586,9 +555,8 @@ func copyRecallExtractStateFromAttachedTx(
 		       COALESCE(
 				(
 					SELECT mapped.namespaced_id
-					FROM mapped_legacy_trae mapped
+					FROM `+legacyTraeTargetMapTable+` mapped
 					WHERE mapped.legacy_id = old_db.recall_extract_progress.session_id
-					  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
 				),
 				session_id
 		       ),
@@ -598,9 +566,8 @@ func copyRecallExtractStateFromAttachedTx(
 		WHERE COALESCE(
 			(
 				SELECT mapped.namespaced_id
-				FROM mapped_legacy_trae mapped
+				FROM `+legacyTraeTargetMapTable+` mapped
 				WHERE mapped.legacy_id = old_db.recall_extract_progress.session_id
-				  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
 			),
 			session_id
 		) IN (SELECT id FROM main.sessions)`); err != nil {

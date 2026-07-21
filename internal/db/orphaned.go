@@ -533,127 +533,37 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	if oldDBHasTable(ctx, tx, "sessions") {
+		if err := rebuildLegacyTraeTargetMapTx(
+			ctx, tx, "old_db.sessions", "main.sessions",
+		); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id,
-					display_name,
-					deleted_at
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id,
-					display_name,
-					deleted_at
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			UPDATE main.sessions
 			SET display_name = CASE
-					WHEN main.sessions.display_name IS NULL THEN mapped.display_name
+					WHEN main.sessions.display_name IS NULL THEN legacy.display_name
 					ELSE main.sessions.display_name
 				END,
-				deleted_at = COALESCE(main.sessions.deleted_at, mapped.deleted_at)
-			FROM mapped
+				deleted_at = COALESCE(main.sessions.deleted_at, legacy.deleted_at)
+			FROM `+legacyTraeTargetMapTable+` mapped
+			JOIN old_db.sessions legacy
+				ON legacy.id = mapped.legacy_id
 			WHERE main.sessions.id = mapped.namespaced_id`); err != nil {
 			return fmt.Errorf("migrating legacy trae session metadata: %w", err)
 		}
 		if oldDBHasTable(ctx, tx, "starred_sessions") {
 			if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			INSERT OR IGNORE INTO main.starred_sessions
 				(session_id, created_at)
 			SELECT mapped.namespaced_id, ss.created_at
 			FROM old_db.starred_sessions ss
-			JOIN mapped ON mapped.legacy_id = ss.session_id
-			WHERE mapped.namespaced_id IN (SELECT id FROM main.sessions)`); err != nil {
+			JOIN `+legacyTraeTargetMapTable+` mapped
+				ON mapped.legacy_id = ss.session_id`); err != nil {
 				return fmt.Errorf("migrating legacy trae stars: %w", err)
 			}
 		}
 		if oldDBHasTable(ctx, tx, "pinned_messages") {
 			if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			INSERT OR IGNORE INTO main.pinned_messages
 				(session_id, message_id, ordinal, note, created_at)
 			SELECT
@@ -661,179 +571,59 @@ func (d *DB) CopySessionMetadataFrom(
 			FROM old_db.pinned_messages op
 			JOIN old_db.messages old_m
 				ON old_m.id = op.message_id
-			JOIN mapped
+			JOIN `+legacyTraeTargetMapTable+` mapped
 				ON mapped.legacy_id = op.session_id
 			JOIN main.messages new_m
 				ON new_m.session_id = mapped.namespaced_id
-				AND new_m.ordinal = old_m.ordinal
-			WHERE mapped.namespaced_id IN (SELECT id FROM main.sessions)`); err != nil {
+				AND new_m.ordinal = old_m.ordinal`); err != nil {
 				return fmt.Errorf("migrating legacy trae pins: %w", err)
 			}
 		}
 		if oldDBHasTable(ctx, tx, "recall_entries") {
 			if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			UPDATE main.recall_entries
 			SET source_session_id = (
 				SELECT mapped.namespaced_id
-				FROM mapped
+				FROM `+legacyTraeTargetMapTable+` mapped
 				WHERE mapped.legacy_id = main.recall_entries.source_session_id
 			)
-			WHERE source_session_id IN (SELECT legacy_id FROM mapped)`); err != nil {
+			WHERE source_session_id IN (
+				SELECT legacy_id FROM `+legacyTraeTargetMapTable+`
+			)`); err != nil {
 				return fmt.Errorf("migrating legacy trae recall entries: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			UPDATE main.recall_evidence
 			SET session_id = (
 				SELECT mapped.namespaced_id
-				FROM mapped
+				FROM `+legacyTraeTargetMapTable+` mapped
 				WHERE mapped.legacy_id = main.recall_evidence.session_id
 			)
-			WHERE session_id IN (SELECT legacy_id FROM mapped)`); err != nil {
+			WHERE session_id IN (
+				SELECT legacy_id FROM `+legacyTraeTargetMapTable+`
+			)`); err != nil {
 				return fmt.Errorf("migrating legacy trae recall evidence: %w", err)
 			}
 		}
 		if oldDBHasTable(ctx, tx, "recall_extract_progress") {
 			if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			UPDATE main.recall_extract_progress
 			SET session_id = (
 				SELECT mapped.namespaced_id
-				FROM mapped
+				FROM `+legacyTraeTargetMapTable+` mapped
 				WHERE mapped.legacy_id = main.recall_extract_progress.session_id
 			)
-			WHERE session_id IN (SELECT legacy_id FROM mapped)`); err != nil {
+			WHERE session_id IN (
+				SELECT legacy_id FROM `+legacyTraeTargetMapTable+`
+			)`); err != nil {
 				return fmt.Errorf("migrating legacy trae recall extract progress: %w", err)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `
-			WITH legacy AS (
-				SELECT
-					id AS legacy_id,
-					CASE
-						WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-						ELSE ''
-					END AS host_prefix,
-					CASE
-						WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-						WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-						ELSE ''
-					END AS namespace,
-					CASE
-						WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-						ELSE source_session_id
-					END AS raw_id
-				FROM old_db.sessions
-				WHERE agent = 'trae'
-					AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-					AND id NOT LIKE 'trae:workspaceStorage:%'
-					AND id NOT LIKE 'trae:globalStorage:%'
-					AND id NOT LIKE '%~trae:workspaceStorage:%'
-					AND id NOT LIKE '%~trae:globalStorage:%'
-			),
-			mapped AS (
-				SELECT
-					legacy_id,
-					host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-				FROM legacy
-				WHERE namespace <> '' AND raw_id <> ''
-			)
 			DELETE FROM main.sessions
 			WHERE id IN (
 				SELECT legacy_id
-				FROM mapped
-				WHERE namespaced_id IN (SELECT id FROM main.sessions)
+				FROM `+legacyTraeTargetMapTable+`
 			)`); err != nil {
 			return fmt.Errorf("removing legacy trae session rows: %w", err)
 		}
@@ -1042,7 +832,7 @@ func copyLegacyTraeSessionProjectIdentitySnapshots(
 	ctx context.Context, tx *sql.Tx,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT snap.session_id, old_s.file_path,
+		SELECT snap.session_id, old_s.file_path, old_s.source_session_id,
 			snap.project, snap.machine, snap.root_path, snap.git_remote,
 			snap.git_remote_name, snap.repository_path, snap.worktree_name,
 			snap.worktree_root_path, snap.worktree_relationship,
@@ -1067,6 +857,7 @@ func copyLegacyTraeSessionProjectIdentitySnapshots(
 		var (
 			oldID                string
 			filePath             sql.NullString
+			sourceSessionID      sql.NullString
 			project              string
 			machine              string
 			rootPath             string
@@ -1086,7 +877,7 @@ func copyLegacyTraeSessionProjectIdentitySnapshots(
 			key                  string
 		)
 		if err := rows.Scan(
-			&oldID, &filePath,
+			&oldID, &filePath, &sourceSessionID,
 			&project, &machine, &rootPath, &gitRemote,
 			&gitRemoteName, &repositoryPath, &worktreeName,
 			&worktreeRootPath, &worktreeRelationship,
@@ -1098,46 +889,30 @@ func copyLegacyTraeSessionProjectIdentitySnapshots(
 				"scanning legacy trae project identity snapshot: %w", err,
 			)
 		}
-		hostPrefix, strippedID := legacyTraeSessionPrefixAndStrippedID(oldID)
-		rawID := strings.TrimPrefix(strippedID, "trae:")
-		rawID = strings.TrimPrefix(rawID, "trae:")
-		if rawID == "" {
+		newID, err := resolveLegacyTraeNamespacedID(
+			oldID,
+			filePath.String,
+			sourceSessionID.String,
+			func(id string) (bool, error) {
+				var ok bool
+				if err := tx.QueryRowContext(ctx,
+					`SELECT EXISTS(SELECT 1 FROM main.sessions WHERE id = ?)`,
+					id,
+				).Scan(&ok); err != nil {
+					return false, err
+				}
+				return ok, nil
+			},
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"resolving legacy trae project identity snapshot %s: %w",
+				oldID, err,
+			)
+		}
+		if newID == "" {
 			continue
 		}
-		namespace := traeSessionNamespaceFromPath(filePath.String)
-		if namespace == "" {
-			workspaceID := hostPrefix + "trae:workspaceStorage:" + rawID
-			globalID := hostPrefix + "trae:globalStorage:" + rawID
-			var workspaceCount, globalCount int
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM main.sessions WHERE id = ?`,
-				workspaceID,
-			).Scan(&workspaceCount); err != nil {
-				return fmt.Errorf(
-					"checking migrated trae snapshot target %s: %w",
-					workspaceID, err,
-				)
-			}
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM main.sessions WHERE id = ?`,
-				globalID,
-			).Scan(&globalCount); err != nil {
-				return fmt.Errorf(
-					"checking migrated trae snapshot target %s: %w",
-					globalID, err,
-				)
-			}
-			switch {
-			case workspaceCount > 0 && globalCount == 0:
-				namespace = "workspaceStorage"
-			case globalCount > 0 && workspaceCount == 0:
-				namespace = "globalStorage"
-			}
-		}
-		if namespace == "" {
-			continue
-		}
-		newID := hostPrefix + "trae:" + namespace + ":" + rawID
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_identity_snapshots (
 				session_id, project, machine, root_path, git_remote,

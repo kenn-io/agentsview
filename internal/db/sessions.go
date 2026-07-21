@@ -1332,16 +1332,25 @@ func (db *DB) MigrateLegacyTraeSessionState(
 	defer func() { _ = tx.Rollback() }()
 
 	var (
-		oldPath      sql.NullString
-		oldName      sql.NullString
-		oldDeletedAt sql.NullString
+		oldPath               sql.NullString
+		oldName               sql.NullString
+		oldDeletedAt          sql.NullString
+		oldSourceSessionID    sql.NullString
+		oldTranscriptRevision sql.NullString
 	)
 	err = tx.QueryRow(
-		`SELECT file_path, display_name, deleted_at
+		`SELECT file_path, display_name, deleted_at,
+		        source_session_id, transcript_revision
 		   FROM sessions
 		  WHERE id = ?`,
 		oldID,
-	).Scan(&oldPath, &oldName, &oldDeletedAt)
+	).Scan(
+		&oldPath,
+		&oldName,
+		&oldDeletedAt,
+		&oldSourceSessionID,
+		&oldTranscriptRevision,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -1361,6 +1370,71 @@ func (db *DB) MigrateLegacyTraeSessionState(
 	}
 	if !targetExists {
 		return nil
+	}
+	if oldNamespace == "" {
+		workspaceID, globalID := legacyTraeSiblingSessionIDs(
+			oldID, oldSourceSessionID.String,
+		)
+		otherID := ""
+		switch targetNamespace {
+		case "workspaceStorage":
+			if workspaceID != newID {
+				return nil
+			}
+			otherID = globalID
+		case "globalStorage":
+			if globalID != newID {
+				return nil
+			}
+			otherID = workspaceID
+		default:
+			return nil
+		}
+		if otherID == "" {
+			return nil
+		}
+		var otherExists bool
+		if err := tx.QueryRow(
+			`SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`,
+			otherID,
+		).Scan(&otherExists); err != nil {
+			return fmt.Errorf(
+				"checking migrated trae sibling target %s: %w",
+				otherID, err,
+			)
+		}
+		if otherExists {
+			oldRevision := strings.TrimSpace(oldTranscriptRevision.String)
+			if oldRevision == "" {
+				return nil
+			}
+			var (
+				targetRevision sql.NullString
+				otherRevision  sql.NullString
+			)
+			if err := tx.QueryRow(
+				`SELECT transcript_revision FROM sessions WHERE id = ?`,
+				newID,
+			).Scan(&targetRevision); err != nil {
+				return fmt.Errorf(
+					"loading migrated trae target revision %s: %w",
+					newID, err,
+				)
+			}
+			if err := tx.QueryRow(
+				`SELECT transcript_revision FROM sessions WHERE id = ?`,
+				otherID,
+			).Scan(&otherRevision); err != nil {
+				return fmt.Errorf(
+					"loading migrated trae sibling revision %s: %w",
+					otherID, err,
+				)
+			}
+			if oldRevision != strings.TrimSpace(targetRevision.String) ||
+				oldRevision == strings.TrimSpace(otherRevision.String) {
+				return nil
+			}
+		}
 	}
 
 	pins, err := savePinsTx(tx, oldID)
@@ -1442,7 +1516,7 @@ func (db *DB) MigrateAllLegacyTraeSessions() error {
 		return err
 	}
 	rows, err := db.getReader().Query(`
-		SELECT id, file_path
+		SELECT id, file_path, source_session_id
 		  FROM sessions
 		 WHERE agent = 'trae'
 		   AND id LIKE 'trae:%'
@@ -1462,41 +1536,44 @@ func (db *DB) MigrateAllLegacyTraeSessions() error {
 	for rows.Next() {
 		var id string
 		var filePath sql.NullString
-		if err := rows.Scan(&id, &filePath); err != nil {
+		var sourceSessionID sql.NullString
+		if err := rows.Scan(&id, &filePath, &sourceSessionID); err != nil {
 			return fmt.Errorf("scanning legacy trae session: %w", err)
 		}
-		hostPrefix, strippedID := legacyTraeSessionPrefixAndStrippedID(id)
-		namespace := traeSessionNamespaceFromPath(filePath.String)
-		rawID := strings.TrimPrefix(strippedID, "trae:")
-		rawID = strings.TrimPrefix(rawID, "trae:")
-		if rawID == "" {
+		newID, err := resolveLegacyTraeNamespacedID(
+			id,
+			filePath.String,
+			sourceSessionID.String,
+			func(candidate string) (bool, error) {
+				var ok bool
+				if err := db.getReader().QueryRow(
+					`SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`,
+					candidate,
+				).Scan(&ok); err != nil {
+					return false, err
+				}
+				return ok, nil
+			},
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"resolving legacy trae session target %s: %w",
+				id, err,
+			)
+		}
+		if newID == "" {
 			continue
 		}
-		if namespace == "" {
-			workspaceID := hostPrefix + "trae:workspaceStorage:" + rawID
-			globalID := hostPrefix + "trae:globalStorage:" + rawID
-			var workspaceCount, globalCount int
-			_ = db.getReader().QueryRow(
-				"SELECT COUNT(*) FROM sessions WHERE id = ?",
-				workspaceID,
-			).Scan(&workspaceCount)
-			_ = db.getReader().QueryRow(
-				"SELECT COUNT(*) FROM sessions WHERE id = ?",
-				globalID,
-			).Scan(&globalCount)
-			switch {
-			case workspaceCount > 0 && globalCount == 0:
-				namespace = "workspaceStorage"
-			case globalCount > 0 && workspaceCount == 0:
-				namespace = "globalStorage"
-			}
-		}
-		if namespace == "" {
-			continue
+		namespace := ""
+		switch {
+		case strings.Contains(newID, "trae:workspaceStorage:"):
+			namespace = "workspaceStorage"
+		case strings.Contains(newID, "trae:globalStorage:"):
+			namespace = "globalStorage"
 		}
 		migrations = append(migrations, migration{
 			oldID:     id,
-			newID:     hostPrefix + "trae:" + namespace + ":" + rawID,
+			newID:     newID,
 			namespace: namespace,
 		})
 	}

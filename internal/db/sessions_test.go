@@ -197,6 +197,183 @@ func TestMigrateAllLegacyTraeSessionsPreservesAmbiguousNamespace(t *testing.T) {
 	require.NotNil(t, legacy, "ambiguous legacy state should be preserved")
 }
 
+func TestMigrateLegacyTraeSessionStateUsesTranscriptRevisionForUnknownNamespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "openCopiedTestDB")
+	defer d.Close()
+
+	ctx := context.Background()
+	const oldID = "trae:legacy-collision"
+	const workspaceID = "trae:workspaceStorage:legacy-collision"
+	const globalID = "trae:globalStorage:legacy-collision"
+	workspaceRev := "workspace-rev"
+	globalRev := "global-rev"
+	unknownPath := filepath.Join(t.TempDir(), "storage", "state.vscdb", "rewrite")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 oldID,
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "legacy-collision",
+		TranscriptRevision: &workspaceRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+		FilePath:           &unknownPath,
+	}), "UpsertSession legacy")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 workspaceID,
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "legacy-collision",
+		TranscriptRevision: &workspaceRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:01:00Z",
+	}), "UpsertSession workspace")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 globalID,
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "legacy-collision",
+		TranscriptRevision: &globalRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:02:00Z",
+	}), "UpsertSession global")
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID:     oldID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+		workspaceRev, oldID,
+	)
+	require.NoError(t, err, "set legacy transcript revision")
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+		workspaceRev, workspaceID,
+	)
+	require.NoError(t, err, "set workspace transcript revision")
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+		globalRev, globalID,
+	)
+	require.NoError(t, err, "set global transcript revision")
+	starred, err := d.StarSession(oldID)
+	require.NoError(t, err, "StarSession")
+	require.True(t, starred)
+
+	require.NoError(t, d.MigrateLegacyTraeSessionState(
+		oldID, workspaceID, "workspaceStorage",
+	), "MigrateLegacyTraeSessionState")
+
+	legacy, err := d.GetSession(ctx, oldID)
+	require.NoError(t, err, "GetSession legacy")
+	assert.Nil(t, legacy, "matched transcript revision should migrate legacy state")
+
+	var workspaceStars int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = ?`,
+		workspaceID,
+	).Scan(&workspaceStars), "count workspace stars")
+	assert.Equal(t, 1, workspaceStars)
+}
+
+func TestMigrateLegacyTraeSessionStatePreservesLegacyWhenUnknownNamespaceStaysAmbiguous(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "openCopiedTestDB")
+	defer d.Close()
+
+	ctx := context.Background()
+	const oldID = "trae:legacy-collision-ambiguous"
+	const workspaceID = "trae:workspaceStorage:legacy-collision-ambiguous"
+	const globalID = "trae:globalStorage:legacy-collision-ambiguous"
+	sharedRev := "shared-rev"
+	unknownPath := filepath.Join(t.TempDir(), "storage", "state.vscdb", "rewrite")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 oldID,
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "legacy-collision-ambiguous",
+		TranscriptRevision: &sharedRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+		FilePath:           &unknownPath,
+	}), "UpsertSession legacy")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 workspaceID,
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "legacy-collision-ambiguous",
+		TranscriptRevision: &sharedRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:01:00Z",
+	}), "UpsertSession workspace")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 globalID,
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "legacy-collision-ambiguous",
+		TranscriptRevision: &sharedRev,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:02:00Z",
+	}), "UpsertSession global")
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID:     oldID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+		sharedRev, oldID,
+	)
+	require.NoError(t, err, "set legacy transcript revision")
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+		sharedRev, workspaceID,
+	)
+	require.NoError(t, err, "set workspace transcript revision")
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+		sharedRev, globalID,
+	)
+	require.NoError(t, err, "set global transcript revision")
+	starred, err := d.StarSession(oldID)
+	require.NoError(t, err, "StarSession")
+	require.True(t, starred)
+
+	require.NoError(t, d.MigrateLegacyTraeSessionState(
+		oldID, workspaceID, "workspaceStorage",
+	), "MigrateLegacyTraeSessionState")
+
+	legacy, err := d.GetSession(ctx, oldID)
+	require.NoError(t, err, "GetSession legacy")
+	require.NotNil(t, legacy, "shared revisions should preserve legacy state")
+
+	var legacyStars int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = ?`,
+		oldID,
+	).Scan(&legacyStars), "count legacy stars")
+	assert.Equal(t, 1, legacyStars)
+}
+
 func TestFindSessionIDsByPartial(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "abcdef-1111-2222", "proj")

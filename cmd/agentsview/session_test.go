@@ -411,6 +411,21 @@ func TestSessionGetVariants(t *testing.T) {
 			project: "proj",
 			mut:     func(s *db.Session) { s.Agent = "amp" },
 		},
+		sessionSeed{
+			id:      "laptop~trae:workspaceStorage:remote-collision",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = string(parser.AgentTrae) },
+		},
+		sessionSeed{
+			id:      "desktop~trae:globalStorage:remote-collision",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = string(parser.AgentTrae) },
+		},
+		sessionSeed{
+			id:      "amp:remote-collision",
+			project: "proj",
+			mut:     func(s *db.Session) { s.Agent = "amp" },
+		},
 	)
 
 	t.Run("json format", func(t *testing.T) {
@@ -497,6 +512,17 @@ func TestSessionGetVariants(t *testing.T) {
 		assert.Contains(t, err.Error(), "ambiguous")
 		assert.Contains(t, err.Error(), "trae:workspaceStorage:collision")
 		assert.Contains(t, err.Error(), "trae:globalStorage:collision")
+	})
+
+	t.Run("bare trae id rejects ambiguous remote namespaces", func(t *testing.T) {
+		_, err := executeCommand(newRootCommand(),
+			"session", "get", "remote-collision", "--format", "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ambiguous")
+		assert.Contains(t, err.Error(),
+			"laptop~trae:workspaceStorage:remote-collision")
+		assert.Contains(t, err.Error(),
+			"desktop~trae:globalStorage:remote-collision")
 	})
 }
 

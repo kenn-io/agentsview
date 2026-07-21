@@ -312,7 +312,7 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // for existing Hermes sessions so historical skill usage appears in analytics.)
 // (69: Trae namespace identities. Re-parsing rebuilds legacy trae:<raw> rows
 // into namespaced workspace/global identities and drops the superseded alias.)
-const dataVersion = 69
+const dataVersion = 70
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -2359,12 +2359,6 @@ func (e *Engine) SyncAll(
 	defer e.clearCurrentProgress()
 	if e.db.NeedsResync() {
 		stats = e.resyncAllLocked(ctx, onProgress)
-		if stats.Aborted && ctx.Err() == nil {
-			stats = e.syncAllLocked(
-				ctx, onProgress, time.Time{}, nil,
-				syncWriteDefault, true, false,
-			)
-		}
 		return
 	}
 	stats = e.syncAllLocked(

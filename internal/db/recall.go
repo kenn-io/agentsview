@@ -231,6 +231,13 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	if oldDBHasTable(ctx, tx, "sessions") {
+		if err := rebuildLegacyTraeTargetMapTx(
+			ctx, tx, "old_db.sessions", "main.sessions",
+		); err != nil {
+			return err
+		}
+	}
 	if err := copyRecallQueryEventsFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
@@ -239,37 +246,6 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	}
 
 	res, err := tx.ExecContext(ctx, `
-		WITH legacy_trae_map AS (
-			SELECT
-				id AS legacy_id,
-				CASE
-					WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-					ELSE ''
-				END AS host_prefix,
-				CASE
-					WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-					WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-					ELSE ''
-				END AS namespace,
-				CASE
-					WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-					ELSE source_session_id
-				END AS raw_id
-			FROM old_db.sessions
-			WHERE agent = 'trae'
-			  AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-			  AND id NOT LIKE 'trae:workspaceStorage:%'
-			  AND id NOT LIKE 'trae:globalStorage:%'
-			  AND id NOT LIKE '%~trae:workspaceStorage:%'
-			  AND id NOT LIKE '%~trae:globalStorage:%'
-		),
-		mapped_legacy_trae AS (
-			SELECT
-				legacy_id,
-				host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-			FROM legacy_trae_map
-			WHERE namespace <> '' AND raw_id <> ''
-		)
 		INSERT OR IGNORE INTO recall_entries (
 			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
@@ -284,9 +260,8 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 			COALESCE(
 				(
 					SELECT mapped.namespaced_id
-					FROM mapped_legacy_trae mapped
+					FROM `+legacyTraeTargetMapTable+` mapped
 					WHERE mapped.legacy_id = old_db.recall_entries.source_session_id
-					  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
 				),
 				source_session_id
 			),
@@ -298,9 +273,8 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		WHERE COALESCE(
 			(
 				SELECT mapped.namespaced_id
-				FROM mapped_legacy_trae mapped
+				FROM `+legacyTraeTargetMapTable+` mapped
 				WHERE mapped.legacy_id = old_db.recall_entries.source_session_id
-				  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
 			),
 			source_session_id
 		) IN (SELECT id FROM main.sessions)`)
@@ -320,37 +294,6 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		WITH legacy_trae_map AS (
-			SELECT
-				id AS legacy_id,
-				CASE
-					WHEN instr(id, '~') > 0 THEN substr(id, 1, instr(id, '~'))
-					ELSE ''
-				END AS host_prefix,
-				CASE
-					WHEN file_path LIKE '%workspaceStorage%' THEN 'workspaceStorage'
-					WHEN file_path LIKE '%globalStorage%' THEN 'globalStorage'
-					ELSE ''
-				END AS namespace,
-				CASE
-					WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
-					ELSE source_session_id
-				END AS raw_id
-			FROM old_db.sessions
-			WHERE agent = 'trae'
-			  AND (id LIKE 'trae:%' OR id LIKE '%~trae:%')
-			  AND id NOT LIKE 'trae:workspaceStorage:%'
-			  AND id NOT LIKE 'trae:globalStorage:%'
-			  AND id NOT LIKE '%~trae:workspaceStorage:%'
-			  AND id NOT LIKE '%~trae:globalStorage:%'
-		),
-		mapped_legacy_trae AS (
-			SELECT
-				legacy_id,
-				host_prefix || 'trae:' || namespace || ':' || raw_id AS namespaced_id
-			FROM legacy_trae_map
-			WHERE namespace <> '' AND raw_id <> ''
-		)
 		INSERT INTO recall_evidence (
 			entry_id, session_id, message_start_ordinal,
 			message_end_ordinal, message_start_source_uuid,
@@ -361,9 +304,8 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 			COALESCE(
 				(
 					SELECT mapped.namespaced_id
-					FROM mapped_legacy_trae mapped
+					FROM `+legacyTraeTargetMapTable+` mapped
 					WHERE mapped.legacy_id = old_db.recall_evidence.session_id
-					  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
 				),
 				session_id
 			),
@@ -375,9 +317,8 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		  AND COALESCE(
 			(
 				SELECT mapped.namespaced_id
-				FROM mapped_legacy_trae mapped
+				FROM `+legacyTraeTargetMapTable+` mapped
 				WHERE mapped.legacy_id = old_db.recall_evidence.session_id
-				  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
 			),
 			session_id
 		  ) IN (SELECT id FROM main.sessions)`); err != nil {

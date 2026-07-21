@@ -1580,12 +1580,19 @@ func deletePGLegacyTraeSessionIfOwned(
 				legacyID, err,
 			)
 		}
+		if legacyLocal != nil && legacyLocal.TranscriptRevision != nil {
+			legacyTranscriptRevision = legacyLocal.TranscriptRevision
+		}
 		if legacyLocal != nil && legacyLocal.FilePath != nil {
 			legacyNamespace := pgTraeSessionNamespaceFromPath(*legacyLocal.FilePath)
-			if legacyNamespace != "" && legacyNamespace != currentNamespace {
-				return nil
+			if legacyNamespace != "" {
+				if legacyNamespace != currentNamespace {
+					return nil
+				}
+				goto revisionCheckDone
 			}
-		} else {
+		}
+		{
 			rawID := strings.TrimPrefix(
 				strings.TrimPrefix(
 					strings.TrimPrefix(sess.ID, pgSessionIDPrefix(sess.ID)),
@@ -1620,6 +1627,7 @@ func deletePGLegacyTraeSessionIfOwned(
 			}
 		}
 	}
+revisionCheckDone:
 	if legacyMarkerMachines == nil {
 		legacyMarkerMachines = []string{}
 	}

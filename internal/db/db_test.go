@@ -931,7 +931,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionTraeNamespaceMigration(t *testing.T) {
-	assert.Equal(t, 69, CurrentDataVersion(),
+	assert.Equal(t, 70, CurrentDataVersion(),
 		"Trae namespace identity migration requires a data version bump")
 }
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

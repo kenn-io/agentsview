@@ -211,7 +211,29 @@ func resolveTraeNamespacedSessionID(
 		match = candidate
 	}
 	if match == "" {
-		return "", nil, false
+		matches, err := svc.FindSessionIDsByPartial(ctx, id, 64)
+		if err != nil {
+			return "", err, true
+		}
+		filtered := make([]string, 0, len(matches))
+		for _, candidate := range matches {
+			if hostPrefix != "" && !strings.HasPrefix(candidate, hostPrefix) {
+				continue
+			}
+			_, stripped := parser.StripHostPrefix(candidate)
+			switch stripped {
+			case string(parser.AgentTrae) + ":workspaceStorage:" + id,
+				string(parser.AgentTrae) + ":globalStorage:" + id:
+				filtered = append(filtered, candidate)
+			}
+		}
+		if len(filtered) == 0 {
+			return "", nil, false
+		}
+		if err := resolveTraeRawSuffixAmbiguity(id, filtered); err != nil {
+			return "", err, true
+		}
+		return filtered[0], nil, true
 	}
 	return match, nil, true
 }
