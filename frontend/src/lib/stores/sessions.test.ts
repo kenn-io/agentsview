@@ -2755,6 +2755,71 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSession?.first_message).toBe("restored");
     });
+
+    it("ignores a stale navigation response resolving after a newer refresh", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      // Navigation fetch for an out-of-list session stays in flight...
+      let resolveNavigate!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveNavigate = r;
+        }),
+      );
+      const nav = sessions.navigateToSession("sel");
+      await Promise.resolve();
+
+      // ...while a watcher-driven refresh for the same session resolves
+      // first with a fresher snapshot.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "NEWER" }),
+      );
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession?.first_message).toBe("NEWER");
+
+      // The older navigation response must not clobber the newer detail.
+      resolveNavigate(
+        makeSession({ id: "sel", project: "proj-a", first_message: "OLDER" }),
+      );
+      await nav;
+
+      expect(sessions.activeSession?.first_message).toBe("NEWER");
+    });
+
+    it("does not let a pre-rename refresh response revert a rename", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", display_name: null, first_message: "detail" }),
+      );
+      await sessions.navigateToSession("sel");
+
+      // Refresh fetch carrying a pre-rename snapshot stays in flight...
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...while a rename completes and updates the cached detail.
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "sel", display_name: "renamed" }),
+      );
+      await sessions.renameSession("sel", "renamed");
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+
+      resolveRefresh(
+        makeSession({ id: "sel", display_name: null, first_message: "detail" }),
+      );
+      await refresh;
+
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+    });
+
   });
 
   describe("route cancellation", () => {
