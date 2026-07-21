@@ -1401,9 +1401,8 @@ class SessionsStore {
       id,
       requestBody: { display_name: displayName },
     }) as unknown as Session;
-    const idx = this.sessions.findIndex((s) => s.id === id);
-    if (idx !== -1) {
-      const merged = { ...this.sessions[idx]!, ...updated };
+    const applyRename = (target: Session): Session => {
+      const merged = { ...target, ...updated };
       // When the caller cleared the rename and the backend found no agent name
       // to restore, display_name is absent from the response (omitempty on nil).
       // Explicitly null it out so the store reflects the cleared state rather
@@ -1411,7 +1410,16 @@ class SessionsStore {
       if (displayName === null && updated.display_name === undefined) {
         merged.display_name = null;
       }
-      this.sessions[idx] = merged;
+      return merged;
+    };
+    const idx = this.sessions.findIndex((s) => s.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = applyRename(this.sessions[idx]!);
+    }
+    // The active session may be backed only by the detail cache (absent from
+    // the sidebar list); keep its name in sync so the breadcrumb updates too.
+    if (this.activeSessionDetail?.id === id) {
+      this.activeSessionDetail = applyRename(this.activeSessionDetail);
     }
   }
 
