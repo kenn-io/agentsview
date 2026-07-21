@@ -864,6 +864,66 @@ func TestClientWithholdsBodyForPathTokenEndpoints(t *testing.T) {
 	}
 }
 
+// TestClientWithholdsMalformedRedirectDetail pins the transport-error
+// leak path: a malformed redirect Location is parsed before CheckRedirect
+// runs, and Go's parse error quotes the raw header — a server that knows
+// the endpoint credential can reflect it there, bypassing the redirect
+// and response-body redaction.
+func TestClientWithholdsMalformedRedirectDetail(t *testing.T) {
+	reflected := "reflected-cap-4bcdefgh1jklmn0pqrst"
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "http://evil.example/%zz"+reflected)
+			w.WriteHeader(http.StatusFound)
+		}))
+	defer server.Close()
+
+	client := testClient(server.URL + "/cap-4bcdefgh1jklmn0pqrst/v1")
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("malformed redirect must surface an error")
+	}
+	if strings.Contains(err.Error(), reflected) {
+		t.Fatalf("error reflects the malformed Location header: %v", err)
+	}
+	if !strings.Contains(err.Error(), "withheld") {
+		t.Fatalf("credentialed transport-error detail must be withheld: %v",
+			err)
+	}
+}
+
+// TestClientBoundsTransportErrorDetail pins the credential-free side: the
+// malformed-Location diagnostic stays — that is where the operator sees
+// the broken proxy — control-stripped and length-bounded.
+func TestClientBoundsTransportErrorDetail(t *testing.T) {
+	long := strings.Repeat("A", 600)
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "http://example.com/%zz"+long)
+			w.WriteHeader(http.StatusFound)
+		}))
+	defer server.Close()
+
+	client := testClient(server.URL + "/v1")
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("malformed redirect must surface an error")
+	}
+	if !strings.Contains(err.Error(), "%zz") {
+		t.Fatalf("credential-free transport diagnostics must be kept: %v", err)
+	}
+	if strings.Contains(err.Error(), long) {
+		t.Fatalf("transport-error text must be length-bounded: %v", err)
+	}
+	if !strings.Contains(err.Error(), "…(truncated)") {
+		t.Fatalf("transport-error text must note truncation: %v", err)
+	}
+}
+
 // TestClientKeepsDiagnosticsForKnownAPIPaths pins the other side: the
 // standard OpenAI-compatible path shapes are API surface, not secrets,
 // and withholding their diagnostics would gut doctor output for every

@@ -380,21 +380,33 @@ func (c *Client) distill(
 		// url.Error echoes the request URL with only the password masked:
 		// the username (which can itself be an API key) and the query
 		// string still leak, and this message reaches doctor output and
-		// stored failure rows. Report the redacted endpoint and keep the
-		// underlying cause on the chain.
+		// stored failure rows. Report the redacted endpoint instead.
 		cause := err
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
 			cause = urlErr.Err
 		}
-		wrapped := fmt.Errorf("posting distill request to %s: %w",
-			config.RedactedEndpoint(endpoint.String()), cause)
 		if errors.Is(cause, errRedirectRefused) {
 			// Deterministic for every request against the same
-			// configuration: fail fast, endpoint-scoped, no retries.
-			return nil, Usage{}, wrapped
+			// configuration: fail fast, endpoint-scoped, no retries. The
+			// cause is RefuseRedirects' own message with the target
+			// already redacted, so it stays on the chain verbatim.
+			return nil, Usage{}, fmt.Errorf(
+				"posting distill request to %s: %w",
+				config.RedactedEndpoint(endpoint.String()), cause)
 		}
-		return nil, Usage{}, &transientError{err: wrapped}
+		// Beyond the URL, the cause text itself can quote
+		// server-controlled bytes — a malformed redirect Location is
+		// parsed before CheckRedirect runs and echoed raw by its parse
+		// error, and a malformed HTTP response is quoted verbatim — so
+		// the detail is withheld for credentialed endpoints and
+		// control-stripped and bounded otherwise. Classification needs
+		// nothing from the chain here: everything but a redirect
+		// refusal is transient.
+		return nil, Usage{}, &transientError{err: fmt.Errorf(
+			"posting distill request to %s: %s",
+			config.RedactedEndpoint(endpoint.String()),
+			c.transportErrorDetail(cause))}
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
@@ -612,6 +624,23 @@ func (c *Client) responseDetail(raw []byte) string {
 		detail = detail[:cut]
 	}
 	return detail
+}
+
+// transportErrorDetail prepares a transport-layer error's text for error
+// messages. Context errors pass through: their text is fixed by the
+// runtime and says why the request ended (canceled, timed out). Anything
+// else can quote bytes the server chose, so it is withheld for
+// credentialed endpoints and control-stripped and length-bounded
+// otherwise.
+func (c *Client) transportErrorDetail(cause error) string {
+	if errors.Is(cause, context.Canceled) ||
+		errors.Is(cause, context.DeadlineExceeded) {
+		return cause.Error()
+	}
+	if c.credentialedEndpoint() {
+		return detailWithheld
+	}
+	return boundedToken(cause.Error(), 200)
 }
 
 // responseToken prepares a short endpoint-supplied token (a finish_reason)
