@@ -251,9 +251,13 @@ func (m *Manager) runPassLocked(
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		outcome, err := m.extractSession(ctx, sessionID, staged)
+		outcome, err := m.extractSession(
+			ctx, sessionID, staged, opts.SessionID != "")
 		result.Units += outcome.units
 		result.Entries += outcome.entries
+		if outcome.failed {
+			result.Failed++
+		}
 		if err != nil {
 			// Ineligibility at the first snapshot is drift: selection
 			// only returned eligible sessions, so this one was excluded
@@ -267,10 +271,7 @@ func (m *Manager) runPassLocked(
 			}
 			return result, err
 		}
-		switch {
-		case outcome.failed:
-			result.Failed++
-		case outcome.done:
+		if outcome.done {
 			result.Sessions++
 		}
 	}
@@ -400,6 +401,28 @@ func (m *Manager) refuseSecretFindings(
 	return nil
 }
 
+// settledPastQuietPeriod refuses a session whose ended_at falls inside
+// the quiet period as of now. An unparseable ended_at fails closed: a
+// value the archive cannot interpret cannot prove the session settled.
+func (m *Manager) settledPastQuietPeriod(
+	id string, s *db.Session,
+) error {
+	endedAt, err := time.Parse(time.RFC3339Nano, *s.EndedAt)
+	if err != nil {
+		return fmt.Errorf(
+			"session %s has an unparseable ended_at %q: %w",
+			id, *s.EndedAt, err,
+		)
+	}
+	if cutoff := time.Now().Add(-m.cfg.QuietPeriod); endedAt.After(cutoff) {
+		return fmt.Errorf(
+			"session %s ended %s ago, inside the %s quiet period",
+			id, time.Since(endedAt).Round(time.Second), m.cfg.QuietPeriod,
+		)
+	}
+	return nil
+}
+
 // extractableSession enforces the extraction privacy boundary for explicit
 // single-session runs. The scan path enforces the same predicates in SQL;
 // keeping both in lockstep means no path can feed an excluded session to
@@ -490,7 +513,7 @@ func (m *Manager) sessionSnapshot(
 }
 
 func (m *Manager) extractSession(
-	ctx context.Context, sessionID string, staged bool,
+	ctx context.Context, sessionID string, staged, explicit bool,
 ) (sessionOutcome, error) {
 	var outcome sessionOutcome
 	// The transcript-read cutoff is captured before anything is read: a
@@ -507,6 +530,18 @@ func (m *Manager) extractSession(
 	}
 	if err := extractableSession(sessionID, session); err != nil {
 		return outcome, &ineligibleSessionError{err: err}
+	}
+	// The quiet period is rechecked here, not only at selection: the
+	// backlog is materialized at pass start, so a session that ends again
+	// while queued would otherwise be extracted mid-settling. Parsed-time
+	// comparison, unlike the selection query's indexed string range, is
+	// exact across the RFC3339Nano precision variants ended_at carries.
+	// Explicit runs bypass the quiet period by contract; ended_at drift
+	// after this check trips the snapshot bracket and the commit guard.
+	if !explicit {
+		if err := m.settledPastQuietPeriod(sessionID, session); err != nil {
+			return outcome, &ineligibleSessionError{err: err}
+		}
 	}
 	if err := m.refuseSecretFindings(ctx, sessionID); err != nil {
 		return outcome, err
@@ -750,6 +785,18 @@ func (m *Manager) extractSession(
 				return outcome, markErr
 			}
 			outcome.failed = true
+			var transient *transientError
+			if errors.As(err, &transient) {
+				// An exhausted retry ladder means the endpoint is down or
+				// saturated, not that this unit is poisoned: every
+				// remaining session would burn its own full ladder
+				// against the same outage, stalling the pass for hours on
+				// a large backlog. Abort — the failure mark above keeps
+				// this session behind its backoff, so one pathological
+				// unit cannot re-abort every pass, and the rest of the
+				// backlog stays untouched and resumable.
+				return outcome, err
+			}
 			return outcome, nil
 		}
 		// The unit's output is committed under an in-transaction guard: the

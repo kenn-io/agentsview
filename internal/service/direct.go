@@ -1036,16 +1036,18 @@ func (b *directBackend) ScanSecrets(
 			progress(SecretScanProgress{Scanned: p.Scanned, Total: p.Total})
 		}
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &SecretScanSummary{
+	// The engine commits per-session results as it walks and reports
+	// what landed before a failure or cancellation; the partial summary
+	// travels with the error so callers can tell whether eligibility
+	// already changed.
+	summary := &SecretScanSummary{
 		Scanned:           sum.Scanned,
 		WithSecrets:       sum.WithSecrets,
 		TotalFindings:     sum.TotalFindings,
 		DefiniteFindings:  sum.DefiniteFindings,
 		CandidateFindings: sum.CandidateFindings,
-	}, nil
+	}
+	return summary, err
 }
 
 // revealFinding re-reads the finding's source by its stored coordinates and

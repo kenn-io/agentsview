@@ -99,6 +99,12 @@ func (s *Server) humaScanSecrets(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
+			// The scan commits per-session results as it walks, so a
+			// failure or cancellation partway through has already
+			// changed eligibility for everything it scanned.
+			if summary != nil && summary.Scanned > 0 {
+				s.notifySessionMutation()
+			}
 			stream.SendJSON("error", map[string]string{"error": err.Error()})
 			return
 		}

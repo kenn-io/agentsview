@@ -331,9 +331,12 @@ func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 		cfg.FailureBackoff = 5 * time.Millisecond
 	})
 
+	// Exhausted transient retries abort the pass (the outage would doom
+	// every queued session), returning the error with the session marked
+	// failed behind its backoff.
 	result, err := m.RunPass(ctx, PassOptions{})
-	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+	if err == nil {
+		t.Fatal("exhausted transient retries must abort the pass")
 	}
 	if result.Failed != 1 || result.Sessions != 0 {
 		t.Fatalf("result = %+v, want the session marked failed", result)
@@ -342,7 +345,7 @@ func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 		t.Fatalf("result = %+v, want 2 units done before the failure", result)
 	}
 	if result.Activated {
-		t.Fatal("a failed-only pass must not activate")
+		t.Fatal("an aborted pass must not activate")
 	}
 
 	// Let the failure row age past the (tiny) backoff before rescanning.
@@ -2016,6 +2019,111 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 		t.Fatalf("coverage stamp advanced from %s to %s outside the "+
 			"failure transition; a crash between the two transactions "+
 			"leaves invalid coverage claimed as current", stamped, got)
+	}
+}
+
+// TestManagerAbortsPassOnExhaustedTransientFailures pins outage handling:
+// when the retry ladder for one unit exhausts against network errors,
+// timeouts, 429s, or 5xxs, every remaining session faces the same outage —
+// continuing would burn the full ladder per queued session and stall the
+// pass for hours on a large backlog. The visited session keeps its failure
+// backoff (a single pathological unit must not re-abort every pass), and
+// the rest of the backlog stays untouched and resumable.
+func TestManagerAbortsPassOnExhaustedTransientFailures(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusInternalServerError, `{"error":"upstream down"}`
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	_, err := m.RunPass(ctx, PassOptions{})
+	if err == nil {
+		t.Fatal("an exhausted retry ladder against a down endpoint must " +
+			"abort the pass")
+	}
+	if calls := log.count(); calls != 2 {
+		t.Fatalf("model calls = %d, want 2 (one session's ladder): the "+
+			"outage must not burn retries for every queued session", calls)
+	}
+	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
+	if perr != nil || !found {
+		t.Fatalf("ExtractProgress(sess-a): found=%v err=%v", found, perr)
+	}
+	if progress.State != db.ExtractProgressFailed {
+		t.Fatalf("sess-a state = %s, want failed with backoff so a "+
+			"pathological unit cannot re-abort every pass", progress.State)
+	}
+	if _, found, perr = d.ExtractProgress(
+		ctx, "sess-b", m.Fingerprint(),
+	); perr != nil || found {
+		t.Fatalf("ExtractProgress(sess-b): found=%v err=%v, want no row: "+
+			"the rest of the backlog stays untouched", found, perr)
+	}
+}
+
+// TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod pins that
+// quiet-period eligibility is rechecked at extraction time, not only at
+// selection: the backlog is materialized at pass start, so a session that
+// ends again while queued would otherwise be extracted mid-settling.
+func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	server, log := modelServer(t, func(_ string, call int) (int, string) {
+		if call == 1 {
+			// While sess-a's unit is at the model, sess-b — already
+			// selected — ends again just now: fresh activity inside the
+			// quiet period.
+			reended := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := side.Exec(
+				"UPDATE sessions SET ended_at = ? WHERE id = 'sess-b'",
+				reended,
+			); err != nil {
+				t.Errorf("re-ending sess-b: %v", err)
+			}
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if calls := log.count(); calls != 2 {
+		t.Fatalf("model calls = %d, want 2 (sess-a's units only): a "+
+			"session re-ended within the quiet period must not reach "+
+			"the model", calls)
+	}
+	if result.Sessions != 1 || result.Failed != 0 {
+		t.Fatalf("result = %+v, want one completed session and no "+
+			"failures: the re-ended session is drift, not an error", result)
+	}
+	if _, found, perr := d.ExtractProgress(
+		ctx, "sess-b", m.Fingerprint(),
+	); perr != nil || found {
+		t.Fatalf("ExtractProgress(sess-b): found=%v err=%v, want no row: "+
+			"the session is rediscovered once its quiet period elapses",
+			found, perr)
 	}
 }
 
