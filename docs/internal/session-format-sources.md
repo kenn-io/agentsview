@@ -18,13 +18,14 @@ computes later with its pricing catalog. A compatible upstream implementation,
 independent parser, or recorded fixture is useful evidence for a format, but is
 called out when it is not the product's own producer source.
 
-All entries were last verified on 2026-07-19. A pinned revision is a
-reproducible research snapshot, not a claim that it produced every historical
-artifact that Agentsview accepts. Where an entry covers several generations, its
-**Format** and **Agentsview** fields identify that boundary; the parser, its
-colocated tests, and `internal/parser/testdata` remain the implementation
-evidence for observed legacy or closed-source artifacts. Add a producer release
-or format-version range when one can be tied confidently to an artifact.
+Unless an entry states otherwise, entries were last verified on 2026-07-19. A
+pinned revision is a reproducible research snapshot, not a claim that it
+produced every historical artifact that Agentsview accepts. Where an entry
+covers several generations, its **Format** and **Agentsview** fields identify
+that boundary; the parser, its colocated tests, and `internal/parser/testdata`
+remain the implementation evidence for observed legacy or closed-source
+artifacts. Add a producer release or format-version range when one can be tied
+confidently to an artifact.
 
 An evidence class names the strongest public authority in an entry, not every
 claim in that section. Source links may prove a current producer or migration
@@ -232,6 +233,27 @@ Grok section and remove the explicit registry exception in the coverage test.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
 
+## Roo Code (`roocode`)
+
+- **Format:** One task directory per session with `history_item.json` metadata
+  and a `ui_messages.json` array of UI transcript records.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/RooCodeInc/Roo-Code.git` at
+  `b867ec9145750d0ae1ff7f02d35406e9bf2a0b16`. The pinned
+  [per-task history store](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/src/core/task-persistence/TaskHistoryStore.ts)
+  persists `history_item.json`, while the
+  [UI message reader and writer](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/src/core/task-persistence/taskMessages.ts)
+  owns `ui_messages.json`. The
+  [history-item construction](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/src/core/task-persistence/taskMetadata.ts)
+  derives the persisted usage totals.
+- **Usage and cost:** `history_item.json` persists cumulative input, output,
+  cache-write, and cache-read tokens plus `totalCost` and optional API profile
+  identity. Agentsview consumes the reported cost, including explicit zero,
+  instead of replacing it with catalog pricing.
+- **Agentsview:** `internal/parser/roocode.go` and
+  `internal/parser/roocode_provider.go`; observed older Roo/Cline message
+  variants remain covered by the parser's colocated fixtures.
+
 ## OpenHands (`openhands`)
 
 - **Format:** A CLI conversation directory containing `base_state.json` and one
@@ -328,6 +350,24 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/windsurf_provider.go` and the shared VS
   Code-state helpers; database keys are reverse-engineered implementation
   evidence.
+
+## Trae (`trae`)
+
+- **Format:** VS Code-compatible workspace and global `state.vscdb` files with a
+  JSON session list stored under the `memento/icube-ai-agent-storage`
+  `ItemTable` key.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Trae's first-party [product site](https://www.trae.ai/) and the
+  official `https://github.com/Trae-AI/Trae.git` repository at
+  `d9386061fd45805f00fd74e09f35566deb4d5a79` were searched 2026-07-21. The
+  repository contains product notices rather than the desktop producer, and
+  neither source publishes the `state.vscdb` key or an authoritative session
+  schema.
+- **Usage and cost:** The consumed session list provides optional model identity
+  but no token, cache, reasoning, credit, or USD fields. Agentsview leaves
+  usage and cost unavailable rather than estimating them.
+- **Agentsview:** `internal/parser/trae_provider.go`; the storage key and JSON
+  shape are based on observed local databases and controlled fixtures.
 
 ## Visual Studio Copilot (`visualstudio-copilot`)
 
