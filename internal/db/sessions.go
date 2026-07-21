@@ -1656,13 +1656,14 @@ const insertSessionSQL = `
 			termination_status,
 			cwd, git_branch, source_session_id,
 			source_version, transcript_fidelity,
+			transcript_revision,
 			parser_malformed_lines,
 			is_truncated,
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1697,6 +1698,7 @@ const upsertSessionSQL = insertSessionSQL + `
 			source_session_id = excluded.source_session_id,
 			source_version = excluded.source_version,
 			transcript_fidelity = excluded.transcript_fidelity,
+			transcript_revision = excluded.transcript_revision,
 			parser_malformed_lines = excluded.parser_malformed_lines,
 			is_truncated = excluded.is_truncated,
 			-- last_write_incremental is deliberately NOT touched on conflict.
@@ -1724,6 +1726,17 @@ func sessionIsAutomated(s Session) bool {
 			IsAutomatedSession(*s.FirstMessage))
 }
 
+func sessionTranscriptRevisionValue(value *string) string {
+	if value == nil {
+		return "0"
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return "0"
+	}
+	return trimmed
+}
+
 func upsertSessionArgs(s Session) []any {
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
@@ -1737,6 +1750,7 @@ func upsertSessionArgs(s Session) []any {
 		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
 		s.SourceVersion, s.TranscriptFidelity,
+		sessionTranscriptRevisionValue(s.TranscriptRevision),
 		s.ParserMalformedLines,
 		s.IsTruncated,
 		// last_write_incremental is seeded false on fresh INSERT: a brand-new

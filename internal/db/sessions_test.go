@@ -286,6 +286,50 @@ func TestMigrateLegacyTraeSessionStateUsesTranscriptRevisionForUnknownNamespace(
 	assert.Equal(t, 1, workspaceStars)
 }
 
+func TestUpsertSessionPersistsTranscriptRevision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "openCopiedTestDB")
+	defer d.Close()
+
+	ctx := context.Background()
+	revision := "7"
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 "persist-transcript-revision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "claude",
+		TranscriptRevision: &revision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession initial")
+
+	session, err := d.GetSession(ctx, "persist-transcript-revision")
+	require.NoError(t, err, "GetSession initial")
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	assert.Equal(t, "7", *session.TranscriptRevision)
+
+	revision = "9"
+	require.NoError(t, d.UpsertSession(Session{
+		ID:                 "persist-transcript-revision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "claude",
+		TranscriptRevision: &revision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession update")
+
+	session, err = d.GetSession(ctx, "persist-transcript-revision")
+	require.NoError(t, err, "GetSession update")
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	assert.Equal(t, "9", *session.TranscriptRevision)
+}
+
 func TestMigrateLegacyTraeSessionStatePreservesLegacyWhenUnknownNamespaceStaysAmbiguous(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.db")
 	d, err := openCopiedTestDB(path)
