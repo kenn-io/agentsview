@@ -603,10 +603,17 @@ class SessionsStore {
             () => SessionsService.getApiV1SessionsId({ id }),
             signal,
           ) as unknown as Session;
-          // The active session's detail stays valid even if a concurrent
-          // reload superseded this hydration version: seed the cache first so
-          // the breadcrumb survives when the new index excludes the row.
-          if (hydrated.id === this.activeSessionId && !hydrated.is_index_only) {
+          // A superseded hydration still carries valid detail for the active
+          // session, so let it back the breadcrumb when the new index excludes
+          // the row — but only fill an empty cache. A stale-version response
+          // must never overwrite detail already resolved for this session by a
+          // newer request; the fresh path below (mergeHydratedSession) owns
+          // updates once the version check passes.
+          if (
+            hydrated.id === this.activeSessionId &&
+            !hydrated.is_index_only &&
+            this.activeSessionDetail?.id !== this.activeSessionId
+          ) {
             this.activeSessionDetail = hydrated;
           }
           if (
@@ -904,9 +911,12 @@ class SessionsStore {
       const idx = this.sessions.findIndex((s) => s.id === id);
       if (idx >= 0) {
         this.mergeHydratedSession(session);
-      } else if (this.activeSessionDetail?.id === id) {
-        // Active session is backed by the detail cache (not in the sidebar
-        // list); refresh the cache so metadata stays current.
+      } else {
+        // Active session is not in the sidebar list, so back it with the detail
+        // cache. Assign unconditionally (id is validated above): this both
+        // refreshes an existing cache and restores one left empty by a failed
+        // initial navigation or hydration, so watcher refreshes can recover the
+        // breadcrumb.
         this.activeSessionDetail = session;
       }
     } catch {

@@ -2716,6 +2716,45 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSessionId).toBe("sel");
     });
+
+    it("does not let a superseded hydration overwrite fresher active detail", async () => {
+      // Active session backed by fresh cache via a navigation fetch.
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "FRESH" }),
+      );
+      await sessions.navigateToSession("sel");
+      expect(sessions.activeSession?.first_message).toBe("FRESH");
+
+      // A superseded (older-version) hydration resolves for the same id; its
+      // version check fails, so it must not replace the newer cached detail.
+      const staleVersion = (sessions as any).sidebarIndexVersion - 1;
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "STALE" }),
+      );
+      await (sessions as any).hydrateVisibleSessions(["sel"], staleVersion);
+
+      expect(sessions.activeSession?.first_message).toBe("FRESH");
+    });
+
+    it("restores an empty out-of-list active cache on refresh", async () => {
+      // Initial navigation fetch fails, leaving activeSession undefined.
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("fetch failed"));
+      await sessions.navigateToSession("gone");
+      expect(sessions.activeSessionId).toBe("gone");
+      expect(sessions.activeSession).toBeUndefined();
+
+      // A watcher-driven refresh succeeds and must populate the empty cache.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-b", first_message: "restored" }),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession?.first_message).toBe("restored");
+    });
   });
 
   describe("route cancellation", () => {
