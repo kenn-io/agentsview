@@ -2475,8 +2475,10 @@ describe("SessionsStore", () => {
       resolveGet(makeSession({ id: "new-id" }));
       await promise;
 
-      expect(sessions.sessions).toHaveLength(1);
-      expect(sessions.sessions[0]!.id).toBe("new-id");
+      // The out-of-list session backs activeSession via the detail cache
+      // without being injected into the (filtered) sidebar collection.
+      expect(sessions.sessions).toHaveLength(0);
+      expect(sessions.activeSession?.id).toBe("new-id");
     });
 
     it("skips fetch for already-loaded session", async () => {
@@ -2548,8 +2550,9 @@ describe("SessionsStore", () => {
 
     it("keeps a search-navigated out-of-index session across a sidebar reload", async () => {
       // Sidebar is filtered so the searched session never appears in the
-      // index. Opening it from search fetches and appends it; a later index
-      // reload (route/filter re-evaluation) must not drop the open session.
+      // index. Opening it from search backs activeSession via the detail
+      // cache; a later index reload (route/filter re-evaluation) must not drop
+      // the open session, and the session must not leak into the sidebar list.
       mockSidebarIndex([makeSkinnyRow({ id: "in-index", project: "proj-a" })]);
       await sessions.load();
 
@@ -2562,6 +2565,7 @@ describe("SessionsStore", () => {
       );
       await sessions.navigateToSession("searched");
       expect(sessions.activeSession?.project).toBe("proj-b");
+      expect(sessions.sessions.some((s) => s.id === "searched")).toBe(false);
 
       // The filtered index still excludes the searched session.
       mockSidebarIndex([makeSkinnyRow({ id: "in-index", project: "proj-a" })]);
@@ -2569,6 +2573,38 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSessionId).toBe("searched");
       expect(sessions.activeSession?.project).toBe("proj-b");
+      // Not conflated with the filtered sidebar collection.
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["in-index"]);
+    });
+
+    it("does not duplicate an active session that appears on a later page", async () => {
+      // Page 1 of the filtered index omits the active session; it lives on a
+      // later page reachable through loadMore. Backing it via the detail cache
+      // (not the sidebar list) means the later page appends it exactly once.
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "page1" })],
+          total: 2,
+          next_cursor: "cursor-2",
+        })
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "later", project: "proj-b" })],
+          total: 2,
+          next_cursor: null,
+        });
+      await sessions.load();
+
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "later", project: "proj-b", first_message: "from search" }),
+      );
+      await sessions.navigateToSession("later");
+      expect(sessions.activeSession?.id).toBe("later");
+      expect(sessions.sessions.some((s) => s.id === "later")).toBe(false);
+
+      await sessions.loadMore();
+
+      expect(sessions.sessions.filter((s) => s.id === "later")).toHaveLength(1);
+      expect(sessions.activeSession?.id).toBe("later");
     });
   });
 

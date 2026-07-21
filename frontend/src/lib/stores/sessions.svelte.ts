@@ -296,6 +296,11 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   activeSessionId: string | null = $state(null);
+  // Resolved detail for the open session, held outside the sidebar list so a
+  // session that falls outside the current filters or page (e.g. opened from
+  // search) can back activeSession without polluting groupedSessions or being
+  // double-counted when loadMore appends a later page. Cleared on navigation.
+  activeSessionDetail: Session | null = $state(null);
   activeSessionUsageVersion: number = $state(0);
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
@@ -358,7 +363,13 @@ class SessionsStore {
 
   get activeSession(): Session | undefined {
     const session = this.sessions.find((s) => s.id === this.activeSessionId);
-    return session?.is_index_only ? undefined : session;
+    if (session && !session.is_index_only) return session;
+    // The open session may be absent from the filtered/paginated sidebar list
+    // (opened from search, filtered out, or on an unloaded page), or present
+    // only as an index-only stub. Fall back to the separately resolved detail.
+    const cached = this.activeSessionDetail;
+    if (cached && cached.id === this.activeSessionId) return cached;
+    return undefined;
   }
 
   get groupedSessions(): SessionGroup[] {
@@ -526,21 +537,6 @@ class SessionsStore {
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
-      // Preserve the open session when the (filtered) index omits it, e.g. one
-      // opened from search that falls outside the current sidebar filters.
-      // navigateToSession appended it to the list; dropping it on reload leaves
-      // activeSession undefined and strips the breadcrumb's project, name, and
-      // badges. Keep the previously resolved row so the detail view stays intact.
-      const activeId = this.activeSessionId;
-      if (
-        activeId !== null &&
-        !index.sessions.some((row) => row.id === activeId)
-      ) {
-        const preserved = existing.get(activeId);
-        if (preserved && !preserved.is_index_only) {
-          this.sessions = [...this.sessions, preserved];
-        }
-      }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch {
@@ -808,6 +804,7 @@ class SessionsStore {
     this.refreshRead.cancel();
     this.childSessionsRead.cancel();
     this.activeSessionId = id;
+    this.activeSessionDetail = null;
     this.activeSessionUsageVersion = 0;
     this.refreshVersion++;
     this.childSessionsVersion++;
@@ -819,8 +816,11 @@ class SessionsStore {
   }
 
   /**
-   * Navigate to a session by ID, loading it into the sessions list if
-   * not already present (e.g. subagent sessions filtered from groups).
+   * Navigate to a session by ID. If it isn't in the current sidebar list
+   * (e.g. opened from search, filtered out, or on an unloaded page), its
+   * detail is fetched into activeSessionDetail rather than injected into the
+   * sidebar collection, so it can back activeSession without appearing in the
+   * filtered list or being double-counted when loadMore appends later pages.
    */
   async navigateToSession(id: string) {
     this.setActiveSession(id);
@@ -841,7 +841,7 @@ class SessionsStore {
         if (idx >= 0) {
           this.mergeHydratedSession(session);
         } else {
-          this.sessions = [...this.sessions, session];
+          this.activeSessionDetail = session;
         }
       }
     } catch {
@@ -883,6 +883,10 @@ class SessionsStore {
       const idx = this.sessions.findIndex((s) => s.id === id);
       if (idx >= 0) {
         this.mergeHydratedSession(session);
+      } else if (this.activeSessionDetail?.id === id) {
+        // Active session is backed by the detail cache (not in the sidebar
+        // list); refresh the cache so metadata stays current.
+        this.activeSessionDetail = session;
       }
     } catch {
       // Session may have been deleted
