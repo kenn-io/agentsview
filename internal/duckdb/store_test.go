@@ -442,6 +442,124 @@ func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 	assert.Contains(t, got.Matches[0].Snippet, "fox")
 }
 
+// TestSearchContentMatchTimestampIsRFC3339 pins the wire format of
+// ContentMatch.Timestamp for the DuckDB (quack) read backend. The mirror
+// stores message and tool_result_events timestamps as a DuckDB TIMESTAMP
+// column; the search-content queries used to project that column via
+// COALESCE(CAST(m.timestamp AS TEXT), the empty string), which DuckDB renders SQL-style
+// ("2026-03-22 10:15:30", space-separated, no zone) rather than
+// RFC3339/RFC3339Nano. Callers (e.g. the CLI's AGE column and the
+// PostgreSQL/SQLite backends via FormatISO8601) expect RFC3339Nano UTC, so
+// every source branch (messages, tool_input, tool_result via tool_calls, and
+// tool_result via tool_result_events) must format the raw timestamp the same
+// way formatDBTime already does for session timestamps.
+func TestSearchContentMatchTimestampIsRFC3339(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sessionID := "duck-ts-format"
+	msgTS := "2026-03-22T10:15:30.000Z"
+	toolTS := "2026-03-22T10:15:31.000Z"
+	eventTS := "2026-03-22T10:15:32.000Z"
+	wantMsg, err := time.Parse(time.RFC3339Nano, msgTS)
+	require.NoError(t, err)
+	wantTool, err := time.Parse(time.RFC3339Nano, toolTS)
+	require.NoError(t, err)
+	wantEvent, err := time.Parse(time.RFC3339Nano, eventTS)
+	require.NoError(t, err)
+
+	// call0 has no ToolUseID, so it always surfaces via the tc.result_content
+	// branch (the tool_result_events exclusion only fires when tc.tool_use_id
+	// is non-empty and matches an event). call1 has a ToolUseID matching a
+	// ResultEvent, so it is excluded from the tc.result_content branch and
+	// instead surfaces via the tool_result_events branch, which reads the
+	// event's own timestamp rather than the owning message's.
+	call0 := db.ToolCall{
+		CallIndex:     0,
+		ToolName:      "shell",
+		InputJSON:     `{"cmd":"timestampneedle-input"}`,
+		ResultContent: "timestampneedle-toolresult",
+	}
+	call1 := db.ToolCall{
+		CallIndex:     1,
+		ToolName:      "shell",
+		ToolUseID:     "evt-1",
+		ResultContent: "no-match-here",
+		ResultEvents: []db.ToolResultEvent{{
+			ToolUseID:     "evt-1",
+			Source:        "test",
+			Status:        "success",
+			Content:       "timestampneedle-event",
+			ContentLength: len("timestampneedle-event"),
+			Timestamp:     eventTS,
+			EventIndex:    0,
+		}},
+	}
+	msg0 := syncMessage(sessionID, 0, "user", "timestampneedle-message", msgTS)
+	msg1 := syncMessage(sessionID, 1, "assistant", "reply", toolTS, call0, call1)
+
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session:         syncSession(sessionID, "alpha", "first", msgTS, 2),
+		Messages:        []db.Message{msg0, msg1},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+
+	store := NewStoreFromDB(syncer.DB())
+
+	for _, mode := range []string{"substring", "regex"} {
+		t.Run(mode+"/message", func(t *testing.T) {
+			got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+				Pattern:        "timestampneedle-message",
+				Mode:           mode,
+				Sources:        []string{"messages"},
+				IncludeOneShot: true,
+				Limit:          10,
+			})
+			require.NoError(t, err)
+			require.Len(t, got.Matches, 1)
+			parsed, err := time.Parse(time.RFC3339Nano, got.Matches[0].Timestamp)
+			require.NoError(t, err, "match timestamp must parse as RFC3339Nano, got %q", got.Matches[0].Timestamp)
+			assert.True(t, wantMsg.Equal(parsed), "want %v, got %v", wantMsg, parsed)
+		})
+
+		t.Run(mode+"/tool_input", func(t *testing.T) {
+			got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+				Pattern:        "timestampneedle-input",
+				Mode:           mode,
+				Sources:        []string{"tool_input"},
+				IncludeOneShot: true,
+				Limit:          10,
+			})
+			require.NoError(t, err)
+			require.Len(t, got.Matches, 1)
+			parsed, err := time.Parse(time.RFC3339Nano, got.Matches[0].Timestamp)
+			require.NoError(t, err, "match timestamp must parse as RFC3339Nano, got %q", got.Matches[0].Timestamp)
+			assert.True(t, wantTool.Equal(parsed), "want %v, got %v", wantTool, parsed)
+		})
+
+		t.Run(mode+"/tool_result", func(t *testing.T) {
+			got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+				Pattern:        "timestampneedle-event",
+				Mode:           mode,
+				Sources:        []string{"tool_result"},
+				IncludeOneShot: true,
+				Limit:          10,
+			})
+			require.NoError(t, err)
+			require.Len(t, got.Matches, 1)
+			parsed, err := time.Parse(time.RFC3339Nano, got.Matches[0].Timestamp)
+			require.NoError(t, err, "match timestamp must parse as RFC3339Nano, got %q", got.Matches[0].Timestamp)
+			assert.True(t, wantEvent.Equal(parsed), "want %v, got %v", wantEvent, parsed)
+		})
+	}
+}
+
 // TestSearchContentOrdinalRangeSelfRange pins the ordinal_range contract on
 // DuckDB content search: the field is always present and derived from the
 // conversation-unit rules, never a zero-valued [0, 0] at a nonzero anchor

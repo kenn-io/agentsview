@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,6 +149,8 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 	assert.Equal(t, 0, m.Ordinal)
 	assert.Equal(t, "user", m.Role)
 	assert.NotEmpty(t, m.Snippet)
+	_, err = time.Parse(time.RFC3339Nano, m.Timestamp)
+	assert.NoError(t, err, "match timestamp must be RFC3339Nano, got %q", m.Timestamp)
 }
 
 // TestPGSearchContentRedactsStraddlingSecret pins the PG default (non-reveal)

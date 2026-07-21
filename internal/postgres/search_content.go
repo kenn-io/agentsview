@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -154,7 +155,7 @@ func pgMessagesBranch(
 	return fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent, 'message' AS location,
 			m.role AS role, '' AS tool_name, m.ordinal,
-			COALESCE(m.timestamp::text, '') AS ts,
+			m.timestamp AS ts,
 			m.content AS snippet, 0 AS src, 0::bigint AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM messages m
@@ -206,7 +207,7 @@ func pgToolInputBranch(
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
-			COALESCE(m.timestamp::text, '') AS ts,
+			m.timestamp AS ts,
 			tc.input_json AS snippet, 1 AS src, tc.id AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM tool_calls tc
@@ -231,7 +232,7 @@ func pgToolResultContentBranch(
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
-			COALESCE(m.timestamp::text, '') AS ts,
+			m.timestamp AS ts,
 			tc.result_content AS snippet, 2 AS src, tc.id AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM tool_calls tc
@@ -260,7 +261,7 @@ func pgToolResultEventsBranch(
 		SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
 			'assistant' AS role, '' AS tool_name,
 			tre.tool_call_message_ordinal AS ordinal,
-			COALESCE(tre.timestamp::text, '') AS ts,
+			tre.timestamp AS ts,
 			tre.content AS snippet, 3 AS src, tre.id AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM tool_result_events tre
@@ -289,12 +290,16 @@ func (s *Store) scanPGContentMatches(
 	for rows.Next() {
 		var m db.ContentMatch
 		var body string
+		var ts *time.Time
 		if err := rows.Scan(
 			&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&m.Timestamp, &body,
+			&ts, &body,
 		); err != nil {
 			return db.ContentSearchPage{}, fmt.Errorf("scan pg match: %w", err)
+		}
+		if ts != nil {
+			m.Timestamp = FormatISO8601(*ts)
 		}
 		m.Snippet = makeSnippet(body)
 		out = append(out, m)
@@ -342,13 +347,17 @@ func (s *Store) searchContentRegexPG(
 	for rows.Next() {
 		var m db.ContentMatch
 		var body string
+		var ts *time.Time
 		if err := rows.Scan(
 			&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&m.Timestamp, &body,
+			&ts, &body,
 		); err != nil {
 			return db.ContentSearchPage{},
 				fmt.Errorf("scan pg regex candidate: %w", err)
+		}
+		if ts != nil {
+			m.Timestamp = FormatISO8601(*ts)
 		}
 		loc := re.FindStringIndex(body)
 		if loc == nil {
@@ -450,7 +459,7 @@ func pgMessagesCandidateBranch(
 	return fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent, 'message' AS location,
 			m.role AS role, '' AS tool_name, m.ordinal,
-			COALESCE(m.timestamp::text, '') AS ts,
+			m.timestamp AS ts,
 			m.content AS body, 0 AS src, 0::bigint AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM messages m
@@ -469,7 +478,7 @@ func pgToolInputCandidateBranch(
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
-			COALESCE(m.timestamp::text, '') AS ts,
+			m.timestamp AS ts,
 			tc.input_json AS body, 1 AS src, tc.id AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM tool_calls tc
@@ -490,7 +499,7 @@ func pgToolResultContentCandidateBranch(
 	return fmt.Sprintf(`
 		SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
 			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
-			COALESCE(m.timestamp::text, '') AS ts,
+			m.timestamp AS ts,
 			tc.result_content AS body, 2 AS src, tc.id AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM tool_calls tc
@@ -518,7 +527,7 @@ func pgToolResultEventsCandidateBranch(
 		SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
 			'assistant' AS role, '' AS tool_name,
 			tre.tool_call_message_ordinal AS ordinal,
-			COALESCE(tre.timestamp::text, '') AS ts,
+			tre.timestamp AS ts,
 			tre.content AS body, 3 AS src, tre.id AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM tool_result_events tre

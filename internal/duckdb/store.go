@@ -1127,7 +1127,7 @@ func (s *Store) collectContentSubstringMatches(
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal,
-					COALESCE(CAST(m.timestamp AS TEXT), '') AS ts,
+					m.timestamp AS ts,
 					m.content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					0 AS src, COALESCE(m.id, 0) AS row_id,
@@ -1141,7 +1141,7 @@ func (s *Store) collectContentSubstringMatches(
 			branches = append(branches, `
 				SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
 					'assistant' AS role, tc.tool_name, m.ordinal,
-					COALESCE(CAST(m.timestamp AS TEXT), '') AS ts,
+					m.timestamp AS ts,
 					tc.input_json AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					1 AS src, COALESCE(tc.id, 0) AS row_id,
@@ -1156,7 +1156,7 @@ func (s *Store) collectContentSubstringMatches(
 			branches = append(branches, `
 					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, tc.tool_name, m.ordinal,
-						COALESCE(CAST(m.timestamp AS TEXT), '') AS ts,
+						m.timestamp AS ts,
 						tc.result_content AS body,
 						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 						2 AS src, COALESCE(tc.id, 0) AS row_id,
@@ -1177,7 +1177,7 @@ func (s *Store) collectContentSubstringMatches(
 					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, '' AS tool_name,
 						tre.tool_call_message_ordinal AS ordinal,
-						COALESCE(CAST(tre.timestamp AS TEXT), '') AS ts,
+						tre.timestamp AS ts,
 						tre.content AS body,
 						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 						3 AS src, COALESCE(tre.id, 0) AS row_id,
@@ -1347,7 +1347,7 @@ func (s *Store) collectContentSource(
 	switch source {
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
-			m.role, '', m.ordinal, COALESCE(CAST(m.timestamp AS TEXT), ''),
+			m.role, '', m.ordinal, m.timestamp,
 			m.content,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 			0 AS src, COALESCE(m.id, 0) AS row_id,
@@ -1364,7 +1364,7 @@ func (s *Store) collectContentSource(
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "tool_input":
 		query = `SELECT tc.session_id, s.project, s.agent, 'tool_input',
-				'assistant', tc.tool_name, m.ordinal, COALESCE(CAST(m.timestamp AS TEXT), ''),
+				'assistant', tc.tool_name, m.ordinal, m.timestamp,
 				COALESCE(tc.input_json, ''),
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 				1 AS src, COALESCE(tc.id, 0) AS row_id,
@@ -1391,7 +1391,7 @@ func (s *Store) collectContentSource(
 				FROM (
 					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, tc.tool_name, m.ordinal,
-						COALESCE(CAST(m.timestamp AS TEXT), '') AS ts,
+						m.timestamp AS ts,
 						COALESCE(tc.result_content, '') AS body,
 						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 						2 AS src,
@@ -1412,7 +1412,7 @@ func (s *Store) collectContentSource(
 					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, '' AS tool_name,
 						tre.tool_call_message_ordinal AS ordinal,
-						COALESCE(CAST(tre.timestamp AS TEXT), '') AS ts,
+						tre.timestamp AS ts,
 						tre.content AS body,
 						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 						3 AS src,
@@ -1457,11 +1457,13 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 	for rows.Next() {
 		var m db.ContentMatch
 		var body string
+		var ts any
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&m.Timestamp, &body); err != nil {
+			&ts, &body); err != nil {
 			return nil, err
 		}
+		m.Timestamp = formatDBTime(ts)
 		m.Snippet = makeSnippet(body)
 		out = append(out, m)
 	}
@@ -1474,16 +1476,18 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 	for rows.Next() {
 		var candidate duckContentCandidate
 		var sortTS any
+		var ts any
 		if err := rows.Scan(
 			&candidate.match.SessionID, &candidate.match.Project,
 			&candidate.match.Agent, &candidate.match.Location,
 			&candidate.match.Role, &candidate.match.ToolName,
-			&candidate.match.Ordinal, &candidate.match.Timestamp,
+			&candidate.match.Ordinal, &ts,
 			&candidate.body, &sortTS, &candidate.sourceRank,
 			&candidate.rowID, &candidate.callIndex, &candidate.eventIndex,
 		); err != nil {
 			return nil, err
 		}
+		candidate.match.Timestamp = formatDBTime(ts)
 		candidate.sortTS = formatDBTime(sortTS)
 		candidate.sortTime, candidate.hasSort = parseAnalyticsTime(candidate.sortTS)
 		candidate.match.Snippet = candidate.body
