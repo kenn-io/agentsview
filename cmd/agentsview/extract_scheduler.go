@@ -176,8 +176,13 @@ func (s *extractScheduler) Run(ctx context.Context) {
 				pendingFull = false
 			}
 		case <-tickC:
+			// A catchup tick also picks up a carried full pass: with the
+			// backstop disabled, a failed startup full pass would otherwise
+			// stay carried forever — the debounce only re-arms on sync
+			// activity, and catchup ticks alone never revisit done sessions.
+			full := tickFull || pendingFull
 			started, ok, err := s.tryPassWithLease(ctx,
-				extract.PassOptions{Full: tickFull})
+				extract.PassOptions{Full: full})
 			if !ok {
 				continue
 			}
@@ -187,9 +192,10 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			if started {
 				startupDone()
 			}
-			if tickFull {
+			if full {
 				// A dropped incremental catchup tick needs no carry: the
-				// next tick or debounced pass covers the same ground.
+				// next tick or debounced pass covers the same ground. A full
+				// pass stays carried until one both starts and succeeds.
 				pendingFull = !started || err != nil
 			}
 		}

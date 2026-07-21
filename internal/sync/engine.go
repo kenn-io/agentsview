@@ -10031,23 +10031,27 @@ func (e *Engine) ScanSecrets(
 			return sum, ctx.Err()
 		}
 		nf, leak, ok := e.scanOneSession(ctx, id, ver)
+		if ok {
+			sum.Scanned++
+			sum.TotalFindings += nf
+			sum.DefiniteFindings += leak
+			sum.CandidateFindings += nf - leak
+			if leak > 0 {
+				sum.WithSecrets++
+			}
+		}
 		// A cancellation during the scan must end the run with an error,
 		// not a partial success. This covers both a failed scan and a
 		// successful final session whose context was canceled mid-scan,
 		// since scanOneSession does CPU work and a non-context-aware
-		// persist after its context-aware reads.
+		// persist after its context-aware reads. That session is already
+		// counted above: its findings are committed, and callers use the
+		// summary to decide whether session eligibility changed.
 		if ctx.Err() != nil {
 			return sum, ctx.Err()
 		}
 		if !ok {
 			continue
-		}
-		sum.Scanned++
-		sum.TotalFindings += nf
-		sum.DefiniteFindings += leak
-		sum.CandidateFindings += nf - leak
-		if leak > 0 {
-			sum.WithSecrets++
 		}
 		if progress != nil && scanShouldReport(i, total) {
 			progress(SecretScanProgress{Scanned: sum.Scanned, Total: total})

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -181,8 +182,12 @@ func TestExtractSchedulerCatchupTicksWhenBackstopDisabled(t *testing.T) {
 
 	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 2 },
 		"catchup passes never ran")
-	for _, call := range mgr.callsSnapshot() {
-		assert.False(t, call.Full, "catchup passes are incremental")
+	calls := mgr.callsSnapshot()
+	assert.True(t, calls[0].Full,
+		"the first catchup tick consumes the startup full carry")
+	for _, call := range calls[1:] {
+		assert.False(t, call.Full,
+			"catchup passes after the startup carry are incremental")
 	}
 }
 
@@ -304,6 +309,30 @@ func TestExtractSchedulerStartupPassSurvivesShortIdleTimeout(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("daemon never idled once the startup pass completed")
 	}
+}
+
+// TestExtractSchedulerCatchupCarriesFailedStartupFullPass pins that a failed
+// startup full pass stays carried when the backstop is disabled: catchup
+// ticks otherwise run incremental passes forever, and without another sync
+// notification the debounce never re-fires, so completed sessions whose
+// transcripts changed between daemon lifetimes would never be revisited.
+func TestExtractSchedulerCatchupCarriesFailedStartupFullPass(t *testing.T) {
+	mgr := &fakePassManager{results: []fakeTryPassResult{
+		{started: true, err: errors.New("model endpoint down")},
+		{started: true},
+	}}
+	s := newExtractScheduler(mgr, 5*time.Millisecond, 0, 40*time.Millisecond, nil)
+	go s.Run(t.Context())
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return mgr.callCount() >= 3 },
+		"catchup ticks never ran")
+	calls := mgr.callsSnapshot()
+	require.True(t, calls[0].Full, "the startup pass carries the full top-up")
+	assert.True(t, calls[1].Full,
+		"a failed startup full pass must carry into the next catchup tick")
+	assert.False(t, calls[2].Full,
+		"the carry clears once a full pass starts and succeeds")
 }
 
 // TestExtractSchedulerRunsStartupPass pins that every daemon lifetime
