@@ -9,22 +9,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSanitizeProjectLabelsSanitizesBranchProjects(t *testing.T) {
-	raw := "/home/example/private/repo"
-	report := Report{ByBranch: []BranchKeyMinutes{{
-		Project: raw,
-		Branch:  "main",
-		Cost:    1,
-	}}}
+func TestSanitizeProjectLabelsKeepsCollidingBranchProjectsDistinct(t *testing.T) {
+	first := "/Users/example/one/private/repo"
+	second := "/Users/example/two/private/repo"
+	report := Report{ByBranch: []BranchKeyMinutes{
+		{Project: first, Branch: "main", Cost: 1},
+		{Project: second, Branch: "main", Cost: 2},
+	}}
 	projects := map[string]export.ProjectMapEntry{
-		raw: {ProjectKey: "pl1-path"},
+		first:  {ProjectKey: "pl1:sha256:first"},
+		second: {ProjectKey: "pl1:sha256:second"},
 	}
 
 	SanitizeProjectLabels(&report, projects)
 
-	require.Len(t, report.ByBranch, 1)
+	require.Len(t, report.ByBranch, 2)
+	assert.Equal(t, "pl1:sha256:first", report.ByBranch[0].ProjectKey)
+	assert.Equal(t, "pl1:sha256:second", report.ByBranch[1].ProjectKey)
 	assert.Empty(t, report.ByBranch[0].Project)
+	assert.Empty(t, report.ByBranch[1].Project)
 	assert.Equal(t, "main", report.ByBranch[0].Branch)
+	assert.Equal(t, "main", report.ByBranch[1].Branch)
 }
 
 func TestSanitizeProjectLabelsSanitizesSessionTitles(t *testing.T) {

@@ -168,9 +168,9 @@ func SanitizeProjectLabels(
 		)
 	}
 	for i := range report.ByBranch {
-		report.ByBranch[i].Project = export.SafeProjectDisplayLabel(
-			report.ByBranch[i].Project,
-		)
+		raw := report.ByBranch[i].Project
+		report.ByBranch[i].ProjectKey = export.ProjectKeyForEntry(projects[raw])
+		report.ByBranch[i].Project = export.SafeProjectDisplayLabel(raw)
 	}
 	for i := range report.BySession {
 		title := export.SafeProjectDisplayLabel(report.BySession[i].Title)
@@ -256,6 +256,7 @@ type KeyMinutes struct {
 // BranchKeyMinutes is one (project, branch) breakdown row, matching
 // db.BranchBreakdown/service.BranchTotal's typed Project/Branch fields.
 type BranchKeyMinutes struct {
+	ProjectKey              string  `json:"project_key"`
 	Project                 string  `json:"project"`
 	Branch                  string  `json:"branch"`
 	AgentMinutes            float64 `json:"agent_minutes"`
