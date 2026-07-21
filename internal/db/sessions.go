@@ -1789,6 +1789,23 @@ func (db *DB) UpsertSession(s Session) error {
 	if trashed == 1 {
 		return ErrSessionTrashed
 	}
+	if s.TranscriptRevision == nil {
+		var storedTranscriptRevision sql.NullString
+		err := db.getWriter().QueryRow(
+			"SELECT transcript_revision FROM sessions WHERE id = ?",
+			s.ID,
+		).Scan(&storedTranscriptRevision)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf(
+				"loading transcript revision for %s: %w",
+				s.ID, err,
+			)
+		}
+		if err == nil && storedTranscriptRevision.Valid {
+			revision := storedTranscriptRevision.String
+			s.TranscriptRevision = &revision
+		}
+	}
 
 	// data_version is intentionally NOT advanced here. The
 	// caller must call SetSessionDataVersion only after the

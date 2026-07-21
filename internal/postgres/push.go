@@ -1659,10 +1659,14 @@ revisionCheckDone:
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions target
-		   SET display_name = legacy_session.display_name,
-		       source_display_name = legacy_session.source_display_name,
-		       deleted_at = legacy_session.deleted_at,
-		       source_deleted_at = legacy_session.source_deleted_at,
+		   SET display_name = COALESCE(
+					target.display_name,
+					legacy_session.display_name
+				),
+		       deleted_at = COALESCE(
+					target.deleted_at,
+					legacy_session.deleted_at
+				),
 		       updated_at = NOW()
 		  FROM sessions legacy_session
 		 WHERE legacy_session.id = $1
@@ -1780,11 +1784,7 @@ revisionCheckDone:
 		SELECT
 			$2, target_ordinal, target_ordinal, target_source_uuid, note, created_at
 		FROM matched
-		ON CONFLICT (session_id, message_id)
-		DO UPDATE SET
-			note = EXCLUDED.note,
-			ordinal = EXCLUDED.ordinal,
-			source_uuid = EXCLUDED.source_uuid`,
+		ON CONFLICT (session_id, message_id) DO NOTHING`,
 		legacyID, sess.ID, pushedMachine, markerID,
 		string(legacyMarkerMachinesJSON),
 		requireRevisionMatch, legacyTranscriptRevision,

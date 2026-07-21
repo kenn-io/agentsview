@@ -361,6 +361,188 @@ func TestDeletePGLegacyTraeSessionIfOwnedMigratesWorkspaceStar(t *testing.T) {
 	assert.Equal(t, "workspace-rev", state.lastRevision)
 }
 
+func TestDeletePGLegacyTraeSessionIfOwnedPreservesCurrentMetadataOverrides(t *testing.T) {
+	state := &legacyTraeMigrationProbeState{}
+	pg := newLegacyTraeMigrationProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+	defer func() { _ = tx.Rollback() }()
+
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	local, err := db.Open(path)
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	legacyRevision := "workspace-rev"
+	globalRevision := "global-rev"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession legacy")
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:workspaceStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:01:00Z",
+	}), "UpsertSession workspace")
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:globalStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &globalRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:02:00Z",
+	}), "UpsertSession global")
+
+	err = deletePGLegacyTraeSessionIfOwned(
+		context.Background(),
+		tx,
+		local,
+		map[string]db.Session{
+			"trae:workspaceStorage:collision": {
+				ID:                 "trae:workspaceStorage:collision",
+				TranscriptRevision: &legacyRevision,
+			},
+			"trae:globalStorage:collision": {
+				ID:                 "trae:globalStorage:collision",
+				TranscriptRevision: &globalRevision,
+			},
+		},
+		db.Session{
+			ID:                 "trae:workspaceStorage:collision",
+			Agent:              "trae",
+			SourceSessionID:    "collision",
+			TranscriptRevision: &legacyRevision,
+		},
+		"marker",
+		"mac",
+		nil,
+	)
+
+	require.NoError(t, err, "deletePGLegacyTraeSessionIfOwned")
+	assert.Contains(
+		t,
+		state.metadataUpdateQuery,
+		"display_name = coalesce( target.display_name, legacy_session.display_name )",
+	)
+	assert.Contains(
+		t,
+		state.metadataUpdateQuery,
+		"deleted_at = coalesce( target.deleted_at, legacy_session.deleted_at )",
+	)
+	assert.NotContains(
+		t,
+		state.metadataUpdateQuery,
+		"source_display_name = legacy_session.source_display_name",
+	)
+	assert.NotContains(
+		t,
+		state.metadataUpdateQuery,
+		"source_deleted_at = legacy_session.source_deleted_at",
+	)
+}
+
+func TestDeletePGLegacyTraeSessionIfOwnedIgnoresPinConflicts(t *testing.T) {
+	state := &legacyTraeMigrationProbeState{}
+	pg := newLegacyTraeMigrationProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+	defer func() { _ = tx.Rollback() }()
+
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	local, err := db.Open(path)
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	legacyRevision := "workspace-rev"
+	globalRevision := "global-rev"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession legacy")
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:workspaceStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:01:00Z",
+	}), "UpsertSession workspace")
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:globalStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &globalRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:02:00Z",
+	}), "UpsertSession global")
+
+	err = deletePGLegacyTraeSessionIfOwned(
+		context.Background(),
+		tx,
+		local,
+		map[string]db.Session{
+			"trae:workspaceStorage:collision": {
+				ID:                 "trae:workspaceStorage:collision",
+				TranscriptRevision: &legacyRevision,
+			},
+			"trae:globalStorage:collision": {
+				ID:                 "trae:globalStorage:collision",
+				TranscriptRevision: &globalRevision,
+			},
+		},
+		db.Session{
+			ID:                 "trae:workspaceStorage:collision",
+			Agent:              "trae",
+			SourceSessionID:    "collision",
+			TranscriptRevision: &legacyRevision,
+		},
+		"marker",
+		"mac",
+		nil,
+	)
+
+	require.NoError(t, err, "deletePGLegacyTraeSessionIfOwned")
+	assert.Contains(
+		t,
+		state.pinInsertQuery,
+		"on conflict (session_id, message_id) do nothing",
+	)
+	assert.NotContains(
+		t,
+		state.pinInsertQuery,
+		"do update set",
+	)
+}
+
 type pushAliasRoutingDriver struct{}
 
 type pushAliasRoutingConn struct{}
@@ -382,9 +564,11 @@ type legacyTraeMigrationProbeConn struct {
 type legacyTraeMigrationProbeTx struct{}
 
 type legacyTraeMigrationProbeState struct {
-	starInsertCalls int
-	lastTargetID    string
-	lastRevision    string
+	starInsertCalls     int
+	lastTargetID        string
+	lastRevision        string
+	metadataUpdateQuery string
+	pinInsertQuery      string
 }
 
 var pushAliasRoutingRegisterOnce sync.Once
@@ -450,7 +634,7 @@ func (c *legacyTraeMigrationProbeConn) CheckNamedValue(
 func (c *legacyTraeMigrationProbeConn) ExecContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Result, error) {
-	normalized := strings.ToLower(query)
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
 	switch {
 	case strings.Contains(normalized, "insert into starred_sessions"):
 		c.state.starInsertCalls++
@@ -468,8 +652,13 @@ func (c *legacyTraeMigrationProbeConn) ExecContext(
 			}
 		}
 		return driver.RowsAffected(1), nil
-	case strings.Contains(normalized, "update sessions target"),
-		strings.Contains(normalized, "with matched as"),
+	case strings.Contains(normalized, "update sessions target"):
+		c.state.metadataUpdateQuery = normalized
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "insert into pinned_messages"):
+		c.state.pinInsertQuery = normalized
+		return driver.RowsAffected(1), nil
+	case
 		strings.Contains(normalized, "delete from sessions"),
 		strings.Contains(normalized, "update pinned_messages p"),
 		strings.Contains(normalized, "delete from pinned_messages p"):
