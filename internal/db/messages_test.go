@@ -774,6 +774,34 @@ func TestInsertMessagesPreservesOpaqueTranscriptRevision(t *testing.T) {
 	assert.Equal(t, "workspace-rev", *session.TranscriptRevision)
 }
 
+func TestWriteSessionBatchPreservesExplicitTranscriptRevision(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	const sessionID = "batch-explicit-transcript-revision"
+	revision := "7"
+	_, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID:                 sessionID,
+			Project:            "proj",
+			Machine:            defaultMachine,
+			Agent:              defaultAgent,
+			MessageCount:       1,
+			UserMessageCount:   1,
+			TranscriptRevision: &revision,
+		},
+		Messages:        []Message{userMsg(sessionID, 0, "hello")},
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	session, err := d.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.TranscriptRevision)
+	assert.Equal(t, "7", *session.TranscriptRevision)
+}
+
 // TestMessageReadsTolerateNullTimestamp pins NULL-timestamp robustness
 // across the three message read paths. timestamp is the only nullable
 // text column in the messages table; fresh inserts always bind a Go
