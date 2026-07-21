@@ -1106,7 +1106,8 @@ func (s *Sync) pushBatchAttempt(
 			}
 		}
 		if err := deletePGLegacyTraeSessionIfOwned(
-			ctx, tx, sess, markerID, pushedSessionMachine(sess, s.machine),
+			ctx, tx, s.local, sess, markerID,
+			pushedSessionMachine(sess, s.machine),
 			legacyMarkerMachines,
 		); err != nil {
 			log.Printf(
@@ -1553,6 +1554,7 @@ func deletePGSessionIfExcluded(
 func deletePGLegacyTraeSessionIfOwned(
 	ctx context.Context,
 	tx *sql.Tx,
+	local *db.DB,
 	sess db.Session,
 	markerID, pushedMachine string,
 	legacyMarkerMachines []string,
@@ -1567,15 +1569,26 @@ func deletePGLegacyTraeSessionIfOwned(
 		rawID := strings.TrimPrefix(stripped, "trae:workspaceStorage:")
 		rawID = strings.TrimPrefix(rawID, "trae:globalStorage:")
 		prefix := pgSessionIDPrefix(sess.ID)
-		var siblingCount int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sessions WHERE id = $1 OR id = $2`,
-			prefix+"trae:workspaceStorage:"+rawID,
-			prefix+"trae:globalStorage:"+rawID,
-		).Scan(&siblingCount); err != nil {
-			return fmt.Errorf("counting namespaced trae siblings for %s: %w", sess.ID, err)
+		if local != nil {
+			workspaceSiblingID := prefix + "trae:workspaceStorage:" + rawID
+			globalSiblingID := prefix + "trae:globalStorage:" + rawID
+			workspaceSibling, err := local.GetSession(ctx, workspaceSiblingID)
+			if err != nil {
+				return fmt.Errorf(
+					"loading namespaced trae sibling %s: %w",
+					workspaceSiblingID, err,
+				)
+			}
+			globalSibling, err := local.GetSession(ctx, globalSiblingID)
+			if err != nil {
+				return fmt.Errorf(
+					"loading namespaced trae sibling %s: %w",
+					globalSiblingID, err,
+				)
+			}
+			requireRevisionMatch =
+				workspaceSibling != nil && globalSibling != nil
 		}
-		requireRevisionMatch = siblingCount > 1
 	}
 	legacyTranscriptRevision := sess.TranscriptRevision
 	if legacyMarkerMachines == nil {

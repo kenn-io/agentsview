@@ -1352,6 +1352,16 @@ func (db *DB) MigrateLegacyTraeSessionState(
 	if oldNamespace != "" && oldNamespace != targetNamespace {
 		return nil
 	}
+	var targetExists bool
+	if err := tx.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`,
+		newID,
+	).Scan(&targetExists); err != nil {
+		return fmt.Errorf("checking migrated trae target %s: %w", newID, err)
+	}
+	if !targetExists {
+		return nil
+	}
 
 	pins, err := savePinsTx(tx, oldID)
 	if err != nil {

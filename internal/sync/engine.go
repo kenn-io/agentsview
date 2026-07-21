@@ -7973,7 +7973,7 @@ func (e *Engine) writeBatchBulk(
 		}
 	}
 	if len(writes) == 0 {
-		return 0, 0, 0, cwdFiltered
+		return 0, 0, failedSessions, cwdFiltered
 	}
 
 	tWrite := time.Now()
@@ -7984,7 +7984,7 @@ func (e *Engine) writeBatchBulk(
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))
 	if err != nil {
 		log.Printf("write session batch: %v", err)
-		return 0, 0, len(writes), cwdFiltered
+		return 0, 0, len(writes) + failedSessions, cwdFiltered
 	}
 	for _, id := range result.ExcludedIDs {
 		if source, ok := sources[id]; ok && source.path != "" {
@@ -8009,7 +8009,7 @@ func (e *Engine) writeBatchBulk(
 	}
 	return result.WrittenSessions,
 		result.WrittenMessages,
-		result.FailedSessions,
+		result.FailedSessions + failedSessions,
 		cwdFiltered
 }
 

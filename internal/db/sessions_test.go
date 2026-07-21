@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,6 +37,55 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 	require.NoError(t, err, "neighbor pins count")
 	assert.Equal(t, crossSessionNeighborCount, neighborPins,
 		"neighbor pins count")
+}
+
+func TestMigrateLegacyTraeSessionStatePreservesLegacyWhenTargetMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "openCopiedTestDB")
+	defer d.Close()
+
+	ctx := context.Background()
+	const oldID = "trae:legacy-missing-target"
+	const newID = "trae:workspaceStorage:legacy-missing-target"
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               oldID,
+		Project:          "proj",
+		Machine:          "mac",
+		Agent:            "trae",
+		SourceSessionID:  "legacy-missing-target",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-07-21T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID:     oldID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+	starred, err := d.StarSession(oldID)
+	require.NoError(t, err, "StarSession")
+	require.True(t, starred, "legacy session should be starred")
+
+	require.NoError(t, d.MigrateLegacyTraeSessionState(
+		oldID, newID, "workspaceStorage",
+	), "MigrateLegacyTraeSessionState")
+
+	legacy, err := d.GetSession(ctx, oldID)
+	require.NoError(t, err, "GetSession legacy")
+	require.NotNil(t, legacy, "legacy session should remain when target is absent")
+	migrated, err := d.GetSession(ctx, newID)
+	require.NoError(t, err, "GetSession migrated")
+	assert.Nil(t, migrated, "missing target should not be synthesized")
+
+	var starCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = ?`,
+		oldID,
+	).Scan(&starCount), "count legacy stars")
+	assert.Equal(t, 1, starCount, "legacy star should remain attached")
 }
 
 func TestFindSessionIDsByPartial(t *testing.T) {
