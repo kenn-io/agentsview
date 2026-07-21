@@ -1380,6 +1380,46 @@ func seedExtractCandidate(
 	require.NoError(t, d.ReplaceSessionSecretFindings(id, nil, 0, "rules-v1"))
 }
 
+// TestExtractCandidatesMixedPrecisionEndedAt pins the quiet-period
+// comparison across RFC3339Nano's variable fractional precision: ended_at
+// trims trailing zeros ("...45Z", "...45.52Z") while the cutoff is always
+// fixed-millis, and comparing the raw strings sorts a trimmed value after
+// a longer one in the same second ('Z' > any digit or '.'). A session
+// misjudged here is skipped while the discovery watermark advances past
+// its last write, stranding it until a daemon restart resets watermarks.
+func TestExtractCandidatesMixedPrecisionEndedAt(t *testing.T) {
+	cases := map[string]struct {
+		endedAt string
+		cutoff  time.Time
+		want    bool
+	}{
+		"whole second inside cutoff": {"2026-01-02T10:00:45Z",
+			time.Date(2026, 1, 2, 10, 0, 45, 123_000_000, time.UTC), true},
+		"trimmed millis inside cutoff": {"2026-01-02T10:00:45.52Z",
+			time.Date(2026, 1, 2, 10, 0, 45, 523_000_000, time.UTC), true},
+		"same second past cutoff": {"2026-01-02T10:00:45.9Z",
+			time.Date(2026, 1, 2, 10, 0, 45, 123_000_000, time.UTC), false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := context.Background()
+			seedExtractCandidate(t, d, "sess-1", 2*time.Hour,
+				func(s *Session) { s.EndedAt = &tc.endedAt })
+			ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+				Fingerprint:  "fp-a",
+				QuietCutoff:  tc.cutoff,
+				ScanVersions: []string{"rules-v1"},
+			})
+			require.NoError(t, err)
+			got := len(ids) == 1
+			require.Equal(t, tc.want, got,
+				"ended_at %s vs cutoff %s: selected=%v, want %v",
+				tc.endedAt, tc.cutoff.Format(time.RFC3339Nano), got, tc.want)
+		})
+	}
+}
+
 // TestExtractCandidateRetryArmUsesUpdatedAtIndex pins that failed-row
 // retry discovery is index-bounded: without an updated_at range in the
 // index probe, every failed row of a generation — including rows still in

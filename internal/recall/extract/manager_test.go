@@ -382,6 +382,51 @@ func TestManagerActivatesOverTransientlyIneligibleUnfinishedSession(
 	}
 }
 
+// TestManagerRefusesUnitStraddlingSecret pins the outbound boundary at
+// unit granularity: adjacent assistant messages join into one unit text,
+// so a PEM block whose BEGIN and END land in different rows matches no
+// per-message scan — stored findings and the extraction-time rescan alike
+// — while the joined text the model would receive contains the whole key.
+// The BEGIN/END literals are assembled at runtime so this file never
+// carries a pattern resembling a real key block.
+func TestManagerRefusesUnitStraddlingSecret(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	pemBegin := "-----BEGIN RSA " + "PRIVATE KEY-----"
+	pemEnd := "-----END RSA " + "PRIVATE KEY-----"
+	keyLine := "MIIBSECRETKEYMATERIAL0123456789ABCDEF\n"
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "rotate the deploy key"},
+		{Role: "assistant", Content: "current key:\n" + pemBegin + "\n" +
+			strings.Repeat(keyLine, 3)},
+		{Role: "assistant", Content: strings.Repeat(keyLine, 2) + pemEnd},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 0 {
+		t.Fatalf("model calls = %d, want 0: a transcript with a secret "+
+			"straddling a unit's message boundary must never reach the "+
+			"model", log.count())
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", result.Failed)
+	}
+	entry, err := d.GetRecallEntry(
+		context.Background(), EntryID(m.Fingerprint(), "sess-1", 1, 0))
+	if err != nil {
+		t.Fatalf("GetRecallEntry: %v", err)
+	}
+	if entry != nil {
+		t.Fatalf("entry staged from a secret-bearing unit: %+v", entry)
+	}
+}
+
 func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()

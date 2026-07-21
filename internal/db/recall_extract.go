@@ -245,10 +245,15 @@ func (db *DB) ActivateExtractGeneration(
 	// returns.
 	versionMarks := strings.TrimSuffix(
 		strings.Repeat("?,", len(scanVersions)), ",")
-	staleSessionSQL := `NOT EXISTS (SELECT 1 FROM sessions s
-			WHERE s.id = %s
+	// Concatenation, not a second Sprintf pass: the rendered eligibility
+	// SQL contains literal % characters (strftime), which a re-format
+	// would mangle into %!Y(MISSING)-style garbage.
+	staleSessionFor := func(idColumn string) string {
+		return `NOT EXISTS (SELECT 1 FROM sessions s
+			WHERE s.id = ` + idColumn + `
 			  AND ` +
-		fmt.Sprintf(extractEligibleSessionSQL, versionMarks) + `)`
+			fmt.Sprintf(extractEligibleSessionSQL, versionMarks) + `)`
+	}
 	staleArgs := make([]any, 0, len(scanVersions)+2)
 	staleArgs = append(staleArgs, fingerprint)
 	for _, version := range scanVersions {
@@ -260,7 +265,7 @@ func (db *DB) ActivateExtractGeneration(
 		WHERE review_state = 'unreviewed_auto' AND status = 'archived'
 		  AND source_run_id = ?
 		  AND `+
-		fmt.Sprintf(staleSessionSQL, "recall_entries.source_session_id"),
+		staleSessionFor("recall_entries.source_session_id"),
 		staleArgs...,
 	); err != nil {
 		return fmt.Errorf(
@@ -270,7 +275,7 @@ func (db *DB) ActivateExtractGeneration(
 		DELETE FROM recall_extract_progress
 		WHERE generation_fingerprint = ?
 		  AND `+
-		fmt.Sprintf(staleSessionSQL, "recall_extract_progress.session_id"),
+		staleSessionFor("recall_extract_progress.session_id"),
 		staleArgs...,
 	); err != nil {
 		return fmt.Errorf(
@@ -1033,7 +1038,7 @@ const extractEligibleSessionSQL = `s.deleted_at IS NULL
 	AND s.message_count > 0
 	AND s.ended_at IS NOT NULL
 	AND s.ended_at != ''
-	AND s.ended_at <= ?`
+	AND strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', s.ended_at) <= ?`
 
 // extractCandidateSQL builds the candidates query as a union of indexed
 // arms: discovery walks sessions by local_modified_at (bounded by

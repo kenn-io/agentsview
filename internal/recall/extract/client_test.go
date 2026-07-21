@@ -924,6 +924,64 @@ func TestClientBoundsTransportErrorDetail(t *testing.T) {
 	}
 }
 
+// TestClientOmitsRedirectTargetForCredentialedEndpoints pins that a
+// refused redirect's error names no target when the configured endpoint
+// carries credential material: a redirect can put the credential in the
+// target hostname, and RedactedEndpoint preserves hostnames.
+func TestClientOmitsRedirectTargetForCredentialedEndpoints(t *testing.T) {
+	token := "cap-4bcdefgh1jklmn0pqrst"
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "https://"+token+".evil.example/")
+			w.WriteHeader(http.StatusFound)
+		}))
+	defer server.Close()
+
+	client := testClient(server.URL + "/" + token + "/v1")
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("refused redirect must surface an error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error reflects the redirect target hostname: %v", err)
+	}
+	if !strings.Contains(err.Error(), "do not follow redirects") {
+		t.Fatalf("error must keep the redirect-refusal cause: %v", err)
+	}
+}
+
+// TestClientBoundsRedirectTargetDetail pins the credential-free side: the
+// redirect target stays in the error — it is the diagnostic — but a
+// hostile Location cannot balloon persisted failure rows.
+func TestClientBoundsRedirectTargetDetail(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "https://"+long+".example/")
+			w.WriteHeader(http.StatusFound)
+		}))
+	defer server.Close()
+
+	client := testClient(server.URL + "/v1")
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "p", "text", 1,
+	)
+	if err == nil {
+		t.Fatal("refused redirect must surface an error")
+	}
+	if !strings.Contains(err.Error(), "refusing redirect to") {
+		t.Fatalf("credential-free redirect diagnostics must be kept: %v", err)
+	}
+	if strings.Contains(err.Error(), long) {
+		t.Fatalf("redirect target must be length-bounded: %v", err)
+	}
+	if !strings.Contains(err.Error(), "…(truncated)") {
+		t.Fatalf("redirect target must note truncation: %v", err)
+	}
+}
+
 // TestClientSanitizesBodyReadErrorDetail pins the body-read twin of the
 // transport-error policy: a malformed chunked trailer line is echoed
 // verbatim by Go's read error ('malformed MIME header: missing colon:

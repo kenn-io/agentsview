@@ -590,6 +590,11 @@ func (m *Manager) extractSession(
 		})
 	}
 	units := m.cfg.Segmenter.Units(messages)
+	// Units join adjacent messages, so a secret split across rows — a PEM
+	// block whose BEGIN and END land in different assistant messages —
+	// matches no per-message scan while the joined text the model would
+	// receive contains the whole key. Scan exactly what would be sent.
+	secretMatches += unitSecretMatches(units)
 	digest := unitsDigest(units)
 	// A digest change means previously extracted units may have different
 	// content now (an assistant run that grew re-packs into an existing
@@ -954,6 +959,17 @@ func (m *Manager) discardSessionOutput(
 // the message content extraction sends to the model. Only Content reaches
 // the segmenter, so scanning it covers exactly the outbound material; tool
 // inputs and results stay the stored scan's concern.
+// unitSecretMatches scans the joined unit texts — the exact payloads a
+// model request would carry. See the call site for why per-message
+// scanning alone is not enough.
+func unitSecretMatches(units []Unit) int {
+	matches := 0
+	for _, unit := range units {
+		matches += len(secrets.Scan(unit.Text))
+	}
+	return matches
+}
+
 func transcriptSecretMatches(rows []db.Message) int {
 	matches := 0
 	for _, row := range rows {

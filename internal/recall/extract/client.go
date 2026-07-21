@@ -106,7 +106,8 @@ func RefuseRedirects(req *http.Request, _ []*http.Request) error {
 	// stored failure rows.
 	return fmt.Errorf(
 		"%w: refusing redirect to %q; configure the endpoint's final URL",
-		errRedirectRefused, config.RedactedEndpoint(req.URL.String()))
+		errRedirectRefused,
+		boundedToken(config.RedactedEndpoint(req.URL.String()), 200))
 }
 
 // transientError marks a failure worth retrying: network errors, timeouts,
@@ -235,9 +236,22 @@ type Client struct {
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
+		if c.HTTPClient.CheckRedirect == nil {
+			// The no-redirect policy is the extraction client's own
+			// boundary, not the caller's wiring: a redirect replays the
+			// extraction POST — transcript included — wherever the
+			// endpoint points. A caller-provided client keeps its other
+			// settings; only a missing policy is filled in, on a copy.
+			enforced := *c.HTTPClient
+			enforced.CheckRedirect = RefuseRedirects
+			return &enforced
+		}
 		return c.HTTPClient
 	}
-	return &http.Client{Timeout: 10 * time.Minute}
+	return &http.Client{
+		Timeout:       10 * time.Minute,
+		CheckRedirect: RefuseRedirects,
+	}
 }
 
 func (c *Client) retryBackoff() time.Duration {
@@ -388,9 +402,19 @@ func (c *Client) distill(
 		}
 		if errors.Is(cause, errRedirectRefused) {
 			// Deterministic for every request against the same
-			// configuration: fail fast, endpoint-scoped, no retries. The
-			// cause is RefuseRedirects' own message with the target
-			// already redacted, so it stays on the chain verbatim.
+			// configuration: fail fast, endpoint-scoped, no retries.
+			if c.credentialedEndpoint() {
+				// The refusal names its redirect target, and a redirect
+				// can put the endpoint credential in the target hostname,
+				// which RedactedEndpoint preserves. Keep the sentinel
+				// alone.
+				return nil, Usage{}, fmt.Errorf(
+					"posting distill request to %s: %w",
+					config.RedactedEndpoint(endpoint.String()),
+					errRedirectRefused)
+			}
+			// The cause is RefuseRedirects' own message with the target
+			// redacted and bounded, so it stays on the chain verbatim.
 			return nil, Usage{}, fmt.Errorf(
 				"posting distill request to %s: %w",
 				config.RedactedEndpoint(endpoint.String()), cause)
