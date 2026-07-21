@@ -355,8 +355,12 @@ class SessionsStore {
   // Single coordinator for every read that commits to activeSessionDetail
   // (navigation and watcher refresh): the newest read cancels older in-flight
   // ones, so a stale response resolving late can never overwrite fresher
-  // cached detail.
+  // cached detail. The generation counter extends that freshness to sidebar
+  // hydration, which shares its fetches with non-active rows and so cannot
+  // claim the coordinator itself: a hydration only touches active-session
+  // state when no read began and no rename committed since it was issued.
   private activeDetailRead = new LatestRead();
+  private activeDetailGeneration = 0;
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -604,6 +608,7 @@ class SessionsStore {
 
       const promise = this.runSidebarHydration(async () => {
         if (signal.aborted) return;
+        const detailGeneration = this.activeDetailGeneration;
         try {
           configureGeneratedClient();
           const hydrated = await callGenerated(
@@ -612,14 +617,19 @@ class SessionsStore {
           ) as unknown as Session;
           // A superseded hydration still carries valid detail for the active
           // session, so let it back the breadcrumb when the new index excludes
-          // the row — but only fill an empty cache. A stale-version response
-          // must never overwrite detail already resolved for this session by a
-          // newer request; the fresh path below (mergeHydratedSession) owns
-          // updates once the version check passes.
+          // the row — but only fill an empty cache, and only when no newer
+          // navigation/refresh/rename touched active-detail state while this
+          // response was in flight. A stale response must never overwrite
+          // detail already resolved for this session by a newer request; the
+          // fresh path below (mergeHydratedSession) owns updates once the
+          // version check passes.
+          const detailFresh =
+            detailGeneration === this.activeDetailGeneration;
           if (
             hydrated.id === this.activeSessionId &&
             !hydrated.is_index_only &&
-            this.activeSessionDetail?.id !== this.activeSessionId
+            this.activeSessionDetail?.id !== this.activeSessionId &&
+            detailFresh
           ) {
             this.activeSessionDetail = hydrated;
           }
@@ -627,6 +637,12 @@ class SessionsStore {
             version !== this.sidebarIndexVersion ||
             epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
           ) {
+            return;
+          }
+          // Same-version guard for the active row: a hydration issued before
+          // a newer refresh resolved must not clobber the row or the cache
+          // with its older snapshot.
+          if (hydrated.id === this.activeSessionId && !detailFresh) {
             return;
           }
           cache.set(id, hydrated);
@@ -840,6 +856,19 @@ class SessionsStore {
     return this.machinesPromise;
   }
 
+  // The generation advances only when something newer commits to (or starts
+  // a read for) active-detail state — never on plain cancellation, so a
+  // hydration joined at selection time can still seed an empty cache.
+  private beginActiveDetailRead(): AbortSignal {
+    this.activeDetailGeneration++;
+    return this.activeDetailRead.begin();
+  }
+
+  private cancelActiveDetailRead(): void {
+    this.activeDetailGeneration++;
+    this.activeDetailRead.cancel();
+  }
+
   private setActiveSession(id: string | null) {
     if (id === this.activeSessionId) return;
     this.activeDetailRead.cancel();
@@ -883,7 +912,7 @@ class SessionsStore {
       await this.hydrateSelectedIndexOnlySession(id);
       return;
     }
-    const signal = this.activeDetailRead.begin();
+    const signal = this.beginActiveDetailRead();
     try {
       configureGeneratedClient();
       const session = await callGenerated(
@@ -922,7 +951,7 @@ class SessionsStore {
   async refreshActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
-    const signal = this.activeDetailRead.begin();
+    const signal = this.beginActiveDetailRead();
     try {
       configureGeneratedClient();
       const session = await callGenerated(
@@ -958,6 +987,7 @@ class SessionsStore {
         this.activeSessionId === id &&
         this.activeDetailRead.isCurrent(signal)
       ) {
+        this.activeDetailGeneration++;
         this.activeSessionDetail = null;
       }
     } finally {
@@ -1461,7 +1491,7 @@ class SessionsStore {
     // Drop any in-flight active-detail read first: it was issued before the
     // rename and would revert the name with a pre-rename snapshot.
     if (this.activeSessionDetail?.id === id) {
-      this.activeDetailRead.cancel();
+      this.cancelActiveDetailRead();
       this.activeSessionDetail = applyRename(this.activeSessionDetail);
     }
   }

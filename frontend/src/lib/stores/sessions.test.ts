@@ -2915,6 +2915,70 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("renamed");
     });
 
+    it("seeds the cache from a hydration already in flight at selection", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Viewport hydration of the row is already in flight when the user
+      // selects it; selection joins that request rather than issuing a new
+      // one, so its response must still hydrate the row and seed the cache.
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      sessions.selectSession("sel");
+
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "detail" }),
+      );
+      await hydration;
+
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      expect(sessions.activeSession?.first_message).toBe("detail");
+
+      // The seeded cache must survive a reload that drops the row.
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load();
+      expect(sessions.activeSession?.first_message).toBe("detail");
+    });
+
+    it("ignores a stale hydration resolving after a newer refresh", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Hydration of the visible row stays in flight...
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+
+      // ...the user selects that row, and a watcher-driven refresh resolves
+      // first with a fresher snapshot for both the row and the cache.
+      sessions.selectSession("sel");
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "NEWER" }),
+      );
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession?.first_message).toBe("NEWER");
+
+      // The older hydration passes the sidebar version/epoch checks (no
+      // reload happened) but must not clobber the newer active detail.
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "STALE" }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.first_message).toBe("NEWER");
+    });
+
     it("clears the cached detail when the active session was deleted", async () => {
       mockSidebarIndex([]);
       await sessions.load();
@@ -2928,6 +2992,35 @@ describe("SessionsStore", () => {
       // breadcrumb must empty rather than keep showing the ghost session.
       vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
       await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession).toBeUndefined();
+    });
+
+    it("does not let an in-flight hydration resurrect a deleted session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["gone"]);
+      await Promise.resolve();
+      sessions.selectSession("gone");
+
+      // The session is deleted elsewhere; a refresh 404s and clears the
+      // cache while the hydration response is still in flight.
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession).toBeUndefined();
+
+      // The pre-deletion hydration snapshot must not refill the cache.
+      resolveHydration(
+        makeSession({ id: "gone", project: "proj-a", first_message: "ghost" }),
+      );
+      await hydration;
 
       expect(sessions.activeSession).toBeUndefined();
     });
