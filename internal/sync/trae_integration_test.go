@@ -605,3 +605,111 @@ func TestFindSourceFileTraeRelocationUsesQualifiedRawID(t *testing.T) {
 	setTraeSyncDBSessions(t, oldDB, []any{traeSyncSession("other", "old moved")}, info.ModTime())
 	assert.Equal(t, newDB+"#rewrite", engine.FindSourceFile("trae:workspaceStorage:rewrite"))
 }
+
+func TestProcessFileProviderTraeDefaultSyncMigratesLegacyState(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	writeTraeSyncDB(t, workspacePath, "workspace reply")
+
+	database := dbtest.OpenTestDB(t)
+	const legacyID = "trae:rewrite"
+	legacyPath := workspacePath + "#rewrite"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               legacyID,
+		Project:          "agentsview",
+		Machine:          "devbox",
+		Agent:            string(parser.AgentTrae),
+		SourceSessionID:  "rewrite",
+		MessageCount:     2,
+		UserMessageCount: 1,
+		FilePath:         &legacyPath,
+	}))
+	dbtest.SeedMessages(t, database,
+		dbtest.UserMsg(legacyID, 0, "same prompt"),
+		db.Message{
+			SessionID:     legacyID,
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "legacy reply",
+			ContentLength: len("legacy reply"),
+		},
+	)
+	legacyName := "Legacy renamed session"
+	require.NoError(t, database.RenameSession(legacyID, &legacyName))
+	starred, err := database.StarSession(legacyID)
+	require.NoError(t, err)
+	require.True(t, starred)
+
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	processed := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  workspacePath,
+		Agent: parser.AgentTrae,
+	})
+	require.NoError(t, processed.err)
+	require.Len(t, processed.results, 1)
+
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess:         processed.results[0].Session,
+		msgs:         processed.results[0].Messages,
+		forceReplace: processed.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	ctx := context.Background()
+	legacy, err := database.GetSession(ctx, legacyID)
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+
+	const namespacedID = "trae:workspaceStorage:rewrite"
+	namespaced, err := database.GetSession(ctx, namespacedID)
+	require.NoError(t, err)
+	require.NotNil(t, namespaced)
+	require.NotNil(t, namespaced.DisplayName)
+	assert.Equal(t, legacyName, *namespaced.DisplayName)
+
+	starredIDs, err := database.ListStarredSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{namespacedID}, starredIDs)
+}
+
+func TestProcessFileProviderTraeDefaultSyncPropagatesLegacyExclusion(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	writeTraeSyncDB(t, workspacePath, "workspace reply")
+
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.ExcludeSessionID("trae:rewrite"))
+
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	processed := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  workspacePath,
+		Agent: parser.AgentTrae,
+	})
+	require.NoError(t, processed.err)
+	require.Len(t, processed.results, 1)
+
+	written, _, failed, _ := engine.writeBatch([]pendingWrite{{
+		sess:         processed.results[0].Session,
+		msgs:         processed.results[0].Messages,
+		forceReplace: processed.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Zero(t, written)
+	require.Zero(t, failed)
+
+	ctx := context.Background()
+	namespaced, err := database.GetSession(
+		ctx, "trae:workspaceStorage:rewrite",
+	)
+	require.NoError(t, err)
+	assert.Nil(t, namespaced)
+	assert.True(t,
+		database.IsSessionExcluded("trae:workspaceStorage:rewrite"),
+	)
+}

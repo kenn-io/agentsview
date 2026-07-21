@@ -6983,6 +6983,14 @@ func (e *Engine) writeBatch(
 			existing < db.CurrentDataVersion() {
 			stale = true
 		}
+		legacyTraeID, legacyTraeNamespace := legacyTraeSessionMigrationTarget(s)
+		if legacyTraeID != "" && e.db.IsSessionExcluded(legacyTraeID) {
+			if err := e.db.ExcludeSessionID(s.ID); err != nil {
+				log.Printf("exclude migrated trae session %s: %v", s.ID, err)
+				failedSessions++
+			}
+			continue
+		}
 
 		// UpsertSession first: the session row must exist
 		// before messages can be inserted (FK constraint).
@@ -7044,6 +7052,18 @@ func (e *Engine) writeBatch(
 			)
 			failedSessions++
 			continue
+		}
+		if legacyTraeID != "" {
+			if err := e.db.MigrateLegacyTraeSessionState(
+				legacyTraeID, s.ID, legacyTraeNamespace,
+			); err != nil {
+				log.Printf(
+					"migrate legacy trae state %s -> %s: %v",
+					legacyTraeID, s.ID, err,
+				)
+				failedSessions++
+				continue
+			}
 		}
 
 		// Advance data_version only after the message write

@@ -82,6 +82,63 @@ func (s *syncStateStoreStub) GetOrCreateSyncState(
 	return defaultValue, nil
 }
 
+func TestPGTraeHasUniqueSiblingRevision(t *testing.T) {
+	rev := func(value string) *string { return &value }
+
+	tests := []struct {
+		name             string
+		currentNamespace string
+		current          db.Session
+		workspaceSibling db.Session
+		globalSibling    db.Session
+		want             bool
+	}{
+		{
+			name:             "workspace revision differs from global",
+			currentNamespace: "workspaceStorage",
+			current:          db.Session{TranscriptRevision: rev("workspace-rev")},
+			workspaceSibling: db.Session{TranscriptRevision: rev("workspace-rev")},
+			globalSibling:    db.Session{TranscriptRevision: rev("global-rev")},
+			want:             true,
+		},
+		{
+			name:             "global revision differs from workspace",
+			currentNamespace: "globalStorage",
+			current:          db.Session{TranscriptRevision: rev("global-rev")},
+			workspaceSibling: db.Session{TranscriptRevision: rev("workspace-rev")},
+			globalSibling:    db.Session{TranscriptRevision: rev("global-rev")},
+			want:             true,
+		},
+		{
+			name:             "shared revision stays ambiguous",
+			currentNamespace: "workspaceStorage",
+			current:          db.Session{TranscriptRevision: rev("shared-rev")},
+			workspaceSibling: db.Session{TranscriptRevision: rev("shared-rev")},
+			globalSibling:    db.Session{TranscriptRevision: rev("shared-rev")},
+			want:             false,
+		},
+		{
+			name:             "missing workspace revision still counts as unique",
+			currentNamespace: "workspaceStorage",
+			current:          db.Session{},
+			workspaceSibling: db.Session{},
+			globalSibling:    db.Session{TranscriptRevision: rev("global-rev")},
+			want:             true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, pgTraeHasUniqueSiblingRevision(
+				tt.currentNamespace,
+				tt.current,
+				tt.workspaceSibling,
+				tt.globalSibling,
+			))
+		})
+	}
+}
+
 type pushAliasRoutingDriver struct{}
 
 type pushAliasRoutingConn struct{}

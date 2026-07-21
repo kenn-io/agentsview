@@ -1570,6 +1570,7 @@ func deletePGLegacyTraeSessionIfOwned(
 		return nil
 	}
 	requireRevisionMatch := false
+	legacyTranscriptRevision := sess.TranscriptRevision
 	currentNamespace, hasNamespace := pgTraeNamespacedSessionNamespace(sess.ID)
 	if hasNamespace && local != nil {
 		legacyLocal, err := local.GetSession(ctx, legacyID)
@@ -1610,11 +1611,15 @@ func deletePGLegacyTraeSessionIfOwned(
 				)
 			}
 			if workspaceSibling != nil && globalSibling != nil {
-				return nil
+				if !pgTraeHasUniqueSiblingRevision(
+					currentNamespace, sess, *workspaceSibling, *globalSibling,
+				) {
+					return nil
+				}
+				requireRevisionMatch = true
 			}
 		}
 	}
-	legacyTranscriptRevision := sess.TranscriptRevision
 	if legacyMarkerMachines == nil {
 		legacyMarkerMachines = []string{}
 	}
@@ -1790,6 +1795,25 @@ func deletePGLegacyTraeSessionIfOwned(
 		)
 	}
 	return nil
+}
+
+func pgTraeHasUniqueSiblingRevision(
+	currentNamespace string,
+	current, workspaceSibling, globalSibling db.Session,
+) bool {
+	currentRevision := transcriptRevisionValue(current.TranscriptRevision)
+	switch currentNamespace {
+	case "workspaceStorage":
+		return currentRevision != transcriptRevisionValue(
+			globalSibling.TranscriptRevision,
+		)
+	case "globalStorage":
+		return currentRevision != transcriptRevisionValue(
+			workspaceSibling.TranscriptRevision,
+		)
+	default:
+		return false
+	}
 }
 
 // sessionPushFingerprint builds the change-detection fingerprint for a
