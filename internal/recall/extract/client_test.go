@@ -924,6 +924,64 @@ func TestClientBoundsTransportErrorDetail(t *testing.T) {
 	}
 }
 
+// TestClientSanitizesBodyReadErrorDetail pins the body-read twin of the
+// transport-error policy: a malformed chunked trailer line is echoed
+// verbatim by Go's read error ('malformed MIME header: missing colon:
+// "<raw line>"'), so read errors carry raw wire bytes into doctor
+// output, scheduler logs, and persisted failure rows unless routed
+// through the same sanitizer.
+func TestClientSanitizesBodyReadErrorDetail(t *testing.T) {
+	reflected := "reflected-cap-4bcdefgh1jklmn0pqrst"
+	newTrailerServer := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				_, _ = conn.Write([]byte(
+					"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" +
+						"3\r\nabc\r\n0\r\n" + reflected + " junk\r\n\r\n"))
+			}))
+	}
+
+	t.Run("credentialed endpoint withholds", func(t *testing.T) {
+		server := newTrailerServer()
+		defer server.Close()
+		client := testClient(server.URL + "/cap-4bcdefgh1jklmn0pqrst/v1")
+		_, _, err := client.DistillWithRecovery(
+			context.Background(), "p", "text", 1,
+		)
+		if err == nil {
+			t.Fatal("malformed trailer must surface an error")
+		}
+		if strings.Contains(err.Error(), reflected) {
+			t.Fatalf("error reflects the malformed trailer line: %v", err)
+		}
+		if !strings.Contains(err.Error(), "withheld") {
+			t.Fatalf("credentialed read-error detail must be withheld: %v",
+				err)
+		}
+	})
+
+	t.Run("bare endpoint keeps bounded diagnostic", func(t *testing.T) {
+		server := newTrailerServer()
+		defer server.Close()
+		client := testClient(server.URL + "/v1")
+		_, _, err := client.DistillWithRecovery(
+			context.Background(), "p", "text", 1,
+		)
+		if err == nil {
+			t.Fatal("malformed trailer must surface an error")
+		}
+		if !strings.Contains(err.Error(), "malformed MIME header") {
+			t.Fatalf("credential-free read diagnostics must be kept: %v", err)
+		}
+	})
+}
+
 // TestClientKeepsDiagnosticsForKnownAPIPaths pins the other side: the
 // standard OpenAI-compatible path shapes are API surface, not secrets,
 // and withholding their diagnostics would gut doctor output for every

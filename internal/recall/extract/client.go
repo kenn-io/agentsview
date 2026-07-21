@@ -411,8 +411,12 @@ func (c *Client) distill(
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
 	if err != nil {
+		// Read errors quote raw wire bytes — a malformed chunked trailer
+		// line is echoed verbatim — so the detail follows the same policy
+		// as transport errors.
 		return nil, Usage{}, &transientError{
-			err: fmt.Errorf("reading distill response: %w", err),
+			err: fmt.Errorf("reading distill response: %s",
+				c.transportErrorDetail(err)),
 		}
 	}
 	if response.StatusCode == http.StatusBadRequest {

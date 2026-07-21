@@ -313,6 +313,75 @@ func TestManagerRunPassExtractsMapsAndActivates(t *testing.T) {
 	}
 }
 
+// TestManagerActivatesOverTransientlyIneligibleUnfinishedSession pins the
+// pass-level half of the transient-flux activation contract: a pending row
+// whose session reopened is skipped by candidate selection and left alone
+// by reconciliation (hard-ineligible only), so no pass can ever finish it.
+// maybeActivate must look through it — the eligibility-aware backlog probe
+// and the activation transaction's own gates decide — instead of refusing
+// on raw pending counts until a session that may never settle does.
+func TestManagerActivatesOverTransientlyIneligibleUnfinishedSession(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("opening archive: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("closing archive: %v", err)
+		}
+	})
+	ctx := context.Background()
+	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("opening side connection: %v", err)
+	}
+	t.Cleanup(func() { _ = side.Close() })
+	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
+	seedSession(t, d, "sess-b", turnMessages("second ask", "answer"), nil)
+	m := newManager(t, d, server.URL, nil)
+	if _, err := d.EnsureExtractGeneration(ctx, db.ExtractGeneration{
+		Fingerprint: m.Fingerprint(), Model: "test-model",
+		Segmenter: "turns-v1",
+	}); err != nil {
+		t.Fatalf("ensuring generation: %v", err)
+	}
+	if _, err := d.UpsertExtractProgress(ctx, db.ExtractProgressUpsert{
+		SessionID: "sess-b", Fingerprint: m.Fingerprint(),
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("seeding pending row: %v", err)
+	}
+	if _, err := side.Exec(
+		"UPDATE sessions SET ended_at = NULL WHERE id = 'sess-b'",
+	); err != nil {
+		t.Fatalf("reopening sess-b: %v", err)
+	}
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if !result.Activated {
+		t.Fatal("activation must look through a transiently ineligible " +
+			"pending row instead of waiting for extraction that cannot run")
+	}
+	if _, found, err := d.ExtractProgress(
+		ctx, "sess-b", m.Fingerprint(),
+	); err != nil {
+		t.Fatalf("ExtractProgress: %v", err)
+	} else if found {
+		t.Fatal("the unfinishable pending row must be cleared so the " +
+			"session is rediscovered once it settles")
+	}
+}
+
 func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()

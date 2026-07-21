@@ -2534,6 +2534,65 @@ func TestActivateExtractGenerationResetsTransientlyIneligibleStagedOutput(
 	}
 }
 
+// TestActivateExtractGenerationResetsTransientlyIneligibleUnfinishedCoverage
+// pins that pending rows follow the same transient-flux contract as failed
+// ones: a session that reopened or lost its scan stamp is excluded from
+// candidate selection, reconciliation clears only hard-ineligible rows, and
+// nothing upstream can ever finish its extraction — counting it as
+// unfinished coverage would block activation until the session happens to
+// settle, possibly forever. The cleanup deletes the row and its staged
+// output so the session is rediscovered once it settles.
+func TestActivateExtractGenerationResetsTransientlyIneligibleUnfinishedCoverage(
+	t *testing.T,
+) {
+	cases := map[string]string{
+		"scan stamp cleared": "UPDATE sessions SET secrets_rules_version " +
+			"= '' WHERE id = 'sess-flux'",
+		"session reopened": "UPDATE sessions SET ended_at = NULL " +
+			"WHERE id = 'sess-flux'",
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := context.Background()
+			_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+				Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+			})
+			require.NoError(t, err)
+			seedCoveredExtractSession(t, d, "sess-ok", "fp-a")
+			seedServableExtractEntry(t, d, "fp-a", "sess-ok", "e-ok")
+			seedExtractCandidate(t, d, "sess-flux", 2*time.Hour, nil)
+			seedServableExtractEntry(t, d, "fp-a", "sess-flux", "e-flux")
+			time.Sleep(2 * time.Millisecond)
+			_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+				SessionID: "sess-flux", Fingerprint: "fp-a",
+				ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+			})
+			require.NoError(t, err)
+			_, err = d.getWriter().Exec(mutate)
+			require.NoError(t, err)
+
+			require.NoError(t, d.ActivateExtractGeneration(
+				ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+			okEntry, err := d.GetRecallEntry(ctx, "e-ok")
+			require.NoError(t, err)
+			require.NotNil(t, okEntry)
+			assert.Equal(t, "accepted", okEntry.Status)
+
+			fluxEntry, err := d.GetRecallEntry(ctx, "e-flux")
+			require.NoError(t, err)
+			assert.Nil(t, fluxEntry,
+				"staged output of an unfinishable pending row must be "+
+					"deleted, not promoted or stranded archived")
+			_, found, err := d.ExtractProgress(ctx, "sess-flux", "fp-a")
+			require.NoError(t, err)
+			assert.False(t, found,
+				"the pending row must go so the session is rediscovered "+
+					"and re-extracted once it settles")
+		})
+	}
+}
+
 // TestActivateExtractGenerationClearsHardIneligibleStagedOutput pins that
 // activation deletes — not merely skips — the staged output and progress
 // of hard-ineligible sessions: leaving them archived relies on a later

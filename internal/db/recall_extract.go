@@ -312,9 +312,9 @@ func (db *DB) ActivateExtractGeneration(
 
 // verifyExtractActivationCoverageTx re-verifies, inside the activation
 // transaction, that the generation's coverage still supports serving: no
-// session is pending or partial, no completed session — still
-// extraction-eligible — has transcript writes past its coverage stamp or a
-// scan stamp outside the current rules versions, and no eligible session
+// fully eligible session is pending or partial, no completed session —
+// still extraction-eligible — has transcript writes past its coverage
+// stamp or a scan stamp outside the current rules versions, and no eligible session
 // lacks a progress row entirely (a single-session run, or a session ending
 // after the caller's checks, leaves uncovered work that no progress-based
 // gate can see). Failed sessions do not block (they retry and top the
@@ -328,13 +328,31 @@ func verifyExtractActivationCoverageTx(
 	ctx context.Context, tx *sql.Tx, fingerprint string,
 	scanVersions []string, quietCutoff time.Time,
 ) error {
+	versionMarks := strings.TrimSuffix(
+		strings.Repeat("?,", len(scanVersions)), ",")
+	// Full eligibility, not merely "not hard-ineligible": a pending or
+	// partial row whose session is in transient flux (reopened, scan
+	// stamp lost) is skipped by candidate selection and left alone by
+	// reconciliation, so no pass can ever finish it — counting it here
+	// would block activation until the session happens to settle,
+	// possibly forever. The cleanup below deletes such rows with their
+	// staged output, and rediscovery re-extracts once the session
+	// settles.
+	buildingArgs := make([]any, 0, len(scanVersions)+4)
+	buildingArgs = append(buildingArgs,
+		fingerprint, ExtractProgressPending, ExtractProgressPartial)
+	for _, version := range scanVersions {
+		buildingArgs = append(buildingArgs, version)
+	}
+	buildingArgs = append(buildingArgs,
+		quietCutoff.UTC().Format(extractTimeLayout))
 	var building int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
 		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
-		  AND NOT (`+extractSessionIneligibleSQL+`)`,
-		fingerprint, ExtractProgressPending, ExtractProgressPartial,
+		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks),
+		buildingArgs...,
 	).Scan(&building); err != nil {
 		return fmt.Errorf("counting unfinished coverage: %w", err)
 	}
@@ -343,8 +361,6 @@ func verifyExtractActivationCoverageTx(
 			"generation %s has %d sessions still being extracted: %w",
 			fingerprint, building, ErrExtractActivationBlocked)
 	}
-	versionMarks := strings.TrimSuffix(
-		strings.Repeat("?,", len(scanVersions)), ",")
 	args := make([]any, 0, len(scanVersions)+2)
 	args = append(args, fingerprint, ExtractProgressDone)
 	for _, version := range scanVersions {

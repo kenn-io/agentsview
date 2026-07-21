@@ -333,38 +333,44 @@ archive or hold its write lock through oversized inserts.
 ## Activation
 
 A building generation auto-activates when everything currently eligible is done,
-nothing is pending or partial, and the generation has produced at least one
-entry. The backlog check counts completed sessions whose transcripts changed
-since their unit snapshot: their corpus is stale, and activating over them would
-promote a generation that does not cover what it claims. Failed sessions do not
-block activation — they retry later and top the corpus up — unless a failed
-partial row holds staged entries and its session was written after its coverage
-stamp (a content change, or a remap to another project, cwd, or branch): those
-entries would promote context only the retry's refresh repairs, so the
-activation transaction refuses them like stale done coverage. An entryless
-generation never activates, manually or automatically: activation retires the
-previously active generation, and replacing a working corpus with an empty one
-must not happen silently. All of these checks are advisory racing against
-concurrent writes, so the activation transaction re-verifies them before
-switching generations: it aborts if any still-eligible session is pending or
-partial (a row whose session has since turned ineligible can never finish, and
-an explicit activation runs no retraction pass to clear it first), if any
-completed, still-eligible session has transcript writes past its coverage stamp
-or a scan stamp outside the current rules versions, if any eligible session has
-no progress row at all (a single-session run, or a session ending after the
-caller's checks, is uncovered work no progress-based gate can see), or if
-promotion would leave zero servable (accepted, provenance-verified) entries — a
-blocked activation changes nothing and the next pass retries after
-re-extraction. Promotion also re-verifies full eligibility inside the same
-transaction, and clears what fails it: any session no longer fully eligible —
-trashed, flagged automated, carrying findings, reopened, back inside the quiet
-period, or awaiting rescan after a write — has its staged entries and progress
-rows deleted before the rest are promoted. Skipping instead of deleting would
-strand the output: an archived entry under a surviving progress row is never
-promoted or rediscovered once the generation is active, and deferring
-hard-ineligible rows to the scheduled retraction pass loses the race against a
-session restored before that pass runs. A cleared session is rediscovered and
-re-extracted from scratch when it settles or returns.
+no eligible session is pending or partial, and the generation has produced at
+least one entry. Raw pending/partial counts are not consulted: a row whose
+session turned transiently ineligible (reopened, scan stamp lost) is skipped by
+candidate selection and left alone by reconciliation, so no pass can ever finish
+it — refusing on it would stall activation until the session happens to settle.
+The activation transaction clears such rows with their staged output, and
+rediscovery re-extracts once the session settles. The backlog check counts
+completed sessions whose transcripts changed since their unit snapshot: their
+corpus is stale, and activating over them would promote a generation that does
+not cover what it claims. Failed sessions do not block activation — they retry
+later and top the corpus up — unless a failed partial row holds staged entries
+and its session was written after its coverage stamp (a content change, or a
+remap to another project, cwd, or branch): those entries would promote context
+only the retry's refresh repairs, so the activation transaction refuses them
+like stale done coverage. An entryless generation never activates, manually or
+automatically: activation retires the previously active generation, and
+replacing a working corpus with an empty one must not happen silently. All of
+these checks are advisory racing against concurrent writes, so the activation
+transaction re-verifies them before switching generations: it aborts if any
+still-eligible session is pending or partial (a row whose session has since
+turned ineligible can never finish, and an explicit activation runs no
+retraction pass to clear it first), if any completed, still-eligible session has
+transcript writes past its coverage stamp or a scan stamp outside the current
+rules versions, if any eligible session has no progress row at all (a
+single-session run, or a session ending after the caller's checks, is uncovered
+work no progress-based gate can see), or if promotion would leave zero servable
+(accepted, provenance-verified) entries — a blocked activation changes nothing
+and the next pass retries after re-extraction. Promotion also re-verifies full
+eligibility inside the same transaction, and clears what fails it: any session
+no longer fully eligible — trashed, flagged automated, carrying findings,
+reopened, back inside the quiet period, or awaiting rescan after a write — has
+its staged entries and progress rows deleted before the rest are promoted.
+Skipping instead of deleting would strand the output: an archived entry under a
+surviving progress row is never promoted or rediscovered once the generation is
+active, and deferring hard-ineligible rows to the scheduled retraction pass
+loses the race against a session restored before that pass runs. A cleared
+session is rediscovered and re-extracted from scratch when it settles or
+returns.
 
 Generation state controls serving. While a generation is building, its entries
 are staged with the `archived` status so an unfinished corpus never serves;

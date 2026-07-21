@@ -1054,7 +1054,13 @@ func (m *Manager) maybeActivate(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if stats.Done == 0 || stats.Pending > 0 || stats.Partial > 0 {
+	// Raw pending/partial counts are not consulted: a row whose session
+	// turned transiently ineligible (reopened, scan stamp lost) can never
+	// finish, and refusing on it would stall activation until the session
+	// happens to settle. The backlog probe below sees pending and partial
+	// rows of eligible sessions, and the activation transaction re-checks
+	// coverage and clears unfinishable rows itself.
+	if stats.Done == 0 {
 		return false, nil
 	}
 	if stats.Entries == 0 {
