@@ -213,6 +213,24 @@ func TestPGResolveTraeSiblingSessionFallsBackToLocal(t *testing.T) {
 	assert.Equal(t, "local-rev", *sess.TranscriptRevision)
 }
 
+func TestPGPreferredTranscriptRevision(t *testing.T) {
+	current := "current-rev"
+	legacy := "legacy-rev"
+
+	preferred := pgPreferredTranscriptRevision(&current, &legacy)
+	require.NotNil(t, preferred)
+	assert.Equal(t, "current-rev", *preferred)
+
+	preferred = pgPreferredTranscriptRevision(nil, &legacy)
+	require.NotNil(t, preferred)
+	assert.Equal(t, "legacy-rev", *preferred)
+
+	empty := ""
+	preferred = pgPreferredTranscriptRevision(&empty, &legacy)
+	require.NotNil(t, preferred)
+	assert.Equal(t, "legacy-rev", *preferred)
+}
+
 type pushAliasRoutingDriver struct{}
 
 type pushAliasRoutingConn struct{}

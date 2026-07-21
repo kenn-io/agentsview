@@ -1583,9 +1583,15 @@ func deletePGLegacyTraeSessionIfOwned(
 				legacyID, err,
 			)
 		}
-		if legacyLocal != nil && legacyLocal.TranscriptRevision != nil {
-			legacyTranscriptRevision = legacyLocal.TranscriptRevision
-		}
+		legacyTranscriptRevision = pgPreferredTranscriptRevision(
+			sess.TranscriptRevision,
+			func() *string {
+				if legacyLocal == nil {
+					return nil
+				}
+				return legacyLocal.TranscriptRevision
+			}(),
+		)
 		if legacyLocal != nil && legacyLocal.FilePath != nil {
 			legacyNamespace := pgTraeSessionNamespaceFromPath(*legacyLocal.FilePath)
 			if legacyNamespace != "" {
@@ -1814,6 +1820,15 @@ revisionCheckDone:
 		)
 	}
 	return nil
+}
+
+func pgPreferredTranscriptRevision(
+	current, legacy *string,
+) *string {
+	if current != nil && *current != "" {
+		return current
+	}
+	return legacy
 }
 
 func pgResolveTraeSiblingSession(
