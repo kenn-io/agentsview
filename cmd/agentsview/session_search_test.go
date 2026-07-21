@@ -413,11 +413,15 @@ func TestPrintContentMatchesTableBasic(t *testing.T) {
 	require.Len(t, lines, 3)
 
 	header, row1, row2 := lines[0], lines[1], lines[2]
-	for _, col := range []string{"ID", "MATCH", "PROJECT", "LOCATION", "SNIPPET"} {
+	for _, col := range []string{"ID", "MATCH", "AGE", "PROJECT", "LOCATION", "SNIPPET"} {
 		assert.Contains(t, header, col)
 	}
 	assert.NotContains(t, header, "SCORE",
 		"SCORE column omitted when no match is scored")
+	assert.Greater(t, strings.Index(header, "AGE"), strings.Index(header, "MATCH"),
+		"AGE comes after MATCH in the unscored table")
+	assert.Less(t, strings.Index(header, "AGE"), strings.Index(header, "PROJECT"),
+		"AGE comes before PROJECT in the unscored table")
 
 	assert.Contains(t, row1, "fc9367d6-38f7-4d18-863d-118dec238bd0")
 	assert.Contains(t, row1, "#12")
@@ -747,12 +751,18 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 				Ordinal: 14, Snippet: "hit", Score: &score,
 				Timestamp: renderNow.Add(-3 * time.Hour).Format(time.RFC3339),
 			},
+			{
+				SessionID: "s2", Project: "proj", Location: "message",
+				Ordinal: 2, Snippet: "no timestamp", Score: &score,
+			},
 		},
 	}
 	var buf bytes.Buffer
 	require.NoError(t, printContentMatchesHuman(&buf, res, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
+	require.Len(t, lines, 4)
+	assert.Contains(t, lines[2], emDash,
+		"missing timestamp renders an em dash on the match line")
 	line := lines[0]
 	scoreIdx := strings.Index(line, "score=0.83")
 	ageIdx := strings.Index(line, "3h")
