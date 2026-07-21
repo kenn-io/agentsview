@@ -101,10 +101,10 @@ Rows with no value for the selected metric are omitted from that view, so
 cost-only untimed sessions appear in **Cost** but not **Agent-min**.
 
 Project, agent, session, bucket, and report totals use the authoritative
-session total when one is available. The model breakdown remains a token-price
-attribution view because a session-wide reported amount cannot be divided among
-models without inventing an allocation. Its model costs can therefore differ
-from, and need not sum to, the authoritative total.
+session total when one is available. For a multi-model session, AgentsView
+allocates that total across usage rows in proportion to their catalog-price
+estimates. The per-model costs are therefore estimated attributions, not
+provider-reported model charges, but they still sum to the displayed total.
 
 ## Activity Insight
 

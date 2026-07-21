@@ -1188,7 +1188,6 @@ func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 	require.NotNil(t, u, "usage is nil")
 	assert.True(t, u.HasCost, "HasCost")
 	assert.Equal(t, 0.10, u.CostUSD, "CostUSD")
-	assert.False(t, u.CostIsAuthoritative)
 	assert.Equal(t, 10.0, u.AICredits, "AICredits")
 }
 
@@ -1221,18 +1220,24 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.InDelta(t, 0.0275, usage.CostUSD, 1e-12)
-	assert.True(t, usage.CostIsAuthoritative)
 	assert.InDelta(t, 0.0275/0.01, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
-	assert.NotEqual(t, usage.CostUSD, usage.Breakdown[1].CostUSD)
+	assert.InDelta(t, 0.01375, usage.Breakdown[0].CostUSD, 1e-12)
+	assert.InDelta(t, 0.01375, usage.Breakdown[1].CostUSD, 1e-12)
+	assert.Equal(t, usage.CostUSD,
+		usage.Breakdown[0].CostUSD+usage.Breakdown[1].CostUSD)
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-03-12", To: "2026-03-13", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.Zero(t, daily.Daily[0].TotalCost)
-	assert.InDelta(t, 0.0275, daily.Daily[1].TotalCost, 1e-12)
+	assert.InDelta(t, 0.01375, daily.Daily[0].TotalCost, 1e-12)
+	assert.InDelta(t, 0.01375, daily.Daily[1].TotalCost, 1e-12)
+	for _, day := range daily.Daily {
+		require.Len(t, day.ModelBreakdowns, 1)
+		assert.Equal(t, day.TotalCost, day.ModelBreakdowns[0].Cost)
+	}
 	assert.InDelta(t, 0.0275, daily.Totals.TotalCost, 1e-12)
 	assert.InDelta(t, 2.75, daily.Totals.CopilotAICredits, 1e-9,
 		"credits derive from the authoritative reported cost")

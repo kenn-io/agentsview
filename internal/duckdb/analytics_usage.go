@@ -3689,10 +3689,7 @@ func (s *Store) GetDailyUsage(
 	accum := map[usageAccumKey]*duckUsageBucket{}
 	type sessionCost struct {
 		estimated     map[usageAccumKey]float64
-		authoritative *struct {
-			key  usageAccumKey
-			cost float64
-		}
+		authoritative *float64
 	}
 	sessionCosts := map[string]*sessionCost{}
 	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
@@ -3726,7 +3723,6 @@ func (s *Store) GetDailyUsage(
 		b.outputTok += r.outputTok
 		b.cacheCr += r.cacheCr
 		b.cacheRd += r.cacheRd
-		b.cost += cost
 		sc := sessionCosts[r.sessionID]
 		if sc == nil {
 			sc = &sessionCost{
@@ -3737,21 +3733,53 @@ func (s *Store) GetDailyUsage(
 		sc.estimated[key] += cost
 		if useAuthoritativeCost && r.authoritativeCostRows > 0 {
 			hasAuthoritativeCost = true
-			sc.authoritative = &struct {
-				key  usageAccumKey
-				cost float64
-			}{key: key, cost: r.authoritativeCost}
+			v := r.authoritativeCost
+			sc.authoritative = &v
 			rateResolver.RecordUnattributedReported()
 		}
 	}
-	for _, sc := range sessionCosts {
+	sessionIDs := make([]string, 0, len(sessionCosts))
+	for sessionID := range sessionCosts {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	sort.Strings(sessionIDs)
+	for _, sessionID := range sessionIDs {
+		sc := sessionCosts[sessionID]
 		if sc.authoritative != nil {
-			b := accum[sc.authoritative.key]
-			if b == nil {
-				b = &duckUsageBucket{}
-				accum[sc.authoritative.key] = b
+			keys := make([]usageAccumKey, 0, len(sc.estimated))
+			for key := range sc.estimated {
+				keys = append(keys, key)
 			}
-			b.aggregateCost += sc.authoritative.cost
+			sort.Slice(keys, func(i, j int) bool {
+				a, b := keys[i], keys[j]
+				if a.date != b.date {
+					return a.date < b.date
+				}
+				if a.project != b.project {
+					return a.project < b.project
+				}
+				if a.agent != b.agent {
+					return a.agent < b.agent
+				}
+				if a.machine != b.machine {
+					return a.machine < b.machine
+				}
+				return a.model < b.model
+			})
+			weights := make([]float64, len(keys))
+			for i, key := range keys {
+				weights[i] = sc.estimated[key]
+			}
+			costs := export.AllocateCostByWeight(*sc.authoritative, weights)
+			for i, key := range keys {
+				b := accum[key]
+				if b == nil {
+					b = &duckUsageBucket{}
+					accum[key] = b
+				}
+				b.cost += costs[i]
+				b.aggregateCost += costs[i]
+			}
 		} else {
 			for key, cost := range sc.estimated {
 				b := accum[key]
@@ -3759,6 +3787,7 @@ func (s *Store) GetDailyUsage(
 					b = &duckUsageBucket{}
 					accum[key] = b
 				}
+				b.cost += cost
 				b.aggregateCost += cost
 			}
 		}
@@ -4324,6 +4353,17 @@ func (s *Store) GetSessionUsage(
 		breakdown = append(breakdown, duckSessionUsageBreakdownEntry(
 			r, len(breakdown)+1, cost, priced))
 	}
+	if authoritativeCost != nil && len(breakdown) > 0 {
+		weights := make([]float64, len(breakdown))
+		for i := range breakdown {
+			weights[i] = breakdown[i].CostUSD
+		}
+		costs := export.AllocateCostByWeight(*authoritativeCost, weights)
+		for i := range breakdown {
+			breakdown[i].CostUSD = costs[i]
+			breakdown[i].HasCost = true
+		}
+	}
 	if includeBreakdown {
 		breakdownCount = len(breakdown)
 	}
@@ -4341,7 +4381,6 @@ func (s *Store) GetSessionUsage(
 		out.HasCost = true
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
-		out.CostIsAuthoritative = true
 	} else if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)

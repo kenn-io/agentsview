@@ -680,10 +680,10 @@ agentsview session usage <id> [--format json]
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
 | `cost_source`         | Omitted without a complete cost; `reported` for an authoritative session total, otherwise `computed`, `reported`, or `mixed` for the contributing rows |
 | `ai_credits`          | Omitted unless the priced agent uses AI Credits; derived from `cost_usd` at 100 credits per dollar |
-| `models`              | Models with contributing usage, sorted by model name; not an allocation of an authoritative session total |
+| `models`              | Models with contributing usage, sorted by model name                    |
 | `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing |
 | `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
-| `breakdown`           | Per-step usage rows, in session order; CLI JSON always includes them (added in 0.37.1) |
+| `breakdown`           | Per-step usage rows, in session order; when a reported session total exists, row costs are estimated allocations that sum to it; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`      | `true` when the report came from an already-running daemon           |
 | `rollup_cost_usd`      | REST only, with `rollup=true`; present only when `has_rollup_cost` is true, then carries the complete cost across the root and explicit subagent descendants |
 | `rollup_cost_source`   | REST only, with `rollup=true`; provenance of `rollup_cost_usd` across sessions, so a reported root plus a computed child is `mixed` |
@@ -698,7 +698,7 @@ Each `breakdown` row carries the fields shown in the example:
 | `message_ordinal` | Ordinal of the originating message; omitted when the row is not tied to one |
 | `source`          | `message` for per-message token usage; otherwise the usage-event source |
 | `label`           | Display label — `Prompt N` for message rows, `Step N` for other rows tied to a message, else the source name |
-| `cost_usd`        | Per-row estimate; `0` with `has_cost: false` when the model is unpriced |
+| `cost_usd`        | Per-row estimate; for a reported multi-model session, catalog-cost weights allocate the session total across rows so the breakdown sums to `cost_usd`; `0` with `has_cost: false` when the model is unpriced |
 
 Human output is a five-line summary:
 
@@ -710,8 +710,8 @@ Peak ctx:      84000
 Cost:          ~$2.41 (claude-opus-4-7)
 ```
 
-The leading `~` on the cost line marks a computed or mixed figure. An
-authoritative reported session total omits it. The parenthesized model list is
+The leading `~` on the cost line marks a computed or mixed figure. A reported
+cost omits it. The parenthesized model list is
 shown only when contributing models exist, so a cost-only reported session does
 not render empty parentheses. When some contributing models are unpriced, the
 cost line reads `n/a (unpriced: model-x)`; when the session has no token data at

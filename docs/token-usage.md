@@ -411,16 +411,17 @@ double counting across models, days, and resumed segments. Historical Copilot
 sessions without `totalNanoAiu` and other Copilot-family agents retain
 catalog pricing.
 
-The cumulative cost is attributed to the final shutdown day. Consequently, a
-date window containing that shutdown receives the full session cost, while a
-window containing only earlier rows can show estimates because the later
-authoritative record is outside the selected data. This limitation is
-unavoidable without allocating a cumulative session total across time.
+For unfiltered reports, AgentsView allocates the session total across the
+selected usage rows in proportion to their catalog-price estimates. This keeps
+per-day and per-model breakdowns additive: their costs sum to the displayed
+session or report total. In a multi-model session those model costs are
+estimated attributions; Copilot reports only the session total, not a charge per
+model.
 
-Model-filtered reports and per-model breakdown costs remain token-price
-estimates because the session-level cost cannot be allocated accurately among
-models. Their sum can therefore differ from the authoritative session or
-aggregate total.
+A date window containing only rows before the reported settlement can still
+show catalog estimates because the later session total is outside the selected
+data. Model-filtered reports also remain catalog estimates because applying the
+whole session total to one selected model would overstate that model.
 
 ### Copilot AI Credits
 
@@ -665,8 +666,9 @@ output-token rate.
 An authoritative session total is never added to that session's computed
 estimate. It replaces the estimate completely. A report-level pricing block can
 still be `mixed` when it records that authoritative settlement alongside
-computed per-model attribution, and a multi-session rollup can be `mixed` when
-different sessions use different sources.
+computed per-model attribution. Those model allocations are estimates derived
+from catalog-cost weights and sum to the reported total. A multi-session rollup
+can also be `mixed` when different sessions use different sources.
 
 If a source reports an amount for a model with no matching effective pricing
 row, the model entry has `cost_source: "reported"`, `matched_pattern: null`, and

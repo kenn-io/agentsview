@@ -232,6 +232,45 @@ func CombinedCostSource(computed, reported bool) CostSource {
 	}
 }
 
+// AllocateCostByWeight distributes a reported aggregate cost across estimated
+// components. The final positive-weight component receives the floating-point
+// remainder so the allocations add back to total exactly.
+func AllocateCostByWeight(total float64, weights []float64) []float64 {
+	allocated := make([]float64, len(weights))
+	if len(weights) == 0 || total == 0 {
+		return allocated
+	}
+
+	var weightTotal float64
+	remainderIndex := -1
+	equalWeights := false
+	for i, weight := range weights {
+		if weight > 0 {
+			weightTotal += weight
+			remainderIndex = i
+		}
+	}
+	if weightTotal == 0 {
+		weightTotal = float64(len(weights))
+		remainderIndex = len(weights) - 1
+		equalWeights = true
+	}
+
+	var assigned float64
+	for i, weight := range weights {
+		if equalWeights {
+			weight = 1
+		}
+		if i == remainderIndex || weight <= 0 {
+			continue
+		}
+		allocated[i] = total * weight / weightTotal
+		assigned += allocated[i]
+	}
+	allocated[remainderIndex] = total - assigned
+	return allocated
+}
+
 func pricingSource(rows []EffectivePricingRow) string {
 	var custom, fetched, embedded bool
 	for _, row := range rows {

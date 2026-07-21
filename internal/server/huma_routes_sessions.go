@@ -367,7 +367,6 @@ type sessionUsageResponse struct {
 	CostUSD             float64                         `json:"cost_usd"`
 	HasCost             bool                            `json:"has_cost"`
 	CostSource          export.CostSource               `json:"cost_source,omitempty"`
-	CostIsAuthoritative bool                            `json:"cost_is_authoritative,omitempty"`
 	AICredits           float64                         `json:"ai_credits,omitempty"`
 	Models              []string                        `json:"models"`
 	UnpricedModels      []string                        `json:"unpriced_models"`
@@ -442,22 +441,21 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		})
 	}
 	return sessionUsageResponse{
-		SessionID:           usage.SessionID,
-		Agent:               usage.Agent,
-		Project:             usage.Project,
-		TotalOutputTokens:   usage.TotalOutputTokens,
-		PeakContextTokens:   usage.PeakContextTokens,
-		HasTokenData:        usage.HasTokenData,
-		CostUSD:             usage.CostUSD,
-		HasCost:             usage.HasCost,
-		CostSource:          usage.CostSource,
-		CostIsAuthoritative: usage.CostIsAuthoritative,
-		AICredits:           usage.AICredits,
-		Models:              usage.Models,
-		UnpricedModels:      unpricedModels,
-		BreakdownCount:      usage.BreakdownCount,
-		Breakdown:           breakdown,
-		ServerRunning:       true,
+		SessionID:         usage.SessionID,
+		Agent:             usage.Agent,
+		Project:           usage.Project,
+		TotalOutputTokens: usage.TotalOutputTokens,
+		PeakContextTokens: usage.PeakContextTokens,
+		HasTokenData:      usage.HasTokenData,
+		CostUSD:           usage.CostUSD,
+		HasCost:           usage.HasCost,
+		CostSource:        usage.CostSource,
+		AICredits:         usage.AICredits,
+		Models:            usage.Models,
+		UnpricedModels:    unpricedModels,
+		BreakdownCount:    usage.BreakdownCount,
+		Breakdown:         breakdown,
+		ServerRunning:     true,
 	}
 }
 

@@ -26,7 +26,7 @@ func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 	assert.Contains(t, s, "claude-opus-4-6", "output missing model")
 }
 
-func TestRenderSessionUsageHuman_ReportedEstimateRemainsEstimated(t *testing.T) {
+func TestRenderSessionUsageHuman_ReportedCostOmitsEstimateMarker(t *testing.T) {
 	var out sessionUsageOutput
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"session_id":"hermes:s1",
@@ -39,7 +39,8 @@ func TestRenderSessionUsageHuman_ReportedEstimateRemainsEstimated(t *testing.T) 
 
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, &out))
-	assert.Contains(t, b.String(), "~$0.03 (model-a)")
+	assert.Contains(t, b.String(), "$0.03 (model-a)")
+	assert.NotContains(t, b.String(), "~$0.03")
 }
 
 func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMarker(
@@ -52,7 +53,6 @@ func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMark
 		"cost_usd":0.03,
 		"has_cost":true,
 		"cost_source":"reported",
-		"cost_is_authoritative":true,
 		"models":[]
 	}`), &out))
 

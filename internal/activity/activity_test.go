@@ -65,6 +65,23 @@ func TestReportEmitsEmptyProjectsMap(t *testing.T) {
 	assert.Contains(t, string(b), `"projects":{}`)
 }
 
+func TestAllocateUsageCostsDistributesSessionTotalByEstimatedCost(t *testing.T) {
+	total := 0.03
+	usage := []UsageRow{
+		{SessionID: "s1", Model: "model-a", Cost: 10, Priced: true, Contributes: true},
+		{SessionID: "s1", Model: "model-b", Cost: 20, SessionCost: &total, Priced: true, Contributes: true},
+	}
+
+	allocated := AllocateUsageCosts(usage)
+
+	require.Len(t, allocated, 2)
+	assert.InDelta(t, 0.01, allocated[0].Cost, 1e-12)
+	assert.InDelta(t, 0.02, allocated[1].Cost, 1e-12)
+	assert.Equal(t, export.CostSourceReported, allocated[0].CostSource)
+	assert.Equal(t, export.CostSourceReported, allocated[1].CostSource)
+	assert.Equal(t, total, allocated[0].Cost+allocated[1].Cost)
+}
+
 func TestAggregate_DayWindowUTC(t *testing.T) {
 	r := Aggregate(baseParams(t, "2026-06-16", "UTC"), nil, nil, nil)
 	assert.Equal(t, "2026-06-16T00:00:00Z", r.RangeStart)

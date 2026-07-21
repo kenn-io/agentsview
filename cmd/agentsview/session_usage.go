@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -286,7 +287,7 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	if out.HasCost {
 		models := strings.Join(out.Models, ", ")
 		prefix := "~"
-		if out.CostIsAuthoritative {
+		if out.CostSource == export.CostSourceReported {
 			prefix = ""
 		}
 		suffix := ""

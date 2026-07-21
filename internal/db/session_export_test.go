@@ -1102,10 +1102,13 @@ func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) 
 	require.NotNil(t, result.Rows[0].ModelUsage)
 	assert.True(t, result.Rows[0].ModelUsage.HasCost)
 	assert.InDelta(t, reportedCost, result.Rows[0].ModelUsage.CostUSD, 1e-12)
-	assert.InDelta(t, 10.0,
+	assert.InDelta(t, 0.01,
 		result.Rows[0].ModelUsage.ByModel["copilot-model-a"].CostUSD, 1e-12)
-	assert.InDelta(t, 20.0,
+	assert.InDelta(t, 0.02,
 		result.Rows[0].ModelUsage.ByModel["copilot-model-b"].CostUSD, 1e-12)
+	assert.Equal(t, result.Rows[0].ModelUsage.CostUSD,
+		result.Rows[0].ModelUsage.ByModel["copilot-model-a"].CostUSD+
+			result.Rows[0].ModelUsage.ByModel["copilot-model-b"].CostUSD)
 	assert.Equal(t, export.CostSourceComputed,
 		result.Rows[0].ModelUsage.ByModel["copilot-model-a"].CostSource)
 	assert.Equal(t, export.CostSourceComputed,

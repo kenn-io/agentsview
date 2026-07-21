@@ -76,41 +76,52 @@ type UsageCostAllocation struct {
 	Contributes bool
 }
 
-// AllocateUsageCosts selects aggregate row costs without changing the
-// row/model estimates. A session may carry one session total; when it does,
-// that settlement wholly replaces the session's row costs.
+// AllocateUsageCosts selects aggregate row costs. A session may carry one
+// session total; when it does, that settlement replaces the session's row
+// estimates and is distributed by their catalog-cost weights.
 func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 	type sessionCost struct {
-		index int
-		cost  float64
+		carrier int
+		cost    float64
+		indices []int
 	}
 	allocated := make([]UsageCostAllocation, len(usage))
-	sessionCosts := make(map[string]sessionCost)
+	sessionCosts := make(map[string]*sessionCost)
 	for i, row := range usage {
 		allocated[i] = UsageCostAllocation{
 			Cost: row.Cost, CostSource: row.CostSource,
 			Priced: row.Priced, Contributes: row.Contributes,
 		}
 		if row.SessionCost != nil {
-			sessionCosts[row.SessionID] = sessionCost{
-				index: i,
-				cost:  *row.SessionCost,
+			sessionCosts[row.SessionID] = &sessionCost{
+				carrier: i,
+				cost:    *row.SessionCost,
 			}
 		}
 	}
-	for i := range allocated {
-		selected, ok := sessionCosts[usage[i].SessionID]
-		if !ok {
+	for i, row := range usage {
+		selected := sessionCosts[row.SessionID]
+		if selected == nil || !allocated[i].Contributes {
 			continue
 		}
-		if allocated[i].Contributes {
-			allocated[i].Cost = 0
-			allocated[i].CostSource = ""
-			allocated[i].Priced = true
-		}
-		if i == selected.index {
-			allocated[i] = UsageCostAllocation{
+		selected.indices = append(selected.indices, i)
+	}
+	for _, selected := range sessionCosts {
+		if len(selected.indices) == 0 {
+			allocated[selected.carrier] = UsageCostAllocation{
 				Cost: selected.cost, CostSource: export.CostSourceReported,
+				Priced: true, Contributes: true,
+			}
+			continue
+		}
+		weights := make([]float64, len(selected.indices))
+		for i, index := range selected.indices {
+			weights[i] = usage[index].Cost
+		}
+		costs := export.AllocateCostByWeight(selected.cost, weights)
+		for i, index := range selected.indices {
+			allocated[index] = UsageCostAllocation{
+				Cost: costs[i], CostSource: export.CostSourceReported,
 				Priced: true, Contributes: true,
 			}
 		}
@@ -778,7 +789,7 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 		c.cost += allocated[i].Cost
 		c.outputTokens += u.OutputTokens
 		if u.Model != "" {
-			c.models[u.Model] += u.Cost
+			c.models[u.Model] += allocated[i].Cost
 		}
 	}
 	projSet := map[string]struct{}{}

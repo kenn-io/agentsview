@@ -823,6 +823,26 @@ func (db *DB) attachSessionExportUsage(
 	if err := sqlRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session export usage: %w", err)
 	}
+	for _, a := range accum {
+		if a == nil || a.authoritativeCost == nil {
+			continue
+		}
+		models := make([]string, 0, len(a.byModel))
+		for model := range a.byModel {
+			models = append(models, model)
+		}
+		sort.Strings(models)
+		weights := make([]float64, len(models))
+		for i, model := range models {
+			weights[i] = a.byModel[model].costUSD
+		}
+		costs := export.AllocateCostByWeight(*a.authoritativeCost, weights)
+		for i, model := range models {
+			a.byModel[model].costUSD = costs[i]
+			a.byModel[model].allPriced = true
+		}
+		a.costUSD = *a.authoritativeCost
+	}
 
 	for i := range rows {
 		a := accum[rows[i].ID]

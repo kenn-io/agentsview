@@ -193,6 +193,15 @@ func TestPricingResolverCostSourceDefaultsComputedWithoutModels(t *testing.T) {
 	assert.Empty(t, block.Models)
 }
 
+func TestAllocateCostByWeightReconcilesToReportedTotal(t *testing.T) {
+	allocated := AllocateCostByWeight(0.03, []float64{10, 20})
+
+	require.Len(t, allocated, 2)
+	assert.InDelta(t, 0.01, allocated[0], 1e-12)
+	assert.InDelta(t, 0.02, allocated[1], 1e-12)
+	assert.Equal(t, 0.03, allocated[0]+allocated[1])
+}
+
 func TestPricingResolverLookupCachesByReportedModel(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "claude-test",

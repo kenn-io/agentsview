@@ -1868,10 +1868,7 @@ func (db *DB) GetDailyUsage(
 	}
 	type sessionCost struct {
 		estimated     map[accumKey]float64
-		authoritative *struct {
-			key  accumKey
-			cost float64
-		}
+		authoritative *float64
 	}
 
 	accum := make(map[accumKey]*bucket)
@@ -1949,7 +1946,6 @@ func (db *DB) GetDailyUsage(
 		b.outputTok += outputTok
 		b.cacheCr += cacheCrTok
 		b.cacheRd += cacheRdTok
-		b.cost += cost
 
 		sc := sessionCosts[r.sessionID]
 		if sc == nil {
@@ -1962,10 +1958,8 @@ func (db *DB) GetDailyUsage(
 		if useAuthoritativeCost &&
 			r.costSource == CopilotReportedCostSource &&
 			r.costUSD.Valid {
-			sc.authoritative = &struct {
-				key  accumKey
-				cost float64
-			}{key: key, cost: r.costUSD.Float64}
+			v := r.costUSD.Float64
+			sc.authoritative = &v
 			rateResolver.RecordUnattributedReported()
 		}
 	}
@@ -1974,14 +1968,48 @@ func (db *DB) GetDailyUsage(
 			fmt.Errorf("iterating daily usage rows: %w", err)
 	}
 
-	for _, sc := range sessionCosts {
+	sessionIDs := make([]string, 0, len(sessionCosts))
+	for sessionID := range sessionCosts {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	sort.Strings(sessionIDs)
+	for _, sessionID := range sessionIDs {
+		sc := sessionCosts[sessionID]
 		if sc.authoritative != nil {
-			b := accum[sc.authoritative.key]
-			if b == nil {
-				b = &bucket{}
-				accum[sc.authoritative.key] = b
+			keys := make([]accumKey, 0, len(sc.estimated))
+			for key := range sc.estimated {
+				keys = append(keys, key)
 			}
-			b.aggregateCost += sc.authoritative.cost
+			sort.Slice(keys, func(i, j int) bool {
+				a, b := keys[i], keys[j]
+				if a.date != b.date {
+					return a.date < b.date
+				}
+				if a.project != b.project {
+					return a.project < b.project
+				}
+				if a.agent != b.agent {
+					return a.agent < b.agent
+				}
+				if a.machine != b.machine {
+					return a.machine < b.machine
+				}
+				return a.model < b.model
+			})
+			weights := make([]float64, len(keys))
+			for i, key := range keys {
+				weights[i] = sc.estimated[key]
+			}
+			costs := export.AllocateCostByWeight(*sc.authoritative, weights)
+			for i, key := range keys {
+				b := accum[key]
+				if b == nil {
+					b = &bucket{}
+					accum[key] = b
+				}
+				b.cost += costs[i]
+				b.aggregateCost += costs[i]
+			}
 		} else {
 			for key, cost := range sc.estimated {
 				b := accum[key]
@@ -1989,6 +2017,7 @@ func (db *DB) GetDailyUsage(
 					b = &bucket{}
 					accum[key] = b
 				}
+				b.cost += cost
 				b.aggregateCost += cost
 			}
 		}
@@ -2546,21 +2575,20 @@ func (db *DB) GetTopSessionsByCost(
 // (usage_events.cost_usd). CostUSD is non-zero only when HasCost is
 // true; a partial total (some models unpriced) is never emitted.
 type SessionUsage struct {
-	SessionID           string                       `json:"session_id"`
-	Agent               string                       `json:"agent"`
-	Project             string                       `json:"project"`
-	TotalOutputTokens   int                          `json:"total_output_tokens"`
-	PeakContextTokens   int                          `json:"peak_context_tokens"`
-	HasTokenData        bool                         `json:"has_token_data"`
-	CostUSD             float64                      `json:"cost_usd"`
-	HasCost             bool                         `json:"has_cost"`
-	CostSource          export.CostSource            `json:"cost_source,omitempty"`
-	CostIsAuthoritative bool                         `json:"cost_is_authoritative,omitempty"`
-	AICredits           float64                      `json:"ai_credits,omitempty"`
-	Models              []string                     `json:"models"`
-	UnpricedModels      []string                     `json:"unpriced_models,omitempty"`
-	BreakdownCount      int                          `json:"breakdown_count"`
-	Breakdown           []SessionUsageBreakdownEntry `json:"breakdown"`
+	SessionID         string                       `json:"session_id"`
+	Agent             string                       `json:"agent"`
+	Project           string                       `json:"project"`
+	TotalOutputTokens int                          `json:"total_output_tokens"`
+	PeakContextTokens int                          `json:"peak_context_tokens"`
+	HasTokenData      bool                         `json:"has_token_data"`
+	CostUSD           float64                      `json:"cost_usd"`
+	HasCost           bool                         `json:"has_cost"`
+	CostSource        export.CostSource            `json:"cost_source,omitempty"`
+	AICredits         float64                      `json:"ai_credits,omitempty"`
+	Models            []string                     `json:"models"`
+	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
+	BreakdownCount    int                          `json:"breakdown_count"`
+	Breakdown         []SessionUsageBreakdownEntry `json:"breakdown"`
 }
 
 type SessionUsageBreakdownEntry struct {
@@ -2766,6 +2794,17 @@ func (db *DB) GetSessionUsage(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session usage rows: %w", err)
 	}
+	if authoritativeCost != nil && len(breakdown) > 0 {
+		weights := make([]float64, len(breakdown))
+		for i := range breakdown {
+			weights[i] = breakdown[i].CostUSD
+		}
+		costs := export.AllocateCostByWeight(*authoritativeCost, weights)
+		for i := range breakdown {
+			breakdown[i].CostUSD = costs[i]
+			breakdown[i].HasCost = true
+		}
+	}
 
 	out := &SessionUsage{
 		SessionID:         sess.ID,
@@ -2782,7 +2821,6 @@ func (db *DB) GetSessionUsage(
 	if authoritativeCost != nil {
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
-		out.CostIsAuthoritative = true
 	} else if out.HasCost {
 		out.CostUSD = cost
 		out.CostSource = export.CombinedCostSource(

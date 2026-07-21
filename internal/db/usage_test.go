@@ -3412,8 +3412,6 @@ func TestGetSessionUsage_ExplicitCostOnly(t *testing.T) {
 	requireNoError(t, err, "GetSessionUsage")
 	assert.True(t, u.HasCost, "HasCost = false, want true (explicit cost)")
 	assert.InDelta(t, 0.02, u.CostUSD, 1e-9, "CostUSD")
-	assert.False(t, u.CostIsAuthoritative,
-		"provider-reported estimate is not a session settlement")
 	assert.Equal(t, []string{"gpt-5.4"}, u.Models, "Models")
 	require.Len(t, u.Breakdown, 1, "Breakdown")
 	entry := u.Breakdown[0]
@@ -3652,20 +3650,24 @@ func TestCopilotReportedCostSuppressesSessionEstimates(t *testing.T) {
 	require.NotNil(t, session)
 	assert.True(t, session.HasCost)
 	assert.InDelta(t, reportedCost, session.CostUSD, 1e-12)
-	assert.True(t, session.CostIsAuthoritative)
 	assert.InDelta(t, reportedCost/0.01, session.AICredits, 1e-9)
 	require.Len(t, session.Breakdown, 2)
-	assert.InDelta(t, 0.0175, session.Breakdown[0].CostUSD, 1e-12)
-	assert.InDelta(t, 0.0175, session.Breakdown[1].CostUSD, 1e-12,
-		"per-row breakdown remains a token-price estimate")
+	assert.InDelta(t, 0.01375, session.Breakdown[0].CostUSD, 1e-12)
+	assert.InDelta(t, 0.01375, session.Breakdown[1].CostUSD, 1e-12)
+	assert.Equal(t, session.CostUSD,
+		session.Breakdown[0].CostUSD+session.Breakdown[1].CostUSD)
 
 	daily, err := d.GetDailyUsage(ctx, UsageFilter{
 		From: "2026-05-20", To: "2026-05-21", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.InDelta(t, 0.0175, daily.Daily[0].TotalCost, 1e-12)
-	assert.InDelta(t, reportedCost, daily.Daily[1].TotalCost, 1e-12)
+	assert.InDelta(t, 0.03125, daily.Daily[0].TotalCost, 1e-12)
+	assert.InDelta(t, 0.01375, daily.Daily[1].TotalCost, 1e-12)
+	for _, day := range daily.Daily {
+		require.Len(t, day.ModelBreakdowns, 1)
+		assert.Equal(t, day.TotalCost, day.ModelBreakdowns[0].Cost)
+	}
 	assert.InDelta(t, 0.045, daily.Totals.TotalCost, 1e-12)
 	assert.InDelta(t, 4.5, daily.Totals.CopilotAICredits, 1e-9,
 		"credits derive from the authoritative reported cost")
@@ -3727,7 +3729,7 @@ func TestCopilotReportedZeroCostSuppressesEstimate(t *testing.T) {
 	assert.Zero(t, daily.Totals.TotalCost)
 	require.Len(t, daily.Daily, 1)
 	require.Len(t, daily.Daily[0].ModelBreakdowns, 1)
-	assert.InDelta(t, 0.0175, daily.Daily[0].ModelBreakdowns[0].Cost, 1e-12)
+	assert.Zero(t, daily.Daily[0].ModelBreakdowns[0].Cost)
 }
 
 // TestGetDailyUsage_CopilotAICredits verifies AI credits are computed from

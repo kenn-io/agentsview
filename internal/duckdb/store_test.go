@@ -2659,18 +2659,24 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.InDelta(t, reportedCost, usage.CostUSD, 1e-12)
-	assert.True(t, usage.CostIsAuthoritative)
 	assert.InDelta(t, reportedCost/0.01, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
+	assert.InDelta(t, 0.0175, usage.Breakdown[0].CostUSD, 1e-12)
 	assert.InDelta(t, 0.0175, usage.Breakdown[1].CostUSD, 1e-12)
+	assert.Equal(t, usage.CostUSD,
+		usage.Breakdown[0].CostUSD+usage.Breakdown[1].CostUSD)
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-01-18", To: "2026-01-19", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.Zero(t, daily.Daily[0].TotalCost)
-	assert.InDelta(t, reportedCost, daily.Daily[1].TotalCost, 1e-12)
+	assert.InDelta(t, 0.0175, daily.Daily[0].TotalCost, 1e-12)
+	assert.InDelta(t, 0.0175, daily.Daily[1].TotalCost, 1e-12)
+	for _, day := range daily.Daily {
+		require.Len(t, day.ModelBreakdowns, 1)
+		assert.Equal(t, day.TotalCost, day.ModelBreakdowns[0].Cost)
+	}
 	assert.InDelta(t, reportedCost, daily.Totals.TotalCost, 1e-12)
 	require.NotNil(t, daily.Pricing)
 	assert.Equal(t, export.CostSourceMixed, daily.Pricing.CostSource,
@@ -2741,7 +2747,19 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 		"credits derive from the authoritative-substituted totals")
 	assert.InDelta(t, want.Totals.CopilotAICredits,
 		got.Totals.CopilotAICredits, 1e-9)
-	assert.Equal(t, want.Daily, got.Daily)
+	require.Len(t, got.Daily, 1)
+	require.Len(t, want.Daily, 1)
+	assert.Equal(t, want.Daily[0].Date, got.Daily[0].Date)
+	assert.Equal(t, want.Daily[0].InputTokens, got.Daily[0].InputTokens)
+	assert.Equal(t, want.Daily[0].OutputTokens, got.Daily[0].OutputTokens)
+	assert.Equal(t, want.Daily[0].ModelsUsed, got.Daily[0].ModelsUsed)
+	assert.InDelta(t, want.Daily[0].TotalCost, got.Daily[0].TotalCost, 1e-12)
+	require.Len(t, got.Daily[0].ModelBreakdowns, 1)
+	require.Len(t, want.Daily[0].ModelBreakdowns, 1)
+	assert.Equal(t, want.Daily[0].ModelBreakdowns[0].ModelName,
+		got.Daily[0].ModelBreakdowns[0].ModelName)
+	assert.InDelta(t, want.Daily[0].ModelBreakdowns[0].Cost,
+		got.Daily[0].ModelBreakdowns[0].Cost, 1e-12)
 }
 
 func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
