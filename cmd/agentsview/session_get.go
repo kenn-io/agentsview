@@ -64,6 +64,18 @@ func resolveServiceSessionID(
 	if detail != nil {
 		return id, nil
 	}
+	if hostPrefix, legacyRaw, ok := splitLegacyTraeSessionID(id); ok {
+		candidate, err, known := resolveTraeNamespacedSessionID(
+			ctx, svc, hostPrefix, legacyRaw,
+		)
+		if err != nil {
+			return "", err
+		}
+		if known {
+			return candidate, nil
+		}
+		return "", fmt.Errorf("session not found: %s", id)
+	}
 	// If the user already supplied a known agent-prefixed ID or
 	// a host-prefixed remote ID ("host~..."), don't second-guess
 	// them — the exact lookup is authoritative. Some raw IDs
@@ -73,7 +85,7 @@ func resolveServiceSessionID(
 	if isCanonicalServiceSessionID(id) {
 		return "", fmt.Errorf("session not found: %s", id)
 	}
-	traeCandidate, traeErr, traeKnown := resolveTraeBareSessionID(
+	traeCandidate, traeErr, traeKnown := resolveTraeNamespacedSessionID(
 		ctx, svc, id,
 	)
 	if traeErr != nil {
@@ -116,6 +128,24 @@ var traeSessionLookupNamespaces = []string{
 	"globalStorage",
 }
 
+func splitLegacyTraeSessionID(id string) (string, string, bool) {
+	host, stripped := parser.StripHostPrefix(id)
+	if !strings.HasPrefix(stripped, "trae:") ||
+		strings.HasPrefix(stripped, "trae:workspaceStorage:") ||
+		strings.HasPrefix(stripped, "trae:globalStorage:") {
+		return "", "", false
+	}
+	raw := strings.TrimPrefix(stripped, "trae:")
+	raw = strings.TrimPrefix(raw, "trae:")
+	if raw == "" {
+		return "", "", false
+	}
+	if host == "" {
+		return "", raw, true
+	}
+	return host + "~", raw, true
+}
+
 func resolveTraeRawSuffixAmbiguity(id string, matches []string) error {
 	workspaceID := string(parser.AgentTrae) + ":workspaceStorage:" + id
 	globalID := string(parser.AgentTrae) + ":globalStorage:" + id
@@ -143,17 +173,28 @@ func resolveTraeRawSuffixAmbiguity(id string, matches []string) error {
 	return nil
 }
 
-// resolveTraeBareSessionID restores bare-ID lookup for namespaced Trae
-// sessions when exactly one namespace matches, and rejects the ambiguous
-// dual-match case so callers do not silently pick a namespace.
-func resolveTraeBareSessionID(
+// resolveTraeNamespacedSessionID restores raw and legacy-canonical lookup for
+// namespaced Trae sessions when exactly one namespace matches, and rejects the
+// ambiguous dual-match case so callers do not silently pick a namespace.
+func resolveTraeNamespacedSessionID(
 	ctx context.Context,
 	svc service.SessionService,
-	id string,
+	args ...string,
 ) (string, error, bool) {
+	hostPrefix := ""
+	id := ""
+	switch len(args) {
+	case 1:
+		id = args[0]
+	case 2:
+		hostPrefix = args[0]
+		id = args[1]
+	default:
+		return "", fmt.Errorf("invalid trae session lookup"), true
+	}
 	var match string
 	for _, ns := range traeSessionLookupNamespaces {
-		candidate := string(parser.AgentTrae) + ":" + ns + ":" + id
+		candidate := hostPrefix + string(parser.AgentTrae) + ":" + ns + ":" + id
 		detail, err := svc.Get(ctx, candidate)
 		if err != nil {
 			return "", err, true
@@ -163,8 +204,8 @@ func resolveTraeBareSessionID(
 		}
 		if match != "" {
 			return "", fmt.Errorf(
-				"session %s is ambiguous; use trae:workspaceStorage:%s or trae:globalStorage:%s",
-				id, id, id,
+				"session %s is ambiguous; use %strae:workspaceStorage:%s or %strae:globalStorage:%s",
+				id, hostPrefix, id, hostPrefix, id,
 			), true
 		}
 		match = candidate

@@ -100,6 +100,11 @@ func resolveRawSessionIDDetailed(
 		}
 		return matches[0], true, nil
 	}
+	if hostPrefix, legacyRaw, ok := splitLegacyTraeSessionID(input); ok {
+		return resolveLegacyTraeSessionIDDetailed(
+			ctx, database, agentDirs, input, hostPrefix, legacyRaw,
+		)
+	}
 
 	// Canonical disk probe: if the input starts with a known
 	// agent prefix, trust that interpretation first and strip
@@ -177,6 +182,58 @@ func resolveRawSessionIDDetailed(
 		return diskMatches[0], true, nil
 	}
 
+	return input, false, nil
+}
+
+func resolveLegacyTraeSessionIDDetailed(
+	ctx context.Context,
+	database *db.DB,
+	agentDirs map[parser.AgentType][]string,
+	input, hostPrefix, rawID string,
+) (resolved string, known bool, err error) {
+	var matches []string
+	for _, ns := range traeSessionLookupNamespaces {
+		candidate := hostPrefix + "trae:" + ns + ":" + rawID
+		sess, getErr := database.GetSession(ctx, candidate)
+		if getErr != nil {
+			return "", false, getErr
+		}
+		if sess != nil {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) > 1 {
+		return "", false, fmt.Errorf(
+			"session %s is ambiguous; use %s or %s",
+			rawID, matches[0], matches[1],
+		)
+	}
+	if len(matches) == 1 {
+		return matches[0], true, nil
+	}
+
+	traeDef, ok := parser.AgentByType(parser.AgentTrae)
+	if !ok {
+		return input, false, nil
+	}
+	for _, ns := range traeSessionLookupNamespaces {
+		qualifiedRawID := ns + ":" + rawID
+		for _, dir := range agentDirs[parser.AgentTrae] {
+			if findAgentSourceFile(traeDef, dir, qualifiedRawID) == "" {
+				continue
+			}
+			matches = append(matches, hostPrefix+"trae:"+qualifiedRawID)
+		}
+	}
+	if len(matches) > 1 {
+		return "", false, fmt.Errorf(
+			"session %s is ambiguous; use %s or %s",
+			rawID, matches[0], matches[1],
+		)
+	}
+	if len(matches) == 1 {
+		return matches[0], true, nil
+	}
 	return input, false, nil
 }
 

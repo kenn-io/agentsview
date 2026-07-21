@@ -472,9 +472,27 @@ func TestSessionGetVariants(t *testing.T) {
 		assert.Equal(t, "trae:workspaceStorage:rewrite", got["id"])
 	})
 
+	t.Run("legacy trae id resolves to namespaced session", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"session", "get", "trae:rewrite", "--format", "json")
+		require.NoError(t, err)
+
+		got := decodeCLIJSON[map[string]any](t, out)
+		assert.Equal(t, "trae:workspaceStorage:rewrite", got["id"])
+	})
+
 	t.Run("bare trae id rejects ambiguous namespaces", func(t *testing.T) {
 		_, err := executeCommand(newRootCommand(),
 			"session", "get", "collision", "--format", "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ambiguous")
+		assert.Contains(t, err.Error(), "trae:workspaceStorage:collision")
+		assert.Contains(t, err.Error(), "trae:globalStorage:collision")
+	})
+
+	t.Run("legacy trae id rejects ambiguous namespaces", func(t *testing.T) {
+		_, err := executeCommand(newRootCommand(),
+			"session", "get", "trae:collision", "--format", "json")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ambiguous")
 		assert.Contains(t, err.Error(), "trae:workspaceStorage:collision")

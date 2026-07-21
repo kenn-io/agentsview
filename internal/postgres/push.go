@@ -1105,6 +1105,18 @@ func (s *Sync) pushBatchAttempt(
 				return batchResult{}, nil
 			}
 		}
+		if err := deletePGLegacyTraeSessionIfOwned(
+			ctx, tx, sess, markerID, pushedSessionMachine(sess, s.machine),
+			legacyMarkerMachines,
+		); err != nil {
+			log.Printf(
+				"pgsync: legacy trae migration %s: %v",
+				sess.ID, err,
+			)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
 
 		*pushed = append(*pushed, sess)
 		n++
@@ -1555,6 +1567,96 @@ func deletePGLegacyTraeSessionIfOwned(
 	legacyMarkerMachinesJSON, err := json.Marshal(legacyMarkerMachines)
 	if err != nil {
 		return fmt.Errorf("encoding legacy marker machines: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO starred_sessions (session_id, created_at)
+		SELECT $2, ss.created_at
+		FROM starred_sessions ss
+		JOIN sessions legacy_session
+			ON legacy_session.id = ss.session_id
+		WHERE ss.session_id = $1
+			AND (
+				(
+					legacy_session.owner_marker = ''
+					AND (
+						legacy_session.machine = $3
+						OR legacy_session.machine = 'local'
+						OR legacy_session.machine = ''
+						OR legacy_session.machine IN (
+							SELECT jsonb_array_elements_text($5::jsonb)
+						)
+					)
+				)
+				OR legacy_session.owner_marker = $4
+			)
+		ON CONFLICT (session_id) DO NOTHING`,
+		legacyID, sess.ID, pushedMachine, markerID, string(legacyMarkerMachinesJSON),
+	); err != nil {
+		return fmt.Errorf("migrating legacy trae stars %s: %w", legacyID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		WITH matched AS (
+			SELECT DISTINCT ON (p.id)
+				p.note,
+				p.created_at,
+				m.ordinal AS target_ordinal,
+				COALESCE(m.source_uuid, '') AS target_source_uuid
+			FROM pinned_messages p
+			JOIN sessions legacy_session
+				ON legacy_session.id = p.session_id
+			LEFT JOIN messages legacy_message
+				ON legacy_message.session_id = p.session_id
+				AND legacy_message.ordinal = p.message_id
+			JOIN messages m
+				ON m.session_id = $2
+				AND (
+					(
+						COALESCE(legacy_message.source_uuid, '') <> ''
+						AND m.source_uuid = legacy_message.source_uuid
+					)
+					OR (
+						COALESCE(legacy_message.source_uuid, '') = ''
+						AND m.ordinal = p.ordinal
+					)
+				)
+			WHERE p.session_id = $1
+				AND (
+					(
+						legacy_session.owner_marker = ''
+						AND (
+							legacy_session.machine = $3
+							OR legacy_session.machine = 'local'
+							OR legacy_session.machine = ''
+							OR legacy_session.machine IN (
+								SELECT jsonb_array_elements_text($5::jsonb)
+							)
+						)
+					)
+					OR legacy_session.owner_marker = $4
+				)
+			ORDER BY p.id,
+				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
+				m.ordinal
+		)
+		INSERT INTO pinned_messages (
+			session_id, message_id, ordinal, source_uuid, note, created_at
+		)
+		SELECT
+			$2, target_ordinal, target_ordinal, target_source_uuid, note, created_at
+		FROM matched
+		ON CONFLICT (session_id, message_id)
+		DO UPDATE SET
+			note = EXCLUDED.note,
+			ordinal = EXCLUDED.ordinal,
+			source_uuid = EXCLUDED.source_uuid`,
+		legacyID, sess.ID, pushedMachine, markerID, string(legacyMarkerMachinesJSON),
+	); err != nil {
+		return fmt.Errorf("migrating legacy trae pins %s: %w", legacyID, err)
+	}
+	if err := reconcilePinnedMessages(ctx, tx, sess.ID); err != nil {
+		return fmt.Errorf(
+			"reconciling migrated legacy trae pins %s: %w", legacyID, err,
+		)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM sessions
@@ -2072,11 +2174,6 @@ func (s *Sync) pushSession(
 		return errSessionExcluded
 	}
 	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
-		return err
-	}
-	if err := deletePGLegacyTraeSessionIfOwned(
-		ctx, tx, sess, markerID, pushedMachine, legacyMarkerMachines,
-	); err != nil {
 		return err
 	}
 	return nil

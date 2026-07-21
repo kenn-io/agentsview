@@ -547,14 +547,56 @@ func copyRecallExtractStateFromAttachedTx(
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `
+		WITH legacy_trae_map AS (
+			SELECT
+				id AS legacy_id,
+				CASE
+					WHEN file_path LIKE '%workspaceStorage%' THEN
+						'trae:workspaceStorage:' ||
+						CASE
+							WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
+							ELSE source_session_id
+						END
+					WHEN file_path LIKE '%globalStorage%' THEN
+						'trae:globalStorage:' ||
+						CASE
+							WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
+							ELSE source_session_id
+						END
+					ELSE ''
+				END AS namespaced_id
+			FROM old_db.sessions
+			WHERE agent = 'trae'
+			  AND id LIKE 'trae:%'
+			  AND id NOT LIKE 'trae:workspaceStorage:%'
+			  AND id NOT LIKE 'trae:globalStorage:%'
+		)
 		INSERT OR IGNORE INTO recall_extract_progress (
 			session_id, generation_fingerprint, unit_cursor, units_total,
 			state, content_digest, last_error, updated_at
 		)
-		SELECT session_id, generation_fingerprint, unit_cursor, units_total,
+		SELECT
+		       COALESCE(
+				(
+					SELECT mapped.namespaced_id
+					FROM legacy_trae_map mapped
+					WHERE mapped.legacy_id = old_db.recall_extract_progress.session_id
+					  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
+				),
+				session_id
+		       ),
+		       generation_fingerprint, unit_cursor, units_total,
 		       state, content_digest, last_error, updated_at
 		FROM old_db.recall_extract_progress
-		WHERE session_id IN (SELECT id FROM main.sessions)`); err != nil {
+		WHERE COALESCE(
+			(
+				SELECT mapped.namespaced_id
+				FROM legacy_trae_map mapped
+				WHERE mapped.legacy_id = old_db.recall_extract_progress.session_id
+				  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
+			),
+			session_id
+		) IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying extract progress: %w", err)
 	}
 	return nil

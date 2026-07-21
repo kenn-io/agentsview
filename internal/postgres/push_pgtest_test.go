@@ -404,7 +404,6 @@ func TestPushMessageContentHashRewriteRegression(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
-
 	const sessID = "content-hash-rewrite-001"
 	sess := db.Session{
 		ID:               sessID,
@@ -1035,6 +1034,7 @@ func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
+	store := &Store{pg: pg}
 
 	const legacyID = "trae:collision"
 	legacy := db.Session{
@@ -1058,10 +1058,12 @@ func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
 
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "initial Push")
-
-	deleted, err := localDB.DeleteParserExcludedSessions([]string{legacyID})
-	require.NoError(t, err, "DeleteParserExcludedSessions legacy")
-	assert.Equal(t, 1, deleted)
+	starred, err := store.StarSession(legacyID)
+	require.NoError(t, err, "StarSession legacy")
+	require.True(t, starred)
+	pinNote := "legacy pin"
+	_, err = store.PinMessage(legacyID, 0, &pinNote)
+	require.NoError(t, err, "PinMessage legacy")
 
 	const namespacedID = "trae:globalStorage:collision"
 	namespaced := legacy
@@ -1090,6 +1092,20 @@ func TestPushPurgesOwnedLegacyTraeRowsDuringNamespaceMigration(t *testing.T) {
 		namespacedID,
 	).Scan(&count), "count namespaced trae session")
 	assert.Equal(t, 1, count, "namespaced trae row should remain")
+
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = $1`,
+		namespacedID,
+	).Scan(&count), "count migrated trae star")
+	assert.Equal(t, 1, count, "legacy trae star should move to namespaced row")
+
+	var gotNote sql.NullString
+	require.NoError(t, pg.QueryRow(
+		`SELECT note FROM pinned_messages WHERE session_id = $1`,
+		namespacedID,
+	).Scan(&gotNote), "read migrated trae pin")
+	require.True(t, gotNote.Valid)
+	assert.Equal(t, pinNote, gotNote.String)
 }
 
 func TestPushSessionSkipsPGExcludedSession(t *testing.T) {

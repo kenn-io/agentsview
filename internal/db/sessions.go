@@ -1243,6 +1243,9 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 		if id == "" {
 			continue
 		}
+		if isLegacyTraeSessionID(id) {
+			continue
+		}
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return 0, fmt.Errorf(
 				"pre-deleting parser-excluded session %s messages: %w",
@@ -1265,6 +1268,239 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 		return 0, fmt.Errorf("commit parser-excluded delete: %w", err)
 	}
 	return int(deleted), nil
+}
+
+func isLegacyTraeSessionID(id string) bool {
+	if idx := strings.Index(id, "~"); idx > 0 {
+		id = id[idx+1:]
+	}
+	return strings.HasPrefix(id, "trae:") &&
+		!strings.HasPrefix(id, "trae:workspaceStorage:") &&
+		!strings.HasPrefix(id, "trae:globalStorage:")
+}
+
+func traeSessionNamespaceFromPath(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	switch {
+	case strings.Contains(path, "/workspaceStorage/"):
+		return "workspaceStorage"
+	case strings.Contains(path, "/globalStorage/"):
+		return "globalStorage"
+	default:
+		return ""
+	}
+}
+
+func (db *DB) ExcludeSessionID(id string) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
+		id,
+	)
+	return err
+}
+
+func (db *DB) MigrateLegacyTraeSessionState(
+	oldID, newID, targetNamespace string,
+) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	if oldID == "" || newID == "" || oldID == newID || targetNamespace == "" {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning trae legacy migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		oldPath      sql.NullString
+		oldName      sql.NullString
+		oldDeletedAt sql.NullString
+	)
+	err = tx.QueryRow(
+		`SELECT file_path, display_name, deleted_at
+		   FROM sessions
+		  WHERE id = ?`,
+		oldID,
+	).Scan(&oldPath, &oldName, &oldDeletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("loading legacy trae session %s: %w", oldID, err)
+	}
+	oldNamespace := traeSessionNamespaceFromPath(oldPath.String)
+	if oldNamespace != "" && oldNamespace != targetNamespace {
+		return nil
+	}
+
+	pins, err := savePinsTx(tx, oldID)
+	if err != nil {
+		return fmt.Errorf("saving legacy trae pins %s: %w", oldID, err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT OR IGNORE INTO starred_sessions (session_id, created_at)
+		 SELECT ?, created_at
+		   FROM starred_sessions
+		  WHERE session_id = ?`,
+		newID, oldID,
+	); err != nil {
+		return fmt.Errorf("migrating legacy trae stars %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE recall_entries
+		    SET source_session_id = ?
+		  WHERE source_session_id = ?`,
+		newID, oldID,
+	); err != nil {
+		return fmt.Errorf("migrating legacy trae recall entries %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE recall_evidence
+		    SET session_id = ?
+		  WHERE session_id = ?`,
+		newID, oldID,
+	); err != nil {
+		return fmt.Errorf("migrating legacy trae recall evidence %s: %w", oldID, err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE recall_extract_progress
+		    SET session_id = ?
+		  WHERE session_id = ?`,
+		newID, oldID,
+	); err != nil {
+		return fmt.Errorf(
+			"migrating legacy trae recall extract progress %s: %w",
+			oldID, err,
+		)
+	}
+	if _, err := tx.Exec(
+		`UPDATE sessions
+		    SET display_name = CASE
+		    		WHEN display_name IS NULL THEN ?
+		    		ELSE display_name
+		    	END,
+		    	deleted_at = COALESCE(deleted_at, ?),
+		    	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		  WHERE id = ?`,
+		nullStringValue(oldName),
+		nullStringValue(oldDeletedAt),
+		newID,
+	); err != nil {
+		return fmt.Errorf("applying legacy trae session state to %s: %w", newID, err)
+	}
+	if err := restorePinsTx(tx, newID, pins); err != nil {
+		return fmt.Errorf("restoring migrated trae pins to %s: %w", newID, err)
+	}
+	if err := deleteSessionMessagesTx(tx, oldID); err != nil {
+		return fmt.Errorf("pre-deleting legacy trae session %s messages: %w", oldID, err)
+	}
+	if _, err := tx.Exec("DELETE FROM sessions WHERE id = ?", oldID); err != nil {
+		return fmt.Errorf("deleting legacy trae session %s: %w", oldID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit trae legacy migration: %w", err)
+	}
+	return nil
+}
+
+func (db *DB) MigrateAllLegacyTraeSessions() error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	rows, err := db.getReader().Query(`
+		SELECT id, file_path
+		  FROM sessions
+		 WHERE agent = 'trae'
+		   AND id LIKE 'trae:%'
+		   AND id NOT LIKE 'trae:workspaceStorage:%'
+		   AND id NOT LIKE 'trae:globalStorage:%'`)
+	if err != nil {
+		return fmt.Errorf("listing legacy trae sessions: %w", err)
+	}
+	defer rows.Close()
+
+	type migration struct {
+		oldID     string
+		newID     string
+		namespace string
+	}
+	var migrations []migration
+	for rows.Next() {
+		var id string
+		var filePath sql.NullString
+		if err := rows.Scan(&id, &filePath); err != nil {
+			return fmt.Errorf("scanning legacy trae session: %w", err)
+		}
+		namespace := traeSessionNamespaceFromPath(filePath.String)
+		rawID := strings.TrimPrefix(id, "trae:")
+		rawID = strings.TrimPrefix(rawID, "trae:")
+		if rawID == "" {
+			continue
+		}
+		if namespace == "" {
+			workspaceID := "trae:workspaceStorage:" + rawID
+			globalID := "trae:globalStorage:" + rawID
+			var workspaceCount, globalCount int
+			_ = db.getReader().QueryRow(
+				"SELECT COUNT(*) FROM sessions WHERE id = ?",
+				workspaceID,
+			).Scan(&workspaceCount)
+			_ = db.getReader().QueryRow(
+				"SELECT COUNT(*) FROM sessions WHERE id = ?",
+				globalID,
+			).Scan(&globalCount)
+			switch {
+			case workspaceCount > 0 && globalCount == 0:
+				namespace = "workspaceStorage"
+			case globalCount > 0 && workspaceCount == 0:
+				namespace = "globalStorage"
+			case workspaceCount > 0:
+				namespace = "workspaceStorage"
+			}
+		}
+		if namespace == "" {
+			continue
+		}
+		migrations = append(migrations, migration{
+			oldID:     id,
+			newID:     "trae:" + namespace + ":" + rawID,
+			namespace: namespace,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating legacy trae sessions: %w", err)
+	}
+	for _, migration := range migrations {
+		if err := db.MigrateLegacyTraeSessionState(
+			migration.oldID, migration.newID, migration.namespace,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nullStringValue(value sql.NullString) any {
+	if value.Valid {
+		return value.String
+	}
+	return nil
 }
 
 const insertSessionSQL = `

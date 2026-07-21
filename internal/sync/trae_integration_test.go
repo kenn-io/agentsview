@@ -425,12 +425,53 @@ func TestResyncAllMigratesLegacyTraeNamespaceIDs(t *testing.T) {
 			ContentLength: len("legacy reply"),
 		},
 	)
+	legacyMsgs, err := archive.GetMessages(context.Background(), "trae:rewrite", 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, legacyMsgs, 2)
+	legacyName := "Legacy renamed session"
+	require.NoError(t, archive.RenameSession("trae:rewrite", &legacyName))
+	starred, err := archive.StarSession("trae:rewrite")
+	require.NoError(t, err)
+	require.True(t, starred)
+	pinNote := "legacy pin"
+	_, err = archive.PinMessage("trae:rewrite", legacyMsgs[1].ID, &pinNote)
+	require.NoError(t, err)
+	_, err = archive.InsertRecallEntry(db.RecallEntry{
+		ID:              "trae-legacy-recall",
+		Type:            "fact",
+		Scope:           "session",
+		Status:          "accepted",
+		ReviewState:     "human_reviewed",
+		Title:           "Legacy Trae recall",
+		Body:            "remember the migrated workspace session",
+		SourceSessionID: "trae:rewrite",
+		CreatedAt:       "2026-05-10T10:00:00Z",
+		UpdatedAt:       "2026-05-10T10:00:00Z",
+		Evidence: []db.RecallEvidence{{
+			SessionID:           "trae:rewrite",
+			MessageStartOrdinal: 1,
+			MessageEndOrdinal:   1,
+			Snippet:             "legacy reply",
+		}},
+	})
+	require.NoError(t, err)
 	require.NoError(t, archive.SetSessionDataVersion("trae:rewrite", 68))
 	require.NoError(t, archive.Close())
 
 	conn, err := sql.Open("sqlite3", archivePath)
 	require.NoError(t, err)
 	_, err = conn.Exec(`PRAGMA user_version = 68`)
+	require.NoError(t, err)
+	_, err = conn.Exec(`
+		INSERT INTO recall_extract_generations
+			(fingerprint, state, model, segmenter, params_json)
+		VALUES
+			('trae-gen', 'active', 'test-model', 'test-segmenter', '{}');
+		INSERT INTO recall_extract_progress
+			(session_id, generation_fingerprint, unit_cursor, units_total, state, content_digest, updated_at)
+		VALUES
+			('trae:rewrite', 'trae-gen', 2, 3, 'partial', 'legacy-digest', '2026-05-10T10:00:00Z');
+	`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
@@ -446,24 +487,94 @@ func TestResyncAllMigratesLegacyTraeNamespaceIDs(t *testing.T) {
 	stats := engine.SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted)
 	assert.Equal(t, 0, stats.OrphanedCopied)
+	verifyDB, err := sql.Open("sqlite3", archivePath)
+	require.NoError(t, err)
+	defer verifyDB.Close()
 
-	legacy, err := reopened.GetSessionFull(context.Background(), "trae:rewrite")
-	require.NoError(t, err)
-	assert.Nil(t, legacy)
+	var count int
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = ?`,
+		"trae:rewrite",
+	).Scan(&count))
+	assert.Zero(t, count)
 
-	workspace, err := reopened.GetSessionFull(context.Background(), "trae:workspaceStorage:rewrite")
-	require.NoError(t, err)
-	require.NotNil(t, workspace)
-	global, err := reopened.GetSessionFull(context.Background(), "trae:globalStorage:rewrite")
-	require.NoError(t, err)
-	require.NotNil(t, global)
+	const workspaceID = "trae:workspaceStorage:rewrite"
+	const globalID = "trae:globalStorage:rewrite"
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = ?`,
+		workspaceID,
+	).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = ?`,
+		globalID,
+	).Scan(&count))
+	assert.Equal(t, 1, count)
 
-	workspaceMessages, err := reopened.GetMessages(context.Background(), workspace.ID, 0, 10, true)
-	require.NoError(t, err)
-	globalMessages, err := reopened.GetMessages(context.Background(), global.ID, 0, 10, true)
-	require.NoError(t, err)
-	assert.Equal(t, "workspace reply", workspaceMessages[1].Content)
-	assert.Equal(t, "global reply", globalMessages[1].Content)
+	var gotDisplayName sql.NullString
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT display_name FROM sessions WHERE id = ?`,
+		workspaceID,
+	).Scan(&gotDisplayName))
+	require.True(t, gotDisplayName.Valid)
+	assert.Equal(t, legacyName, gotDisplayName.String)
+
+	var workspaceReply, globalReply string
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT content FROM messages
+		  WHERE session_id = ? AND ordinal = 1`,
+		workspaceID,
+	).Scan(&workspaceReply))
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT content FROM messages
+		  WHERE session_id = ? AND ordinal = 1`,
+		globalID,
+	).Scan(&globalReply))
+	assert.Equal(t, "workspace reply", workspaceReply)
+	assert.Equal(t, "global reply", globalReply)
+
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = ?`,
+		workspaceID,
+	).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT COUNT(*) FROM starred_sessions WHERE session_id = ?`,
+		"trae:rewrite",
+	).Scan(&count))
+	assert.Zero(t, count)
+
+	var pinSessionID string
+	var pinOrdinal int
+	var gotPinNote sql.NullString
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT session_id, ordinal, note
+		   FROM pinned_messages
+		  WHERE session_id = ?`,
+		workspaceID,
+	).Scan(&pinSessionID, &pinOrdinal, &gotPinNote))
+	assert.Equal(t, workspaceID, pinSessionID)
+	assert.Equal(t, 1, pinOrdinal)
+	require.True(t, gotPinNote.Valid)
+	assert.Equal(t, pinNote, gotPinNote.String)
+
+	var recallSessionID, evidenceSessionID string
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT source_session_id FROM recall_entries WHERE id = ?`,
+		"trae-legacy-recall",
+	).Scan(&recallSessionID))
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT session_id FROM recall_evidence WHERE entry_id = ?`,
+		"trae-legacy-recall",
+	).Scan(&evidenceSessionID))
+	assert.Equal(t, workspaceID, recallSessionID)
+	assert.Equal(t, workspaceID, evidenceSessionID)
+
+	require.NoError(t, verifyDB.QueryRow(
+		`SELECT COUNT(*) FROM recall_extract_progress WHERE session_id = ?`,
+		workspaceID,
+	).Scan(&count))
+	assert.Equal(t, 1, count)
 }
 
 func TestFindSourceFileTraeRelocationUsesQualifiedRawID(t *testing.T) {

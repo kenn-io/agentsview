@@ -255,7 +255,8 @@ func traeParseRecord(src multiSessionSource, record traeSessionRecord, req Parse
 }
 
 func traeLegacySessionID(rawID string) string {
-	return string(AgentTrae) + ":" + strings.TrimSpace(rawID)
+	return string(AgentTrae) + ":" +
+		strings.TrimPrefix(strings.TrimSpace(rawID), "trae:")
 }
 
 func traeStorageNamespace(container string) (string, error) {

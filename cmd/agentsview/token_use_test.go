@@ -201,6 +201,44 @@ func TestResolveSessionIDDetailed_TraeDiskLookupReturnsQualifiedNamespace(t *tes
 	assert.True(t, known)
 }
 
+func TestResolveSessionIDDetailed_LegacyTraeCanonicalResolvesToQualifiedNamespace(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	raw := "rewrite"
+	upsertSession(
+		t, d, "trae:workspaceStorage:"+raw,
+		string(parser.AgentTrae), "2026-04-17T10:00:00Z",
+	)
+
+	got, known, err := resolveRawSessionIDDetailed(ctx, d, nil, "trae:"+raw)
+	require.NoError(t, err)
+	assert.Equal(t, "trae:workspaceStorage:"+raw, got)
+	assert.True(t, known)
+}
+
+func TestResolveSessionIDDetailed_LegacyTraeCanonicalRejectsNamespaceCollision(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	raw := "collision"
+	upsertSession(
+		t, d, "trae:workspaceStorage:"+raw,
+		string(parser.AgentTrae), "2026-04-16T10:00:00Z",
+	)
+	upsertSession(
+		t, d, "trae:globalStorage:"+raw,
+		string(parser.AgentTrae), "2026-04-17T10:00:00Z",
+	)
+
+	got, known, err := resolveRawSessionIDDetailed(ctx, d, nil, "trae:"+raw)
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.False(t, known)
+	assert.Contains(t, err.Error(), "trae:workspaceStorage:"+raw)
+	assert.Contains(t, err.Error(), "trae:globalStorage:"+raw)
+}
+
 func TestResolveSessionIDDetailed_TraeDiskLookupRejectsNamespaceCollision(t *testing.T) {
 	d := newTestDB(t)
 	ctx := context.Background()

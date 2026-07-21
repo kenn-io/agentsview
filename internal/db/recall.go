@@ -239,6 +239,30 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	}
 
 	res, err := tx.ExecContext(ctx, `
+		WITH legacy_trae_map AS (
+			SELECT
+				id AS legacy_id,
+				CASE
+					WHEN file_path LIKE '%workspaceStorage%' THEN
+						'trae:workspaceStorage:' ||
+						CASE
+							WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
+							ELSE source_session_id
+						END
+					WHEN file_path LIKE '%globalStorage%' THEN
+						'trae:globalStorage:' ||
+						CASE
+							WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
+							ELSE source_session_id
+						END
+					ELSE ''
+				END AS namespaced_id
+			FROM old_db.sessions
+			WHERE agent = 'trae'
+			  AND id LIKE 'trae:%'
+			  AND id NOT LIKE 'trae:workspaceStorage:%'
+			  AND id NOT LIKE 'trae:globalStorage:%'
+		)
 		INSERT OR IGNORE INTO recall_entries (
 			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
@@ -250,12 +274,29 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		SELECT
 			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
-			source_session_id, source_episode_id, source_run_id,
+			COALESCE(
+				(
+					SELECT mapped.namespaced_id
+					FROM legacy_trae_map mapped
+					WHERE mapped.legacy_id = old_db.recall_entries.source_session_id
+					  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
+				),
+				source_session_id
+			),
+			source_episode_id, source_run_id,
 			extractor_method, model, transferable, provenance_ok,
 			supersedes_entry_id, superseded_by_entry_id,
 			created_at, updated_at
 		FROM old_db.recall_entries
-		WHERE source_session_id IN (SELECT id FROM main.sessions)`)
+		WHERE COALESCE(
+			(
+				SELECT mapped.namespaced_id
+				FROM legacy_trae_map mapped
+				WHERE mapped.legacy_id = old_db.recall_entries.source_session_id
+				  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
+			),
+			source_session_id
+		) IN (SELECT id FROM main.sessions)`)
 	if err != nil {
 		return fmt.Errorf("copying entries: %w", err)
 	}
@@ -272,18 +313,60 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	}
 
 	if _, err := tx.ExecContext(ctx, `
+		WITH legacy_trae_map AS (
+			SELECT
+				id AS legacy_id,
+				CASE
+					WHEN file_path LIKE '%workspaceStorage%' THEN
+						'trae:workspaceStorage:' ||
+						CASE
+							WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
+							ELSE source_session_id
+						END
+					WHEN file_path LIKE '%globalStorage%' THEN
+						'trae:globalStorage:' ||
+						CASE
+							WHEN source_session_id LIKE 'trae:%' THEN substr(source_session_id, 6)
+							ELSE source_session_id
+						END
+					ELSE ''
+				END AS namespaced_id
+			FROM old_db.sessions
+			WHERE agent = 'trae'
+			  AND id LIKE 'trae:%'
+			  AND id NOT LIKE 'trae:workspaceStorage:%'
+			  AND id NOT LIKE 'trae:globalStorage:%'
+		)
 		INSERT INTO recall_evidence (
 			entry_id, session_id, message_start_ordinal,
 			message_end_ordinal, message_start_source_uuid,
 			message_end_source_uuid, content_digest, tool_use_id, snippet
 		)
 		SELECT
-			entry_id, session_id, message_start_ordinal,
+			entry_id,
+			COALESCE(
+				(
+					SELECT mapped.namespaced_id
+					FROM legacy_trae_map mapped
+					WHERE mapped.legacy_id = old_db.recall_evidence.session_id
+					  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
+				),
+				session_id
+			),
+			message_start_ordinal,
 			message_end_ordinal, message_start_source_uuid,
 			message_end_source_uuid, content_digest, tool_use_id, snippet
 		FROM old_db.recall_evidence
 		WHERE entry_id IN (SELECT id FROM main.recall_entries)
-		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
+		  AND COALESCE(
+			(
+				SELECT mapped.namespaced_id
+				FROM legacy_trae_map mapped
+				WHERE mapped.legacy_id = old_db.recall_evidence.session_id
+				  AND mapped.namespaced_id IN (SELECT id FROM main.sessions)
+			),
+			session_id
+		  ) IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying recall evidence: %w", err)
 	}
 	if err := revokeRecallEntriesWithDroppedEvidenceTx(

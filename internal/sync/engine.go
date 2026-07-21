@@ -1780,6 +1780,23 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		return stats, err
 	}
 	stats.OrphanedCopied = orphaned
+	if err := newDB.MigrateAllLegacyTraeSessions(); err != nil {
+		log.Printf("resync: migrate legacy trae sessions: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"legacy trae migration failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
@@ -1848,6 +1865,23 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		context.Background(), e.machine,
 	); err != nil {
 		log.Printf("resync: apply worktree mappings: %v", err)
+	}
+	if err := newDB.MigrateAllLegacyTraeSessions(); err != nil {
+		log.Printf("resync: finalize legacy trae migration: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"legacy trae finalization failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
 	}
 
 	// Reclassify is_automated across every row. Orphan-copied
@@ -1939,6 +1973,17 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		return stats, err
 	} else {
 		origDB.MarkDataCurrent()
+		if err := origDB.MigrateAllLegacyTraeSessions(); err != nil {
+			log.Printf("resync: live legacy trae migration: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"resync completed but legacy trae migration failed: "+err.Error(),
+			)
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
 		if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {
 			if errors.Is(err, db.ErrWALCheckpointBusy) {
 				log.Printf("resync: wal checkpoint busy")
@@ -2312,6 +2357,16 @@ func (e *Engine) SyncAll(
 	}()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
+	if e.db.NeedsResync() {
+		stats = e.resyncAllLocked(ctx, onProgress)
+		if stats.Aborted && ctx.Err() == nil {
+			stats = e.syncAllLocked(
+				ctx, onProgress, time.Time{}, nil,
+				syncWriteDefault, true, false,
+			)
+		}
+		return
+	}
 	stats = e.syncAllLocked(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true, false,
 	)
@@ -7855,6 +7910,12 @@ func (e *Engine) writeBatchBulk(
 	batch []pendingWrite, forceReplace bool,
 ) (writtenSessions, writtenMessages, failedSessions, cwdFiltered int) {
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
+	type legacyTraeMigration struct {
+		oldID     string
+		newID     string
+		namespace string
+	}
+	migrations := make([]legacyTraeMigration, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
@@ -7867,6 +7928,14 @@ func (e *Engine) writeBatchBulk(
 		if verdict != sessionWriteOK {
 			if verdict == sessionWriteCwdFiltered {
 				cwdFiltered++
+			}
+			continue
+		}
+		legacyTraeID, legacyTraeNamespace := legacyTraeSessionMigrationTarget(s)
+		if legacyTraeID != "" && e.db.IsSessionExcluded(legacyTraeID) {
+			if err := e.db.ExcludeSessionID(s.ID); err != nil {
+				log.Printf("exclude migrated trae session %s: %v", s.ID, err)
+				failedSessions++
 			}
 			continue
 		}
@@ -7888,6 +7957,13 @@ func (e *Engine) writeBatchBulk(
 			DataVersion:     dataVersionForWrite(pw),
 			ReplaceMessages: replaceMessages,
 		})
+		if legacyTraeID != "" {
+			migrations = append(migrations, legacyTraeMigration{
+				oldID:     legacyTraeID,
+				newID:     s.ID,
+				namespace: legacyTraeNamespace,
+			})
+		}
 		if pw.sess.File.Path != "" {
 			sources[s.ID] = batchSourceFile{
 				path:        pw.sess.File.Path,
@@ -7919,6 +7995,17 @@ func (e *Engine) writeBatchBulk(
 	}
 	for _, err := range result.Errors {
 		log.Printf("write session batch: %v", err)
+	}
+	for _, migration := range migrations {
+		if err := e.db.MigrateLegacyTraeSessionState(
+			migration.oldID, migration.newID, migration.namespace,
+		); err != nil {
+			log.Printf(
+				"migrate legacy trae state %s -> %s: %v",
+				migration.oldID, migration.newID, err,
+			)
+			failedSessions++
+		}
 	}
 	return result.WrittenSessions,
 		result.WrittenMessages,
@@ -8514,6 +8601,13 @@ func (e *Engine) writeSessionFullWithResolver(
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
+	legacyTraeID, legacyTraeNamespace := legacyTraeSessionMigrationTarget(s)
+	if legacyTraeID != "" && e.db.IsSessionExcluded(legacyTraeID) {
+		if err := e.db.ExcludeSessionID(s.ID); err != nil {
+			return err
+		}
+		return db.ErrSessionExcluded
+	}
 	if err := e.db.UpsertSession(s); err != nil {
 		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
@@ -8544,6 +8638,13 @@ func (e *Engine) writeSessionFullWithResolver(
 			s.ID, err,
 		)
 		return err
+	}
+	if legacyTraeID != "" {
+		if err := e.db.MigrateLegacyTraeSessionState(
+			legacyTraeID, s.ID, legacyTraeNamespace,
+		); err != nil {
+			return err
+		}
 	}
 
 	// See writeBatch for why data_version is bumped here
@@ -8844,6 +8945,36 @@ func countToolResultEvents(calls []db.ToolCall) int {
 
 func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
 	return applyIDPrefixToIDs(e.idPrefix, ids)
+}
+
+func legacyTraeSessionMigrationTarget(s db.Session) (string, string) {
+	if s.Agent != string(parser.AgentTrae) {
+		return "", ""
+	}
+	rawID := strings.TrimSpace(s.SourceSessionID)
+	rawID = strings.TrimPrefix(rawID, "trae:")
+	if rawID == "" {
+		return "", ""
+	}
+	id := "trae:" + rawID
+	namespace := ""
+	switch {
+	case strings.Contains(s.ID, "trae:workspaceStorage:"):
+		namespace = "workspaceStorage"
+	case strings.Contains(s.ID, "trae:globalStorage:"):
+		namespace = "globalStorage"
+	}
+	if namespace == "" || id == s.ID {
+		return "", ""
+	}
+	return applyIDPrefixToID(sessionIDPrefixForSession(s.ID), id), namespace
+}
+
+func sessionIDPrefixForSession(id string) string {
+	if idx := strings.Index(id, "~"); idx > 0 {
+		return id[:idx+1]
+	}
+	return ""
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites

@@ -153,6 +153,11 @@ func TestTraeWorkspaceGlobalCollisionIdentity(t *testing.T) {
 	assert.NotEqual(t, ids["workspaceStorage"], ids["globalStorage"])
 }
 
+func TestTraeLegacySessionIDNormalizesExistingPrefix(t *testing.T) {
+	assert.Equal(t, "trae:prefixed", traeLegacySessionID("trae:prefixed"))
+	assert.Equal(t, "trae:prefixed", traeLegacySessionID(" prefixed "))
+}
+
 func mustTraeStorageNamespace(t *testing.T, path string) string {
 	t.Helper()
 	namespace, err := traeStorageNamespace(path)
