@@ -62,6 +62,34 @@ func seedSearchMessage(t *testing.T, dataDir, sessionID, content string) {
 	}}))
 }
 
+func TestHumanizeMatchAge(t *testing.T) {
+	t.Parallel()
+	rfc := func(d time.Duration) string {
+		return renderNow.Add(-d).Format(time.RFC3339)
+	}
+	tests := []struct {
+		name string
+		ts   string
+		want string
+	}{
+		{"seconds", rfc(30 * time.Second), "30s"},
+		{"minutes", rfc(5 * time.Minute), "5m"},
+		{"hours", rfc(3 * time.Hour), "3h"},
+		{"days", rfc(2 * 24 * time.Hour), "2d"},
+		{"future skew reads as now", renderNow.Add(5 * time.Second).Format(time.RFC3339), "now"},
+		{"current-year absolute", "2026-01-02T08:00:00Z", "Jan 02"},
+		{"prior-year absolute", "2025-01-02T08:00:00Z", "Jan 2025"},
+		{"RFC3339Nano parses", renderNow.Add(-time.Hour).Format(time.RFC3339Nano), "1h"},
+		{"empty is em dash", "", emDash},
+		{"unparseable is em dash", "not-a-time", emDash},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, humanizeMatchAge(tc.ts, renderNow))
+		})
+	}
+}
+
 // TestSessionSearchSinceFiltersByActivity is the end-to-end regression test
 // for the CRITICAL requirement that --since actually narrows results by
 // resolving to the same active_since window --active-since already

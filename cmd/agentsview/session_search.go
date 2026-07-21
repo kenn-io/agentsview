@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
@@ -202,6 +203,28 @@ func printContentSearchResult(
 		return printContentMatchesHuman(w, res)
 	}
 	return printContentMatchesTable(w, res, contentTerminalWidth(w))
+}
+
+// humanizeMatchAge renders a content match's timestamp for the search AGE
+// column. It parses the RFC3339/RFC3339Nano string via parseSessionTime
+// (returning emDash when empty or unparseable), uses the shared relative
+// buckets under a week, and beyond a week formats an absolute date that
+// disambiguates the year: "Jan 02" when the timestamp falls in now's year,
+// "Jan 2006" (e.g. "Jan 2025") for prior years. Search spans the whole
+// multi-year archive, so the year matters here even though session list omits
+// it.
+func humanizeMatchAge(ts string, now time.Time) string {
+	t, ok := parseSessionTime(ts)
+	if !ok {
+		return emDash
+	}
+	if rel, ok := humanizeAgeRelative(t, now); ok {
+		return rel
+	}
+	if t.Year() == now.Year() {
+		return t.Format("Jan 02")
+	}
+	return t.Format("Jan 2006")
 }
 
 // contentTerminalWidth reports the terminal width of w, or 0 when w is not
