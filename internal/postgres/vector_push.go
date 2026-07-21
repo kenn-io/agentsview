@@ -252,17 +252,6 @@ func (s *Sync) pushVectors(
 		return res, nil
 	}
 	res.GenerationFingerprint = gen.Fingerprint
-	// A scoped push registers the generation and writes only its changed
-	// sessions' chunks. If this generation's fingerprint differs from the
-	// last one reconciled generation-wide, it may be newly active (a
-	// re-embed), and scoping would leave search reading an incomplete
-	// generation until the interval-floor reconciliation. Promote to a
-	// generation-wide read so the new generation is fully populated at
-	// first contact.
-	if scope != nil && gen.Fingerprint != lastReconciledFingerprint {
-		log.Printf("vector push: generation fingerprint changed since the last generation-wide reconciliation; promoting scoped push to generation-wide")
-		scope = nil
-	}
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, s.pg)
 	if err != nil {
 		if s.skipVectorsOnPrivilegeError(err, &res) {
@@ -274,12 +263,30 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, unavailable
 		return res, nil
 	}
-	resolved, err := s.resolveVectorGeneration(ctx, gen)
+	resolved, generationCreated, err := s.resolveVectorGeneration(ctx, gen)
 	if err != nil {
 		if s.skipVectorsOnPrivilegeError(err, &res) {
 			return res, nil
 		}
 		return res, err
+	}
+	// A scoped push writes only its changed sessions' chunks, which is safe
+	// only within a generation this process has already reconciled
+	// generation-wide and that PG still holds intact. Promote to a
+	// generation-wide read when either is in doubt: the active fingerprint
+	// differs from the last reconciled one (a re-embed activated a new
+	// generation), or resolveVectorGeneration had to create the generation
+	// row (PG lost it — a reset, an admin drop — while this process kept a
+	// stale fingerprint memo). Either way scoping would leave search reading
+	// an incomplete generation until the interval floor. An empty memo means
+	// no prior reconciliation to trust, so the reconcile bit already forces
+	// this push generation-wide and the fingerprint check must not fire.
+	if scope != nil &&
+		(generationCreated ||
+			(lastReconciledFingerprint != "" &&
+				gen.Fingerprint != lastReconciledFingerprint)) {
+		log.Printf("vector push: active generation is new or was recreated in PG; promoting scoped push to generation-wide reconciliation")
+		scope = nil
 	}
 	owner, err := s.vectorOwnerIdentity(ctx)
 	if err != nil {
@@ -680,31 +687,34 @@ func vectorOutOfScopeQuery(
 }
 
 // resolveVectorGeneration registers the generation, creates its chunk table,
-// and records this machine's push against it.
+// and records this machine's push against it. created reports whether the
+// generation row was freshly inserted (PG had no prior row for this
+// fingerprint), which a scoped push treats as a signal to reconcile
+// generation-wide rather than trust an in-memory fingerprint memo.
 func (s *Sync) resolveVectorGeneration(
 	ctx context.Context, gen VectorGenerationInfo,
-) (vectorGeneration, error) {
-	genID, err := ensureVectorGeneration(
+) (vectorGeneration, bool, error) {
+	genID, created, err := ensureVectorGenerationTracked(
 		ctx, s.pg, gen.Fingerprint, gen.Model, gen.Dimension,
 	)
 	if err != nil {
-		return vectorGeneration{}, err
+		return vectorGeneration{}, false, err
 	}
 	if err := ensureVectorChunkTable(ctx, s.pg, genID, gen.Dimension); err != nil {
-		return vectorGeneration{}, err
+		return vectorGeneration{}, false, err
 	}
 	extSchema, err := vectorExtensionSchema(ctx, s.pg)
 	if err != nil {
-		return vectorGeneration{}, err
+		return vectorGeneration{}, false, err
 	}
 	if _, err := s.pg.ExecContext(ctx, `
 INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
 VALUES ($1, $2, now())
 ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = now()`,
 		genID, s.machine); err != nil {
-		return vectorGeneration{}, fmt.Errorf("recording vector push machine: %w", err)
+		return vectorGeneration{}, false, fmt.Errorf("recording vector push machine: %w", err)
 	}
-	return vectorGeneration{id: genID, halfvecType: extSchema + ".halfvec"}, nil
+	return vectorGeneration{id: genID, halfvecType: extSchema + ".halfvec"}, created, nil
 }
 
 // readVectorPushState loads the delta state for genID, joined with each

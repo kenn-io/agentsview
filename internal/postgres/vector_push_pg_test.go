@@ -367,6 +367,71 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 		"both sessions have state rows under the new generation")
 }
 
+// TestVectorPushRecreatedGenerationPromotesScopedPush pins that a scoped push
+// promotes to generation-wide when PG has lost the active generation (a reset
+// or admin drop) even though the source fingerprint is unchanged, so an
+// in-memory fingerprint memo cannot leave the recreated generation populated
+// with only the changed session's chunks.
+func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_gen_recreated_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+
+	var gen1 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
+	).Scan(&gen1), "gen1 id")
+
+	// PG loses the generation while the source keeps the same fingerprint, so
+	// the memo would still read fp1 and the fingerprint check alone would not
+	// promote.
+	for _, q := range []string{
+		`DELETE FROM vector_push_state WHERE generation_id = $1`,
+		`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
+		`DELETE FROM vector_generations WHERE id = $1`,
+	} {
+		_, err := pg.Exec(q, gen1)
+		require.NoError(t, err, q)
+	}
+	src.hashScopes = nil
+
+	// A scoped push still carrying fp1 must notice the generation is gone and
+	// reconcile the whole corpus, not just the one changed session.
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, "fp1", nil, nil)
+	require.NoError(t, err, "scoped push after generation drop")
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the recreated generation is fully populated, not just the changed session")
+	require.Len(t, src.hashScopes, 1)
+	assert.Nil(t, src.hashScopes[0],
+		"promotion reads the whole generation, not the changed subset")
+
+	var gen2 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
+	).Scan(&gen2), "recreated generation id")
+	assert.NotEqual(t, gen1, gen2, "the generation row was recreated with a new id")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
+		"both sessions have state rows under the recreated generation")
+}
+
 func TestVectorPushRoundTrip(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
