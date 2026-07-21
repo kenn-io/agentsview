@@ -135,13 +135,14 @@ func buildExtractManager(
 	})
 }
 
-// setupRecallExtraction wires the daemon's extraction scheduler; nil when
-// the section is disabled.
+// setupRecallExtraction wires the daemon's extraction scheduler. When the
+// section is disabled it returns a reconcile-only scheduler if a generation
+// exists, and nil when none does.
 func setupRecallExtraction(
 	cfg config.Config, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
 	if !cfg.Recall.Extract.Enabled {
-		return nil, nil
+		return setupExtractReconcileOnly(database, idle)
 	}
 	dist, err := resolveExtractDistillation(cfg.Recall.Extract)
 	if err != nil {
@@ -160,6 +161,41 @@ func setupRecallExtraction(
 		mgr, extractDebounceInterval, backstop, catchup, idle,
 	), nil
 }
+
+// setupExtractReconcileOnly wires a scheduler that only retracts the
+// generated corpus of sessions that lost eligibility, for the case where
+// extraction is disabled but a generation activated while it was enabled is
+// still serving. Retraction must not depend on the model-backed loop being
+// enabled: a session trashed, flagged automated, or found to carry secrets
+// must stop serving its entries regardless. Nil when no generation exists —
+// extraction was never run, so there is nothing to retract and a
+// default-disabled daemon starts no scheduler.
+func setupExtractReconcileOnly(
+	database *db.DB, idle *server.IdleTracker,
+) (*extractScheduler, error) {
+	generations, err := database.ExtractGenerations(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("checking for extraction generations: %w", err)
+	}
+	if len(generations) == 0 {
+		return nil, nil
+	}
+	// No backstop: there is no corpus to top up. Session-mutation
+	// notifications drive prompt retraction; the catchup ticker is a cheap
+	// periodic backstop for anything a missed notification left behind. A
+	// short debounce — retraction is cheap and carries no model latency,
+	// unlike extraction's sync-batching debounce — keeps the startup pass
+	// and post-trash retraction prompt.
+	return newExtractScheduler(
+		extract.NewReconciler(database),
+		extractReconcileDebounce, 0, time.Minute, idle,
+	), nil
+}
+
+// extractReconcileDebounce is the reconcile-only scheduler's debounce: short,
+// so entries of a just-trashed session stop serving promptly and the startup
+// pass retracts soon after launch.
+const extractReconcileDebounce = 2 * time.Second
 
 // openWritableExtractDB opens the archive read-write for manual extraction
 // commands, refusing while a daemon owns it: there is no extraction HTTP

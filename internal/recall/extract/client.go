@@ -34,6 +34,16 @@ var ErrPersistentTruncation = errors.New(
 	"model output truncated at the token budget",
 )
 
+// ErrSplitBudgetExceeded reports a unit whose overflow recovery ran past the
+// per-unit split budget: one oversized transcript message would otherwise
+// drive an unbounded fan-out of model calls and accumulate every leaf's
+// entries in memory. It is neither transient nor endpoint-scoped, so the
+// session fails closed and waits out its backoff rather than aborting the
+// pass or retrying the same oversized message every time.
+var ErrSplitBudgetExceeded = errors.New(
+	"unit overflow recovery exceeded the split budget",
+)
+
 // errTruncated is the per-request truncation signal that
 // DistillWithRecovery converts into the typed split signal.
 var errTruncated = errors.New("model output truncated")

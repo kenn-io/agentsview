@@ -89,6 +89,16 @@ watch. An unstable bracket skips the session silently: a concurrent write bumped
 `local_modified_at`, so the next pass retries against a settled view, and a
 newly ineligible session must simply not be extracted.
 
+Before distillation the manager also re-scans the transcript content it is about
+to send, independently of the stored scan stamp (an archive from an older binary
+can carry a clean stamp over content the scanner never saw). The re-scan runs
+over the raw message contents concatenated in transcript order, not per message:
+a secret whose structure spans messages — a private-key block split across
+adjacent messages, or across separate units the endpoint receives and can
+correlate — matches no per-message scan, and scanning the formatted unit texts
+would let the interposed formatting push a straddling key under the scanner's
+payload-purity gate. A match fails the session closed.
+
 The bracket does not end when distillation starts. Eligibility is re-validated —
 snapshot comparison, eligibility predicates, and a fresh secret-findings read (a
 scan under an unchanged rules version can land candidate findings without
@@ -129,14 +139,20 @@ generation-independent) and their progress rows removed, so an excluded
 session's corpus stops serving, a lingering pending or partial row cannot block
 activation forever, and a session that becomes eligible again is rediscovered
 and re-extracted from scratch. Both deletes are set-based, so retraction cannot
-be blocked by SQLite's host-parameter limit however many sessions match. Stale
-or missing scan versions deliberately do not qualify — they are transient (every
-transcript write clears the stamp until rescan), and deleting on them would
-rebuild the corpus on every sync. The walk is bounded by its own watermark,
-which advances on every completed unlimited scan pass; a fresh manager
-reconciles unbounded. A mid-extraction discard is likewise atomic: the entry
-delete and the guarded cursor reset commit together, so a resume can never skip
-units whose entries no longer exist.
+be blocked by SQLite's host-parameter limit however many sessions match.
+Retraction does not depend on extraction being enabled: a generation activated
+while `[recall.extract]` was on keeps serving after it is turned off, so the
+daemon runs a reconcile-only scheduler in that case (skipped entirely when no
+generation exists), driven by the same session-mutation notifications, startup
+pass, and periodic ticks — a session trashed, flagged automated, or found to
+carry secrets stops serving its entries whether or not the model-backed loop
+runs. Stale or missing scan versions deliberately do not qualify — they are
+transient (every transcript write clears the stamp until rescan), and deleting
+on them would rebuild the corpus on every sync. The walk is bounded by its own
+watermark, which advances on every completed unlimited scan pass; a fresh
+manager reconciles unbounded. A mid-extraction discard is likewise atomic: the
+entry delete and the guarded cursor reset commit together, so a resume can never
+skip units whose entries no longer exist.
 
 A stable bracket whose loaded message count differs from the row's is a
 different case — the sync loop writes the session row before the transcript, so
@@ -252,7 +268,11 @@ ladder:
   are typed errors meaning *split this unit*: the manager halves the text
   recursively down to a floor (`max_window_chars / 8`, capped at 2000 code
   points), below which splitting would only destroy context and the error
-  surfaces instead.
+  surfaces instead. The recovery is bounded: one unit's recursive splitting
+  may make at most a fixed number of model calls, so a single oversized
+  message — user content is never packed, so its length is unbounded — cannot
+  fan out into unbounded calls or accumulate every leaf's entries in memory;
+  exceeding the budget fails the session closed.
 
 There is no "retry with a compact prompt" path: a capped response silently loses
 entries, so truncation always splits or fails.

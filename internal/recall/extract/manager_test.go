@@ -427,6 +427,87 @@ func TestManagerRefusesUnitStraddlingSecret(t *testing.T) {
 	}
 }
 
+// TestManagerRefusesSecretSplitAcrossUnits pins the outbound gate against
+// a secret split across separate units, not just across messages inside one
+// unit: two user messages become two intent units, so a PEM block whose
+// BEGIN and END land in different messages matches neither the per-message
+// scan nor the per-unit scan, while the model endpoint — receiving both
+// units — can correlate them and reconstruct the key. The aggregate scan
+// over all outbound unit texts in transcript order is what catches it. The
+// BEGIN/END literals are assembled at runtime so this file carries no
+// key-shaped pattern.
+func TestManagerRefusesSecretSplitAcrossUnits(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	pemBegin := "-----BEGIN RSA " + "PRIVATE KEY-----"
+	pemEnd := "-----END RSA " + "PRIVATE KEY-----"
+	keyLine := "MIIBSECRETKEYMATERIAL0123456789ABCDEF\n"
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "store this:\n" + pemBegin + "\n" +
+			strings.Repeat(keyLine, 3)},
+		{Role: "user", Content: strings.Repeat(keyLine, 2) + pemEnd},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 0 {
+		t.Fatalf("model calls = %d, want 0: a key split across units must "+
+			"never reach the model", log.count())
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", result.Failed)
+	}
+}
+
+// TestManagerBoundsOversizedUnitSplitWork pins the split budget: a single
+// oversized message becomes one unit (user messages are never packed), and
+// overflow recovery would otherwise fan out one model call per split leaf
+// and accumulate every leaf's entries in memory — unbounded work driven by
+// one transcript message. The budget caps the recovery and fails the
+// session closed instead.
+func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(text string, _ int) (int, string) {
+		if utf8.RuneCountInString(text) > 120 {
+			return http.StatusBadRequest,
+				`{"error":{"code":"context_length_exceeded"}}`
+		}
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	big := strings.Repeat("word ", 6000)
+	seedSession(t, d, "sess-1",
+		[]db.Message{{Role: "user", Content: big}}, nil)
+	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
+		cfg.Segmenter = TurnsV1{MaxWindowChars: 400}
+	})
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1: an oversized unit that blows the "+
+			"split budget must fail the session", result.Failed)
+	}
+	if log.count() > maxUnitDistillCalls {
+		t.Fatalf("model calls = %d, want <= %d: the split budget must bound "+
+			"overflow recovery", log.count(), maxUnitDistillCalls)
+	}
+	entry, err := d.GetRecallEntry(
+		context.Background(), EntryID(m.Fingerprint(), "sess-1", 0, 0))
+	if err != nil {
+		t.Fatalf("GetRecallEntry: %v", err)
+	}
+	if entry != nil {
+		t.Fatalf("entry persisted despite a budget failure: %+v", entry)
+	}
+}
+
 func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 	d := newTestArchive(t)
 	ctx := context.Background()

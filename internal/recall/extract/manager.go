@@ -20,6 +20,14 @@ import (
 const (
 	defaultFailureBackoff = time.Hour
 	defaultMaxAttempts    = 3
+	// maxUnitDistillCalls caps the model calls one unit's overflow recovery
+	// may make. A legitimate oversized action unit needs only a handful of
+	// halvings to fit the context; a message far larger than any window —
+	// user content is never packed, so its size is unbounded — would
+	// otherwise fan out one call per split leaf and hold every leaf's
+	// entries in memory. The cap is generous enough that no well-formed
+	// unit reaches it.
+	maxUnitDistillCalls = 256
 )
 
 // ManagerConfig assembles one extraction configuration. Its identity-bearing
@@ -580,6 +588,14 @@ func (m *Manager) extractSession(
 	// Re-scanning the content this function is about to send makes the
 	// boundary independent of that history.
 	secretMatches := transcriptSecretMatches(rows)
+	// Per-message scanning misses a secret whose structure spans messages:
+	// a PEM block split across adjacent messages (joined inside one unit) or
+	// across separate units the endpoint receives and can correlate. Scan
+	// the raw contents concatenated in transcript order — the aggregate of
+	// the sensitive material leaving the session, free of the unit
+	// formatting whose interposed non-base64 text would otherwise let a
+	// straddling key slip under the scanner's payload-purity gate.
+	secretMatches += aggregateTranscriptSecretMatches(rows)
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
 		messages = append(messages, Message{
@@ -590,11 +606,6 @@ func (m *Manager) extractSession(
 		})
 	}
 	units := m.cfg.Segmenter.Units(messages)
-	// Units join adjacent messages, so a secret split across rows — a PEM
-	// block whose BEGIN and END land in different assistant messages —
-	// matches no per-message scan while the joined text the model would
-	// receive contains the whole key. Scan exactly what would be sent.
-	secretMatches += unitSecretMatches(units)
 	digest := unitsDigest(units)
 	// A digest change means previously extracted units may have different
 	// content now (an assistant run that grew re-packs into an existing
@@ -959,15 +970,16 @@ func (m *Manager) discardSessionOutput(
 // the message content extraction sends to the model. Only Content reaches
 // the segmenter, so scanning it covers exactly the outbound material; tool
 // inputs and results stay the stored scan's concern.
-// unitSecretMatches scans the joined unit texts — the exact payloads a
-// model request would carry. See the call site for why per-message
-// scanning alone is not enough.
-func unitSecretMatches(units []Unit) int {
-	matches := 0
-	for _, unit := range units {
-		matches += len(secrets.Scan(unit.Text))
+// aggregateTranscriptSecretMatches scans the raw message contents
+// concatenated in transcript order. See the call site for why per-message
+// scanning alone is not enough, and why the raw contents — not the
+// formatted unit texts — are the right aggregate to scan.
+func aggregateTranscriptSecretMatches(rows []db.Message) int {
+	texts := make([]string, len(rows))
+	for i, row := range rows {
+		texts[i] = row.Content
 	}
-	return matches
+	return len(secrets.Scan(strings.Join(texts, "\n")))
 }
 
 func transcriptSecretMatches(rows []db.Message) int {
@@ -986,6 +998,24 @@ func transcriptSecretMatches(rows []db.Message) int {
 func (m *Manager) distillSplit(
 	ctx context.Context, prompt, text string,
 ) ([]Entry, error) {
+	calls := 0
+	return m.distillSplitBounded(ctx, prompt, text, &calls)
+}
+
+// distillSplitBounded is distillSplit with a shared call counter so one
+// unit's recovery cannot fan out without limit. calls counts every model
+// request the recovery makes across the whole recursion; once it reaches the
+// budget the unit fails closed with ErrSplitBudgetExceeded rather than
+// splitting an unbounded message into ever more leaves.
+func (m *Manager) distillSplitBounded(
+	ctx context.Context, prompt, text string, calls *int,
+) ([]Entry, error) {
+	if *calls >= maxUnitDistillCalls {
+		return nil, fmt.Errorf(
+			"unit recovery reached %d model calls: %w",
+			maxUnitDistillCalls, ErrSplitBudgetExceeded)
+	}
+	*calls++
 	entries, _, err := m.cfg.Client.DistillWithRecovery(
 		ctx, prompt, text, m.cfg.MaxAttempts,
 	)
@@ -1001,11 +1031,11 @@ func (m *Manager) distillSplit(
 		return nil, err
 	}
 	mid := len(runes) / 2
-	left, err := m.distillSplit(ctx, prompt, string(runes[:mid]))
+	left, err := m.distillSplitBounded(ctx, prompt, string(runes[:mid]), calls)
 	if err != nil {
 		return nil, err
 	}
-	right, err := m.distillSplit(ctx, prompt, string(runes[mid:]))
+	right, err := m.distillSplitBounded(ctx, prompt, string(runes[mid:]), calls)
 	if err != nil {
 		return nil, err
 	}

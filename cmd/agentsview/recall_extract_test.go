@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -136,6 +137,60 @@ func TestRecallExtractRunAndStatusEndToEnd(t *testing.T) {
 	assert.Equal(t, 1, status.Stats.Done)
 	assert.Equal(t, 2, status.Stats.Entries)
 	assert.NotEmpty(t, status.Fingerprint)
+}
+
+// TestSetupExtractReconcileOnlyWhenDisabled pins that retraction runs even
+// with extraction disabled: a generation activated while it was enabled
+// keeps serving, so setup returns a reconcile-only scheduler when a
+// generation exists and nil when none does.
+func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil without a generation", func(t *testing.T) {
+		d, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = d.Close() })
+		sched, err := setupRecallExtraction(config.Config{}, d, nil)
+		require.NoError(t, err)
+		assert.Nil(t, sched,
+			"a disabled daemon with no generation starts no scheduler")
+	})
+
+	t.Run("reconciles an ineligible session's entries", func(t *testing.T) {
+		d, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = d.Close() })
+		_, err = d.EnsureExtractGeneration(ctx, db.ExtractGeneration{
+			Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+		})
+		require.NoError(t, err)
+		require.NoError(t, d.UpsertSession(db.Session{
+			ID: "sess-gone", Project: "p", Machine: "m", Agent: "claude",
+		}))
+		_, err = d.InsertExtractedRecallEntries(ctx, []db.RecallEntry{{
+			ID: "e-gone", Type: "fact", ReviewState: "unreviewed_auto",
+			Status: "accepted", Title: "t", Body: "b",
+			SourceSessionID: "sess-gone", SourceRunID: "fp-a",
+			ProvenanceOK: true,
+		}})
+		require.NoError(t, err)
+		require.NoError(t, d.SoftDeleteSession("sess-gone"))
+
+		sched, err := setupRecallExtraction(config.Config{}, d, nil)
+		require.NoError(t, err)
+		require.NotNil(t, sched,
+			"a disabled daemon with a generation runs reconciliation")
+
+		runCtx, cancel := context.WithCancel(ctx)
+		go sched.Run(runCtx)
+		require.Eventually(t, func() bool {
+			entry, err := d.GetRecallEntry(ctx, "e-gone")
+			return err == nil && entry == nil
+		}, 5*time.Second, 10*time.Millisecond,
+			"the startup reconcile pass must retract the ineligible entry")
+		cancel()
+		sched.Stop()
+	})
 }
 
 func TestRecallExtractRunRefusesWhenDisabled(t *testing.T) {
