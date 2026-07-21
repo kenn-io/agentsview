@@ -92,6 +92,40 @@ func (TurnsV1) PromptRoles() []PromptRole {
 }
 
 // Units implements Segmenter.
+// VisibleContents returns the trimmed content of each message that becomes
+// model-visible unit content, in transcript order. The outbound secret scan
+// aggregates exactly these so it sees what the endpoint does — system rows,
+// unsupported roles, and empty rows are dropped from both the units and the
+// scan through the shared visibleContent predicate.
+func VisibleContents(messages []Message) []string {
+	out := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if content, ok := visibleContent(message); ok {
+			out = append(out, content)
+		}
+	}
+	return out
+}
+
+// visibleContent reports whether message contributes model-visible unit
+// content and returns its trimmed text. Units and VisibleContents share it so
+// the segmenter and the outbound scan cannot disagree about what is sent. It
+// does not decide run contiguity: a skipped row still occupies its ordinal,
+// which Units tracks separately.
+func visibleContent(message Message) (string, bool) {
+	if message.IsSystem {
+		return "", false
+	}
+	if message.Role != "user" && message.Role != "assistant" {
+		return "", false
+	}
+	content := strings.TrimSpace(message.Content)
+	if content == "" {
+		return "", false
+	}
+	return content, true
+}
+
 func (s TurnsV1) Units(messages []Message) []Unit {
 	var units []Unit
 	var run []ordinalBlock
@@ -110,11 +144,8 @@ func (s TurnsV1) Units(messages []Message) []Unit {
 			run = nil
 		}
 		prevOrdinal = message.Ordinal
-		if message.IsSystem {
-			continue
-		}
-		content := strings.TrimSpace(message.Content)
-		if content == "" {
+		content, ok := visibleContent(message)
+		if !ok {
 			continue
 		}
 		switch message.Role {

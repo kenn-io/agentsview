@@ -288,6 +288,15 @@ func newRecallExtractRunCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if limit < 0 {
+				// A negative limit would reach the DB's "<= 0 means all"
+				// rule and scan the entire eligible archive — a surprise
+				// burst of model usage. Zero is the documented unlimited
+				// value; negatives are a mistake.
+				return fmt.Errorf(
+					"--limit must not be negative (0 means all): got %d",
+					limit)
+			}
 			cfg, err := loadExtractConfig(cmd)
 			if err != nil {
 				return err

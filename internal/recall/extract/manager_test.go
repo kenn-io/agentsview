@@ -496,6 +496,68 @@ func TestManagerRefusesSecretSplitMidTokenAcrossMessages(t *testing.T) {
 	}
 }
 
+// TestManagerRefusesSecretSplitAcrossSystemMessage pins that the aggregate
+// scan mirrors the model-visible sequence: a system message between the two
+// halves is dropped from the units the endpoint receives, so scanning the
+// raw rows (system content interposed) would miss a key the model can
+// reconstruct from the two adjacent user units.
+func TestManagerRefusesSecretSplitAcrossSystemMessage(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	keyHi := "AKIA7QHWN2"
+	keyLo := "DKR4FYPLJM"
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "deploy key " + keyHi},
+		{Role: "system", Content: "context window compacted", IsSystem: true},
+		{Role: "user", Content: keyLo + " done"},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 0 {
+		t.Fatalf("model calls = %d, want 0: a system message between the "+
+			"halves must not hide a key the model reconstructs", log.count())
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", result.Failed)
+	}
+}
+
+// TestManagerRefusesSecretSplitAcrossBoundaryWhitespace pins that the
+// aggregate trims each message as the segmenter does: boundary whitespace
+// that separates the halves in the raw rows is stripped before the model
+// sees them, so the scan must strip it too.
+func TestManagerRefusesSecretSplitAcrossBoundaryWhitespace(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	keyHi := "AKIA7QHWN2"
+	keyLo := "DKR4FYPLJM"
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "key " + keyHi + "   \n\t "},
+		{Role: "user", Content: "  \n" + keyLo},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if log.count() != 0 {
+		t.Fatalf("model calls = %d, want 0: boundary whitespace must not "+
+			"hide a key the model receives contiguously", log.count())
+	}
+	if result.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", result.Failed)
+	}
+}
+
 // TestManagerBoundsOversizedUnitSplitWork pins the split budget: a single
 // oversized message becomes one unit (user messages are never packed), and
 // overflow recovery would otherwise fan out one model call per split leaf

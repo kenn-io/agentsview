@@ -588,14 +588,6 @@ func (m *Manager) extractSession(
 	// Re-scanning the content this function is about to send makes the
 	// boundary independent of that history.
 	secretMatches := transcriptSecretMatches(rows)
-	// Per-message scanning misses a secret whose structure spans messages:
-	// a PEM block split across adjacent messages (joined inside one unit) or
-	// across separate units the endpoint receives and can correlate. Scan
-	// the raw contents concatenated in transcript order — the aggregate of
-	// the sensitive material leaving the session, free of the unit
-	// formatting whose interposed non-base64 text would otherwise let a
-	// straddling key slip under the scanner's payload-purity gate.
-	secretMatches += aggregateTranscriptSecretMatches(rows)
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
 		messages = append(messages, Message{
@@ -605,6 +597,16 @@ func (m *Manager) extractSession(
 			IsSystem: row.IsSystem,
 		})
 	}
+	// Per-message scanning misses a secret whose structure spans messages:
+	// a PEM block split across adjacent messages (joined inside one unit) or
+	// across separate units the endpoint receives and can correlate. Scan
+	// the aggregate of exactly the model-visible content — the same rows the
+	// segmenter keeps (system and unsupported roles dropped, each trimmed) —
+	// so an intervening system message or boundary whitespace cannot break a
+	// token in the scan that the endpoint still receives contiguously. Raw
+	// contents, not formatted unit texts, so interposed formatting cannot
+	// push a straddling key under the scanner's payload-purity gate.
+	secretMatches += aggregateModelSecretMatches(messages)
 	units := m.cfg.Segmenter.Units(messages)
 	digest := unitsDigest(units)
 	// A digest change means previously extracted units may have different
@@ -970,20 +972,17 @@ func (m *Manager) discardSessionOutput(
 // the message content extraction sends to the model. Only Content reaches
 // the segmenter, so scanning it covers exactly the outbound material; tool
 // inputs and results stay the stored scan's concern.
-// aggregateTranscriptSecretMatches scans the raw message contents
-// concatenated in transcript order. See the call site for why per-message
-// scanning alone is not enough, and why the raw contents — not the
-// formatted unit texts — are the right aggregate to scan. Two joins are
-// scanned: newline-preserving keeps the structure of multi-line secrets (a
-// PEM block), and separator-free reconstructs a single-token credential
-// split mid-token across messages, which the newline would otherwise break
-// so a regex needing contiguous characters could not match. Either matching
-// means the material is present.
-func aggregateTranscriptSecretMatches(rows []db.Message) int {
-	texts := make([]string, len(rows))
-	for i, row := range rows {
-		texts[i] = row.Content
-	}
+// aggregateModelSecretMatches scans the concatenation of exactly the
+// model-visible contents (see VisibleContents), in transcript order. See the
+// call site for why per-message scanning alone is not enough, and why the
+// raw contents — not the formatted unit texts — are the right aggregate to
+// scan. Two joins are scanned: newline-preserving keeps the structure of
+// multi-line secrets (a PEM block), and separator-free reconstructs a
+// single-token credential split mid-token across messages, which the newline
+// would otherwise break so a regex needing contiguous characters could not
+// match. Either matching means the material is present.
+func aggregateModelSecretMatches(messages []Message) int {
+	texts := VisibleContents(messages)
 	matches := len(secrets.Scan(strings.Join(texts, "\n")))
 	matches += len(secrets.Scan(strings.Join(texts, "")))
 	return matches

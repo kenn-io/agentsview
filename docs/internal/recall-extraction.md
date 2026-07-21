@@ -92,9 +92,12 @@ newly ineligible session must simply not be extracted.
 Before distillation the manager also re-scans the transcript content it is about
 to send, independently of the stored scan stamp (an archive from an older binary
 can carry a clean stamp over content the scanner never saw). The re-scan runs
-over the raw message contents concatenated in transcript order, not per message:
-a secret whose structure spans messages — a private-key block split across
-adjacent messages, or across separate units the endpoint receives and can
+over exactly the model-visible contents concatenated in transcript order (the
+same rows the segmenter keeps — system messages and unsupported roles dropped,
+each trimmed — so an intervening system message or boundary whitespace cannot
+break a token in the scan that the endpoint still receives contiguously), not
+per message: a secret whose structure spans messages — a private-key block split
+across adjacent messages, or across separate units the endpoint receives and can
 correlate — matches no per-message scan, and scanning the formatted unit texts
 would let the interposed formatting push a straddling key under the scanner's
 payload-purity gate. Both a newline-joined and a separator-free aggregate are

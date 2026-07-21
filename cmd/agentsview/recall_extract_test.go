@@ -202,6 +202,20 @@ func TestRecallExtractRunRefusesWhenDisabled(t *testing.T) {
 	assert.Contains(t, err.Error(), "recall.extract")
 }
 
+// TestRecallExtractRunRejectsNegativeLimit pins that a negative --limit is
+// refused at the CLI boundary: the DB reads "<= 0" as unlimited, so a
+// negative would scan the whole eligible archive — a surprise model-usage
+// burst. The check runs before config load, so it needs no valid config.
+func TestRecallExtractRunRejectsNegativeLimit(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	_, err := executeCommand(newRootCommand(),
+		"recall", "extract", "run", "--limit", "-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "limit")
+}
+
 func TestRecallExtractRetireRequiresForceForActive(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
