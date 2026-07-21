@@ -558,6 +558,44 @@ func TestManagerRefusesSecretSplitAcrossBoundaryWhitespace(t *testing.T) {
 	}
 }
 
+// TestManagerExtractsBenignHighEntropyAssistantToken guards the decision not
+// to scan the formatted unit text: TurnsV1 prepends "ASSISTANT:\n", which the
+// high-entropy-assignment rule reads as an assignment key, so scanning the
+// formatted payload would flag any assistant message starting with a bare
+// 20+ char high-entropy token — a git SHA, a hash, a base64 blob — as a
+// secret and fail the session. Those are not secrets (the scanner
+// deliberately does not flag bare tokens without a real assignment), and
+// they are ubiquitous in coding transcripts. The gate scans the raw
+// model-visible content, consistent with sync-time scanning, so a benign
+// high-entropy token extracts normally.
+func TestManagerExtractsBenignHighEntropyAssistantToken(t *testing.T) {
+	d := newTestArchive(t)
+	server, log := modelServer(t, func(_ string, _ int) (int, string) {
+		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
+	})
+	// A bare 40-hex commit SHA as the first line of an assistant message:
+	// high entropy, no assignment structure, not a secret.
+	sha := "5f3a9b2c8d1e4f6a7b0c1d2e3f4a5b6c7d8e9f0a"
+	seedSession(t, d, "sess-1", []db.Message{
+		{Role: "user", Content: "what changed?"},
+		{Role: "assistant", Content: sha + " reworked the parser"},
+	}, nil)
+	m := newManager(t, d, server.URL, nil)
+
+	result, err := m.RunPass(context.Background(), PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Failed != 0 {
+		t.Fatalf("failed = %d, want 0: a bare high-entropy token is not a "+
+			"secret and must not fail the session", result.Failed)
+	}
+	if log.count() == 0 {
+		t.Fatal("model was never called: a benign high-entropy token must " +
+			"not block extraction")
+	}
+}
+
 // TestManagerBoundsOversizedUnitSplitWork pins the split budget: a single
 // oversized message becomes one unit (user messages are never packed), and
 // overflow recovery would otherwise fan out one model call per split leaf
