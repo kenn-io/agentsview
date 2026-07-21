@@ -195,14 +195,17 @@ func resolveContentSearchMode(
 // printContentSearchResult renders a content search result for humans.
 // Flat results (no --context) render as an aligned table sized to the
 // terminal; --context requests keep the record-style output because
-// per-match context lines cannot live inside table rows.
+// per-match context lines cannot live inside table rows. The clock is
+// captured once here and threaded into the row loop so tests can inject a
+// fixed time.
 func printContentSearchResult(
 	w io.Writer, res *service.ContentSearchResult, contextN int,
 ) error {
+	now := time.Now()
 	if contextN > 0 {
-		return printContentMatchesHuman(w, res)
+		return printContentMatchesHuman(w, res, now)
 	}
-	return printContentMatchesTable(w, res, contentTerminalWidth(w))
+	return printContentMatchesTable(w, res, contentTerminalWidth(w), now)
 }
 
 // humanizeMatchAge renders a content match's timestamp for the search AGE
@@ -298,7 +301,7 @@ func contentSnippetBudget(termWidth int, otherWidths []int) int {
 // expands to fill the remaining terminal width when termWidth is known and
 // prints untruncated when it is 0. Every cell is terminal-sanitized.
 func printContentMatchesTable(
-	w io.Writer, res *service.ContentSearchResult, termWidth int,
+	w io.Writer, res *service.ContentSearchResult, termWidth int, now time.Time,
 ) error {
 	if len(res.Matches) == 0 {
 		fmt.Fprintln(w, "(no matches)")
@@ -311,7 +314,7 @@ func printContentMatchesTable(
 			break
 		}
 	}
-	headers := []string{"ID", "MATCH"}
+	headers := []string{"ID", "MATCH", "AGE"}
 	if hasScore {
 		headers = append(headers, "SCORE")
 	}
@@ -335,7 +338,9 @@ func printContentMatchesTable(
 		if m.Subordinate {
 			match += " sub"
 		}
-		cells := []string{sanitizeTerminal(m.SessionID), match}
+		cells := []string{
+			sanitizeTerminal(m.SessionID), match, humanizeMatchAge(m.Timestamp, now),
+		}
 		if hasScore {
 			score := emDash
 			if m.Score != nil {
@@ -401,7 +406,7 @@ func printContentMatchesTable(
 // plain "#<ordinal>", and a subordinate unit gains a "sub" marker. When
 // --context requested inline context, ContextBefore/ContextAfter print as
 // indented "role: content" lines around the match line.
-func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) error {
+func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult, now time.Time) error {
 	if len(res.Matches) == 0 {
 		fmt.Fprintln(w, "(no matches)")
 		return nil
@@ -421,7 +426,8 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 		if m.Score != nil {
 			fmt.Fprintf(w, " score=%.2f", *m.Score)
 		}
-		fmt.Fprintf(w, "  %s  %s\n",
+		fmt.Fprintf(w, "  %s  %s  %s\n",
+			humanizeMatchAge(m.Timestamp, now),
 			sanitizeTerminal(m.Project), sanitizeTerminal(loc))
 		fmt.Fprintf(w, "    %s\n",
 			sanitizeTerminal(strings.ReplaceAll(m.Snippet, "\n", " ")))
