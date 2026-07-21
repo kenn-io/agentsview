@@ -14,12 +14,14 @@ import {
   splitExcludeProjectParam,
 } from "./sessions.svelte.js";
 import { SessionsService } from "../api/generated/index";
-import { ApiError } from "../api/generated/core/ApiError";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
-import { callGenerated } from "../api/runtime.js";
+import {
+  ApiError as RuntimeApiError,
+  callGenerated,
+} from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
 
 const api = vi.hoisted(() => ({
@@ -62,14 +64,18 @@ vi.mock("../api/client.js", () => ({
   watchEvents: api.watchEvents,
 }));
 
-vi.mock("../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
-  isAbortError: vi.fn(
-    (error: unknown) =>
-      error instanceof DOMException && error.name === "AbortError",
-  ),
-}));
+vi.mock("../api/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/runtime.js")>();
+  return {
+    ...actual,
+    configureGeneratedClient: vi.fn(),
+    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+    isAbortError: vi.fn(
+      (error: unknown) =>
+        error instanceof DOMException && error.name === "AbortError",
+    ),
+  };
+});
 
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
@@ -106,13 +112,11 @@ function mockSidebarPage(
   });
 }
 
-function makeNotFoundError(id: string): ApiError {
-  const url = `/api/v1/sessions/${id}`;
-  return new ApiError(
-    { method: "GET", url },
-    { url, ok: false, status: 404, statusText: "Not Found", body: null },
-    "Not Found",
-  );
+// Store code never sees the generated ApiError class: production callGenerated
+// converts it to the runtime ApiError before rethrowing. Reject fixtures with
+// the runtime class to model that boundary faithfully.
+function makeNotFoundError(id: string): RuntimeApiError {
+  return new RuntimeApiError(404, `session ${id} not found`);
 }
 
 function rejectGeneratedRequestOnAbort(
