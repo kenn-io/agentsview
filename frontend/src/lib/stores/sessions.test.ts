@@ -2258,6 +2258,41 @@ describe("SessionsStore", () => {
 
       expect(sessions.sessions[0]!.display_name).toBe("agent-name");
     });
+
+    it("renames an active session backed only by the detail cache", async () => {
+      // Open a session that is absent from the (empty) sidebar list, so it is
+      // held solely in activeSessionDetail.
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "cached", display_name: null, project: "proj-b" }),
+      );
+      await sessions.navigateToSession("cached");
+      expect(sessions.sessions.some((s) => s.id === "cached")).toBe(false);
+
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "cached", display_name: "renamed-in-breadcrumb" }),
+      );
+      await sessions.renameSession("cached", "renamed-in-breadcrumb");
+
+      expect(sessions.activeSession?.display_name).toBe("renamed-in-breadcrumb");
+    });
+
+    it("clears a cache-backed active session name when the response omits it", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "cached", display_name: "custom-name" }),
+      );
+      await sessions.navigateToSession("cached");
+      expect(sessions.activeSession?.display_name).toBe("custom-name");
+
+      // Backend clears the name and omits display_name (omitempty on nil).
+      vi.mocked(api.renameSession).mockResolvedValue(makeSession({ id: "cached" }));
+      await sessions.renameSession("cached", null);
+
+      expect(sessions.activeSession?.display_name).toBeNull();
+    });
   });
 
   describe("loadProjects dedup", () => {
