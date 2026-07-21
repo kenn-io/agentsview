@@ -964,6 +964,15 @@ class SessionsStore {
       ) {
         this.activeDetailGeneration++;
         this.activeSessionDetail = null;
+        // A hydrated matching row would keep backing activeSession as a
+        // ghost of the deleted session; drop it and keep the pagination
+        // total consistent, mirroring deleteSession.
+        const before = this.sessions.length;
+        this.sessions = this.sessions.filter((s) => s.id !== id);
+        const removed = before - this.sessions.length;
+        if (removed > 0) {
+          this.total = Math.max(0, this.total - removed);
+        }
       }
     } finally {
       this.activeDetailRead.finish(signal);

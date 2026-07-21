@@ -2982,6 +2982,28 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession).toBeUndefined();
     });
 
+    it("drops a hydrated sidebar row when a refresh 404s for the active session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-a", first_message: "detail" }),
+      );
+      await sessions.hydrateVisibleSessions(["gone"]);
+      sessions.selectSession("gone");
+      expect(sessions.activeSession?.first_message).toBe("detail");
+      expect(sessions.total).toBe(1);
+
+      // The session is deleted elsewhere; a refresh 404s. Clearing only the
+      // detail cache is not enough — the hydrated sidebar row would keep
+      // backing activeSession as a ghost of the deleted session.
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.total).toBe(0);
+    });
+
     it("keeps the cached detail when a refresh fails transiently", async () => {
       mockSidebarIndex([]);
       await sessions.load();
