@@ -58,6 +58,31 @@ func TestHumanizeSessionAge(t *testing.T) {
 	}
 }
 
+func TestHumanizeAgeRelative(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		t       time.Time
+		wantStr string
+		wantOK  bool
+	}{
+		{"future skew reads as now", renderNow.Add(5 * time.Second), "now", true},
+		{"seconds", renderNow.Add(-30 * time.Second), "30s", true},
+		{"minutes", renderNow.Add(-5 * time.Minute), "5m", true},
+		{"hours", renderNow.Add(-3 * time.Hour), "3h", true},
+		{"days", renderNow.Add(-2 * 24 * time.Hour), "2d", true},
+		{"a week or more returns not-ok", renderNow.Add(-7 * 24 * time.Hour), "", false},
+		{"long past returns not-ok", renderNow.Add(-90 * 24 * time.Hour), "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := humanizeAgeRelative(tc.t, renderNow)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantStr, got)
+		})
+	}
+}
+
 func TestIsSessionRecentlyActive(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
