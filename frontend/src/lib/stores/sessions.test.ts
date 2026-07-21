@@ -2743,6 +2743,60 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBe("sel");
       expect(sessions.activeSession?.project).toBe("proj-a");
     });
+
+    it("keeps a keyboard-navigated session across an excluding reload", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "a", project: "proj-a" }),
+        makeSkinnyRow({ id: "b", project: "proj-a" }),
+      ]);
+      vi.mocked(api.getSession).mockImplementation((id: string) =>
+        Promise.resolve(
+          makeSession({ id, project: "proj-a", first_message: `${id}-detail` }),
+        ),
+      );
+      await sessions.load();
+      sessions.selectSession("a");
+      await vi.waitFor(() => expect(sessions.activeSession?.id).toBe("a"));
+
+      // Keyboard next moves to "b" via navigateSession, not selectSession.
+      sessions.navigateSession(1);
+      await vi.waitFor(() => expect(sessions.activeSession?.id).toBe("b"));
+
+      // A reload excludes the keyboard-navigated session.
+      mockSidebarIndex([makeSkinnyRow({ id: "c", project: "proj-b" })]);
+      await sessions.load();
+
+      expect(sessions.activeSessionId).toBe("b");
+      expect(sessions.activeSession?.id).toBe("b");
+    });
+
+    it("caches an index-only selection even when a reload supersedes hydration", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Hydration request stays in flight until after the reload below.
+      let resolveGet!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValue(
+        new Promise<Session>((r) => {
+          resolveGet = r;
+        }),
+      );
+      sessions.selectSession("sel");
+      await Promise.resolve();
+
+      // A reload bumps the sidebar index version and drops "sel".
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load();
+
+      // The superseded hydration resolves; its version is stale for the list
+      // but the active-session cache must still capture it.
+      resolveGet(makeSession({ id: "sel", project: "proj-a", first_message: "detail" }));
+      await vi.waitFor(() => {
+        expect(sessions.activeSession?.project).toBe("proj-a");
+      });
+
+      expect(sessions.activeSessionId).toBe("sel");
+    });
   });
 
   describe("route cancellation", () => {
