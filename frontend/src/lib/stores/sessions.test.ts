@@ -2995,6 +2995,32 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("renamed");
     });
 
+    it("joins an in-flight navigation for the same active session", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      let resolveNavigate!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveNavigate = r;
+        }),
+      );
+      const first = sessions.navigateToSession("sel");
+      await Promise.resolve();
+
+      // A reactive caller (App's deep-link effect) re-requests hydration
+      // while the fetch is pending; it must join the in-flight read rather
+      // than cancel and restart it.
+      const second = sessions.navigateToSession("sel");
+      resolveNavigate(
+        makeSession({ id: "sel", first_message: "detail" }),
+      );
+      await Promise.all([first, second]);
+
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      expect(sessions.activeSession?.first_message).toBe("detail");
+    });
+
     it("commits the rename response when it lands during the navigation fetch", async () => {
       mockSidebarIndex([]);
       await sessions.load();
