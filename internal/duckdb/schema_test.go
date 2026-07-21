@@ -128,6 +128,26 @@ func TestCheckSchemaCompatPassesAfterCreateSchema(t *testing.T) {
 	require.NoError(t, CheckSchemaCompat(ctx, db), "CheckSchemaCompat")
 }
 
+func TestCheckSchemaCompatViaQuackRejectsPreReportedCostMirror(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, createSchema(ctx, db), "createSchema")
+	_, err := db.ExecContext(ctx,
+		`UPDATE sync_metadata SET value = '3' WHERE key = ?`,
+		schemaVersionMetadataKey,
+	)
+	require.NoError(t, err, "simulate v3 mirror schema version")
+	_, err = db.ExecContext(ctx,
+		`UPDATE sync_metadata SET value = '68' WHERE key = ?`,
+		dataVersionMetadataKey,
+	)
+	require.NoError(t, err, "simulate v3 mirror built from parser data version 68")
+
+	err = CheckSchemaCompatViaQuack(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'")
+}
+
 func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 	t *testing.T,
 ) {
@@ -179,7 +199,7 @@ func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 }
 
 // TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections verifies
-// that mirror schema v3's create-only version check rejects a mismatch in
+// that mirror schema v4's create-only version check rejects a mismatch in
 // either direction (an older or a newer schema_version row than this
 // build's SchemaVersion), for both the local mirror file and a remote Quack
 // server, with the same rebuild hint.

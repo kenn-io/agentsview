@@ -55,10 +55,10 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	assert.True(t, p.NeedsRebuild("", 69))
 	assert.True(t, p.NeedsRebuild(canonicalPushScope([]string{"p"}, nil), 68))
 	older := p
-	older.SchemaVersion = 2
+	older.SchemaVersion = SchemaVersion - 1
 	assert.True(t, older.NeedsRebuild("", 68))
 	newer := p
-	newer.SchemaVersion = 4
+	newer.SchemaVersion = SchemaVersion + 1
 	assert.True(t, newer.NeedsRebuild("", 68))
 }
 

@@ -498,7 +498,8 @@ func mergeExportSessionsPricing(
 func exportSessionsPricingMergeCostSource(
 	block *export.PricingBlock,
 ) export.CostSource {
-	if block == nil || len(block.Models) == 0 {
+	if block == nil ||
+		(len(block.Models) == 0 && block.CostSource == export.CostSourceComputed) {
 		return ""
 	}
 	return block.CostSource

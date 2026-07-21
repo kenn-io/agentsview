@@ -11,10 +11,10 @@ import (
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
-// createSchema. Mirror schema v3 is create-only: there are no in-place
+// createSchema. Mirror schema v4 is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -685,7 +685,7 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 }
 
 // createSchema creates the DuckDB mirror schema on a fresh file. Mirror
-// schema v3 has no in-place migrations: an existing file whose shape or
+// schema v4 has no in-place migrations: an existing file whose shape or
 // version does not match is rejected by CheckSchemaCompat and must be
 // rebuilt with 'agentsview duckdb push --full' rather than patched here.
 func createSchema(ctx context.Context, db *sql.DB) error {
@@ -870,8 +870,8 @@ func parseMirrorMetadataInt64(key, value string) (int64, error) {
 }
 
 // CheckSchemaCompat verifies that the local DuckDB mirror file has the
-// required v3 tables, columns, and schema version. It does not mutate the
-// database. Mirror schema v3 is create-only, so a mismatch of any kind means
+// required v4 tables, columns, and schema version. It does not mutate the
+// database. Mirror schema v4 is create-only, so a mismatch of any kind means
 // the mirror must be rebuilt rather than migrated in place.
 func CheckSchemaCompat(ctx context.Context, db *sql.DB) error {
 	return checkSchemaShapeCompat(ctx, db, localSchema)

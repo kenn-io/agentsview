@@ -166,6 +166,59 @@ func TestExportSessionsAllJSONMergesPricingAcrossPages(t *testing.T) {
 	assert.Empty(t, doc.Cursor.Next)
 }
 
+func TestExportSessionsAllJSONPreservesCostOnlyReportedPricingAcrossPages(
+	t *testing.T,
+) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.SetDatabaseIDForTest(
+		context.Background(), "cost-only-reported-export-db"))
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "computed-model", InputPerMTok: 1,
+	}}))
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID: "computed", Project: "alpha", Machine: "local", Agent: "codex",
+		StartedAt:    dbtest.Ptr("2026-06-16T11:00:00Z"),
+		EndedAt:      dbtest.Ptr("2026-06-16T11:10:00Z"),
+		MessageCount: 2, UserMessageCount: 2,
+	})
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "computed", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-06-16T11:05:00Z", Model: "computed-model",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000000}`),
+	}}))
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID: "cost-only-reported", Project: "alpha", Machine: "local",
+		Agent: "copilot", StartedAt: dbtest.Ptr("2026-06-16T10:00:00Z"),
+		EndedAt:      dbtest.Ptr("2026-06-16T10:10:00Z"),
+		MessageCount: 2, UserMessageCount: 2,
+	})
+	reportedCost := 0.03
+	require.NoError(t, database.ReplaceSessionUsageEvents(
+		"cost-only-reported", []db.UsageEvent{{
+			Source: "shutdown", Model: "copilot-cost-only",
+			CostUSD: &reportedCost, CostStatus: "exact",
+			CostSource: db.CopilotReportedCostSource,
+			OccurredAt: "2026-06-16T10:10:00Z", DedupKey: "final",
+		}},
+	))
+	require.NoError(t, database.Close())
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions", "--all", "--format", "json",
+		"--limit", "1",
+	)
+	require.NoError(t, err, "export all sessions")
+	assert.Empty(t, stderr)
+
+	doc := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, doc.Sessions, 2)
+	assert.Equal(t, string(export.CostSourceMixed), doc.Pricing["cost_source"])
+	require.NotNil(t, doc.Sessions[1].ModelUsage)
+	assert.Equal(t, "cost-only-reported", doc.Sessions[1].ID)
+	assert.InDelta(t, reportedCost, doc.Sessions[1].ModelUsage.CostUSD, 1e-12)
+}
+
 func TestBuildExportSessionsOutputMarksCrossPageProjectConflictAmbiguous(t *testing.T) {
 	const projectKey = "pl1:sha256:project"
 	page := func(identityKey string) db.SessionExportResult {
@@ -190,9 +243,15 @@ func TestBuildExportSessionsOutputMarksCrossPageProjectConflictAmbiguous(t *test
 	assert.Nil(t, got.Projects[projectKey].Identity)
 }
 
-func TestMergeExportSessionsPricingTreatsNoModelPagesAsNeutral(t *testing.T) {
+func TestMergeExportSessionsPricingTreatsOnlyComputedNoModelPagesAsNeutral(
+	t *testing.T,
+) {
 	noModels := &export.PricingBlock{
 		CostSource: export.CostSourceComputed,
+		Models:     map[string]export.EffectiveModelRate{},
+	}
+	mixedNoModels := &export.PricingBlock{
+		CostSource: export.CostSourceMixed,
 		Models:     map[string]export.EffectiveModelRate{},
 	}
 	reported := &export.PricingBlock{
@@ -212,6 +271,12 @@ func TestMergeExportSessionsPricingTreatsNoModelPagesAsNeutral(t *testing.T) {
 
 	got = mergeExportSessionsPricing(noModels, noModels)
 	assert.Equal(t, export.CostSourceComputed, got.CostSource)
+
+	got = mergeExportSessionsPricing(noModels, mixedNoModels)
+	assert.Equal(t, export.CostSourceMixed, got.CostSource)
+
+	got = mergeExportSessionsPricing(mixedNoModels, noModels)
+	assert.Equal(t, export.CostSourceMixed, got.CostSource)
 }
 
 func TestExportSessionsAllNDJSONCursorNextEmpty(t *testing.T) {
