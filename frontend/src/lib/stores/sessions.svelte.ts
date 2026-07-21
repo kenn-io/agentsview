@@ -526,6 +526,21 @@ class SessionsStore {
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
+      // Preserve the open session when the (filtered) index omits it, e.g. one
+      // opened from search that falls outside the current sidebar filters.
+      // navigateToSession appended it to the list; dropping it on reload leaves
+      // activeSession undefined and strips the breadcrumb's project, name, and
+      // badges. Keep the previously resolved row so the detail view stays intact.
+      const activeId = this.activeSessionId;
+      if (
+        activeId !== null &&
+        !index.sessions.some((row) => row.id === activeId)
+      ) {
+        const preserved = existing.get(activeId);
+        if (preserved && !preserved.is_index_only) {
+          this.sessions = [...this.sessions, preserved];
+        }
+      }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch {
