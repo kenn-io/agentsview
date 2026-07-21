@@ -2722,6 +2722,27 @@ describe("SessionsStore", () => {
       expect(sessions.sessions.filter((s) => s.id === "later")).toHaveLength(1);
       expect(sessions.activeSession?.id).toBe("later");
     });
+
+    it("keeps a sidebar-selected session across a reload that filters it out", async () => {
+      // Select a hydrated sidebar row, then reload with a filtered index that
+      // no longer includes it. The breadcrumb must not go blank.
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "sel", project: "proj-a", first_message: "detail" }),
+      );
+      await sessions.load();
+      await sessions.hydrateVisibleSessions(["sel"]);
+      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+
+      sessions.selectSession("sel");
+      expect(sessions.activeSession?.id).toBe("sel");
+
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load();
+
+      expect(sessions.activeSessionId).toBe("sel");
+      expect(sessions.activeSession?.project).toBe("proj-a");
+    });
   });
 
   describe("route cancellation", () => {
