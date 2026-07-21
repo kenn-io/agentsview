@@ -26,7 +26,7 @@
 
   interface Props {
     sessionId: string;
-    session?: Session;
+    session: Session | undefined;
   }
 
   let { sessionId, session }: Props = $props();
@@ -300,17 +300,19 @@
     </button>
   </header>
 
-  {#if timing}
+  {#if timing || session}
     <section class="v-section">
       <header class="v-h">
         <span>{m.session_vitals_session()}</span>
-        <span class="v-meta" class:live={timing.running}>
-          {#if timing.running}
-            {m.session_vitals_running_duration({ duration: formatDuration(timing.total_duration_ms) })}
-          {:else}
-            {formatDuration(timing.total_duration_ms)}
-          {/if}
-        </span>
+        {#if timing}
+          <span class="v-meta" class:live={timing.running}>
+            {#if timing.running}
+              {m.session_vitals_running_duration({ duration: formatDuration(timing.total_duration_ms) })}
+            {:else}
+              {formatDuration(timing.total_duration_ms)}
+            {/if}
+          </span>
+        {/if}
       </header>
       {#if session}
         <div class="session-context">
@@ -332,44 +334,48 @@
           </div>
         </div>
       {/if}
-      <div class="stat-grid">
-        <div>
-          <div class="lbl">{m.session_vitals_tool_calls()}</div>
-          <div class="val">{timing.tool_call_count}</div>
-        </div>
-        <div>
-          <div class="lbl">{m.session_vitals_tool_time()}</div>
-          <div class="val" class:live={timing.running}>
-            {formatDuration(timing.tool_duration_ms)}{timing.running ? "+" : ""}
+      {#if timing}
+        <div class="stat-grid">
+          <div>
+            <div class="lbl">{m.session_vitals_tool_calls()}</div>
+            <div class="val">{timing.tool_call_count}</div>
+          </div>
+          <div>
+            <div class="lbl">{m.session_vitals_tool_time()}</div>
+            <div class="val" class:live={timing.running}>
+              {formatDuration(timing.tool_duration_ms)}{timing.running ? "+" : ""}
+            </div>
+          </div>
+          <div>
+            <div class="lbl">{m.session_vitals_slowest_call()}</div>
+            {#if timing.slowest_call}
+              {@const slowest = timing.slowest_call}
+              <button
+                type="button"
+                class="val slow val-link"
+                title={m.session_vitals_jump_to_call()}
+                onclick={() => scrollToCall(slowest)}
+              >
+                {displayToolName(slowest)} · {formatDuration(slowest.duration_ms ?? 0)}
+              </button>
+            {:else}
+              <div class="val slow">—</div>
+            {/if}
+          </div>
+          <div>
+            <div class="lbl">{m.session_vitals_turns()}</div>
+            <div class="val">{timing.turn_count}</div>
+          </div>
+          <div>
+            <div class="lbl">{m.session_vitals_subagents()}</div>
+            <div class="val">{timing.subagent_count}</div>
           </div>
         </div>
-        <div>
-          <div class="lbl">{m.session_vitals_slowest_call()}</div>
-          {#if timing.slowest_call}
-            {@const slowest = timing.slowest_call}
-            <button
-              type="button"
-              class="val slow val-link"
-              title={m.session_vitals_jump_to_call()}
-              onclick={() => scrollToCall(slowest)}
-            >
-              {displayToolName(slowest)} · {formatDuration(slowest.duration_ms ?? 0)}
-            </button>
-          {:else}
-            <div class="val slow">—</div>
-          {/if}
-        </div>
-        <div>
-          <div class="lbl">{m.session_vitals_turns()}</div>
-          <div class="val">{timing.turn_count}</div>
-        </div>
-        <div>
-          <div class="lbl">{m.session_vitals_subagents()}</div>
-          <div class="val">{timing.subagent_count}</div>
-        </div>
-      </div>
+      {/if}
     </section>
+  {/if}
 
+  {#if timing}
     {#if timing.by_category.length > 0}
       <section class="v-section">
         <header class="v-h">
