@@ -2621,6 +2621,102 @@ func TestActivateExtractGenerationRefusesDriftedDoneCoverage(t *testing.T) {
 	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
 }
 
+// TestActivateExtractGenerationRefusesStaleFailedPartialCoverage pins that
+// the stale-coverage gate also covers failed rows holding staged output: a
+// partially extracted session keeps its staged entries behind the failure
+// backoff, and a session write after the coverage stamp — a content change,
+// or a remap to another project, cwd, or branch — makes those entries
+// stale. Promoting them would serve context the retry's refresh has not
+// seen yet.
+func TestActivateExtractGenerationRefusesStaleFailedPartialCoverage(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-ok", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-ok", "e-ok")
+	seedExtractCandidate(t, d, "sess-fail", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-a", "sess-fail", "e-fail")
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-fail", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-fail", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0, LastError: "unit failed",
+	}))
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, d.BumpLocalModifiedAt("sess-fail"))
+
+	err = d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now())
+	require.ErrorIs(t, err, ErrExtractActivationBlocked,
+		"staged output of a failed row written after its stamp must not promote")
+	assert.Equal(t, ExtractGenerationBuilding, generationStates(t, d)["fp-a"])
+	entry, err := d.GetRecallEntry(ctx, "e-fail")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "archived", entry.Status,
+		"stale staged output must stay archived behind the blocked activation")
+}
+
+// TestActivateExtractGenerationAllowsFreshFailedCoverage pins the scoping
+// of the failed-row stale gate: a failed row with no staged output has
+// nothing stale to promote no matter when its session was written, and a
+// failed partial row whose stamp still covers the last write promotes its
+// staged output as designed — the retry tops the corpus up later.
+func TestActivateExtractGenerationAllowsFreshFailedCoverage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-ok", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-ok", "e-ok")
+	// A failed partial row with staged output and a current stamp.
+	seedExtractCandidate(t, d, "sess-partial", 2*time.Hour, nil)
+	seedServableExtractEntry(t, d, "fp-a", "sess-partial", "e-partial")
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-partial", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-partial", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0, LastError: "unit failed",
+	}))
+	// A failed row with no staged output, written after its stamp.
+	seedExtractCandidate(t, d, "sess-bare", 2*time.Hour, nil)
+	time.Sleep(2 * time.Millisecond)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-bare", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-bare", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0, LastError: "unit failed",
+	}))
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, d.BumpLocalModifiedAt("sess-bare"))
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	entry, err := d.GetRecallEntry(ctx, "e-partial")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "accepted", entry.Status,
+		"a fresh failed partial row's staged output promotes as designed")
+}
+
 // TestActivateExtractGenerationRefusesEmptyPromotion pins the replacement
 // guarantee: when every staged entry's session lost eligibility after the
 // caller's checks, activation must abort instead of retiring the served

@@ -337,7 +337,11 @@ nothing is pending or partial, and the generation has produced at least one
 entry. The backlog check counts completed sessions whose transcripts changed
 since their unit snapshot: their corpus is stale, and activating over them would
 promote a generation that does not cover what it claims. Failed sessions do not
-block activation — they retry later and top the corpus up. An entryless
+block activation — they retry later and top the corpus up — unless a failed
+partial row holds staged entries and its session was written after its coverage
+stamp (a content change, or a remap to another project, cwd, or branch): those
+entries would promote context only the retry's refresh repairs, so the
+activation transaction refuses them like stale done coverage. An entryless
 generation never activates, manually or automatically: activation retires the
 previously active generation, and replacing a working corpus with an empty one
 must not happen silently. All of these checks are advisory racing against

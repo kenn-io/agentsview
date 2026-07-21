@@ -318,7 +318,8 @@ func (db *DB) ActivateExtractGeneration(
 // lacks a progress row entirely (a single-session run, or a session ending
 // after the caller's checks, leaves uncovered work that no progress-based
 // gate can see). Failed sessions do not block (they retry and top the
-// corpus up later), and sessions that turned ineligible are ignored by
+// corpus up later) unless they hold staged output made stale by a later
+// session write, and sessions that turned ineligible are ignored by
 // every gate — including the unfinished count, since their extraction can
 // never finish and an explicit activation runs no retraction pass to clear
 // their rows first: promotion excludes their entries and the retraction
@@ -375,6 +376,44 @@ func verifyExtractActivationCoverageTx(
 		return fmt.Errorf(
 			"generation %s has %d completed sessions whose coverage went "+
 				"stale: %w", fingerprint, stale, ErrExtractActivationBlocked)
+	}
+	failedArgs := make([]any, 0, len(scanVersions)+3)
+	failedArgs = append(failedArgs, fingerprint, ExtractProgressFailed)
+	for _, version := range scanVersions {
+		failedArgs = append(failedArgs, version)
+	}
+	failedArgs = append(failedArgs, quietCutoff.UTC().Format(extractTimeLayout))
+	// Failed rows do not block in general — they retry and top the corpus
+	// up later — but a failed partial row keeps its staged entries behind
+	// the failure backoff, and a session write past its stamp (content, or
+	// a remap to another project, cwd, or branch) leaves them stale in
+	// ways only the retry's refresh repairs. Only fully eligible sessions
+	// count: staged output of every other session is deleted by the
+	// cleanup later in this transaction, and a failed row with nothing
+	// staged promotes nothing.
+	var staleFailed int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM recall_extract_progress p
+		JOIN sessions s ON s.id = p.session_id
+		WHERE p.generation_fingerprint = ? AND p.state = ?
+		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks)+`
+		  AND ((s.local_modified_at IS NULL AND p.content_stamped_at = '')
+			OR s.local_modified_at >= p.content_stamped_at)
+		  AND EXISTS (
+			SELECT 1 FROM recall_entries e
+			WHERE e.source_session_id = p.session_id
+			  AND e.source_run_id = p.generation_fingerprint
+			  AND e.status = 'archived'
+		  )`,
+		failedArgs...,
+	).Scan(&staleFailed); err != nil {
+		return fmt.Errorf("counting stale failed coverage: %w", err)
+	}
+	if staleFailed > 0 {
+		return fmt.Errorf(
+			"generation %s has %d failed sessions whose staged output "+
+				"went stale: %w",
+			fingerprint, staleFailed, ErrExtractActivationBlocked)
 	}
 	eligibleArgs := make([]any, 0, len(scanVersions)+2)
 	for _, version := range scanVersions {
