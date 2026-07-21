@@ -195,21 +195,12 @@ CREATE TABLE IF NOT EXISTS %s (
 
 // ensureVectorGeneration registers fingerprint's generation, returning its
 // id. Machines with matching embedding configs share one generation.
+// ensureVectorGeneration registers the generation for fingerprint and reports
+// whether the row was freshly inserted (created) rather than found already
+// present. A scoped vector push uses created to detect that PG lost the
+// generation (a reset or admin drop) and reconcile it generation-wide instead
+// of writing only the changed sessions' chunks.
 func ensureVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
-) (int64, error) {
-	id, _, err := ensureVectorGenerationTracked(
-		ctx, pg, fingerprint, model, dimension,
-	)
-	return id, err
-}
-
-// ensureVectorGenerationTracked is ensureVectorGeneration that also reports
-// whether the generation row was freshly inserted (created) rather than found
-// already present. A scoped vector push uses created to detect that PG lost
-// the generation (a reset or admin drop) and reconcile it generation-wide
-// instead of writing only the changed sessions' chunks.
-func ensureVectorGenerationTracked(
 	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
 ) (int64, bool, error) {
 	var id int64

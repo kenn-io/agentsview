@@ -99,7 +99,7 @@ func seedSemanticFixture(t *testing.T, store *Store) (int64, string) {
 	insertSemDoc(t, pg, "run1", "S1", 10, 12, false, runOffsets, runContent)
 	insertSemDoc(t, pg, "dsub", "Ssub", 0, 0, true, "[]", "subordinate hit content")
 
-	genID, err := ensureVectorGeneration(ctx, pg, "fp-sem", "m", 4)
+	genID, _, err := ensureVectorGeneration(ctx, pg, "fp-sem", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")
 	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
 	extSchema, err := vectorExtensionSchema(ctx, pg)

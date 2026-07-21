@@ -694,7 +694,7 @@ func vectorOutOfScopeQuery(
 func (s *Sync) resolveVectorGeneration(
 	ctx context.Context, gen VectorGenerationInfo,
 ) (vectorGeneration, bool, error) {
-	genID, created, err := ensureVectorGenerationTracked(
+	genID, created, err := ensureVectorGeneration(
 		ctx, s.pg, gen.Fingerprint, gen.Model, gen.Dimension,
 	)
 	if err != nil {

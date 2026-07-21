@@ -54,9 +54,9 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 	_, err = ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
 
-	id, err := ensureVectorGeneration(ctx, pg, "fp-1", "test-model", 4)
+	id, _, err := ensureVectorGeneration(ctx, pg, "fp-1", "test-model", 4)
 	require.NoError(t, err)
-	id2, err := ensureVectorGeneration(ctx, pg, "fp-1", "test-model", 4)
+	id2, _, err := ensureVectorGeneration(ctx, pg, "fp-1", "test-model", 4)
 	require.NoError(t, err)
 	assert.Equal(t, id, id2)
 
@@ -97,7 +97,7 @@ func TestVectorChunkTableExists(t *testing.T) {
 	}
 
 	// Generation registered, chunk table not yet created.
-	id, err := ensureVectorGeneration(ctx, pg, "fp-partial", "test-model", 4)
+	id, _, err := ensureVectorGeneration(ctx, pg, "fp-partial", "test-model", 4)
 	require.NoError(t, err)
 	exists, err := VectorChunkTableExists(ctx, pg, id)
 	require.NoError(t, err)
@@ -161,9 +161,9 @@ func TestListVectorGenerationFingerprints(t *testing.T) {
 		t.Skip(unavailable)
 	}
 
-	_, err = ensureVectorGeneration(ctx, pg, "fp-alpha", "model-a", 4)
+	_, _, err = ensureVectorGeneration(ctx, pg, "fp-alpha", "model-a", 4)
 	require.NoError(t, err)
-	_, err = ensureVectorGeneration(ctx, pg, "fp-beta", "model-b", 8)
+	_, _, err = ensureVectorGeneration(ctx, pg, "fp-beta", "model-b", 8)
 	require.NoError(t, err)
 
 	fingerprints, err := ListVectorGenerationFingerprints(ctx, pg)
