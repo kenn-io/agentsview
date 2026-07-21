@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -173,11 +174,19 @@ func TestPGSemanticSearchRankedResults(t *testing.T) {
 	assert.Equal(t, [2]int{10, 12}, run.OrdinalRange, "run hit spans the unit")
 	assert.Equal(t, runMemberB, run.Snippet, "member-local snippet from message content")
 	assert.False(t, run.Subordinate, "top-level run")
+	runTS, err := time.Parse(time.RFC3339Nano, run.Timestamp)
+	require.NoError(t, err, "run timestamp must be RFC3339Nano, got %q", run.Timestamp)
+	assert.True(t, time.Date(2026, 5, 1, 10, 0, 12, 0, time.UTC).Equal(runTS),
+		"run timestamp must equal the anchor member's inserted instant, got %v", runTS)
 
 	d1 := byKey[semKey{"S1", 0}]
 	assert.Equal(t, "alpha", d1.Project, "project from sessions join")
 	assert.Contains(t, d1.Snippet, "hello alpha content", "snippet from message content")
 	assert.InDelta(t, 0.981, *d1.Score, 0.01, "keeps the searcher's cosine score")
+	d1TS, err := time.Parse(time.RFC3339Nano, d1.Timestamp)
+	require.NoError(t, err, "d1 timestamp must be RFC3339Nano, got %q", d1.Timestamp)
+	assert.True(t, time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).Equal(d1TS),
+		"d1 timestamp must equal the inserted instant, got %v", d1TS)
 
 	sub := byKey[semKey{"Ssub", 0}]
 	assert.True(t, sub.Subordinate, "subagent unit is subordinate")

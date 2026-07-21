@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -201,7 +202,7 @@ func (s *Store) enrichSemanticHitsPG(
 
 	const query = `
 SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
-       COALESCE(m.timestamp::text, ''), m.content,
+       m.timestamp, m.content,
        COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
        m.is_sidechain
   FROM (SELECT unnest($1::text[]) AS session_id,
@@ -218,11 +219,15 @@ SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
 	for rows.Next() {
 		var ref db.MessageRef
 		var info pgSemanticHitInfo
+		var ts *time.Time
 		if err := rows.Scan(&ref.SessionID, &info.project, &info.agent,
-			&info.role, &ref.Ordinal, &info.timestamp, &info.content,
+			&info.role, &ref.Ordinal, &ts, &info.content,
 			&info.relationshipType, &info.parentSessionID,
 			&info.isSidechain); err != nil {
 			return nil, fmt.Errorf("scan pg semantic hit: %w", err)
+		}
+		if ts != nil {
+			info.timestamp = FormatISO8601(*ts)
 		}
 		out[ref] = info
 	}
