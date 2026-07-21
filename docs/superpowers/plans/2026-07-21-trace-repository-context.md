@@ -5,8 +5,8 @@
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Show the repository label and trace-recorded worktree path in the
-session analysis sidebar.
+**Goal:** Show and copy the repository label and trace-recorded worktree path in
+the session analysis sidebar.
 
 **Architecture:** Reuse the active hydrated session already owned by the
 sessions store. Pass it into `SessionVitals`, render its identity metadata above
@@ -19,6 +19,7 @@ the timing statistics, and leave the timing API unchanged.
 - Keep the analysis pane compact and consistent with its existing label/value
   vocabulary.
 - Use the exact persisted `project` and trace-recorded `cwd` values.
+- Reveal shared copy controls on hover and keyboard focus.
 - Localize all new user-facing labels in every supported locale.
 - Do not add a new backend request or timing-response field.
 
@@ -43,15 +44,17 @@ ______________________________________________________________________
 - Consumes: `sessions.activeSession: Session | undefined`, with
   `project: string` and `cwd?: string`.
 
-- Produces: `SessionVitals` props `{ sessionId: string; session?: Session }` and
-  localized repository-context rows.
+- Produces: `SessionVitals` props
+  `{ sessionId: string; session: Session | undefined }` and localized
+  repository-context rows.
 
 - [ ] **Step 1: Write the failing component test**
 
-Add a test that mounts `SessionVitals` with a hydrated session whose project is
+Add tests that mount `SessionVitals` with a hydrated session whose project is
 `agentsview` and whose cwd is `/repos/agentsview/.worktrees/trace-context`.
-Assert that both localized labels and both values render, and that the values
-retain the complete strings in their title attributes.
+Assert that both localized labels and both values render, that the values retain
+the complete strings in their title attributes, and that the hover controls copy
+the corresponding values.
 
 - [ ] **Step 2: Run the focused test to verify it fails**
 
@@ -65,11 +68,12 @@ yet.
 Add `cwd?: string` to the frontend `Session` type, pass the active session from
 `App.svelte`, accept it in `SessionVitals`, and render the two rows only when a
 hydrated session is available. Add compact stacked-row styling with ellipsis and
-full-value title attributes.
+full-value title attributes, plus shared `CopyButton` controls that reveal on
+row hover or keyboard focus.
 
 - [ ] **Step 4: Localize the labels**
 
-Add `session_vitals_repository` and `session_vitals_worktree` to all five locale
+Add the repository/worktree labels and copy-state messages to all five locale
 catalogs, keeping the key sets identical.
 
 - [ ] **Step 5: Run focused and frontend verification**

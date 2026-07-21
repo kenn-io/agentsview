@@ -1,6 +1,7 @@
 <!-- ABOUTME: Session Vital Signs panel — replaces ActivityMinimap on the right column. -->
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { CopyButton } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { fetchSessionTiming } from "../../api/timing.js";
@@ -317,20 +318,42 @@
       {#if session}
         <div class="session-context">
           <div class="context-row">
-            <div class="context-label">
-              {m.session_vitals_repository()}
+            <div class="context-text">
+              <div class="context-label">
+                {m.session_vitals_repository()}
+              </div>
+              <div class="context-value" title={session.project}>
+                {session.project}
+              </div>
             </div>
-            <div class="context-value" title={session.project}>
-              {session.project}
-            </div>
+            <CopyButton
+              text={session.project}
+              revealOnHover
+              ariaLabel={m.session_vitals_copy_repository()}
+              copiedAriaLabel={m.session_vitals_repository_copied()}
+              title={m.session_vitals_copy_repository()}
+              copiedTitle={m.session_vitals_repository_copied()}
+            />
           </div>
           <div class="context-row">
-            <div class="context-label">
-              {m.session_vitals_worktree()}
+            <div class="context-text">
+              <div class="context-label">
+                {m.session_vitals_worktree()}
+              </div>
+              <div class="context-value" title={session.cwd || undefined}>
+                {session.cwd || "—"}
+              </div>
             </div>
-            <div class="context-value" title={session.cwd || undefined}>
-              {session.cwd || "—"}
-            </div>
+            {#if session.cwd}
+              <CopyButton
+                text={session.cwd}
+                revealOnHover
+                ariaLabel={m.session_vitals_copy_worktree()}
+                copiedAriaLabel={m.session_vitals_worktree_copied()}
+                title={m.session_vitals_copy_worktree()}
+                copiedTitle={m.session_vitals_worktree_copied()}
+              />
+            {/if}
           </div>
         </div>
       {/if}
@@ -698,7 +721,20 @@
   }
 
   .context-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px;
+    align-items: center;
+    gap: 4px;
     min-width: 0;
+  }
+
+  .context-text {
+    min-width: 0;
+  }
+
+  .context-row:hover :global(.kit-copy-btn--reveal),
+  .context-row:focus-within :global(.kit-copy-btn--reveal) {
+    opacity: 1;
   }
 
   .context-label {

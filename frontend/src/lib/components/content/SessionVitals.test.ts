@@ -77,6 +77,7 @@ describe("SessionVitals", () => {
     ui.vitalsOpen = false;
     cleanup();
     document.body.innerHTML = "";
+    vi.unstubAllGlobals();
   });
 
   it("has an obvious close control inside the analysis pane", async () => {
@@ -148,6 +149,36 @@ describe("SessionVitals", () => {
     expect(document.body.textContent).toContain(traceSession.project);
     expect(document.body.textContent).toContain(traceSession.cwd);
     expect(document.body.textContent).toContain("timing unavailable");
+  });
+
+  it("copies repository and worktree values from hover controls", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: traceSession.id, session: traceSession },
+    });
+    await tick();
+    await tick();
+
+    const repositoryCopy = document.querySelector<HTMLButtonElement>(
+      `button[aria-label="${m.session_vitals_copy_repository()}"]`,
+    );
+    const worktreeCopy = document.querySelector<HTMLButtonElement>(
+      `button[aria-label="${m.session_vitals_copy_worktree()}"]`,
+    );
+    expect(repositoryCopy).not.toBeNull();
+    expect(worktreeCopy).not.toBeNull();
+    expect(repositoryCopy?.classList).toContain("kit-copy-btn--reveal");
+    expect(worktreeCopy?.classList).toContain("kit-copy-btn--reveal");
+
+    repositoryCopy!.click();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenNthCalledWith(1, traceSession.project);
+
+    worktreeCopy!.click();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenNthCalledWith(2, traceSession.cwd);
   });
 
   it("aborts a pending sub-agent timing read when collapsed", async () => {

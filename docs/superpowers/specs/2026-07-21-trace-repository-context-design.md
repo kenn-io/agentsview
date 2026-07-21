@@ -31,10 +31,12 @@ section, before the timing statistics. It contains two stacked label/value rows:
 - **Worktree** displays the exact trace-recorded `cwd` value.
 
 Values use the existing monospace data treatment. Long values truncate within
-the narrow sidebar, while a native title tooltip exposes the complete value. The
-block is omitted until hydrated session metadata is available, so selecting an
-index-only session does not flash placeholders that could be mistaken for
-recorded trace data.
+the narrow sidebar, while a native title tooltip exposes the complete value.
+Hovering a row, or focusing within it by keyboard, reveals the shared copy
+control for that value; touch devices keep the control visible. The block is
+omitted until hydrated session metadata is available, so selecting an index-only
+session does not flash placeholders that could be mistaken for recorded trace
+data.
 
 ## Data Flow
 
@@ -49,11 +51,12 @@ changes are required.
 Add Repository and Worktree labels to every supported Paraglide catalog. The
 repository label and path are technical identifiers and remain untranslated.
 Each visible value has a matching `title` containing the complete text, so
-truncation does not hide the recorded value from pointer users.
+truncation does not hide the recorded value from pointer users. Copy controls
+have localized accessible names and copied-state feedback.
 
 ## Testing
 
 Extend the `SessionVitals` component test to render a hydrated session and
-assert the localized labels, repository label, worktree path, and full-value
-titles. Existing component, localization, and frontend checks cover the
-propagation and catalog synchronization.
+assert the localized labels, repository label, worktree path, full-value titles,
+and clipboard values. Existing component, localization, and frontend checks
+cover the propagation and catalog synchronization.
