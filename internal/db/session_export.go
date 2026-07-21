@@ -827,19 +827,27 @@ func (db *DB) attachSessionExportUsage(
 		if a == nil || a.authoritativeCost == nil {
 			continue
 		}
-		models := make([]string, 0, len(a.byModel))
-		for model := range a.byModel {
-			models = append(models, model)
+		type modelAllocation struct {
+			model string
+			usage *sessionExportModelUsageAccum
 		}
-		sort.Strings(models)
+		models := make([]modelAllocation, 0, len(a.byModel))
+		for model, usage := range a.byModel {
+			if usage != nil {
+				models = append(models, modelAllocation{model: model, usage: usage})
+			}
+		}
+		sort.Slice(models, func(i, j int) bool {
+			return models[i].model < models[j].model
+		})
 		weights := make([]float64, len(models))
 		for i, model := range models {
-			weights[i] = a.byModel[model].costUSD
+			weights[i] = model.usage.costUSD
 		}
 		costs := export.AllocateCostByWeight(*a.authoritativeCost, weights)
 		for i, model := range models {
-			a.byModel[model].costUSD = costs[i]
-			a.byModel[model].allPriced = true
+			model.usage.costUSD = costs[i]
+			model.usage.allPriced = true
 		}
 		a.costUSD = *a.authoritativeCost
 	}

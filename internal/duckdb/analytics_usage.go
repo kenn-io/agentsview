@@ -3691,7 +3691,7 @@ func (s *Store) GetDailyUsage(
 		estimated     map[usageAccumKey]float64
 		authoritative *float64
 	}
-	sessionCosts := map[string]*sessionCost{}
+	sessionCosts := map[string]sessionCost{}
 	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
 	hasAuthoritativeCost := false
 	projectLabels := map[string]bool{}
@@ -3724,11 +3724,8 @@ func (s *Store) GetDailyUsage(
 		b.cacheCr += r.cacheCr
 		b.cacheRd += r.cacheRd
 		sc := sessionCosts[r.sessionID]
-		if sc == nil {
-			sc = &sessionCost{
-				estimated: map[usageAccumKey]float64{},
-			}
-			sessionCosts[r.sessionID] = sc
+		if sc.estimated == nil {
+			sc.estimated = map[usageAccumKey]float64{}
 		}
 		sc.estimated[key] += cost
 		if useAuthoritativeCost && r.authoritativeCostRows > 0 {
@@ -3737,6 +3734,7 @@ func (s *Store) GetDailyUsage(
 			sc.authoritative = &v
 			rateResolver.RecordUnattributedReported()
 		}
+		sessionCosts[r.sessionID] = sc
 	}
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {

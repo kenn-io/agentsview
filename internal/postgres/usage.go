@@ -1350,7 +1350,7 @@ func (s *Store) GetDailyUsage(
 		authoritative *float64
 	}
 	accum := make(map[accumKey]*bucket)
-	sessionCosts := make(map[string]*sessionCost)
+	sessionCosts := make(map[string]sessionCost)
 	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
 	seen := make(map[pgUsageDedupToken]struct{})
 	var seenSessions map[string]db.UsageSessionInfo
@@ -1416,11 +1416,8 @@ func (s *Store) GetDailyUsage(
 		b.cacheRd += cacheRdTok
 
 		sc := sessionCosts[r.sessionID]
-		if sc == nil {
-			sc = &sessionCost{
-				estimated: make(map[accumKey]float64),
-			}
-			sessionCosts[r.sessionID] = sc
+		if sc.estimated == nil {
+			sc.estimated = make(map[accumKey]float64)
 		}
 		sc.estimated[key] += cost
 		if useAuthoritativeCost &&
@@ -1430,6 +1427,7 @@ func (s *Store) GetDailyUsage(
 			sc.authoritative = &v
 			rateResolver.RecordUnattributedReported()
 		}
+		sessionCosts[r.sessionID] = sc
 	}
 	if err := rows.Err(); err != nil {
 		return db.DailyUsageResult{},
