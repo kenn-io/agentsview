@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 )
@@ -195,34 +194,23 @@ CREATE TABLE IF NOT EXISTS %s (
 
 // ensureVectorGeneration registers fingerprint's generation, returning its
 // id. Machines with matching embedding configs share one generation.
-// ensureVectorGeneration registers the generation for fingerprint and reports
-// whether the row was freshly inserted (created) rather than found already
-// present. A scoped vector push uses created to detect that PG lost the
-// generation (a reset or admin drop) and reconcile it generation-wide instead
-// of writing only the changed sessions' chunks.
 func ensureVectorGeneration(
 	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
-) (int64, bool, error) {
-	var id int64
-	err := pg.QueryRowContext(ctx, `
+) (int64, error) {
+	if _, err := pg.ExecContext(ctx, `
 INSERT INTO vector_generations (fingerprint, model, dimension)
-VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING
-RETURNING id`, fingerprint, model, dimension).Scan(&id)
-	if err == nil {
-		return id, true, nil
+VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
+		fingerprint, model, dimension); err != nil {
+		return 0, fmt.Errorf("registering vector generation: %w", err)
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return 0, false, fmt.Errorf("registering vector generation: %w", err)
-	}
-	// ON CONFLICT DO NOTHING returned no row: the generation already existed.
-	existing, _, ok, err := LookupVectorGeneration(ctx, pg, fingerprint)
+	id, _, ok, err := LookupVectorGeneration(ctx, pg, fingerprint)
 	if err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if !ok {
-		return 0, false, fmt.Errorf("vector generation %q vanished after insert", fingerprint)
+		return 0, fmt.Errorf("vector generation %q vanished after insert", fingerprint)
 	}
-	return existing, false, nil
+	return id, nil
 }
 
 // LookupVectorGeneration resolves a config fingerprint to its PG

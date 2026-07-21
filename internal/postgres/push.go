@@ -108,13 +108,13 @@ type PushOptions struct {
 	// when the push runs (or is internally promoted to run) full, so
 	// reset recovery and backfills keep generation-wide reconciliation.
 	ScopeVectorsToChangedSessions bool
-	// LastReconciledVectorFingerprint is the generation fingerprint the
-	// caller last reconciled generation-wide. When a scoped push finds a
-	// different active fingerprint, the vector phase promotes itself to a
-	// generation-wide read so a newly active generation is never left
-	// partially populated (see pushVectors). Empty on the first push,
-	// which the reconcile bit already forces generation-wide.
-	LastReconciledVectorFingerprint string
+	// LastReconciledVectorGeneration is the PG generation id the caller
+	// last reconciled generation-wide. When a scoped push resolves a
+	// different active generation id, the vector phase promotes itself to a
+	// generation-wide read so a newly active or recreated generation is
+	// never left partially populated (see pushVectors). Zero on the first
+	// push, which the reconcile bit already forces generation-wide.
+	LastReconciledVectorGeneration int64
 }
 
 // Push syncs local sessions and messages to PostgreSQL.
@@ -473,7 +473,7 @@ func (s *Sync) PushWithOptions(
 		}
 		result.Vectors, err = s.runVectorPushPhase(
 			ctx, full, vectorScope,
-			opts.LastReconciledVectorFingerprint, nil, onProgress,
+			opts.LastReconciledVectorGeneration, nil, onProgress,
 		)
 		if err != nil {
 			return result, err
@@ -596,7 +596,7 @@ func (s *Sync) PushWithOptions(
 	}
 	result.Vectors, err = s.runVectorPushPhase(
 		ctx, full, vectorScope,
-		opts.LastReconciledVectorFingerprint, failedSessions, onProgress,
+		opts.LastReconciledVectorGeneration, failedSessions, onProgress,
 	)
 	if err != nil {
 		return result, err
@@ -619,7 +619,7 @@ func (s *Sync) PushWithOptions(
 // Phase "vectors" reports as the delta scan advances.
 func (s *Sync) runVectorPushPhase(
 	ctx context.Context, full bool, scope []string,
-	lastReconciledFingerprint string,
+	lastReconciledGeneration int64,
 	failedSessions map[string]struct{},
 	onProgress func(PushProgress),
 ) (VectorPushResult, error) {
@@ -627,7 +627,7 @@ func (s *Sync) runVectorPushPhase(
 		return VectorPushResult{Skipped: true}, nil
 	}
 	res, err := s.pushVectors(
-		ctx, full, scope, lastReconciledFingerprint,
+		ctx, full, scope, lastReconciledGeneration,
 		failedSessions, onProgress,
 	)
 	if err != nil {

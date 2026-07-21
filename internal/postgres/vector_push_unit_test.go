@@ -65,7 +65,7 @@ func (notReadyVectorSource) SessionDocs(
 func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 	sync := &Sync{vectorSource: notReadyVectorSource{}}
 
-	res, err := sync.pushVectors(context.Background(), false, nil, "", nil, nil)
+	res, err := sync.pushVectors(context.Background(), false, nil, 0, nil, nil)
 
 	require.NoError(t, err)
 	assert.True(t, res.Skipped)
@@ -106,7 +106,7 @@ func TestPushVectorsEmptyScopeReadsNothing(t *testing.T) {
 	sync := &Sync{vectorSource: spyVectorSource{t: t}}
 
 	res, err := sync.pushVectors(
-		context.Background(), false, []string{}, "", nil, nil,
+		context.Background(), false, []string{}, 0, nil, nil,
 	)
 
 	require.NoError(t, err)

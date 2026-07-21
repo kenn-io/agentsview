@@ -32,10 +32,10 @@ type PGPushConfig struct {
 	// ScopeVectorsToChangedSessions is set internally by the watch
 	// loop for change-triggered pushes; it has no CLI flag.
 	ScopeVectorsToChangedSessions bool
-	// LastReconciledVectorFingerprint is set internally by the watch
+	// LastReconciledVectorGeneration is set internally by the watch
 	// loop so a scoped push can promote to generation-wide when the
-	// active generation fingerprint has changed; it has no CLI flag.
-	LastReconciledVectorFingerprint string
+	// active generation id has changed; it has no CLI flag.
+	LastReconciledVectorGeneration int64
 }
 
 type PGStatusConfig struct {

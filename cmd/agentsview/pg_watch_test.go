@@ -282,50 +282,49 @@ func TestPGPusherPushErrorForcesReconcile(t *testing.T) {
 	assert.False(t, recovered.pushOpts[0].ScopeVectorsToChangedSessions)
 }
 
-// TestPGPusherThreadsGenerationFingerprint pins the fingerprint memo that
-// keeps a scoped push from exposing an incomplete generation: the watch
-// process threads the last generation-wide fingerprint into every push and
-// advances it whenever a push reconciles a different generation, so a later
-// scoped push always carries the current fingerprint for the vector phase to
-// compare against.
-func TestPGPusherThreadsGenerationFingerprint(t *testing.T) {
+// TestPGPusherThreadsGenerationID pins the generation-id memo that keeps a
+// scoped push from exposing an incomplete generation: the watch process
+// threads the last generation-wide id into every push and advances it
+// whenever a push reconciles a different generation, so a later scoped push
+// always carries the current id for the vector phase to compare against.
+func TestPGPusherThreadsGenerationID(t *testing.T) {
 	target := &fakeTarget{}
 	pusher, _ := newTestPgPusher(target)
 	pusher.vectorReconcileNeeded = true
 	ctx := context.Background()
 
-	// Startup reconciles generation fp1 generation-wide.
+	// Startup reconciles generation id 1 generation-wide.
 	target.pushResult = postgres.PushResult{
-		Vectors: postgres.VectorPushResult{GenerationFingerprint: "fp1"},
+		Vectors: postgres.VectorPushResult{GenerationID: 1},
 	}
 	require.NoError(t, pusher.push(ctx, reasonStartup, false))
 
-	// A scoped change push carries fp1 and leaves the memo unchanged.
+	// A scoped change push carries id 1 and leaves the memo unchanged.
 	require.NoError(t, pusher.push(ctx, reasonChange, false))
 
-	// The active generation switches to fp2. The phase promotes itself and
-	// reconciles it generation-wide, reported by the differing fingerprint,
-	// so the memo advances to fp2 while the reconcile bit stays clear.
+	// The active generation is recreated as id 2. The phase promotes itself
+	// and reconciles it generation-wide, reported by the differing id, so the
+	// memo advances to 2 while the reconcile bit stays clear.
 	target.pushResult = postgres.PushResult{
-		Vectors: postgres.VectorPushResult{GenerationFingerprint: "fp2"},
+		Vectors: postgres.VectorPushResult{GenerationID: 2},
 	}
 	require.NoError(t, pusher.push(ctx, reasonChange, false))
 
-	// The next scoped change push now carries fp2.
+	// The next scoped change push now carries id 2.
 	require.NoError(t, pusher.push(ctx, reasonChange, false))
 
 	require.Len(t, target.pushOpts, 4)
-	assert.Equal(t, "", target.pushOpts[0].LastReconciledVectorFingerprint,
-		"startup carries no prior fingerprint")
+	assert.Zero(t, target.pushOpts[0].LastReconciledVectorGeneration,
+		"startup carries no prior generation id")
 	assert.False(t, target.pushOpts[0].ScopeVectorsToChangedSessions)
-	assert.Equal(t, "fp1", target.pushOpts[1].LastReconciledVectorFingerprint,
-		"the scoped change push carries the startup fingerprint")
+	assert.Equal(t, int64(1), target.pushOpts[1].LastReconciledVectorGeneration,
+		"the scoped change push carries the startup generation id")
 	assert.True(t, target.pushOpts[1].ScopeVectorsToChangedSessions)
-	assert.Equal(t, "fp1", target.pushOpts[2].LastReconciledVectorFingerprint,
-		"the switch push still carries fp1 so the phase can detect the change")
+	assert.Equal(t, int64(1), target.pushOpts[2].LastReconciledVectorGeneration,
+		"the switch push still carries id 1 so the phase can detect the change")
 	assert.True(t, target.pushOpts[2].ScopeVectorsToChangedSessions)
-	assert.Equal(t, "fp2", target.pushOpts[3].LastReconciledVectorFingerprint,
-		"once fp2 is reconciled the next scoped push carries it")
+	assert.Equal(t, int64(2), target.pushOpts[3].LastReconciledVectorGeneration,
+		"once id 2 is reconciled the next scoped push carries it")
 	assert.True(t, target.pushOpts[3].ScopeVectorsToChangedSessions)
 }
 

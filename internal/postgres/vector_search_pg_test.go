@@ -93,7 +93,7 @@ func insertSearchChunk(
 func seedVectorSearchFixture(t *testing.T, pg *sql.DB) (genID int64, table string) {
 	t.Helper()
 	ctx := context.Background()
-	genID, _, err := ensureVectorGeneration(ctx, pg, "fp-search", "m", 4)
+	genID, err := ensureVectorGeneration(ctx, pg, "fp-search", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")
 	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
 	extSchema, err := vectorExtensionSchema(ctx, pg)
@@ -257,7 +257,7 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_exactk_test")
 	ctx := context.Background()
 
-	genID, _, err := ensureVectorGeneration(ctx, pg, "fp-exactk", "m", 4)
+	genID, err := ensureVectorGeneration(ctx, pg, "fp-exactk", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")
 	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
 	extSchema, err := vectorExtensionSchema(ctx, pg)
@@ -291,7 +291,7 @@ func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_efsearch_test")
 	ctx := context.Background()
 
-	genID, _, err := ensureVectorGeneration(ctx, pg, "fp-efsearch", "m", 4)
+	genID, err := ensureVectorGeneration(ctx, pg, "fp-efsearch", "m", 4)
 	require.NoError(t, err, "ensureVectorGeneration")
 	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
 	extSchema, err := vectorExtensionSchema(ctx, pg)
