@@ -180,7 +180,11 @@ func ParseGrokSummary(
 	if err != nil {
 		return ParseResult{}, err
 	}
-	applyUsageEventTokenTotals(&result.Session, result.UsageEvents)
+	totalOutput, hasOutput, _, _ := UsageEventTokenAggregate(result.UsageEvents)
+	if hasOutput {
+		result.Session.TotalOutputTokens = totalOutput
+		result.Session.HasTotalOutputTokens = true
+	}
 	result.Session.aggregateTokenPresenceKnown =
 		result.Session.HasTotalOutputTokens ||
 			result.Session.HasPeakContextTokens
@@ -243,9 +247,19 @@ func grokUsageEvent(
 		OutputTokens:         int(usage.Get("outputTokens").Int()),
 		CacheReadInputTokens: cachedRead,
 		ReasoningTokens:      int(usage.Get("reasoningTokens").Int()),
+		CostUSD:              grokUsageCostUSD(usage),
 		OccurredAt:           occurredAt,
 		DedupKey:             "session:" + sessionID + ":" + model,
 	}
+}
+
+func grokUsageCostUSD(usage gjson.Result) *float64 {
+	ticks := usage.Get("costUsdTicks")
+	if !ticks.Exists() {
+		return nil
+	}
+	costUSD := float64(ticks.Int()) / 10_000_000_000
+	return &costUSD
 }
 
 func parseGrokChatHistory(path string) ([]ParsedMessage, int, error) {

@@ -355,6 +355,33 @@ func TestGrokProviderSummarySource(t *testing.T) {
 	assert.Equal(t, "Investigate the failing Grok session import", outcome.Results[0].Result.Messages[0].Content)
 }
 
+func TestGrokProviderPreservesSignalPeakOverCumulativeUsageInput(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "sess-1")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"summary":"Usage fixture",
+		"firstPrompt":"test usage",
+		"modelId":"grok-summary",
+		"createdAt":"2026-07-08T10:00:00Z",
+		"updatedAt":"2026-07-08T10:30:00Z"
+	}`)
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "signals.json"), `{
+		"tokenUsage": {
+			"peakContextTokens": 4096
+		}
+	}`)
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), `{"params":{"update":{"usage":{"inputTokens":8192,"outputTokens":7,"cachedReadTokens":96}}}}`)
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "cwd-key", "local",
+	)
+	require.NoError(t, err)
+	assert.True(t, result.Session.HasPeakContextTokens)
+	assert.Equal(t, 4096, result.Session.PeakContextTokens)
+	assert.True(t, result.Session.HasTotalOutputTokens)
+	assert.Equal(t, 7, result.Session.TotalOutputTokens)
+}
+
 func parseGrokUsageFixture(t *testing.T, updates string) ParseResult {
 	t.Helper()
 	root := t.TempDir()
@@ -434,7 +461,7 @@ func TestGrokProviderRetainsUsageAcrossUnrelatedJSON(t *testing.T) {
 }
 
 func TestGrokProviderUpdatesUsageByModel(t *testing.T) {
-	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":999,"outputTokens":999,"modelUsage":{"grok-a":{"inputTokens":10,"outputTokens":2},"grok-b":{"inputTokens":20,"outputTokens":3}}}}}}`)
+	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":999,"outputTokens":999,"costUsdTicks":9999999999,"modelUsage":{"grok-a":{"inputTokens":10,"outputTokens":2,"costUsdTicks":10000000000},"grok-b":{"inputTokens":20,"outputTokens":3,"costUsdTicks":2500000000}}}}}}`)
 
 	require.Len(t, result.UsageEvents, 2)
 	models := map[string]ParsedUsageEvent{}
@@ -443,15 +470,21 @@ func TestGrokProviderUpdatesUsageByModel(t *testing.T) {
 	}
 	assert.Equal(t, 2, models["grok-a"].OutputTokens)
 	assert.Equal(t, 3, models["grok-b"].OutputTokens)
+	require.NotNil(t, models["grok-a"].CostUSD)
+	require.NotNil(t, models["grok-b"].CostUSD)
+	assert.InDelta(t, 1.0, *models["grok-a"].CostUSD, 1e-12)
+	assert.InDelta(t, 0.25, *models["grok-b"].CostUSD, 1e-12)
 	assert.NotContains(t, models, "grok-summary")
 }
 
 func TestGrokProviderUpdatesUsageTopLevelFallback(t *testing.T) {
-	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":12,"outputTokens":4,"modelUsage":{}}}}}`)
+	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":12,"outputTokens":4,"costUsdTicks":424128000,"modelUsage":{}}}}}`)
 
 	require.Len(t, result.UsageEvents, 1)
 	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
 	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
+	require.NotNil(t, result.UsageEvents[0].CostUSD)
+	assert.InDelta(t, 0.0424128, *result.UsageEvents[0].CostUSD, 1e-12)
 }
 
 func TestGrokProviderUpdatesUsageTopLevelFallbackWithoutSummaryModel(t *testing.T) {
@@ -465,6 +498,15 @@ func TestGrokProviderUpdatesUsageTopLevelFallbackWithoutSummaryModel(t *testing.
 	require.Len(t, result.UsageEvents, 1)
 	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
 	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
+	assert.Nil(t, result.UsageEvents[0].CostUSD)
+}
+
+func TestGrokProviderUpdatesUsageReportedZeroCost(t *testing.T) {
+	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":12,"outputTokens":4,"costUsdTicks":0,"modelUsage":{}}}}}`)
+
+	require.Len(t, result.UsageEvents, 1)
+	require.NotNil(t, result.UsageEvents[0].CostUSD)
+	assert.Equal(t, 0.0, *result.UsageEvents[0].CostUSD)
 }
 
 func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {
