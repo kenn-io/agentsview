@@ -526,10 +526,13 @@ class SessionsStore {
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
+      this.sidebarIndexIds = new Set(index.sessions.map((row) => row.id));
       // Keep the active session's hydrated row when the new index
       // page doesn't contain it: navigateToSession appends deep-linked,
       // cross-page, and subagent targets, and dropping them here would
-      // revert activeSession to undefined mid-view.
+      // revert activeSession to undefined mid-view. It stays outside
+      // sidebarIndexIds, so later pages keep it at the tail until
+      // pagination reaches its real position.
       const activeId = this.activeSessionId;
       if (activeId && !this.sessions.some((s) => s.id === activeId)) {
         const kept = existing.get(activeId);
@@ -555,6 +558,10 @@ class SessionsStore {
   }
 
   sidebarIndexVersion: number = $state(0);
+  // Session ids supplied by the loaded sidebar index pages; rows in
+  // this.sessions outside this set were appended out of position
+  // (see loadSidebarPage / loadMore).
+  private sidebarIndexIds: Set<string> = new Set();
   hydratedSessionsByVersion: Map<number, Map<string, Session>> =
     $state(new Map());
 
@@ -680,21 +687,30 @@ class SessionsStore {
         signal,
       ) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
-      // Drop rows the incoming page supersedes: the active session's
-      // hydrated row is re-appended out of position by loadSidebarPage
-      // when its index page isn't loaded yet, and must move to its
-      // real position (carrying its hydrated fields) when pagination
-      // reaches it, not duplicate.
-      const incoming = new Set(index.sessions.map((row) => row.id));
-      const kept = this.sessions.filter((s) => !incoming.has(s.id));
+      // Merge index-page order first, appended rows last. Rows outside
+      // sidebarIndexIds were appended out of position (the active
+      // session kept by loadSidebarPage, navigateToSession targets);
+      // they stay at the tail until pagination reaches their real
+      // position, then merge in place carrying their hydrated fields.
       const existingById = new Map(
         this.sessions.map((session) => [session.id, session]),
       );
+      for (const row of index.sessions) {
+        this.sidebarIndexIds.add(row.id);
+      }
+      const paged = this.sessions.filter(
+        (s) => this.sidebarIndexIds.has(s.id) &&
+          !index.sessions.some((row) => row.id === s.id),
+      );
+      const appended = this.sessions.filter(
+        (s) => !this.sidebarIndexIds.has(s.id),
+      );
       this.sessions = [
-        ...kept,
+        ...paged,
         ...index.sessions.map((row) =>
           sidebarIndexRowToSession(row, existingById.get(row.id))
         ),
+        ...appended,
       ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;

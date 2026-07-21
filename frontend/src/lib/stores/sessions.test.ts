@@ -797,12 +797,26 @@ describe("SessionsStore", () => {
         "offpage",
       ]);
 
+      // A page that doesn't contain the appended row keeps it at the
+      // tail, preserving index order for keyboard navigation.
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "middle" })],
+        total: 4,
+        next_cursor: "page-3",
+      });
+      await sessions.loadMore();
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "middle",
+        "offpage",
+      ]);
+
       vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
         sessions: [
-          makeSkinnyRow({ id: "middle" }),
           makeSkinnyRow({ id: "offpage" }),
+          makeSkinnyRow({ id: "last" }),
         ],
-        total: 3,
+        total: 4,
         next_cursor: null,
       });
       await sessions.loadMore();
@@ -811,6 +825,7 @@ describe("SessionsStore", () => {
         "listed",
         "middle",
         "offpage",
+        "last",
       ]);
       expect(sessions.activeSession?.first_message).toBe(
         "hydrated offpage detail",
