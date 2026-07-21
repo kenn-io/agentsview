@@ -459,11 +459,12 @@
   ) {
     event.preventDefault();
     const params = evidenceSessionParams(example);
+    // Route-first: App's deep-link effect owns selection and
+    // hydration once the URL commits (#1190).
+    router.navigateToSession(example.session_id, params);
     if (example.message_ordinal != null) {
       ui.scrollToOrdinal(example.message_ordinal, example.session_id);
     }
-    sessions.navigateToSession(example.session_id);
-    router.navigateToSession(example.session_id, params);
   }
 
   function openEvidenceListSession(event: MouseEvent) {

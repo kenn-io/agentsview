@@ -740,7 +740,6 @@ describe("InsightsPage evidence navigation", () => {
     await flushEffects();
 
     expect(scrollToOrdinal).toHaveBeenCalledWith(23, "second-session");
-    expect(mocks.navigateToSession).toHaveBeenCalledWith("second-session");
     expect(routeToSession).toHaveBeenCalledWith("second-session", {
       msg: "23",
     });

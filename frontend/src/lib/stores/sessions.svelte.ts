@@ -526,6 +526,17 @@ class SessionsStore {
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
+      // Keep the active session's hydrated row when the new index
+      // page doesn't contain it: navigateToSession appends deep-linked,
+      // cross-page, and subagent targets, and dropping them here would
+      // revert activeSession to undefined mid-view.
+      const activeId = this.activeSessionId;
+      if (activeId && !this.sessions.some((s) => s.id === activeId)) {
+        const kept = existing.get(activeId);
+        if (kept && !kept.is_index_only) {
+          this.sessions = [...this.sessions, kept];
+        }
+      }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch {
@@ -803,11 +814,20 @@ class SessionsStore {
     void this.hydrateSelectedIndexOnlySession(id);
   }
 
+  private navigateInFlight: { id: string; promise: Promise<void> } | null =
+    null;
+
   /**
    * Navigate to a session by ID, loading it into the sessions list if
    * not already present (e.g. subagent sessions filtered from groups).
+   * Re-invocations for the same still-active session join the in-flight
+   * fetch instead of restarting it, so reactive callers can re-request
+   * hydration without duplicating requests.
    */
   async navigateToSession(id: string) {
+    if (this.navigateInFlight?.id === id && this.activeSessionId === id) {
+      return this.navigateInFlight.promise;
+    }
     this.setActiveSession(id);
     const existing = this.sessions.find((s) => s.id === id);
     if (existing) {
@@ -815,25 +835,35 @@ class SessionsStore {
       return;
     }
     const signal = this.navigateRead.begin();
-    try {
-      configureGeneratedClient();
-      const session = await callGenerated(
-        () => SessionsService.getApiV1SessionsId({ id }),
-        signal,
-      ) as unknown as Session;
-      if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
-        const idx = this.sessions.findIndex((s) => s.id === id);
-        if (idx >= 0) {
-          this.mergeHydratedSession(session);
-        } else {
-          this.sessions = [...this.sessions, session];
+    const entry = { id, promise: Promise.resolve() };
+    entry.promise = (async () => {
+      try {
+        configureGeneratedClient();
+        const session = await callGenerated(
+          () => SessionsService.getApiV1SessionsId({ id }),
+          signal,
+        ) as unknown as Session;
+        if (
+          this.activeSessionId === id && this.navigateRead.isCurrent(signal)
+        ) {
+          const idx = this.sessions.findIndex((s) => s.id === id);
+          if (idx >= 0) {
+            this.mergeHydratedSession(session);
+          } else {
+            this.sessions = [...this.sessions, session];
+          }
+        }
+      } catch {
+        // Session not found — selection stands without metadata
+      } finally {
+        this.navigateRead.finish(signal);
+        if (this.navigateInFlight === entry) {
+          this.navigateInFlight = null;
         }
       }
-    } catch {
-      // Session not found — selection stands without metadata
-    } finally {
-      this.navigateRead.finish(signal);
-    }
+    })();
+    this.navigateInFlight = entry;
+    return entry.promise;
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {
