@@ -119,20 +119,25 @@ var traeSessionLookupNamespaces = []string{
 func resolveTraeRawSuffixAmbiguity(id string, matches []string) error {
 	workspaceID := string(parser.AgentTrae) + ":workspaceStorage:" + id
 	globalID := string(parser.AgentTrae) + ":globalStorage:" + id
-	hasWorkspace := false
-	hasGlobal := false
+	workspaceMatch := ""
+	globalMatch := ""
 	for _, match := range matches {
-		switch match {
+		_, stripped := parser.StripHostPrefix(match)
+		switch stripped {
 		case workspaceID:
-			hasWorkspace = true
+			if workspaceMatch == "" {
+				workspaceMatch = match
+			}
 		case globalID:
-			hasGlobal = true
+			if globalMatch == "" {
+				globalMatch = match
+			}
 		}
 	}
-	if hasWorkspace && hasGlobal {
+	if workspaceMatch != "" && globalMatch != "" {
 		return fmt.Errorf(
 			"session %s is ambiguous; use %s or %s",
-			id, workspaceID, globalID,
+			id, workspaceMatch, globalMatch,
 		)
 	}
 	return nil

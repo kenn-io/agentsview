@@ -1677,11 +1677,11 @@ func TestSessionUsage_PGFlagRejectsAmbiguousTraeNamespaces(t *testing.T) {
 	rawID := "collision"
 	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
 	seedUsageSession(t, pgDB,
-		"trae:workspaceStorage:"+rawID,
+		"laptop~trae:workspaceStorage:"+rawID,
 		"pg-project", string(parser.AgentTrae), 84,
 	)
 	seedUsageSession(t, pgDB,
-		"trae:globalStorage:"+rawID,
+		"desktop~trae:globalStorage:"+rawID,
 		"pg-project", string(parser.AgentTrae), 84,
 	)
 	seedUsageSession(t, pgDB,
@@ -1698,8 +1698,8 @@ func TestSessionUsage_PGFlagRejectsAmbiguousTraeNamespaces(t *testing.T) {
 	assert.Nil(t, out)
 	assert.Equal(t, tokenUseExitErr, code)
 	assert.Contains(t, err.Error(), "ambiguous")
-	assert.Contains(t, err.Error(), "trae:workspaceStorage:"+rawID)
-	assert.Contains(t, err.Error(), "trae:globalStorage:"+rawID)
+	assert.Contains(t, err.Error(), "laptop~trae:workspaceStorage:"+rawID)
+	assert.Contains(t, err.Error(), "desktop~trae:globalStorage:"+rawID)
 }
 
 // TestSessionSync_UnknownID_ReportsNoFilePath verifies that the

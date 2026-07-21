@@ -98,6 +98,7 @@ func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 		result := outcome.Results[0].Result
 		assert.Equal(t, AgentTrae, result.Session.Agent)
 		assert.Equal(t, "trae:"+namespace+":session-1", result.Session.ID)
+		assert.Equal(t, []string{"trae:session-1"}, outcome.ExcludedSessionIDs)
 		assert.Equal(t, "session-1", result.Session.SourceSessionID)
 		assert.Equal(t, traeVirtualPath(source.Key, "session-1"), result.Session.File.Path)
 		assert.Equal(t, []string{"first", "fallback"}, []string{result.Messages[0].Content, result.Messages[1].Content})
@@ -145,6 +146,7 @@ func TestTraeWorkspaceGlobalCollisionIdentity(t *testing.T) {
 			namespace = "workspaceStorage"
 		}
 		ids[namespace] = result.Session.ID
+		assert.Equal(t, []string{"trae:collision"}, outcome.ExcludedSessionIDs)
 		assert.Equal(t, "trae:"+namespace+":collision", result.Session.ID)
 		assert.Equal(t, "collision", result.Session.SourceSessionID)
 	}
@@ -414,6 +416,7 @@ func TestTraeMalformedSessionEntryKeepsContainerIncomplete(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, []string{"trae:good"}, outcome.ExcludedSessionIDs)
 	assert.Equal(t, "trae:globalStorage:good", outcome.Results[0].Result.Session.ID)
 	assert.False(t, outcome.ResultSetComplete)
 
@@ -480,6 +483,7 @@ func TestTraeUnparseableSessionStatesKeepContainerIncomplete(t *testing.T) {
 			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
+			assert.Equal(t, []string{"trae:good"}, outcome.ExcludedSessionIDs)
 			assert.Equal(t, "trae:globalStorage:good", outcome.Results[0].Result.Session.ID)
 			assert.False(t, outcome.ResultSetComplete)
 

@@ -176,12 +176,19 @@ func traeParseContainerOutcome(
 		}, nil
 	}
 	results := make([]ParseResultOutcome, 0, len(snapshot.records))
+	excluded := make([]string, 0, len(snapshot.records))
+	seenExcluded := make(map[string]struct{}, len(snapshot.records))
 	for _, record := range snapshot.records {
 		result, err := traeParseRecord(src, record, req)
 		if err != nil {
 			return ParseOutcome{}, err
 		}
 		if result != nil {
+			legacyID := traeLegacySessionID(record.SessionID)
+			if _, ok := seenExcluded[legacyID]; !ok {
+				seenExcluded[legacyID] = struct{}{}
+				excluded = append(excluded, legacyID)
+			}
 			results = append(results, ParseResultOutcome{
 				Result:      *result,
 				DataVersion: DataVersionCurrent,
@@ -196,9 +203,10 @@ func traeParseContainerOutcome(
 		}, nil
 	}
 	return ParseOutcome{
-		Results:           results,
-		ResultSetComplete: snapshot.complete,
-		ForceReplace:      true,
+		Results:            results,
+		ExcludedSessionIDs: excluded,
+		ResultSetComplete:  snapshot.complete,
+		ForceReplace:       true,
 	}, nil
 }
 
@@ -244,6 +252,10 @@ func traeParseRecord(src multiSessionSource, record traeSessionRecord, req Parse
 	}
 	sess.File.Hash = traeRecordHash(record.Hash, req.Source.ProjectHint)
 	return &ParseResult{Session: *sess, Messages: msgs}, nil
+}
+
+func traeLegacySessionID(rawID string) string {
+	return string(AgentTrae) + ":" + strings.TrimSpace(rawID)
 }
 
 func traeStorageNamespace(container string) (string, error) {

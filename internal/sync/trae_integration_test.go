@@ -12,6 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -385,6 +386,83 @@ func TestProcessFileProviderTraeNamespaceLifecycleIsolation(t *testing.T) {
 	globalMessages, err := database.GetMessages(context.Background(), "trae:globalStorage:rewrite", 0, 10, true)
 	require.NoError(t, err)
 	assert.Equal(t, "workspace rewritten", workspaceMessages[1].Content)
+	assert.Equal(t, "global reply", globalMessages[1].Content)
+}
+
+func TestResyncAllMigratesLegacyTraeNamespaceIDs(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
+	globalPath := filepath.Join(root, "globalStorage", "state.vscdb")
+	writeTraeSyncDB(t, workspacePath, "workspace reply")
+	writeTraeSyncDB(t, globalPath, "global reply")
+
+	archivePath := filepath.Join(root, "agentsview.db")
+	dbtest.EnsureTestDBAt(t, archivePath)
+	archive, err := db.Open(archivePath)
+	require.NoError(t, err)
+
+	startedAt := "2026-05-10T10:00:00Z"
+	legacyPath := workspacePath + "#rewrite"
+	require.NoError(t, archive.UpsertSession(db.Session{
+		ID:               "trae:rewrite",
+		Project:          "agentsview",
+		Machine:          "devbox",
+		Agent:            string(parser.AgentTrae),
+		SourceSessionID:  "rewrite",
+		StartedAt:        &startedAt,
+		EndedAt:          &startedAt,
+		MessageCount:     2,
+		UserMessageCount: 1,
+		FilePath:         &legacyPath,
+	}))
+	dbtest.SeedMessages(t, archive,
+		dbtest.UserMsg("trae:rewrite", 0, "same prompt"),
+		db.Message{
+			SessionID:     "trae:rewrite",
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "legacy reply",
+			ContentLength: len("legacy reply"),
+		},
+	)
+	require.NoError(t, archive.SetSessionDataVersion("trae:rewrite", 68))
+	require.NoError(t, archive.Close())
+
+	conn, err := sql.Open("sqlite3", archivePath)
+	require.NoError(t, err)
+	_, err = conn.Exec(`PRAGMA user_version = 68`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	reopened, err := db.Open(archivePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.True(t, reopened.NeedsResync())
+
+	engine := NewEngine(reopened, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		Machine:   "devbox",
+	})
+	stats := engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	assert.Equal(t, 0, stats.OrphanedCopied)
+
+	legacy, err := reopened.GetSessionFull(context.Background(), "trae:rewrite")
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+
+	workspace, err := reopened.GetSessionFull(context.Background(), "trae:workspaceStorage:rewrite")
+	require.NoError(t, err)
+	require.NotNil(t, workspace)
+	global, err := reopened.GetSessionFull(context.Background(), "trae:globalStorage:rewrite")
+	require.NoError(t, err)
+	require.NotNil(t, global)
+
+	workspaceMessages, err := reopened.GetMessages(context.Background(), workspace.ID, 0, 10, true)
+	require.NoError(t, err)
+	globalMessages, err := reopened.GetMessages(context.Background(), global.ID, 0, 10, true)
+	require.NoError(t, err)
+	assert.Equal(t, "workspace reply", workspaceMessages[1].Content)
 	assert.Equal(t, "global reply", globalMessages[1].Content)
 }
 

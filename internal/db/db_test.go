@@ -930,9 +930,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionHermesSkillName(t *testing.T) {
-	assert.Equal(t, 68, CurrentDataVersion(),
-		"Hermes skill-name parsing requires a data version bump")
+func TestCurrentDataVersionTraeNamespaceMigration(t *testing.T) {
+	assert.Equal(t, 69, CurrentDataVersion(),
+		"Trae namespace identity migration requires a data version bump")
 }
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)

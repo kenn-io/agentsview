@@ -128,33 +128,57 @@ func TestResolveSessionID_Ambiguous_MostRecentWins(t *testing.T) {
 }
 
 func TestResolveSessionIDDetailed_TraeNamespaceCollisionErrors(t *testing.T) {
-	d := newTestDB(t)
-	ctx := context.Background()
+	cases := []struct {
+		name        string
+		workspaceID string
+		globalID    string
+	}{
+		{
+			name:        "local",
+			workspaceID: "trae:workspaceStorage:collision",
+			globalID:    "trae:globalStorage:collision",
+		},
+		{
+			name:        "host qualified",
+			workspaceID: "laptop~trae:workspaceStorage:collision",
+			globalID:    "desktop~trae:globalStorage:collision",
+		},
+		{
+			name:        "mixed host and local",
+			workspaceID: "trae:workspaceStorage:collision",
+			globalID:    "desktop~trae:globalStorage:collision",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestDB(t)
+			ctx := context.Background()
+			raw := "collision"
+			upsertSession(t, d,
+				"amp:"+raw,
+				"amp",
+				"2026-04-18T10:00:00Z",
+			)
+			upsertSession(t, d,
+				tc.workspaceID,
+				string(parser.AgentTrae),
+				"2026-04-16T10:00:00Z",
+			)
+			upsertSession(t, d,
+				tc.globalID,
+				string(parser.AgentTrae),
+				"2026-04-17T10:00:00Z",
+			)
 
-	raw := "collision"
-	upsertSession(t, d,
-		"amp:"+raw,
-		"amp",
-		"2026-04-18T10:00:00Z",
-	)
-	upsertSession(t, d,
-		"trae:workspaceStorage:"+raw,
-		string(parser.AgentTrae),
-		"2026-04-16T10:00:00Z",
-	)
-	upsertSession(t, d,
-		"trae:globalStorage:"+raw,
-		string(parser.AgentTrae),
-		"2026-04-17T10:00:00Z",
-	)
-
-	got, known, err := resolveRawSessionIDDetailed(ctx, d, nil, raw)
-	require.Error(t, err)
-	assert.Empty(t, got)
-	assert.False(t, known)
-	assert.Contains(t, err.Error(), "ambiguous")
-	assert.Contains(t, err.Error(), "trae:workspaceStorage:"+raw)
-	assert.Contains(t, err.Error(), "trae:globalStorage:"+raw)
+			got, known, err := resolveRawSessionIDDetailed(ctx, d, nil, raw)
+			require.Error(t, err)
+			assert.Empty(t, got)
+			assert.False(t, known)
+			assert.Contains(t, err.Error(), "ambiguous")
+			assert.Contains(t, err.Error(), tc.workspaceID)
+			assert.Contains(t, err.Error(), tc.globalID)
+		})
+	}
 }
 
 func TestResolveSessionIDDetailed_TraeDiskLookupReturnsQualifiedNamespace(t *testing.T) {

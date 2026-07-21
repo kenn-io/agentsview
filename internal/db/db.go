@@ -310,7 +310,9 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // and relationship_type from agyReader.parentCascadeId in trajectory sidecars.)
 // (68: Hermes skill_view metadata. Re-parsing populates tool_calls.skill_name
 // for existing Hermes sessions so historical skill usage appears in analytics.)
-const dataVersion = 68
+// (69: Trae namespace identities. Re-parsing rebuilds legacy trae:<raw> rows
+// into namespaced workspace/global identities and drops the superseded alias.)
+const dataVersion = 69
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
