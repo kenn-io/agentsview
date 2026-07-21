@@ -120,29 +120,33 @@ GET /api/v1/branches
 GET /api/v1/agents
 ```
 
-`GET /api/v1/branches` returns distinct `(project, branch)` pairs
-plus an opaque `token` field. By default only root sessions count;
-`?scope=all` also counts subagent and fork sessions, matching the
-activity and usage rollups (the Activity and Usage pages request this
-scope so every branch their breakdowns can surface is offered):
+`GET /api/v1/branches` returns a bounded list of distinct branch names for
+filter pickers. Results are sorted by session count and then branch name. The
+search is case-insensitive and matches branch-name substrings.
+
+| Query parameter | Meaning |
+|-----------------|---------|
+| `search` | Optional case-insensitive branch-name substring |
+| `projects` | Optional repeated project filter applied before branch-name deduplication |
+| `scope` | `roots` by default; `all` also includes subagent and fork sessions |
+| `limit` | Maximum branch names, from 1 through 100; default 100 |
 
 ```json
 {
   "branches": [
     {
-      "project": "myapp",
       "branch": "main",
-      "token": "..."
+      "session_count": 42
     }
-  ]
+  ],
+  "has_more": false
 }
 ```
 
-Pass the returned token back as the `git_branch` query parameter on
-branch-aware endpoints. Treat it as opaque and URL-encode it in
-manual HTTP calls. The token is scoped by both project and branch,
-so `app-a/main` and `app-b/main` remain distinct, and an empty
-branch remains distinct from a literal `unknown` branch.
+`has_more` is true when additional matching branch names exist beyond the
+requested limit. Branch-aware endpoints accept branch names directly in
+`git_branch`; clients do not obtain opaque filter tokens from this metadata
+endpoint.
 
 ## Commands
 
@@ -232,7 +236,7 @@ therefore appear on both dates.
 | `--project`           | `project`           | string                            |
 | `--exclude-project`   | `exclude_project`   | string                            |
 | `--machine`           | `machine`           | string                            |
-| `--branch`            | `git_branch`        | Branch name; requires `--project`. The HTTP param takes an opaque token from `GET /api/v1/branches`, which the flag encodes |
+| `--branch`            | `git_branch`        | Branch name; the CLI requires `--project`. Direct HTTP callers may supply project scope separately |
 | `--agent`             | `agent`             | string                            |
 | `--date`              | `date`              | `YYYY-MM-DD`                      |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |
