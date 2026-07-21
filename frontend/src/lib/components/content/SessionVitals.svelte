@@ -22,12 +22,14 @@
   import SubagentCalls from "./SubagentCalls.svelte";
   import { XIcon } from "../../icons.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import type { Session } from "../../api/types/core.js";
 
   interface Props {
     sessionId: string;
+    session?: Session;
   }
 
-  let { sessionId }: Props = $props();
+  let { sessionId, session }: Props = $props();
 
   $effect(() => {
     void sessionTiming.load(sessionId);
@@ -310,6 +312,26 @@
           {/if}
         </span>
       </header>
+      {#if session}
+        <div class="session-context">
+          <div class="context-row">
+            <div class="context-label">
+              {m.session_vitals_repository()}
+            </div>
+            <div class="context-value" title={session.project}>
+              {session.project}
+            </div>
+          </div>
+          <div class="context-row">
+            <div class="context-label">
+              {m.session_vitals_worktree()}
+            </div>
+            <div class="context-value" title={session.cwd || undefined}>
+              {session.cwd || "—"}
+            </div>
+          </div>
+        </div>
+      {/if}
       <div class="stat-grid">
         <div>
           <div class="lbl">{m.session_vitals_tool_calls()}</div>
@@ -658,6 +680,36 @@
   .v-meta.live {
     color: var(--running-fg);
     animation: duration-pulse 1.6s ease-in-out infinite;
+  }
+
+  .session-context {
+    display: grid;
+    gap: 7px;
+    margin-bottom: 12px;
+    padding-bottom: 11px;
+    border-bottom: 1px solid var(--border-muted);
+    font-family: var(--font-mono);
+  }
+
+  .context-row {
+    min-width: 0;
+  }
+
+  .context-label {
+    color: var(--text-muted);
+    font-size: 9px;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+
+  .context-value {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 10px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Stat grid */

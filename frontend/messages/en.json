@@ -1146,6 +1146,8 @@
   "session_vitals_subtitle": "Session vital signs",
   "session_vitals_close": "Close session analysis",
   "session_vitals_session": "Session",
+  "session_vitals_repository": "Repository",
+  "session_vitals_worktree": "Worktree",
   "session_vitals_running": "running",
   "session_vitals_running_duration": "running {duration}+",
   "session_vitals_tool_calls": "tool calls",

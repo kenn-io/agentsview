@@ -23,6 +23,7 @@ export interface Session {
   id: string;
   project: string;
   machine: string;
+  cwd?: string;
   agent: string;
   agent_label?: string;
   entrypoint?: string;

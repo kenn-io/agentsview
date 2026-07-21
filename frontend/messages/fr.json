@@ -1146,6 +1146,8 @@
   "session_vitals_subtitle": "Signes vitaux de la session",
   "session_vitals_close": "Fermer l'analyse de la session",
   "session_vitals_session": "Session",
+  "session_vitals_repository": "Dépôt",
+  "session_vitals_worktree": "Arbre de travail",
   "session_vitals_running": "en cours",
   "session_vitals_running_duration": "en cours depuis {duration}+",
   "session_vitals_tool_calls": "appels d'outil",

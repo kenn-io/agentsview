@@ -658,7 +658,10 @@
 
     {#snippet vitals()}
       {#if sessions.activeSessionId}
-        <SessionVitals sessionId={sessions.activeSessionId} />
+        <SessionVitals
+          sessionId={sessions.activeSessionId}
+          session={sessions.activeSession}
+        />
       {/if}
     {/snippet}
   </ThreeColumnLayout>

@@ -1114,6 +1114,8 @@
   "session_vitals_subtitle": "會話指標",
   "session_vitals_close": "關閉會話分析",
   "session_vitals_session": "會話",
+  "session_vitals_repository": "儲存庫",
+  "session_vitals_worktree": "工作樹",
   "session_vitals_running": "運行中",
   "session_vitals_running_duration": "運行中 {duration}+",
   "session_vitals_tool_calls": "工具調用",

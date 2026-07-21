@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import { cleanup, render } from "@testing-library/svelte";
+import type { Session } from "../../api/types/core.js";
 import type { SessionTiming } from "../../api/types/timing.js";
 
 const mocks = vi.hoisted(() => {
@@ -80,6 +81,48 @@ describe("SessionVitals", () => {
     await tick();
 
     expect(ui.vitalsOpen).toBe(false);
+  });
+
+  it("shows the repository and worktree recorded by the trace", async () => {
+    const session: Session = {
+      id: "sess-1",
+      project: "agentsview",
+      machine: "local",
+      agent: "codex",
+      first_message: "hello",
+      started_at: "2026-07-14T12:00:00Z",
+      ended_at: "2026-07-14T12:01:00Z",
+      message_count: 2,
+      user_message_count: 1,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      is_automated: false,
+      created_at: "2026-07-14T12:00:00Z",
+      cwd: "/repos/agentsview/.worktrees/trace-context",
+    };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session },
+    });
+    await tick();
+    await tick();
+
+    expect(document.body.textContent).toContain(
+      m.session_vitals_repository(),
+    );
+    expect(document.body.textContent).toContain(
+      m.session_vitals_worktree(),
+    );
+    expect(document.body.textContent).toContain(session.project);
+    expect(document.body.textContent).toContain(session.cwd);
+    expect(
+      document.querySelector('[title="agentsview"]'),
+    ).not.toBeNull();
+    expect(
+      document.querySelector(
+        '[title="/repos/agentsview/.worktrees/trace-context"]',
+      ),
+    ).not.toBeNull();
   });
 
   it("aborts a pending sub-agent timing read when collapsed", async () => {
