@@ -335,7 +335,6 @@ class SessionsStore {
   private agentsLoaded: boolean = false;
   private agentsPromise: Promise<void> | null = null;
   private agentsVersion: number = 0;
-  private refreshVersion: number = 0;
   private childSessionsVersion: number = 0;
   private machinesLoaded: boolean = false;
   private machinesPromise: Promise<void> | null = null;
@@ -352,8 +351,11 @@ class SessionsStore {
   private sidebarLoadSignature: string | null = null;
   private sidebarAbort: AbortController | null = null;
   private routeAbort: AbortController | null = null;
-  private navigateRead = new LatestRead();
-  private refreshRead = new LatestRead();
+  // Single coordinator for every read that commits to activeSessionDetail
+  // (navigation and watcher refresh): the newest read cancels older in-flight
+  // ones, so a stale response resolving late can never overwrite fresher
+  // cached detail.
+  private activeDetailRead = new LatestRead();
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -839,13 +841,11 @@ class SessionsStore {
 
   private setActiveSession(id: string | null) {
     if (id === this.activeSessionId) return;
-    this.navigateRead.cancel();
-    this.refreshRead.cancel();
+    this.activeDetailRead.cancel();
     this.childSessionsRead.cancel();
     this.activeSessionId = id;
     this.activeSessionDetail = null;
     this.activeSessionUsageVersion = 0;
-    this.refreshVersion++;
     this.childSessionsVersion++;
   }
 
@@ -882,14 +882,17 @@ class SessionsStore {
       await this.hydrateSelectedIndexOnlySession(id);
       return;
     }
-    const signal = this.navigateRead.begin();
+    const signal = this.activeDetailRead.begin();
     try {
       configureGeneratedClient();
       const session = await callGenerated(
         () => SessionsService.getApiV1SessionsId({ id }),
         signal,
       ) as unknown as Session;
-      if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
+      if (
+        this.activeSessionId === id &&
+        this.activeDetailRead.isCurrent(signal)
+      ) {
         const idx = this.sessions.findIndex((s) => s.id === id);
         if (idx >= 0) {
           this.mergeHydratedSession(session);
@@ -897,9 +900,11 @@ class SessionsStore {
           this.activeSessionDetail = session;
         }
       }
-    })();
-    this.navigateInFlight = entry;
-    return entry.promise;
+    } catch {
+      // Session not found — selection stands without metadata
+    } finally {
+      this.activeDetailRead.finish(signal);
+    }
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {
@@ -916,8 +921,7 @@ class SessionsStore {
   async refreshActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
-    const version = ++this.refreshVersion;
-    const signal = this.refreshRead.begin();
+    const signal = this.activeDetailRead.begin();
     try {
       configureGeneratedClient();
       const session = await callGenerated(
@@ -925,9 +929,8 @@ class SessionsStore {
         signal,
       ) as unknown as Session;
       if (
-        this.refreshVersion !== version ||
         this.activeSessionId !== id ||
-        !this.refreshRead.isCurrent(signal)
+        !this.activeDetailRead.isCurrent(signal)
       ) {
         return;
       }
@@ -945,7 +948,7 @@ class SessionsStore {
     } catch {
       // Session may have been deleted
     } finally {
-      this.refreshRead.finish(signal);
+      this.activeDetailRead.finish(signal);
     }
   }
 
@@ -1442,7 +1445,10 @@ class SessionsStore {
     }
     // The active session may be backed only by the detail cache (absent from
     // the sidebar list); keep its name in sync so the breadcrumb updates too.
+    // Drop any in-flight active-detail read first: it was issued before the
+    // rename and would revert the name with a pre-rename snapshot.
     if (this.activeSessionDetail?.id === id) {
+      this.activeDetailRead.cancel();
       this.activeSessionDetail = applyRename(this.activeSessionDetail);
     }
   }
@@ -1513,11 +1519,9 @@ class SessionsStore {
     this.sidebarLoadSignature = null;
     this.routeAbort?.abort();
     this.routeAbort = null;
-    this.navigateRead.cancel();
-    this.refreshRead.cancel();
+    this.activeDetailRead.cancel();
     this.childSessionsRead.cancel();
     this.loadVersion++;
-    this.refreshVersion++;
     this.childSessionsVersion++;
     this.loading = false;
     this.signalDetailInflight.clear();
