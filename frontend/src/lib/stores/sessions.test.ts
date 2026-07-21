@@ -2915,6 +2915,44 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("renamed");
     });
 
+    it("does not let an in-flight hydration revert a rename of an index-only row", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "stale" }),
+      ]);
+      await sessions.load();
+
+      // Hydration of the index-only row stays in flight while the user
+      // selects it (selection joins the request) and renames it. The detail
+      // cache is still empty at rename time, so the rename must advance the
+      // freshness generation without relying on a populated cache.
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      sessions.selectSession("sel");
+
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "sel", display_name: "renamed" }),
+      );
+      await sessions.renameSession("sel", "renamed");
+      expect(sessions.sessions[0]?.display_name).toBe("renamed");
+
+      // The pre-rename hydration snapshot must not overwrite the row or seed
+      // the breadcrumb cache with the old name.
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", display_name: "stale" }),
+      );
+      await hydration;
+
+      expect(sessions.sessions[0]?.display_name).toBe("renamed");
+      expect(sessions.activeSession?.display_name).not.toBe("stale");
+      expect(sessions.activeSessionDetail?.display_name).not.toBe("stale");
+    });
+
     it("seeds the cache from a hydration already in flight at selection", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

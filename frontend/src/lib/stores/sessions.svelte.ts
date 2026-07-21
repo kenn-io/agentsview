@@ -1486,12 +1486,17 @@ class SessionsStore {
     if (idx !== -1) {
       this.sessions[idx] = applyRename(this.sessions[idx]!);
     }
+    // Renaming the active session invalidates any in-flight active-detail
+    // read or hydration: both were issued before the rename and would revert
+    // the name with a pre-rename snapshot. Cancel and advance the generation
+    // even when the detail cache is empty (index-only row with hydration in
+    // flight) — the cache-population paths all check the generation.
+    if (this.activeSessionId === id) {
+      this.cancelActiveDetailRead();
+    }
     // The active session may be backed only by the detail cache (absent from
     // the sidebar list); keep its name in sync so the breadcrumb updates too.
-    // Drop any in-flight active-detail read first: it was issued before the
-    // rename and would revert the name with a pre-rename snapshot.
     if (this.activeSessionDetail?.id === id) {
-      this.cancelActiveDetailRead();
       this.activeSessionDetail = applyRename(this.activeSessionDetail);
     }
   }
