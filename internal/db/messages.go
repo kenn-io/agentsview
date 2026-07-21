@@ -1237,9 +1237,12 @@ func replaceSessionMessagesTx(
 func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
 	result, err := tx.Exec(
 		`UPDATE sessions
-		 SET transcript_revision = CAST(
-			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
-		 )
+		 SET transcript_revision = CASE
+			WHEN transcript_revision GLOB '[0-9]*'
+			 AND transcript_revision NOT GLOB '*[^0-9]*'
+			THEN CAST(CAST(transcript_revision AS INTEGER) + 1 AS TEXT)
+			ELSE transcript_revision
+		 END
 		 WHERE id = ?`,
 		sessionID,
 	)

@@ -282,6 +282,85 @@ func TestPGShouldSkipLegacyTraeBatchSession(t *testing.T) {
 	})
 }
 
+func TestDeletePGLegacyTraeSessionIfOwnedMigratesWorkspaceStar(t *testing.T) {
+	state := &legacyTraeMigrationProbeState{}
+	pg := newLegacyTraeMigrationProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+	defer func() { _ = tx.Rollback() }()
+
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	local, err := db.Open(path)
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	legacyRevision := "workspace-rev"
+	globalRevision := "global-rev"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:00:00Z",
+	}), "UpsertSession legacy")
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:workspaceStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &legacyRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:01:00Z",
+	}), "UpsertSession workspace")
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:                 "trae:globalStorage:collision",
+		Project:            "proj",
+		Machine:            "mac",
+		Agent:              "trae",
+		SourceSessionID:    "collision",
+		TranscriptRevision: &globalRevision,
+		MessageCount:       1,
+		UserMessageCount:   1,
+		CreatedAt:          "2026-07-21T00:02:00Z",
+	}), "UpsertSession global")
+
+	err = deletePGLegacyTraeSessionIfOwned(
+		context.Background(),
+		tx,
+		local,
+		map[string]db.Session{
+			"trae:workspaceStorage:collision": {
+				ID:                 "trae:workspaceStorage:collision",
+				TranscriptRevision: &legacyRevision,
+			},
+			"trae:globalStorage:collision": {
+				ID:                 "trae:globalStorage:collision",
+				TranscriptRevision: &globalRevision,
+			},
+		},
+		db.Session{
+			ID:                 "trae:workspaceStorage:collision",
+			Agent:              "trae",
+			SourceSessionID:    "collision",
+			TranscriptRevision: &legacyRevision,
+		},
+		"marker",
+		"mac",
+		nil,
+	)
+
+	require.NoError(t, err, "deletePGLegacyTraeSessionIfOwned")
+	assert.Equal(t, 1, state.starInsertCalls)
+	assert.Equal(t, "trae:workspaceStorage:collision", state.lastTargetID)
+	assert.Equal(t, "workspace-rev", state.lastRevision)
+}
+
 type pushAliasRoutingDriver struct{}
 
 type pushAliasRoutingConn struct{}
@@ -294,7 +373,121 @@ type pushAliasRoutingRows struct {
 	next    int
 }
 
+type legacyTraeMigrationProbeDriver struct{}
+
+type legacyTraeMigrationProbeConn struct {
+	state *legacyTraeMigrationProbeState
+}
+
+type legacyTraeMigrationProbeTx struct{}
+
+type legacyTraeMigrationProbeState struct {
+	starInsertCalls int
+	lastTargetID    string
+	lastRevision    string
+}
+
 var pushAliasRoutingRegisterOnce sync.Once
+var legacyTraeMigrationProbeRegisterOnce sync.Once
+var legacyTraeMigrationProbeStatesMu sync.Mutex
+var legacyTraeMigrationProbeStates = map[string]*legacyTraeMigrationProbeState{}
+
+func newLegacyTraeMigrationProbeDB(
+	t *testing.T, state *legacyTraeMigrationProbeState,
+) *sql.DB {
+	t.Helper()
+	legacyTraeMigrationProbeRegisterOnce.Do(func() {
+		sql.Register(
+			"agentsview_legacy_trae_migration_probe",
+			legacyTraeMigrationProbeDriver{},
+		)
+	})
+	name := t.Name()
+	legacyTraeMigrationProbeStatesMu.Lock()
+	legacyTraeMigrationProbeStates[name] = state
+	legacyTraeMigrationProbeStatesMu.Unlock()
+	t.Cleanup(func() {
+		legacyTraeMigrationProbeStatesMu.Lock()
+		delete(legacyTraeMigrationProbeStates, name)
+		legacyTraeMigrationProbeStatesMu.Unlock()
+	})
+
+	pg, err := sql.Open("agentsview_legacy_trae_migration_probe", name)
+	require.NoError(t, err, "open legacy trae migration probe db")
+	t.Cleanup(func() { _ = pg.Close() })
+	return pg
+}
+
+func (legacyTraeMigrationProbeDriver) Open(name string) (driver.Conn, error) {
+	legacyTraeMigrationProbeStatesMu.Lock()
+	state := legacyTraeMigrationProbeStates[name]
+	legacyTraeMigrationProbeStatesMu.Unlock()
+	return &legacyTraeMigrationProbeConn{state: state}, nil
+}
+
+func (c *legacyTraeMigrationProbeConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (c *legacyTraeMigrationProbeConn) Close() error { return nil }
+
+func (c *legacyTraeMigrationProbeConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *legacyTraeMigrationProbeConn) BeginTx(
+	context.Context, driver.TxOptions,
+) (driver.Tx, error) {
+	return legacyTraeMigrationProbeTx{}, nil
+}
+
+func (c *legacyTraeMigrationProbeConn) CheckNamedValue(
+	*driver.NamedValue,
+) error {
+	return nil
+}
+
+func (c *legacyTraeMigrationProbeConn) ExecContext(
+	_ context.Context, query string, args []driver.NamedValue,
+) (driver.Result, error) {
+	normalized := strings.ToLower(query)
+	switch {
+	case strings.Contains(normalized, "insert into starred_sessions"):
+		c.state.starInsertCalls++
+		if len(args) > 1 {
+			c.state.lastTargetID, _ = args[1].Value.(string)
+		}
+		if len(args) > 6 {
+			switch value := args[6].Value.(type) {
+			case string:
+				c.state.lastRevision = value
+			case *string:
+				if value != nil {
+					c.state.lastRevision = *value
+				}
+			}
+		}
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "update sessions target"),
+		strings.Contains(normalized, "with matched as"),
+		strings.Contains(normalized, "delete from sessions"),
+		strings.Contains(normalized, "update pinned_messages p"),
+		strings.Contains(normalized, "delete from pinned_messages p"):
+		return driver.RowsAffected(1), nil
+	default:
+		return nil, errors.New("unexpected legacy trae migration probe exec")
+	}
+}
+
+func (c *legacyTraeMigrationProbeConn) QueryContext(
+	context.Context, string, []driver.NamedValue,
+) (driver.Rows, error) {
+	return nil, errors.New("query not implemented")
+}
+
+func (legacyTraeMigrationProbeTx) Commit() error { return nil }
+
+func (legacyTraeMigrationProbeTx) Rollback() error { return nil }
 
 func newPushAliasRoutingDB(t *testing.T) *sql.DB {
 	t.Helper()
