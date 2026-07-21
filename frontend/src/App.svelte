@@ -451,13 +451,18 @@
   });
 
   // Deep-link: clear the selection when the URL drops its session.
-  // Tracks only the URL so local selection changes (which sync to
-  // the URL in a later effect) cannot trigger a spurious deselect.
+  // Tracks the route alongside the session id: entering bare /sessions
+  // from a non-session page leaves the id null both sides, so a
+  // session-id-only dependency would not rerun and a stale active
+  // session would keep showing instead of the list. Route is
+  // authoritative URL state that local selection does not mutate, so
+  // tracking it cannot trigger a spurious deselect.
   $effect(() => {
     const sid = router.sessionId;
+    const route = router.route;
     untrack(() => {
       if (
-        !sid && router.route === "sessions" &&
+        !sid && route === "sessions" &&
         sessions.activeSessionId !== null
       ) {
         sessions.deselectSession();

@@ -185,6 +185,55 @@ describe("App session URL date state", () => {
     expect(navigateToSession).toHaveBeenCalledTimes(2);
   });
 
+  it("clears a stale active session entering /sessions from a non-session page (#1190)", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    // Leave for a non-session page: the URL drops the session id but the
+    // deselect guard only clears on the sessions route, so the active
+    // session is intentionally preserved here.
+    router.navigate("usage");
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("session-1");
+
+    // Enter the bare sessions list. The session id stays null across this
+    // transition, so a session-id-only dependency would not rerun; tracking
+    // the route makes the effect fire and clear the stale selection.
+    router.navigate("sessions");
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
   it("keeps route-first search scroll intent when entering the sessions route", async () => {
     vi.stubGlobal(
       "ResizeObserver",
