@@ -3,9 +3,11 @@
 package sync
 
 import (
+	"maps"
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -62,16 +64,12 @@ func sqliteContainerPathForResultPath(path string) string {
 }
 
 // trustedSQLiteContainer is a container's state at the end of the last pass
-// that verified every one of its discovered sessions, together with exactly
-// which session IDs that pass discovered. The set matters in hybrid roots:
-// discovery drops SQLite rows shadowed by a same-ID storage JSON, so the
-// discoverable row set can grow — a storage JSON removed while the DB is
-// untouched exposes its row — without the container state changing. A
-// source may therefore gate-skip only when its session ID was part of the
-// verified set; a newly exposed row misses the set and parses.
+// that verified every one of its discovered sessions. Per-session membership
+// is checked against the persistent archive's canonical source path instead
+// of retaining an archive-sized Go set: a newly unshadowed SQLite row still
+// has its storage JSON path in the archive and therefore cannot gate-skip.
 type trustedSQLiteContainer struct {
-	state    parser.SQLiteContainerState
-	sessions map[string]struct{}
+	state parser.SQLiteContainerState
 }
 
 // sqliteContainerPass tracks one sync pass's view of every OpenCode-family
@@ -82,7 +80,6 @@ type trustedSQLiteContainer struct {
 type sqliteContainerPass struct {
 	captured   map[string]parser.SQLiteContainerState
 	discovered map[string]int
-	sessions   map[string]map[string]struct{}
 	completed  map[string]int
 	failed     map[string]bool
 	poisoned   bool
@@ -184,35 +181,55 @@ func (e *Engine) beginSQLiteContainerPass(
 		e.containerMu.Unlock()
 		return
 	}
-	var pass *sqliteContainerPass
+	e.beginStreamingSQLiteContainerPass(preStates)
 	for _, file := range files {
-		dbPath, sessionID, ok := sqliteContainerSourceForFile(file)
-		if !ok {
-			continue
-		}
-		if pass == nil {
-			pass = &sqliteContainerPass{
-				captured:   make(map[string]parser.SQLiteContainerState),
-				discovered: make(map[string]int),
-				sessions:   make(map[string]map[string]struct{}),
-				completed:  make(map[string]int),
-				failed:     make(map[string]bool),
-			}
-		}
-		pass.discovered[dbPath]++
-		if pass.sessions[dbPath] == nil {
-			pass.sessions[dbPath] = make(map[string]struct{})
-		}
-		pass.sessions[dbPath][sessionID] = struct{}{}
-		if _, seen := pass.captured[dbPath]; seen || pass.failed[dbPath] {
-			continue
-		}
-		if state, ok := preStates[dbPath]; ok {
-			pass.captured[dbPath] = state
-		} else {
-			pass.failed[dbPath] = true
-		}
+		e.noteSQLiteContainerDiscovery(file)
 	}
+	e.finishStreamingSQLiteContainerDiscovery()
+}
+
+func (e *Engine) beginStreamingSQLiteContainerPass(
+	preStates map[string]parser.SQLiteContainerState,
+) {
+	if e.forceParse {
+		e.containerMu.Lock()
+		e.containerPass = nil
+		e.containerMu.Unlock()
+		return
+	}
+	pass := &sqliteContainerPass{
+		captured:   make(map[string]parser.SQLiteContainerState, len(preStates)),
+		discovered: make(map[string]int),
+		completed:  make(map[string]int),
+		failed:     make(map[string]bool),
+	}
+	maps.Copy(pass.captured, preStates)
+	e.containerMu.Lock()
+	e.containerPass = pass
+	e.containerMu.Unlock()
+}
+
+func (e *Engine) noteSQLiteContainerDiscovery(file parser.DiscoveredFile) {
+	dbPath, _, ok := sqliteContainerSourceForFile(file)
+	if !ok {
+		return
+	}
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil {
+		return
+	}
+	pass.discovered[dbPath]++
+	if _, captured := pass.captured[dbPath]; !captured {
+		pass.failed[dbPath] = true
+	}
+}
+
+func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
 	if pass != nil {
 		for dbPath, pre := range pass.captured {
 			if post, ok := statSQLiteContainerState(dbPath); ok &&
@@ -223,9 +240,6 @@ func (e *Engine) beginSQLiteContainerPass(
 			pass.failed[dbPath] = true
 		}
 	}
-	e.containerMu.Lock()
-	e.containerPass = pass
-	e.containerMu.Unlock()
 }
 
 // sqliteContainerSourceFresh reports whether a discovered file belongs to a
@@ -244,20 +258,23 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 		return false
 	}
 	e.containerMu.Lock()
-	defer e.containerMu.Unlock()
 	if e.containerPass == nil {
+		e.containerMu.Unlock()
 		return false
 	}
 	current, ok := e.containerPass.captured[dbPath]
 	if !ok {
+		e.containerMu.Unlock()
 		return false
 	}
 	trusted, ok := e.trustedSQLiteContainers[dbPath]
+	e.containerMu.Unlock()
 	if !ok || current != trusted.state {
 		return false
 	}
-	_, verified := trusted.sessions[sessionID]
-	return verified
+	fullID := applyIDPrefixToID(e.idPrefix, string(file.Agent)+":"+sessionID)
+	return e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() &&
+		e.db.GetSessionFilePath(fullID) == e.effectiveSourcePath(file.Path)
 }
 
 // noteSQLiteContainerResult records a processed file's outcome for
@@ -295,7 +312,12 @@ func (e *Engine) poisonSQLiteContainerPass() {
 
 // finishSQLiteContainerPass promotes the pass's captured container states
 // to trusted for every container whose discovered sessions all completed
-// without errors, retries, or write failures. incomplete marks passes that
+// without errors, retries, or write failures. Promotion requires at least
+// one discovered session: scoped passes capture every configured container
+// (captureSQLiteContainerStates(nil)) but discover only in-scope sources,
+// so an out-of-scope container ends the pass at completed == discovered ==
+// 0 having verified nothing — trusting its freshly captured state would
+// gate-skip changes that were never parsed. incomplete marks passes that
 // must never promote (aborted, cancelled, or discovery failures whose
 // provider cannot be attributed).
 //
@@ -303,10 +325,9 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // root (full syncs, as opposed to changed-path or scoped-root passes).
 // Such a pass is authoritative for which rows are discoverable, so a
 // trusted container it discovered no sources for — fully shadowed by
-// storage JSONs, or gone — loses its trusted entry: the entry's session
-// set is no longer being maintained, and stale membership would otherwise
-// gate-skip a row re-exposed later by a storage removal that leaves the
-// DB untouched.
+// storage JSONs, or gone — loses its trusted entry. Per-session archive-path
+// checks protect newly re-exposed rows; removing the unused container trust
+// here also keeps the compact state map aligned with current discovery.
 func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
@@ -329,7 +350,8 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 		if pass.failed[dbPath] {
 			continue
 		}
-		if pass.completed[dbPath] != pass.discovered[dbPath] {
+		if pass.discovered[dbPath] == 0 ||
+			pass.completed[dbPath] != pass.discovered[dbPath] {
 			continue
 		}
 		if e.trustedSQLiteContainers == nil {
@@ -337,41 +359,8 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 				make(map[string]trustedSQLiteContainer)
 		}
 		e.trustedSQLiteContainers[dbPath] = trustedSQLiteContainer{
-			state:    state,
-			sessions: pass.sessions[dbPath],
+			state: state,
 		}
-	}
-}
-
-// dropTrustedSQLiteContainerSessionForStorage removes a processed storage
-// session's ID from its root's trusted container membership. From the
-// moment a file-backed storage session is processed, the archive's
-// canonical copy for that ID is the storage one, so a same-ID SQLite row —
-// even under an unchanged container state — no longer matches what its
-// membership verified. Without this, a storage JSON that arrives and
-// disappears entirely between full passes (both legs via watcher
-// changed-path syncs, which never re-promote containers) would leave the
-// stale membership in place, and the re-exposed row would gate-skip
-// forever while the archive kept the interim storage copy. The next fully
-// verified pass re-adds the ID once the row is actually re-verified.
-func (e *Engine) dropTrustedSQLiteContainerSessionForStorage(
-	agent parser.AgentType, sessionPath string,
-) {
-	// sessionPath is root/storage/<sessionSubdir>/<project>/<id>.json,
-	// mirroring the root derivation in StatOpenCodeStorageSessionState.
-	sessionID := strings.TrimSuffix(filepath.Base(sessionPath), ".json")
-	if sessionID == "" {
-		return
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(sessionPath))))
-	src := resolveOpenCodeFormatSource(agent, root)
-	if src.DBPath == "" {
-		return
-	}
-	e.containerMu.Lock()
-	defer e.containerMu.Unlock()
-	if trusted, ok := e.trustedSQLiteContainers[src.DBPath]; ok {
-		delete(trusted.sessions, sessionID)
 	}
 }
 

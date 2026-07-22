@@ -334,6 +334,11 @@ const (
 // the WAL because another connection still had pages pinned.
 var ErrWALCheckpointBusy = errors.New("wal checkpoint busy")
 
+// ErrWriterClosed reports that a write was attempted while the writer pool was
+// intentionally closed for a maintenance pass (a sync-worker handoff). Readers
+// keep serving; the writer returns once ReopenWriter runs.
+var ErrWriterClosed = errors.New("writer closed for maintenance pass")
+
 // DataVersionTooNewError reports that an archive was written by a newer
 // agentsview parser than the current binary understands.
 type DataVersionTooNewError struct {
@@ -493,14 +498,24 @@ END;
 // concurrent HTTP handler goroutines can safely read while
 // Reopen/CloseConnections swap the underlying *sql.DB.
 type DB struct {
-	path      string
-	writer    atomic.Pointer[sql.DB]
-	reader    atomic.Pointer[sql.DB]
-	mu        sync.Mutex // serializes writes
-	connMu    sync.RWMutex
-	retired   []*sql.DB // old pools kept open for in-flight reads
-	readOnly  bool
-	dataStale atomic.Bool // set by Open when user_version < dataVersion
+	path    string
+	writer  atomic.Pointer[sql.DB]
+	reader  atomic.Pointer[sql.DB]
+	mu      sync.Mutex // serializes writes
+	connMu  sync.RWMutex
+	retired []*sql.DB // old pools kept open for in-flight reads
+	// undrainedPools holds closed pools whose connections had not drained
+	// when CloseWriter or CloseConnections gave up. They must drain before
+	// a later close reports success, or write ownership could be released
+	// (or the database file replaced) while a connection still holds the
+	// file. Guarded by connMu.
+	undrainedPools []*sql.DB
+	readOnly       bool
+	// writerClosed is set while the writer pool is intentionally closed for a
+	// worker maintenance pass (CloseWriter). It lets write attempts report
+	// ErrWriterClosed instead of the generic read-only error.
+	writerClosed atomic.Bool
+	dataStale    atomic.Bool // set by Open when user_version < dataVersion
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
@@ -603,6 +618,9 @@ func (w *writerHandle) current() (*sql.DB, error) {
 	}
 	db := w.owner.writer.Load()
 	if db == nil {
+		if w.owner.writerClosed.Load() {
+			return nil, ErrWriterClosed
+		}
 		return nil, ErrReadOnly
 	}
 	return db, nil
@@ -1631,6 +1649,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN deleted_at TEXT",
 		},
 		{
+			"sessions", "deletion_cause",
+			"ALTER TABLE sessions ADD COLUMN deletion_cause TEXT",
+		},
+		{
 			"messages", "is_system",
 			"ALTER TABLE messages ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0",
 		},
@@ -1879,6 +1901,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "last_entry_uuid",
 			"ALTER TABLE sessions ADD COLUMN last_entry_uuid TEXT",
+		},
+		{
+			// Whether the Claude full parser fell back to linear
+			// processing for this file (NULL = unknown/legacy or
+			// non-Claude). Read by the incremental parser to skip
+			// fork detection on linear-bound transcripts.
+			"sessions", "claude_linear_parse",
+			"ALTER TABLE sessions ADD COLUMN claude_linear_parse INTEGER",
 		},
 		{
 			"messages", "thinking_text",
@@ -2473,14 +2503,46 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
-		`CREATE INDEX IF NOT EXISTS idx_sessions_agent_file_path_active
-		 ON sessions(agent, file_path)
-		 WHERE file_path IS NOT NULL AND deleted_at IS NULL`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ddl); err != nil {
 			return fmt.Errorf("creating index: %w", err)
 		}
+	}
+	var sourceIndexColumns sql.NullString
+	if err := w.QueryRow(`
+		SELECT group_concat(name, ',')
+		FROM (
+			SELECT name
+			FROM pragma_index_info('idx_sessions_agent_file_path_active')
+			ORDER BY seqno
+		)`).Scan(&sourceIndexColumns); err != nil {
+		return fmt.Errorf("probing active session source index: %w", err)
+	}
+	var sourceIndexSQL sql.NullString
+	if err := w.QueryRow(`
+		SELECT sql FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_sessions_agent_file_path_active'
+	`).Scan(&sourceIndexSQL); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reading active session source index: %w", err)
+	}
+	normalizedSourceIndexSQL := strings.ToLower(
+		strings.Join(strings.Fields(sourceIndexSQL.String), " "),
+	)
+	if sourceIndexColumns.String != "agent,file_path,id" ||
+		!strings.Contains(normalizedSourceIndexSQL,
+			"where file_path is not null and deleted_at is null") {
+		if _, err := w.Exec(
+			`DROP INDEX IF EXISTS idx_sessions_agent_file_path_active`,
+		); err != nil {
+			return fmt.Errorf("dropping legacy active session source index: %w", err)
+		}
+	}
+	if _, err := w.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_sessions_agent_file_path_active
+		ON sessions(agent, file_path, id)
+		WHERE file_path IS NOT NULL AND deleted_at IS NULL`); err != nil {
+		return fmt.Errorf("creating active session source index: %w", err)
 	}
 	if _, err := w.Exec(
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
@@ -3465,8 +3527,17 @@ func (db *DB) init() error {
 	return nil
 }
 
-// Close closes both writer and reader connections, plus any
-// retired pools left over from previous Reopen calls.
+// Close closes both writer and reader connections, plus any retired pools
+// left over from previous Reopen calls and any pools a failed CloseWriter or
+// CloseConnections left undrained.
+//
+// Like those methods, Close waits (bounded by closeDrainTimeout) for every
+// closed pool to actually drain: callers such as closeWriteDB release the
+// write-owner flock once Close returns, so reporting success while a
+// connection still holds the SQLite file would let another process acquire
+// writer ownership alongside the surviving connection. A drain timeout is an
+// error, and the undrained pools are retained so a retry cannot succeed
+// before they actually drain.
 func (db *DB) Close() error {
 	db.stopWALCheckpointLoop()
 	db.mu.Lock()
@@ -3475,6 +3546,8 @@ func (db *DB) Close() error {
 	r := db.rawReader()
 	retired := db.retired
 	db.retired = nil
+	undrained := db.undrainedPools
+	db.undrainedPools = nil
 	db.connMu.Unlock()
 	db.mu.Unlock()
 
@@ -3482,31 +3555,71 @@ func (db *DB) Close() error {
 	// the final connection closes, and the reader pool is mode=ro so its
 	// close cannot perform that checkpoint.
 	var errs []error
+	closed := make([]*sql.DB, 0, len(retired)+len(undrained)+2)
 	for _, p := range retired {
 		errs = append(errs, p.Close())
+		closed = append(closed, p)
 	}
+	// Pools a failed close left undrained are already closed; they still
+	// hold the file until drained, so Close must wait for them like every
+	// other pool.
+	closed = append(closed, undrained...)
 	if r != nil {
 		errs = append(errs, r.Close())
+		closed = append(closed, r)
 	}
 	if w != nil && w != r {
 		errs = append(errs, w.Close())
+		closed = append(closed, w)
+	}
+	if stillOpen := drainPools(closed); len(stillOpen) > 0 {
+		db.retainUndrainedPools(stillOpen)
+		errs = append(errs, fmt.Errorf(
+			"db connections still in use %v after close; "+
+				"write ownership is not safe to release",
+			closeDrainTimeout))
 	}
 	return errors.Join(errs...)
+}
+
+// closeDrainTimeout bounds how long CloseConnections and CloseWriter wait
+// for in-flight queries to release their pooled connections after the pools
+// are closed. The drain normally completes in microseconds; the bound only
+// limits a pathological stuck query. A variable so tests can exercise the
+// timeout path without waiting out the production bound.
+var closeDrainTimeout = 5 * time.Second
+
+// SetCloseDrainTimeoutForTest overrides closeDrainTimeout so tests outside
+// this package can exercise the drain-timeout failure path without waiting
+// out the production bound. It returns a func restoring the previous value.
+func SetCloseDrainTimeoutForTest(d time.Duration) (restore func()) {
+	prev := closeDrainTimeout
+	closeDrainTimeout = d
+	return func() { closeDrainTimeout = prev }
 }
 
 // CloseConnections closes both connections without reopening,
 // releasing file locks so the database file can be renamed.
 // Also drains any retired pools from previous Reopen calls.
 // Callers must call Reopen afterwards to restore service.
+//
+// sql.DB.Close does not wait for in-use connections: a query started before
+// the close keeps its driver connection (and file handle) until its rows are
+// released. On Windows SQLite opens the database without FILE_SHARE_DELETE,
+// so renaming over the file fails while any such handle survives. Because
+// this method's contract is that the file can be renamed afterwards, it
+// waits (bounded) for every closed pool to drain before returning.
 func (db *DB) CloseConnections() error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
 	db.stopWALCheckpointLoop()
+	// db.mu stays held through the drain: a concurrent Reopen or
+	// ReopenWriter would open fresh handles on the same path, letting this
+	// method return "drained" while new handles still block the rename.
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.connMu.Lock()
-	defer db.connMu.Unlock()
 
 	// Close the writer last: SQLite checkpoints and removes the WAL when
 	// the final connection closes, and the reader pool is mode=ro so its
@@ -3514,15 +3627,114 @@ func (db *DB) CloseConnections() error {
 	// WAL file after this returns, so a skipped checkpoint would lose
 	// every write still sitting in the log.
 	var errs []error
+	closed := make([]*sql.DB, 0,
+		len(db.retired)+len(db.undrainedPools)+2)
 	for _, p := range db.retired {
 		errs = append(errs, p.Close())
+		closed = append(closed, p)
 	}
-	errs = append(errs,
-		db.rawReader().Close(),
-		db.rawWriter().Close(),
-	)
+	// Pools a failed close left undrained are already closed; they still
+	// hold the file until drained, so the rename must wait for them like
+	// every other pool.
+	closed = append(closed, db.undrainedPools...)
+	db.undrainedPools = nil
+	r := db.rawReader()
+	errs = append(errs, r.Close())
+	closed = append(closed, r)
+	// The writer pool is nil when a worker maintenance pass has it closed.
+	// Guard the close so this lifecycle path can never nil-deref.
+	w := db.rawWriter()
+	if w != nil {
+		errs = append(errs, w.Close())
+		closed = append(closed, w)
+	}
 	db.retired = nil
+	db.connMu.Unlock()
+
+	// Drain with connMu released: queries racing the close fail fast on
+	// the closed pools instead of blocking behind connMu, and releasing an
+	// in-flight row never needs either lock. A drain timeout is an error:
+	// proceeding would let the caller delete the WAL and rename the
+	// database file while a connection still holds it, which breaks the
+	// swap on Windows and risks discarding uncheckpointed WAL data. The
+	// undrained pools are retained so a retry cannot succeed before they
+	// actually drain.
+	if undrained := drainPools(closed); len(undrained) > 0 {
+		db.retainUndrainedPools(undrained)
+		errs = append(errs, fmt.Errorf(
+			"db connections still in use %v after close; "+
+				"database file is not safe to replace",
+			closeDrainTimeout))
+	}
+
+	// A write barrier (CloseWriter) may have closed the writer pool earlier,
+	// leaving only read-only connections for this close — and a read-only
+	// close cannot perform the final checkpoint. Callers are entitled to
+	// rename the database file and delete its WAL sidecars afterwards, so any
+	// committed writes still sitting in the log must be folded into the main
+	// file before this method reports success.
+	if w == nil && errors.Join(errs...) == nil {
+		if cerr := checkpointWALWithoutWriter(db.path); cerr != nil {
+			errs = append(errs, cerr)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// checkpointWALWithoutWriter folds any remaining WAL into the main database
+// file via a short-lived writable connection, for a CloseConnections whose
+// writer pool was already closed by a write barrier. Closing the connection
+// afterwards removes the truncated sidecars, restoring the writer-last close
+// posture the method's contract promises.
+func checkpointWALWithoutWriter(path string) error {
+	if _, err := os.Stat(path + "-wal"); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat wal before final checkpoint: %w", err)
+	}
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	if err != nil {
+		return fmt.Errorf("opening final checkpoint connection: %w", err)
+	}
+	defer conn.Close()
+	var busy, logPages, checkpointedPages int
+	if err := conn.QueryRow(
+		"PRAGMA wal_checkpoint(TRUNCATE)",
+	).Scan(&busy, &logPages, &checkpointedPages); err != nil {
+		return fmt.Errorf("final wal checkpoint: %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("final wal checkpoint: %w", ErrWALCheckpointBusy)
+	}
+	return nil
+}
+
+// drainPools waits until every connection in the already-closed pools has
+// been released, so the underlying file handles are gone and the database
+// file can be renamed on every platform. Gives up after closeDrainTimeout
+// and returns the pools that still had connections checked out.
+func drainPools(pools []*sql.DB) []*sql.DB {
+	deadline := time.Now().Add(closeDrainTimeout)
+	var undrained []*sql.DB
+	for _, p := range pools {
+		if !drainPoolUntil(p, deadline) {
+			undrained = append(undrained, p)
+		}
+	}
+	return undrained
+}
+
+// drainPoolUntil waits for every connection in the already-closed pool to be
+// released, reporting false if any survive past the deadline.
+func drainPoolUntil(p *sql.DB, deadline time.Time) bool {
+	for p.Stats().OpenConnections > 0 {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return true
 }
 
 // Reopen closes and reopens both connections to the same
@@ -3570,12 +3782,25 @@ func (db *DB) reopenLocked() error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
+	// Reopen fully restores the writer pool, so clear any writer-closed barrier
+	// a prior CloseWriter set. Without this a resync swap that ran behind the
+	// worker write barrier would reopen the pool yet keep rejecting writes.
+	db.writerClosed.Store(false)
 
 	// Retire the just-swapped pools. Concurrent readers that
 	// loaded the old pointer before the swap may still have
 	// in-flight queries; these pools will be closed on the
-	// next Reopen, CloseConnections, or Close call.
-	db.retired = []*sql.DB{oldWriter, oldReader}
+	// next Reopen, CloseConnections, or Close call. Skip a nil
+	// old writer: a Reopen that follows CloseWriter swaps out a
+	// nil pool, and retiring it would nil-deref on the next close.
+	var freshRetired []*sql.DB
+	if oldWriter != nil {
+		freshRetired = append(freshRetired, oldWriter)
+	}
+	if oldReader != nil {
+		freshRetired = append(freshRetired, oldReader)
+	}
+	db.retired = freshRetired
 	db.connMu.Unlock()
 
 	// Close pools from earlier reopens outside connMu. database/sql
@@ -3591,6 +3816,110 @@ func (db *DB) reopenLocked() error {
 	return nil
 }
 
+// CloseWriter closes the writer pool without touching the reader pool, so
+// read-only queries keep serving while a sync-worker owns the archive for a
+// maintenance pass. Writes attempted while closed return ErrWriterClosed. The
+// reader pool is mode=ro and cannot checkpoint, so it holds the WAL open across
+// the handoff; the worker attaches to the same WAL. Callers must call
+// ReopenWriter to restore write service.
+//
+// Failure posture: the writer pointer is swapped to nil (marking the barrier
+// active) before the old pool is closed, so if the close or drain fails the
+// barrier stays up and the undrained pool is retained. The caller must keep
+// the write-owner flock and must not hand ownership to a worker — a possible
+// double-writer racing the worker over the same archive is worse than a
+// failed pass. Because ownership is never released on this path, the caller
+// may restore write service with ReopenWriter: the surviving connection
+// belongs to this process, and a later CloseWriter must drain the retained
+// pool before it can succeed.
+func (db *DB) CloseWriter() error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	db.stopWALCheckpointLoop()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.connMu.Lock()
+	old := db.writer.Swap(nil)
+	db.writerClosed.Store(true)
+	pending := db.undrainedPools
+	db.undrainedPools = nil
+	db.connMu.Unlock()
+
+	if old != nil {
+		if err := old.Close(); err != nil {
+			db.retainUndrainedPools(append(pending, old))
+			return fmt.Errorf("closing writer pool: %w", err)
+		}
+		pending = append(pending, old)
+	}
+	// sql.DB.Close does not wait for checked-out connections: a stats or
+	// git-cache query that snapshotted the writer handle may still hold the
+	// single writer connection. The caller releases write ownership (the
+	// flock) once this returns, so an undrained connection would overlap
+	// with the worker's writes. Per the failure posture above, a drain
+	// timeout is an error: the pools that failed to drain are retained so a
+	// retry cannot report success while their connections survive, and the
+	// caller keeps the flock rather than risking a double writer.
+	if undrained := drainPools(pending); len(undrained) > 0 {
+		db.retainUndrainedPools(undrained)
+		return fmt.Errorf(
+			"writer connection still in use %v after close; "+
+				"keeping write ownership", closeDrainTimeout)
+	}
+	return nil
+}
+
+// retainUndrainedPools records closed-but-undrained pools so a later
+// CloseWriter or CloseConnections drains them before it may succeed.
+func (db *DB) retainUndrainedPools(pools []*sql.DB) {
+	db.connMu.Lock()
+	db.undrainedPools = append(db.undrainedPools, pools...)
+	db.connMu.Unlock()
+}
+
+// ReopenWriter reopens the writer pool after a worker maintenance pass. It
+// re-runs the writer-open half of Reopen (writable DSN, single connection,
+// configureWAL) and restarts the WAL checkpoint loop. The reader pool is left
+// untouched.
+func (db *DB) ReopenWriter() error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	writer, err := sql.Open("sqlite3", makeDSN(db.path, false))
+	if err != nil {
+		return fmt.Errorf("reopening writer: %w", err)
+	}
+	writer.SetMaxOpenConns(1)
+	if err := configureWAL(writer); err != nil {
+		writer.Close()
+		return fmt.Errorf("configuring reopened wal: %w", err)
+	}
+
+	db.connMu.Lock()
+	old := db.writer.Swap(writer)
+	db.writerClosed.Store(false)
+	db.connMu.Unlock()
+
+	if old != nil {
+		if err := old.Close(); err != nil {
+			log.Printf("warning: closing stale writer pool: %v", err)
+		}
+	}
+	db.startWALCheckpointLoop()
+	return nil
+}
+
+// WriterClosed reports whether the writer pool is currently closed for a
+// maintenance pass. Callers that conditionally own the write barrier check it to
+// avoid double-closing or reopening a barrier an outer owner holds.
+func (db *DB) WriterClosed() bool {
+	return db.writerClosed.Load()
+}
+
 // Update executes fn within a write lock and transaction.
 // The transaction is committed if fn returns nil, rolled back
 // otherwise.
@@ -3598,6 +3927,12 @@ func (db *DB) Update(fn func(tx *sql.Tx) error) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Fail fast before handing out a raw *sql.Tx: while the writer is closed
+	// for a worker maintenance pass the pool pointer is nil, and a caller must
+	// see ErrWriterClosed rather than a transaction from a torn-down pool.
+	if db.writerClosed.Load() {
+		return ErrWriterClosed
+	}
 	tx, err := db.getWriter().Begin()
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)

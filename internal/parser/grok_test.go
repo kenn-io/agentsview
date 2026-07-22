@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -304,6 +305,110 @@ func TestParseGrokChatHistoryDropsOrphanReasoning(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A followed cwd- or session-directory symlink whose target cannot be
+// resolved must surface incomplete streaming discovery rather than reading as
+// absent: reconciliation treats a clean DiscoverEach as authoritative and
+// would tombstone every session beneath the symlink.
+func TestGrokProviderStreamingDiscoveryPropagatesDirectorySymlinkErrors(t *testing.T) {
+	discoverEach := func(t *testing.T, root string) ([]string, error) {
+		t.Helper()
+		provider := newGrokTestProvider(t, root)
+		discoverer, ok := provider.(StreamingDiscoverer)
+		require.True(t, ok)
+		var yielded []string
+		err := discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
+			yielded = append(yielded, source.DisplayPath)
+			return nil
+		})
+		return yielded, err
+	}
+	writeHealthySession := func(t *testing.T, root string) string {
+		t.Helper()
+		path := grokSummaryPath(root, "cwd-key", "sess-1")
+		writeGrokFixtureFile(t, path, `{"summary":"Healthy"}`)
+		return path
+	}
+
+	t.Run("dangling cwd symlink", func(t *testing.T) {
+		root := t.TempDir()
+		healthy := writeHealthySession(t, root)
+		target := filepath.Join(t.TempDir(), "linked-cwd")
+		require.NoError(t, os.MkdirAll(target, 0o755))
+		link := filepath.Join(root, "linked")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
+		require.NoError(t, os.RemoveAll(target))
+
+		_, err := discoverEach(t, root)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+
+		require.NoError(t, os.Remove(link))
+		yielded, err := discoverEach(t, root)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
+
+	t.Run("dangling session symlink", func(t *testing.T) {
+		root := t.TempDir()
+		healthy := writeHealthySession(t, root)
+		target := filepath.Join(t.TempDir(), "linked-session")
+		require.NoError(t, os.MkdirAll(target, 0o755))
+		link := filepath.Join(root, "cwd-key", "sess-linked")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
+		require.NoError(t, os.RemoveAll(target))
+
+		_, err := discoverEach(t, root)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+
+		require.NoError(t, os.Remove(link))
+		yielded, err := discoverEach(t, root)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
+
+	t.Run("unstatable cwd symlink target", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory read permissions are not enforced on Windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses directory permissions")
+		}
+		root := t.TempDir()
+		healthy := writeHealthySession(t, root)
+		targetParent := t.TempDir()
+		target := filepath.Join(targetParent, "linked-cwd")
+		require.NoError(t, os.MkdirAll(target, 0o755))
+		if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
+		require.NoError(t, os.Chmod(targetParent, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
+
+		_, err := discoverEach(t, root)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrPermission)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+
+		require.NoError(t, os.Chmod(targetParent, 0o755))
+		yielded, err := discoverEach(t, root)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
 }
 
 func TestGrokProviderSummarySource(t *testing.T) {

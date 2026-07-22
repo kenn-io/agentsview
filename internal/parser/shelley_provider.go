@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ func newShelleyProviderFactory(def AgentDef) ProviderFactory {
 				AgentShelley,
 				cfg.Roots,
 				WithContainerDiscovery(shelleyDiscoverContainers),
+				WithStreamingSourceDiscovery(shelleyDiscoverEach),
 				WithWatchRoots(shelleyWatchRoots),
 				WithChangedPathClassifier(shelleyClassifyPath),
 				WithMemberLookup(shelleyFindMember),
@@ -33,6 +35,25 @@ func newShelleyProviderFactory(def AgentDef) ProviderFactory {
 			)
 		},
 	)
+}
+
+func shelleyDiscoverEach(
+	ctx context.Context, root string, yield func(multiSessionMatch) error,
+) error {
+	dbPath := shelleyDBPath(root)
+	if dbPath == "" {
+		return nil
+	}
+	conn, err := OpenShelleyDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return ForEachShelleyConversationMeta(ctx, conn, dbPath, func(meta ShelleyConversationMeta) error {
+		return yield(multiSessionMatch{
+			Path: meta.VirtualPath, Container: dbPath, MemberID: meta.RawID,
+		})
+	})
 }
 
 func shelleyDiscoverContainers(root string) []string {
@@ -133,14 +154,13 @@ func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error)
 		return SourceFingerprint{}, err
 	}
 	defer conn.Close()
-	metas, err := ListShelleyConversationMetas(conn, src.Container)
+	meta, found, err := ShelleyConversationMetaByID(
+		context.Background(), conn, src.Container, src.MemberID,
+	)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
-	for _, meta := range metas {
-		if meta.RawID != src.MemberID {
-			continue
-		}
+	if found {
 		fingerprint.MTimeNS = meta.FileMtime
 		fingerprint.Hash = meta.Fingerprint
 		return fingerprint, nil
@@ -265,11 +285,13 @@ func parseShelleyVirtualPath(path string) (string, string, bool) {
 }
 
 func shelleyProviderCapabilities() Capabilities {
+	source := multiSessionContainerSourceCapabilities(
+		CapabilitySupported,
+		CapabilitySupported,
+	)
+	source.PersistentArchive = CapabilitySupported
 	return Capabilities{
-		Source: multiSessionContainerSourceCapabilities(
-			CapabilitySupported,
-			CapabilitySupported,
-		),
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,

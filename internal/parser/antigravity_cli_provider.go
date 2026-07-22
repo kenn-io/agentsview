@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,10 @@ type antigravityCLIProvider struct {
 
 func (p *antigravityCLIProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
+}
+
+func (p *antigravityCLIProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
 }
 
 func (p *antigravityCLIProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -172,6 +177,52 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s antigravityCLISourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		projects, err := newDiscoveryDiskMapForContext(ctx)
+		if err != nil {
+			return err
+		}
+		if err := projects.loadJSONL(
+			ctx, filepath.Join(root, "history.jsonl"), "conversationId", "workspace",
+		); err != nil {
+			return errors.Join(err, projects.close())
+		}
+		for _, subdir := range []string{"conversations", "implicit"} {
+			dir := filepath.Join(root, subdir)
+			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+				if entry.IsDir() {
+					return nil
+				}
+				_, ext, ok := antigravityCLIPathID(entry.Name())
+				if !ok || subdir == "implicit" && ext != ".pb" {
+					return nil
+				}
+				path := filepath.Join(dir, entry.Name())
+				rawID, ok := antigravityCLISessionIDForPath(root, path)
+				if !ok {
+					return nil
+				}
+				project, _, err := projects.get(ctx, strings.TrimPrefix(rawID, antigravityImplicitTag))
+				if err != nil {
+					return err
+				}
+				return yield(s.newSourceRef(root, path, rawID, project))
+			})
+			if err != nil {
+				return errors.Join(err, projects.close())
+			}
+		}
+		if err := projects.close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // discoverSessions enumerates conversations/*.db, conversations/*.pb, and
@@ -545,7 +596,7 @@ func (s antigravityCLISourceSet) newSourceRef(
 ) SourceRef {
 	return SourceRef{
 		Provider:       AgentAntigravityCLI,
-		Key:            path,
+		Key:            id,
 		DisplayPath:    path,
 		FingerprintKey: path,
 		ProjectHint:    project,
@@ -664,6 +715,7 @@ func antigravityCLIWatchRootMatches(root, watchRoot string) bool {
 
 func antigravityCLIProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
+	source.StreamingDiscovery = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
 	return Capabilities{
 		Source: source,

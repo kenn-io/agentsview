@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -653,6 +654,52 @@ func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
 	require.NoError(t, tx.Rollback(), "Rollback")
 }
 
+func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
+	state := &pushSessionProbeState{}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	deletedAt := "2026-07-14T12:34:56Z"
+	cause := "source_missing"
+
+	err = (&Sync{machine: "push-machine"}).pushSession(
+		t.Context(), tx,
+		db.Session{
+			ID: "session", Project: "project", Machine: "push-machine",
+			Agent: "claude", CreatedAt: "2026-01-01T00:00:00Z",
+			DeletedAt: &deletedAt, DeletionCause: &cause,
+		},
+		"marker", nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, state.upsertArgs, 63)
+	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
+	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
+	assert.Equal(t, cause, state.upsertArgs[14].Value)
+	assert.Equal(t, "[]", state.upsertArgs[62].Value)
+
+	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
+	assert.Contains(t, query,
+		"deleted_at, source_deleted_at, deletion_cause")
+	assert.Contains(t, query,
+		"when sessions.deleted_at is distinct from sessions.source_deleted_at then sessions.deletion_cause else excluded.deletion_cause")
+	assert.Contains(t, query,
+		"sessions.deletion_cause is distinct from excluded.deletion_cause")
+	require.NoError(t, tx.Rollback())
+}
+
+func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
+	base := db.Session{ID: "session", Machine: "machine"}
+	withCause := base
+	cause := "source_missing"
+	withCause.DeletionCause = &cause
+
+	assert.NotEqual(t,
+		sessionPushFingerprint(base, base.Machine, "", "", ""),
+		sessionPushFingerprint(withCause, withCause.Machine, "", "", ""),
+	)
+}
+
 func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
 	state := &pushSessionProbeState{aliases: map[string]string{}}
 	pg := newPushSessionProbeDB(t, state)
@@ -828,6 +875,8 @@ type pushSessionProbeState struct {
 	aliases             map[string]string
 	excludedIDs         map[string]bool
 	existingExcluded    map[string]bool
+	upsertQuery         string
+	upsertArgs          []driver.NamedValue
 }
 
 var (
@@ -898,6 +947,8 @@ func (c *pushSessionProbeConn) ExecContext(
 	switch {
 	case strings.Contains(normalized, "insert into sessions"):
 		c.state.upserts++
+		c.state.upsertQuery = query
+		c.state.upsertArgs = append([]driver.NamedValue(nil), args...)
 		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "delete from sessions") &&
 		strings.Contains(normalized, "id = any($1)"):

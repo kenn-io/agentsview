@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ func newReasonixProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				AgentReasonix,
 				cfg.Roots,
-				WithFileDiscovery(reasonixDiscoverFiles),
+				WithStreamingFileDiscovery(reasonixDiscoverEach),
 				WithFileWatchRoots(
 					func(roots []string) []WatchRoot {
 						return reasonixWatchRoots(roots, watchSubdirs)
@@ -38,16 +39,18 @@ func newReasonixProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
-func reasonixDiscoverFiles(root string) []singleFileMatch {
-	sessions := discoverReasonixSessions(root)
-	out := make([]singleFileMatch, 0, len(sessions))
-	for _, df := range sessions {
-		out = append(out, singleFileMatch{
-			Path:        filepath.Clean(df.Path),
-			ProjectHint: df.Project,
-		})
-	}
-	return out
+func reasonixDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
+	return streamDirectoryTree(ctx, root, func(path string, entry os.DirEntry) error {
+		if !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		if match, ok := reasonixClassifyPath(root, path, false); ok {
+			return yield(match)
+		}
+		return nil
+	})
 }
 
 func reasonixWatchRoots(roots, watchSubdirs []string) []WatchRoot {
@@ -257,6 +260,7 @@ func reasonixProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

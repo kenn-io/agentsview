@@ -59,6 +59,83 @@ func TestWindsurfProviderDiscoversAndParsesWorkspaceSQLiteChat(t *testing.T) {
 	assert.Equal(t, "Use the existing parser.", result.Messages[1].Content)
 }
 
+func TestWindsurfProviderStreamingDiscoveryKeepsFirstDuplicateSession(t *testing.T) {
+	firstPayload := windsurfVSCodeSessionJSON(
+		"duplicate-session",
+		"Question from the first key",
+		"Answer from the first key.",
+	)
+	root, dbPath := windsurfProviderFixture(t, firstPayload)
+	insertWindsurfStateRow(
+		t,
+		dbPath,
+		"aiChat.chatdata",
+		windsurfVSCodeSessionJSON(
+			"duplicate-session",
+			"Question from the second key",
+			"Answer from the second key.",
+		),
+	)
+	provider := newTestWindsurfProvider(root)
+	baselineRoot, _ := windsurfProviderFixture(t, firstPayload)
+	baselineProvider := newTestWindsurfProvider(baselineRoot)
+	baselineSources, err := baselineProvider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, baselineSources, 1)
+	baselineFingerprint, err := baselineProvider.Fingerprint(t.Context(), baselineSources[0])
+	require.NoError(t, err)
+
+	ctx, cleanup, err := WithReconciliationCache(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+	var sources []SourceRef
+	err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(source SourceRef) error {
+		sources = append(sources, source)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	fingerprint, err := provider.Fingerprint(ctx, sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, baselineFingerprint.Hash, fingerprint.Hash)
+	assert.Equal(t, baselineFingerprint.Size, fingerprint.Size)
+
+	out, err := provider.Parse(ctx, ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	messages := out.Results[0].Result.Messages
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Question from the first key", messages[0].Content)
+	assert.Equal(t, "Answer from the first key.", messages[1].Content)
+}
+
+func TestWindsurfProviderRehydratesExactVirtualSourceWithoutContainerFanout(t *testing.T) {
+	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
+		"windsurf-exact", "Exact?", "Exact.",
+	))
+	provider := newTestWindsurfProvider(root)
+	virtualPath := dbPath + "#windsurf-exact"
+
+	resolver, ok := provider.(ReconciliationSourceResolver)
+	require.True(t, ok)
+	source, found, err := resolver.SourceForReconciliation(
+		t.Context(), virtualPath, "spooled-project",
+	)
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, virtualPath, source.DisplayPath)
+	assert.Equal(t, "spooled-project", source.ProjectHint)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, err = resolver.SourceForReconciliation(ctx, virtualPath, "")
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestWindsurfProviderFingerprintHashIsContentBased(t *testing.T) {
 	payload := windsurfVSCodeSessionJSON(
 		"windsurf-session-hash",

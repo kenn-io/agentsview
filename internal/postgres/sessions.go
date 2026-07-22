@@ -71,7 +71,7 @@ const pgSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -231,7 +231,7 @@ func scanPGSession(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.TerminationStatus, &s.TranscriptRevision,
+		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
 	)
 	if err != nil {
 		return s, err

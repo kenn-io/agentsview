@@ -184,7 +184,7 @@ func (e *Engine) verifiedProviderSourceState(
 	if !ok {
 		return verifiedSourceCapture{}, 0, false, false
 	}
-	inode, device := getFileIdentity(info)
+	inode, device := getFileIdentity(path, info)
 	mtime := info.ModTime().UnixNano()
 	sidecar := verifiedSourceSignature{}
 	if provider.Definition().Type == parser.AgentCodex {
@@ -202,7 +202,7 @@ func (e *Engine) verifiedProviderSourceState(
 				if !reliable {
 					return verifiedSourceCapture{}, 0, false, false
 				}
-				indexInode, indexDevice := getFileIdentity(indexInfo)
+				indexInode, indexDevice := getFileIdentity(indexPath, indexInfo)
 				sidecar.sidecarSize = indexInfo.Size()
 				sidecar.sidecarMtime = indexInfo.ModTime().UnixNano()
 				sidecar.sidecarInode = indexInode

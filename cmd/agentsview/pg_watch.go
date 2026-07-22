@@ -79,7 +79,7 @@ func (p *pgPusher) push(
 			"pg watch: %d session(s) failed to push; will retry",
 			res.Errors,
 		)
-		return nil
+		return fmt.Errorf("%d session(s) failed to push", res.Errors)
 	}
 	logPGWatchPushResult(res, reason)
 	return nil

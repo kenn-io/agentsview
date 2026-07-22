@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -21,6 +22,7 @@ func newTraeProviderFactory(def AgentDef) ProviderFactory {
 	return NewMultiSessionProviderFactory(def, traeProviderCapabilities(), func(cfg ProviderConfig) multiSessionContainerSourceSet {
 		return NewMultiSessionContainerSourceSet(AgentTrae, cfg.Roots,
 			WithContainerDiscovery(traeDiscoverContainers),
+			WithStreamingSourceDiscovery(traeDiscoverEach),
 			WithWatchRoots(traeWatchRoots),
 			WithChangedPathClassifier(traeClassifyPath),
 			WithMemberLookup(traeFindMember),
@@ -34,6 +36,37 @@ func newTraeProviderFactory(def AgentDef) ProviderFactory {
 }
 
 type traeDB struct{ path, project string }
+
+func traeDiscoverEach(
+	ctx context.Context, root string, yield func(multiSessionMatch) error,
+) error {
+	workspace := filepath.Join(filepath.Clean(root), "workspaceStorage")
+	if err := streamDirectoryEntries(ctx, workspace, func(entry os.DirEntry) error {
+		if !entry.IsDir() {
+			return nil
+		}
+		path := filepath.Join(workspace, entry.Name(), traeStateDBName)
+		regular, err := streamingRegularFileCandidate(path)
+		if err != nil {
+			return err
+		}
+		if !regular {
+			return nil
+		}
+		return yield(traeMatch(path, ""))
+	}); err != nil {
+		return err
+	}
+	global := filepath.Join(filepath.Clean(root), "globalStorage", traeStateDBName)
+	regular, err := streamingRegularFileCandidate(global)
+	if err != nil {
+		return err
+	}
+	if !regular {
+		return nil
+	}
+	return yield(traeMatch(global, ""))
+}
 
 func traeDiscoverContainers(root string) []string {
 	dbs := traeDBs(root)

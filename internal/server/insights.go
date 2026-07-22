@@ -321,29 +321,34 @@ func (s *Server) generateCannedInsight(
 		promptPtr = &req.Prompt
 	}
 
-	id, err := s.db.InsertInsight(db.Insight{
-		Type:            insight.CannedType,
-		DateFrom:        req.DateFrom,
-		DateTo:          req.DateTo,
-		Project:         project,
-		Agent:           result.Agent,
-		Model:           modelPtr,
-		Prompt:          promptPtr,
-		Content:         insight.RenderCannedMarkdown(envelope, prov),
-		Kind:            string(kind),
-		SchemaVersion:   insight.CannedSchemaVersion,
-		TemplateID:      prov.TemplateID,
-		TemplateVersion: prov.TemplateVersion,
-		AggregateHash:   aggregateHash,
-		CacheKey:        cacheKey,
-		CacheStatus:     "fresh",
-		ProvenanceJSON:  string(provJSON),
-		StructuredJSON:  string(structuredJSON),
+	var id int64
+	err = s.serializeArchiveWrite(func() error {
+		var insertErr error
+		id, insertErr = s.db.InsertInsight(db.Insight{
+			Type:            insight.CannedType,
+			DateFrom:        req.DateFrom,
+			DateTo:          req.DateTo,
+			Project:         project,
+			Agent:           result.Agent,
+			Model:           modelPtr,
+			Prompt:          promptPtr,
+			Content:         insight.RenderCannedMarkdown(envelope, prov),
+			Kind:            string(kind),
+			SchemaVersion:   insight.CannedSchemaVersion,
+			TemplateID:      prov.TemplateID,
+			TemplateVersion: prov.TemplateVersion,
+			AggregateHash:   aggregateHash,
+			CacheKey:        cacheKey,
+			CacheStatus:     "fresh",
+			ProvenanceJSON:  string(provJSON),
+			StructuredJSON:  string(structuredJSON),
+		})
+		return insertErr
 	})
 	if err != nil {
 		log.Printf("canned insight insert error: %v", err)
 		sendJSON("error", map[string]string{
-			"message": "failed to save insight",
+			"message": insightSaveErrorMessage(err),
 		})
 		return
 	}

@@ -3,6 +3,7 @@ package sync_test
 import (
 	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -23,7 +25,12 @@ func createForgeDB(t *testing.T, dir string) *forgeTestDB {
 	path := filepath.Join(dir, ".forge.db")
 	d, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "opening forge test db")
-	t.Cleanup(func() { d.Close() })
+	fixture := &forgeTestDB{path: path, db: d}
+	t.Cleanup(func() {
+		if fixture.db != nil {
+			_ = fixture.db.Close()
+		}
+	})
 
 	schema := `
 		CREATE TABLE conversations (
@@ -38,7 +45,13 @@ func createForgeDB(t *testing.T, dir string) *forgeTestDB {
 	`
 	_, err = d.Exec(schema)
 	require.NoError(t, err, "creating forge schema")
-	return &forgeTestDB{path: path, db: d}
+	return fixture
+}
+
+func (f *forgeTestDB) close(t *testing.T) {
+	t.Helper()
+	require.NoError(t, f.db.Close())
+	f.db = nil
 }
 
 func (f *forgeTestDB) mustExec(t *testing.T, msg, query string, args ...any) {
@@ -181,6 +194,109 @@ func TestSyncEngineForgeBulkSync(t *testing.T) {
 	)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
+}
+
+func TestReconcileWatchRootsGenericDBBackedProviderPreservesArchive(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentForge)
+	forge := createForgeDB(t, env.forgeDir)
+	forge.addConversation(
+		t,
+		"persistent-archive",
+		"Persistent Forge Archive",
+		forgeTestContext("Preserve this prompt.", "Preserved."),
+		"2026-05-02 09:58:15.741021507",
+		"2026-05-02 10:00:16.848497543",
+		`{"input_tokens":360,"output_tokens":55,"cached_input_tokens":85}`,
+	)
+	forge.close(t)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(forge.path))
+
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{env.forgeDir}, false,
+	))
+
+	sess, err := env.db.GetSession(t.Context(), "forge:persistent-archive")
+	require.NoError(t, err)
+	assert.NotNil(t, sess,
+		"the generic DB-backed provider must preserve members after its SQLite archive vanishes")
+}
+
+func TestReconcileWatchRootsForgeDeletedMemberTombstonesSession(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentForge)
+	forge := createForgeDB(t, env.forgeDir)
+	for _, id := range []string{"deleted-member", "surviving-member"} {
+		forge.addConversation(
+			t, id, id,
+			forgeTestContext("Prompt for "+id, "Answer for "+id),
+			"2026-05-02 09:58:15.741021507",
+			"2026-05-02 10:00:16.848497543",
+			`{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}`,
+		)
+	}
+	require.Equal(t, 2, env.engine.SyncAll(t.Context(), nil).Synced)
+	beforeDelete, err := env.db.GetSessionFull(t.Context(), "forge:deleted-member")
+	require.NoError(t, err)
+	require.NotNil(t, beforeDelete)
+	forge.mustExec(t, "delete Forge conversation",
+		"DELETE FROM conversations WHERE conversation_id = ?", "deleted-member")
+
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{env.forgeDir}, false,
+	))
+
+	deleted, err := env.db.GetSession(t.Context(), "forge:deleted-member")
+	require.NoError(t, err)
+	assert.Nil(t, deleted,
+		"full sync must baseline dedicated streaming sources for later reconciliation")
+	archived, err := env.db.GetSessionFull(t.Context(), "forge:deleted-member")
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	require.NotNil(t, archived.DeletedAt)
+	require.NotNil(t, archived.DeletionCause)
+	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assert.Equal(t, beforeDelete.MessageCount, archived.MessageCount,
+		"source loss must retain the archived transcript")
+	surviving, err := env.db.GetSession(t.Context(), "forge:surviving-member")
+	require.NoError(t, err)
+	assert.NotNil(t, surviving)
+}
+
+func TestReconcileWatchRootsForgeScopedPassPreservesUnscannedReplacement(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentForge, []string{rootA, rootB},
+	)
+	forgeA := createForgeDB(t, rootA)
+	forgeA.addConversation(
+		t, "moved-member", "Moved member",
+		forgeTestContext("original prompt", "original answer"),
+		"2026-05-02 09:58:15.741021507",
+		"2026-05-02 10:00:16.848497543",
+		`{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}`,
+	)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	forgeB := createForgeDB(t, rootB)
+	forgeB.addConversation(
+		t, "moved-member", "Moved member",
+		forgeTestContext("replacement prompt", "replacement answer"),
+		"2026-05-02 09:58:15.741021507",
+		"2026-05-02 10:01:16.848497543",
+		`{"input_tokens":2,"output_tokens":2,"cached_input_tokens":0}`,
+	)
+	forgeA.mustExec(t, "remove original Forge conversation",
+		"DELETE FROM conversations WHERE conversation_id = ?", "moved-member")
+
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{rootA}, false,
+	))
+
+	active, err := env.db.GetSession(t.Context(), "forge:moved-member")
+	require.NoError(t, err)
+	assert.NotNil(t, active,
+		"a scoped pass cannot prove absence below an unscanned provider root")
 }
 
 func TestSyncSingleSessionForge(t *testing.T) {

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -17,7 +18,7 @@ func newGrokProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				AgentGrok,
 				cfg.Roots,
-				WithFileDiscovery(grokDiscoverFiles),
+				WithStreamingFileDiscovery(grokDiscoverEach),
 				WithFileWatchRoots(grokWatchRoots),
 				WithFileChangedPathClassifier(grokClassifyPath),
 				WithFileLookup(grokFindFile),
@@ -28,35 +29,41 @@ func newGrokProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
-func grokDiscoverFiles(root string) []singleFileMatch {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	var out []singleFileMatch
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, root) {
-			continue
+func grokDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
+	return streamDirectoryEntries(ctx, root, func(cwd os.DirEntry) error {
+		isCwdDir, dirErr := streamingDirCandidateOrIncomplete(
+			AgentGrok, "Grok cwd directory", cwd, root,
+		)
+		if dirErr != nil {
+			return dirErr
 		}
-		cwdRoot := filepath.Join(root, entry.Name())
-		sessionEntries, err := os.ReadDir(cwdRoot)
-		if err != nil {
-			continue
+		if !isCwdDir {
+			return nil
 		}
-		for _, sessionEntry := range sessionEntries {
-			if !isDirOrSymlink(sessionEntry, cwdRoot) ||
-				!IsValidSessionID(sessionEntry.Name()) {
-				continue
+		cwdRoot := filepath.Join(root, cwd.Name())
+		return streamDirectoryEntries(ctx, cwdRoot, func(session os.DirEntry) error {
+			if !IsValidSessionID(session.Name()) {
+				return nil
 			}
-			summaryPath := filepath.Join(
-				cwdRoot, sessionEntry.Name(), "summary.json",
+			isSessionDir, sessionErr := streamingDirCandidateOrIncomplete(
+				AgentGrok, "Grok session directory", session, cwdRoot,
 			)
-			if match, ok := grokStrictMatch(root, summaryPath); ok {
-				out = append(out, match)
+			if sessionErr != nil {
+				return sessionErr
 			}
-		}
-	}
-	return out
+			if !isSessionDir {
+				return nil
+			}
+			if match, ok := grokStrictMatch(
+				root, filepath.Join(cwdRoot, session.Name(), "summary.json"),
+			); ok {
+				return yield(match)
+			}
+			return nil
+		})
+	})
 }
 
 func grokWatchRoots(roots []string) []WatchRoot {

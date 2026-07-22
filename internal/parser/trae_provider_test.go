@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +106,66 @@ func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 	}
 }
 
+func TestTraeStreamingDiscoveryBoundsWorkspaceAndStopsEarly(t *testing.T) {
+	const workspaces = streamingDirectoryBatchSize*2 + 3
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "workspaceStorage")
+	for i := range workspaces {
+		path := filepath.Join(
+			workspaceRoot, fmt.Sprintf("workspace-%03d", i), traeStateDBName,
+		)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+	}
+	provider, ok := NewProvider(AgentTrae, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	streaming, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	maxBuffered := 0
+	ctx := WithStreamingDiscoveryBufferObserver(t.Context(), func(buffered int) {
+		maxBuffered = max(maxBuffered, buffered)
+	})
+	count := 0
+
+	err := streaming.DiscoverEach(ctx, func(SourceRef) error {
+		count++
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, workspaces, count)
+	assert.Positive(t, maxBuffered,
+		"Trae discovery must report its bounded directory batches")
+	assert.LessOrEqual(t, maxBuffered, streamingDirectoryBatchSize)
+
+	stop := errors.New("stop after first source")
+	visited := 0
+	ctx = withStreamingDirectoryReader(t.Context(), func(
+		ctx context.Context, dir string, yield func(os.DirEntry) error,
+	) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			visited++
+			if err := yield(entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	err = streaming.DiscoverEach(ctx, func(SourceRef) error { return stop })
+
+	assert.ErrorIs(t, err, stop)
+	assert.Equal(t, 1, visited,
+		"consumer stop must halt the workspace traversal immediately")
+}
+
 func TestTraeWatchChangedPathAndVirtualLookup(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "globalStorage", traeStateDBName)
@@ -134,6 +196,42 @@ func TestTraeWatchChangedPathAndVirtualLookup(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, changed, 1)
 	}
+}
+
+// Watcher sidecar events (workspace.json, -wal) must scope stored-source
+// hints to the owning state.vscdb container, not the whole watch root, so
+// changed-path hint queries stay bounded by the affected container.
+func TestTraeStoredSourceHintScopesResolveEventToContainer(t *testing.T) {
+	root := t.TempDir()
+	workspaceDB := filepath.Join(
+		root, "workspaceStorage", "hash-a", traeStateDBName,
+	)
+	globalDB := filepath.Join(root, "globalStorage", traeStateDBName)
+	writeTraeDB(t, workspaceDB, traeFixtureValue(t), "")
+	writeTraeDB(t, globalDB, traeFixtureValue(t), "")
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
+	resolver, ok := provider.(StoredSourceHintScopeProvider)
+	require.True(t, ok, "trae provider must resolve stored-source hint scopes")
+
+	workspaceScopes := resolver.StoredSourceHintScopes(ChangedPathRequest{
+		Path: filepath.Join(
+			root, "workspaceStorage", "hash-a", "workspace.json",
+		),
+		WatchRoot: filepath.Join(root, "workspaceStorage"),
+	})
+	require.Len(t, workspaceScopes, 1)
+	assert.Equal(t, workspaceDB, workspaceScopes[0].Path)
+	assert.True(t, workspaceScopes[0].IncludeVirtualMembers)
+
+	globalScopes := resolver.StoredSourceHintScopes(ChangedPathRequest{
+		Path:      globalDB + "-wal",
+		WatchRoot: filepath.Join(root, "globalStorage"),
+	})
+	require.Len(t, globalScopes, 1)
+	assert.Equal(t, globalDB, globalScopes[0].Path)
+	assert.True(t, globalScopes[0].IncludeVirtualMembers)
 }
 
 func TestTraeWorkspaceChangedPathAndRawExport(t *testing.T) {

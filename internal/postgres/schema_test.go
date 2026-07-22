@@ -281,6 +281,12 @@ func (s *schemaProbeState) alterTableExecCount() int {
 	return len(s.alterTableExecs)
 }
 
+func (s *schemaProbeState) alterTableSQL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.alterTableExecs, "\n")
+}
+
 func (s *schemaProbeState) execCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -358,6 +364,43 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	assert.Equal(t, 1, state.informationQueryCount(),
 		"information_schema.columns queries")
+}
+
+func TestEnsureSchemaMigratesSessionDeletionCause(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"owner_marker", "created_at", "deleted_at",
+			"source_display_name", "source_deleted_at",
+			"total_output_tokens", "peak_context_tokens",
+			"has_total_output_tokens", "has_peak_context_tokens",
+			"is_automated", "tool_failure_signal_count", "tool_retry_count",
+			"edit_churn_count", "consecutive_failure_max", "outcome",
+			"outcome_confidence", "ended_with_role", "final_failure_streak",
+			"signals_pending_since", "compaction_count",
+			"mid_task_compaction_count", "context_pressure_max", "health_score",
+			"health_grade", "has_tool_calls", "has_context_data", "data_version",
+			"cwd", "quality_signal_version", "short_prompt_count",
+			"unstructured_start", "missing_success_criteria_count",
+			"missing_verification_count", "duplicate_prompt_count",
+			"no_code_context_count", "runaway_tool_loop_count", "git_branch",
+			"source_session_id", "source_version", "parser_malformed_lines",
+			"is_truncated", "termination_status", "secret_leak_count",
+			"secrets_rules_version", "session_name",
+		},
+		"messages": {
+			"model", "token_usage", "context_tokens", "output_tokens",
+			"has_context_tokens", "has_output_tokens", "claude_message_id",
+			"claude_request_id", "source_type", "source_subtype", "source_uuid",
+			"source_parent_uuid", "is_sidechain", "is_compact_boundary",
+			"thinking_text",
+		},
+		"tool_calls": {"call_index", "file_path"},
+	})
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, "agentsview"))
+
+	assert.Contains(t, state.alterTableSQL(),
+		"ADD COLUMN IF NOT EXISTS deletion_cause TEXT")
 }
 
 func TestEnsureSchemaBackfillsCurationBaselinesWhenAdded(t *testing.T) {
@@ -565,6 +608,20 @@ func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sessions table missing curation columns")
+}
+
+func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "deletion_cause",
+		err: errors.New(
+			`ERROR: column "deletion_cause" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessions table missing required columns")
 }
 
 func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {

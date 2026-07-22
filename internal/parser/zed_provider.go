@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ func newZedProviderFactory(def AgentDef) ProviderFactory {
 				AgentZed,
 				cfg.Roots,
 				WithContainerDiscovery(zedDiscoverContainers),
+				WithStreamingSourceDiscovery(zedDiscoverEach),
 				WithWatchRoots(zedWatchRoots),
 				WithChangedPathClassifier(zedClassifyPath),
 				WithMemberLookup(zedFindMember),
@@ -33,6 +35,26 @@ func newZedProviderFactory(def AgentDef) ProviderFactory {
 			)
 		},
 	)
+}
+
+func zedDiscoverEach(
+	ctx context.Context, root string, yield func(multiSessionMatch) error,
+) error {
+	containers := zedDiscoverContainers(root)
+	if len(containers) == 0 {
+		return nil
+	}
+	dbPath := containers[0]
+	conn, err := OpenZedDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return ForEachZedThreadMeta(ctx, conn, dbPath, func(meta ZedThreadMeta) error {
+		return yield(multiSessionMatch{
+			Path: meta.VirtualPath, Container: dbPath, MemberID: meta.RawID,
+		})
+	})
 }
 
 func zedDiscoverContainers(root string) []string {
@@ -276,11 +298,13 @@ func parseZedVirtualPath(path string) (string, string, bool) {
 }
 
 func zedProviderCapabilities() Capabilities {
+	source := multiSessionContainerSourceCapabilities(
+		CapabilitySupported,
+		CapabilitySupported,
+	)
+	source.PersistentArchive = CapabilitySupported
 	return Capabilities{
-		Source: multiSessionContainerSourceCapabilities(
-			CapabilitySupported,
-			CapabilitySupported,
-		),
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,

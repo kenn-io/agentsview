@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,6 +67,10 @@ func (p *windsurfProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *windsurfProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *windsurfProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -75,6 +80,18 @@ func (p *windsurfProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *windsurfProvider) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	return p.sources.StoredSourceHintScopes(req)
+}
+
+func (p *windsurfProvider) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (SourceRef, bool, error) {
+	return p.sources.SourceForReconciliation(ctx, path, project)
 }
 
 func (p *windsurfProvider) FindSource(
@@ -113,8 +130,8 @@ func (p *windsurfProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := parseWindsurfSession(
-		src.DBPath, src.SessionID, src.Project, machine, src.VirtualPath,
+	sess, msgs, err := parseWindsurfSessionContext(
+		ctx, src.DBPath, src.SessionID, src.Project, machine, src.VirtualPath,
 	)
 	if err == sql.ErrNoRows {
 		return ParseOutcome{
@@ -192,6 +209,102 @@ func (s windsurfSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return sources, nil
 }
 
+func (s windsurfSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		workspaceRoot := windsurfWorkspaceRoot(root)
+		if err := streamDirectoryEntries(ctx, workspaceRoot, func(entry os.DirEntry) error {
+			if !entry.IsDir() {
+				return nil
+			}
+			dbPath := filepath.Join(workspaceRoot, entry.Name(), windsurfStateDBName)
+			info, err := os.Stat(dbPath)
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			project := windsurfWorkspaceProject(dbPath)
+			manifestPath := windsurfWorkspaceManifestPath(dbPath)
+			manifest, err := os.ReadFile(manifestPath)
+			manifestExists := err == nil
+			if errors.Is(err, os.ErrNotExist) {
+				manifest = nil
+				err = nil
+			}
+			if err != nil {
+				return err
+			}
+			manifestRetained := int64(len(manifest))
+			observeStreamingRetainedBytes(ctx, manifestRetained)
+			defer observeStreamingRetainedBytes(ctx, -manifestRetained)
+			var manifestInfo os.FileInfo
+			if manifestExists {
+				manifestInfo, err = os.Stat(manifestPath)
+				if err != nil {
+					return err
+				}
+			}
+			ids, err := newDiscoveryDiskMapForContext(ctx)
+			if err != nil {
+				return err
+			}
+			err = forEachWindsurfSessionRecord(ctx, dbPath, func(record windsurfSessionRecord) error {
+				inserted, err := ids.putIfAbsent(ctx, record.SessionID, record.SessionID)
+				if err != nil {
+					return err
+				}
+				if !inserted {
+					return nil
+				}
+				if err := reconciliationCachePut(
+					ctx, windsurfCachedRecordKey(dbPath, record.SessionID), string(record.Data),
+				); err != nil {
+					return err
+				}
+				h := sha256.New()
+				_, _ = h.Write(record.Data)
+				_, _ = h.Write(manifest)
+				mtime := info.ModTime().UnixNano()
+				if manifestInfo != nil {
+					mtime = max(mtime, manifestInfo.ModTime().UnixNano())
+				}
+				encoded, err := json.Marshal(SourceFingerprint{
+					Size: int64(len(record.Data) + len(manifest)), MTimeNS: mtime,
+					Hash: fmt.Sprintf("%x", h.Sum(nil)),
+				})
+				if err != nil {
+					return err
+				}
+				if err := reconciliationCachePut(
+					ctx, windsurfCachedFingerprintKey(dbPath, record.SessionID), string(encoded),
+				); err != nil {
+					return err
+				}
+				return nil
+			})
+			if err == nil {
+				err = ids.forEach(ctx, func(id, _ string) error {
+					ref := s.newSourceRef(root, dbPath, id, project)
+					ref.DiscoveryMTimeNS = info.ModTime().UnixNano()
+					return yield(ref)
+				})
+			}
+			err = errors.Join(err, ids.close())
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s windsurfSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
@@ -214,6 +327,17 @@ func (s windsurfSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
+		if ref, ok := s.sourceRef(root, req.Path); ok {
+			src := ref.Opaque.(windsurfSource)
+			exists, err := windsurfDBHasSession(src.DBPath, src.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				return []SourceRef{ref}, nil
+			}
+			return nil, nil
+		}
 		dbPath, ok := s.dbPathForEvent(root, req)
 		if !ok {
 			continue
@@ -242,6 +366,48 @@ func (s windsurfSourceSet) SourcesForChangedPath(
 		return sources, nil
 	}
 	return nil, nil
+}
+
+func (s windsurfSourceSet) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	for _, root := range s.roots {
+		if ref, ok := s.sourceRef(root, req.Path); ok {
+			return []StoredSourceHintScope{{Path: ref.DisplayPath}}
+		}
+		if dbPath, ok := s.dbPathForEvent(root, req); ok {
+			return []StoredSourceHintScope{{
+				Path: dbPath, IncludeVirtualMembers: true,
+			}}
+		}
+	}
+	return nil
+}
+
+// SourceForReconciliation reconstructs an already-discovered virtual member
+// without reopening or scanning the shared workspace database. Discovery is
+// authoritative for member existence and populates the reconciliation cache;
+// parsing consumes that exact cached member later in the same operation.
+func (s windsurfSourceSet) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (SourceRef, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, root := range s.roots {
+		ref, ok := s.sourceRef(root, path)
+		if !ok {
+			continue
+		}
+		if project != "" {
+			ref.ProjectHint = project
+			source := ref.Opaque.(windsurfSource)
+			source.Project = project
+			ref.Opaque = source
+		}
+		return ref, true, nil
+	}
+	return SourceRef{}, false, nil
 }
 
 func (s windsurfSourceSet) FindSource(
@@ -278,14 +444,12 @@ func (s windsurfSourceSet) FindSource(
 	}
 	for _, root := range s.roots {
 		for _, db := range s.workspaceDBs(root) {
-			records, err := listWindsurfSessionRecords(db.DBPath)
+			exists, err := windsurfDBHasSession(db.DBPath, req.RawSessionID)
 			if err != nil {
 				return SourceRef{}, false, err
 			}
-			for _, record := range records {
-				if record.SessionID == req.RawSessionID {
-					return s.newSourceRef(root, db.DBPath, record.SessionID, db.Project), true, nil
-				}
+			if exists {
+				return s.newSourceRef(root, db.DBPath, req.RawSessionID, db.Project), true, nil
 			}
 		}
 	}
@@ -316,21 +480,57 @@ func (s windsurfSourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
+	if encoded, found, err := reconciliationCacheGet(
+		ctx, windsurfCachedFingerprintKey(src.DBPath, src.SessionID),
+	); err != nil {
+		return SourceFingerprint{}, err
+	} else if found {
+		var fingerprint SourceFingerprint
+		if err := json.Unmarshal([]byte(encoded), &fingerprint); err != nil {
+			return SourceFingerprint{}, fmt.Errorf("decode cached windsurf fingerprint: %w", err)
+		}
+		fingerprint.Key = firstNonEmptyJSONLString(
+			source.FingerprintKey, source.Key, src.VirtualPath,
+		)
+		return fingerprint, nil
+	}
 	workspacePath := windsurfWorkspaceManifestPath(src.DBPath)
-	combined := antigravityCLICombinedFileInfo(
-		info,
-		src.DBPath+"-wal",
-		workspacePath,
-	)
-	hash, err := windsurfSourceHash(src.DBPath, workspacePath)
+	record, err := loadWindsurfSessionRecord(src.DBPath, src.SessionID)
+	if err == sql.ErrNoRows {
+		return SourceFingerprint{Key: source.FingerprintKey}, nil
+	}
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
+	h := sha256.New()
+	_, _ = h.Write(record.Data)
+	size := int64(len(record.Data))
+	mtime := info.ModTime().UnixNano()
+	if IsRegularFile(workspacePath) {
+		manifestInfo, err := os.Stat(workspacePath)
+		if err != nil {
+			return SourceFingerprint{}, err
+		}
+		manifest, err := os.Open(workspacePath)
+		if err != nil {
+			return SourceFingerprint{}, err
+		}
+		_, copyErr := io.Copy(h, manifest)
+		closeErr := manifest.Close()
+		if copyErr != nil {
+			return SourceFingerprint{}, copyErr
+		}
+		if closeErr != nil {
+			return SourceFingerprint{}, closeErr
+		}
+		size += manifestInfo.Size()
+		mtime = max(mtime, manifestInfo.ModTime().UnixNano())
+	}
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.VirtualPath),
-		Size:    combined.Size(),
-		MTimeNS: combined.ModTime().UnixNano(),
-		Hash:    hash,
+		Size:    size,
+		MTimeNS: mtime,
+		Hash:    fmt.Sprintf("%x", h.Sum(nil)),
 	}, nil
 }
 
@@ -557,23 +757,249 @@ func readWindsurfChatValues(dbPath string) ([]windsurfChatValue, error) {
 	return values, nil
 }
 
-func windsurfDBHasSession(dbPath, sessionID string) (bool, error) {
-	records, err := listWindsurfSessionRecords(dbPath)
-	if err != nil {
-		return false, err
+func forEachWindsurfSessionRecord(
+	ctx context.Context, dbPath string, yield func(windsurfSessionRecord) error,
+) error {
+	observeSharedContainerScan(ctx)
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil
 	}
-	for _, record := range records {
-		if record.SessionID == sessionID {
-			return true, nil
+	db, err := openWindsurfDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	for _, key := range windsurfChatDataKeys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var exists int
+		err := db.QueryRowContext(ctx,
+			`SELECT 1 FROM ItemTable WHERE key = ?`, key,
+		).Scan(&exists)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read windsurf chat data: %w", err)
+		}
+		reader := &windsurfSQLiteValueReader{ctx: ctx, db: db, key: key}
+		if err := forEachWindsurfRecordFromReader(
+			ctx, reader, windsurfFallbackSessionID(dbPath), yield,
+		); err != nil {
+			return err
 		}
 	}
-	return false, nil
+	return nil
 }
 
-func parseWindsurfSession(
-	dbPath, sessionID, project, machine, virtualPath string,
+const windsurfSQLiteReadChunk = 64 * 1024
+
+type windsurfSQLiteValueReader struct {
+	ctx    context.Context
+	db     *sql.DB
+	key    string
+	offset int64
+}
+
+func (reader *windsurfSQLiteValueReader) Read(p []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	limit := min(len(p), windsurfSQLiteReadChunk)
+	var chunk []byte
+	err := reader.db.QueryRowContext(
+		reader.ctx,
+		`SELECT substr(CAST(value AS BLOB), ?, ?) FROM ItemTable WHERE key = ?`,
+		reader.offset+1, limit, reader.key,
+	).Scan(&chunk)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && len(chunk) == 0 {
+		return 0, io.EOF
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read windsurf chat data chunk: %w", err)
+	}
+	observeStreamingRetainedBytes(reader.ctx, int64(len(chunk)))
+	n := copy(p, chunk)
+	observeStreamingRetainedBytes(reader.ctx, -int64(len(chunk)))
+	reader.offset += int64(n)
+	return n, nil
+}
+
+func forEachWindsurfRecordFromReader(
+	ctx context.Context, reader io.Reader, fallbackSessionID string,
+	yield func(windsurfSessionRecord) error,
+) error {
+	dec := json.NewDecoder(reader)
+	delim, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("parse windsurf chatdata: %w", err)
+	}
+	if delim != json.Delim('{') {
+		return fmt.Errorf("parse windsurf chatdata: expected object")
+	}
+	var session vscodeCopilotSession
+	hasRequests := false
+	for dec.More() {
+		name, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		switch name {
+		case "version":
+			err = dec.Decode(&session.Version)
+		case "sessionId":
+			err = dec.Decode(&session.SessionID)
+		case "creationDate":
+			err = dec.Decode(&session.CreationDate)
+		case "lastMessageDate":
+			err = dec.Decode(&session.LastMessageDate)
+		case "customTitle":
+			err = dec.Decode(&session.CustomTitle)
+		case "requests":
+			hasRequests = true
+			err = dec.Decode(&session.Requests)
+		case "tabs":
+			err = decodeWindsurfTabs(ctx, dec, yield)
+		default:
+			if err := skipJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("parse windsurf chatdata %s: %w", name, err)
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	if !hasRequests || len(session.Requests) == 0 {
+		return nil
+	}
+	if session.SessionID == "" {
+		session.SessionID = fallbackSessionID
+	}
+	payload, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	observeStreamingDiscoveryBuffer(ctx, 1)
+	observeStreamingRetainedBytes(ctx, int64(len(payload)))
+	defer observeStreamingRetainedBytes(ctx, -int64(len(payload)))
+	return yield(windsurfSessionRecord{SessionID: session.SessionID, Data: payload})
+}
+
+func decodeWindsurfTabs(
+	ctx context.Context, dec *json.Decoder,
+	yield func(windsurfSessionRecord) error,
+) error {
+	open, err := dec.Token()
+	if err != nil || open != json.Delim('[') {
+		return fmt.Errorf("expected array")
+	}
+	var decoderRetained int64
+	defer func() { observeStreamingRetainedBytes(ctx, -decoderRetained) }()
+	for dec.More() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		start := dec.InputOffset()
+		var tab windsurfChatTab
+		if err := dec.Decode(&tab); err != nil {
+			return fmt.Errorf("parse windsurf chat tab: %w", err)
+		}
+		encodedBytes := dec.InputOffset() - start
+		if encodedBytes > decoderRetained {
+			observeStreamingRetainedBytes(ctx, encodedBytes-decoderRetained)
+			decoderRetained = encodedBytes
+		}
+		decodedRetained := conservativeDecodedRetainedBytes(encodedBytes)
+		observeStreamingRetainedBytes(ctx, decodedRetained)
+		session, ok := tab.toVSCodeSession()
+		if !ok {
+			observeStreamingRetainedBytes(ctx, -decodedRetained)
+			continue
+		}
+		payload, err := json.Marshal(session)
+		if err != nil {
+			observeStreamingRetainedBytes(ctx, -decodedRetained)
+			return err
+		}
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		observeStreamingRetainedBytes(ctx, int64(len(payload)))
+		if err := yield(windsurfSessionRecord{SessionID: session.SessionID, Data: payload}); err != nil {
+			observeStreamingRetainedBytes(ctx, -int64(len(payload)))
+			observeStreamingRetainedBytes(ctx, -decodedRetained)
+			return err
+		}
+		observeStreamingRetainedBytes(ctx, -int64(len(payload)))
+		observeStreamingRetainedBytes(ctx, -decodedRetained)
+	}
+	_, err = dec.Token()
+	return err
+}
+
+func skipJSONValue(dec *json.Decoder) error {
+	token, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || (delim != '{' && delim != '[') {
+		return nil
+	}
+	for dec.More() {
+		if delim == '{' {
+			if _, err := dec.Token(); err != nil {
+				return err
+			}
+		}
+		if err := skipJSONValue(dec); err != nil {
+			return err
+		}
+	}
+	_, err = dec.Token()
+	return err
+}
+
+func windsurfDBHasSession(dbPath, sessionID string) (bool, error) {
+	_, err := loadWindsurfSessionRecord(dbPath, sessionID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func windsurfCachedRecordKey(dbPath, sessionID string) string {
+	return "windsurf:record:" + VirtualSourcePath(filepath.Clean(dbPath), sessionID)
+}
+
+func windsurfCachedFingerprintKey(dbPath, sessionID string) string {
+	return "windsurf:fingerprint:" + VirtualSourcePath(filepath.Clean(dbPath), sessionID)
+}
+
+func parseWindsurfSessionContext(
+	ctx context.Context, dbPath, sessionID, project, machine, virtualPath string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	record, err := loadWindsurfSessionRecord(dbPath, sessionID)
+	encoded, found, err := reconciliationCacheGet(
+		ctx, windsurfCachedRecordKey(dbPath, sessionID),
+	)
+	var record windsurfSessionRecord
+	if err != nil {
+		return nil, nil, err
+	}
+	if found {
+		record = windsurfSessionRecord{SessionID: sessionID, Data: []byte(encoded)}
+		retained := conservativeDecodedRetainedBytes(int64(len(encoded)))
+		observeStreamingRetainedBytes(ctx, retained)
+		defer observeStreamingRetainedBytes(ctx, -retained)
+		observeReconciliationRetainedMember(ctx, AgentWindsurf, retained)
+	} else {
+		record, err = loadWindsurfSessionRecord(dbPath, sessionID)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -615,14 +1041,20 @@ func parseWindsurfSession(
 func loadWindsurfSessionRecord(
 	dbPath, sessionID string,
 ) (windsurfSessionRecord, error) {
-	records, err := listWindsurfSessionRecords(dbPath)
+	var found windsurfSessionRecord
+	errFound := errors.New("windsurf session found")
+	err := forEachWindsurfSessionRecord(context.Background(), dbPath, func(record windsurfSessionRecord) error {
+		if record.SessionID != sessionID {
+			return nil
+		}
+		found = record
+		return errFound
+	})
+	if errors.Is(err, errFound) {
+		return found, nil
+	}
 	if err != nil {
 		return windsurfSessionRecord{}, err
-	}
-	for _, record := range records {
-		if record.SessionID == sessionID {
-			return record, nil
-		}
 	}
 	return windsurfSessionRecord{}, sql.ErrNoRows
 }
@@ -893,49 +1325,22 @@ func windsurfWorkspaceProject(dbPath string) string {
 	return project
 }
 
-func windsurfSourceHash(dbPath, workspacePath string) (string, error) {
-	h := sha256.New()
-	if IsRegularFile(dbPath) {
-		values, err := readWindsurfChatValues(dbPath)
-		if err != nil {
-			return "", err
-		}
-		for _, value := range values {
-			_, _ = h.Write([]byte("chat"))
-			_, _ = h.Write([]byte{0})
-			_, _ = h.Write([]byte(value.Key))
-			_, _ = h.Write([]byte{0})
-			_, _ = h.Write([]byte(value.Value))
-			_, _ = h.Write([]byte{0})
-		}
-	}
-	if workspacePath != "" && IsRegularFile(workspacePath) {
-		hash, err := hashJSONLSourceFile(workspacePath)
-		if err != nil {
-			return "", err
-		}
-		_, _ = h.Write([]byte("workspace"))
-		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(hash))
-		_, _ = h.Write([]byte{0})
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
 func windsurfProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
-			DiscoverSources:      CapabilitySupported,
-			WatchSources:         CapabilitySupported,
-			ClassifyChangedPath:  CapabilitySupported,
-			StoredSourceHints:    CapabilitySupported,
-			FindSource:           CapabilitySupported,
-			CompositeFingerprint: CapabilitySupported,
-			IncrementalAppend:    CapabilityNotApplicable,
-			MultiSessionSource:   CapabilityNotApplicable,
-			PerSessionErrors:     CapabilityNotApplicable,
-			ExcludedSessions:     CapabilityNotApplicable,
-			ForceReplaceOnParse:  CapabilitySupported,
+			DiscoverSources:       CapabilitySupported,
+			StreamingDiscovery:    CapabilitySupported,
+			WatchSources:          CapabilitySupported,
+			ClassifyChangedPath:   CapabilitySupported,
+			StoredSourceHints:     CapabilitySupported,
+			FindSource:            CapabilitySupported,
+			CompositeFingerprint:  CapabilitySupported,
+			IncrementalAppend:     CapabilityNotApplicable,
+			MultiSessionSource:    CapabilityNotApplicable,
+			SharedContainerSource: CapabilitySupported,
+			PerSessionErrors:      CapabilityNotApplicable,
+			ExcludedSessions:      CapabilityNotApplicable,
+			ForceReplaceOnParse:   CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

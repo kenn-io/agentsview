@@ -104,7 +104,7 @@ func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 		Machine: "devbox",
 	})
 
-	files := engine.classifyProviderChangedPath(dbPath)
+	files := requireClassifyProviderChangedPath(t, engine, dbPath)
 	require.Len(t, files, 1)
 	assert.Equal(t, dbPath+"#conv-001", files[0].Path)
 	assert.Equal(t, parser.AgentForge, files[0].Agent)
@@ -287,7 +287,7 @@ func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 		Machine: "devbox",
 	})
 
-	files := engine.classifyProviderChangedPath(dbPath)
+	files := requireClassifyProviderChangedPath(t, engine, dbPath)
 	require.Len(t, files, 1)
 	assert.Equal(t, dbPath+"#session-001", files[0].Path)
 	assert.Equal(t, parser.AgentZCode, files[0].Agent)

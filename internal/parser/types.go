@@ -81,6 +81,12 @@ type AgentDef struct {
 	FileBased         bool     // false for DB-backed agents
 	Usage             UsageCapabilities
 
+	// PeriodicReconcile opts the agent into the scheduled scoped
+	// reconciliation because its declared watch coverage is shallow and
+	// subdirectory changes are invisible to the watcher. Expensive
+	// scheduling inputs default to unsupported.
+	PeriodicReconcile bool
+
 	// WatchRootsFunc resolves the directories to watch for live
 	// updates under a configured root, for agents whose watch
 	// targets depend on the on-disk layout rather than a static
@@ -243,14 +249,15 @@ var Registry = []AgentDef{
 		Usage:       UsageCapabilities{NoPerMessageTokenData: true},
 	},
 	{
-		Type:         AgentOpenHands,
-		DisplayName:  "OpenHands CLI",
-		EnvVar:       "OPENHANDS_CONVERSATIONS_DIR",
-		ConfigKey:    "openhands_dirs",
-		DefaultDirs:  []string{".openhands/conversations"},
-		IDPrefix:     "openhands:",
-		FileBased:    true,
-		ShallowWatch: true,
+		Type:              AgentOpenHands,
+		DisplayName:       "OpenHands CLI",
+		EnvVar:            "OPENHANDS_CONVERSATIONS_DIR",
+		ConfigKey:         "openhands_dirs",
+		DefaultDirs:       []string{".openhands/conversations"},
+		IDPrefix:          "openhands:",
+		FileBased:         true,
+		ShallowWatch:      true,
+		PeriodicReconcile: true,
 	},
 	{
 		Type:        AgentCursor,
@@ -736,13 +743,14 @@ var Registry = []AgentDef{
 		// roots; watch those roots shallowly and rely on the 15-minute
 		// periodic sync to pick up new repos' history files. Aider history
 		// is append-mostly, so this is an acceptable latency tradeoff.
-		Type:         AgentAider,
-		DisplayName:  "Aider",
-		EnvVar:       "AIDER_DIR",
-		ConfigKey:    "aider_dirs",
-		IDPrefix:     "aider:",
-		FileBased:    true,
-		ShallowWatch: true,
+		Type:              AgentAider,
+		DisplayName:       "Aider",
+		EnvVar:            "AIDER_DIR",
+		ConfigKey:         "aider_dirs",
+		IDPrefix:          "aider:",
+		FileBased:         true,
+		ShallowWatch:      true,
+		PeriodicReconcile: true,
 	},
 	{
 		Type:         AgentReasonix,
@@ -995,6 +1003,14 @@ type ParsedSession struct {
 	// ended. Empty string = unknown (parser did not classify, or
 	// agent format does not yet support classification).
 	TerminationStatus TerminationStatus
+
+	// ClaudeLinearParse reports whether the Claude full parser fell
+	// back to linear processing for this session's file (multi-root or
+	// unresolvable-parent uuid DAG). Linearity is monotonic across
+	// appends, so the incremental parser skips fork detection for
+	// linear-bound sessions. Only set by the Claude parser; nil for
+	// all other agents.
+	ClaudeLinearParse *bool
 
 	TotalOutputTokens    int
 	PeakContextTokens    int

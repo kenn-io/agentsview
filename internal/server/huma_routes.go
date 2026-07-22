@@ -418,11 +418,60 @@ func handleHumaContextError(err error) error {
 	return nil
 }
 
+// writerClosedRetryAfterSeconds is the Retry-After hint returned when a write is
+// rejected because the archive writer is closed for a maintenance pass. The
+// barrier window ranges from seconds (sync/audit) to minutes (resync build), so
+// this is a modest floor: a well-behaved client backs off at least this long.
+const writerClosedRetryAfterSeconds = "5"
+
+// handleHumaReadOnly maps a non-writable-archive error to the right HTTP status:
+// a remote-mode read-only store is a permanent 501, while a writer closed for a
+// maintenance pass is a transient 503 with Retry-After so clients retry once the
+// barrier lifts. It returns nil for any other error. Read endpoints never
+// produce ErrWriterClosed, so folding it in here is safe for every call site.
 func handleHumaReadOnly(err error) error {
 	if errors.Is(err, db.ErrReadOnly) {
 		return apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
+	if errors.Is(err, db.ErrWriterClosed) {
+		return writerClosedError()
+	}
 	return nil
+}
+
+// writerClosedError is the 503 + Retry-After response for a write rejected while
+// the archive writer is closed for a maintenance pass.
+func writerClosedError() error {
+	return huma.ErrorWithHeaders(
+		apiError(
+			http.StatusServiceUnavailable,
+			"archive is briefly read-only for a maintenance pass; retry shortly",
+		),
+		http.Header{"Retry-After": []string{writerClosedRetryAfterSeconds}},
+	)
+}
+
+// rejectWriterClosedWrite fails a write endpoint before its stream body opens
+// while the archive writer is closed for a maintenance pass, so clients see
+// the 503 + Retry-After instead of an HTTP-200 SSE error event or a generic
+// 500 (mirrors the push handlers' pre-stream gate).
+func (s *Server) rejectWriterClosedWrite() error {
+	if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
+		return writerClosedError()
+	}
+	return nil
+}
+
+// serializeArchiveWrite runs work under the daemon engine's exclusive lock —
+// the same mutex a worker pass holds while the writer is closed — so a write
+// that passed the pre-stream writer gate cannot race a maintenance pass
+// closing the writer mid-operation. Servers without a daemon engine have no
+// worker passes to serialize with, so work runs directly.
+func (s *Server) serializeArchiveWrite(work func() error) error {
+	if s.engine != nil {
+		return s.engine.RunExclusive(work)
+	}
+	return work()
 }
 
 func serverError(err error) error {

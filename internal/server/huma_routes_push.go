@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/postgres"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // pushProgressLogInterval bounds how often the daemon-side push handlers log
@@ -118,6 +120,12 @@ func runPushStream[T any](
 	}
 	result, err := run(nil)
 	if err != nil {
+		if errors.Is(err, db.ErrWriterClosed) {
+			hctx.SetHeader("Retry-After", writerClosedRetryAfterSeconds)
+			writeHumaJSON(hctx, http.StatusServiceUnavailable,
+				map[string]string{"error": err.Error()})
+			return
+		}
 		writeHumaJSON(hctx, http.StatusInternalServerError,
 			map[string]string{"error": err.Error()})
 		return
@@ -258,6 +266,38 @@ func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
 	}
 }
 
+// syncThenRunForPush brings the local archive current and then runs the push
+// work serialized against sync passes. Full and stale-archive pushes are
+// archive-scale: with the worker-backed resync runner wired they route the
+// rebuild through the worker (matching /api/v1/resync and the pre-session-sync
+// resync) instead of running an in-process resync in the long-lived daemon,
+// and the push work then runs under the engine's exclusive sync lock — after
+// the deferred-signal flush — so it still observes the post-rebuild archive
+// and stays serialized against watcher and periodic syncs. Per-batch pushes
+// (not full, archive current) keep the in-process SyncThenRun path: their
+// catch-up sync's parse work is bounded by the changed batch via the skip
+// cache. Without a runner (tests, remote-mode-less setups) every case keeps
+// the in-process SyncThenRun path.
+func (s *Server) syncThenRunForPush(
+	ctx context.Context,
+	engine *syncpkg.Engine,
+	local *db.DB,
+	full bool,
+	work func(forceFull bool) error,
+) error {
+	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
+		_, err := engine.SyncThenRun(ctx, full, nil, work)
+		return err
+	}
+	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return engine.RunExclusiveFlushed(func() error { return work(true) })
+}
+
 func (s *Server) humaPGPush(
 	ctx context.Context,
 	in *daemonPushInput,
@@ -271,6 +311,12 @@ func (s *Server) humaPGPush(
 	local, err := s.localPushTarget()
 	if err != nil {
 		return nil, err
+	}
+	// Reject before the stream body flushes a 200: SSE clients (the daemon
+	// CLI always negotiates SSE) must see the 503 + Retry-After, not a
+	// generic error event.
+	if local.WriterClosed() {
+		return nil, writerClosedError()
 	}
 	pgCfg, err := s.pgPushConfig(in.Body)
 	if err != nil {
@@ -291,7 +337,7 @@ func (s *Server) humaPGPush(
 				newPGPushProgressLogger(), streamProgress,
 			)
 			var result postgres.PushResult
-			_, err := engine.SyncThenRun(ctx, body.Full, nil,
+			err := s.syncThenRunForPush(ctx, engine, local, body.Full,
 				func(forceFull bool) error {
 					if refreshErr := s.ensurePricing(ctx, local); refreshErr != nil {
 						if ctxErr := ctx.Err(); ctxErr != nil {
@@ -342,6 +388,11 @@ func (s *Server) humaDuckDBPush(
 	if err != nil {
 		return nil, err
 	}
+	// Reject before the stream body flushes a 200 so SSE clients see the
+	// 503 + Retry-After (mirrors humaPGPush).
+	if local.WriterClosed() {
+		return nil, writerClosedError()
+	}
 	duckCfg, err := s.duckDBPushConfig(in.Body)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
@@ -361,7 +412,7 @@ func (s *Server) humaDuckDBPush(
 				newDuckDBPushProgressLogger(), streamProgress,
 			)
 			var result duckdbsync.PushResult
-			_, err := engine.SyncThenRun(ctx, body.Full, nil,
+			err := s.syncThenRunForPush(ctx, engine, local, body.Full,
 				func(forceFull bool) error {
 					var pushErr error
 					result, pushErr = duckdbsync.Push(

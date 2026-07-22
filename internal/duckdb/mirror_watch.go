@@ -103,6 +103,11 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 		return
 	}
 
+	if !s.beginReplacementCheck() {
+		return
+	}
+	defer s.retiring.Done()
+
 	conn, alias, err := openMirrorAlias(s.path)
 	if err != nil {
 		reportMirrorReplacementEvent(
@@ -176,22 +181,54 @@ func removeMirrorAlias(alias string) {
 	}
 }
 
+// beginReplacementCheck registers an in-flight mirror-replacement check on
+// s.retiring before the check opens any handle or alias, and rejects the
+// check once the Store is closed. Store.Close waits on s.retiring, so a
+// closing Store cannot return while a check is still opening or validating
+// a replacement — without this registration, a check racing Close would
+// create a fresh handle and reopen alias after Close already reported that
+// every handle is closed and every alias is gone (swapHandle's closed
+// branch discards them, but only after Close has returned). The caller must
+// call s.retiring.Done() when the check finishes.
+func (s *Store) beginReplacementCheck() bool {
+	s.handleMu.Lock()
+	defer s.handleMu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.retiring.Add(1)
+	return true
+}
+
 // swapHandle installs the new handle and its backing alias under a write
 // lock, then closes the old handle and removes its alias (if any) after
 // releasing the lock. sql.DB.Close waits for connections currently in use
 // to be released before returning, so any query already running against
 // the old handle completes normally; only new queries see the
-// replacement.
+// replacement. The post-unlock retirement is registered on s.retiring so
+// Store.Close waits for it, and a swap that finds the Store already closed
+// discards its handle and alias instead of installing them into a Store
+// nothing will ever close again.
 func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	PrimeFileIdentity(info)
 	s.handleMu.Lock()
+	if s.closed {
+		s.handleMu.Unlock()
+		if err := conn.Close(); err != nil {
+			log.Printf("duckdb serve: closing mirror handle opened after Close: %v", err)
+		}
+		removeMirrorAlias(alias)
+		return
+	}
 	oldConn := s.duck
 	oldAlias := s.aliasPath
 	s.duck = conn
 	s.aliasPath = alias
 	s.fileInfo = info
+	s.retiring.Add(1)
 	s.handleMu.Unlock()
 
+	defer s.retiring.Done()
 	if err := oldConn.Close(); err != nil {
 		log.Printf("duckdb serve: closing replaced mirror handle: %v", err)
 	}

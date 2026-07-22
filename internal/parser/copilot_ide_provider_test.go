@@ -757,6 +757,16 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 	require.Len(t, discovered, 1)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 
+	streaming, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	var streamed []SourceRef
+	require.NoError(t, streaming.DiscoverEach(t.Context(), func(source SourceRef) error {
+		streamed = append(streamed, source)
+		return nil
+	}))
+	require.Len(t, streamed, 1)
+	assert.Equal(t, virtualPath, streamed[0].DisplayPath)
+
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		RawSessionID: conversationID,
 	})

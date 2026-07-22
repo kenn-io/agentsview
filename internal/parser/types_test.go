@@ -655,6 +655,28 @@ func TestCoworkRegistryEntry(t *testing.T) {
 		"Cowork root contains large local_* working trees that discovery skips")
 }
 
+func TestPeriodicReconcileCapability(t *testing.T) {
+	optedIn := map[AgentType]bool{}
+	for _, def := range Registry {
+		optedIn[def.Type] = def.PeriodicReconcile
+	}
+	// Shallow-watched providers rely on scheduled reconciliation because
+	// subdirectory changes are invisible to their shallow watch coverage.
+	assert.True(t, optedIn[AgentOpenHands])
+	assert.True(t, optedIn[AgentAider])
+	// Cowork's provider WatchPlan registers its root recursively
+	// (coworkWatchRoots Recursive:true overrides legacy ShallowWatch), so
+	// scheduled reconciliation would redundantly rescan the whole archive.
+	assert.False(t, optedIn[AgentCowork])
+	// Recursive session roots must NOT opt in: their shallow roots are
+	// supplemental (codex_provider.go WatchPlan registers Recursive:true),
+	// so scheduled reconciliation would rescan the whole session tree.
+	assert.False(t, optedIn[AgentCodex])
+	assert.False(t, optedIn[AgentHermes])
+	assert.False(t, optedIn[AgentClaude])
+	assert.False(t, optedIn[AgentGemini])
+}
+
 func TestAgentByPrefixCowork(t *testing.T) {
 	def, ok := AgentByPrefix("cowork:c0000000-0000-4000-8000-000000000001")
 	require.True(t, ok, "cowork-prefixed ID should resolve")
@@ -979,8 +1001,20 @@ func TestResolveOpenCodeWatchRootsSQLite(t *testing.T) {
 
 func TestResolveOpenCodeWatchRootsMissingRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing")
-	got := ResolveOpenCodeWatchRoots(root)
-	assert.Nil(t, got, "ResolveOpenCodeWatchRoots()")
+	for _, tc := range []struct {
+		name    string
+		resolve func(string) []string
+	}{
+		{name: "opencode", resolve: ResolveOpenCodeWatchRoots},
+		{name: "kilo", resolve: ResolveKiloWatchRoots},
+		{name: "mimocode", resolve: ResolveMiMoCodeWatchRoots},
+		{name: "icodemate", resolve: ResolveIcodemateWatchRoots},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, []string{root}, tc.resolve(root),
+				"missing roots need a deterministic lifecycle watch plan")
+		})
+	}
 }
 
 func TestParseOpenCodeSQLiteVirtualPath(t *testing.T) {

@@ -246,7 +246,10 @@ func TestProcessFileProviderTraeWALWatcherEventDropsUnchangedSibling(t *testing.
 		traeSyncSession("steady", "steady reply"),
 	}, info.ModTime())
 
-	classified := engine.classifyPaths([]string{path + "-wal"})
+	classified, err := engine.classifyPaths(
+		context.Background(), []string{path + "-wal"},
+	)
+	require.NoError(t, err)
 	require.Len(t, classified, 1)
 	assert.Equal(t, path, classified[0].Path)
 	assert.Equal(t, parser.AgentTrae, classified[0].Agent)
@@ -284,7 +287,10 @@ func TestProcessFileProviderTraeRemovedWALSidecarDoesNotForceParse(t *testing.T)
 	require.Equal(t, 1, written)
 	require.Equal(t, 0, failed)
 
-	classified := engine.classifyPaths([]string{path + "-wal"})
+	classified, err := engine.classifyPaths(
+		context.Background(), []string{path + "-wal"},
+	)
+	require.NoError(t, err)
 	require.Len(t, classified, 1)
 	assert.Equal(t, path, classified[0].Path)
 	assert.False(t, classified[0].ForceParse)

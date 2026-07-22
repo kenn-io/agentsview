@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/ssh"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -131,6 +132,22 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 					onProgress,
 				)
 				if progress != nil {
+					progress.Finish()
+				}
+				if errors.Is(err, errDaemonResyncRequired) {
+					// The archive's data version changed and the
+					// worker-backed daemon refuses to swap it under itself
+					// via /sync; the dedicated resync route rebuilds and
+					// swaps safely, preserving the previously automatic
+					// upgrade behavior.
+					fmt.Println(
+						"Archive data version changed; running full resync via daemon...",
+					)
+					progress = newResyncProgressPrinter(os.Stdout, time.Now)
+					stats, err = runDaemonSync(
+						context.Background(), tr, appCfg.AuthToken, true,
+						progress.Print,
+					)
 					progress.Finish()
 				}
 				if err != nil {
@@ -406,6 +423,7 @@ var prepareHTTPRebuildCLI = func(
 
 var runLocalSyncWithRebuildCLI = runLocalSyncWithRebuild
 var runLocalSyncWithFallbackCLI = runLocalSyncWithFallback
+var coordinateLocalSyncRunner = coordinateLocalSync
 
 type preparedHTTPRebuildLeaseCLI struct {
 	prepared preparedHTTPRebuildCLI
@@ -746,6 +764,33 @@ func primaryCoordinatorError(err error) error {
 func runLocalSync(
 	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
 ) bool {
+	didResync, _, err := runLocalSyncResult(ctx, appCfg, database, full)
+	if err != nil {
+		log.Printf("local sync failed: %v", err)
+	}
+	return didResync
+}
+
+// runLocalSyncAuthoritative runs a local sync and returns an error unless its
+// provider discovery completed authoritatively. Push-watch callers use it so
+// a mirror update cannot acknowledge watcher reconciliation that never
+// established a complete view of the local sources.
+func runLocalSyncAuthoritative(
+	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
+) (bool, error) {
+	didResync, stats, err := runLocalSyncResult(ctx, appCfg, database, full)
+	if err != nil {
+		return didResync, err
+	}
+	if !stats.AuthoritativeDiscoveryComplete() {
+		return didResync, errors.New("local sync discovery incomplete")
+	}
+	return didResync, nil
+}
+
+func runLocalSyncResult(
+	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
+) (bool, sync.SyncStats, error) {
 	didResync := full || database.NeedsResync()
 	var progress sync.ProgressFunc
 	var resyncProgress *resyncProgressPrinter
@@ -758,7 +803,7 @@ func runLocalSync(
 		progress = printSyncProgress
 	}
 	started := time.Now()
-	didResync, stats, err := coordinateLocalSync(
+	didResync, stats, err := coordinateLocalSyncRunner(
 		ctx, appCfg, database, full, progress, true,
 		func() (sync.RebuildOptions, sync.RebuildCleanup, error) {
 			return sync.RebuildOptions{}, nil, nil
@@ -768,11 +813,8 @@ func runLocalSync(
 	if resyncProgress != nil {
 		resyncProgress.Finish()
 	}
-	if err != nil {
-		log.Printf("local sync failed: %v", err)
-	}
 	printDirectSyncResult(ctx, database, stats, started)
-	return didResync
+	return didResync, stats, err
 }
 
 func runLocalSyncWithRebuild(
@@ -891,6 +933,11 @@ func printDirectSyncResult(
 	}
 }
 
+// errDaemonResyncRequired marks a /sync rejected because the archive's data
+// version changed: the worker-backed daemon will not swap a stale archive
+// under itself, so the CLI must retry through /api/v1/resync.
+var errDaemonResyncRequired = errors.New("daemon requires a full resync")
+
 func runDaemonSync(
 	ctx context.Context,
 	tr transport,
@@ -920,9 +967,15 @@ func runDaemonSync(
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
-		return sync.SyncStats{}, fmt.Errorf(
+		httpErr := fmt.Errorf(
 			"HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)),
 		)
+		if !full && resp.Header.Get(server.ResyncRequiredHeader) != "" {
+			return sync.SyncStats{}, fmt.Errorf(
+				"%w: %w", errDaemonResyncRequired, httpErr,
+			)
+		}
+		return sync.SyncStats{}, httpErr
 	}
 	if strings.HasPrefix(
 		resp.Header.Get("Content-Type"), "application/json",

@@ -66,8 +66,13 @@ type SyncStats struct {
 	// run and is omitted from the summary.
 	Anomalies AnomalyStats `json:"anomalies,omitzero"`
 
-	filesOK         int // unexported: file-level success counter
-	filesDiscovered int // file-based total, excludes DB-backed agents
+	filesOK int // unexported: file-level success counter
+	// sourceMissingTombstoned counts stored virtual members tombstoned
+	// during this run because their member source vanished from a
+	// still-existing shared container. Changed-path syncs use it to emit
+	// a sessions event even when nothing else was written.
+	sourceMissingTombstoned int
+	filesDiscovered         int // file-based total, excludes DB-backed agents
 	// nonContainerDiscovered counts discovered files that are not part of
 	// a self-preserving container store (OpenCode-format storage and its
 	// SQLite virtual paths). The resync empty-discovery guard uses it so a
@@ -77,6 +82,7 @@ type SyncStats struct {
 	messagesIndexed        int // unexported: progress message counter
 	parserExcludedFiles    int // file-level intentional parser exclusions
 	parserExcludedIDs      []string
+	providerFailures       int // authoritative discoveries that did not complete
 	// cwdFilteredSessions counts sessions vetoed by the
 	// sync_include_cwd_prefixes allow-list. The resync abort guard uses
 	// it so a run where every discovered session is filtered reads as

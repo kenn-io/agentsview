@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,17 +38,31 @@ func piebaldDBPath(dir string) string {
 
 // ListPiebaldSessionMeta returns lightweight metadata for all non-empty chats.
 func ListPiebaldSessionMeta(dbPath string) ([]PiebaldSessionMeta, error) {
+	var metas []PiebaldSessionMeta
+	err := ForEachPiebaldSessionMeta(
+		context.Background(), dbPath,
+		func(meta PiebaldSessionMeta) error {
+			metas = append(metas, meta)
+			return nil
+		},
+	)
+	return metas, err
+}
+
+func ForEachPiebaldSessionMeta(
+	ctx context.Context, dbPath string, yield func(PiebaldSessionMeta) error,
+) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
+		return nil
 	}
 
 	db, err := openPiebaldDB(dbPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       COALESCE(updated_at, created_at)
 		FROM chats
@@ -54,24 +70,54 @@ func ListPiebaldSessionMeta(dbPath string) ([]PiebaldSessionMeta, error) {
 		  AND message_count > 0
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("listing piebald chats: %w", err)
+		return fmt.Errorf("listing piebald chats: %w", err)
 	}
 	defer rows.Close()
 
-	var metas []PiebaldSessionMeta
 	for rows.Next() {
 		var id int64
 		var updatedAt string
 		if err := rows.Scan(&id, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scanning piebald chat meta: %w", err)
+			return fmt.Errorf("scanning piebald chat meta: %w", err)
 		}
-		metas = append(metas, PiebaldSessionMeta{
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(PiebaldSessionMeta{
 			SessionID:   fmt.Sprintf("%d", id),
 			VirtualPath: fmt.Sprintf("%s#%d", dbPath, id),
 			FileMtime:   parsePiebaldTimestamp(updatedAt).UnixNano(),
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	return metas, rows.Err()
+	return rows.Err()
+}
+
+func piebaldSessionMeta(
+	ctx context.Context, dbPath, sessionID string,
+) (PiebaldSessionMeta, bool, error) {
+	db, err := openPiebaldDB(dbPath)
+	if err != nil {
+		return PiebaldSessionMeta{}, false, err
+	}
+	defer db.Close()
+	var id int64
+	var updatedAt string
+	err = db.QueryRowContext(ctx, `
+		SELECT id, COALESCE(updated_at, created_at)
+		FROM chats
+		WHERE id = ? AND COALESCE(is_deleted, 0) = 0 AND message_count > 0
+	`, sessionID).Scan(&id, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PiebaldSessionMeta{}, false, nil
+	}
+	if err != nil {
+		return PiebaldSessionMeta{}, false, err
+	}
+	idString := fmt.Sprintf("%d", id)
+	return PiebaldSessionMeta{
+		SessionID: idString, VirtualPath: VirtualSourcePath(dbPath, idString),
+		FileMtime: parsePiebaldTimestamp(updatedAt).UnixNano(),
+	}, true, nil
 }
 
 // parsePiebaldSessionResults parses a single Piebald chat and any large

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +46,10 @@ type claudeProvider struct {
 
 func (p *claudeProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
+}
+
+func (p *claudeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
 }
 
 func (p *claudeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -159,16 +164,25 @@ func (p *claudeProvider) ParseIncremental(
 	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
 		req.Offset,
-		req.StartOrdinal,
-		req.LastEntryUUID,
-		claudeStoredIdentity{
-			agentLabel: req.StoredAgentLabel,
-			entrypoint: req.StoredEntrypoint,
+		claudeIncrementalScan{
+			startOrdinal:  req.StartOrdinal,
+			lastEntryUUID: req.LastEntryUUID,
+			stored: claudeStoredIdentity{
+				agentLabel: req.StoredAgentLabel,
+				entrypoint: req.StoredEntrypoint,
+			},
+			storedLinearParse:         req.StoredClaudeLinearParse,
+			storedTailClaudeMessageID: req.StoredLastClaudeMessageID,
 		},
 	)
 	if err != nil {
 		if IsIncrementalFullParseFallback(err) || errorsIsClaudeDAG(err) {
-			return IncrementalOutcome{ForceReplace: IsIncrementalFullParseFallback(err)},
+			// Both fallbacks require a replacing write. Explicit
+			// fallbacks update already-stored rows; a detected DAG
+			// fork means the full parse may drop or re-branch stored
+			// messages (small-gap retries follow the latest child),
+			// which the append-only write path would silently retain.
+			return IncrementalOutcome{ForceReplace: true},
 				IncrementalNeedsFullParse, nil
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
@@ -230,6 +244,78 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s claudeSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if strings.HasPrefix(root, "s3://") {
+			for _, file := range ClaudeProjectSessionFiles(root) {
+				source, ok := s.discoveredSourceRef(root, file)
+				if ok {
+					if err := yield(source); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+		err := s.streamLocalRoot(ctx, root, yield)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s claudeSourceSet) streamLocalRoot(
+	ctx context.Context, root string, yield func(SourceRef) error,
+) error {
+	var incomplete error
+	err := streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
+		isProjectDir, dirErr := streamingDirCandidateOrIncomplete(
+			AgentClaude, "Claude project directory", project, root,
+		)
+		if dirErr != nil {
+			incomplete = errors.Join(incomplete, dirErr)
+			return nil
+		}
+		if !isProjectDir {
+			return nil
+		}
+		projectRoot := filepath.Join(root, project.Name())
+		err := streamDirectoryTreeRecursive(ctx, projectRoot, func(
+			path string, entry os.DirEntry,
+		) error {
+			if !strings.HasSuffix(entry.Name(), ".jsonl") {
+				return nil
+			}
+			source, ok := s.sourceRef(root, path)
+			if !ok {
+				return nil
+			}
+			return yield(source)
+		})
+		if err == nil {
+			return nil
+		}
+		if _, ok := discoveryYieldCause(err); ok {
+			return err
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		incomplete = errors.Join(incomplete, err)
+		return nil
+	})
+	if cause, ok := discoveryYieldCause(err); ok {
+		return cause
+	}
+	return errors.Join(incomplete, err)
 }
 
 // discoveredSourceRef builds the SourceRef for one enumerated Claude session
@@ -535,6 +621,7 @@ func claudeProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

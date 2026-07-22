@@ -55,12 +55,40 @@ type SourceSetProvider struct {
 	sources SourceSet
 }
 
+var _ StreamingDiscoverer = (*SourceSetProvider)(nil)
+
 func (p *SourceSetProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *SourceSetProvider) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	discoverer, ok := p.sources.(StreamingDiscoverer)
+	if !ok {
+		return UnsupportedProviderFeatureError{
+			Provider: p.Def.Type,
+			Feature:  "streaming discovery",
+		}
+	}
+	return discoverer.DiscoverEach(ctx, yield)
+}
+
 func (p *SourceSetProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
+}
+
+func (p *SourceSetProvider) WatchRoots(
+	ctx context.Context,
+) ([]WatchRoot, error) {
+	if planner, ok := p.sources.(WatchRootPlanner); ok {
+		return planner.WatchRoots(ctx)
+	}
+	plan, err := p.sources.WatchPlan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return watchRootMetadata(plan.Roots), nil
 }
 
 func (p *SourceSetProvider) SourcesForChangedPath(
@@ -68,6 +96,16 @@ func (p *SourceSetProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *SourceSetProvider) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	resolver, ok := p.sources.(StoredSourceHintScopeProvider)
+	if !ok {
+		return nil
+	}
+	return resolver.StoredSourceHintScopes(req)
 }
 
 func (p *SourceSetProvider) FindSource(
@@ -94,6 +132,36 @@ func (p *SourceSetProvider) Parse(
 	return p.sources.Parse(ctx, req)
 }
 
+func (p *SourceSetProvider) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (SourceRef, bool, error) {
+	resolver, ok := p.sources.(ReconciliationSourceResolver)
+	if !ok {
+		return SourceRef{}, false, nil
+	}
+	return resolver.SourceForReconciliation(ctx, path, project)
+}
+
+func (p *SourceSetProvider) ReconciliationMemberIdentity(
+	fullSessionID string,
+) string {
+	resolver, ok := p.sources.(ReconciliationMemberIdentityResolver)
+	if !ok {
+		return ""
+	}
+	return resolver.ReconciliationMemberIdentity(fullSessionID)
+}
+
+func (p *SourceSetProvider) PersistentArchiveSource(
+	path string, fullSessionID string,
+) (string, bool) {
+	resolver, ok := p.sources.(PersistentArchiveSourceResolver)
+	if !ok {
+		return "", false
+	}
+	return resolver.PersistentArchiveSource(path, fullSessionID)
+}
+
 // SourceSetFactory is the generic ProviderFactory for any SourceSet-backed
 // provider. build constructs the SourceSet from the cloned per-provider config
 // (roots, machine, path rewriter), so a base captures whatever config it needs
@@ -104,14 +172,19 @@ type SourceSetFactory struct {
 	build func(cfg ProviderConfig) SourceSet
 }
 
+// NewSourceSetFactory advertises StreamingDiscovery up front because every
+// source-set base streams. A wrapper still cannot invent streaming for a
+// collecting source set: NewProvider downgrades the capability when the built
+// SourceSet does not implement StreamingDiscoverer.
 func NewSourceSetFactory(
 	def AgentDef,
 	caps Capabilities,
 	build func(cfg ProviderConfig) SourceSet,
 ) ProviderFactory {
+	caps.Source.StreamingDiscovery = CapabilitySupported
 	return SourceSetFactory{
 		def:   cloneAgentDef(def),
-		caps:  caps,
+		caps:  withWatchRootPlanningCapability(caps),
 		build: build,
 	}
 }
@@ -126,12 +199,23 @@ func (f SourceSetFactory) Capabilities() Capabilities {
 
 func (f SourceSetFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	sources := f.build(cfg)
+	caps := f.caps
+	if _, ok := sources.(StreamingDiscoverer); !ok {
+		caps.Source.StreamingDiscovery = CapabilityUnsupported
+	}
+	if _, ok := sources.(ReconciliationSourceResolver); !ok {
+		caps.Source.SharedContainerSource = CapabilityUnsupported
+	}
+	if _, ok := sources.(StoredSourceHintScopeProvider); !ok {
+		caps.Source.StoredSourceHints = CapabilityUnsupported
+	}
 	return &SourceSetProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
-			Caps:   f.caps,
+			Caps:   caps,
 			Config: cfg,
 		},
-		sources: f.build(cfg),
+		sources: sources,
 	}
 }

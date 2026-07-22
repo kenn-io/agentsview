@@ -3,10 +3,12 @@ package sync_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +44,180 @@ func vsCopilotTraceLine(
 		`","endTimeUnixNano":"` + end +
 		`","attributes":[` + strings.Join(allAttrs, ",") +
 		`]}]}]}]}`
+}
+
+func TestReconcileWatchRootsPreservesVisualStudioCopilotSessionBehindSymlinkedVSRoot(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	vsRoot := filepath.Join(root, ".vs")
+	sessionPath := filepath.Join(
+		vsRoot, "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(vsCopilotTraceLine(
+		conversationID, "span", "chat gpt-5.5", "1781293600000000000",
+		"1781293610000000000", map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	)+"\n"), 0o600))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentVSCopilot: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
+	sessionID := "visualstudio-copilot:" + conversationID
+	stored, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	targetVSRoot := filepath.Join(t.TempDir(), "vs-data")
+	require.NoError(t, os.Rename(vsRoot, targetVSRoot))
+	if err := os.Symlink(targetVSRoot, vsRoot); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	active, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.NotNil(t, active,
+		"authoritative reconciliation must preserve a session behind a directory symlink")
+}
+
+func TestReconcileWatchRootsVisualStudioCopilot300MembersUsesOneBoundedScan(t *testing.T) {
+	const members = 300
+	root := t.TempDir()
+	tracePath := filepath.Join(
+		root, "20260714T120000_00000000_VSGitHubCopilot_traces.jsonl",
+	)
+	var data strings.Builder
+	for i := range members {
+		id := fmt.Sprintf("00000000-0000-0000-0000-%012x", i)
+		data.WriteString(vsCopilotTraceLine(
+			id, fmt.Sprintf("span-%03d", i), "chat gpt-5.5", "1781293620000000000",
+			"1781293630000000000", map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": strings.Repeat("bounded prompt ", 300),
+			},
+		))
+		data.WriteByte('\n')
+	}
+	require.NoError(t, os.WriteFile(tracePath, []byte(data.String()), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentVSCopilot: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	// Production uses at least two workers and caps above this desired overlap,
+	// so this target cannot exceed the workers available on low-CPU hosts.
+	overlapTarget := min(4, max(runtime.NumCPU(), 2))
+	require.GreaterOrEqual(t, overlapTarget, 2)
+	probe := newVSRetainedOverlapProbe(parser.AgentVSCopilot, overlapTarget)
+	ctx := parser.WithReconciliationRetainedMemberObserver(t.Context(), probe.observe)
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.ReconcileWatchRoots(ctx, []string{root}, false)
+	}()
+	probe.waitAndRelease(t)
+	require.NoError(t, <-done)
+
+	result := engine.LastReconciliationResult()
+	assert.True(t, result.Complete)
+	assert.Equal(t, 1, result.Metrics.SharedContainerScans)
+	assert.Equal(t, 256, result.Metrics.MaxSpoolPageRows)
+	assert.Positive(t, result.Metrics.MaxProviderRetainedBytes)
+	assert.GreaterOrEqual(t, probe.maxActive.Load(), int32(overlapTarget))
+	assert.GreaterOrEqual(t, result.Metrics.MaxProviderRetainedBytes, probe.maxBytes.Load(),
+		"aggregate metric must include every concurrently retained worker member")
+	assert.Less(t, result.Metrics.MaxProviderRetainedBytes, int64(data.Len())/2,
+		"concurrent provider retention must stay bounded by members, not the container")
+	lastID := fmt.Sprintf("visualstudio-copilot:00000000-0000-0000-0000-%012x", members-1)
+	stored, err := database.GetSession(t.Context(), lastID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+}
+
+type vsRetainedOverlapProbe struct {
+	provider  parser.AgentType
+	target    int
+	arrived   chan struct{}
+	release   chan struct{}
+	active    atomic.Int32
+	liveBytes atomic.Int64
+	maxActive atomic.Int32
+	maxBytes  atomic.Int64
+}
+
+func newVSRetainedOverlapProbe(
+	provider parser.AgentType, target int,
+) *vsRetainedOverlapProbe {
+	return &vsRetainedOverlapProbe{
+		provider: provider, target: target,
+		arrived: make(chan struct{}, target), release: make(chan struct{}),
+	}
+}
+
+func (probe *vsRetainedOverlapProbe) observe(provider parser.AgentType, retained int64) {
+	if provider != probe.provider || retained <= 0 {
+		return
+	}
+	active := probe.active.Add(1)
+	liveBytes := probe.liveBytes.Add(retained)
+	vsAtomicMaxInt32(&probe.maxActive, active)
+	vsAtomicMaxInt64(&probe.maxBytes, liveBytes)
+	select {
+	case probe.arrived <- struct{}{}:
+	case <-probe.release:
+	}
+	<-probe.release
+	probe.liveBytes.Add(-retained)
+	probe.active.Add(-1)
+}
+
+func (probe *vsRetainedOverlapProbe) waitAndRelease(t *testing.T) {
+	t.Helper()
+	defer func() {
+		select {
+		case <-probe.release:
+		default:
+			close(probe.release)
+		}
+	}()
+	for range probe.target {
+		select {
+		case <-probe.arrived:
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for concurrent retained members")
+		}
+	}
+	close(probe.release)
+}
+
+func vsAtomicMaxInt32(value *atomic.Int32, candidate int32) {
+	for current := value.Load(); candidate > current; current = value.Load() {
+		if value.CompareAndSwap(current, candidate) {
+			return
+		}
+	}
+}
+
+func vsAtomicMaxInt64(value *atomic.Int64, candidate int64) {
+	for current := value.Load(); candidate > current; current = value.Load() {
+		if value.CompareAndSwap(current, candidate) {
+			return
+		}
+	}
 }
 
 // TestSyncEngineVisualStudioCopilotMultipleConversationsPerFile verifies that a
@@ -284,6 +460,45 @@ func TestSyncRootsSinceVisualStudioCopilotPollTombstonesDeletedVS2026Session(
 	require.NoError(t, err)
 	assert.Nil(t, gone,
 		"unwatched polling must tombstone deleted VS 2026 session files")
+}
+
+func TestSyncPathsVisualStudioCopilotTombstonesDeletedVS2026Session(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
+			"1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Hello."}]}]`,
+			})+"\n"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {root},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	assertSessionMessageCount(t, database, sessionID, 1)
+
+	require.NoError(t, os.Remove(sessionPath))
+	engine.SyncPathsContext(context.Background(), []string{sessionPath})
+
+	gone, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, gone,
+		"an extensionless container event must tombstone its stored virtual member")
 }
 
 func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMissing(

@@ -270,9 +270,55 @@ func TestResyncContributorPostSwapReopenFailureReturnsCoordinatorError(t *testin
 	assert.Empty(t, emitter.got(), "failed reopen published a successful sync")
 	assert.True(t, engine.LastSyncStats().Aborted)
 
-	// The rename already completed. Restore the handle and prove the rebuilt
-	// file is now the active archive even though publication failed.
-	require.NoError(t, database.Reopen())
+	// The rename already completed and the barrier recovery performed a full
+	// reopen, so the rebuilt file must serve reads and writes without a
+	// manual Reopen — a writer-only recovery would leave every read on a
+	// closed pool until restart.
+	assert.False(t, database.WriterClosed(),
+		"barrier recovery must restore the writer")
+	session, getErr := database.GetSession(context.Background(), "session")
+	require.NoError(t, getErr)
+	require.NotNil(t, session)
+}
+
+// TestResyncContributorPostSwapReopenRecoversOnRetry pins the retry: a
+// transient reopen failure after the rename must not fail the resync — the
+// swap retries the reopen and completes, recording the retry as a warning.
+func TestResyncContributorPostSwapReopenRecoversOnRetry(t *testing.T) {
+	root := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	path := filepath.Join(root, "project", "session.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "reopen retry fixture").String()), 0o644))
+
+	var reopenCalls int
+	stats, err := engine.resyncAllWithOptionsAndOperations(
+		context.Background(), nil, RebuildOptions{}, rebuildOperations{
+			rebuildFTS: productionRebuildOperations.rebuildFTS,
+			reopen: func(database *db.DB) error {
+				reopenCalls++
+				if reopenCalls == 1 {
+					return errors.New("transient reopen failure")
+				}
+				return database.Reopen()
+			},
+		},
+	)
+
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 2, reopenCalls)
+	assert.Contains(t, stats.Warnings,
+		"resync reopen required a retry: transient reopen failure")
+	assert.False(t, database.WriterClosed())
 	session, getErr := database.GetSession(context.Background(), "session")
 	require.NoError(t, getErr)
 	require.NotNil(t, session)

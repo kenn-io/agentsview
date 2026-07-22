@@ -49,6 +49,15 @@ func (p *gptmeProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.filterSources(sources), nil
 }
 
+func (p *gptmeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, func(source SourceRef) error {
+		if !p.isSource(source) {
+			return nil
+		}
+		return yield(source)
+	})
+}
+
 func (p *gptmeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -267,6 +276,7 @@ func gptmeProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

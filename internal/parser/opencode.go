@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -61,44 +62,65 @@ func OpenCodeSQLiteSessionExists(dbPath, sessionID string) bool {
 func ListOpenCodeSessionMeta(
 	dbPath string,
 ) ([]OpenCodeSessionMeta, error) {
+	var metas []OpenCodeSessionMeta
+	err := ForEachOpenCodeSessionMeta(
+		context.Background(), dbPath,
+		func(meta OpenCodeSessionMeta) error {
+			metas = append(metas, meta)
+			return nil
+		},
+	)
+	return metas, err
+}
+
+// ForEachOpenCodeSessionMeta streams lightweight session rows directly from
+// SQLite. The callback runs while the read-only query is open and receives one
+// row at a time; callers must not retain database-owned values.
+func ForEachOpenCodeSessionMeta(
+	ctx context.Context,
+	dbPath string,
+	yield func(OpenCodeSessionMeta) error,
+) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
+		return nil
 	}
 
 	db, err := openOpenCodeDB(dbPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer db.Close()
 
-	rows, err := db.Query(
+	rows, err := db.QueryContext(ctx,
 		"SELECT id, time_updated FROM session",
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"listing opencode sessions: %w", err,
 		)
 	}
 	defer rows.Close()
 
-	var metas []OpenCodeSessionMeta
 	for rows.Next() {
 		var id string
 		var timeUpdated int64
 		if err := rows.Scan(
 			&id, &timeUpdated,
 		); err != nil {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"scanning opencode session meta: %w", err,
 			)
 		}
-		metas = append(metas, OpenCodeSessionMeta{
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(OpenCodeSessionMeta{
 			SessionID:   id,
 			VirtualPath: dbPath + "#" + id,
 			FileMtime:   timeUpdated * 1_000_000,
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	return metas, rows.Err()
+	return rows.Err()
 }
 
 // parseOpenCodeDBSession parses a single session by ID from the

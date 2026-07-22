@@ -283,8 +283,19 @@ func createKiroSQLiteDB(t *testing.T, dir string) *kiroSQLiteTestDB {
 	)
 	d, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "opening kiro sqlite test db")
-	t.Cleanup(func() { d.Close() })
-	return &kiroSQLiteTestDB{path: path, db: d}
+	fixture := &kiroSQLiteTestDB{path: path, db: d}
+	t.Cleanup(func() {
+		if fixture.db != nil {
+			_ = fixture.db.Close()
+		}
+	})
+	return fixture
+}
+
+func (k *kiroSQLiteTestDB) close(t *testing.T) {
+	t.Helper()
+	require.NoError(t, k.db.Close())
+	k.db = nil
 }
 
 func copySQLiteSchemaTemplate(

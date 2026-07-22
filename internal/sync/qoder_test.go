@@ -34,21 +34,21 @@ func TestEngineClassifyQoderPaths(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 	}
 
-	files := engine.classifyPaths([]string{mainPath})
+	files := requireClassifyPaths(t, engine, []string{mainPath})
 	require.Len(t, files, 1, "main path did not classify")
 	got := files[0]
 	assert.Equal(t, mainPath, got.Path)
 	assert.Equal(t, "project", got.Project)
 	assert.Equal(t, parser.AgentQoder, got.Agent)
 
-	files = engine.classifyPaths([]string{subPath})
+	files = requireClassifyPaths(t, engine, []string{subPath})
 	require.Len(t, files, 1, "subagent path did not classify")
 	got = files[0]
 	assert.Equal(t, subPath, got.Path)
 	assert.Equal(t, "project", got.Project)
 	assert.Equal(t, parser.AgentQoder, got.Agent)
 
-	files = engine.classifyPaths([]string{sidecarPath})
+	files = requireClassifyPaths(t, engine, []string{sidecarPath})
 	require.Len(t, files, 1, "sidecar path did not map to transcript")
 	got = files[0]
 	assert.Equal(t, mainPath, got.Path)
@@ -56,7 +56,7 @@ func TestEngineClassifyQoderPaths(t *testing.T) {
 	assert.Equal(t, parser.AgentQoder, got.Agent)
 
 	for _, path := range []string{statsPath, rootAgentPath, nestedPath} {
-		files = engine.classifyPaths([]string{path})
+		files = requireClassifyPaths(t, engine, []string{path})
 		assert.Emptyf(t, files, "%s classified as %+v", path, files)
 	}
 }
@@ -75,7 +75,7 @@ func TestEngineClassifyQoderProjectNamedSubagentsAsMainSession(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 
-	files := engine.classifyPaths([]string{path})
+	files := requireClassifyPaths(t, engine, []string{path})
 	require.Len(t, files, 1, "path did not classify")
 	got := files[0]
 	assert.Equal(t, path, got.Path)

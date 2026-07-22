@@ -20,7 +20,8 @@ type dbBackedProviderSpec struct {
 	agent        AgentType
 	dbName       string
 	findDB       func(string) string
-	listMeta     func(string) ([]dbBackedSessionMeta, error)
+	streamMeta   func(context.Context, string, func(dbBackedSessionMeta) error) error
+	metaForID    func(context.Context, string, string) (dbBackedSessionMeta, bool, error)
 	parse        func(string, string, string) ([]ParseResult, error)
 	normalizeRaw func(string) string
 	caps         Capabilities
@@ -62,6 +63,12 @@ func (p *dbBackedProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *dbBackedProvider) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *dbBackedProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -71,6 +78,12 @@ func (p *dbBackedProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *dbBackedProvider) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	return p.sources.StoredSourceHintScopes(req)
 }
 
 func (p *dbBackedProvider) FindSource(
@@ -89,6 +102,26 @@ func (p *dbBackedProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+func (p *dbBackedProvider) PersistentArchiveSource(
+	path string, fullSessionID string,
+) (string, bool) {
+	rawSessionID := ProviderRawSessionIDFromFull(p.Def, fullSessionID)
+	if p.spec.normalizeRaw != nil {
+		rawSessionID = p.spec.normalizeRaw(rawSessionID)
+	}
+	for _, root := range p.sources.roots {
+		source, ok := p.sources.sourceRef(root, path, true)
+		if !ok {
+			continue
+		}
+		src, ok := p.sources.sourceFromRef(source)
+		if ok && rawSessionID != "" && src.SessionID == rawSessionID {
+			return src.DBPath, true
+		}
+	}
+	return "", false
 }
 
 func (p *dbBackedProvider) Parse(
@@ -175,21 +208,21 @@ func newDBBackedSourceSet(
 }
 
 func (s dbBackedSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	var sources []SourceRef
-	seen := make(map[string]struct{})
+	return collectDiscoveredSources(ctx, s.DiscoverEach)
+}
+
+func (s dbBackedSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		dbPath := s.spec.findDB(root)
 		if dbPath == "" {
 			continue
 		}
-		metas, err := s.spec.listMeta(dbPath)
-		if err != nil {
-			return nil, err
-		}
-		for _, meta := range metas {
+		err := s.spec.streamMeta(ctx, dbPath, func(meta dbBackedSessionMeta) error {
 			ref := s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath)
 			// Carry the per-session mtime captured here so parse-diff's --limit
 			// sampler can order these virtual "<db>#<sessionID>" sources by each
@@ -197,11 +230,13 @@ func (s dbBackedSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			// on-disk existence. Ordering metadata only: skip-cache and
 			// data-version freshness still resolve through Fingerprint.
 			ref.DiscoveryMTimeNS = meta.FileMtime
-			addJSONLSource(ref, &sources, seen)
+			return yield(ref)
+		})
+		if err != nil {
+			return err
 		}
 	}
-	sortJSONLSources(sources)
-	return sources, nil
+	return nil
 }
 
 func (s dbBackedSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -235,18 +270,18 @@ func (s dbBackedSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
-		metas, err := s.spec.listMeta(dbPath)
-		if err != nil {
-			return nil, err
-		}
-		sources := make([]SourceRef, 0, len(metas))
-		seen := make(map[string]struct{}, len(metas))
-		for _, meta := range metas {
+		var sources []SourceRef
+		seen := make(map[string]struct{})
+		err := s.spec.streamMeta(ctx, dbPath, func(meta dbBackedSessionMeta) error {
 			addJSONLSource(
 				s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath),
 				&sources,
 				seen,
 			)
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 		for _, path := range req.StoredSourcePaths {
 			ref, ok := s.sourceRef(root, path, true)
@@ -263,6 +298,25 @@ func (s dbBackedSourceSet) SourcesForChangedPath(
 		return sources, nil
 	}
 	return nil, nil
+}
+
+func (s dbBackedSourceSet) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	for _, root := range s.roots {
+		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
+			continue
+		}
+		if ref, ok := s.sourceRef(root, req.Path, true); ok {
+			return []StoredSourceHintScope{{Path: ref.DisplayPath}}
+		}
+		if dbPath, ok := s.dbPathForEvent(root, req.Path); ok {
+			return []StoredSourceHintScope{{
+				Path: dbPath, IncludeVirtualMembers: true,
+			}}
+		}
+	}
+	return nil
 }
 
 func (s dbBackedSourceSet) FindSource(
@@ -303,14 +357,12 @@ func (s dbBackedSourceSet) FindSource(
 		if dbPath == "" {
 			continue
 		}
-		metas, err := s.spec.listMeta(dbPath)
+		meta, found, err := s.spec.metaForID(ctx, dbPath, req.RawSessionID)
 		if err != nil {
 			return SourceRef{}, false, err
 		}
-		for _, meta := range metas {
-			if meta.SessionID == req.RawSessionID {
-				return s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath), true, nil
-			}
+		if found {
+			return s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath), true, nil
 		}
 	}
 	return SourceRef{}, false, nil
@@ -320,16 +372,11 @@ func (s dbBackedSourceSet) sourceExists(src dbBackedSource) (bool, error) {
 	if !IsRegularFile(src.DBPath) {
 		return false, nil
 	}
-	metas, err := s.spec.listMeta(src.DBPath)
+	_, found, err := s.spec.metaForID(context.Background(), src.DBPath, src.SessionID)
 	if err != nil {
 		return false, err
 	}
-	for _, meta := range metas {
-		if meta.SessionID == src.SessionID {
-			return true, nil
-		}
-	}
-	return false, nil
+	return found, nil
 }
 
 func (s dbBackedSourceSet) Fingerprint(
@@ -350,17 +397,15 @@ func (s dbBackedSourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
-	metas, err := s.spec.listMeta(src.DBPath)
+	meta, found, err := s.spec.metaForID(ctx, src.DBPath, src.SessionID)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
-	for _, meta := range metas {
-		if meta.SessionID == src.SessionID {
-			return SourceFingerprint{
-				Key:     key,
-				MTimeNS: meta.FileMtime,
-			}, nil
-		}
+	if found {
+		return SourceFingerprint{
+			Key:     key,
+			MTimeNS: meta.FileMtime,
+		}, nil
 	}
 	return SourceFingerprint{Key: key}, nil
 }
@@ -462,13 +507,18 @@ func forgeProviderSpec() dbBackedProviderSpec {
 		agent:  AgentForge,
 		dbName: ForgeDBFilename,
 		findDB: forgeDBPath,
-		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
-			metas, err := ListForgeSessionMeta(dbPath)
-			out := make([]dbBackedSessionMeta, 0, len(metas))
-			for _, meta := range metas {
-				out = append(out, dbBackedSessionMeta(meta))
-			}
-			return out, err
+		streamMeta: func(
+			ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+		) error {
+			return ForEachForgeSessionMeta(ctx, dbPath, func(meta ForgeSessionMeta) error {
+				return yield(dbBackedSessionMeta(meta))
+			})
+		},
+		metaForID: func(
+			ctx context.Context, dbPath, id string,
+		) (dbBackedSessionMeta, bool, error) {
+			meta, found, err := forgeSessionMeta(ctx, dbPath, id)
+			return dbBackedSessionMeta(meta), found, err
 		},
 		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
 			sess, msgs, err := parseForgeSession(dbPath, sessionID, machine)
@@ -493,13 +543,18 @@ func piebaldProviderSpec() dbBackedProviderSpec {
 		agent:  AgentPiebald,
 		dbName: PiebaldDBFilename,
 		findDB: piebaldDBPath,
-		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
-			metas, err := ListPiebaldSessionMeta(dbPath)
-			out := make([]dbBackedSessionMeta, 0, len(metas))
-			for _, meta := range metas {
-				out = append(out, dbBackedSessionMeta(meta))
-			}
-			return out, err
+		streamMeta: func(
+			ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+		) error {
+			return ForEachPiebaldSessionMeta(ctx, dbPath, func(meta PiebaldSessionMeta) error {
+				return yield(dbBackedSessionMeta(meta))
+			})
+		},
+		metaForID: func(
+			ctx context.Context, dbPath, id string,
+		) (dbBackedSessionMeta, bool, error) {
+			meta, found, err := piebaldSessionMeta(ctx, dbPath, id)
+			return dbBackedSessionMeta(meta), found, err
 		},
 		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
 			return parsePiebaldSessionResults(dbPath, sessionID, machine)
@@ -524,13 +579,18 @@ func warpProviderSpec() dbBackedProviderSpec {
 		agent:  AgentWarp,
 		dbName: WarpDBFilename,
 		findDB: warpDBPath,
-		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
-			metas, err := ListWarpSessionMeta(dbPath)
-			out := make([]dbBackedSessionMeta, 0, len(metas))
-			for _, meta := range metas {
-				out = append(out, dbBackedSessionMeta(meta))
-			}
-			return out, err
+		streamMeta: func(
+			ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+		) error {
+			return ForEachWarpSessionMeta(ctx, dbPath, func(meta WarpSessionMeta) error {
+				return yield(dbBackedSessionMeta(meta))
+			})
+		},
+		metaForID: func(
+			ctx context.Context, dbPath, id string,
+		) (dbBackedSessionMeta, bool, error) {
+			meta, found, err := warpSessionMeta(ctx, dbPath, id)
+			return dbBackedSessionMeta(meta), found, err
 		},
 		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
 			sess, msgs, err := parseWarpSession(dbPath, sessionID, machine)
@@ -545,9 +605,11 @@ func warpProviderSpec() dbBackedProviderSpec {
 
 func dbBackedSourceCapabilities(multiSession CapabilitySupport) SourceCapabilities {
 	source := jsonlFileProviderSourceCapabilities()
+	source.StreamingDiscovery = CapabilitySupported
 	source.StoredSourceHints = CapabilitySupported
 	source.MultiSessionSource = multiSession
 	source.ForceReplaceOnParse = CapabilitySupported
+	source.PersistentArchive = CapabilitySupported
 	return source
 }
 

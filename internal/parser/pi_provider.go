@@ -51,6 +51,16 @@ func (p *piProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.filterDiscoveredSources(sources), nil
 }
 
+func (p *piProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, func(source SourceRef) error {
+		src, ok := source.Opaque.(JSONLSource)
+		if !ok || !IsPiSessionFile(src.Path) {
+			return nil
+		}
+		return yield(source)
+	})
+}
+
 func (p *piProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -284,7 +294,7 @@ func piSessionIDFromPath(root, path string) string {
 }
 
 func piProviderCapabilities() Capabilities {
-	return Capabilities{
+	caps := Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -298,4 +308,6 @@ func piProviderCapabilities() Capabilities {
 			Model:                CapabilitySupported,
 		},
 	}
+	caps.Source.StreamingDiscovery = CapabilitySupported
+	return caps
 }

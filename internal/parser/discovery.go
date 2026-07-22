@@ -290,7 +290,10 @@ func resolveOpenCodeFormatWatchRoots(
 	if info, err := os.Stat(root); err == nil && info.IsDir() {
 		return []string{root}
 	}
-	return nil
+	// Keep a deterministic logical root even before the provider is installed.
+	// Lifecycle-aware watcher backends can cover its creation from a bounded
+	// ancestor and avoid permanent archive-scale polling of absent defaults.
+	return []string{root}
 }
 
 func parseOpenCodeFormatVirtualPath(

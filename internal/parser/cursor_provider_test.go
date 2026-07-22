@@ -122,6 +122,74 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 	assert.Empty(t, wrongRoot)
 }
 
+func TestCursorStreamingDiscoveryUsesCanonicalMixedLayoutPrecedence(t *testing.T) {
+	root := t.TempDir()
+	transcriptsDir := filepath.Join(
+		root, "Users-demo", "agent-transcripts",
+	)
+	flatJSONL := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, "mixed.jsonl", "canonical flat source",
+	)
+	cursorProviderWriteTranscript(
+		t, transcriptsDir, filepath.Join("mixed", "mixed.txt"),
+		"older nested source",
+	)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, flatJSONL, discovered[0].DisplayPath)
+
+	var streamed []SourceRef
+	err = provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, streamed, 1)
+	assert.Equal(t, flatJSONL, streamed[0].DisplayPath)
+}
+
+func TestCursorStreamingDiscoveryPropagatesAuthoritativeResolutionErrors(t *testing.T) {
+	t.Run("configured root", func(t *testing.T) {
+		parent := t.TempDir()
+		root := filepath.Join(parent, "broken-root")
+		require.NoError(t, os.Symlink(filepath.Join(parent, "missing"), root))
+		provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+
+		err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resolve cursor root")
+	})
+
+	t.Run("project transcripts", func(t *testing.T) {
+		root := t.TempDir()
+		project := filepath.Join(root, "Users-demo")
+		require.NoError(t, os.MkdirAll(project, 0o755))
+		require.NoError(t, os.Symlink(
+			filepath.Join(root, "missing-transcripts"),
+			filepath.Join(project, "agent-transcripts"),
+		))
+		provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+
+		err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resolve cursor transcripts")
+	})
+}
+
 func TestCursorProviderResolvesDuplicateStemsWithinProject(t *testing.T) {
 	root := t.TempDir()
 	firstProject := "Users-fiona-Documents-first"

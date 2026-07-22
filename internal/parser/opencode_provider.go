@@ -83,6 +83,10 @@ func (p *openCodeFormatProvider) Discover(ctx context.Context) ([]SourceRef, err
 	return p.sources.Discover(ctx)
 }
 
+func (p *openCodeFormatProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *openCodeFormatProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -92,6 +96,12 @@ func (p *openCodeFormatProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *openCodeFormatProvider) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (SourceRef, bool, error) {
+	return p.sources.SourceForReconciliation(ctx, path, project)
 }
 
 func (p *openCodeFormatProvider) FindSource(
@@ -165,53 +175,71 @@ func (p *openCodeFormatProvider) Parse(
 // the OpenCode storage and SQLite readers, then relabel the result onto
 // their own agent and ID prefix.
 type openCodeProviderSpec struct {
-	agent       AgentType
-	format      openCodeFormat
-	dbName      string
-	listSQLite  func(string) ([]OpenCodeSessionMeta, error)
-	sourceMtime func(string) (int64, error)
-	relabel     func(*ParsedSession)
+	agent        AgentType
+	format       openCodeFormat
+	dbName       string
+	listSQLite   func(string) ([]OpenCodeSessionMeta, error)
+	streamSQLite func(context.Context, string, func(OpenCodeSessionMeta) error) error
+	sourceMtime  func(string) (int64, error)
+	relabel      func(*ParsedSession)
 }
 
 func openCodeProviderSpecForAgent(agent AgentType) openCodeProviderSpec {
 	switch agent {
 	case AgentOpenCode:
 		return openCodeProviderSpec{
-			agent:       AgentOpenCode,
-			format:      openCodeFmt,
-			dbName:      openCodeFmt.dbName,
-			listSQLite:  ListOpenCodeSessionMeta,
-			sourceMtime: OpenCodeSourceMtime,
+			agent:        AgentOpenCode,
+			format:       openCodeFmt,
+			dbName:       openCodeFmt.dbName,
+			listSQLite:   ListOpenCodeSessionMeta,
+			streamSQLite: ForEachOpenCodeSessionMeta,
+			sourceMtime:  OpenCodeSourceMtime,
 		}
 	case AgentKilo:
 		return openCodeProviderSpec{
-			agent:       AgentKilo,
-			format:      kiloFmt,
-			dbName:      kiloFmt.dbName,
-			listSQLite:  ListKiloSessionMeta,
-			sourceMtime: KiloSourceMtime,
-			relabel:     relabelOpenCodeSessionAsKilo,
+			agent:        AgentKilo,
+			format:       kiloFmt,
+			dbName:       kiloFmt.dbName,
+			listSQLite:   ListKiloSessionMeta,
+			streamSQLite: streamOpenCodeSessionMetaAs(KiloSQLiteVirtualPath),
+			sourceMtime:  KiloSourceMtime,
+			relabel:      relabelOpenCodeSessionAsKilo,
 		}
 	case AgentMiMoCode:
 		return openCodeProviderSpec{
-			agent:       AgentMiMoCode,
-			format:      mimoFmt,
-			dbName:      mimoFmt.dbName,
-			listSQLite:  ListMiMoCodeSessionMeta,
-			sourceMtime: MiMoCodeSourceMtime,
-			relabel:     relabelOpenCodeSessionAsMiMoCode,
+			agent:        AgentMiMoCode,
+			format:       mimoFmt,
+			dbName:       mimoFmt.dbName,
+			listSQLite:   ListMiMoCodeSessionMeta,
+			streamSQLite: streamOpenCodeSessionMetaAs(MiMoCodeSQLiteVirtualPath),
+			sourceMtime:  MiMoCodeSourceMtime,
+			relabel:      relabelOpenCodeSessionAsMiMoCode,
 		}
 	case AgentIcodemate:
 		return openCodeProviderSpec{
-			agent:       AgentIcodemate,
-			format:      icodemateFmt,
-			dbName:      icodemateFmt.dbName,
-			listSQLite:  ListIcodemateSessionMeta,
-			sourceMtime: IcodemateSourceMtime,
-			relabel:     relabelOpenCodeSessionAsIcodemate,
+			agent:        AgentIcodemate,
+			format:       icodemateFmt,
+			dbName:       icodemateFmt.dbName,
+			listSQLite:   ListIcodemateSessionMeta,
+			streamSQLite: streamOpenCodeSessionMetaAs(IcodemateSQLiteVirtualPath),
+			sourceMtime:  IcodemateSourceMtime,
+			relabel:      relabelOpenCodeSessionAsIcodemate,
 		}
 	default:
 		return openCodeProviderSpec{}
+	}
+}
+
+func streamOpenCodeSessionMetaAs(
+	virtualPath func(string, string) string,
+) func(context.Context, string, func(OpenCodeSessionMeta) error) error {
+	return func(
+		ctx context.Context, dbPath string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		return ForEachOpenCodeSessionMeta(ctx, dbPath, func(meta OpenCodeSessionMeta) error {
+			meta.VirtualPath = virtualPath(dbPath, meta.SessionID)
+			return yield(meta)
+		})
 	}
 }
 
@@ -354,6 +382,179 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 	return sources, nil
 }
 
+func (s openCodeFormatSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	var incomplete error
+	wrappedYield := func(source SourceRef) error {
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
+	}
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		continuable, err := s.discoverRootEach(ctx, root, wrappedYield)
+		if err == nil {
+			continue
+		}
+		if cause, ok := discoveryYieldCause(err); ok {
+			return cause
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if continuable {
+			incomplete = errors.Join(incomplete, err)
+			continue
+		}
+		if incomplete == nil {
+			return err
+		}
+		return errors.Join(incomplete, err)
+	}
+	return incomplete
+}
+
+type openCodeDiscoveryMapError struct{ cause error }
+
+func (err openCodeDiscoveryMapError) Error() string { return err.cause.Error() }
+func (err openCodeDiscoveryMapError) Unwrap() error { return err.cause }
+
+func (s openCodeFormatSourceSet) discoverRootEach(
+	ctx context.Context, root string, yield func(SourceRef) error,
+) (continuable bool, retErr error) {
+	src := s.spec.resolve(root)
+	hasSQLite := src.DBPath != "" && IsRegularFile(src.DBPath)
+	var storageIDs *discoveryDiskMap
+	if src.Mode == OpenCodeSourceStorage && hasSQLite {
+		var err error
+		storageIDs, err = newDiscoveryDiskMapForContext(ctx)
+		if err != nil {
+			return false, err
+		}
+		defer func() {
+			if cleanupErr := storageIDs.close(); cleanupErr != nil {
+				continuable = false
+				retErr = errors.Join(retErr, cleanupErr)
+			}
+		}()
+	}
+	if src.Mode == OpenCodeSourceStorage {
+		if err := s.discoverStorageEach(ctx, root, src, storageIDs, yield); err != nil {
+			var mapErr openCodeDiscoveryMapError
+			if errors.As(err, &mapErr) {
+				return false, err
+			}
+			return true, incompleteDiscoveryError(
+				s.spec.agent, "stream storage "+src.SessionRoot, err,
+			)
+		}
+	}
+	if !hasSQLite {
+		return false, nil
+	}
+	var callbackErr error
+	var membershipErr error
+	err := s.spec.streamSQLite(ctx, src.DBPath, func(meta OpenCodeSessionMeta) error {
+		if storageIDs != nil {
+			_, exists, err := storageIDs.get(ctx, meta.SessionID)
+			if err != nil {
+				membershipErr = err
+				return err
+			}
+			if exists {
+				return nil
+			}
+		}
+		source, ok := s.sqliteSourceRefFromMeta(root, meta)
+		if !ok {
+			return nil
+		}
+		callbackErr = yield(source)
+		return callbackErr
+	})
+	if callbackErr != nil {
+		return false, callbackErr
+	}
+	if membershipErr != nil {
+		return false, membershipErr
+	}
+	if err == nil {
+		return false, nil
+	}
+	if ctx.Err() != nil {
+		return false, err
+	}
+	if src.Mode == OpenCodeSourceStorage {
+		return true, incompleteDiscoveryError(
+			s.spec.agent, "stream SQLite "+src.DBPath, err,
+		)
+	}
+	return true, incompleteDiscoveryError(
+		s.spec.agent, "stream SQLite "+src.DBPath, err,
+	)
+}
+
+func (s openCodeFormatSourceSet) discoverStorageEach(
+	ctx context.Context,
+	root string,
+	src OpenCodeSource,
+	storageIDs *discoveryDiskMap,
+	yield func(SourceRef) error,
+) error {
+	var callbackErr error
+	err := streamDirectoryEntries(ctx, src.SessionRoot, func(project os.DirEntry) error {
+		isProjectDir, dirErr := streamingDirCandidateOrIncomplete(
+			s.spec.agent, "project directory", project, src.SessionRoot,
+		)
+		if dirErr != nil {
+			return dirErr
+		}
+		if !isProjectDir {
+			return nil
+		}
+		projectDir := filepath.Join(src.SessionRoot, project.Name())
+		err := streamDirectoryEntries(ctx, projectDir, func(entry os.DirEntry) error {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				return nil
+			}
+			path := filepath.Join(projectDir, entry.Name())
+			source, ok := s.sourceRef(root, path, false)
+			if !ok {
+				return nil
+			}
+			if storageIDs != nil {
+				id := strings.TrimSuffix(entry.Name(), ".json")
+				if id != "" {
+					if err := storageIDs.put(ctx, id, id, false); err != nil {
+						return openCodeDiscoveryMapError{cause: err}
+					}
+				}
+			}
+			source.ProjectHint = openCodeSessionProject(path)
+			callbackErr = yield(source)
+			return callbackErr
+		})
+		if callbackErr != nil {
+			return callbackErr
+		}
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if callbackErr != nil {
+		return callbackErr
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
 func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
@@ -380,6 +581,19 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
+		for _, root := range s.roots {
+			if _, under := relUnder(root, dbPath); !under {
+				continue
+			}
+			source, ok, err := s.canonicalVirtualSource(ctx, root, req.Path)
+			if err != nil || !ok {
+				return nil, err
+			}
+			return []SourceRef{source}, nil
+		}
+		return nil, nil
+	}
 	pathExists := true
 	if _, err := os.Stat(req.Path); err != nil {
 		if !os.IsNotExist(err) {
@@ -396,6 +610,59 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 		}
 	}
 	return nil, nil
+}
+
+func (s openCodeFormatSourceSet) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (SourceRef, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, root := range s.roots {
+		source, ok := s.sourceRef(root, path, false)
+		if !ok {
+			continue
+		}
+		if project != "" {
+			source.ProjectHint = project
+		}
+		return source, true, nil
+	}
+	return SourceRef{}, false, nil
+}
+
+var errOpenCodeCanonicalSourceFound = errors.New("opencode canonical source found")
+
+func (s openCodeFormatSourceSet) canonicalVirtualSource(
+	ctx context.Context, root, virtualPath string,
+) (SourceRef, bool, error) {
+	_, sessionID, ok := s.spec.parseVirtual(virtualPath)
+	if !ok {
+		return SourceRef{}, false, nil
+	}
+	src := s.spec.resolve(root)
+	if src.Mode == OpenCodeSourceStorage {
+		var found SourceRef
+		err := streamDirectoryEntries(ctx, src.SessionRoot, func(project os.DirEntry) error {
+			if !isDirOrSymlink(project, src.SessionRoot) {
+				return nil
+			}
+			path := filepath.Join(src.SessionRoot, project.Name(), sessionID+".json")
+			if source, ok := s.sourceRef(root, path, false); ok {
+				found = source
+				return errOpenCodeCanonicalSourceFound
+			}
+			return nil
+		})
+		switch {
+		case errors.Is(err, errOpenCodeCanonicalSourceFound):
+			return found, true, nil
+		case ctx.Err() != nil:
+			return SourceRef{}, false, ctx.Err()
+		}
+	}
+	source, ok := s.sourceRef(root, virtualPath, false)
+	return source, ok, nil
 }
 
 func (s openCodeFormatSourceSet) FindSource(
@@ -837,16 +1104,18 @@ func findOpenCodeProviderStorageSessionIDByMessageID(
 func openCodeFormatProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
-			DiscoverSources:      CapabilitySupported,
-			WatchSources:         CapabilitySupported,
-			ClassifyChangedPath:  CapabilitySupported,
-			FindSource:           CapabilitySupported,
-			CompositeFingerprint: CapabilitySupported,
-			IncrementalAppend:    CapabilityNotApplicable,
-			MultiSessionSource:   CapabilityNotApplicable,
-			PerSessionErrors:     CapabilityNotApplicable,
-			ExcludedSessions:     CapabilityNotApplicable,
-			ForceReplaceOnParse:  CapabilityNotApplicable,
+			DiscoverSources:       CapabilitySupported,
+			StreamingDiscovery:    CapabilitySupported,
+			WatchSources:          CapabilitySupported,
+			ClassifyChangedPath:   CapabilitySupported,
+			FindSource:            CapabilitySupported,
+			CompositeFingerprint:  CapabilitySupported,
+			IncrementalAppend:     CapabilityNotApplicable,
+			MultiSessionSource:    CapabilityNotApplicable,
+			SharedContainerSource: CapabilitySupported,
+			PerSessionErrors:      CapabilityNotApplicable,
+			ExcludedSessions:      CapabilityNotApplicable,
+			ForceReplaceOnParse:   CapabilityNotApplicable,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

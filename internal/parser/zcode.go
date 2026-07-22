@@ -1,11 +1,11 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,8 +69,17 @@ func zcodeProviderSpec() dbBackedProviderSpec {
 		agent:  AgentZCode,
 		dbName: zcodeDBName,
 		findDB: zcodeDBPath,
-		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
-			return listZCodeSessionMeta(dbPath)
+		streamMeta: func(
+			ctx context.Context,
+			dbPath string,
+			yield func(dbBackedSessionMeta) error,
+		) error {
+			return forEachZCodeSessionMeta(ctx, dbPath, yield)
+		},
+		metaForID: func(
+			ctx context.Context, dbPath, sessionID string,
+		) (dbBackedSessionMeta, bool, error) {
+			return zcodeSessionMeta(ctx, dbPath, sessionID)
 		},
 		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
 			result, err := parseZCodeSession(dbPath, sessionID, machine)
@@ -150,17 +159,19 @@ func ZCodeSQLiteSourceMtime(path string) (int64, error) {
 	return zcodeSessionFileMtime(dbPath, db, row), nil
 }
 
-func listZCodeSessionMeta(dbPath string) ([]dbBackedSessionMeta, error) {
+func forEachZCodeSessionMeta(
+	ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
+		return nil
 	}
 	db, err := openZCodeDB(dbPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       project_id,
 		       workspace_id,
@@ -172,32 +183,55 @@ func listZCodeSessionMeta(dbPath string) ([]dbBackedSessionMeta, error) {
 		 ORDER BY COALESCE(time_updated, time_created), id
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("listing zcode sessions: %w", err)
+		return fmt.Errorf("listing zcode sessions: %w", err)
 	}
 	defer rows.Close()
 
-	var metas []dbBackedSessionMeta
 	for rows.Next() {
 		row, err := scanZCodeSessionRow(rows)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if row.id == "" {
 			continue
 		}
-		metas = append(metas, dbBackedSessionMeta{
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(dbBackedSessionMeta{
 			SessionID:   row.id,
 			VirtualPath: ZCodeSQLiteVirtualPath(dbPath, row.id),
 			FileMtime:   zcodeSessionFileMtime(dbPath, db, row),
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	sort.Slice(metas, func(i, j int) bool {
-		return metas[i].SessionID < metas[j].SessionID
-	})
-	return metas, nil
+	return nil
+}
+
+func zcodeSessionMeta(
+	ctx context.Context, dbPath, sessionID string,
+) (dbBackedSessionMeta, bool, error) {
+	db, err := openZCodeDB(dbPath)
+	if err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
+	defer db.Close()
+	row, err := loadZCodeSessionRow(db, sessionID)
+	if err == sql.ErrNoRows {
+		return dbBackedSessionMeta{}, false, nil
+	}
+	if err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
+	return dbBackedSessionMeta{
+		SessionID: row.id, VirtualPath: ZCodeSQLiteVirtualPath(dbPath, row.id),
+		FileMtime: zcodeSessionFileMtime(dbPath, db, row),
+	}, true, nil
 }
 
 func parseZCodeSession(dbPath, sessionID, machine string) (*ParseResult, error) {

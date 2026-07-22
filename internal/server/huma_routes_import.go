@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
 
@@ -44,6 +46,9 @@ func (s *Server) humaImportClaudeAI(
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented,
 			"import not available in read-only mode")
+	}
+	if err := s.rejectWriterClosedWrite(); err != nil {
+		return nil, err
 	}
 	file := in.RawBody.Data().File
 	if !file.IsSet {
@@ -97,8 +102,16 @@ func (s *Server) importClaudeAIFromFileWithCallbacks(
 		return importer.ImportStats{}, err
 	}
 	defer cleanup()
-	stats, err := importer.ImportClaudeAI(ctx, s.db, reader, cb)
+	var stats importer.ImportStats
+	err = s.serializeArchiveWrite(func() error {
+		var importErr error
+		stats, importErr = importer.ImportClaudeAI(ctx, s.db, reader, cb)
+		return importErr
+	})
 	if err != nil {
+		if errors.Is(err, db.ErrWriterClosed) {
+			return importer.ImportStats{}, writerClosedError()
+		}
 		return importer.ImportStats{}, apiError(http.StatusInternalServerError,
 			"import failed: "+err.Error())
 	}
@@ -157,6 +170,9 @@ func (s *Server) humaImportChatGPT(
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented,
 			"import not available in read-only mode")
+	}
+	if err := s.rejectWriterClosedWrite(); err != nil {
+		return nil, err
 	}
 	file := in.RawBody.Data().File
 	if !file.IsSet {
@@ -221,9 +237,17 @@ func (s *Server) importChatGPTFromFile(
 			"failed to extract zip: "+err.Error())
 	}
 	defer cleanup()
-	stats, err := importer.ImportChatGPT(ctx, s.db, dir,
-		filepath.Join(s.cfg.DataDir, "assets"), cb)
+	var stats importer.ImportStats
+	err = s.serializeArchiveWrite(func() error {
+		var importErr error
+		stats, importErr = importer.ImportChatGPT(ctx, s.db, dir,
+			filepath.Join(s.cfg.DataDir, "assets"), cb)
+		return importErr
+	})
 	if err != nil {
+		if errors.Is(err, db.ErrWriterClosed) {
+			return importer.ImportStats{}, writerClosedError()
+		}
 		return importer.ImportStats{}, apiError(http.StatusInternalServerError,
 			"import failed: "+err.Error())
 	}

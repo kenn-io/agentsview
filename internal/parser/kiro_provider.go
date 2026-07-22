@@ -49,6 +49,10 @@ func (p *kiroProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *kiroProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *kiroProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -58,6 +62,12 @@ func (p *kiroProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *kiroProvider) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	return p.sources.StoredSourceHintScopes(req)
 }
 
 func (p *kiroProvider) FindSource(
@@ -73,6 +83,24 @@ func (p *kiroProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+func (p *kiroProvider) PersistentArchiveSource(
+	path string, fullSessionID string,
+) (string, bool) {
+	rawSessionID := ProviderRawSessionIDFromFull(p.Def, fullSessionID)
+	for _, root := range p.sources.roots {
+		source, ok := p.sources.sourceRef(root, path, true)
+		if !ok {
+			continue
+		}
+		src, ok := p.sources.sourceFromRef(source)
+		if ok && src.Kind == kiroSourceSQLiteSession &&
+			rawSessionID != "" && src.SessionID == rawSessionID {
+			return src.DBPath, true
+		}
+	}
+	return "", false
 }
 
 func (p *kiroProvider) Parse(
@@ -305,6 +333,51 @@ func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return sources, nil
 }
 
+func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
+			store, err := OpenKiroSQLiteStore(dbPath)
+			if err != nil {
+				return err
+			}
+			err = store.ForEachSessionMeta(ctx, func(meta KiroSQLiteSessionMeta) error {
+				source := s.newSourceRef(
+					root, meta.VirtualPath, dbPath, meta.SessionID,
+					kiroSourceSQLiteSession,
+				)
+				source.DiscoveryMTimeNS = meta.FileMtime
+				return yield(source)
+			})
+			closeErr := store.Close()
+			if err != nil {
+				return err
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+		if err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+				return nil
+			}
+			path := filepath.Join(root, entry.Name())
+			if s.legacyPathShadowed(path) {
+				return nil
+			}
+			if source, ok := s.sourceRef(root, path, false); ok {
+				return yield(source)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s kiroSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
@@ -341,6 +414,34 @@ func (s kiroSourceSet) SourcesForChangedPath(
 		return sources, nil
 	}
 	return nil, nil
+}
+
+func (s kiroSourceSet) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	for _, root := range s.roots {
+		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
+			continue
+		}
+		source, ok := s.sourceRefForChangedPath(root, req.Path)
+		if !ok {
+			continue
+		}
+		src, ok := s.sourceFromRef(source)
+		if !ok {
+			return nil
+		}
+		switch src.Kind {
+		case kiroSourceSQLiteDB:
+			return []StoredSourceHintScope{{
+				Path: src.DBPath, IncludeVirtualMembers: true,
+			}}
+		case kiroSourceSQLiteSession, kiroSourceLegacyJSONL:
+			return []StoredSourceHintScope{{Path: src.Path}}
+		}
+		return nil
+	}
+	return nil
 }
 
 // changedPathTombstones emits a per-session source for every stored Kiro SQLite
@@ -549,6 +650,9 @@ func (s kiroSourceSet) sourceRef(
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if kiroLegacyPathUnderRoot(root, path) && IsRegularFile(path) {
+		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
+	}
 	if dbPath, sessionID, ok := kiroSQLiteVirtualPathParts(path); ok {
 		if !kiroDBUnderRoot(root, dbPath, !allowMissing) {
 			return SourceRef{}, false
@@ -573,6 +677,9 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	}
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if kiroLegacyPathUnderRoot(root, path) {
+		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
+	}
 	if dbPath, sessionID, ok := kiroSQLiteVirtualPathParts(path); ok {
 		if !kiroDBUnderRoot(root, dbPath, false) {
 			return SourceRef{}, false
@@ -581,9 +688,6 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	}
 	if dbPath, ok := kiroDBPathForEvent(root, path); ok {
 		return s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB), true
-	}
-	if kiroLegacyPathUnderRoot(root, path) {
-		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
 	}
 	return SourceRef{}, false
 }
@@ -669,10 +773,12 @@ func kiroLegacyPathUnderRoot(root, path string) bool {
 
 func kiroProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
+	source.StreamingDiscovery = CapabilitySupported
 	source.StoredSourceHints = CapabilitySupported
 	source.MultiSessionSource = CapabilitySupported
 	source.PerSessionErrors = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
+	source.PersistentArchive = CapabilitySupported
 	return Capabilities{
 		Source: source,
 		Content: ContentCapabilities{

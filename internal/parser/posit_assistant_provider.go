@@ -76,6 +76,10 @@ func (p *positAssistantProvider) Discover(ctx context.Context) ([]SourceRef, err
 	return p.sources.Discover(ctx)
 }
 
+func (p *positAssistantProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *positAssistantProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -201,6 +205,57 @@ func (s positAssistantSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s positAssistantSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := streamDirectoryEntries(ctx, root, func(workspace os.DirEntry) error {
+			if !workspace.IsDir() {
+				return nil
+			}
+			wsDir := filepath.Join(root, workspace.Name())
+			project, cwd := positAssistantWorkspaceProject(wsDir)
+			return streamDirectoryEntries(ctx, wsDir, func(entry os.DirEntry) error {
+				if entry.IsDir() {
+					return s.yieldConversationSources(ctx, root, filepath.Join(wsDir, entry.Name()), project, cwd, yield)
+				}
+				return nil
+			})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s positAssistantSourceSet) yieldConversationSources(
+	ctx context.Context, root, convDir, project, cwd string,
+	yield func(SourceRef) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !IsValidSessionID(filepath.Base(convDir)) {
+		return nil
+	}
+	convPath := filepath.Join(convDir, positAssistantConversationFile)
+	if IsRegularFile(convPath) {
+		if err := yield(s.newSourceRef(root, convPath, project, cwd)); err != nil {
+			return err
+		}
+	}
+	return streamDirectoryEntries(ctx, filepath.Join(convDir, positAssistantSubagentsDir), func(sub os.DirEntry) error {
+		if sub.IsDir() {
+			return s.yieldConversationSources(ctx, root, filepath.Join(convDir, positAssistantSubagentsDir, sub.Name()), project, cwd, yield)
+		}
+		return nil
+	})
 }
 
 // collectConversationSources adds convDir as a source when it holds a
@@ -1017,6 +1072,7 @@ func positAssistantProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

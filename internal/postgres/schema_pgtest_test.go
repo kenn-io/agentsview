@@ -23,6 +23,41 @@ func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	)
 }
 
+func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+
+	var exists bool
+	require.NoError(t, pg.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = $1 AND table_name = 'sessions'
+			  AND column_name = 'deletion_cause'
+		)`, schemaTestSchema).Scan(&exists))
+	require.True(t, exists, "fresh schema must include sessions.deletion_cause")
+	_, err = pg.Exec(`
+		INSERT INTO sessions (id, machine, project, agent, deleted_at)
+		VALUES ('preserved-trash', 'machine', 'project', 'claude', NOW())`)
+	require.NoError(t, err)
+	_, err = pg.Exec(`ALTER TABLE sessions DROP COLUMN deletion_cause`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	var deleted bool
+	var cause sql.NullString
+	require.NoError(t, pg.QueryRow(`
+		SELECT deleted_at IS NOT NULL, deletion_cause
+		FROM sessions WHERE id = 'preserved-trash'`,
+	).Scan(&deleted, &cause))
+	assert.True(t, deleted, "migration must preserve legacy user trash")
+	assert.False(t, cause.Valid, "legacy user trash must retain a NULL cause")
+}
+
 // TestSecretFindingsSchema verifies that EnsureSchema creates the
 // secret_findings table with all required columns, and that the
 // sessions table has the secret_leak_count and

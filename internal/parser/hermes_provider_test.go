@@ -2,10 +2,14 @@ package parser
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,7 +131,8 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, stateDB, found.DisplayPath)
+	memberPath := VirtualSourcePath(stateDB, "child")
+	assert.Equal(t, memberPath, found.DisplayPath)
 
 	stateInfo, err := os.Stat(stateDB)
 	require.NoError(t, err)
@@ -135,10 +140,9 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 	require.NoError(t, err)
 	fingerprint, err := provider.Fingerprint(context.Background(), found)
 	require.NoError(t, err)
-	assert.Equal(t, stateDB, fingerprint.Key)
+	assert.Equal(t, memberPath, fingerprint.Key)
 	assert.Equal(t, stateInfo.Size()+transcriptInfo.Size(), fingerprint.Size)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		max(stateInfo.ModTime().UnixNano(), transcriptInfo.ModTime().UnixNano()),
 		fingerprint.MTimeNS,
 	)
@@ -187,6 +191,506 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, stateDB, changed[0].DisplayPath)
+}
+
+func TestHermesStreamingDiscoveryYieldsFallbackAndReportsUnreadableStateDB(
+	t *testing.T,
+) {
+	tests := []struct {
+		name    string
+		setupDB func(*testing.T, string)
+	}{
+		{
+			name: "malformed database",
+			setupDB: func(t *testing.T, path string) {
+				t.Helper()
+				writeSourceFile(t, path, "not a sqlite database")
+			},
+		},
+		{
+			name: "incompatible schema",
+			setupDB: func(t *testing.T, path string) {
+				t.Helper()
+				conn, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = conn.Exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+			},
+		},
+		{
+			name: "first row scan failure",
+			setupDB: func(t *testing.T, path string) {
+				t.Helper()
+				conn, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = conn.Exec(`
+					CREATE TABLE sessions (id TEXT);
+					INSERT INTO sessions (id) VALUES (NULL);
+				`)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionsDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+			tt.setupDB(t, filepath.Join(root, "state.db"))
+			jsonlPath := filepath.Join(sessionsDir, "orphan.jsonl")
+			writeSourceFile(t, jsonlPath, hermesProviderJSONLFixture("question"))
+			writeSourceFile(t, filepath.Join(sessionsDir, "session_orphan.json"),
+				hermesProviderJSONFixture("duplicate"))
+			jsonPath := filepath.Join(sessionsDir, "session_jsononly.json")
+			writeSourceFile(t, jsonPath, hermesProviderJSONFixture("json question"))
+
+			provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+				RawSessionID: "orphan",
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, jsonlPath, found.DisplayPath,
+				"FindSource establishes transcript fallback parity")
+
+			discoverer, ok := provider.(StreamingDiscoverer)
+			require.True(t, ok)
+			var paths []string
+			err = discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
+				paths = append(paths, source.DisplayPath)
+				return nil
+			})
+
+			require.Error(t, err,
+				"transcript fallback must not make the state scope authoritative")
+			assert.ElementsMatch(t, []string{jsonlPath, jsonPath}, paths)
+			assert.Len(t, paths, 2,
+				"JSONL and legacy JSON copies of one session must yield once")
+		})
+	}
+}
+
+func TestHermesStreamingDiscoveryPreservesStateYieldError(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	createHermesStateDB(t, root)
+	writeSourceFile(t, filepath.Join(sessionsDir, "orphan.jsonl"),
+		hermesProviderJSONLFixture("orphan question"))
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	wantErr := errors.New("stop streaming")
+	calls := 0
+
+	err := discoverer.DiscoverEach(t.Context(), func(SourceRef) error {
+		calls++
+		return wantErr
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	assert.Equal(t, 1, calls,
+		"a state callback failure must not restart transcript discovery")
+}
+
+func TestHermesStreamingFallbackErrorPrecedence(t *testing.T) {
+	newDiscoverer := func(t *testing.T) StreamingDiscoverer {
+		t.Helper()
+		root := t.TempDir()
+		sessionsDir := filepath.Join(root, "sessions")
+		require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+		writeSourceFile(t, filepath.Join(root, "state.db"), "not a sqlite database")
+		writeSourceFile(t, filepath.Join(sessionsDir, "orphan.jsonl"),
+			hermesProviderJSONLFixture("orphan question"))
+		writeSourceFile(t, filepath.Join(sessionsDir, "session_orphan.json"),
+			hermesProviderJSONFixture("duplicate legacy question"))
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		discoverer, ok := provider.(StreamingDiscoverer)
+		require.True(t, ok)
+		return discoverer
+	}
+
+	t.Run("yield error", func(t *testing.T) {
+		discoverer := newDiscoverer(t)
+		wantErr := errors.New("stop transcript fallback")
+		calls := 0
+
+		err := discoverer.DiscoverEach(t.Context(), func(SourceRef) error {
+			calls++
+			return wantErr
+		})
+
+		assert.Same(t, wantErr, err,
+			"callback failure must take precedence over state incompleteness")
+		assert.Equal(t, 1, calls,
+			"fallback deduplication must not invoke the callback for legacy JSON")
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		discoverer := newDiscoverer(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		ctx = withStreamingDirectoryReader(ctx, func(
+			ctx context.Context, _ string, _ func(os.DirEntry) error,
+		) error {
+			cancel()
+			return ctx.Err()
+		})
+
+		err := discoverer.DiscoverEach(ctx, func(SourceRef) error { return nil })
+
+		assert.Equal(t, context.Canceled, err,
+			"cancellation must take precedence over state incompleteness")
+	})
+
+	t.Run("transcript traversal error", func(t *testing.T) {
+		discoverer := newDiscoverer(t)
+		fallbackErr := errors.New("read transcript directory")
+		ctx := withStreamingDirectoryReader(t.Context(), func(
+			context.Context, string, func(os.DirEntry) error,
+		) error {
+			return fallbackErr
+		})
+
+		err := discoverer.DiscoverEach(ctx, func(SourceRef) error { return nil })
+
+		require.ErrorIs(t, err, fallbackErr)
+		assert.Contains(t, err.Error(), "query hermes sessions",
+			"joined error must retain the original state failure")
+	})
+}
+
+func TestHermesStreamingFallbackContinuesAcrossRoots(t *testing.T) {
+	malformedRoot := t.TempDir()
+	malformedSessions := filepath.Join(malformedRoot, "sessions")
+	require.NoError(t, os.MkdirAll(malformedSessions, 0o755))
+	writeSourceFile(t, filepath.Join(malformedRoot, "state.db"), "not a sqlite database")
+	malformedTranscript := filepath.Join(malformedSessions, "first.jsonl")
+	writeSourceFile(t, malformedTranscript, hermesProviderJSONLFixture("first fallback"))
+
+	incompatibleRoot := t.TempDir()
+	incompatibleSessions := filepath.Join(incompatibleRoot, "sessions")
+	require.NoError(t, os.MkdirAll(incompatibleSessions, 0o755))
+	conn, err := sql.Open("sqlite3", filepath.Join(incompatibleRoot, "state.db"))
+	require.NoError(t, err)
+	_, err = conn.Exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	incompatibleTranscript := filepath.Join(incompatibleSessions, "second.jsonl")
+	writeSourceFile(t, incompatibleTranscript, hermesProviderJSONLFixture("second fallback"))
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots: []string{malformedRoot, incompatibleRoot},
+	})
+	require.True(t, ok)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	var paths []string
+
+	err = discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
+		paths = append(paths, source.DisplayPath)
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.ElementsMatch(t, []string{malformedTranscript, incompatibleTranscript}, paths,
+		"a failed root must not prevent safe fallback discovery for later roots")
+	assert.Contains(t, err.Error(), "file is not a database")
+	assert.Contains(t, err.Error(), "no such table: sessions")
+}
+
+func TestHermesStreamingTranscriptFailureContinuesLaterRoots(t *testing.T) {
+	failedRoot := t.TempDir()
+	healthyRoot := t.TempDir()
+	healthyPath := filepath.Join(healthyRoot, "healthy.jsonl")
+	writeSourceFile(t, healthyPath, hermesProviderJSONLFixture("healthy root"))
+	discoveryErr := errors.New("read failed transcript root")
+	ctx := withStreamingDirectoryReader(t.Context(), func(
+		ctx context.Context, dir string, yield func(os.DirEntry) error,
+	) error {
+		if samePath(dir, failedRoot) {
+			return discoveryErr
+		}
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots: []string{failedRoot, healthyRoot},
+	})
+	require.True(t, ok)
+	var paths []string
+
+	err := provider.(StreamingDiscoverer).DiscoverEach(
+		ctx, func(source SourceRef) error {
+			paths = append(paths, source.DisplayPath)
+			return nil
+		},
+	)
+
+	require.ErrorIs(t, err, discoveryErr)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	assert.Equal(t, AgentHermes, incomplete.Provider)
+	assert.Equal(t, []string{healthyPath}, paths,
+		"a root-local transcript failure must not starve later roots")
+}
+
+// TestHermesProfilesContainerEnumerationFailureIsIncompleteDiscovery guards
+// the reconciliation tombstoning path: hermesProfileArchiveRoots used to
+// convert every os.ReadDir failure into an empty profile list, so a
+// transient permission or I/O failure on the profiles container made
+// discovery look authoritatively empty while ReconciliationOwnershipScopes
+// still claimed the whole container — and the engine tombstoned every
+// stored hermes session under it as source_missing. Enumeration failures
+// must surface as DiscoveryIncompleteError so the engine retains
+// reconciliation markers and retries instead.
+func TestHermesProfilesContainerEnumerationFailureIsIncompleteDiscovery(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+	profileRoot := filepath.Join(profilesRoot, "research")
+	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
+	createHermesStateDB(t, profileRoot)
+
+	healthyRoot := t.TempDir()
+	healthyPath := filepath.Join(healthyRoot, "healthy.jsonl")
+	writeSourceFile(t, healthyPath, hermesProviderJSONLFixture("healthy root"))
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots: []string{profilesRoot, healthyRoot},
+	})
+	require.True(t, ok)
+
+	require.NoError(t, os.Chmod(profilesRoot, 0o000))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chmod(profilesRoot, 0o755))
+	})
+
+	var paths []string
+	err := provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			paths = append(paths, source.DisplayPath)
+			return nil
+		},
+	)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete,
+		"an unreadable profiles container must make streamed discovery incomplete, not empty")
+	assert.Equal(t, AgentHermes, incomplete.Provider)
+	assert.Equal(t, []string{healthyPath}, paths,
+		"a failed profiles container must not starve other configured roots")
+
+	_, err = provider.Discover(t.Context())
+	require.ErrorAs(t, err, &incomplete,
+		"an unreadable profiles container must make batch discovery incomplete, not empty")
+
+	resolver, ok := provider.(ReconciliationSourceResolver)
+	require.True(t, ok)
+	_, found, err := resolver.SourceForReconciliation(
+		t.Context(), filepath.Join(profileRoot, "state.db"), "",
+	)
+	assert.False(t, found)
+	require.ErrorAs(t, err, &incomplete,
+		"not-found under a failed container expansion must not be authoritative")
+}
+
+func TestHermesStreamingArchiveTranscriptFailureContinuesLaterRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state func(*testing.T, string)
+	}{
+		{
+			name: "after state discovery",
+			state: func(t *testing.T, root string) {
+				createHermesStateDB(t, root)
+			},
+		},
+		{
+			name: "during state fallback",
+			state: func(t *testing.T, root string) {
+				writeSourceFile(t, filepath.Join(root, "state.db"), "not sqlite")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failedRoot := t.TempDir()
+			failedSessions := filepath.Join(failedRoot, "sessions")
+			require.NoError(t, os.MkdirAll(failedSessions, 0o755))
+			tc.state(t, failedRoot)
+			healthyRoot := t.TempDir()
+			healthyPath := filepath.Join(healthyRoot, "healthy.jsonl")
+			writeSourceFile(t, healthyPath, hermesProviderJSONLFixture("healthy root"))
+			discoveryErr := errors.New("read failed archive transcripts")
+			ctx := withStreamingDirectoryReader(t.Context(), func(
+				ctx context.Context, dir string, yield func(os.DirEntry) error,
+			) error {
+				if samePath(dir, failedSessions) {
+					return discoveryErr
+				}
+				return streamDirectoryEntriesDirect(ctx, dir, yield)
+			})
+			provider, ok := NewProvider(AgentHermes, ProviderConfig{
+				Roots: []string{failedRoot, healthyRoot},
+			})
+			require.True(t, ok)
+			var paths []string
+
+			err := provider.(StreamingDiscoverer).DiscoverEach(
+				ctx, func(source SourceRef) error {
+					paths = append(paths, source.DisplayPath)
+					return nil
+				},
+			)
+
+			require.ErrorIs(t, err, discoveryErr)
+			assert.Contains(t, paths, healthyPath,
+				"an archive transcript failure must not starve later roots")
+		})
+	}
+}
+
+func TestHermesSourceForReconciliationPreservesOrdinaryTranscript(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	createHermesStateDB(t, root)
+	transcriptPath := filepath.Join(sessionsDir, "orphan.jsonl")
+	writeSourceFile(t, transcriptPath, hermesProviderJSONLFixture("orphan question"))
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	resolver, ok := provider.(ReconciliationSourceResolver)
+	require.True(t, ok)
+	source, found, err := resolver.SourceForReconciliation(
+		t.Context(), transcriptPath, "project",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, transcriptPath, source.DisplayPath)
+	assert.Equal(t, transcriptPath, source.FingerprintKey)
+	assert.Equal(t, "project", source.ProjectHint)
+}
+
+func TestHermesStateMemberFingerprintIncludesSelectedTranscriptMetadata(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	createHermesStateDB(t, root)
+	transcriptPath := filepath.Join(sessionsDir, "session_child.json")
+	writeSourceFile(t, transcriptPath, hermesProviderJSONFixture("transcript question"))
+	transcriptTime := time.Now().Add(2 * time.Second).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(transcriptPath, transcriptTime, transcriptTime))
+	stateDB := filepath.Join(root, "state.db")
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "child",
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	stateInfo, err := os.Stat(stateDB)
+	require.NoError(t, err)
+	transcriptInfo, err := os.Stat(transcriptPath)
+	require.NoError(t, err)
+	assert.Equal(t, stateInfo.Size()+transcriptInfo.Size(), fingerprint.Size)
+	assert.Equal(t, transcriptInfo.ModTime().UnixNano(), fingerprint.MTimeNS)
+}
+
+// TestHermesArchiveFingerprintIgnoresEmptyWAL pins fingerprint determinism
+// across a parse: opening state.db read-only creates a zero-length -wal as a
+// side effect, and if its mtime entered the fingerprint, the identity stored
+// before a parse would never match the one computed after it, so every sync
+// would re-parse an unchanged archive. A WAL with committed frames must still
+// change the fingerprint.
+func TestHermesArchiveFingerprintIgnoresEmptyWAL(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	require.Equal(t, stateDB, discovered[0].DisplayPath)
+
+	before, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+
+	walPath := stateDB + "-wal"
+	require.NoError(t, os.WriteFile(walPath, nil, 0o644))
+	walTime := time.Now().Add(2 * time.Second).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+
+	after, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.Equal(t, before.Size, after.Size,
+		"a zero-length WAL must not change the archive size")
+	assert.Equal(t, before.MTimeNS, after.MTimeNS,
+		"a zero-length WAL's mtime must not change the archive freshness")
+	assert.Equal(t, before.Hash, after.Hash,
+		"a zero-length WAL must not change the archive hash")
+
+	require.NoError(t, os.WriteFile(walPath, []byte("wal frames"), 0o644))
+	committedTime := walTime.Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(walPath, committedTime, committedTime))
+
+	committed, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.Equal(t, before.Size+int64(len("wal frames")), committed.Size,
+		"a WAL with frames must add its size to the archive fingerprint")
+	assert.Equal(t, committedTime.UnixNano(), committed.MTimeNS,
+		"a WAL with frames must advance the archive freshness")
+	assert.NotEqual(t, before.Hash, committed.Hash,
+		"a WAL with frames must change the archive hash")
+}
+
+func TestHermesStateMemberFingerprintIncludesStateMetadataWhenTranscriptWins(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	createHermesStateDB(t, root)
+	transcriptPath := filepath.Join(sessionsDir, "session_child.json")
+	writeSourceFile(t, transcriptPath, hermesProviderJSONFixture("transcript question"))
+	stateDB := filepath.Join(root, "state.db")
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "child",
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	stateInfo, err := os.Stat(stateDB)
+	require.NoError(t, err)
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.Exec("UPDATE sessions SET title = ? WHERE id = ?", "Other Session", "child")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.NoError(t, os.Chtimes(stateDB, stateInfo.ModTime(), stateInfo.ModTime()))
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, before.Hash, after.Hash,
+		"state metadata used by parsing must participate even when transcript messages win")
 }
 
 func TestHermesProviderArchiveWatchRoots(t *testing.T) {
@@ -328,6 +832,50 @@ func TestHermesProfileChangedPathAllocationsStayBounded(t *testing.T) {
 	largeAllocs := measure(t, 1000)
 	assert.LessOrEqual(t, largeAllocs, smallAllocs*2,
 		"Hermes profile events must not scan unrelated profiles")
+}
+
+func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
+	measure := func(t *testing.T, sessionCount int) int64 {
+		t.Helper()
+		root := t.TempDir()
+		createHermesStateDB(t, root)
+		stateDB := filepath.Join(root, "state.db")
+		conn, err := sql.Open("sqlite3", stateDB)
+		require.NoError(t, err)
+		_, err = conn.Exec("DELETE FROM messages; DELETE FROM sessions")
+		require.NoError(t, err)
+		for i := range sessionCount {
+			id := fmt.Sprintf("member-%06d", i)
+			_, err = conn.Exec(`INSERT INTO sessions
+				(id, source, started_at, estimated_cost_usd, actual_cost_usd)
+				VALUES (?, 'cli', ?, 0, 0)`, id, i)
+			require.NoError(t, err)
+			_, err = conn.Exec(`INSERT INTO messages
+				(session_id, role, content, timestamp)
+				VALUES (?, 'user', 'hello', ?)`, id, i)
+			require.NoError(t, err)
+		}
+		require.NoError(t, conn.Close())
+
+		var retained, peak int64
+		ctx := WithStreamingRetainedBytesObserver(t.Context(), func(delta int64) {
+			retained += delta
+			peak = max(peak, retained)
+		})
+		ctx, cleanup, err := WithReconciliationCache(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+		require.NoError(t, seedHermesMemberCoresLocked(ctx, stateDB))
+		assert.Zero(t, retained, "seeded IDs must be released before the pass returns")
+		return peak
+	}
+
+	small := measure(t, 3)
+	large := measure(t, 300)
+	assert.Positive(t, small, "the retained-ID allocation boundary must be observed")
+	assert.LessOrEqual(t, large, small*2,
+		"peak retained ID bytes must not scale with Hermes archive cardinality")
 }
 
 func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {

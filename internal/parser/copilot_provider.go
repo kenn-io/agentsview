@@ -50,6 +50,10 @@ func (p *copilotProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *copilotProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *copilotProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -151,6 +155,39 @@ func (s copilotSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s copilotSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		stateDir := filepath.Join(root, copilotStateDir)
+		err := streamDirectoryEntries(ctx, stateDir, func(entry os.DirEntry) error {
+			name := entry.Name()
+			path := ""
+			if entry.IsDir() {
+				candidate := filepath.Join(stateDir, name, "events.jsonl")
+				if IsRegularFile(candidate) {
+					path = candidate
+				}
+			} else if stem, ok := strings.CutSuffix(name, ".jsonl"); ok {
+				if !IsRegularFile(filepath.Join(stateDir, stem, "events.jsonl")) {
+					path = filepath.Join(stateDir, name)
+				}
+			}
+			if path != "" {
+				if source, ok := s.sourceRef(root, path); ok {
+					return yield(source)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // discoverSessionPaths finds all Copilot session file paths under
@@ -465,6 +502,7 @@ func copilotProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

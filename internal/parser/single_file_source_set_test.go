@@ -83,3 +83,48 @@ func TestSingleFileFindSourceRejectsStaleStoredPath(t *testing.T) {
 	assert.Equal(t, stalePath, src2.DisplayPath,
 		"without RequireFreshSource the stored-path hint is honored unchanged")
 }
+
+func TestSingleFileWatchRootsDropsParserOnlyGlobs(t *testing.T) {
+	root := t.TempDir()
+	want := WatchRoot{
+		Path:        filepath.Join(root, "sessions"),
+		Recursive:   true,
+		DebounceKey: "reasonix:sessions",
+	}
+	set := NewSingleFileSourceSet(
+		AgentReasonix,
+		[]string{root},
+		WithFileDiscovery(func(string) []singleFileMatch { return nil }),
+		WithFileWatchRoots(func([]string) []WatchRoot {
+			withParserGlobs := want
+			withParserGlobs.IncludeGlobs = []string{"*.jsonl", "*.meta"}
+			withParserGlobs.ExcludeGlobs = []string{"*.tmp"}
+			return []WatchRoot{withParserGlobs}
+		}),
+		WithFileChangedPathClassifier(
+			func(string, string, bool) (singleFileMatch, bool) {
+				return singleFileMatch{}, false
+			},
+		),
+		WithFileLookup(func(string, string) (singleFileMatch, bool) {
+			return singleFileMatch{}, false
+		}),
+		WithFileFingerprint(func(singleFileSource) (SourceFingerprint, error) {
+			return SourceFingerprint{}, nil
+		}),
+		WithFileParse(func(singleFileSource, ParseRequest) ([]ParseResult, []string, error) {
+			return nil, nil, nil
+		}),
+	)
+
+	roots, err := set.WatchRoots(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []WatchRoot{want}, roots)
+
+	plan, err := set.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, []string{"*.jsonl", "*.meta"}, plan.Roots[0].IncludeGlobs,
+		"parser callers must retain the existing include globs")
+	assert.Equal(t, []string{"*.tmp"}, plan.Roots[0].ExcludeGlobs)
+}

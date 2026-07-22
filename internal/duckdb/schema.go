@@ -13,8 +13,9 @@ import (
 // SchemaVersion is the version of the DuckDB mirror schema created by
 // createSchema. Mirror schema v4 is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
-// must be rebuilt with 'agentsview duckdb push --full'.
-const SchemaVersion = 4
+// must be rebuilt with 'agentsview duckdb push --full'. v5 adds the
+// sessions.deletion_cause column on top of the v4 shape.
+const SchemaVersion = 5
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -164,6 +165,7 @@ var mirrorTables = []tableSpec{
 			parser_malformed_lines INTEGER NOT NULL DEFAULT 0,
 			is_truncated BOOLEAN NOT NULL DEFAULT FALSE,
 			deleted_at TIMESTAMP,
+			deletion_cause TEXT,
 			created_at TIMESTAMP,
 			termination_status TEXT,
 			secret_leak_count INTEGER NOT NULL DEFAULT 0,
@@ -232,6 +234,7 @@ var mirrorTables = []tableSpec{
 			{"parser_malformed_lines", "parser_malformed_lines INTEGER NOT NULL DEFAULT 0"},
 			{"is_truncated", "is_truncated BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"deleted_at", "deleted_at TIMESTAMP"},
+			{"deletion_cause", "deletion_cause TEXT"},
 			{"created_at", "created_at TIMESTAMP"},
 			{"termination_status", "termination_status TEXT"},
 			{"secret_leak_count", "secret_leak_count INTEGER NOT NULL DEFAULT 0"},
@@ -870,9 +873,9 @@ func parseMirrorMetadataInt64(key, value string) (int64, error) {
 }
 
 // CheckSchemaCompat verifies that the local DuckDB mirror file has the
-// required v4 tables, columns, and schema version. It does not mutate the
-// database. Mirror schema v4 is create-only, so a mismatch of any kind means
-// the mirror must be rebuilt rather than migrated in place.
+// required tables, columns, and schema version. It does not mutate the
+// database. The mirror schema is create-only, so a mismatch of any kind
+// means the mirror must be rebuilt rather than migrated in place.
 func CheckSchemaCompat(ctx context.Context, db *sql.DB) error {
 	return checkSchemaShapeCompat(ctx, db, localSchema)
 }

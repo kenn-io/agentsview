@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -99,7 +100,8 @@ func claudeParseWithExclusions(
 		foundParentSID  bool
 		lineIndex       int
 		malformedLines  int
-		lastLine        string
+		lastLineHasData bool
+		lastLineValid   bool
 		subagentMap     = map[string]string{}
 		globalStart     time.Time
 		globalEnd       time.Time
@@ -111,41 +113,41 @@ func claudeParseWithExclusions(
 	defer releaseLineReader(lr)
 	lastLineFailed := false
 	for {
-		line, ok := lr.next()
+		lineBytes, ok := lr.nextBytes()
 		if !ok {
 			break
 		}
-		lastLine = line
-		if !gjson.Valid(line) {
+		lastLineHasData = len(bytes.TrimSpace(lineBytes)) > 0
+		lastLineValid = gjson.ValidBytes(lineBytes)
+		if !lastLineValid {
 			malformedLines++
 			lastLineFailed = true
 			continue
 		}
-		line = resolveClaudePersistedToolResults(path, line)
 		lastLineFailed = false
 
-		entryType := gjson.Get(line, "type").Str
+		entryType := gjson.GetBytes(lineBytes, "type").Str
 		if agentLabel == "" {
-			if value := gjson.Get(line, "agentSetting").Str; strings.TrimSpace(value) != "" {
-				agentLabel = value
+			if value := gjson.GetBytes(lineBytes, "agentSetting").Str; strings.TrimSpace(value) != "" {
+				agentLabel = strings.Clone(value)
 			}
 		}
 		if entrypoint == "" {
-			if value := gjson.Get(line, "entrypoint").Str; strings.TrimSpace(value) != "" {
-				entrypoint = value
+			if value := gjson.GetBytes(lineBytes, "entrypoint").Str; strings.TrimSpace(value) != "" {
+				entrypoint = strings.Clone(value)
 			}
 		}
 
 		// Extract source version from first line that has it.
 		if sourceVersion == "" {
-			if v := gjson.Get(line, "version").Str; v != "" {
-				sourceVersion = v
+			if v := gjson.GetBytes(lineBytes, "version").Str; v != "" {
+				sourceVersion = strings.Clone(v)
 			}
 		}
 
 		// Track global timestamps from all lines for session
 		// bounds, including non-message events.
-		if ts := extractTimestamp(line); !ts.IsZero() {
+		if ts := extractTimestampBytes(lineBytes); !ts.IsZero() {
 			if globalStart.IsZero() || ts.Before(globalStart) {
 				globalStart = ts
 			}
@@ -156,8 +158,8 @@ func claudeParseWithExclusions(
 
 		// Collect queue-operation enqueue entries for subagent mapping.
 		if entryType == "queue-operation" {
-			if gjson.Get(line, "operation").Str == "enqueue" {
-				contentStr := gjson.Get(line, "content").Str
+			if gjson.GetBytes(lineBytes, "operation").Str == "enqueue" {
+				contentStr := gjson.GetBytes(lineBytes, "content").Str
 				if contentStr != "" {
 					tuid := gjson.Get(contentStr, "tool_use_id").Str
 					taskID := gjson.Get(contentStr, "task_id").Str
@@ -171,7 +173,7 @@ func claudeParseWithExclusions(
 						}
 					}
 					if tuid != "" && taskID != "" {
-						subagentMap[tuid] = "agent-" + taskID
+						subagentMap[strings.Clone(tuid)] = "agent-" + strings.Clone(taskID)
 					}
 				}
 			}
@@ -181,11 +183,11 @@ func claudeParseWithExclusions(
 		// Collect agent_progress events for subagent mapping.
 		// Claude Code v2.1+ emits these instead of queue-operation for Agent tool calls.
 		if entryType == "progress" {
-			if gjson.Get(line, "data.type").Str == "agent_progress" {
-				tuid := gjson.Get(line, "parentToolUseID").Str
-				agentID := gjson.Get(line, "data.agentId").Str
+			if gjson.GetBytes(lineBytes, "data.type").Str == "agent_progress" {
+				tuid := gjson.GetBytes(lineBytes, "parentToolUseID").Str
+				agentID := gjson.GetBytes(lineBytes, "data.agentId").Str
 				if tuid != "" && agentID != "" {
-					subagentMap[tuid] = "agent-" + agentID
+					subagentMap[strings.Clone(tuid)] = "agent-" + strings.Clone(agentID)
 				}
 			}
 			continue
@@ -195,7 +197,8 @@ func claudeParseWithExclusions(
 		// the user typed mid-tool-call. Other attachment types
 		// (e.g. task_reminder) are intentionally dropped.
 		if entryType == "attachment" {
-			if qc, ok := extractQueuedCommand(line); ok {
+			if qc, ok := extractQueuedCommand(string(lineBytes)); ok {
+				qc.prompt = strings.Clone(qc.prompt)
 				queuedCommands = append(queuedCommands, qc)
 			}
 			continue
@@ -205,9 +208,9 @@ func claudeParseWithExclusions(
 		// display name; last rename wins (empty arg clears it).
 		if entryType == "system" {
 			if name, ok := extractRenameName(
-				gjson.Get(line, "content").Str,
+				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
-				displayName = name
+				displayName = strings.Clone(name)
 			}
 			continue
 		}
@@ -215,15 +218,18 @@ func claudeParseWithExclusions(
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
+		line := resolveClaudePersistedToolResults(
+			path, compactClaudeEntry(lineBytes),
+		)
 
 		// Collect subagent links and cwd/gitBranch from user entries.
 		if entryType == "user" {
 			collectToolResultAgentID(line, subagentMap)
 			if cwd == "" {
-				cwd = gjson.Get(line, "cwd").Str
+				cwd = strings.Clone(gjson.GetBytes(lineBytes, "cwd").Str)
 			}
 			if gitBranch == "" {
-				gitBranch = gjson.Get(line, "gitBranch").Str
+				gitBranch = strings.Clone(gjson.GetBytes(lineBytes, "gitBranch").Str)
 			}
 		}
 
@@ -231,11 +237,11 @@ func claudeParseWithExclusions(
 		// then check whether it differs from the file-derived
 		// ID to detect parent sessions.
 		if !foundParentSID {
-			if sid := gjson.Get(line, "sessionId").Str; sid != "" {
+			if sid := gjson.GetBytes(lineBytes, "sessionId").Str; sid != "" {
 				foundParentSID = true
-				sourceSessionID = sid
+				sourceSessionID = strings.Clone(sid)
 				if sid != sessionID {
-					parentSessionID = sid
+					parentSessionID = strings.Clone(sid)
 				}
 			}
 		}
@@ -254,7 +260,7 @@ func claudeParseWithExclusions(
 		entries = append(entries, dagEntry{
 			uuid:       uuid,
 			parentUuid: parentUuid,
-			entryType:  entryType,
+			entryType:  strings.Clone(entryType),
 			lineIndex:  lineIndex,
 			line:       line,
 			timestamp:  ts,
@@ -270,9 +276,8 @@ func claudeParseWithExclusions(
 	// AND the file did not end with a newline. A newline-
 	// terminated invalid line is just a complete malformed
 	// record, not a truncated write.
-	isTruncated := lastLine != "" &&
-		strings.TrimSpace(lastLine) != "" &&
-		!gjson.Valid(lastLine) &&
+	isTruncated := lastLineHasData &&
+		!lastLineValid &&
 		!fileEndsWithNewline(f, info.Size())
 
 	// Merge consecutive assistant entries that share the same
@@ -361,6 +366,151 @@ func claudeParseWithExclusions(
 	return kept, excluded, nil
 }
 
+type claudeCompactField struct {
+	name   string
+	result gjson.Result
+}
+
+func compactClaudeEntry(line []byte) string {
+	topFields := []claudeCompactField{
+		{name: "uuid"}, {name: "parentUuid"}, {name: "timestamp"},
+		{name: "isCompactSummary"}, {name: "isSidechain"},
+		{name: "isMeta"}, {name: "requestId"},
+	}
+	messageFields := []claudeCompactField{
+		{name: "content"}, {name: "id"}, {name: "stop_reason"},
+		{name: "model"}, {name: "usage"},
+	}
+	snapshotFields := []claudeCompactField{
+		{name: "timestamp"},
+	}
+	toolResultFields := []claudeCompactField{
+		{name: "agentId"}, {name: "persistedOutputPath"},
+	}
+
+	// Fill all field groups in a single pass over the entry. This runs
+	// for every retained message during a full parse, and one gjson
+	// scan per field made it the dominant per-line parse cost. Only the
+	// first occurrence of a key is kept, matching gjson.Get's
+	// duplicate-key behavior.
+	var seenMessage, seenSnapshot, seenToolResult bool
+	gjson.Parse(string(line)).ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "message":
+			if !seenMessage {
+				seenMessage = true
+				setClaudeCompactFields(messageFields, value)
+			}
+		case "snapshot":
+			if !seenSnapshot {
+				seenSnapshot = true
+				setClaudeCompactFields(snapshotFields, value)
+			}
+		case "toolUseResult":
+			if !seenToolResult {
+				seenToolResult = true
+				setClaudeCompactFields(toolResultFields, value)
+			}
+		default:
+			setClaudeCompactField(topFields, key.Str, value)
+		}
+		return true
+	})
+
+	var b strings.Builder
+	b.Grow(compactClaudeEntrySize(
+		topFields, snapshotFields, messageFields, toolResultFields,
+	))
+	b.WriteByte('{')
+	first := true
+	writeClaudeCompactFields(&b, &first, topFields)
+	writeClaudeCompactObject(&b, &first, "snapshot", snapshotFields)
+	writeClaudeCompactObject(&b, &first, "message", messageFields)
+	writeClaudeCompactObject(&b, &first, "toolUseResult", toolResultFields)
+	b.WriteByte('}')
+	return b.String()
+}
+
+// setClaudeCompactFields fills fields from the keys of an object
+// value, keeping the first occurrence of each key.
+func setClaudeCompactFields(fields []claudeCompactField, obj gjson.Result) {
+	if !obj.IsObject() {
+		return
+	}
+	obj.ForEach(func(key, value gjson.Result) bool {
+		setClaudeCompactField(fields, key.Str, value)
+		return true
+	})
+}
+
+func setClaudeCompactField(
+	fields []claudeCompactField, name string, value gjson.Result,
+) {
+	for i := range fields {
+		if fields[i].name == name && !fields[i].result.Exists() {
+			fields[i].result = value
+			return
+		}
+	}
+}
+
+func compactClaudeEntrySize(groups ...[]claudeCompactField) int {
+	size := 2
+	for _, fields := range groups {
+		for _, field := range fields {
+			if field.result.Exists() {
+				size += len(field.name) + len(field.result.Raw) + 4
+			}
+		}
+	}
+	return size
+}
+
+func writeClaudeCompactObject(
+	b *strings.Builder, first *bool, name string, fields []claudeCompactField,
+) {
+	hasFields := false
+	for _, field := range fields {
+		if field.result.Exists() {
+			hasFields = true
+			break
+		}
+	}
+	if !hasFields {
+		return
+	}
+	writeClaudeCompactSeparator(b, first)
+	b.WriteByte('"')
+	b.WriteString(name)
+	b.WriteString("\":{")
+	nestedFirst := true
+	writeClaudeCompactFields(b, &nestedFirst, fields)
+	b.WriteByte('}')
+}
+
+func writeClaudeCompactFields(
+	b *strings.Builder, first *bool, fields []claudeCompactField,
+) {
+	for _, field := range fields {
+		if !field.result.Exists() {
+			continue
+		}
+		writeClaudeCompactSeparator(b, first)
+		b.WriteByte('"')
+		b.WriteString(field.name)
+		b.WriteString("\":")
+		b.WriteString(field.result.Raw)
+	}
+}
+
+func writeClaudeCompactSeparator(b *strings.Builder, first *bool) {
+	if *first {
+		*first = false
+		return
+	}
+	b.WriteByte(',')
+}
+
 // lastAssistantStopReason returns the StopReason of the most
 // recent assistant message in the slice, or "" when there is
 // none. Used by Classify to decide between awaiting_user and
@@ -394,7 +544,8 @@ var ErrDAGDetected = fmt.Errorf(
 
 // ErrClaudeIncrementalNeedsFullParse signals that appended Claude
 // lines contain content the incremental path cannot stitch into
-// already-stored rows (currently same-message.id chunk merging).
+// already-stored rows (renames, late identity fields, and subagent-map
+// repairs for tool calls outside the append).
 var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
 	"incremental parse: appended Claude lines require full parse",
 )
@@ -417,13 +568,38 @@ type claudeStoredIdentity struct {
 	entrypoint string
 }
 
+// claudeIncrementalScan carries the per-session stored state an
+// incremental parse needs beyond the file path and byte offset.
+type claudeIncrementalScan struct {
+	startOrdinal  int
+	lastEntryUUID string
+	stored        claudeStoredIdentity
+	// storedLinearParse mirrors the session's persisted
+	// claude_linear_parse flag: whether the last full parse fell back
+	// to linear processing (multi-root or unresolvable-parent DAG).
+	// Linearity is monotonic — appends can only add roots or
+	// unresolvable references, never repair them — so true lets the
+	// incremental path skip fork detection: the full parser processes
+	// such files in line order regardless of parent uuids. nil
+	// (unknown, legacy rows) or false keeps strict fork detection.
+	storedLinearParse *bool
+	// storedTailClaudeMessageID is the provider message id of the last
+	// stored assistant message for this session (empty when none), or
+	// nil when the call site cannot supply it. The queued-command
+	// masking fallback only matters when the appended assistant head
+	// continues exactly this message id; a fresh id cannot be a hidden
+	// continuation, so such appends stay incremental. nil keeps the
+	// conservative fallback.
+	storedTailClaudeMessageID *string
+}
+
 func claudeParseSessionFrom(
 	path string,
 	offset int64,
-	startOrdinal int,
-	lastEntryUUID string,
-	stored claudeStoredIdentity,
+	scan claudeIncrementalScan,
 ) ([]ParsedMessage, []ClaudeSubagentLink, time.Time, int64, error) {
+	startOrdinal := scan.startOrdinal
+	stored := scan.stored
 	var (
 		entries        []dagEntry
 		queuedCommands []claudeQueuedCommand
@@ -521,6 +697,19 @@ func claudeParseSessionFrom(
 		)
 	}
 
+	// Merge same-message.id streaming runs exactly as the full parser
+	// does before any DAG work. Merging swallows chunk uuids, which
+	// makes the merged entry's parent unresolvable — the same thing
+	// happens in the full parser's post-merge uuid set, driving such
+	// files to linear parsing. Runs that straddle a sync boundary are
+	// detected by the engine's LastClaudeMessageID check on the first
+	// appended assistant message; when a queued command would sort
+	// ahead of that head and mask the check, the parser itself falls
+	// back to a full parse (claudeQueuedCommandMasksSplitDetection).
+	if len(entries) > 1 {
+		entries = mergeClaudeAssistantMessageChunks(entries)
+	}
+
 	// A rename-only append produces no entries and no queued commands, so
 	// the empty-entries early return below would silently succeed. Check
 	// first and force a full parse so the display name is persisted.
@@ -542,27 +731,60 @@ func claudeParseSessionFrom(
 		return nil, nil, latestTS, consumed, nil
 	}
 
-	// Detect forks: if any entry's parentUuid doesn't
-	// match the previous entry's uuid, the appended data
-	// contains a branch that requires full DAG processing.
-	if hasDAGFork(entries, lastEntryUUID) {
+	// Fork detection only matters when the full parser would actually
+	// walk the DAG. parseLinear-bound files — multi-root or with
+	// unresolvable parents, which is every real CLI transcript whose
+	// chain routes through attachment/system lines — are processed in
+	// line order by the full parser too, so a linear append is exactly
+	// equivalent and chain breaks are irrelevant there. For
+	// DAG-resolvable or unknown (legacy) sessions, any break falls
+	// back to the full parser, which re-decides and persists the flag.
+	//
+	// Linearity is monotonic under the transcript's causal write
+	// order: a line's parentUuid always references an already-written
+	// line, and appended lines carry fresh uuids, so an append can
+	// never supply a previously-unresolved parent. The one
+	// append-visible way a file can move toward resolvability is a
+	// parentless entry adding a DAG root; guard that explicitly and
+	// let the full parser re-derive the verdict. The reverse drift —
+	// a DAG verdict flipping to linear — happens when an appended
+	// entry lacks a uuid, since the full parser only walks the DAG
+	// when every entry carries one; guard that in the DAG branch.
+	linearBound := scan.storedLinearParse != nil && *scan.storedLinearParse
+	dagBound := scan.storedLinearParse != nil && !*scan.storedLinearParse
+	if linearBound {
+		if appendAddsDAGRoot(entries) {
+			return nil, nil, time.Time{}, 0, ErrDAGDetected
+		}
+	} else if (dagBound || scan.lastEntryUUID != "") &&
+		appendMissingEntryUUID(entries) {
+		return nil, nil, time.Time{}, 0, ErrDAGDetected
+	} else if hasDAGFork(entries, scan.lastEntryUUID) {
 		return nil, nil, time.Time{}, 0, ErrDAGDetected
 	}
 
 	links := collectClaudeSubagentLinks(entries)
-
-	// same-message.id chunk merging still needs state the full parser
-	// builds across the whole file.
-	if needsClaudeFullParse(entries) {
-		return nil, nil, time.Time{}, 0,
-			ErrClaudeIncrementalNeedsFullParse
-	}
+	links = append(
+		links, collectClaudeUnmatchedToolResults(entries, links)...,
+	)
 
 	msgs, _, endedAt := extractMessagesFrom(
 		entries, startOrdinal,
 	)
 	annotateSubagentSessions(msgs, subagentMap)
 	if len(queuedCommands) > 0 {
+		// The engine's cross-sync split detection compares only the
+		// FIRST returned message's ClaudeMessageID against the stored
+		// tail. A queued command sorting ahead of an assistant head
+		// would mask a same-message.id continuation and let the stored
+		// partial response be appended a second time instead of
+		// replaced — fall back to a full parse instead.
+		if claudeQueuedCommandMasksSplitDetection(
+			msgs, queuedCommands, scan.storedTailClaudeMessageID,
+		) {
+			return nil, nil, time.Time{}, 0,
+				ErrClaudeIncrementalNeedsFullParse
+		}
 		msgs = mergeQueuedCommands(
 			msgs, queuedCommands, startOrdinal, queuedCommandMessage,
 		)
@@ -596,62 +818,71 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != ""
 }
 
-// needsClaudeFullParse returns true when appended entries contain
-// a consecutive same-message.id assistant run whose chunks the full
-// parser merges into one message, or a tool_result that still refers to
-// a tool_use outside this append without a typed incremental linkage path.
-func needsClaudeFullParse(entries []dagEntry) bool {
-	toolUseIDs := make(map[string]struct{})
-	var prevAssistantMID string
+// collectClaudeUnmatchedToolResults returns result links for appended
+// tool_result blocks whose tool_use lives outside the appended window.
+// In-append results pair at write time and agentId-linked results are
+// already carried by collectClaudeSubagentLinks. isMeta carriers are
+// skipped: the full parser drops those lines entirely, so their result
+// content never reaches the stored tool call there either. Results
+// whose tool_use id is unknown to the store no-op at apply time,
+// matching the full parser's unpaired-result behavior.
+func collectClaudeUnmatchedToolResults(
+	entries []dagEntry, agentLinks []ClaudeSubagentLink,
+) []ClaudeSubagentLink {
+	linked := make(map[string]struct{}, len(agentLinks))
+	for _, l := range agentLinks {
+		linked[l.ToolUseID] = struct{}{}
+	}
+	appendedToolUse := make(map[string]struct{})
+	var out []ClaudeSubagentLink
 	for _, e := range entries {
-		if e.entryType == "user" {
-			link, hasLink := extractToolResultAgentIDLink(e.line)
+		if e.entryType == "assistant" {
 			content := gjson.Get(e.line, "message.content")
-			if content.IsArray() {
-				unmatched := false
-				content.ForEach(func(_, part gjson.Result) bool {
-					if part.Get("type").Str != "tool_result" {
-						return true
-					}
-					toolUseID := part.Get("tool_use_id").Str
-					if toolUseID == "" {
-						return true
-					}
-					if _, ok := toolUseIDs[toolUseID]; !ok &&
-						(!hasLink || toolUseID != link.ToolUseID) {
-						unmatched = true
-						return false
-					}
-					return true
-				})
-				if unmatched {
+			if !content.IsArray() {
+				continue
+			}
+			content.ForEach(func(_, part gjson.Result) bool {
+				if part.Get("type").Str != "tool_use" {
 					return true
 				}
-			}
-		}
-		if e.entryType == "assistant" {
-			mid := gjson.Get(e.line, "message.id").Str
-			if mid != "" && mid == prevAssistantMID {
+				if id := part.Get("id").Str; id != "" {
+					appendedToolUse[id] = struct{}{}
+				}
 				return true
-			}
-			content := gjson.Get(e.line, "message.content")
-			if content.IsArray() {
-				content.ForEach(func(_, part gjson.Result) bool {
-					if part.Get("type").Str != "tool_use" {
-						return true
-					}
-					if toolUseID := part.Get("id").Str; toolUseID != "" {
-						toolUseIDs[toolUseID] = struct{}{}
-					}
-					return true
-				})
-			}
-			prevAssistantMID = mid
+			})
 			continue
 		}
-		prevAssistantMID = ""
+		if e.entryType != "user" || gjson.Get(e.line, "isMeta").Bool() {
+			continue
+		}
+		content := gjson.Get(e.line, "message.content")
+		if !content.IsArray() {
+			continue
+		}
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").Str != "tool_result" {
+				return true
+			}
+			result, ok := parseToolResult(part)
+			if !ok {
+				return true
+			}
+			if _, matched := appendedToolUse[result.ToolUseID]; matched {
+				return true
+			}
+			if _, hasAgentLink := linked[result.ToolUseID]; hasAgentLink {
+				return true
+			}
+			out = append(out, ClaudeSubagentLink{
+				ToolUseID:        result.ToolUseID,
+				ResultContentRaw: result.ContentRaw,
+				ResultContentLen: result.ContentLength,
+				HasResult:        true,
+			})
+			return true
+		})
 	}
-	return false
+	return out
 }
 
 func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
@@ -709,11 +940,48 @@ func needsClaudeFullParseForSubagentMap(
 	return false
 }
 
+// appendAddsDAGRoot reports whether an appended message entry has a
+// uuid but no parentUuid, i.e. it would add a root to the session's
+// DAG. Root count is the only property of the stored linearity verdict
+// an append can move toward resolvability, so linear-bound sessions
+// fall back to a full parse (which re-derives the verdict) when one
+// appears.
+func appendAddsDAGRoot(entries []dagEntry) bool {
+	for _, e := range entries {
+		if e.uuid != "" && e.parentUuid == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// appendMissingEntryUUID reports whether an appended message entry
+// lacks a uuid. The full parser only walks the DAG when every entry
+// carries a uuid (hasAnyUUID && allHaveUUID), so a uuid-less append
+// flips a DAG-resolvable transcript to linear processing — restoring
+// branches DAG processing had omitted. Sessions with a DAG verdict or
+// a uuid-carrying stored tip force a full parse so the stored
+// messages and the verdict are re-derived together. Linear-bound
+// sessions and unknown sessions with a uuid-less stored tip skip
+// this check: the former are already processed in line order, and
+// the latter already fail allHaveUUID, so a uuid-less append cannot
+// change the full parser's mode.
+func appendMissingEntryUUID(entries []dagEntry) bool {
+	for _, e := range entries {
+		if e.uuid == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // hasDAGFork returns true if the entries contain a fork —
 // i.e. any entry whose parentUuid doesn't point to the
 // immediately preceding entry's uuid. Linear UUID chains
 // (each entry parenting the next) are safe for incremental
-// parsing; forks require full DAG processing.
+// parsing; forks require full DAG processing. Callers skip this
+// check entirely for parseLinear-bound sessions (see
+// claudeIncrementalScan.storedLinearParse).
 func hasDAGFork(entries []dagEntry, lastEntryUUID string) bool {
 	lastUUID := lastEntryUUID
 	for _, e := range entries {
@@ -910,18 +1178,20 @@ func parseLinear(
 	// the next real message instead of the command.
 	firstMsg, userCount := firstMessageAndUserCount(messages)
 
+	linear := true
 	sess := ParsedSession{
-		ID:               sessionID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentClaude,
-		ParentSessionID:  parentSessionID,
-		FirstMessage:     firstMsg,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: userCount,
-		File:             fileInfo,
+		ID:                sessionID,
+		Project:           project,
+		Machine:           machine,
+		Agent:             AgentClaude,
+		ParentSessionID:   parentSessionID,
+		FirstMessage:      firstMsg,
+		StartedAt:         startedAt,
+		EndedAt:           endedAt,
+		MessageCount:      len(messages),
+		UserMessageCount:  userCount,
+		File:              fileInfo,
+		ClaudeLinearParse: &linear,
 	}
 	meta.applyTo(&sess)
 	accumulateMessageTokenUsage(&sess, messages)
@@ -1076,19 +1346,21 @@ func parseDAG(
 			relType = RelFork
 		}
 
+		linear := false
 		sess := ParsedSession{
-			ID:               sid,
-			Project:          project,
-			Machine:          machine,
-			Agent:            AgentClaude,
-			ParentSessionID:  pSID,
-			RelationshipType: relType,
-			FirstMessage:     firstMsg,
-			StartedAt:        startedAt,
-			EndedAt:          endedAt,
-			MessageCount:     len(messages),
-			UserMessageCount: userCount,
-			File:             fileInfo,
+			ID:                sid,
+			Project:           project,
+			Machine:           machine,
+			Agent:             AgentClaude,
+			ParentSessionID:   pSID,
+			RelationshipType:  relType,
+			FirstMessage:      firstMsg,
+			StartedAt:         startedAt,
+			EndedAt:           endedAt,
+			MessageCount:      len(messages),
+			UserMessageCount:  userCount,
+			File:              fileInfo,
+			ClaudeLinearParse: &linear,
 		}
 		meta.applyTo(&sess)
 		accumulateMessageTokenUsage(&sess, messages)
@@ -1235,6 +1507,45 @@ func mergeQueuedCommands(
 		out[k].Ordinal = startOrdinal + k
 	}
 	return out
+}
+
+// claudeQueuedCommandMasksSplitDetection reports whether merging
+// queued commands would sort one ahead of a leading assistant message
+// that carries a provider message id. The engine's cross-sync split
+// detection (LastClaudeMessageID) inspects only the first appended
+// message, so a displaced assistant head would hide a same-message.id
+// continuation of the stored tail and duplicate the partial response.
+// Real CLI transcripts write queued_command attachments mid-stream,
+// between chunks of one response, so this masking is reachable
+// whenever the sync boundary falls inside such a run.
+//
+// Masking only matters when the head actually continues the stored
+// tail's message id: a fresh id is a new response, appending is correct
+// regardless of the queued command's sort position, and forcing a full
+// parse would make every routine queued-command turn scale with
+// transcript size. When the stored tail id is unavailable (nil) the
+// check stays conservative and treats any displaced head as masked.
+func claudeQueuedCommandMasksSplitDetection(
+	msgs []ParsedMessage,
+	queued []claudeQueuedCommand,
+	storedTailID *string,
+) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+	head := msgs[0]
+	if head.Role != RoleAssistant || head.ClaudeMessageID == "" {
+		return false
+	}
+	if storedTailID != nil && head.ClaudeMessageID != *storedTailID {
+		return false
+	}
+	for _, qc := range queued {
+		if queuedBefore(qc, head) {
+			return true
+		}
+	}
+	return false
 }
 
 // queuedBefore reports whether a queued_command should sort before
@@ -1889,6 +2200,23 @@ func extractTimestamp(line string) time.Time {
 	ts := parseTimestamp(tsStr)
 	if ts.IsZero() {
 		snapTsStr := gjson.Get(line, "snapshot.timestamp").Str
+		ts = parseTimestamp(snapTsStr)
+		if ts.IsZero() {
+			if tsStr != "" {
+				logParseError(tsStr)
+			} else if snapTsStr != "" {
+				logParseError(snapTsStr)
+			}
+		}
+	}
+	return ts
+}
+
+func extractTimestampBytes(line []byte) time.Time {
+	tsStr := gjson.GetBytes(line, "timestamp").Str
+	ts := parseTimestamp(tsStr)
+	if ts.IsZero() {
+		snapTsStr := gjson.GetBytes(line, "snapshot.timestamp").Str
 		ts = parseTimestamp(snapTsStr)
 		if ts.IsZero() {
 			if tsStr != "" {

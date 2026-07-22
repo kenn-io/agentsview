@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newTestLoop wires a pushLoop with caller-controlled timers.
@@ -118,6 +121,69 @@ func TestPushLoop_ErrorDoesNotStopLoop(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("loop did not survive a push error")
 	}
+}
+
+func TestPushLoop_NotifyDirtyWithAckWaitsForSuccessfulRetry(t *testing.T) {
+	attempts := make(chan pushReason, 2)
+	pushErr := errors.New("target unavailable")
+	call := 0
+	l, fire, _ := newTestLoop(func(_ context.Context, reason pushReason) error {
+		call++
+		attempts <- reason
+		if call == 1 {
+			return pushErr
+		}
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go l.Run(ctx)
+
+	ack := l.NotifyDirtyWithAck()
+	fire <- time.Now()
+	require.Equal(t, reasonChange, <-attempts)
+	select {
+	case err := <-ack:
+		require.Fail(t, "failed push acknowledged dirty generation", "%v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Failure retains the dirty generation and rearms debounce without a
+	// second producer notification.
+	fire <- time.Now()
+	require.Equal(t, reasonChange, <-attempts)
+	require.NoError(t, <-ack)
+}
+
+func TestPushLoop_NotifyDirtyWithAckIsNonBlockingAndCoalescesWaiters(t *testing.T) {
+	l, fire, _ := newTestLoop(func(context.Context, pushReason) error { return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go l.Run(ctx)
+
+	first := l.NotifyDirtyWithAck()
+	second := l.NotifyDirtyWithAck()
+	assert.NotNil(t, first)
+	assert.NotNil(t, second)
+	fire <- time.Now()
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
+}
+
+func TestPushWatchFallbackCoverageMarksLoopDirty(t *testing.T) {
+	loop, _, _ := newTestLoop(func(context.Context, pushReason) error { return nil })
+
+	require.NoError(t,
+		loop.NotifyCoverageDegraded([]string{"/root-a", "/root-a", "/root-b"}))
+	pending, waiters := func() (bool, int) {
+		loop.pendingMu.Lock()
+		defer loop.pendingMu.Unlock()
+		return loop.pending, len(loop.waiters)
+	}()
+	assert.True(t, pending,
+		"coverage degradation must mark the loop dirty for the next push")
+	assert.Zero(t, waiters,
+		"coverage degradation must not enqueue ack waiters")
 }
 
 func TestPushLoop_ShutdownFlushes(t *testing.T) {

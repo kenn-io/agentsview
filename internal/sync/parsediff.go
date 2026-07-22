@@ -49,6 +49,7 @@ func NewDiffEngine(database *db.DB, cfg EngineConfig) *Engine {
 func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDiffReport, error) {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
+	defer e.retentionBudget().scavengeIfNeeded()
 
 	resolved, err := e.resolveParseDiffAgents(opts.Agents)
 	if err != nil {
@@ -148,11 +149,13 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			// Workers emit ctx.Err() for files skipped after
 			// cancellation.
 			cancel()
+			r.releaseRetention()
 			drainResults(results, total-i-1)
 			return nil, ctx.Err()
 		}
 		if r.incremental != nil {
 			cancel()
+			r.releaseRetention()
 			drainResults(results, total-i-1)
 			return nil, fmt.Errorf(
 				"parse-diff: internal error: incremental parse of %s "+
@@ -164,9 +167,11 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			visited, resolver, &presencePaths,
 		); err != nil {
 			cancel()
+			r.releaseRetention()
 			drainResults(results, total-i-1)
 			return nil, err
 		}
+		r.releaseRetention()
 		if opts.Progress != nil {
 			opts.Progress(i+1, total)
 		}
@@ -898,6 +903,26 @@ func (e *Engine) parseDiffCollectFile(
 			FilePath:          job.path,
 			Class:             DiffExcluded,
 			Reason:            "parser exclusion (would delete)",
+			StoredDataVersion: stored.DataVersion,
+		})
+		report.Totals.ExcludedByParser++
+	}
+
+	// Virtual members gone from a still-existing shared container are
+	// tombstone-bound on a real sync; mark them visited so the presence
+	// sweep does not misreport them as parser drift.
+	for _, member := range job.sourceMissingMembers {
+		stored := storedByID[member.sessionID]
+		if stored == nil {
+			continue
+		}
+		visited[stored.ID] = true
+		report.Sessions = append(report.Sessions, SessionDiff{
+			SessionID:         stored.ID,
+			Agent:             stored.Agent,
+			FilePath:          member.filePath,
+			Class:             DiffExcluded,
+			Reason:            "member source missing (would tombstone)",
 			StoredDataVersion: stored.DataVersion,
 		})
 		report.Totals.ExcludedByParser++

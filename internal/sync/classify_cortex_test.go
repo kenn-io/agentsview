@@ -75,7 +75,7 @@ func TestClassifyOnePath_Cortex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			files := eng.classifyPaths([]string{tt.path})
+			files := requireClassifyPaths(t, eng, []string{tt.path})
 			if !tt.want {
 				assert.Empty(t, files)
 				return

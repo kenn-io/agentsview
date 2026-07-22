@@ -718,3 +718,47 @@ func TestFindAiderSourceFile(t *testing.T) {
 	assert.Empty(t, findAiderSourceFile(root, "nonexistent-id"))
 	assert.Empty(t, findAiderSourceFile("", "anything"))
 }
+
+// A run header with trailing whitespace must resolve to one identity
+// everywhere: the canonical full split trims it before hashing, so the
+// single-run scanner and streamed discovery must trim it too, or the
+// same run gets a second session ID and the original is tombstoned
+// during reconciliation.
+func TestAiderTrailingWhitespaceHeaderKeepsOneIdentity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "project", ".aider.chat.history.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	content := "# aider chat started at 2024-01-02 03:04:05 \n" +
+		"\n#### first prompt\nfirst answer\n" +
+		"# aider chat started at 2024-01-02 03:04:05 \n" +
+		"\n#### second prompt\nsecond answer\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	full, err := parseAiderRuns(path, "local")
+	require.NoError(t, err)
+	require.Len(t, full, 2)
+
+	for idx, want := range full {
+		sess, _, err := parseAiderRun(path, idx, "local")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, want.Session.ID, sess.ID,
+			"single-run scan must derive the same identity as the full split")
+	}
+
+	var streamed []string
+	require.NoError(t, streamAiderRunIndexes(
+		t.Context(), path, "",
+		func(_ int, rawID string) error {
+			streamed = append(streamed, rawID)
+			return nil
+		},
+	))
+	require.Len(t, streamed, 2)
+	for idx, want := range full {
+		assert.Equal(t, want.Session.ID, aiderIDPrefix+streamed[idx],
+			"streamed discovery must derive the same identity as the full split")
+	}
+}

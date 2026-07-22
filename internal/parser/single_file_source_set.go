@@ -41,6 +41,7 @@ func (m singleFileMatch) toSource(root string) singleFileSource {
 type singleFileConfig struct {
 	// discoverFiles returns the source files under one root.
 	discoverFiles func(root string) []singleFileMatch
+	discoverEach  func(context.Context, string, func(singleFileMatch) error) error
 	// watchRoots returns the provider WatchPlan roots for the configured roots.
 	watchRoots func(roots []string) []WatchRoot
 	// classifyPath maps a stored or changed path (including a sidecar event) to
@@ -69,6 +70,12 @@ func WithFileDiscovery(
 	fn func(root string) []singleFileMatch,
 ) SingleFileOption {
 	return func(c *singleFileConfig) { c.discoverFiles = fn }
+}
+
+func WithStreamingFileDiscovery(
+	fn func(context.Context, string, func(singleFileMatch) error) error,
+) SingleFileOption {
+	return func(c *singleFileConfig) { c.discoverEach = fn }
 }
 
 func WithFileWatchRoots(
@@ -118,7 +125,7 @@ func NewSingleFileSourceSet(
 		opt(&cfg)
 	}
 	switch {
-	case cfg.discoverFiles == nil:
+	case cfg.discoverFiles == nil && cfg.discoverEach == nil:
 		panic("single-file source set: missing WithFileDiscovery")
 	case cfg.watchRoots == nil:
 		panic("single-file source set: missing WithFileWatchRoots")
@@ -149,27 +156,52 @@ var _ SourceSet = singleFileSourceSet{}
 func (s singleFileSourceSet) Discover(
 	ctx context.Context,
 ) ([]SourceRef, error) {
-	var sources []SourceRef
-	seen := make(map[string]struct{})
+	return collectDiscoveredSources(ctx, s.DiscoverEach)
+}
+
+func (s singleFileSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
+		}
+		if s.cfg.discoverEach != nil {
+			if err := s.cfg.discoverEach(ctx, root, func(match singleFileMatch) error {
+				if match.Path == "" {
+					return nil
+				}
+				return yield(s.sourceRef(root, match))
+			}); err != nil {
+				return err
+			}
+			continue
 		}
 		for _, match := range s.cfg.discoverFiles(root) {
 			if match.Path == "" {
 				continue
 			}
-			addJSONLSource(s.sourceRef(root, match), &sources, seen)
+			if err := yield(s.sourceRef(root, match)); err != nil {
+				return err
+			}
 		}
 	}
-	sortJSONLSources(sources)
-	return sources, nil
+	return nil
 }
 
 func (s singleFileSourceSet) WatchPlan(
 	context.Context,
 ) (WatchPlan, error) {
 	return WatchPlan{Roots: s.cfg.watchRoots(s.roots)}, nil
+}
+
+func (s singleFileSourceSet) WatchRoots(
+	ctx context.Context,
+) ([]WatchRoot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return watchRootMetadata(s.cfg.watchRoots(s.roots)), nil
 }
 
 func (s singleFileSourceSet) SourcesForChangedPath(

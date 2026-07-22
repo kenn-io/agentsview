@@ -2,14 +2,28 @@
 
 package sync
 
-import "os"
+import (
+	"os"
 
-// getFileIdentity returns zeros on Windows. Native file
-// identity (NTFS FileID + volume serial) requires the
-// GetFileInformationByHandle API; treating identity as
-// unknown here disables the identity-changed check and
-// falls back to size/mtime, which is the pre-existing
-// behavior.
-func getFileIdentity(info os.FileInfo) (inode, device int64) {
-	return 0, 0
+	"golang.org/x/sys/windows"
+)
+
+// getFileIdentity returns the stable file index and volume serial exposed by
+// Windows. Together they distinguish an atomic replacement from an append,
+// even when the replacement is larger than the stored source.
+func getFileIdentity(path string, _ os.FileInfo) (inode, device int64) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer file.Close()
+
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(
+		windows.Handle(file.Fd()), &info,
+	); err != nil {
+		return 0, 0
+	}
+	fileIndex := uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow)
+	return int64(fileIndex), int64(info.VolumeSerialNumber)
 }

@@ -250,7 +250,7 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 
 	health := 95
 	grade := "A"
-	result, err := d.WriteSessionBatch([]SessionBatchWrite{
+	writes := []SessionBatchWrite{
 		{
 			Session: Session{
 				ID:               "good",
@@ -328,12 +328,15 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 			},
 			DataVersion: CurrentDataVersion(),
 		},
-	})
+	}
+	writes[0], writes[1] = writes[1], writes[0]
+	result, err := d.WriteSessionBatch(writes)
 	require.NoError(t, err, "WriteSessionBatch")
 	require.Equal(t, 1, result.WrittenSessions, "WrittenSessions")
 	require.Equal(t, 2, result.WrittenMessages, "WrittenMessages")
 	require.Equal(t, 1, result.FailedSessions, "FailedSessions")
 	require.Equal(t, 2, result.ExcludedSessions, "ExcludedSessions")
+	assert.Equal(t, []int{1}, result.WrittenIndexes)
 
 	sess, err := d.GetSessionFull(context.Background(), "good")
 	require.NoError(t, err, "GetSessionFull good")

@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -48,6 +49,10 @@ type geminiProvider struct {
 
 func (p *geminiProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
+}
+
+func (p *geminiProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
 }
 
 func (p *geminiProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -140,6 +145,63 @@ func (s geminiSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s geminiSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		projects, err := newDiscoveryDiskMapForContext(ctx)
+		if err != nil {
+			return err
+		}
+		if err := projects.loadGeminiConfig(ctx, root); err != nil {
+			return errors.Join(err, projects.close())
+		}
+		tmpDir := filepath.Join(root, "tmp")
+		err = streamDirectoryEntries(ctx, tmpDir, func(projectDir os.DirEntry) error {
+			isProjectDir, dirErr := streamingDirCandidateOrIncomplete(
+				AgentGemini, "Gemini project directory", projectDir, tmpDir,
+			)
+			if dirErr != nil {
+				return dirErr
+			}
+			if !isProjectDir {
+				return nil
+			}
+			project, _, err := projects.get(ctx, projectDir.Name())
+			if err != nil {
+				return err
+			}
+			if project == "" {
+				if isHexHash(projectDir.Name()) {
+					project = "unknown"
+				} else {
+					project = NormalizeName(projectDir.Name())
+				}
+			}
+			chatDir := filepath.Join(tmpDir, projectDir.Name(), geminiChatsDir)
+			return streamDirectoryEntries(ctx, chatDir, func(entry os.DirEntry) error {
+				if entry.IsDir() || !isGeminiSessionFilename(entry.Name()) {
+					return nil
+				}
+				path := filepath.Join(chatDir, entry.Name())
+				source, ok := s.sourceRefForPathWithProjectMap(
+					root, path, true, map[string]string{projectDir.Name(): project},
+				)
+				if ok {
+					return yield(source)
+				}
+				return nil
+			})
+		})
+		err = errors.Join(err, projects.close())
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s geminiSourceSet) discoverRoot(
@@ -366,21 +428,45 @@ func (s geminiSourceSet) Fingerprint(
 	if err := addGeminiFingerprintPart(h, "session", path, info); err != nil {
 		return SourceFingerprint{}, err
 	}
-	for _, metadataPath := range geminiProjectMetadataPaths(root) {
-		metadataInfo, err := os.Stat(metadataPath)
-		if err != nil || metadataInfo.IsDir() {
-			continue
-		}
-		fingerprint.Size += metadataInfo.Size()
-		if mtime := metadataInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
-			fingerprint.MTimeNS = mtime
-		}
-		if err := addGeminiFingerprintPart(h, "project", metadataPath, metadataInfo); err != nil {
-			return SourceFingerprint{}, err
-		}
+	if _, err := fmt.Fprintf(
+		h, "project\x00%s\x00",
+		s.resolvedProjectForFingerprint(root, path, source),
+	); err != nil {
+		return SourceFingerprint{}, err
 	}
 	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
 	return fingerprint, nil
+}
+
+// geminiSessionDirHash extracts the tmp/<dirHash>/chats component that keys
+// the session's project resolution.
+func geminiSessionDirHash(root, path string) (string, bool) {
+	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 4 || parts[0] != "tmp" || parts[2] != geminiChatsDir {
+		return "", false
+	}
+	return parts[1], true
+}
+
+// resolvedProjectForFingerprint returns the only metadata this session's
+// parse consumes: its resolved project name. Root-wide metadata files must
+// not leak into unrelated sessions' fingerprints (they used to
+// mass-invalidate the whole root on any edit).
+func (s geminiSourceSet) resolvedProjectForFingerprint(
+	root, path string, source SourceRef,
+) string {
+	if source.ProjectHint != "" {
+		return source.ProjectHint
+	}
+	dirHash, ok := geminiSessionDirHash(root, path)
+	if !ok {
+		return ""
+	}
+	return ResolveGeminiProject(dirHash, buildGeminiProjectMap(root))
 }
 
 func (s geminiSourceSet) pathFromSource(source SourceRef) (string, bool) {
@@ -461,11 +547,14 @@ func (s geminiSourceSet) sourceRefForPathWithProjectMap(
 // the project map once per root and tests can observe how often it runs.
 var buildGeminiProjectMap = BuildGeminiProjectMap
 
-func geminiProjectMetadataPaths(root string) []string {
-	return []string{
-		filepath.Join(root, "projects.json"),
-		filepath.Join(root, "trustedFolders.json"),
-	}
+// IsGeminiProjectMetadataFile reports whether path names one of the
+// root-level Gemini project-metadata files whose changes fan out to every
+// session under the root. The Gemini watch plan only emits these names from
+// the non-recursive root watch, so a basename check is sufficient for
+// callers without the root at hand.
+func IsGeminiProjectMetadataFile(path string) bool {
+	base := filepath.Base(path)
+	return base == "projects.json" || base == "trustedFolders.json"
 }
 
 func geminiProjectMetadataPath(root, path string) bool {
@@ -510,6 +599,7 @@ func geminiProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

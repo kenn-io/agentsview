@@ -27,17 +27,27 @@ type Capabilities struct {
 // provider.
 type SourceCapabilities struct {
 	DiscoverSources      CapabilitySupport
+	StreamingDiscovery   CapabilitySupport
 	WatchSources         CapabilitySupport
+	WatchRoots           CapabilitySupport
 	ClassifyChangedPath  CapabilitySupport
 	StoredSourceHints    CapabilitySupport
 	FindSource           CapabilitySupport
 	CompositeFingerprint CapabilitySupport
 	IncrementalAppend    CapabilitySupport
 	MultiSessionSource   CapabilitySupport
-	PerSessionErrors     CapabilitySupport
-	ExcludedSessions     CapabilitySupport
-	ForceReplaceOnParse  CapabilitySupport
-	VerifiedLocalStat    CapabilitySupport
+	// SharedContainerSource means streaming discovery emits multiple logical
+	// virtual members from one physical container and exact reconciliation
+	// rehydration is required to avoid reopening or rescanning that container.
+	SharedContainerSource CapabilitySupport
+	PerSessionErrors      CapabilitySupport
+	ExcludedSessions      CapabilitySupport
+	ForceReplaceOnParse   CapabilitySupport
+	VerifiedLocalStat     CapabilitySupport
+	// PersistentArchive means a vanished physical container must not tombstone
+	// its stored virtual members. A still-present container remains
+	// authoritative for member deletion.
+	PersistentArchive CapabilitySupport
 }
 
 // ContentCapabilities declares optional normalized content fields a provider

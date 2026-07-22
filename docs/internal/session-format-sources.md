@@ -70,7 +70,12 @@ Grok section and remove the explicit registry exception in the coverage test.
   cost field is consumed; Agentsview prices the tokens from its catalog.
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
-  the implementation evidence for fields not documented upstream.
+  the implementation evidence for fields not documented upstream. Reverified
+  2026-07-22 against local CLI transcripts: `type=attachment` records with
+  `attachment.type=queued_command` are written mid-stream, in file order
+  between consecutive `assistant` records that share one `message.id`, so a
+  queued command can fall inside a streaming run that straddles an incremental
+  sync boundary.
 
 ## OpenClaude (`openclaude`)
 
@@ -95,6 +100,13 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/openclaude.go` plus the shared Claude parsing
   code in `internal/parser/claude.go`; the producer writes the same
   project-scoped JSONL family that the parser consumes.
+
+- **Project-directory layout reverified 2026-07-23:** the pinned session writer
+  creates project directories itself with `mkdir(recursive: true)` under
+  `<config home>/projects/<sanitized cwd>` and never creates symlinks.
+  Symlinked project directories are therefore a user-side arrangement, and
+  streaming discovery follows them only to match the legacy `Discover` walk
+  (`isDirOrSymlink`), not because the producer emits them.
 
 ## Cowork (`cowork`)
 

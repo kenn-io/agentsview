@@ -236,7 +236,7 @@ func mirrorShapeIssueFromColumns(existing map[string]map[string]bool) string {
 // sourceDataVersion as-is, or must be rebuilt with rebuildMirror. A missing
 // file, a shape problem, a schema version mismatch in either direction, a
 // stale source data version, or a different push scope all require a
-// rebuild; there is no in-place migration path for mirror schema v4.
+// rebuild; there is no in-place migration path for the mirror schema.
 func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 	if !p.FileExists || !p.ShapeOK {
 		return true

@@ -359,7 +359,8 @@ func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 	logs := captureLogOutput(t)
 
 	p, _ := newTestPgPusher(target)
-	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	require.Error(t, p.push(context.Background(), reasonChange, false),
+		"partial pushes must remain pending for retry")
 
 	got := logs.String()
 	assert.Contains(t, got, "pushed 3 sessions, 9 messages, 2 errors")

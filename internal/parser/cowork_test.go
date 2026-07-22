@@ -158,6 +158,43 @@ func TestCoworkProviderDiscoversSessions(t *testing.T) {
 	assert.Equal(t, transcript, got[0], "DisplayPath")
 }
 
+func TestCoworkStreamingDiscoveryPropagatesMetadataErrors(t *testing.T) {
+	t.Run("decode", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "org", "workspace")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		metaPath := filepath.Join(dir, "local_50000000-0000-4000-8000-000000000099.json")
+		require.NoError(t, os.WriteFile(metaPath, []byte("{"), 0o600))
+		provider := coworkProviderForRoot(t, root, "local")
+
+		err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decode cowork metadata")
+	})
+
+	t.Run("projects directory", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "org", "workspace")
+		base := "local_50000000-0000-4000-8000-000000000098"
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, base), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, base+".json"),
+			[]byte(`{"cliSessionId":"c0000000-0000-4000-8000-000000000098"}`), 0o600,
+		))
+		provider := coworkProviderForRoot(t, root, "local")
+
+		err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "stat cowork projects directory")
+	})
+}
+
 func TestCoworkProviderDiscoverIgnoresNoise(t *testing.T) {
 	root := t.TempDir()
 	wsDir := filepath.Join(root, "org", "ws")
@@ -439,6 +476,31 @@ func TestCoworkProviderDiscoverIncludesSubagents(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "find subagent source")
 	assert.Equal(t, subPath, found.DisplayPath)
+}
+
+func TestCoworkStreamingDiscoveryPropagatesSubagentCandidateStatError(t *testing.T) {
+	root := t.TempDir()
+	cli := "c0000000-0000-4000-8000-000000000096"
+	_, transcript := writeCoworkSession(t, root, coworkFixture{
+		org: "org", workspace: "ws",
+		sessionUUID:  "50000000-0000-4000-8000-000000000096",
+		cliSessionID: cli, encodedProject: "-sessions-demo",
+		transcriptLines: coworkTranscriptLines(cli),
+	})
+	subagents := filepath.Join(filepath.Dir(transcript), cli, "subagents")
+	require.NoError(t, os.MkdirAll(subagents, 0o755))
+	require.NoError(t, os.Symlink(
+		filepath.Join(root, "missing-subagent"),
+		filepath.Join(subagents, "agent-broken.jsonl"),
+	))
+	provider := coworkProviderForRoot(t, root, "local")
+
+	err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stat cowork subagent candidate")
 }
 
 func TestResolveCoworkSessionRejectsSymlinkEscape(t *testing.T) {

@@ -132,9 +132,16 @@ func writeTestFile(t *testing.T, path string, content []byte) {
 }
 
 // requireSymlinkOrSkip creates a symlink from link to target, skipping the test
-// when the platform or filesystem does not support symlinks.
+// when the platform or filesystem does not support symlinks. The target must
+// exist first: os.Symlink on Windows types the link (file vs directory) by
+// statting the target at creation time, and a link created before its
+// directory target exists becomes a file symlink whose directory reads later
+// fail with access denied.
 func requireSymlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
+	_, statErr := os.Stat(target)
+	require.NoError(t, statErr,
+		"symlink target must exist before creating the link")
 	err := os.Symlink(target, link)
 	if err == nil {
 		return

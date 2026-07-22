@@ -383,6 +383,7 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Failed:        2,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 
@@ -406,6 +407,7 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Failed:        2,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
@@ -417,6 +419,7 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Failed:        2,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
@@ -457,6 +460,7 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 		TotalSessions: 1,
 		Synced:        1,
 		Skipped:       0,
+		Failed:        1,
 	})
 
 	assertSessionMessageCount(t, env.db, sessionID, 1)

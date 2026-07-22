@@ -40,6 +40,22 @@ func (te *testEnv) requestJSON(
 	return w
 }
 
+func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "alpha", 2)
+
+	// Close the writer to simulate the maintenance-pass barrier window while the
+	// daemon's worker rebuilds the archive; readers keep serving.
+	require.NoError(t, te.db.CloseWriter())
+	defer func() { assert.NoError(t, te.db.ReopenWriter()) }()
+
+	w := te.put(t, "/api/v1/sessions/s1/star", `{}`)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"body: %s", w.Body.String())
+	assert.Equal(t, "5", w.Header().Get("Retry-After"),
+		"a writer-closed write must advertise Retry-After")
+}
+
 func TestStarredHandlers(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "alpha", 2)

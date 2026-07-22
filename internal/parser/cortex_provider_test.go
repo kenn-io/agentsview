@@ -35,6 +35,46 @@ func TestCortexProviderCapabilities(t *testing.T) {
 	require.NotNil(t, provider)
 }
 
+func TestCortexProviderWatchRootsStayBounded(t *testing.T) {
+	root := t.TempDir()
+	transcript := filepath.Join(root, cortexTestUUID+".json")
+	writeSourceFile(t, transcript, "{}\n")
+	companionCalls := 0
+	provider := &cortexProvider{
+		ProviderBase: ProviderBase{
+			Def:  AgentDef{Type: AgentCortex},
+			Caps: cortexProviderCapabilities(),
+		},
+		sources: NewJSONLSourceSet(
+			AgentCortex,
+			[]string{root},
+			WithExtensions(".json"),
+			WithCompanionFiles(func(path string) []string {
+				companionCalls++
+				return []string{cortexHistoryCompanionPath(path)}
+			}),
+		),
+	}
+
+	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.WatchRoots)
+	assert.Implements(t, (*WatchRootPlanner)(nil), provider)
+	roots, err := ResolveWatchRoots(context.Background(), provider)
+	require.NoError(t, err)
+	assert.Equal(t, []WatchRoot{{
+		Path:        root,
+		DebounceKey: string(AgentCortex) + ":jsonl:" + root,
+	}}, roots)
+	assert.Zero(t, companionCalls,
+		"bounded root scheduling must not discover transcript companions")
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, cortexTestUUID+".history.jsonl")
+	assert.Equal(t, 1, companionCalls,
+		"legacy WatchPlan must retain companion glob discovery")
+}
+
 func TestCortexProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	otherID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

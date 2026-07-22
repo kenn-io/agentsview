@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -69,10 +70,6 @@ func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
 		trusted := e.trustedSQLiteContainers[dbPath]
 		assert.Equal(t, pre, trusted.state,
 			"trusted state must be exactly the pre-discovery capture")
-		assert.Equal(t,
-			map[string]struct{}{"ses-1": {}, "ses-2": {}},
-			trusted.sessions,
-			"trusted set must be exactly the verified session IDs")
 	})
 }
 
@@ -116,7 +113,7 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	// The container is trusted at the pre-discovery state, as after a
 	// fully verified idle pass.
 	e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
-		dbPath: {state: pre, sessions: map[string]struct{}{"ses-1": {}}},
+		dbPath: {state: pre},
 	}
 
 	// The container changes inside the capture-discovery window.
@@ -148,7 +145,8 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 // pass discovered, and only those may gate-skip; a newly exposed row was
 // never verified against the archive and must parse.
 func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
-	e := &Engine{}
+	archive := openTestDB(t)
+	e := &Engine{db: archive}
 	dbPath, _ := newContainerTestDB(t)
 	state, ok := parser.StatSQLiteContainerState(dbPath)
 	require.True(t, ok, "container state must be readable")
@@ -157,6 +155,15 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 	// shadowed by its storage JSON at the time.
 	verified := parser.DiscoveredFile{
 		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+	}
+	verifiedPath := verified.Path
+	replacementPath := filepath.Join(t.TempDir(), "ses-2.json")
+	for _, session := range []db.Session{
+		{ID: "opencode:ses-1", Agent: "opencode", Project: "project", Machine: "local", FilePath: &verifiedPath},
+		{ID: "opencode:ses-2", Agent: "opencode", Project: "project", Machine: "local", FilePath: &replacementPath},
+	} {
+		require.NoError(t, archive.UpsertSession(session))
+		require.NoError(t, archive.SetSessionDataVersion(session.ID, db.CurrentDataVersion()))
 	}
 	e.beginSQLiteContainerPass(
 		[]parser.DiscoveredFile{verified},
@@ -181,6 +188,69 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 		"a newly exposed row must parse despite the unchanged container")
 }
 
+// TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer pins the
+// promotion precondition: a pass may only trust a container it actually
+// verified, meaning it discovered (and completed) at least one of its
+// sessions. Scoped reconciliations and scoped syncs capture every configured
+// container's state up front (captureSQLiteContainerStates(nil)) but discover
+// only in-scope sources, so an out-of-scope container ends the pass with
+// discovered == completed == 0. Promoting its freshly captured state would
+// mark a change that was never parsed as verified, and the next covering
+// pass would gate-skip the changed sessions, leaving the archive stale.
+func TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer(t *testing.T) {
+	archive := openTestDB(t)
+	e := &Engine{db: archive}
+	dbPath, conn := newContainerTestDB(t)
+	pre, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
+
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+	}
+	filePath := file.Path
+	session := db.Session{
+		ID: "opencode:ses-1", Agent: "opencode", Project: "project",
+		Machine: "local", FilePath: &filePath,
+	}
+	require.NoError(t, archive.UpsertSession(session))
+	require.NoError(t, archive.SetSessionDataVersion(
+		session.ID, db.CurrentDataVersion(),
+	))
+
+	// A fully verified pass trusts the container at its current state.
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{file},
+		map[string]parser.SQLiteContainerState{dbPath: pre},
+	)
+	e.noteSQLiteContainerResult(file.Path, true)
+	e.finishSQLiteContainerPass(false, true)
+	require.Contains(t, e.trustedSQLiteContainers, dbPath)
+
+	// The container changes after the verified pass.
+	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses-1')")
+	require.NoError(t, err, "write session after the verified pass")
+	changed, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "changed container state must be readable")
+	require.NotEqual(t, pre, changed,
+		"the write must change the container state")
+
+	// A scoped pass elsewhere captures every configured container but
+	// discovers none of this one's sessions.
+	e.beginSQLiteContainerPass(
+		nil, map[string]parser.SQLiteContainerState{dbPath: changed},
+	)
+	e.finishSQLiteContainerPass(false, false)
+
+	// The next covering pass must parse the changed session, not gate-skip
+	// it against a state that was never verified.
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{file},
+		map[string]parser.SQLiteContainerState{dbPath: changed},
+	)
+	assert.False(t, e.sqliteContainerSourceFresh(file),
+		"a container changed while out of scope must not gate-skip after a scoped pass")
+}
+
 // TestSQLiteContainerFullPassDropsUndiscoveredTrust pins the stale-trust
 // cleanup: a complete full-discovery pass that finds no sources for a
 // trusted container (fully shadowed by storage JSONs, or gone) must drop
@@ -192,9 +262,7 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 	trusted := func() map[string]trustedSQLiteContainer {
 		return map[string]trustedSQLiteContainer{
-			"/data/opencode.db": {
-				sessions: map[string]struct{}{"ses-1": {}},
-			},
+			"/data/opencode.db": {},
 		}
 	}
 

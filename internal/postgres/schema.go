@@ -29,6 +29,13 @@ type columnMigration struct {
 
 // coreDDL creates the tables and indexes. It uses unqualified
 // names because Open() sets search_path to the target schema.
+//
+// The sessions table deliberately omits SQLite's machine-local sync
+// bookkeeping cluster (next_ordinal, last_entry_uuid,
+// claude_linear_parse, last_write_incremental): parsers never run
+// against this read-side store, so mirroring those columns would be
+// inert plumbing. Their absence from push SQL and
+// sessionPushFingerprint is intentional.
 const coreDDL = `
 CREATE TABLE IF NOT EXISTS sync_metadata (
     key   TEXT PRIMARY KEY,
@@ -52,6 +59,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at           TIMESTAMPTZ,
     deleted_at         TIMESTAMPTZ,
     source_deleted_at  TIMESTAMPTZ,
+    deletion_cause     TEXT,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
@@ -474,6 +482,11 @@ func EnsureSchema(
 			"sessions", "source_deleted_at",
 			`source_deleted_at TIMESTAMPTZ`,
 			"adding sessions.source_deleted_at",
+		},
+		{
+			"sessions", "deletion_cause",
+			`deletion_cause TEXT`,
+			"adding sessions.deletion_cause",
 		},
 		{
 			"sessions", "total_output_tokens",
@@ -1851,7 +1864,7 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT source_display_name, source_deleted_at
+		`SELECT source_display_name, source_deleted_at, deletion_cause
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -85,33 +86,47 @@ type ZedThreadMeta struct {
 // mtimes before deciding whether to parse, sharing the same connection as the
 // subsequent parseZedThreadFromDB loop to avoid a second DB open.
 func ListZedThreadMetas(conn *sql.DB, dbPath string) ([]ZedThreadMeta, error) {
-	rows, err := conn.Query(
+	var metas []ZedThreadMeta
+	err := ForEachZedThreadMeta(context.Background(), conn, dbPath, func(meta ZedThreadMeta) error {
+		metas = append(metas, meta)
+		return nil
+	})
+	return metas, err
+}
+
+func ForEachZedThreadMeta(
+	ctx context.Context, conn *sql.DB, dbPath string,
+	yield func(ZedThreadMeta) error,
+) error {
+	rows, err := conn.QueryContext(ctx,
 		`SELECT id, COALESCE(updated_at, '')
 		   FROM threads
 		  WHERE COALESCE(parent_id, '') = ''
 		  ORDER BY updated_at, id`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("listing zed thread metas: %w", err)
+		return fmt.Errorf("listing zed thread metas: %w", err)
 	}
 	defer rows.Close()
 
-	var metas []ZedThreadMeta
 	for rows.Next() {
 		var id, updatedAt string
 		if err := rows.Scan(&id, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scanning zed thread meta: %w", err)
+			return fmt.Errorf("scanning zed thread meta: %w", err)
 		}
 		if !IsValidSessionID(id) {
 			continue
 		}
-		metas = append(metas, ZedThreadMeta{
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(ZedThreadMeta{
 			RawID:       id,
 			VirtualPath: ZedSQLiteVirtualPath(dbPath, id),
 			FileMtime:   parseTimestamp(updatedAt).UnixNano(),
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	return metas, rows.Err()
+	return rows.Err()
 }
 
 // parseZedThreadFromDB queries and parses one thread using an already-open

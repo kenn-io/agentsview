@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-var _ Provider = (*commandCodeProvider)(nil)
+var (
+	_ Provider         = (*commandCodeProvider)(nil)
+	_ WatchRootPlanner = (*commandCodeProvider)(nil)
+)
 
 type commandCodeProviderFactory struct {
 	def AgentDef
@@ -47,8 +50,18 @@ func (p *commandCodeProvider) Discover(ctx context.Context) ([]SourceRef, error)
 	return p.sources.Discover(ctx)
 }
 
+func (p *commandCodeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *commandCodeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
+}
+
+func (p *commandCodeProvider) WatchRoots(
+	ctx context.Context,
+) ([]WatchRoot, error) {
+	return p.sources.WatchRoots(ctx)
 }
 
 func (p *commandCodeProvider) SourcesForChangedPath(
@@ -136,6 +149,10 @@ func newCommandCodeSourceSet(roots []string) DirectoryJSONLSourceSet {
 		WithCompanionFiles(func(transcriptPath string) []string {
 			return []string{commandCodeMetaCompanionPath(transcriptPath)}
 		}),
+		WithCompanionTranscript(func(companionPath string) (string, bool) {
+			stem, ok := strings.CutSuffix(companionPath, ".meta.json")
+			return stem + ".jsonl", ok
+		}),
 		WithContentHashing(),
 	)
 }
@@ -198,8 +215,11 @@ func commandCodeCompanionInfo(path string) (os.FileInfo, bool, error) {
 }
 
 func commandCodeProviderCapabilities() Capabilities {
+	source := jsonlFileProviderSourceCapabilities()
+	source.StreamingDiscovery = CapabilitySupported
+	source.WatchRoots = CapabilitySupported
 	return Capabilities{
-		Source: jsonlFileProviderSourceCapabilities(),
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:       CapabilitySupported,
 			SessionName:        CapabilitySupported,

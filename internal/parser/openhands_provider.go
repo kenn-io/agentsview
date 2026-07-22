@@ -47,6 +47,10 @@ func (p *openHandsProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *openHandsProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *openHandsProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -148,6 +152,29 @@ func (s openHandsSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s openHandsSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
+			if !entry.IsDir() || !IsValidSessionID(entry.Name()) {
+				return nil
+			}
+			if source, ok := s.sourceRef(root, filepath.Join(root, entry.Name())); ok {
+				if err := yield(source); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s openHandsSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -393,6 +420,7 @@ func openHandsProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

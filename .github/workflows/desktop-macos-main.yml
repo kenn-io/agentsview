@@ -1,8 +1,8 @@
 name: Desktop Artifacts (macOS)
 
 on:
-  # This workflow is the only workflow allowed to use the ci-runners group.
-  # The organization runner-group policy must pin access to this path on main.
+  # macOS self-hosted workflows are push-only for main. The organization
+  # runner-group policy must pin access to their exact workflow paths on main.
   push:
     branches: [main]
     paths:

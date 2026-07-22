@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ func openClaudeProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,
@@ -86,6 +88,72 @@ func (s openClaudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) 
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s openClaudeSourceSet) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.streamLocalRoot(ctx, root, yield); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// streamLocalRoot enumerates one local projects root. Project directories
+// resolve through streamingDirCandidateOrIncomplete so followed symlinked
+// projects are descended exactly as Discover's isDirOrSymlink walk does, and
+// a symlink whose target cannot be resolved surfaces DiscoveryIncompleteError
+// instead of reading as absent: reconciliation treats a clean DiscoverEach as
+// authoritative and would tombstone every session beneath the symlink.
+func (s openClaudeSourceSet) streamLocalRoot(
+	ctx context.Context, root string, yield func(SourceRef) error,
+) error {
+	var incomplete error
+	err := streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
+		isProjectDir, dirErr := streamingDirCandidateOrIncomplete(
+			AgentOpenClaude, "OpenClaude project directory", project, root,
+		)
+		if dirErr != nil {
+			incomplete = errors.Join(incomplete, dirErr)
+			return nil
+		}
+		if !isProjectDir {
+			return nil
+		}
+		projectRoot := filepath.Join(root, project.Name())
+		err := streamDirectoryTreeRecursive(ctx, projectRoot, func(
+			path string, entry os.DirEntry,
+		) error {
+			if !strings.HasSuffix(entry.Name(), ".jsonl") {
+				return nil
+			}
+			source, ok := s.sourceRef(root, path)
+			if !ok {
+				return nil
+			}
+			return yield(source)
+		})
+		if err == nil {
+			return nil
+		}
+		if _, ok := discoveryYieldCause(err); ok {
+			return err
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		incomplete = errors.Join(incomplete, err)
+		return nil
+	})
+	if cause, ok := discoveryYieldCause(err); ok {
+		return cause
+	}
+	return errors.Join(incomplete, err)
 }
 
 func (s openClaudeSourceSet) discoveredSourceRef(

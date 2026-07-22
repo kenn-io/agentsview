@@ -1500,10 +1500,15 @@ func (db *DB) computeOutcomeStats(
 	since := from.UTC().Format(time.RFC3339)
 	until := to.UTC().Format(time.RFC3339)
 	var cache *git.Cache
-	if db.ReadOnly() {
-		cache = git.NewReadOnlyCache(db.rawReader())
+	// Snapshot the writer pool once: CloseWriter can nil it concurrently for a
+	// worker maintenance pass, so a check-then-load would hand git.NewCache a nil
+	// *sql.DB and panic on first use. When the snapshot is nil (writer closed) or
+	// the store is read-only, fall back to the read-only cache: analytics keep
+	// computing from the reader without persisting git stats.
+	if writer := db.rawWriter(); !db.ReadOnly() && writer != nil {
+		cache = git.NewCache(writer)
 	} else {
-		cache = git.NewCache(db.rawWriter())
+		cache = git.NewReadOnlyCache(db.rawReader())
 	}
 	out := &StatsOutcomeStats{}
 	contributed := false

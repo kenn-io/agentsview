@@ -1347,41 +1347,6 @@ func parseRooCodeToolCall(text string, ordinal int) *ParsedToolCall {
 	return tc
 }
 
-// discoverRooCodeSessions finds all task directories under a RooCode root.
-// root is the globalStorage directory (e.g. ~/Library/.../rooveterinaryinc.roo-cline).
-// Sessions live under <root>/tasks/<taskId>/.
-func discoverRooCodeSessions(root string) []rooCodeSessionDir {
-	tasksDir := filepath.Join(root, "tasks")
-	entries, err := os.ReadDir(tasksDir)
-	if err != nil {
-		return nil
-	}
-
-	var dirs []rooCodeSessionDir
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Skip the _index.json file directory marker.
-		if strings.HasPrefix(entry.Name(), "_") {
-			continue
-		}
-		taskDir := filepath.Join(tasksDir, entry.Name())
-		if !IsRegularFile(filepath.Join(taskDir, "history_item.json")) {
-			continue
-		}
-		dirs = append(dirs, rooCodeSessionDir{
-			Path: taskDir,
-		})
-	}
-	return dirs
-}
-
-// rooCodeSessionDir holds a discovered RooCode task directory path.
-type rooCodeSessionDir struct {
-	Path string
-}
-
 // rooCodeFingerprintSource computes a composite fingerprint from
 // history_item.json and ui_messages.json for freshness detection.
 func rooCodeFingerprintSource(path string) (SourceFingerprint, error) {

@@ -130,6 +130,88 @@ func TestSyncPathsZedDeletedPhysicalDBPreservesSessions(t *testing.T) {
 	assert.Equal(t, "zed:exists", sess.ID)
 }
 
+func TestReconcileWatchRootsZedDeletedPhysicalDBPreservesSessions(t *testing.T) {
+	zedDir := t.TempDir()
+	dbPath := filepath.Join(zedDir, "threads", "threads.db")
+	createZedThreadsDB(t, dbPath, []zedThreadFixture{{
+		id:        "archived-thread",
+		summary:   "Archived thread",
+		updatedAt: "2026-06-09T02:30:00Z",
+		dataType:  "json",
+		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`),
+	}})
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentZed: {zedDir},
+		},
+		Machine: "local",
+	})
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(dbPath))
+
+	require.NoError(t, engine.ReconcileWatchRoots(
+		t.Context(), []string{zedDir}, false,
+	))
+
+	sess, err := database.GetSession(t.Context(), "zed:archived-thread")
+	require.NoError(t, err)
+	assert.NotNil(t, sess,
+		"reconciliation must preserve an archived Zed member when threads.db vanishes")
+}
+
+func TestReconcileWatchRootsZedDeletedMemberTombstonesSession(t *testing.T) {
+	zedDir := t.TempDir()
+	dbPath := filepath.Join(zedDir, "threads", "threads.db")
+	createZedThreadsDB(t, dbPath, []zedThreadFixture{
+		{
+			id: "deleted-thread", summary: "Deleted thread",
+			updatedAt: "2026-06-09T02:30:00Z", dataType: "json",
+			data: []byte(`{"messages":[{"User":{"content":[{"Text":"gone"}]}}]}`),
+		},
+		{
+			id: "surviving-thread", summary: "Surviving thread",
+			updatedAt: "2026-06-09T02:31:00Z", dataType: "json",
+			data: []byte(`{"messages":[{"User":{"content":[{"Text":"kept"}]}}]}`),
+		},
+	})
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentZed: {zedDir}},
+		Machine:   "local",
+	})
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	beforeDelete, err := database.GetSessionFull(t.Context(), "zed:deleted-thread")
+	require.NoError(t, err)
+	require.NotNil(t, beforeDelete)
+
+	zedDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = zedDB.Exec("DELETE FROM threads WHERE id = ?", "deleted-thread")
+	require.NoError(t, err)
+	require.NoError(t, zedDB.Close())
+
+	require.NoError(t, engine.ReconcileWatchRoots(
+		t.Context(), []string{zedDir}, false,
+	))
+
+	deleted, err := database.GetSession(t.Context(), "zed:deleted-thread")
+	require.NoError(t, err)
+	assert.Nil(t, deleted,
+		"a present authoritative container must retire a missing virtual member")
+	archived, err := database.GetSessionFull(t.Context(), "zed:deleted-thread")
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	require.NotNil(t, archived.DeletedAt)
+	require.NotNil(t, archived.DeletionCause)
+	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assert.Equal(t, beforeDelete.MessageCount, archived.MessageCount,
+		"source loss must retain the archived transcript")
+	surviving, err := database.GetSession(t.Context(), "zed:surviving-thread")
+	require.NoError(t, err)
+	assert.NotNil(t, surviving)
+}
+
 func TestSyncSingleSessionZedMissingThreadReturnsNotFound(t *testing.T) {
 
 	zedDir := t.TempDir()

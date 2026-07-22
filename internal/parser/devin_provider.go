@@ -49,6 +49,10 @@ func (p *devinProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *devinProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *devinProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -58,6 +62,12 @@ func (p *devinProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *devinProvider) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	return p.sources.StoredSourceHintScopes(req)
 }
 
 func (p *devinProvider) FindSource(
@@ -168,6 +178,24 @@ func (s devinSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return sources, nil
 }
 
+func (s devinSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		dbPath := devinDBPath(root)
+		if dbPath == "" {
+			continue
+		}
+		if err := ForEachDevinSessionMeta(ctx, dbPath, func(meta DevinSessionMeta) error {
+			return yield(s.newSourceRefWithMTime(root, dbPath, meta.RawSessionID, meta.FileMtime))
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s devinSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots)*2)
 	for _, root := range s.roots {
@@ -247,6 +275,33 @@ func (s devinSourceSet) SourcesForChangedPath(
 		}
 	}
 	return nil, nil
+}
+
+func (s devinSourceSet) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	for _, root := range s.roots {
+		if req.WatchRoot != "" &&
+			!samePath(req.WatchRoot, filepath.Join(root, "cli")) &&
+			!samePath(req.WatchRoot, filepath.Join(root, "cli", "transcripts")) {
+			continue
+		}
+		if ref, ok := s.sourceRef(root, req.Path, true); ok {
+			return []StoredSourceHintScope{{Path: ref.DisplayPath}}
+		}
+		if dbPath, ok := s.dbPathForEvent(root, req.Path); ok {
+			return []StoredSourceHintScope{{
+				Path: dbPath, IncludeVirtualMembers: true,
+			}}
+		}
+		if sessionID, ok := s.transcriptSessionIDForEvent(root, req.Path); ok {
+			dbPath := filepath.Join(root, "cli", devinDBFilename)
+			return []StoredSourceHintScope{{
+				Path: VirtualSourcePath(dbPath, sessionID),
+			}}
+		}
+	}
+	return nil
 }
 
 func (s devinSourceSet) FindSource(
@@ -573,8 +628,10 @@ func (s devinSource) virtualPath() string {
 }
 
 func devinProviderCapabilities() Capabilities {
+	source := dbBackedSourceCapabilities(CapabilityNotApplicable)
+	source.StreamingDiscovery = CapabilitySupported
 	return Capabilities{
-		Source: dbBackedSourceCapabilities(CapabilityNotApplicable),
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,

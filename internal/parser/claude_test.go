@@ -546,8 +546,11 @@ func TestClaudeIncrementalStoredIdentityAppendStaysIncremental(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	msgs, _, _, _, parseErr := claudeParseSessionFrom(
-		path, info.Size(), 1, "u1",
-		claudeStoredIdentity{entrypoint: "cli"},
+		path, info.Size(), claudeIncrementalScan{
+			startOrdinal:  1,
+			lastEntryUUID: "u1",
+			stored:        claudeStoredIdentity{entrypoint: "cli"},
+		},
 	)
 	require.NoError(t, parseErr)
 	require.Len(t, msgs, 1)
@@ -593,8 +596,11 @@ func TestClaudeIncrementalNewIdentityFieldStillEscalates(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	_, _, _, _, parseErr := claudeParseSessionFrom(
-		path, info.Size(), 1, "u1",
-		claudeStoredIdentity{entrypoint: "cli"},
+		path, info.Size(), claudeIncrementalScan{
+			startOrdinal:  1,
+			lastEntryUUID: "u1",
+			stored:        claudeStoredIdentity{entrypoint: "cli"},
+		},
 	)
 	require.Error(t, parseErr)
 	assert.True(t, IsIncrementalFullParseFallback(parseErr))

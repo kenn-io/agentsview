@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,6 +55,169 @@ func TestJSONLSourceSetDiscoverRecursiveStableSources(t *testing.T) {
 		assert.IsType(t, JSONLSource{}, source.Opaque)
 	}
 }
+
+func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T) {
+	t.Run("configured root is not a directory", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "root.jsonl")
+		writeSourceFile(t, root, "{}\n")
+		set := NewJSONLSourceSet(AgentCodex, []string{root})
+
+		err := set.DiscoverEach(t.Context(), func(SourceRef) error { return nil })
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a directory")
+	})
+
+	t.Run("followed source stat", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.Symlink(
+			filepath.Join(root, "missing-target"), filepath.Join(root, "a-broken.jsonl"),
+		))
+		writeSourceFile(t, filepath.Join(root, "z-healthy.jsonl"), "{}\n")
+		set := NewJSONLSourceSet(
+			AgentCodex, []string{root}, WithFollowSymlinkFiles(),
+		)
+		var yielded []string
+
+		err := set.DiscoverEach(t.Context(), func(source SourceRef) error {
+			yielded = append(yielded, source.DisplayPath)
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{filepath.Join(root, "z-healthy.jsonl")}, yielded)
+	})
+
+	t.Run("followed directory symlink stat", func(t *testing.T) {
+		root := t.TempDir()
+		target := filepath.Join(t.TempDir(), "linked-dir")
+		require.NoError(t, os.MkdirAll(target, 0o755))
+		link := filepath.Join(root, "a-linked")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
+		require.NoError(t, os.RemoveAll(target))
+		writeSourceFile(t, filepath.Join(root, "z-healthy.jsonl"), "{}\n")
+		// No exported option follows directory symlinks without also
+		// following file symlinks, whose own stat failure would mask
+		// the directory-descent path under test; build the
+		// directory-only configuration directly.
+		set := jsonlSourceSetFromOptions(AgentCodex, []string{root},
+			JSONLSourceSetOptions{Recursive: true, FollowSymlinkDirs: true})
+		var yielded []string
+
+		err := set.DiscoverEach(t.Context(), func(source SourceRef) error {
+			yielded = append(yielded, source.DisplayPath)
+			return nil
+		})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{filepath.Join(root, "z-healthy.jsonl")}, yielded)
+	})
+
+	t.Run("entry info race continues healthy sibling", func(t *testing.T) {
+		root := t.TempDir()
+		healthy := filepath.Join(root, "z-healthy.jsonl")
+		writeSourceFile(t, healthy, "{}\n")
+		ctx := withStreamingDirectoryReader(t.Context(), func(
+			_ context.Context, _ string, yield func(os.DirEntry) error,
+		) error {
+			if err := yield(failingInfoDirEntry{
+				name: "a-vanished.jsonl", err: os.ErrNotExist,
+			}); err != nil {
+				return err
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				return err
+			}
+			return yield(entries[0])
+		})
+		set := NewJSONLSourceSet(AgentCodex, []string{root})
+		var yielded []string
+
+		err := set.DiscoverEach(ctx, func(source SourceRef) error {
+			yielded = append(yielded, source.DisplayPath)
+			return nil
+		})
+
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
+
+	t.Run("nested directory read continues healthy sibling", func(t *testing.T) {
+		root := t.TempDir()
+		nested := filepath.Join(root, "a-nested")
+		require.NoError(t, os.Mkdir(nested, 0o755))
+		healthy := filepath.Join(root, "z-healthy.jsonl")
+		writeSourceFile(t, healthy, "{}\n")
+		injected := errors.New("nested directory read failed")
+		ctx := withStreamingDirectoryReader(t.Context(), func(
+			ctx context.Context, dir string, yield func(os.DirEntry) error,
+		) error {
+			if samePath(dir, nested) {
+				return injected
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if err := yield(entry); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		set := NewJSONLSourceSet(AgentCodex, []string{root}, WithRecursive())
+		var yielded []string
+
+		err := set.DiscoverEach(ctx, func(source SourceRef) error {
+			yielded = append(yielded, source.DisplayPath)
+			return nil
+		})
+
+		assert.ErrorIs(t, err, injected)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
+
+	t.Run("yield error aborts immediately", func(t *testing.T) {
+		root := t.TempDir()
+		writeSourceFile(t, filepath.Join(root, "a.jsonl"), "{}\n")
+		writeSourceFile(t, filepath.Join(root, "b.jsonl"), "{}\n")
+		set := NewJSONLSourceSet(AgentCodex, []string{root})
+		injected := errors.New("stop consumer")
+		calls := 0
+
+		err := set.DiscoverEach(t.Context(), func(SourceRef) error {
+			calls++
+			return injected
+		})
+
+		assert.ErrorIs(t, err, injected)
+		assert.Equal(t, 1, calls)
+	})
+}
+
+type failingInfoDirEntry struct {
+	name string
+	err  error
+}
+
+func (entry failingInfoDirEntry) Name() string               { return entry.name }
+func (failingInfoDirEntry) IsDir() bool                      { return false }
+func (failingInfoDirEntry) Type() os.FileMode                { return 0 }
+func (entry failingInfoDirEntry) Info() (os.FileInfo, error) { return nil, entry.err }
 
 func TestJSONLSourceSetShallowDiscoveryAndFilters(t *testing.T) {
 	root := t.TempDir()
@@ -155,6 +319,37 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 	assert.Equal(t, info.Size(), fingerprint.Size)
 	assert.Equal(t, info.ModTime().UnixNano(), fingerprint.MTimeNS)
 	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), fingerprint.Hash)
+}
+
+func TestJSONLSourceSetWatchRootsReturnsBoundedMetadata(t *testing.T) {
+	root := t.TempDir()
+	otherRoot := filepath.Join(t.TempDir(), "sessions")
+	companionCalls := 0
+	sources := NewJSONLSourceSet(
+		AgentCodex,
+		[]string{root, otherRoot},
+		WithRecursive(),
+		WithCompanionFiles(func(transcriptPath string) []string {
+			companionCalls++
+			return []string{transcriptPath + ".meta"}
+		}),
+	)
+
+	roots, err := sources.WatchRoots(context.Background())
+	require.NoError(t, err)
+	require.Len(t, roots, 2)
+	assert.Equal(t, WatchRoot{
+		Path:        root,
+		Recursive:   true,
+		DebounceKey: string(AgentCodex) + ":jsonl:" + root,
+	}, roots[0])
+	assert.Equal(t, WatchRoot{
+		Path:        otherRoot,
+		Recursive:   true,
+		DebounceKey: string(AgentCodex) + ":jsonl:" + otherRoot,
+	}, roots[1])
+	assert.Zero(t, companionCalls,
+		"root scheduling must not enumerate transcripts or companions")
 }
 
 func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {

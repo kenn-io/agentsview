@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,10 +168,49 @@ func TestStoredSourceHintCapabilitiesMatchConsumers(t *testing.T) {
 		got := factory.Capabilities().Source.StoredSourceHints
 		if wantSupported[agent] {
 			assert.Equalf(t, CapabilitySupported, got, "%s consumes stored path hints", agent)
+			provider := factory.NewProvider(ProviderConfig{})
+			assert.Equalf(t, CapabilitySupported,
+				provider.Capabilities().Source.StoredSourceHints,
+				"%s configured provider consumes stored path hints", agent)
+			assert.Implementsf(t, (*StoredSourceHintScopeProvider)(nil), provider,
+				"%s must scope stored hints before the engine queries them", agent)
 		} else {
 			assert.Equalf(t, CapabilityUnsupported, got, "%s must not schedule stored path hints", agent)
 		}
 	}
+}
+
+func TestStoredSourceHintScopesDistinguishContainersFromExactMembers(t *testing.T) {
+	root := t.TempDir()
+	forge, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	forgeScopes := forge.(StoredSourceHintScopeProvider)
+	dbPath := filepath.Join(root, ForgeDBFilename)
+	assert.Equal(t, []StoredSourceHintScope{{
+		Path: dbPath, IncludeVirtualMembers: true,
+	}}, forgeScopes.StoredSourceHintScopes(ChangedPathRequest{
+		Path: dbPath + "-wal", WatchRoot: root,
+	}))
+	virtualPath := VirtualSourcePath(dbPath, "conversation-a")
+	assert.Equal(t, []StoredSourceHintScope{{Path: virtualPath}},
+		forgeScopes.StoredSourceHintScopes(ChangedPathRequest{
+			Path: virtualPath, WatchRoot: root,
+		}))
+
+	visualStudio, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	visualStudioScopes := visualStudio.(StoredSourceHintScopeProvider)
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	container := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	assert.Equal(t, []StoredSourceHintScope{{
+		Path: container, IncludeVirtualMembers: true,
+	}}, visualStudioScopes.StoredSourceHintScopes(ChangedPathRequest{Path: container}))
+	member := VisualStudioCopilotVirtualPath(container, conversationID)
+	assert.Equal(t, []StoredSourceHintScope{{Path: member}},
+		visualStudioScopes.StoredSourceHintScopes(ChangedPathRequest{Path: member}))
 }
 
 func TestVerifiedLocalStatCapabilitiesMatchConsumers(t *testing.T) {
@@ -255,7 +295,8 @@ func TestProviderMigrationModesRestrictImportOnlyMode(t *testing.T) {
 }
 
 type testProviderFactory struct {
-	def AgentDef
+	def  AgentDef
+	caps Capabilities
 }
 
 func (f testProviderFactory) Definition() AgentDef {
@@ -263,13 +304,14 @@ func (f testProviderFactory) Definition() AgentDef {
 }
 
 func (f testProviderFactory) Capabilities() Capabilities {
-	return Capabilities{}
+	return f.caps
 }
 
 func (f testProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	return &testProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
+			Caps:   f.caps,
 			Config: cfg.Clone(),
 		},
 	}

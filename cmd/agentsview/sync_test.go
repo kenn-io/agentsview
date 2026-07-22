@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/kit/daemon"
@@ -1701,6 +1702,42 @@ func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, syncCalled)
 	assert.Equal(t, 7, stats.Synced)
+}
+
+// TestRunDaemonSyncDetectsResyncRequired pins the stale-archive UX: only a
+// /sync rejection carrying the resync-required header maps to
+// errDaemonResyncRequired (so the CLI retries via /api/v1/resync); a plain
+// non-200, or the same header on an already-full resync request, stays a
+// generic error.
+func TestRunDaemonSyncDetectsResyncRequired(t *testing.T) {
+	tests := []struct {
+		name       string
+		withHeader bool
+		full       bool
+		wantResync bool
+	}{
+		{name: "409 with header on sync", withHeader: true, wantResync: true},
+		{name: "409 without header", withHeader: false, wantResync: false},
+		{name: "409 with header on resync", withHeader: true, full: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := syncRouteTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				if tt.withHeader {
+					w.Header().Set(server.ResyncRequiredHeader, "true")
+				}
+				w.WriteHeader(http.StatusConflict)
+			})
+
+			_, err := runDaemonSync(
+				context.Background(), transport{URL: ts.URL}, "", tt.full, nil,
+			)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantResync,
+				errors.Is(err, errDaemonResyncRequired))
+			assert.Contains(t, err.Error(), "HTTP 409")
+		})
+	}
 }
 
 func TestDoSyncRemoteHostUsesDaemonRouteWhenWritableDaemonRunning(t *testing.T) {

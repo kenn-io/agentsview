@@ -1562,6 +1562,7 @@ func sessionPushFingerprint(
 		stringValue(sess.StartedAt),
 		stringValue(sess.EndedAt),
 		stringValue(sess.DeletedAt),
+		stringValue(sess.DeletionCause),
 		fmt.Sprintf("%d", sess.MessageCount),
 		fmt.Sprintf("%d", sess.UserMessageCount),
 		fmt.Sprintf("%t", sess.IsAutomated),
@@ -1748,7 +1749,7 @@ func (s *Sync) pushSession(
 			id, machine, owner_marker, project, agent,
 			first_message, display_name, source_display_name,
 			session_name, created_at, started_at, ended_at,
-			deleted_at, source_deleted_at,
+			deleted_at, source_deleted_at, deletion_cause,
 			message_count, user_message_count,
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
@@ -1778,20 +1779,20 @@ func (s *Sync) pushSession(
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14,
-				$15, $16, $17, $18,
-			$19, $20, $21, $22,
-			$23, $24, $25, $26, $27, $28, $29,
-			$30, $31,
-			$32, $33, $34, $35,
-			$36, $37, $38, $39,
-			$40,
-			$41, $42,
-			$43,
-			$44, $45, $46, $47,
-			$48, $49,
-				$50, $51, $52, $53, $54, $55, $56, $57, $58, $59,
-				$60, $61,
+				$9, $10, $11, $12, $13, $14, $15,
+				$16, $17, $18, $19,
+			$20, $21, $22, $23,
+			$24, $25, $26, $27, $28, $29, $30,
+			$31, $32,
+			$33, $34, $35, $36,
+			$37, $38, $39, $40,
+			$41,
+			$42, $43,
+			$44,
+			$45, $46, $47, $48,
+			$49, $50,
+				$51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
+				$61, $62,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -1818,6 +1819,11 @@ func (s *Sync) pushSession(
 				WHEN sessions.deleted_at IS DISTINCT FROM
 					sessions.source_deleted_at THEN sessions.deleted_at
 				ELSE EXCLUDED.deleted_at
+			END,
+			deletion_cause = CASE
+				WHEN sessions.deleted_at IS DISTINCT FROM
+					sessions.source_deleted_at THEN sessions.deletion_cause
+				ELSE EXCLUDED.deletion_cause
 			END,
 			source_deleted_at = EXCLUDED.deleted_at,
 			message_count = EXCLUDED.message_count,
@@ -1872,7 +1878,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-					SELECT jsonb_array_elements_text($62::jsonb)
+						SELECT jsonb_array_elements_text($63::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1894,6 +1900,7 @@ func (s *Sync) pushSession(
 			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
 			OR sessions.source_deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
+			OR sessions.deletion_cause IS DISTINCT FROM EXCLUDED.deletion_cause
 			OR sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
 			OR sessions.total_output_tokens IS DISTINCT FROM EXCLUDED.total_output_tokens
@@ -1951,6 +1958,7 @@ func (s *Sync) pushSession(
 		nilStrTS(sess.EndedAt),
 		nilStrTS(sess.DeletedAt),
 		nilStrTS(sess.DeletedAt),
+		nilStr(sess.DeletionCause),
 		sess.MessageCount, sess.UserMessageCount,
 		sess.TotalOutputTokens, sess.PeakContextTokens,
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens,

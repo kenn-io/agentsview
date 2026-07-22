@@ -81,3 +81,17 @@ func (db *DB) DeleteSkippedFile(path string) error {
 	)
 	return err
 }
+
+// DeleteSkippedFileAndPrefix removes one exact cache key and every variant
+// beginning with prefix. Sync uses this for hash-qualified source keys so a
+// tombstone cannot leave a durable sibling that survives process restart.
+func (db *DB) DeleteSkippedFileAndPrefix(path, prefix string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`DELETE FROM skipped_files
+		 WHERE file_path = ? OR substr(file_path, 1, length(?)) = ?`,
+		path, prefix, prefix,
+	)
+	return err
+}

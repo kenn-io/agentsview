@@ -48,6 +48,10 @@ func (p *antigravityProvider) Discover(ctx context.Context) ([]SourceRef, error)
 	return p.sources.Discover(ctx)
 }
 
+func (p *antigravityProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *antigravityProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -158,6 +162,32 @@ func (s antigravitySourceSet) Discover(ctx context.Context) ([]SourceRef, error)
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s antigravitySourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		dir := filepath.Join(root, "conversations")
+		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".db") ||
+				!IsValidSessionID(strings.TrimSuffix(name, ".db")) {
+				return nil
+			}
+			if source, ok := s.sourceRef(root, filepath.Join(dir, name), false); ok {
+				if err := yield(source); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // discoverSessionPaths returns one conversations/<uuid>.db path per IDE session
@@ -482,6 +512,7 @@ func antigravityWatchRootMatches(root, watchRoot string) bool {
 
 func antigravityProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
+	source.StreamingDiscovery = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
 	return Capabilities{
 		Source: source,

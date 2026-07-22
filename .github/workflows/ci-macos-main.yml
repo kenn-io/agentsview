@@ -1,0 +1,37 @@
+name: CI (macOS)
+
+on:
+  # Persistent self-hosted runners must never be selectable from a workflow
+  # definition controlled by a pull request. The ci-runners group must allow
+  # this exact workflow path only from refs/heads/main.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-macos-fsevents:
+    name: Go Test (macOS FSEvents)
+    runs-on:
+      group: ci-runners
+      labels: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Restore pricing snapshot
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+      - name: Run focused macOS FSEvents tests
+        run: CGO_ENABLED=1 go test -tags "fts5" ./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview -count=1 -timeout=20m

@@ -240,32 +240,40 @@ func (e *Engine) processS3Session(
 	if err != nil {
 		return processResult{err: err}
 	}
+	// Legacy/S3 parse seam: the per-agent skip gates above return lease-free,
+	// so acquire the retention lease that bounds the materialized-and-parsed
+	// payload just before the object is fetched and parsed. Every result from
+	// here carries the lease; releaseRetention frees it after consumption.
+	lease, err := e.retentionBudget().acquire(ctx, parseRetentionSourceBytes(file))
+	if err != nil {
+		return processResult{err: err}
+	}
 	rc, err := fetchS3Object(file.Path)
 	if err != nil {
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	defer rc.Close()
 	dir, err := os.MkdirTemp("", "avs3-")
 	if err != nil {
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	defer os.RemoveAll(dir)
 	tmp := filepath.Join(dir, relPath)
 	if err := os.MkdirAll(filepath.Dir(tmp), 0o755); err != nil {
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	f, err := os.Create(tmp)
 	if err != nil {
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	// Stream the object straight to disk so a large session never has to be
 	// held whole in memory.
 	if _, err := io.Copy(f, rc); err != nil {
 		f.Close()
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	if err := f.Close(); err != nil {
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	hydratedToolResults := false
 	sawPersistedToolResults := false
@@ -273,14 +281,14 @@ func (e *Engine) processS3Session(
 	case parser.AgentClaude:
 		rewrote, sawPersisted, err := hydrateS3ClaudeToolResults(tmp, file.Path)
 		if err != nil {
-			return processResult{err: err, noCacheSkip: true}
+			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 		}
 		hydratedToolResults = rewrote
 		sawPersistedToolResults = sawPersisted
 	case parser.AgentCodex:
 		indexPath, err := hydrateS3CodexSessionIndex(tmp, file.Path)
 		if err != nil {
-			return processResult{err: err, noCacheSkip: true}
+			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 		}
 		if indexPath != "" {
 			defer parser.EvictCodexSessionIndex(indexPath)
@@ -288,7 +296,7 @@ func (e *Engine) processS3Session(
 	}
 	res, err := e.parseMaterializedS3Source(ctx, file, dir, tmp)
 	if err != nil {
-		return processResult{err: err, noCacheSkip: true}
+		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
 	// Record the real s3:// source on each parsed session rather than the
 	// transient temp path (which is deleted on return), so the stored source
@@ -308,6 +316,7 @@ func (e *Engine) processS3Session(
 	res.excludedSessionIDs = applyIDPrefixToIDs(
 		idPrefix, res.excludedSessionIDs,
 	)
+	res.retentionLease = lease
 	return res
 }
 

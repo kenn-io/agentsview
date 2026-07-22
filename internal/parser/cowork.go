@@ -5,6 +5,7 @@ package parser
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -61,6 +62,18 @@ func readCoworkMeta(path string) coworkMeta {
 	}
 	_ = json.Unmarshal(data, &meta)
 	return meta
+}
+
+func readCoworkMetaStrict(path string) (coworkMeta, error) {
+	var meta coworkMeta
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return meta, fmt.Errorf("read cowork metadata %s: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return meta, fmt.Errorf("decode cowork metadata %s: %w", path, err)
+	}
+	return meta, nil
 }
 
 // coworkProjectName derives a project grouping for a cowork session.

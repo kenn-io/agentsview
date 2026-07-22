@@ -2,6 +2,8 @@ package parser
 
 import (
 	"bufio"
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,19 +132,10 @@ func ResolveSourceFilePath(storedPath string) string {
 	if dbPath, _, ok := SplitWindsurfVirtualPath(storedPath); ok {
 		return dbPath
 	}
+	if dbPath, _, ok := ParseVirtualSourcePathForBase(storedPath, "state.db"); ok {
+		return dbPath
+	}
 	return storedPath
-}
-
-type vsCopilotTraceLine struct {
-	ResourceSpans []vsCopilotResourceSpan `json:"resourceSpans"`
-}
-
-type vsCopilotResourceSpan struct {
-	ScopeSpans []vsCopilotScopeSpan `json:"scopeSpans"`
-}
-
-type vsCopilotScopeSpan struct {
-	Spans []vsCopilotSpan `json:"spans"`
 }
 
 type vsCopilotSpan struct {
@@ -186,22 +179,24 @@ func parseVisualStudioCopilotConversation(
 		return nil, nil, fmt.Errorf("stat %s: %w", tracePath, err)
 	}
 
-	// Fingerprint every sibling trace file before reading spans. A
-	// conversation's transcript is rebuilt from all siblings, so the stored
-	// size/mtime must span them; computing it first means a sibling appended
-	// during the read shows up as a change on the next sync rather than being
-	// hidden behind a fingerprint that already counts it.
-	compositeSize, compositeMtime := VisualStudioCopilotTraceFingerprint(
-		tracePath,
-	)
-
 	spans, err := visualStudioCopilotConversationSpans(tracePath, conversationID)
 	if err != nil {
 		return nil, nil, err
 	}
+	return buildVisualStudioCopilotConversationFromSpans(
+		tracePath, conversationID, project, machine, spans,
+	)
+}
+
+func buildVisualStudioCopilotConversationFromSpans(
+	tracePath, conversationID, project, machine string, spans []vsCopilotSpan,
+) (*ParsedSession, []ParsedMessage, error) {
 	if len(spans) == 0 {
 		return nil, nil, nil
 	}
+	// Fingerprint every sibling before using the discovery cache. If any file
+	// changed, the next reconciliation invalidates the persisted fingerprint.
+	compositeSize, compositeMtime := VisualStudioCopilotTraceFingerprint(tracePath)
 
 	messages := visualStudioCopilotTraceMessages(spans)
 	if len(messages) == 0 {
@@ -250,18 +245,13 @@ func parseVisualStudioCopilotConversation(
 func visualStudioCopilotConversationSpans(
 	tracePath, conversationID string,
 ) ([]vsCopilotSpan, error) {
-	own, err := readVisualStudioCopilotTraceSpans(tracePath)
+	own, err := readVisualStudioCopilotConversationTraceSpans(
+		tracePath, conversationID,
+	)
 	if err != nil {
 		return nil, err
 	}
-	var spans []vsCopilotSpan
-	for _, span := range own {
-		if sameVisualStudioCopilotConversationID(
-			span.attrMap["gen_ai.conversation.id"], conversationID,
-		) {
-			spans = append(spans, span)
-		}
-	}
+	spans := own
 	siblingSpans, err := visualStudioCopilotSiblingTraceSpans(
 		tracePath, conversationID,
 	)
@@ -277,26 +267,190 @@ func visualStudioCopilotConversationSpans(
 // is returned rather than reported as an empty file, so callers do not mistake
 // an unreadable file for one with no conversations.
 func VisualStudioCopilotFileConversationIDs(path string) ([]string, error) {
-	spans, err := readVisualStudioCopilotTraceSpans(path)
-	if err != nil {
-		return nil, err
-	}
 	seen := map[string]struct{}{}
 	var ids []string
-	for _, span := range spans {
+	err := ForEachVisualStudioCopilotFileConversationID(
+		context.Background(), path, func(id string) error {
+			if _, ok := seen[id]; ok {
+				return nil
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+			return nil
+		})
+	return ids, err
+}
+
+// ForEachVisualStudioCopilotFileConversationID scans one trace line at a time
+// and yields conversation IDs without retaining all spans from the trace.
+func ForEachVisualStudioCopilotFileConversationID(
+	ctx context.Context, path string, yield func(string) error,
+) error {
+	return forEachVisualStudioCopilotTraceSpan(ctx, path, func(span vsCopilotSpan) error {
 		id := canonicalVisualStudioCopilotConversationID(
-			span.attrMap["gen_ai.conversation.id"],
+			vsCopilotTraceAttrs(span.Attributes)["gen_ai.conversation.id"],
 		)
 		if id == "" {
-			continue
+			return nil
 		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		return yield(id)
+	})
+}
+
+// forEachVisualStudioCopilotTraceSpan decodes a JSONL trace one span at a
+// time. It never materializes a whole trace line, resourceSpans array, or
+// scopeSpans array, so a single large OTLP export remains bounded by the
+// decoder's fixed input window plus one span.
+func forEachVisualStudioCopilotTraceSpan(
+	ctx context.Context, path string, yield func(vsCopilotSpan) error,
+) error {
+	observeSharedContainerScan(ctx)
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
 	}
-	return ids, nil
+	defer f.Close()
+	hasher := sha256.New()
+	dec := json.NewDecoder(io.LimitReader(io.TeeReader(f, hasher), 1<<62))
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		token, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			info, statErr := f.Stat()
+			if statErr != nil {
+				return statErr
+			}
+			encoded, marshalErr := json.Marshal(SourceFingerprint{
+				Size: info.Size(), MTimeNS: info.ModTime().UnixNano(),
+				Hash: fmt.Sprintf("%x", hasher.Sum(nil)),
+			})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			return reconciliationCachePut(
+				ctx, vsCopilotCachedFingerprintKey(path), string(encoded),
+			)
+		}
+		if err != nil {
+			return fmt.Errorf("decode %s: %w", path, err)
+		}
+		if token != json.Delim('{') {
+			return fmt.Errorf("decode %s: expected trace object", path)
+		}
+		if err := decodeVisualStudioCopilotTraceObject(ctx, dec, yield); err != nil {
+			return fmt.Errorf("decode %s: %w", path, err)
+		}
+	}
+}
+
+func decodeVisualStudioCopilotTraceObject(
+	ctx context.Context, dec *json.Decoder, yield func(vsCopilotSpan) error,
+) error {
+	for dec.More() {
+		name, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if name != "resourceSpans" {
+			if err := skipJSONValue(dec); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := decodeVisualStudioCopilotObjectArray(
+			dec, "scopeSpans", func() error {
+				return decodeVisualStudioCopilotObjectArray(
+					dec, "spans", func() error {
+						return decodeVisualStudioCopilotSpanArray(ctx, dec, yield)
+					},
+				)
+			},
+		); err != nil {
+			return err
+		}
+	}
+	_, err := dec.Token()
+	return err
+}
+
+func decodeVisualStudioCopilotSpanArray(
+	ctx context.Context, dec *json.Decoder, yield func(vsCopilotSpan) error,
+) error {
+	open, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if open != json.Delim('[') {
+		return fmt.Errorf("spans: expected array")
+	}
+	var decoderRetained int64
+	defer func() { observeStreamingRetainedBytes(ctx, -decoderRetained) }()
+	for dec.More() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		start := dec.InputOffset()
+		var span vsCopilotSpan
+		if err := dec.Decode(&span); err != nil {
+			return err
+		}
+		encodedBytes := dec.InputOffset() - start
+		if encodedBytes > decoderRetained {
+			observeStreamingRetainedBytes(ctx, encodedBytes-decoderRetained)
+			decoderRetained = encodedBytes
+		}
+		retained := conservativeDecodedRetainedBytes(encodedBytes)
+		observeStreamingRetainedBytes(ctx, retained)
+		if err := yield(span); err != nil {
+			observeStreamingRetainedBytes(ctx, -retained)
+			return err
+		}
+		observeStreamingRetainedBytes(ctx, -retained)
+	}
+	_, err = dec.Token()
+	return err
+}
+
+func decodeVisualStudioCopilotObjectArray(
+	dec *json.Decoder, nestedField string, consumeNested func() error,
+) error {
+	open, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if open != json.Delim('[') {
+		return fmt.Errorf("%s parent: expected array", nestedField)
+	}
+	for dec.More() {
+		open, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if open != json.Delim('{') {
+			return fmt.Errorf("%s parent: expected object", nestedField)
+		}
+		for dec.More() {
+			name, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			if name == nestedField {
+				if err := consumeNested(); err != nil {
+					return err
+				}
+			} else if err := skipJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return err
+		}
+	}
+	_, err = dec.Token()
+	return err
 }
 
 // WriteVisualStudioCopilotConversationJSONL streams the trace data for one
@@ -557,49 +711,28 @@ func visualStudioCopilotSpanConversationID(span json.RawMessage) string {
 	return ""
 }
 
-func readVisualStudioCopilotTraceSpans(
-	path string,
+func readVisualStudioCopilotConversationTraceSpans(
+	path, conversationID string,
 ) ([]vsCopilotSpan, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	defer f.Close()
-
 	var spans []vsCopilotSpan
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024*1024)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var trace vsCopilotTraceLine
-		if err := json.Unmarshal([]byte(line), &trace); err != nil {
-			return nil, fmt.Errorf(
-				"decode %s line %d: %w", path, lineNo, err,
-			)
-		}
-		for _, resourceSpan := range trace.ResourceSpans {
-			for _, scopeSpan := range resourceSpan.ScopeSpans {
-				for _, span := range scopeSpan.Spans {
-					span.attrMap = vsCopilotTraceAttrs(span.Attributes)
-					span.start = parseUnixNano(span.StartTimeUnixNano)
-					span.end = parseUnixNano(span.EndTimeUnixNano)
-					if span.attrMap["gen_ai.conversation.id"] == "" {
-						continue
-					}
-					spans = append(spans, span)
-				}
+	err := forEachVisualStudioCopilotTraceSpan(
+		context.Background(), path, func(span vsCopilotSpan) error {
+			prepareVisualStudioCopilotSpan(&span)
+			if sameVisualStudioCopilotConversationID(
+				span.attrMap["gen_ai.conversation.id"], conversationID,
+			) {
+				spans = append(spans, span)
 			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan %s: %w", path, err)
-	}
-	return spans, nil
+			return nil
+		},
+	)
+	return spans, err
+}
+
+func prepareVisualStudioCopilotSpan(span *vsCopilotSpan) {
+	span.attrMap = vsCopilotTraceAttrs(span.Attributes)
+	span.start = parseUnixNano(span.StartTimeUnixNano)
+	span.end = parseUnixNano(span.EndTimeUnixNano)
 }
 
 // visualStudioCopilotSiblingTraceSpans collects spans for one conversation from
@@ -623,17 +756,13 @@ func visualStudioCopilotSiblingTraceSpans(
 		if sibling == path {
 			continue
 		}
-		candidateSpans, err := readVisualStudioCopilotTraceSpans(sibling)
+		candidateSpans, err := readVisualStudioCopilotConversationTraceSpans(
+			sibling, conversationID,
+		)
 		if err != nil {
 			return nil, err
 		}
-		for _, span := range candidateSpans {
-			if sameVisualStudioCopilotConversationID(
-				span.attrMap["gen_ai.conversation.id"], conversationID,
-			) {
-				spans = append(spans, span)
-			}
-		}
+		spans = append(spans, candidateSpans...)
 	}
 	return spans, nil
 }

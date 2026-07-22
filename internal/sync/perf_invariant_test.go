@@ -2,9 +2,11 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	gosync "sync"
 	"testing"
 
@@ -29,6 +31,150 @@ import (
 //   - The count-based seam tests in internal/parser
 //     (discovery_workspace_manifest_test.go, antigravity/gemini
 //     provider tests) pin O(roots) discovery work (#912).
+
+// coworkCorpusSession identifies one written Cowork session and its on-disk
+// artifacts so a test can delete the source and assert tombstoning.
+type coworkCorpusSession struct {
+	id             string
+	sessionDir     string
+	metaPath       string
+	transcriptPath string
+}
+
+// writeCoworkCorpus writes n Cowork sessions under root (metadata plus a
+// per-session Claude-format transcript) and returns their identifiers.
+func writeCoworkCorpus(t *testing.T, root string, n int) []coworkCorpusSession {
+	t.Helper()
+	workspaceDir := filepath.Join(root, "org", "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	sessions := make([]coworkCorpusSession, 0, n)
+	for i := range n {
+		uuid := fmt.Sprintf("0b4eea33-0000-4000-8000-%012d", i)
+		cliID := fmt.Sprintf("3021ea26-0000-4000-8000-%012d", i)
+		sessionDirName := "local_" + uuid
+		metaPath := filepath.Join(workspaceDir, sessionDirName+".json")
+		meta := map[string]any{
+			"sessionId":      sessionDirName,
+			"cliSessionId":   cliID,
+			"title":          fmt.Sprintf("session %d", i),
+			"createdAt":      int64(1_700_000_000_000),
+			"lastActivityAt": int64(1_700_000_001_000),
+		}
+		data, err := json.Marshal(meta)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(metaPath, data, 0o644))
+
+		projectDir := filepath.Join(
+			workspaceDir, sessionDirName, ".claude", "projects", "-sessions-demo",
+		)
+		require.NoError(t, os.MkdirAll(projectDir, 0o755))
+		transcriptPath := filepath.Join(projectDir, cliID+".jsonl")
+		lines := []string{
+			`{"type":"user","uuid":"u1","parentUuid":null,` +
+				`"sessionId":"` + cliID + `","cwd":"/sessions/test",` +
+				`"timestamp":"2026-03-01T10:00:00.000Z",` +
+				`"message":{"role":"user","content":"hello there"}}`,
+			`{"type":"assistant","uuid":"a1","parentUuid":"u1",` +
+				`"sessionId":"` + cliID + `","timestamp":"2026-03-01T10:00:05.000Z",` +
+				`"message":{"role":"assistant","id":"msg_1",` +
+				`"model":"claude-sonnet-4-6","stop_reason":"end_turn",` +
+				`"content":[{"type":"text","text":"hi back"}],` +
+				`"usage":{"input_tokens":10,"output_tokens":5}}}`,
+		}
+		require.NoError(t, os.WriteFile(
+			transcriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+		sessions = append(sessions, coworkCorpusSession{
+			id:             "cowork:" + cliID,
+			sessionDir:     filepath.Join(workspaceDir, sessionDirName),
+			metaPath:       metaPath,
+			transcriptPath: transcriptPath,
+		})
+	}
+	return sessions
+}
+
+// TestScheduledReconcileWorkIsClaudeCardinalityIndependent pins the background
+// invariant for the scheduled scoped pass: reconciling an opted-in provider
+// (Cowork) does the same work regardless of how large an unrelated provider's
+// archive is, and still tombstones a deleted Cowork source within scope.
+func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	const coworkCount = 5
+	observed := make(map[int]int)
+	for _, claudeCount := range []int{5, 500} {
+		t.Run(fmt.Sprintf("claude_%d", claudeCount), func(t *testing.T) {
+			base := t.TempDir()
+			coworkDir := filepath.Join(base, "cowork")
+			claudeDir := filepath.Join(base, "claude")
+			require.NoError(t, os.MkdirAll(coworkDir, 0o755))
+			require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+			writeCoworkCorpus(t, coworkDir, coworkCount)
+			writeClaudeCorpus(t, claudeDir, claudeCount)
+
+			database := openTestDB(t)
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentCowork: {coworkDir},
+					parser.AgentClaude: {claudeDir},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, coworkCount+claudeCount,
+				engine.SyncAll(context.Background(), nil).Synced)
+
+			require.NoError(t, engine.ReconcileProviderRoots(
+				context.Background(), parser.AgentCowork, []string{coworkDir}))
+			observed[claudeCount] =
+				engine.LastReconciliationResult().Metrics.MaxRehydratedSources
+		})
+	}
+	assert.Equal(t, observed[5], observed[500],
+		"scheduled reconcile work must not grow with an unrelated provider's archive")
+
+	t.Run("deletion_preserved", func(t *testing.T) {
+		base := t.TempDir()
+		coworkDir := filepath.Join(base, "cowork")
+		claudeDir := filepath.Join(base, "claude")
+		require.NoError(t, os.MkdirAll(coworkDir, 0o755))
+		require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+		cowork := writeCoworkCorpus(t, coworkDir, coworkCount)
+		claudeIDs := writeClaudeCorpus(t, claudeDir, coworkCount)
+
+		database := openTestDB(t)
+		engine := NewEngine(database, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{
+				parser.AgentCowork: {coworkDir},
+				parser.AgentClaude: {claudeDir},
+			},
+			Machine: "local",
+		})
+		t.Cleanup(engine.Close)
+		require.Equal(t, 2*coworkCount,
+			engine.SyncAll(context.Background(), nil).Synced)
+
+		require.NoError(t, os.RemoveAll(cowork[2].sessionDir))
+		require.NoError(t, os.Remove(cowork[2].metaPath))
+
+		require.NoError(t, engine.ReconcileProviderRoots(
+			context.Background(), parser.AgentCowork, []string{coworkDir}))
+
+		deleted, err := database.GetSessionFull(context.Background(), cowork[2].id)
+		require.NoError(t, err)
+		require.NotNil(t, deleted)
+		require.NotNil(t, deleted.DeletionCause)
+		assert.Equal(t, "source_missing", *deleted.DeletionCause)
+		for _, id := range claudeIDs {
+			active, err := database.GetSession(context.Background(), id)
+			require.NoError(t, err)
+			assert.NotNil(t, active,
+				"Cowork-scoped pass must not tombstone Claude sources")
+		}
+	})
+}
 
 func TestSourceHashSkipMutationWorkIsArchiveCardinalityIndependent(t *testing.T) {
 	type workCounts struct {

@@ -58,6 +58,10 @@ func (p *openClawProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *openClawProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *openClawProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -82,6 +86,12 @@ func (p *openClawProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+func (p *openClawProvider) ReconciliationSourceRank(
+	source SourceRef,
+) ReconciliationSourceRank {
+	return p.sources.reconciliationSourceRank(source)
 }
 
 func (p *openClawProvider) Parse(
@@ -137,6 +147,10 @@ func (p *qClawProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *qClawProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *qClawProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -161,6 +175,12 @@ func (p *qClawProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+func (p *qClawProvider) ReconciliationSourceRank(
+	source SourceRef,
+) ReconciliationSourceRank {
+	return p.sources.reconciliationSourceRank(source)
 }
 
 func (p *qClawProvider) Parse(
@@ -219,6 +239,47 @@ func (s clawSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		return sources[i].Key < sources[j].Key
 	})
 	return sources, nil
+}
+
+func (s clawSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := streamDirectoryEntries(ctx, root, func(agent os.DirEntry) error {
+			if !IsValidSessionID(agent.Name()) {
+				return nil
+			}
+			isAgentDir, dirErr := streamingDirCandidateOrIncomplete(
+				s.spec.agent, "agent directory", agent, root,
+			)
+			if dirErr != nil {
+				return dirErr
+			}
+			if !isAgentDir {
+				return nil
+			}
+			dir := filepath.Join(root, agent.Name(), "sessions")
+			return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+				if entry.IsDir() || !s.spec.sessionFile(entry.Name()) ||
+					!IsValidSessionID(s.spec.sessionID(entry.Name())) {
+					return nil
+				}
+				source, ok := s.sourceRef(root, filepath.Join(dir, entry.Name()))
+				if !ok {
+					return nil
+				}
+				if info, infoErr := entry.Info(); infoErr == nil {
+					source.DiscoveryMTimeNS = info.ModTime().UnixNano()
+				}
+				return yield(source)
+			})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s clawSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -424,7 +485,7 @@ func (s clawSourceSet) sourceRef(root string, path string) (SourceRef, bool) {
 	}
 	return SourceRef{
 		Provider:       s.spec.agent,
-		Key:            path,
+		Key:            rawID,
 		DisplayPath:    path,
 		FingerprintKey: path,
 		ProjectHint:    clawAgentIDFromRawID(rawID),
@@ -555,38 +616,47 @@ func (s clawSourceSet) sourcePathForRawID(root, rawID string) string {
 }
 
 func (s clawSourceSet) bestEntry(a, b os.DirEntry) os.DirEntry {
-	aActive := strings.HasSuffix(a.Name(), ".jsonl")
-	bActive := strings.HasSuffix(b.Name(), ".jsonl")
-	if aActive && !bActive {
-		return a
-	}
-	if bActive && !aActive {
-		return b
-	}
-	aTime := clawArchiveTime(a)
-	bTime := clawArchiveTime(b)
-	if !aTime.IsZero() && !bTime.IsZero() {
-		if bTime.After(aTime) {
-			return b
-		}
-		return a
-	}
-	if !aTime.IsZero() {
-		return a
-	}
-	if !bTime.IsZero() {
-		return b
-	}
-	ai, errA := a.Info()
-	bi, errB := b.Info()
-	if errA == nil && errB == nil && bi.ModTime().After(ai.ModTime()) {
+	aRank := clawDirEntryReconciliationRank(a)
+	bRank := clawDirEntryReconciliationRank(b)
+	if bRank.Class > aRank.Class ||
+		(bRank.Class == aRank.Class && bRank.Recency > aRank.Recency) {
 		return b
 	}
 	return a
 }
 
-func clawArchiveTime(e os.DirEntry) time.Time {
-	name := e.Name()
+func (s clawSourceSet) reconciliationSourceRank(
+	source SourceRef,
+) ReconciliationSourceRank {
+	path, ok := s.pathFromSource(source)
+	if !ok {
+		return ReconciliationSourceRank{}
+	}
+	return clawReconciliationSourceRank(
+		filepath.Base(path), source.DiscoveryMTimeNS,
+	)
+}
+
+func clawDirEntryReconciliationRank(entry os.DirEntry) ReconciliationSourceRank {
+	mtime := int64(0)
+	if info, err := entry.Info(); err == nil {
+		mtime = info.ModTime().UnixNano()
+	}
+	return clawReconciliationSourceRank(entry.Name(), mtime)
+}
+
+func clawReconciliationSourceRank(name string, mtime int64) ReconciliationSourceRank {
+	if strings.HasSuffix(name, ".jsonl") {
+		return ReconciliationSourceRank{Class: 2, Recency: mtime}
+	}
+	archiveTime := clawArchiveNameTime(name)
+	if !archiveTime.IsZero() {
+		return ReconciliationSourceRank{Class: 1, Recency: archiveTime.UnixNano()}
+	}
+	return ReconciliationSourceRank{Recency: mtime}
+}
+
+func clawArchiveNameTime(name string) time.Time {
 	idx := strings.Index(name, ".jsonl.")
 	if idx <= 0 {
 		return time.Time{}
@@ -676,8 +746,10 @@ func qClawProviderCapabilities() Capabilities {
 }
 
 func clawProviderCapabilities() Capabilities {
+	source := jsonlFileProviderSourceCapabilities()
+	source.StreamingDiscovery = CapabilitySupported
 	return Capabilities{
-		Source: jsonlFileProviderSourceCapabilities(),
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			Thinking:             CapabilitySupported,

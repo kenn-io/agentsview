@@ -42,6 +42,15 @@ type Store struct {
 	duck      *sql.DB
 	fileInfo  os.FileInfo
 	aliasPath string
+	closed    bool
+	// retiring tracks in-flight mirror-replacement checks, registered in
+	// beginReplacementCheck before a check opens anything and spanning
+	// swapHandle's tail cleanup (closing the replaced handle and removing
+	// its alias after the write lock is released). Close waits on it so
+	// "closed" means no check is still opening or validating a replacement,
+	// every retired handle is closed, and every alias this Store created is
+	// gone.
+	retiring sync.WaitGroup
 
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
@@ -90,11 +99,29 @@ func (s *Store) DB() *sql.DB {
 	return s.duck
 }
 
+// Close closes the current handle and removes its backing alias, then waits
+// for any in-flight mirror-replacement check to finish — from opening and
+// validating a candidate replacement (see beginReplacementCheck) through
+// retiring the handle a swap replaced (see swapHandle). Without the wait,
+// Close could return while a check still held a freshly opened handle and
+// its reopen alias on disk. Close is idempotent; the closed flag also
+// rejects checks that have not started yet and tells a swap that loses the
+// race to Close to discard its freshly opened handle instead of installing
+// it.
 func (s *Store) Close() error {
 	s.handleMu.Lock()
-	defer s.handleMu.Unlock()
-	err := s.duck.Close()
-	removeMirrorAlias(s.aliasPath)
+	if s.closed {
+		s.handleMu.Unlock()
+		return nil
+	}
+	s.closed = true
+	conn := s.duck
+	alias := s.aliasPath
+	s.handleMu.Unlock()
+
+	err := conn.Close()
+	removeMirrorAlias(alias)
+	s.retiring.Wait()
 	return err
 }
 
@@ -273,7 +300,7 @@ const duckSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision`
 
 func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	var s db.Session
@@ -307,7 +334,7 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 		&s.SourceSessionID, &s.SourceVersion, &s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.TerminationStatus, &s.TranscriptRevision,
+		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
 	)
 	if err != nil {
 		return s, err
@@ -613,6 +640,20 @@ func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, err
 		return nil, fmt.Errorf("getting duckdb full session: %w", err)
 	}
 	return &sess, nil
+}
+
+func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
+	rows, err := s.queryContext(ctx,
+		"SELECT "+duckSessionCols+
+			" FROM sessions WHERE deleted_at IS NOT NULL"+
+			" AND deletion_cause IS NULL"+
+			" ORDER BY deleted_at DESC LIMIT 500",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing duckdb trash: %w", err)
+	}
+	defer rows.Close()
+	return scanSessionRows(rows)
 }
 
 func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Session, error) {

@@ -18,6 +18,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_mtime  INTEGER,
     next_ordinal INTEGER NOT NULL DEFAULT 0,
     last_entry_uuid TEXT,
+    -- SQLite-only sync bookkeeping: whether the Claude full parser fell
+    -- back to linear processing for this file (NULL = unknown/legacy or
+    -- non-Claude). Read by the incremental parser to skip fork
+    -- detection on linear-bound transcripts. Like next_ordinal and
+    -- last_entry_uuid, this is machine-local parse state deliberately
+    -- not mirrored to PostgreSQL or DuckDB: parsers never run against
+    -- those read-side stores, and any copy that drops it degrades to
+    -- the conservative NULL verdict (full parse re-derives it).
+    claude_linear_parse INTEGER,
     file_inode  INTEGER,
     file_device INTEGER,
     file_hash   TEXT,
@@ -69,6 +78,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- mirrored to PG/DuckDB.
     last_write_incremental INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
+    -- NULL remains the established user-trash representation; source_missing
+    -- is recoverable when the file reappears.
+    deletion_cause TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     termination_status TEXT,
     secret_leak_count INTEGER NOT NULL DEFAULT 0,
@@ -153,7 +165,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent
 CREATE INDEX IF NOT EXISTS idx_sessions_file_path
     ON sessions(file_path)
     WHERE file_path IS NOT NULL;
-
 -- Analytics indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_started
     ON sessions(started_at);
@@ -509,6 +520,19 @@ CREATE TABLE IF NOT EXISTS skipped_files (
     file_path  TEXT PRIMARY KEY,
     file_mtime INTEGER NOT NULL
 );
+
+-- Machine-local watcher proof. This deliberately stays outside the shared
+-- session model: remote stores must not authorize source tombstones for paths
+-- they did not observe on this machine.
+CREATE TABLE IF NOT EXISTS local_session_source_baselines (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    machine    TEXT NOT NULL,
+    agent      TEXT NOT NULL,
+    file_path  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_local_source_baselines_ownership
+    ON local_session_source_baselines(machine, agent, file_path, session_id);
 
 -- Remote skip cache: tracks file mtimes per remote host
 -- for SSH sync incremental optimization.

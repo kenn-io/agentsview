@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +48,10 @@ type vscodeCopilotProvider struct {
 
 func (p *vscodeCopilotProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
+}
+
+func (p *vscodeCopilotProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
 }
 
 func (p *vscodeCopilotProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -153,6 +158,77 @@ func (s vscodeCopilotSourceSet) Discover(ctx context.Context) ([]SourceRef, erro
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s vscodeCopilotSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		yieldDir := func(dir, project string) error {
+			return streamVSCodeSessionFiles(ctx, dir, project, AgentVSCodeCopilot, func(file DiscoveredFile) error {
+				source, ok := s.sourceRefWithProject(root, file.Path, file.Project)
+				if !ok {
+					return nil
+				}
+				source.ProjectHint = file.Project
+				return yield(source)
+			})
+		}
+		workspaceRoot := filepath.Join(root, "workspaceStorage")
+		if err := streamDirectoryEntries(ctx, workspaceRoot, func(entry os.DirEntry) error {
+			if !entry.IsDir() {
+				return nil
+			}
+			hashPath := filepath.Join(workspaceRoot, entry.Name())
+			project := readVSCodeWorkspaceManifest(hashPath)
+			if project == "" {
+				project = "unknown"
+			}
+			return yieldDir(filepath.Join(hashPath, "chatSessions"), project)
+		}); err != nil {
+			return err
+		}
+		for _, subdir := range []string{
+			"globalStorage/emptyWindowChatSessions",
+			"globalStorage/transferredChatSessions",
+		} {
+			if err := yieldDir(filepath.Join(root, subdir), "empty-window"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func streamVSCodeSessionFiles(
+	ctx context.Context, dir, project string, agent AgentType,
+	yield func(DiscoveredFile) error,
+) error {
+	err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+		if entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
+		ext := filepath.Ext(name)
+		if ext != ".json" && ext != ".jsonl" {
+			return nil
+		}
+		stem := strings.TrimSuffix(name, ext)
+		if !IsValidSessionID(stem) {
+			return nil
+		}
+		if ext == ".json" && IsRegularFile(filepath.Join(dir, stem+".jsonl")) {
+			return nil
+		}
+		return yield(DiscoveredFile{
+			Path: filepath.Join(dir, name), Project: project, Agent: agent,
+		})
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // discoverSessionFiles traverses the VSCode workspaceStorage directory to find
@@ -647,6 +723,7 @@ func vscodeCopilotProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

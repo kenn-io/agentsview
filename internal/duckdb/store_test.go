@@ -294,6 +294,45 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	}, labels)
 }
 
+func TestStoreListTrashedSessionsOrdersNewestFirstAndCapsAt500(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	duck := syncer.DB()
+	store := NewStoreFromDB(duck)
+
+	_, err := duck.ExecContext(ctx, `
+		INSERT INTO sessions (id, project, deleted_at)
+		SELECT 'trash-' || i, 'trash-parity',
+			TIMESTAMP '2026-01-01 00:00:00' + INTERVAL (i) SECOND
+		FROM range(600) t(i)`)
+	require.NoError(t, err)
+	// A recoverable source-missing tombstone newer than all user trash: if
+	// deletion_cause filtering regressed it would surface as the first row.
+	_, err = duck.ExecContext(ctx, `
+		INSERT INTO sessions (id, project, deleted_at, deletion_cause)
+		VALUES ('tombstone', 'trash-parity',
+			TIMESTAMP '2026-02-01 00:00:00', 'source_missing')`)
+	require.NoError(t, err)
+	_, err = duck.ExecContext(ctx,
+		`INSERT INTO sessions (id, project) VALUES ('active', 'trash-parity')`)
+	require.NoError(t, err)
+
+	trashed, err := store.ListTrashedSessions(ctx)
+	require.NoError(t, err)
+	// Same cap and ordering as the SQLite and PG stores: newest 500 by
+	// deleted_at, excluding active rows and source-missing tombstones.
+	require.Len(t, trashed, 500)
+	assert.Equal(t, "trash-599", trashed[0].ID)
+	assert.Equal(t, "trash-100", trashed[499].ID)
+	for i := 1; i < len(trashed); i++ {
+		require.NotNil(t, trashed[i].DeletedAt)
+		require.Less(t, *trashed[i].DeletedAt, *trashed[i-1].DeletedAt,
+			"trash must be ordered newest-first at index %d", i)
+	}
+}
+
 func TestStoreMessageIDJoinsAreSessionScoped(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)

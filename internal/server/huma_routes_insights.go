@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -196,6 +197,9 @@ func (s *Server) humaGenerateInsight(
 	if !supportsInsightGeneration(s.db) {
 		return nil, apiError(http.StatusNotImplemented,
 			"insight generation is not available in read-only mode")
+	}
+	if err := s.rejectWriterClosedWrite(); err != nil {
+		return nil, err
 	}
 	req := in.Body
 	if !validInsightTypes[req.Type] {
@@ -428,19 +432,26 @@ func (s *Server) humaGenerateInsight(
 		if req.Prompt != "" {
 			promptPtr = &req.Prompt
 		}
-		id, err := s.db.InsertInsight(db.Insight{
-			Type:     req.Type,
-			DateFrom: req.DateFrom,
-			DateTo:   req.DateTo,
-			Project:  project,
-			Agent:    result.Agent,
-			Model:    model,
-			Prompt:   promptPtr,
-			Content:  result.Content,
+		var id int64
+		err = s.serializeArchiveWrite(func() error {
+			var insertErr error
+			id, insertErr = s.db.InsertInsight(db.Insight{
+				Type:     req.Type,
+				DateFrom: req.DateFrom,
+				DateTo:   req.DateTo,
+				Project:  project,
+				Agent:    result.Agent,
+				Model:    model,
+				Prompt:   promptPtr,
+				Content:  result.Content,
+			})
+			return insertErr
 		})
 		if err != nil {
 			log.Printf("insight insert error: %v", err)
-			sendJSON("error", map[string]string{"message": "failed to save insight"})
+			sendJSON("error", map[string]string{
+				"message": insightSaveErrorMessage(err),
+			})
 			return
 		}
 		saved, err := s.db.GetInsight(hctx.Context(), id)
@@ -453,6 +464,16 @@ func (s *Server) humaGenerateInsight(
 		}
 		sendJSON("done", saved)
 	}}, nil
+}
+
+// insightSaveErrorMessage names a failed insight save for the SSE error event.
+// A writer closed for a maintenance pass is transient and worth telling the
+// client to retry; anything else stays a generic failure.
+func insightSaveErrorMessage(err error) string {
+	if errors.Is(err, db.ErrWriterClosed) {
+		return "archive is briefly read-only for a maintenance pass; retry shortly"
+	}
+	return "failed to save insight"
 }
 
 func insightSessionDate(session *db.Session) string {

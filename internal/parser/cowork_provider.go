@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +24,7 @@ func newCoworkProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				AgentCowork,
 				cfg.Roots,
-				WithFileDiscovery(coworkDiscoverFiles),
+				WithStreamingFileDiscovery(coworkDiscoverEach),
 				WithFileWatchRoots(coworkWatchRoots),
 				WithFileChangedPathClassifier(coworkClassifyPath),
 				WithFileLookup(coworkFindFile),
@@ -36,14 +38,124 @@ func newCoworkProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
-func coworkDiscoverFiles(root string) []singleFileMatch {
-	var out []singleFileMatch
-	walkCoworkSessions(root, func(transcript string) {
-		if match, ok := coworkTranscriptMatch(root, transcript); ok {
-			out = append(out, match)
+func coworkDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
+	var walk func(string) error
+	walk = func(dir string) error {
+		return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			path := filepath.Join(dir, entry.Name())
+			if entry.IsDir() {
+				name := entry.Name()
+				if strings.HasPrefix(name, "local_") || name == "skills-plugin" ||
+					name == "node_modules" || name == ".git" {
+					return nil
+				}
+				return walk(path)
+			}
+			if !isCoworkMetaFileName(entry.Name()) {
+				return nil
+			}
+			meta, err := readCoworkMetaStrict(path)
+			if err != nil {
+				return err
+			}
+			if meta.CliSessionID == "" {
+				return nil
+			}
+			sessionDir := strings.TrimSuffix(path, ".json")
+			main, encDir, err := resolveCoworkSessionStreamed(ctx, sessionDir, meta.CliSessionID)
+			if err != nil {
+				return err
+			}
+			if main == "" {
+				return nil
+			}
+			if match, ok, matchErr := coworkTranscriptMatchStrict(root, main); matchErr != nil {
+				return matchErr
+			} else if ok {
+				if err := yield(match); err != nil {
+					return err
+				}
+			}
+			subagents := filepath.Join(encDir, meta.CliSessionID, "subagents")
+			return streamDirectoryTree(ctx, subagents, func(subPath string, sub os.DirEntry) error {
+				if !strings.HasPrefix(sub.Name(), "agent-") ||
+					!strings.HasSuffix(sub.Name(), ".jsonl") {
+					return nil
+				}
+				regular, statErr := streamingRegularFileCandidate(subPath)
+				if statErr != nil {
+					return fmt.Errorf("stat cowork subagent candidate %s: %w", subPath, statErr)
+				}
+				if !regular {
+					return nil
+				}
+				if match, ok, matchErr := coworkTranscriptMatchStrict(root, subPath); matchErr != nil {
+					return matchErr
+				} else if ok {
+					return yield(match)
+				}
+				return nil
+			})
+		})
+	}
+	return walk(root)
+}
+
+func resolveCoworkSessionStreamed(
+	ctx context.Context, sessionDir, cliSessionID string,
+) (main, encodedDir string, retErr error) {
+	if sessionDir == "" || !IsValidSessionID(cliSessionID) {
+		return "", "", nil
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		if _, lstatErr := os.Lstat(sessionDir); errors.Is(lstatErr, os.ErrNotExist) {
+			return "", "", nil
 		}
+		return "", "", fmt.Errorf("resolve cowork session directory %s: %w", sessionDir, err)
+	}
+	projectsDir := filepath.Join(sessionDir, ".claude", "projects")
+	projectsInfo, err := os.Stat(projectsDir)
+	if err != nil {
+		return "", "", fmt.Errorf("stat cowork projects directory %s: %w", projectsDir, err)
+	}
+	if !projectsInfo.IsDir() {
+		return "", "", fmt.Errorf("stat cowork projects directory %s: not a directory", projectsDir)
+	}
+	err = streamDirectoryEntries(ctx, projectsDir, func(entry os.DirEntry) error {
+		candidateDir, candidateErr := streamingDirOrSymlinkCandidate(entry, projectsDir)
+		if candidateErr != nil {
+			return fmt.Errorf("stat cowork project candidate %s: %w",
+				filepath.Join(projectsDir, entry.Name()), candidateErr)
+		}
+		if !candidateDir {
+			return nil
+		}
+		dir := filepath.Join(projectsDir, entry.Name())
+		candidate := filepath.Join(dir, cliSessionID+".jsonl")
+		regular, statErr := streamingRegularFileCandidate(candidate)
+		if statErr != nil {
+			return fmt.Errorf("stat cowork transcript %s: %w", candidate, statErr)
+		}
+		if !regular {
+			return nil
+		}
+		resolved, resolveErr := filepath.EvalSymlinks(candidate)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve cowork transcript %s: %w", candidate, resolveErr)
+		}
+		if isContainedIn(resolved, resolvedRoot) {
+			main, encodedDir = candidate, dir
+			return errStopStreamingDiscovery
+		}
+		return nil
 	})
-	return out
+	if errors.Is(err, errStopStreamingDiscovery) {
+		err = nil
+	}
+	return main, encodedDir, err
 }
 
 func coworkWatchRoots(roots []string) []WatchRoot {
@@ -105,6 +217,27 @@ func coworkTranscriptMatch(root, path string) (singleFileMatch, bool) {
 		Path:        path,
 		ProjectHint: coworkProjectName(readCoworkMeta(metaPath)),
 	}, true
+}
+
+func coworkTranscriptMatchStrict(
+	root, path string,
+) (singleFileMatch, bool, error) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if _, ok := relUnder(root, path); !ok {
+		return singleFileMatch{}, false, nil
+	}
+	metaPath := coworkMetaPathForTranscript(path)
+	if metaPath == "" || !isCoworkTranscriptPath(root, path) {
+		return singleFileMatch{}, false, nil
+	}
+	meta, err := readCoworkMetaStrict(metaPath)
+	if err != nil {
+		return singleFileMatch{}, false, err
+	}
+	return singleFileMatch{
+		Path: path, ProjectHint: coworkProjectName(meta),
+	}, true, nil
 }
 
 func coworkFingerprintSource(
@@ -301,6 +434,7 @@ func coworkProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

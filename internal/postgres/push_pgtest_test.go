@@ -803,6 +803,134 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 		"source-owned fields should still update")
 }
 
+func TestPushPreservesRecoverableWatcherTombstonesAcrossPG(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_source_missing_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	})
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+	syncer := &Sync{
+		pg: pg, local: local, machine: "test-machine",
+		schema: schema, schemaDone: true,
+	}
+	paths := map[string]string{}
+	for _, id := range []string{
+		"source-revive", "source-protected", "user-delete", "user-empty",
+	} {
+		path := filepath.Join(t.TempDir(), id+".jsonl")
+		paths[id] = path
+		mtime := time.Now().UnixNano()
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: id, Project: "project", Machine: "test-machine", Agent: "claude",
+			CreatedAt: "2026-07-14T00:00:00Z", FilePath: &path, FileMtime: &mtime,
+		}))
+	}
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err, "initial push")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	for _, id := range []string{"user-delete", "user-empty"} {
+		require.NoError(t, store.SoftDeleteSession(id), "PG user trash %s", id)
+	}
+	sources := make([]db.SessionSourcePath, 0, len(paths))
+	for _, path := range paths {
+		sources = append(sources, db.SessionSourcePath{
+			Agent: "claude", FilePath: path,
+		})
+	}
+	require.NoError(t, local.BaselineActiveSessionSourcePaths(
+		t.Context(), "test-machine", sources,
+	))
+	for id, path := range paths {
+		changed, tombstoneErr := local.SoftDeleteSessionSourceOwnership(
+			t.Context(), "test-machine", "claude", id, path,
+		)
+		require.NoError(t, tombstoneErr)
+		require.True(t, changed)
+	}
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err, "push source-missing state")
+
+	for _, id := range []string{"source-revive", "source-protected"} {
+		active, getErr := store.GetSession(t.Context(), id)
+		require.NoError(t, getErr)
+		assert.Nil(t, active, "%s must remain hidden while its source is missing", id)
+		var deleted bool
+		var cause sql.NullString
+		require.NoError(t, pg.QueryRow(`
+			SELECT deleted_at IS NOT NULL, deletion_cause
+			FROM sessions WHERE id = $1`, id,
+		).Scan(&deleted, &cause))
+		assert.True(t, deleted)
+		require.True(t, cause.Valid)
+		assert.Equal(t, "source_missing", cause.String)
+	}
+	trashed, err := store.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	trashIDs := sessionIDs(trashed)
+	assert.NotContains(t, trashIDs, "source-revive")
+	assert.NotContains(t, trashIDs, "source-protected")
+	assert.Contains(t, trashIDs, "user-delete")
+	assert.Contains(t, trashIDs, "user-empty")
+
+	restored, err := store.RestoreSession("source-protected")
+	require.NoError(t, err)
+	assert.Zero(t, restored, "PG restore must refuse watcher tombstones")
+	deleted, err := store.DeleteSessionIfTrashed("source-protected")
+	require.NoError(t, err)
+	assert.Zero(t, deleted, "PG permanent delete must refuse watcher tombstones")
+	deleted, err = store.DeleteSessionIfTrashed("user-delete")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted, "ordinary PG user trash remains deletable")
+
+	for _, id := range []string{"source-revive", "user-empty"} {
+		path := paths[id]
+		mtime := time.Now().UnixNano()
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: id, Project: "project", Machine: "test-machine", Agent: "claude",
+			CreatedAt: "2026-07-14T00:00:00Z", FilePath: &path, FileMtime: &mtime,
+		}), "revive local source %s", id)
+	}
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err, "push local source revival")
+
+	active, err := store.GetSession(t.Context(), "source-revive")
+	require.NoError(t, err)
+	require.NotNil(t, active, "recoverable source must become visible after revival")
+	var deletedAt sql.NullTime
+	var cause sql.NullString
+	require.NoError(t, pg.QueryRow(`
+		SELECT deleted_at, deletion_cause
+		FROM sessions WHERE id = 'source-revive'`,
+	).Scan(&deletedAt, &cause))
+	assert.False(t, deletedAt.Valid)
+	assert.False(t, cause.Valid)
+
+	trashed, err = store.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, sessionIDs(trashed), "user-empty",
+		"newer PG user trash must survive an older local revival")
+	emptied, err := store.EmptyTrash()
+	require.NoError(t, err)
+	assert.Equal(t, 1, emptied)
+	protected, err := store.GetSessionFull(t.Context(), "source-protected")
+	require.NoError(t, err)
+	assert.NotNil(t, protected,
+		"EmptyTrash must not purge a still-missing recoverable source")
+}
+
 func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 	pgURL := testPGURL(t)
 

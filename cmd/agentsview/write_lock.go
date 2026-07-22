@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,35 @@ func (l *writeOwnerLock) Close() error {
 	}
 	if err := l.lock.Unlock(); err != nil {
 		return fmt.Errorf("releasing write lock %s: %w", l.path, err)
+	}
+	return nil
+}
+
+// Release yields the write lock for a worker maintenance pass while keeping the
+// lock handle so Reacquire can retake the same path. Unlike Close, the owner is
+// expected to reacquire.
+func (l *writeOwnerLock) Release() error {
+	if l == nil || l.lock == nil {
+		return errors.New("release on nil write lock")
+	}
+	if err := l.lock.Unlock(); err != nil {
+		return fmt.Errorf("releasing write lock %s: %w", l.path, err)
+	}
+	return nil
+}
+
+// Reacquire retakes the write lock after a worker maintenance pass. It fails if
+// another process grabbed the lock while it was released.
+func (l *writeOwnerLock) Reacquire() error {
+	if l == nil || l.lock == nil {
+		return errors.New("reacquire on nil write lock")
+	}
+	locked, err := l.lock.TryLock()
+	if err != nil {
+		return fmt.Errorf("reacquiring write lock %s: %w", l.path, err)
+	}
+	if !locked {
+		return writeOwnerLockHeldError{path: l.path}
 	}
 	return nil
 }

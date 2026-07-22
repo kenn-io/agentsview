@@ -983,6 +983,18 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 	assert.Equal(t, count, progress[duckSessionPushBatchSize].MessagesDone)
 }
 
+func TestDuckSessionFingerprintIncludesDeletionCause(t *testing.T) {
+	base := db.Session{ID: "session", Machine: "machine"}
+	withCause := base
+	cause := "source_missing"
+	withCause.DeletionCause = &cause
+
+	assert.NotEqual(t,
+		duckSessionFingerprintFields(base, base.Machine),
+		duckSessionFingerprintFields(withCause, withCause.Machine),
+	)
+}
+
 func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 	base := db.Session{
 		ID:               "sess-001",

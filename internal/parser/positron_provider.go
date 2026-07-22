@@ -47,6 +47,10 @@ func (p *positronProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
 
+func (p *positronProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	return p.sources.DiscoverEach(ctx, yield)
+}
+
 func (p *positronProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -203,6 +207,34 @@ func (s positronSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func (s positronSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		workspaceRoot := filepath.Join(root, "workspaceStorage")
+		err := streamDirectoryEntries(ctx, workspaceRoot, func(entry os.DirEntry) error {
+			if !entry.IsDir() {
+				return nil
+			}
+			project := positronWorkspaceProject(root, entry.Name())
+			chatDir := filepath.Join(workspaceRoot, entry.Name(), "chatSessions")
+			return streamVSCodeSessionFiles(ctx, chatDir, project, AgentPositron, func(file DiscoveredFile) error {
+				source, ok := s.sourceRefWithProject(root, file.Path, file.Project)
+				if !ok {
+					return nil
+				}
+				source.ProjectHint = file.Project
+				return yield(source)
+			})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // discoverSessions finds all chat session files under a Positron User
@@ -567,6 +599,7 @@ func positronProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

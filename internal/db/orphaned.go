@@ -453,15 +453,36 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Copy user-managed metadata from the quiesced old DB. deleted_at
-	// is copied for all rows. display_name is overlaid ONLY for
+	// Copy user-managed metadata from the quiesced old DB. User-owned
+	// deleted_at is copied for all rows. Recoverable source_missing state is
+	// already carried by the pre-sync trash/orphan copy and must not re-hide a
+	// row that the fresh sync revived after its source reappeared. display_name
+	// is overlaid ONLY for
 	// user-owned rows: the fresh DB already holds re-parsed session_name
 	// values, so agent-owned and cleared rows must keep the fresh value.
 	// Probe columns first so older source DBs don't abort.
 	hasDisplayName := oldDBHasColumn(ctx, tx, "sessions", "display_name")
 	hasDeletedAt := oldDBHasColumn(ctx, tx, "sessions", "deleted_at")
+	hasDeletionCause := oldDBHasColumn(ctx, tx, "sessions", "deletion_cause")
 
-	if hasDeletedAt {
+	if hasDeletedAt && hasDeletionCause {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET deleted_at = CASE
+					WHEN old_s.deletion_cause = '`+deletionCauseSourceMissing+`'
+					THEN main.sessions.deleted_at
+					ELSE old_s.deleted_at
+				END,
+				deletion_cause = CASE
+					WHEN old_s.deletion_cause = '`+deletionCauseSourceMissing+`'
+					THEN main.sessions.deletion_cause
+					ELSE old_s.deletion_cause
+				END
+			FROM old_db.sessions old_s
+			WHERE main.sessions.id = old_s.id`); err != nil {
+			return fmt.Errorf("copying deletion state: %w", err)
+		}
+	} else if hasDeletedAt {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
 			SET deleted_at = old_s.deleted_at
@@ -731,7 +752,7 @@ func oldDBHasTable(
 
 // orphanSessionCols returns the comma-separated column list for
 // copying sessions from old_db, including display_name and
-// deleted_at only when the source schema has them.
+// deletion state only when the source schema has it.
 func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	cols := []string{
 		"id", "project", "machine", "agent", "first_message",
@@ -756,6 +777,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	}
 	if oldDBHasColumn(ctx, tx, "sessions", "deleted_at") {
 		cols = append(cols, "deleted_at")
+	}
+	if oldDBHasColumn(ctx, tx, "sessions", "deletion_cause") {
+		cols = append(cols, "deletion_cause")
 	}
 	cols = append(cols, "created_at")
 	for _, c := range []string{

@@ -1450,6 +1450,99 @@ func TestCodexProviderDiscoverDedupesLiveAndArchivedByUUID(t *testing.T) {
 	assert.NotEqual(t, archivedPath, discovered[0].DisplayPath)
 }
 
+func TestCodexProviderDiscoverEachYieldsDuplicateCandidates(t *testing.T) {
+	base := t.TempDir()
+	liveRoot := filepath.Join(base, "sessions")
+	archivedRoot := filepath.Join(base, "archived_sessions")
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+	livePath := writeCodexProviderSession(t, liveRoot, uuid, "live")
+	archivedPath := writeCodexProviderArchivedSession(t, archivedRoot, uuid, "archived")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots: []string{archivedRoot, liveRoot},
+	})
+	require.True(t, ok)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+
+	var paths []string
+	require.NoError(t, discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
+		paths = append(paths, source.DisplayPath)
+		return nil
+	}))
+
+	assert.ElementsMatch(t, []string{archivedPath, livePath}, paths)
+}
+
+func TestCodexProviderDiscoverEachIncludesNoncanonicalRollout(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(
+		root, "2026", "06", "11", "rollout-manually-restored.jsonl",
+	)
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229ef"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "Restore this session", tsEarlyS1),
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	changed, err := provider.SourcesForChangedPath(
+		t.Context(), ChangedPathRequest{Path: path, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	var streamed []SourceRef
+	require.NoError(t, discoverer.DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+
+	assert.Equal(t, []string{path}, sourceDisplayPaths(discovered))
+	assert.Equal(t, []string{path}, sourceDisplayPaths(changed))
+	assert.Equal(t, []string{path}, sourceDisplayPaths(streamed),
+		"streaming discovery must preserve direct-path rollout fallback parity")
+}
+
+func TestCodexProviderDiscoverEachExcludesNoncanonicalRolloutOutsideSupportedLayouts(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	path := filepath.Join(
+		root, "arbitrary", "nesting", "rollout-manually-restored.jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, discovered)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	var streamed []SourceRef
+	require.NoError(t, discoverer.DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+
+	assert.Empty(t, streamed,
+		"streaming discovery must preserve slice discovery's layout boundary")
+}
+
 func TestCodexProviderFindSourcePinsExactArchivedDuplicate(t *testing.T) {
 	base := t.TempDir()
 	liveRoot := filepath.Join(base, "sessions")

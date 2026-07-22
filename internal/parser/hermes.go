@@ -801,27 +801,50 @@ func readHermesStateMessagesForSession(
 func writeHermesStateSessionJSONL(
 	w io.Writer, stateDB, rawSessionID string,
 ) error {
+	ss, messages, selectedPath, err := readHermesStateSessionSource(
+		stateDB, rawSessionID,
+	)
+	if err != nil {
+		return err
+	}
+	if selectedPath != stateDB {
+		return copyHermesTranscriptFile(w, selectedPath)
+	}
+	return encodeHermesStateSessionJSONL(w, ss, messages)
+}
+
+func readHermesStateSessionSource(
+	stateDB, rawSessionID string,
+) (hermesStateSession, []hermesStateMessage, string, error) {
 	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
 	if err != nil {
-		return hermesStateLookupError{
+		return hermesStateSession{}, nil, "", hermesStateLookupError{
 			err: fmt.Errorf("open hermes state db: %w", err),
 		}
 	}
 	defer conn.Close()
+	return readHermesStateSessionSourceConn(conn, stateDB, rawSessionID)
+}
 
+// readHermesStateSessionSourceConn is readHermesStateSessionSource on an
+// already-open connection, so per-pass callers can reuse one state.db open
+// across every member instead of opening the database per session.
+func readHermesStateSessionSourceConn(
+	conn *sql.DB, stateDB, rawSessionID string,
+) (hermesStateSession, []hermesStateMessage, string, error) {
 	ss, found, err := readHermesStateSession(conn, rawSessionID)
 	if err != nil {
-		return hermesStateLookupError{err: err}
+		return hermesStateSession{}, nil, "", hermesStateLookupError{err: err}
 	}
 	if !found {
-		return fmt.Errorf(
+		return hermesStateSession{}, nil, "", fmt.Errorf(
 			"hermes session %s not found in %s: %w",
 			rawSessionID, stateDB, os.ErrNotExist,
 		)
 	}
 	messages, err := readHermesStateMessagesForSession(conn, rawSessionID)
 	if err != nil {
-		return hermesStateLookupError{err: err}
+		return hermesStateSession{}, nil, "", hermesStateLookupError{err: err}
 	}
 	selectedPath, _, _, _ := chooseHermesStateSessionSource(
 		ss,
@@ -831,10 +854,7 @@ func writeHermesStateSessionJSONL(
 		"",
 		"",
 	)
-	if selectedPath != stateDB {
-		return copyHermesTranscriptFile(w, selectedPath)
-	}
-	return encodeHermesStateSessionJSONL(w, ss, messages)
+	return ss, messages, selectedPath, nil
 }
 
 func copyHermesTranscriptFile(w io.Writer, path string) error {

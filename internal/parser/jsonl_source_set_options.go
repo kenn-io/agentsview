@@ -142,3 +142,15 @@ func WithForceReplace() JSONLOption {
 func WithCompanionFiles(fn func(transcriptPath string) []string) JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.CompanionFiles = fn }
 }
+
+// WithCompanionTranscript registers the inverse of WithCompanionFiles: given a
+// changed sidecar path, derive the owning transcript path directly. With the
+// inverse configured, a companion event resolves through the same per-path
+// lookup as a transcript event instead of scanning every discovered
+// transcript's companion list, keeping per-event work bounded by the changed
+// batch. Return ok=false when the path is not a recognizable companion.
+func WithCompanionTranscript(
+	fn func(companionPath string) (transcriptPath string, ok bool),
+) JSONLOption {
+	return func(o *JSONLSourceSetOptions) { o.CompanionTranscript = fn }
+}

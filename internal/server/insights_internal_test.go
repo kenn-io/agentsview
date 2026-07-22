@@ -2,13 +2,40 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+// TestGenerateInsightRejectsWriterClosedBeforeStream pins the maintenance-mode
+// UX: while a worker pass holds the write barrier, insight generation fails at
+// request time with the transient 503 + Retry-After instead of running for
+// minutes and then failing to save.
+func TestGenerateInsightRejectsWriterClosedBeforeStream(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	local, ok := srv.db.(*db.DB)
+	require.True(t, ok)
+	require.NoError(t, local.CloseWriter())
+	t.Cleanup(func() { require.NoError(t, local.ReopenWriter()) })
+
+	w := serveJSON(t, srv.Handler(), http.MethodPost, "/api/v1/insights/generate",
+		map[string]any{
+			"type":      "daily_activity",
+			"date_from": "2026-01-01",
+			"date_to":   "2026-01-01",
+		})
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"body: %s", w.Body.String())
+	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
+	assert.NotContains(t, w.Body.String(), "event:",
+		"the rejection must not open an SSE stream")
+}
 
 // TestActivityRangeSummaryUsesRequestTimezone confirms the insight activity
 // summary resolves its window in the request timezone, so a non-UTC viewer's

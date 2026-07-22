@@ -24,6 +24,7 @@ import (
 // same enclosing body.
 var triggerCalls = map[string]struct{}{
 	"db.Open":               {},
+	"db.OpenReadOnly":       {},
 	"postgres.Open":         {},
 	"postgres.NewStore":     {},
 	"postgres.New":          {},

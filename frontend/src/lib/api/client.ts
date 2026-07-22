@@ -130,6 +130,9 @@ function processFrame(
     onProgress?.(JSON.parse(data) as SyncProgress);
   } else if (event === "done") {
     return JSON.parse(data) as SyncStats;
+  } else if (event === "error") {
+    const payload = JSON.parse(data) as { error?: string };
+    throw new Error(payload.error ?? "Sync failed");
   }
   return undefined;
 }

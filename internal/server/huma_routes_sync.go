@@ -202,28 +202,85 @@ func (s *Server) humaTriggerSync(
 	if err != nil {
 		return nil, err
 	}
+	if err := s.rejectStaleArchiveForSync(); err != nil {
+		return nil, err
+	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			stats := s.runSyncWithResyncFallback(ctx, engine, nil)
+			stats, err := s.runSyncWithResyncFallback(ctx, engine, nil)
+			if err != nil {
+				writeHumaJSON(hctx, http.StatusInternalServerError,
+					apiErrorResponse{Message: err.Error()})
+				return
+			}
 			writeHumaJSON(hctx, http.StatusOK, stats)
 			return
 		}
-		stats := s.runSyncWithResyncFallback(ctx, engine, func(p syncpkg.Progress) {
+		stats, err := s.runSyncWithResyncFallback(ctx, engine, func(p syncpkg.Progress) {
 			stream.SendJSON("progress", p)
 		})
+		if err != nil {
+			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			return
+		}
 		stream.SendJSON("done", stats)
 	}}, nil
+}
+
+// ResyncRequiredHeader marks a /sync rejection that requires a full resync, so
+// the CLI can retry through /api/v1/resync instead of surfacing a raw HTTP
+// error. The body remains the human-readable explanation.
+const ResyncRequiredHeader = "X-Agentsview-Resync-Required"
+
+// rejectStaleArchiveForSync fails a worker-backed /sync when the archive's data
+// version changed, because the worker sync pass refuses to swap a stale archive
+// under the live daemon. It points the caller at /resync, which rebuilds through
+// the resync-build flow; it deliberately does not auto-trigger a resync. The
+// in-process path (no worker runner) safely resyncs a stale archive itself, so
+// the gate only applies when the worker-backed runner is wired.
+func (s *Server) rejectStaleArchiveForSync() error {
+	if s.localSyncRunner == nil {
+		return nil
+	}
+	local, ok := s.db.(*db.DB)
+	if !ok || !local.NeedsResync() {
+		return nil
+	}
+	return huma.ErrorWithHeaders(
+		apiError(
+			http.StatusConflict,
+			"archive data version changed; POST /api/v1/resync to rebuild the "+
+				"archive before syncing",
+		),
+		http.Header{ResyncRequiredHeader: []string{"true"}},
+	)
 }
 
 func (s *Server) runSyncWithResyncFallback(
 	ctx context.Context, engine *syncpkg.Engine,
 	progress func(syncpkg.Progress),
-) syncpkg.SyncStats {
+) (syncpkg.SyncStats, error) {
+	if s.localSyncRunner != nil {
+		// The worker-backed "sync" runner refuses a stale-version archive rather
+		// than swap it under the live daemon (see runSyncWorkerStartup); callers
+		// gate on NeedsResync before reaching here and route rebuilds through the
+		// resync-build flow. It only returns an error when the worker ran and
+		// reported failure, so propagate it to the caller instead of reporting
+		// the failed pass as a successful sync.
+		stats, err := s.localSyncRunner(ctx, progress)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("foreground local sync: %v", err)
+			}
+			return stats, err
+		}
+		return stats, nil
+	}
 	stats, _ := engine.SyncThenRun(
 		ctx, false, progress, func(bool) error { return nil },
 	)
-	return stats
+	return stats, nil
 }
 
 func (s *Server) humaTriggerResync(
@@ -237,13 +294,22 @@ func (s *Server) humaTriggerResync(
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			stats := s.runResyncWithFallback(ctx, engine, nil)
+			stats, err := s.runResyncWithFallback(ctx, engine, nil)
+			if err != nil {
+				writeHumaJSON(hctx, http.StatusInternalServerError,
+					apiErrorResponse{Message: err.Error()})
+				return
+			}
 			writeHumaJSON(hctx, http.StatusOK, stats)
 			return
 		}
-		stats := s.runResyncWithFallback(ctx, engine, func(p syncpkg.Progress) {
+		stats, err := s.runResyncWithFallback(ctx, engine, func(p syncpkg.Progress) {
 			stream.SendJSON("progress", p)
 		})
+		if err != nil {
+			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			return
+		}
 		stream.SendJSON("done", stats)
 	}}, nil
 }
@@ -251,11 +317,25 @@ func (s *Server) humaTriggerResync(
 func (s *Server) runResyncWithFallback(
 	ctx context.Context, engine *syncpkg.Engine,
 	progress func(syncpkg.Progress),
-) syncpkg.SyncStats {
+) (syncpkg.SyncStats, error) {
+	if s.localResyncRunner != nil {
+		// The worker-backed runner builds the replacement archive in a child
+		// process behind a write barrier and swaps it in. It only returns an
+		// error when the worker ran and reported failure, so propagate it to
+		// the caller instead of reporting the failed pass as a success.
+		stats, err := s.localResyncRunner(ctx, progress)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("foreground resync: %v", err)
+			}
+			return stats, err
+		}
+		return stats, nil
+	}
 	stats, _ := engine.SyncThenRun(
 		ctx, true, progress, func(bool) error { return nil },
 	)
-	return stats
+	return stats, nil
 }
 
 func (s *Server) humaSyncRemotes(
@@ -786,6 +866,8 @@ func (s *Server) resyncBeforeSessionSync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.runResyncWithFallback(ctx, engine, nil)
+	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
+		return err
+	}
 	return ctx.Err()
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/postgres"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // stubVectorPushSource is a no-op postgres.VectorPushSource: the gating test
@@ -410,6 +412,179 @@ func TestPushRoutesAreStreaming(t *testing.T) {
 		require.Contains(t, op.Responses, "200", path)
 		assertStreamingResponseContent(t, op.Responses["200"].Content)
 	}
+}
+
+// TestPushRoutesReturn503WhileWriterClosedForSSE pins that a push during the
+// write barrier is rejected before the stream body flushes a 200: the daemon
+// CLI always negotiates SSE, so the 503 + Retry-After must be decided up
+// front rather than emitted as a generic SSE error event.
+func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
+	s := testServer(t, 30*time.Second)
+	database := s.db.(*db.DB)
+	require.NoError(t, database.CloseWriter())
+	defer func() { assert.NoError(t, database.ReopenWriter()) }()
+
+	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
+		req := httptest.NewRequest(
+			http.MethodPost, path, strings.NewReader(`{"full":false}`),
+		)
+		req.Host = "127.0.0.1:0"
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code,
+			"%s body: %s", path, w.Body.String())
+		assert.Equal(t, "5", w.Header().Get("Retry-After"),
+			"%s: a writer-closed push must advertise Retry-After", path)
+	}
+}
+
+// TestSyncThenRunForPushWorkerRunnerRouting pins the daemon push coordinator:
+// with the worker-backed resync runner wired, full and stale-archive pushes
+// run the worker build-and-swap instead of an in-process archive-scale pass
+// (the on-disk session must NOT land in the archive, proving no direct
+// sync/resync ran in process), and the push work still runs afterwards with a
+// full push forced. Per-batch pushes and runner-less servers keep the
+// in-process SyncThenRun path, whose sync does land the session.
+func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
+	tests := []struct {
+		name          string
+		stale         bool
+		full          bool
+		wireRunner    bool
+		wantRunner    int
+		wantForceFull bool
+		wantSessions  int
+	}{
+		{
+			name:          "full push routes through worker resync runner",
+			full:          true,
+			wireRunner:    true,
+			wantRunner:    1,
+			wantForceFull: true,
+			wantSessions:  0,
+		},
+		{
+			name:          "stale archive push routes through worker resync runner",
+			stale:         true,
+			wireRunner:    true,
+			wantRunner:    1,
+			wantForceFull: true,
+			wantSessions:  0,
+		},
+		{
+			name:         "per-batch push stays in process",
+			wireRunner:   true,
+			wantRunner:   0,
+			wantSessions: 1,
+		},
+		{
+			name:          "full push without runner falls back in process",
+			full:          true,
+			wantForceFull: true,
+			wantSessions:  1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runnerCalls := 0
+			workCalls := 0
+			var opts []syncRouteFixtureOption
+			if tt.stale {
+				opts = append(opts, withStaleDB())
+			}
+			if tt.wireRunner {
+				opts = append(opts, withLocalResyncRunner(func(
+					context.Context, func(syncpkg.Progress),
+				) (syncpkg.SyncStats, error) {
+					runnerCalls++
+					assert.Zero(t, workCalls,
+						"the worker pass must complete before the push runs")
+					return syncpkg.SyncStats{}, nil
+				}))
+			}
+			f := newSyncRouteFixture(t, opts...)
+			f.writeClaudeSession(t, "proj/session.jsonl", "push coordinator")
+			engine := f.srv.syncEngineForLocal(f.db)
+			t.Cleanup(engine.Close)
+
+			err := f.srv.syncThenRunForPush(
+				context.Background(), engine, f.db, tt.full,
+				func(forceFull bool) error {
+					workCalls++
+					assert.Equal(t, tt.wantForceFull, forceFull)
+					return nil
+				},
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRunner, runnerCalls)
+			assert.Equal(t, 1, workCalls, "push work must run exactly once")
+			assertSessionCount(t, f.db, tt.wantSessions)
+		})
+	}
+}
+
+// TestSyncThenRunForPushRunnerErrorSkipsPush pins the failure contract: a
+// worker resync pass that ran and reported failure surfaces its error and the
+// push never runs against the unrebuilt archive.
+func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{}, errors.New("resync build reported failed")
+	}))
+	engine := f.srv.syncEngineForLocal(f.db)
+	t.Cleanup(engine.Close)
+
+	err := f.srv.syncThenRunForPush(
+		context.Background(), engine, f.db, true,
+		func(bool) error {
+			require.FailNow(t, "push work must not run after a failed worker pass")
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resync build reported failed")
+}
+
+// TestPGPushFullRoutesResyncThroughWorkerRunner is the handler-level twin of
+// the coordinator table test: a full pg push over HTTP invokes the wired
+// worker resync runner and never runs the archive-scale pass in process (the
+// on-disk session must not land in the archive).
+func TestPGPushFullRoutesResyncThroughWorkerRunner(t *testing.T) {
+	runnerCalls := 0
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		runnerCalls++
+		return syncpkg.SyncStats{}, nil
+	}))
+	f.writeClaudeSession(t, "proj/session.jsonl", "full push worker routing")
+	f.srv.ensurePricing = func(context.Context, *db.DB) error { return nil }
+
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/push/pg",
+		map[string]any{
+			"full": true,
+			"pg": map[string]any{
+				"url":            "postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable",
+				"schema":         "agentsview",
+				"machine_name":   "test",
+				"allow_insecure": false,
+			},
+		})
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"the push itself fails against the unreachable target; body: %s",
+		w.Body.String())
+	assert.Equal(t, 1, runnerCalls,
+		"a full push must run the worker-backed resync pass")
+	assertSessionCount(t, f.db, 0)
 }
 
 // TestNewPushProgressStreamSenderThrottles pins the SSE fan-out throttle: the

@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,46 +29,87 @@ type WarpSessionMeta struct {
 func ListWarpSessionMeta(
 	dbPath string,
 ) ([]WarpSessionMeta, error) {
+	var metas []WarpSessionMeta
+	err := ForEachWarpSessionMeta(
+		context.Background(), dbPath,
+		func(meta WarpSessionMeta) error {
+			metas = append(metas, meta)
+			return nil
+		},
+	)
+	return metas, err
+}
+
+func ForEachWarpSessionMeta(
+	ctx context.Context, dbPath string, yield func(WarpSessionMeta) error,
+) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
+		return nil
 	}
 
 	db, err := openWarpDB(dbPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer db.Close()
 
-	rows, err := db.Query(
+	rows, err := db.QueryContext(ctx,
 		`SELECT conversation_id, last_modified_at
 		 FROM agent_conversations`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"listing warp conversations: %w", err,
 		)
 	}
 	defer rows.Close()
 
-	var metas []WarpSessionMeta
 	for rows.Next() {
 		var id string
 		var lastModified string
 		if err := rows.Scan(
 			&id, &lastModified,
 		); err != nil {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"scanning warp session meta: %w", err,
 			)
 		}
 		mtime := parseWarpTimestamp(lastModified).UnixNano()
-		metas = append(metas, WarpSessionMeta{
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(WarpSessionMeta{
 			SessionID:   id,
-			VirtualPath: dbPath + "#" + id,
+			VirtualPath: VirtualSourcePath(dbPath, id),
 			FileMtime:   mtime,
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	return metas, rows.Err()
+	return rows.Err()
+}
+
+func warpSessionMeta(
+	ctx context.Context, dbPath, sessionID string,
+) (WarpSessionMeta, bool, error) {
+	db, err := openWarpDB(dbPath)
+	if err != nil {
+		return WarpSessionMeta{}, false, err
+	}
+	defer db.Close()
+	var lastModified string
+	err = db.QueryRowContext(ctx, `
+		SELECT last_modified_at FROM agent_conversations
+		WHERE conversation_id = ?
+	`, sessionID).Scan(&lastModified)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WarpSessionMeta{}, false, nil
+	}
+	if err != nil {
+		return WarpSessionMeta{}, false, err
+	}
+	return WarpSessionMeta{
+		SessionID: sessionID, VirtualPath: VirtualSourcePath(dbPath, sessionID),
+		FileMtime: parseWarpTimestamp(lastModified).UnixNano(),
+	}, true, nil
 }
 
 // parseWarpSession parses a single conversation by ID from
@@ -278,7 +321,7 @@ func buildWarpSession(
 		MessageCount:     len(parsed),
 		UserMessageCount: userCount,
 		File: FileInfo{
-			Path:  dbPath + "#" + c.id,
+			Path:  VirtualSourcePath(dbPath, c.id),
 			Mtime: parseWarpTimestamp(c.lastModifiedAt).UnixNano(),
 		},
 	}

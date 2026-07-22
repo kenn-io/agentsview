@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -181,6 +182,92 @@ func TestVibeProviderDiscoversSymlinkedSessionDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
+}
+
+// A followed session-directory symlink whose target cannot be resolved must
+// surface incomplete streaming discovery rather than reading as absent:
+// reconciliation treats a clean DiscoverEach as authoritative and would
+// tombstone every session beneath the symlink.
+func TestVibeProviderStreamingDiscoveryPropagatesSessionSymlinkErrors(t *testing.T) {
+	discoverEach := func(t *testing.T, root string) ([]string, error) {
+		t.Helper()
+		provider, ok := NewProvider(AgentVibe, ProviderConfig{
+			Roots: []string{root},
+		})
+		require.True(t, ok)
+		discoverer, ok := provider.(StreamingDiscoverer)
+		require.True(t, ok)
+		var yielded []string
+		err := discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
+			yielded = append(yielded, source.DisplayPath)
+			return nil
+		})
+		return yielded, err
+	}
+	writeHealthySession := func(t *testing.T, root string) string {
+		t.Helper()
+		path := filepath.Join(
+			root, "session_20260613_123456_healthy", "messages.jsonl",
+		)
+		writeSourceFile(t, path, vibeProviderMessagesFixture("healthy question"))
+		return path
+	}
+
+	t.Run("dangling session symlink", func(t *testing.T) {
+		root := t.TempDir()
+		healthy := writeHealthySession(t, root)
+		target := filepath.Join(t.TempDir(), "linked-session")
+		require.NoError(t, os.MkdirAll(target, 0o755))
+		link := filepath.Join(root, "session_20260613_123456_linked")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
+		require.NoError(t, os.RemoveAll(target))
+
+		_, err := discoverEach(t, root)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+
+		require.NoError(t, os.Remove(link))
+		yielded, err := discoverEach(t, root)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
+
+	t.Run("unstatable session symlink target", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory read permissions are not enforced on Windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses directory permissions")
+		}
+		root := t.TempDir()
+		healthy := writeHealthySession(t, root)
+		targetParent := t.TempDir()
+		target := filepath.Join(targetParent, "linked-session")
+		require.NoError(t, os.MkdirAll(target, 0o755))
+		link := filepath.Join(root, "session_20260613_123456_linked")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
+		require.NoError(t, os.Chmod(targetParent, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
+
+		_, err := discoverEach(t, root)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrPermission)
+		var incomplete DiscoveryIncompleteError
+		assert.ErrorAs(t, err, &incomplete)
+
+		require.NoError(t, os.Chmod(targetParent, 0o755))
+		yielded, err := discoverEach(t, root)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
+	})
 }
 
 func TestVibeProviderParse(t *testing.T) {

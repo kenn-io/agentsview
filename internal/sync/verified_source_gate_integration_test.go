@@ -283,7 +283,7 @@ func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T)
 	assert.Equal(t, 2, provider.fingerprintCalls,
 		"same-size rewrite with restored mtime must deep-verify")
 
-	classified := engine.classifyPaths([]string{file.Path})
+	classified := requireClassifyPaths(t, engine, []string{file.Path})
 	require.Len(t, classified, 1)
 	res := engine.processFile(context.Background(), classified[0])
 	require.NoError(t, res.err)

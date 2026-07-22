@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -16,9 +18,7 @@ func newRooCodeProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				def.Type,
 				cfg.Roots,
-				WithFileDiscovery(func(root string) []singleFileMatch {
-					return rooCodeDiscoverFiles(root)
-				}),
+				WithStreamingFileDiscovery(rooCodeDiscoverEach),
 				WithFileWatchRoots(func(roots []string) []WatchRoot {
 					return rooCodeWatchRoots(roots)
 				}),
@@ -41,20 +41,26 @@ func newRooCodeProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
-// rooCodeDiscoverFiles finds all RooCode session directories under a root.
-// root is the globalStorage directory; sessions live under <root>/tasks/<taskId>/.
-func rooCodeDiscoverFiles(root string) []singleFileMatch {
-	dirs := discoverRooCodeSessions(root)
-	matches := make([]singleFileMatch, 0, len(dirs))
-	for _, d := range dirs {
-		historyPath := filepath.Join(d.Path, "history_item.json")
-		if IsRegularFile(historyPath) {
-			matches = append(matches, singleFileMatch{
-				Path: historyPath,
-			})
+// rooCodeDiscoverEach streams the RooCode session sources under a root.
+// root is the globalStorage directory; sessions live under
+// <root>/tasks/<taskId>/history_item.json. A missing tasks directory is a
+// legitimately empty scope, but any other traversal failure propagates so the
+// sync engine treats the scope as incomplete instead of tombstoning every
+// baselined session against an authoritative empty enumeration.
+func rooCodeDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
+	tasksDir := filepath.Join(root, "tasks")
+	return streamDirectoryEntries(ctx, tasksDir, func(entry os.DirEntry) error {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), "_") {
+			return nil
 		}
-	}
-	return matches
+		historyPath := filepath.Join(tasksDir, entry.Name(), "history_item.json")
+		if !IsRegularFile(historyPath) {
+			return nil
+		}
+		return yield(singleFileMatch{Path: historyPath})
+	})
 }
 
 // rooCodeWatchRoots creates watch plans for each root.

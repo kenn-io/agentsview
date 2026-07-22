@@ -2599,6 +2599,56 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 	assert.Nil(t, out.PRsMerged, "PRsMerged want nil (no GHToken)")
 }
 
+// TestOutcomeStatsWriterCloseRaceDoesNotPanic guards the writer snapshot in
+// computeOutcomeStats: closing the writer for a maintenance pass concurrently
+// with the git outcome-stats path must fall back to the read-only cache and
+// never hand git.NewCache a nil writer pool (which would panic on first use).
+func TestOutcomeStatsWriterCloseRaceDoesNotPanic(t *testing.T) {
+	skipIfNoGit(t)
+	d := testDB(t)
+	ctx := context.Background()
+	repo := statsOutcomeRepo(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "race1", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: repo,
+	})
+
+	done := make(chan struct{})
+	toggleErr := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if err := d.CloseWriter(); err != nil {
+				toggleErr <- err
+				return
+			}
+			if err := d.ReopenWriter(); err != nil {
+				toggleErr <- err
+				return
+			}
+		}
+	})
+
+	for range 300 {
+		// Must never panic; a transient error while the writer is closed is fine.
+		_, _ = d.GetSessionStats(ctx, StatsFilter{
+			Since: "28d", IncludeGitOutcomes: true,
+		})
+	}
+	close(done)
+	wg.Wait()
+	select {
+	case err := <-toggleErr:
+		require.NoError(t, err, "writer toggling failed")
+	default:
+	}
+}
+
 // TestGetSessionStats_OutcomeStats_NoCwd verifies that sessions without
 // a recorded cwd leave OutcomeStats nil — a pure non-git workload must
 // not surface a fabricated all-zero outcome row. The JSON contract uses

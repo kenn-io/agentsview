@@ -1,11 +1,11 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -135,46 +135,60 @@ func ListKiroSQLiteSessionMeta(
 // ListSessionMeta returns one metadata row per logical conversation
 // using the store's existing SQLite handle.
 func (s *KiroSQLiteStore) ListSessionMeta() ([]KiroSQLiteSessionMeta, error) {
+	var metas []KiroSQLiteSessionMeta
+	err := s.ForEachSessionMeta(context.Background(), func(meta KiroSQLiteSessionMeta) error {
+		metas = append(metas, meta)
+		return nil
+	})
+	return metas, err
+}
+
+// ForEachSessionMeta streams one metadata row per logical conversation using
+// the store's existing SQLite handle. The query orders rows so callers never
+// need an archive-sized Go slice or membership map.
+func (s *KiroSQLiteStore) ForEachSessionMeta(
+	ctx context.Context, yield func(KiroSQLiteSessionMeta) error,
+) error {
 	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("kiro sqlite store is closed")
+		return fmt.Errorf("kiro sqlite store is closed")
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT conversation_id, MAX(updated_at)
 		  FROM conversations_v2
 		 GROUP BY conversation_id
+		 ORDER BY conversation_id
 	`)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"listing kiro sqlite sessions: %w", err,
 		)
 	}
 	defer rows.Close()
 
-	var metas []KiroSQLiteSessionMeta
 	for rows.Next() {
 		var id string
 		var updatedAt int64
 		if err := rows.Scan(&id, &updatedAt); err != nil {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"scanning kiro sqlite session meta: %w", err,
 			)
 		}
 		if id == "" {
 			continue
 		}
-		metas = append(metas, KiroSQLiteSessionMeta{
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(KiroSQLiteSessionMeta{
 			SessionID:   id,
 			VirtualPath: KiroSQLiteVirtualPath(s.dbPath, id),
 			FileMtime:   updatedAt * 1_000_000,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	sort.Slice(metas, func(i, j int) bool {
-		return metas[i].SessionID < metas[j].SessionID
-	})
-	return metas, nil
+	return nil
 }
 
 // KiroSQLiteSessionIDs returns the set of current-store logical

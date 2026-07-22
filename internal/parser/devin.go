@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -45,17 +46,28 @@ func devinDBPath(root string) string {
 // ListDevinSessionMeta returns lightweight metadata for all non-hidden Devin
 // sessions without parsing transcripts.
 func ListDevinSessionMeta(dbPath string) ([]DevinSessionMeta, error) {
+	var metas []DevinSessionMeta
+	err := ForEachDevinSessionMeta(context.Background(), dbPath, func(meta DevinSessionMeta) error {
+		metas = append(metas, meta)
+		return nil
+	})
+	return metas, err
+}
+
+func ForEachDevinSessionMeta(
+	ctx context.Context, dbPath string, yield func(DevinSessionMeta) error,
+) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
+		return nil
 	}
 
 	db, err := openDevinDB(dbPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       COALESCE(title, ''),
 		       COALESCE(working_directory, ''),
@@ -68,11 +80,10 @@ func ListDevinSessionMeta(dbPath string) ([]DevinSessionMeta, error) {
 		 ORDER BY COALESCE(last_activity_at, created_at, 0) DESC, id DESC
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("listing devin sessions: %w", err)
+		return fmt.Errorf("listing devin sessions: %w", err)
 	}
 	defer rows.Close()
 
-	var metas []DevinSessionMeta
 	for rows.Next() {
 		var meta DevinSessionMeta
 		var createdAtMS int64
@@ -87,7 +98,7 @@ func ListDevinSessionMeta(dbPath string) ([]DevinSessionMeta, error) {
 			&lastActivityMS,
 			&updatedAtMS,
 		); err != nil {
-			return nil, fmt.Errorf("scanning devin session meta: %w", err)
+			return fmt.Errorf("scanning devin session meta: %w", err)
 		}
 		meta.VirtualPath = VirtualSourcePath(dbPath, meta.RawSessionID)
 		meta.CreatedAt = devinUnixMilli(createdAtMS)
@@ -96,12 +107,15 @@ func ListDevinSessionMeta(dbPath string) ([]DevinSessionMeta, error) {
 		}
 		meta.UpdatedAt = devinUnixMilli(updatedAtMS)
 		meta.FileMtime = updatedAtMS * 1_000_000
-		metas = append(metas, meta)
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(meta); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating devin sessions: %w", err)
+		return fmt.Errorf("iterating devin sessions: %w", err)
 	}
-	return metas, nil
+	return nil
 }
 
 func openDevinDB(dbPath string) (*sql.DB, error) {

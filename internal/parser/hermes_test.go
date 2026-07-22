@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,6 +360,57 @@ func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBMissesSession(t *test
 		"child",
 	))
 	assert.Contains(t, buf.String(), "state db only has one message")
+}
+
+func TestWriteHermesSessionJSONL_FallsBackToStateMemberWhenStoredSourceMissing(
+	t *testing.T,
+) {
+	missingRoot := t.TempDir()
+	fallbackRoot := t.TempDir()
+	fallbackSessions := filepath.Join(fallbackRoot, "sessions")
+	require.NoError(t, os.MkdirAll(fallbackSessions, 0o755))
+	createHermesStateDB(t, fallbackRoot)
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf,
+		VirtualSourcePath(filepath.Join(missingRoot, "state.db"), "child"),
+		[]string{fallbackSessions},
+		"child",
+	))
+
+	out := buf.String()
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, "state db only has one message")
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+	}
+}
+
+func TestWriteHermesSessionJSONL_PreservesHashInTranscriptPath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state.db#profile")
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	body := strings.Join([]string{
+		`{"role":"session_meta","model":"gpt-4","timestamp":"2026-04-03T15:27:00Z"}`,
+		`{"role":"user","content":"hash path transcript","timestamp":"2026-04-03T15:28:00Z"}`,
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionsDir, "child.jsonl"),
+		[]byte(body),
+		0o644,
+	))
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf,
+		VirtualSourcePath(filepath.Join(t.TempDir(), "state.db"), "child"),
+		[]string{sessionsDir},
+		"child",
+	))
+	assert.Equal(t, body, buf.String())
 }
 
 func TestWriteHermesSessionJSONL_FallsBackToTranscriptWhenStateDBMissesSessionInSameRoot(t *testing.T) {

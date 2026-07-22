@@ -57,6 +57,46 @@ func TestCommandCodeProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+func TestCommandCodeProviderWatchRootsStayBounded(t *testing.T) {
+	root := t.TempDir()
+	transcript := filepath.Join(root, "project", "session.jsonl")
+	writeSourceFile(t, transcript, "{}\n")
+	companionCalls := 0
+	provider := &commandCodeProvider{
+		ProviderBase: ProviderBase{
+			Def:  AgentDef{Type: AgentCommandCode},
+			Caps: commandCodeProviderCapabilities(),
+		},
+		sources: NewDirectoryJSONLSourceSet(
+			AgentCommandCode,
+			[]string{root},
+			WithCompanionFiles(func(path string) []string {
+				companionCalls++
+				return []string{commandCodeMetaCompanionPath(path)}
+			}),
+		),
+	}
+
+	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.WatchRoots)
+	assert.Implements(t, (*WatchRootPlanner)(nil), provider)
+	roots, err := ResolveWatchRoots(context.Background(), provider)
+	require.NoError(t, err)
+	assert.Equal(t, []WatchRoot{{
+		Path:        root,
+		Recursive:   true,
+		DebounceKey: string(AgentCommandCode) + ":jsonl:" + root,
+	}}, roots)
+	assert.Zero(t, companionCalls,
+		"bounded root scheduling must not discover transcript companions")
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, "session.meta.json")
+	assert.Equal(t, 1, companionCalls,
+		"legacy WatchPlan must retain companion glob discovery")
+}
+
 func TestCommandCodeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	root := t.TempDir()
 	realProjectDir := filepath.Join(t.TempDir(), "real-project")

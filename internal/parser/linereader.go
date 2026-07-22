@@ -80,15 +80,27 @@ func releaseLineReader(lr *lineReader) {
 // or ("", false) at EOF or read error. After the loop, call Err()
 // to distinguish EOF from I/O failure.
 func (lr *lineReader) next() (string, bool) {
+	line, ok := lr.nextBytes()
+	if !ok {
+		return "", false
+	}
+	return string(line), true
+}
+
+// nextBytes returns the next line as storage borrowed from the reader. The
+// bytes remain valid only until the next call. Callers that retain a line must
+// copy it; callers that only classify or discard it can avoid allocating a
+// string proportional to the source record.
+func (lr *lineReader) nextBytes() ([]byte, bool) {
 	for {
-		line, err := lr.readLine()
+		line, err := lr.readLineBytes()
 		if err != nil {
 			if err != io.EOF {
 				lr.err = err
 			}
-			return "", false
+			return nil, false
 		}
-		if line != "" {
+		if len(line) != 0 {
 			return line, true
 		}
 		// Empty line or skipped oversized line — continue.
@@ -111,7 +123,7 @@ func (lr *lineReader) updateBytesRead() {
 	}
 }
 
-func (lr *lineReader) readLine() (string, error) {
+func (lr *lineReader) readLineBytes() ([]byte, error) {
 	lr.buf = lr.buf[:0]
 	oversized := false
 
@@ -122,13 +134,13 @@ func (lr *lineReader) readLine() (string, error) {
 				lr.updateBytesRead()
 				break
 			}
-			return "", err
+			return nil, err
 		}
 
 		if oversized {
 			if !isPrefix {
 				lr.updateBytesRead()
-				return "", nil // done skipping
+				return nil, nil // done skipping
 			}
 			continue
 		}
@@ -139,9 +151,9 @@ func (lr *lineReader) readLine() (string, error) {
 		if len(lr.buf) == 0 && !isPrefix {
 			lr.updateBytesRead()
 			if len(chunk) > lr.maxLen {
-				return "", nil
+				return nil, nil
 			}
-			return string(chunk), nil
+			return chunk, nil
 		}
 
 		lr.buf = append(lr.buf, chunk...)
@@ -151,7 +163,7 @@ func (lr *lineReader) readLine() (string, error) {
 			lr.buf = lr.buf[:0]
 			if !isPrefix {
 				lr.updateBytesRead()
-				return "", nil
+				return nil, nil
 			}
 			continue
 		}
@@ -162,7 +174,7 @@ func (lr *lineReader) readLine() (string, error) {
 		}
 	}
 
-	return string(lr.buf), nil
+	return lr.buf, nil
 }
 
 // readJSONLFrom opens a JSONL file, seeks to offset, and

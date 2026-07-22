@@ -557,6 +557,33 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 		"work must observe flushed signal fields before pushing")
 }
 
+// TestRunExclusiveFlushedFlushesSignalsBeforeWork mirrors the worker-backed
+// daemon push path: the sync ran in a worker process, so the push half runs
+// through RunExclusiveFlushed and must still observe flushed signal fields.
+func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "sig-flush-excl.jsonl", "hello")
+	fx.engine.SyncAll(context.Background(), nil)
+	sid := fx.sessionIDFor(t, path)
+
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"second write within interval should defer the recompute")
+
+	var seen int
+	err := fx.engine.RunExclusiveFlushed(func() error {
+		seen = secretLeakCount(t, fx, sid)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, seen,
+		"work must observe flushed signal fields before pushing")
+}
+
 func TestSignalSchedulerRealTimerFlushes(t *testing.T) {
 	var mu sync.Mutex
 	var runs int

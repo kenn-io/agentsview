@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func newVibeProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				AgentVibe,
 				cfg.Roots,
-				WithFileDiscovery(vibeDiscoverFiles),
+				WithStreamingFileDiscovery(vibeDiscoverEach),
 				WithFileWatchRoots(vibeWatchRoots),
 				WithFileChangedPathClassifier(vibeClassifyPath),
 				WithFileLookup(vibeFindFile),
@@ -32,38 +33,28 @@ func newVibeProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
-func vibeDiscoverFiles(root string) []singleFileMatch {
-	var out []singleFileMatch
-	for _, path := range discoverVibeSessionPaths(root) {
-		if match, ok := vibeStrictMatch(root, path); ok {
-			out = append(out, match)
-		}
-	}
-	return out
-}
-
-// discoverVibeSessionPaths finds all Vibe messages.jsonl paths under root.
-// Symlinked session directories are followed (matching the watcher), but only
-// session_-prefixed directories that hold a regular messages.jsonl qualify.
-func discoverVibeSessionPaths(root string) []string {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	var paths []string
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, root) {
-			continue
-		}
+func vibeDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
+	return streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
 		if !isVibeSessionDirName(entry.Name()) {
-			continue
+			return nil
 		}
-		messagesPath := filepath.Join(root, entry.Name(), "messages.jsonl")
-		if isVibeMessagesFile(messagesPath) {
-			paths = append(paths, messagesPath)
+		isSessionDir, dirErr := streamingDirCandidateOrIncomplete(
+			AgentVibe, "Vibe session directory", entry, root,
+		)
+		if dirErr != nil {
+			return dirErr
 		}
-	}
-	return paths
+		if !isSessionDir {
+			return nil
+		}
+		path := filepath.Join(root, entry.Name(), "messages.jsonl")
+		if match, ok := vibeStrictMatch(root, path); ok {
+			return yield(match)
+		}
+		return nil
+	})
 }
 
 func vibeWatchRoots(roots []string) []WatchRoot {
@@ -280,6 +271,7 @@ func vibeProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
+			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,

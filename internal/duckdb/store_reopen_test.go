@@ -276,6 +276,51 @@ func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
 		errDetail)
 }
 
+// TestStoreCloseWaitsForInFlightReplacementCheck races Store.Close against a
+// replacement check that is mid-open. The whole check registers with the
+// Store's lifecycle before it opens anything (see beginReplacementCheck), so
+// the moment Close returns no reopen alias may remain on disk and no handle
+// may be created afterward. Without that registration only swapHandle's tail
+// joined s.retiring, so Close could return while the check was still opening
+// or validating a replacement, leaving a fresh handle and alias to outlive
+// the "fully closed" contract. There is no delay-injection seam, so a tight
+// loop of real check/Close races provides the interleavings.
+func TestStoreCloseWaitsForInFlightReplacementCheck(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "src-a.duckdb")
+	srcB := filepath.Join(dir, "src-b.duckdb")
+	buildMirrorFixture(t, srcA, "gen-a")
+	buildMirrorFixtureAt(t, srcB, "gen-b")
+	path := filepath.Join(dir, "m.duckdb")
+	require.NoError(t, os.Link(srcA, path))
+
+	// Each iteration replaces path with the source it is not currently
+	// hardlinked to, so the check always sees a changed file identity.
+	sources := [2]string{srcB, srcA}
+	for i := range 25 {
+		store, err := NewStore(path)
+		require.NoError(t, err)
+
+		tmp := filepath.Join(dir, fmt.Sprintf("swap-%d.duckdb", i))
+		require.NoError(t, os.Link(sources[i%2], tmp))
+		require.NoError(t, os.Rename(tmp, path))
+
+		checkDone := make(chan struct{})
+		go func() {
+			defer close(checkDone)
+			store.checkMirrorReplacement(context.Background(), nil)
+		}()
+		runtime.Gosched()
+		require.NoError(t, store.Close())
+		assert.Zero(t, countReopenAliasFiles(t, dir),
+			"Close must not return while a replacement check still holds a reopen alias (iteration %d)", i)
+		<-checkDone
+	}
+	assert.Zero(t, countReopenAliasFiles(t, dir),
+		"no reopen alias may survive once every check has finished")
+}
+
 // TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement extends
 // TestStoreKeepsOldHandleWhenReplacementIncompatible: after the watcher
 // rejects one incompatible replacement and reports it via onEvent, it must

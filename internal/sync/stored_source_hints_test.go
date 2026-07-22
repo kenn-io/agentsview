@@ -14,7 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 type hintRecordingFactory struct {
@@ -55,6 +54,14 @@ func (p *hintRecordingProvider) SourcesForChangedPath(
 	}}, nil
 }
 
+func (p *hintRecordingProvider) StoredSourceHintScopes(
+	req parser.ChangedPathRequest,
+) []parser.StoredSourceHintScope {
+	return []parser.StoredSourceHintScope{{
+		Path: req.Path, IncludeVirtualMembers: true,
+	}}
+}
+
 func (p *hintRecordingProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
 	return parser.ParseOutcome{}, nil
 }
@@ -72,7 +79,7 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 			root := t.TempDir()
 			changedPath := filepath.Join(root, "container.db")
 			require.NoError(t, os.WriteFile(changedPath, []byte("fixture"), 0o600))
-			persistedPath := filepath.Join(root, "archive", "stored#member")
+			persistedPath := changedPath + "#stored"
 			database := dbtest.OpenTestDB(t)
 			require.NoError(t, database.UpsertSession(db.Session{
 				ID: "hint-agent:stored", Agent: "hint-agent", Project: "fixture",
@@ -94,7 +101,7 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 				},
 			}
 
-			files := engine.classifyProviderChangedPath(changedPath)
+			files := requireClassifyProviderChangedPath(t, engine, changedPath)
 
 			require.Len(t, files, 1)
 			require.Len(t, seen, 1)
@@ -107,81 +114,50 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 	}
 }
 
-func TestProviderChangedPathStoredHintRootsTraeScopesToContainer(t *testing.T) {
-	root := t.TempDir()
-	workspaceWatchRoot := filepath.Join(root, "workspaceStorage")
-	globalWatchRoot := filepath.Join(root, "globalStorage")
-
-	workspaceManifest := filepath.Join(
-		workspaceWatchRoot, "hash-a", "workspace.json",
-	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(workspaceManifest), 0o755))
-	assert.Equal(
-		t,
-		[]string{filepath.Join(workspaceWatchRoot, "hash-a", "state.vscdb")},
-		providerChangedPathStoredHintRoots(
-			parser.AgentTrae, workspaceWatchRoot, workspaceManifest,
-		),
-	)
-
-	globalDB := filepath.Join(globalWatchRoot, "state.vscdb")
-	require.NoError(t, os.MkdirAll(filepath.Dir(globalDB), 0o755))
-	assert.Equal(
-		t,
-		[]string{globalDB},
-		providerChangedPathStoredHintRoots(
-			parser.AgentTrae, globalWatchRoot, globalDB+"-wal",
-		),
-	)
-}
-
-func TestClassifyCodexChangedPathAllocationsStayBounded(t *testing.T) {
+func TestClassifyStoredHintProviderChangedPathAllocationsStayBoundedByContainer(t *testing.T) {
 	measure := func(t *testing.T, hintCount int) float64 {
 		t.Helper()
-		root := t.TempDir()
-		path := filepath.Join(root, "rollout-2026-07-11T10-00-00-alloc.jsonl")
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON(
-				"alloc", "/workspace/agentsview", "codex_cli_rs", "2026-07-11T10:00:00Z",
-			),
-			testjsonl.CodexMsgJSON("user", "measure allocations", "2026-07-11T10:00:01Z"),
-		)
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		root := filepath.Join(t.TempDir(), "Windsurf", "User")
+		path := filepath.Join(root, "workspaceStorage", "changed", "state.vscdb")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeSyncWindsurfStateDB(t, path, windsurfSyncPayload("live", "reply"))
 		database := dbtest.OpenTestDB(t)
 		for i := range hintCount {
-			hint := filepath.Join(root, "archive", fmt.Sprintf("%04d.jsonl", i))
+			hint := fmt.Sprintf("%s-archive-%04d#archived", path, i)
 			require.NoError(t, database.UpsertSession(db.Session{
-				ID: fmt.Sprintf("codex:hint-%04d", i), Agent: string(parser.AgentCodex),
+				ID: fmt.Sprintf("windsurf:hint-%04d", i), Agent: string(parser.AgentWindsurf),
 				Project: "archive", Machine: "local", FilePath: strPtr(hint),
 			}))
 		}
 		engine := &Engine{
 			db: database, machine: "local",
-			agentDirs:         map[parser.AgentType][]string{parser.AgentCodex: {root}},
+			agentDirs:         map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
 			providerFactories: providerFactoryMap(parser.ProviderFactories()),
 			providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-				parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+				parser.AgentWindsurf: parser.ProviderMigrationProviderAuthoritative,
 			},
 		}
-		warm := engine.classifyProviderChangedPath(path)
+		warm := requireClassifyProviderChangedPath(t, engine, path)
 		require.Len(t, warm, 1)
-		assert.Equal(t, path, warm[0].Path)
-		assert.Equal(t, parser.AgentCodex, warm[0].Agent)
+		assert.Equal(t, path+"#live", warm[0].Path)
+		assert.Equal(t, parser.AgentWindsurf, warm[0].Agent)
 
 		var got []parser.DiscoveredFile
+		var classifyErr error
 		allocs := testing.AllocsPerRun(5, func() {
-			got = engine.classifyProviderChangedPath(path)
+			got, classifyErr = engine.classifyProviderChangedPath(t.Context(), path)
 		})
+		require.NoError(t, classifyErr)
 		require.Len(t, got, 1)
-		assert.Equal(t, path, got[0].Path)
-		assert.Equal(t, parser.AgentCodex, got[0].Agent)
+		assert.Equal(t, path+"#live", got[0].Path)
+		assert.Equal(t, parser.AgentWindsurf, got[0].Agent)
 		return allocs
 	}
 
 	smallAllocs := measure(t, 10)
 	largeAllocs := measure(t, 2000)
 	assert.LessOrEqual(t, largeAllocs, smallAllocs*2,
-		"stored archives must not scale Codex changed-path allocations")
+		"unrelated stored containers must not scale changed-path allocations")
 }
 
 func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.T) {
@@ -200,7 +176,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				_, err = conn.Exec(`DELETE FROM conversations WHERE conversation_id = 'conv-001'`)
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
-				return root, path, path + "#conv-001"
+				return root, path + "-wal", path + "#conv-001"
 			},
 		},
 		{
@@ -217,7 +193,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 					folder_paths TEXT, folder_paths_order TEXT, created_at TEXT)`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
-				return root, path, parser.ZedSQLiteVirtualPath(path, "deleted")
+				return root, path + "-shm", parser.ZedSQLiteVirtualPath(path, "deleted")
 			},
 		},
 		{
@@ -232,7 +208,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				_, err = conn.Exec(`DELETE FROM sessions WHERE id = 'deleted'`)
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
-				return root, path, path + "#deleted"
+				return root, path + "-wal", path + "#deleted"
 			},
 		},
 		{
@@ -259,7 +235,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				_, err = store.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = 'deleted'`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
-				return root, path, parser.KiroSQLiteVirtualPath(path, "deleted")
+				return root, path + "-shm", parser.KiroSQLiteVirtualPath(path, "deleted")
 			},
 		},
 		{
@@ -270,7 +246,9 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 				writeSyncWindsurfStateDB(t, path, windsurfSyncPayload("deleted", "reply"))
 				updateSyncWindsurfStateDB(t, path, `{}`)
-				return root, path, path + "#deleted"
+				manifestPath := filepath.Join(filepath.Dir(path), "workspace.json")
+				require.NoError(t, os.WriteFile(manifestPath, []byte(`{"folder":"fixture"}`), 0o600))
+				return root, manifestPath, path + "#deleted"
 			},
 		},
 		{
@@ -306,7 +284,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				},
 			}
 
-			files := engine.classifyProviderChangedPath(changedPath)
+			files := requireClassifyProviderChangedPath(t, engine, changedPath)
 			var tombstone parser.DiscoveredFile
 			for _, file := range files {
 				if file.Path == deletedPath {

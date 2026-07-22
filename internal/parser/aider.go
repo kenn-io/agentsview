@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -596,22 +597,98 @@ func parseAiderRunWithID(
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
 	}
-	data, err := os.ReadFile(path)
+	run, found, err := scanAiderRun(path, idx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, nil, err
 	}
-	runs := splitAiderRuns(string(data))
-	if idx < 0 || idx >= len(runs) {
+	if !found {
 		return nil, nil, nil
 	}
-	ordinals := aiderEqualHeaderOrdinals(runs)
+	ordinal, err := aiderHeaderOrdinalAt(path, idx, run.rawHeader)
+	if err != nil {
+		return nil, nil, err
+	}
 	sess, msgs := buildAiderRunSession(
-		path, idPath, machine, info, runs[idx], idx, ordinals[idx],
+		path, idPath, machine, info, run, idx, ordinal,
 	)
 	if sess == nil {
 		return nil, nil, nil
 	}
 	return sess, msgs, nil
+}
+
+func scanAiderRun(path string, target int) (aiderRun, bool, error) {
+	if target < 0 {
+		return aiderRun{}, false, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return aiderRun{}, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
+	idx := -1
+	var run aiderRun
+	var body strings.Builder
+	for scanner.Scan() {
+		line := strings.TrimSuffix(scanner.Text(), "\r")
+		if strings.HasPrefix(line, aiderHeaderPrefix) {
+			if idx == target {
+				run.body = body.String()
+				return run, true, nil
+			}
+			idx++
+			if idx == target {
+				raw := strings.TrimSpace(
+					strings.TrimPrefix(line, aiderHeaderPrefix),
+				)
+				run = aiderRun{rawHeader: raw}
+				run.started, run.hasTime = parseAiderTimestamp(raw)
+				body.Reset()
+			}
+			continue
+		}
+		if idx == target {
+			body.WriteString(line)
+			body.WriteByte('\n')
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return aiderRun{}, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if idx == target {
+		run.body = body.String()
+		return run, true, nil
+	}
+	return aiderRun{}, false, nil
+}
+
+func aiderHeaderOrdinalAt(path string, target int, rawHeader string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
+	idx, ordinal := -1, 0
+	for scanner.Scan() {
+		line := strings.TrimSuffix(scanner.Text(), "\r")
+		if !strings.HasPrefix(line, aiderHeaderPrefix) {
+			continue
+		}
+		idx++
+		if idx >= target {
+			break
+		}
+		if strings.TrimSpace(
+			strings.TrimPrefix(line, aiderHeaderPrefix),
+		) == rawHeader {
+			ordinal++
+		}
+	}
+	return ordinal, scanner.Err()
 }
 
 // parseAiderRuns reads a history file once and parses every run into its
