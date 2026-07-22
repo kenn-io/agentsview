@@ -354,6 +354,37 @@ func TestOMPProviderDiscoversNestedSubagents(t *testing.T) {
 	assert.Equal(t, "DeepScout", deep.SessionName)
 }
 
+func TestOMPProviderFindSourceByNestedSubagentRawID(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "-repos-x")
+	stem := "2026-07-14T06-45-53-798Z_parent-uuid"
+	mainPath := filepath.Join(proj, stem+".jsonl")
+	subPath := filepath.Join(proj, stem, "Scout.jsonl")
+	writeSourceFile(t, mainPath, ompMainFixture("parent-uuid"))
+	writeSourceFile(t, subPath, ompSubagentFixture("child-uuid"))
+
+	provider, ok := NewProvider(AgentOMP, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "child-uuid",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, subPath, found.DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: found,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "omp:child-uuid", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "omp:parent-uuid", outcome.Results[0].Result.Session.ParentSessionID)
+}
+
 // TestOMPProviderMapsSubagentChangedPath verifies a filesystem event on a
 // nested subagent transcript resolves back to that subagent source so live
 // updates re-parse it.

@@ -93,6 +93,9 @@ func (p *piProvider) FindSource(
 	if req.RawSessionID == "" || !IsValidSessionID(req.RawSessionID) {
 		return SourceRef{}, false, nil
 	}
+	if p.Def.Type == AgentOMP {
+		return p.sourceForOMPHeaderSessionID(ctx, req.RawSessionID)
+	}
 	for _, root := range p.Config.Roots {
 		source, ok, err := p.sourceForSessionID(ctx, root, req.RawSessionID)
 		if err != nil || ok {
@@ -125,6 +128,29 @@ func (p *piProvider) sourceForSessionID(
 			return SourceRef{}, false, err
 		}
 		if ok {
+			return source, true, nil
+		}
+	}
+	return SourceRef{}, false, nil
+}
+
+func (p *piProvider) sourceForOMPHeaderSessionID(
+	ctx context.Context,
+	sessionID string,
+) (SourceRef, bool, error) {
+	sources, err := p.sources.Discover(ctx)
+	if err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, source := range sources {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
+		}
+		src, ok := source.Opaque.(JSONLSource)
+		if !ok {
+			continue
+		}
+		if ompHeaderSessionID(src.Path) == sessionID {
 			return source, true, nil
 		}
 	}
