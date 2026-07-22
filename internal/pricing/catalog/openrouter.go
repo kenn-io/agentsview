@@ -45,15 +45,15 @@ func FetchOpenRouterPricing() ([]ModelPricing, error) {
 }
 
 type openrouterEntry struct {
-	ID         string  `json:"id"`
+	ID           string `json:"id"`
 	Architecture struct {
 		Modality string `json:"modality"`
 	} `json:"architecture"`
 	Pricing struct {
-		Prompt            string `json:"prompt"`
-		Completion        string `json:"completion"`
-		InputCacheRead    string `json:"input_cache_read"`
-		InputCacheWrite   string `json:"input_cache_write"`
+		Prompt          string `json:"prompt"`
+		Completion      string `json:"completion"`
+		InputCacheRead  string `json:"input_cache_read"`
+		InputCacheWrite string `json:"input_cache_write"`
 	} `json:"pricing"`
 }
 
@@ -84,14 +84,6 @@ func ParseOpenRouterPricing(data []byte) ([]ModelPricing, error) {
 	// an ambiguous unqualified row.
 	suffixCounts := make(map[string]int)
 	for _, e := range envelope.Data {
-		if bare := bareSuffix(e.ID); bare != "" && bare != e.ID {
-			suffixCounts[bare]++
-		}
-	}
-	for _, e := range envelope.Data {
-		if !producesText(e.Architecture.Modality) {
-			continue
-		}
 		if bare := bareSuffix(e.ID); bare != "" && bare != e.ID {
 			suffixCounts[bare]++
 		}
@@ -139,6 +131,26 @@ func bareSuffix(id string) string {
 		return ""
 	}
 	return id[i+1:]
+}
+
+// producesText reports whether an OpenRouter modality string
+// describes a model whose output side is text. The earlier strict
+// text->text filter dropped multimodal-input, text-output models
+// like `minimax/minimax-m3` (text+image+video->text) and
+// `moonshotai/kimi-k2.5` (text+image->text) — the very models
+// users reach via bare names such as `MiniMax-M3`. They still bill
+// prompt/completion in tokens, so the filter is output-side only.
+// An empty modality is treated as text->text since OpenRouter
+// omits the field for plain text models.
+func producesText(modality string) bool {
+	if modality == "" {
+		return true
+	}
+	i := strings.Index(modality, "->")
+	if i < 0 {
+		return false
+	}
+	return strings.Contains(modality[i+2:], "text")
 }
 
 // parsePricePerToken turns OpenRouter's quoted string

@@ -423,6 +423,26 @@ func periodicPricingRefresh(
 	}
 }
 
+// upsertPricing converts merged catalog rates to db.ModelPricing
+// rows and upserts them. Used by refreshPricingFromSources, which
+// fans out to multiple upstream catalogs and merges before writing
+// a single batch.
+func upsertPricing(
+	database *db.DB, prices []pricing.ModelPricing,
+) error {
+	dbPrices := make([]db.ModelPricing, len(prices))
+	for i, p := range prices {
+		dbPrices[i] = db.ModelPricing{
+			ModelPattern:         p.ModelPattern,
+			InputPerMTok:         p.InputPerMTok,
+			OutputPerMTok:        p.OutputPerMTok,
+			CacheCreationPerMTok: p.CacheCreationPerMTok,
+			CacheReadPerMTok:     p.CacheReadPerMTok,
+		}
+	}
+	return database.UpsertModelPricing(dbPrices)
+}
+
 func seedFallbackPricing(database *db.DB) error {
 	const metaKey = "_fallback_version"
 	stored, err := database.GetPricingMeta(metaKey)
