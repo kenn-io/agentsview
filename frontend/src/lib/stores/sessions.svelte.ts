@@ -385,11 +385,10 @@ class SessionsStore {
       issuedAtIndexOrdinal: number;
       committedAtTick: number;
       // For deleted commits: whether the tombstone actually removed a
-      // sidebar row, and whether that row counted as a root group. Revival
-      // restores only what was removed — a cache-only session excluded by
-      // the filter must not be injected into the list.
+      // sidebar row. Revival restores a row only if one was removed — a
+      // cache-only session excluded by the filter must not be injected
+      // into the list. Root status is recomputed at append time.
       removedRow: boolean;
-      removedRoot: boolean;
     }
   >();
   // Generations are globally unique (not per-id counters) so pruning an
@@ -779,10 +778,14 @@ class SessionsStore {
           const detailFresh =
             detailCommitGeneration === this.detailCommitGeneration(id) ||
             (latestCommit?.issuedAtIndexOrdinal ?? 0) < issuedAtIndexOrdinal;
+          // Commit for the active session even over a populated cache: the
+          // reconciled response carries any newer index-owned fields, and
+          // when a reload has excluded the row this is the only update the
+          // off-list session will get (the version check below discards the
+          // row merge, and no hydration retries an absent row).
           if (
             hydrated.id === this.activeSessionId &&
             !hydrated.is_index_only &&
-            this.activeSessionDetail?.id !== this.activeSessionId &&
             detailFresh
           ) {
             this.activeSessionDetail = hydrated;
@@ -1071,7 +1074,6 @@ class SessionsStore {
       issuedAtIndexOrdinal,
       committedAtTick: this.requestClock,
       removedRow: false,
-      removedRoot: false,
     });
     if (deleted) {
       this.committedDetailByRow.delete(id);
@@ -1100,8 +1102,15 @@ class SessionsStore {
       snapshot !== undefined &&
       !this.sessions.some((row) => row.id === id)
     ) {
+      const presentIds = new Set(this.sessions.map((row) => row.id));
       this.sessions = [...this.sessions, { ...snapshot }];
-      if (previous.removedRoot) {
+      // Root status is judged against the CURRENT rows: a revived
+      // descendant whose parent is still absent is a promoted orphan root
+      // now, whatever it was at deletion time.
+      if (
+        !snapshot.parent_session_id ||
+        !presentIds.has(snapshot.parent_session_id)
+      ) {
         this.total += 1;
       }
       this.scheduleIndexRefresh();
@@ -1258,8 +1267,6 @@ class SessionsStore {
       const commit = this.activeDetailCommitBySession.get(row.id);
       if (commit?.deleted) {
         commit.removedRow = true;
-        commit.removedRoot =
-          !row.parent_session_id || !presentIds.has(row.parent_session_id);
       }
     }
     return subtree;

@@ -2946,22 +2946,36 @@ describe("SessionsStore", () => {
     });
 
     it("does not let a superseded hydration overwrite fresher active detail", async () => {
-      // Active session backed by fresh cache via a navigation fetch.
       mockSidebarIndex([]);
       await sessions.load();
+
+      // A hydration is issued first and stays in flight...
+      const staleVersion = (sessions as any).sidebarIndexVersion - 1;
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = (sessions as any).hydrateVisibleSessions(
+        ["sel"],
+        staleVersion,
+      );
+      await Promise.resolve();
+
+      // ...then a navigation commits fresher detail for the same session.
       vi.mocked(api.getSession).mockResolvedValueOnce(
         makeSession({ id: "sel", project: "proj-a", first_message: "FRESH" }),
       );
       await sessions.navigateToSession("sel");
       expect(sessions.activeSession?.first_message).toBe("FRESH");
 
-      // A superseded (older-version) hydration resolves for the same id; its
-      // version check fails, so it must not replace the newer cached detail.
-      const staleVersion = (sessions as any).sidebarIndexVersion - 1;
-      vi.mocked(api.getSession).mockResolvedValueOnce(
+      // The earlier-issued hydration resolves late; its response predates
+      // the navigation's commit and must not replace the newer detail.
+      resolveHydration(
         makeSession({ id: "sel", project: "proj-a", first_message: "STALE" }),
       );
-      await (sessions as any).hydrateVisibleSessions(["sel"], staleVersion);
+      await hydration;
 
       expect(sessions.activeSession?.first_message).toBe("FRESH");
     });
@@ -5024,6 +5038,43 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("again");
       expect(sessions.sessions.length).toBe(0);
       expect(sessions.total).toBe(0);
+    });
+
+    it("updates a populated cache from a hydration after an excluding reload", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "v1" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+      expect(sessions.activeSession?.first_message).toBe("v1");
+
+      // A messages event invalidates hydration caches and a fresh hydration
+      // is issued...
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+
+      // ...then a reload excludes the active row from the sidebar.
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load({ force: true });
+
+      // The hydration resolves with newer detail. The populated (older)
+      // cache is now the only thing backing the off-list session, and no
+      // retry will come — the fresh response must replace it.
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "v2" }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.first_message).toBe("v2");
     });
 
     it("ignores a stale hydration resolving after a newer refresh", async () => {
