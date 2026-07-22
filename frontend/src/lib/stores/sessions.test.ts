@@ -3866,6 +3866,109 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("detail-2");
     });
 
+    it("lets a detail read issued after an index request keep its fields", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // An index reload is issued first...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+
+      // ...then a refresh is issued, observing a rename the reload's older
+      // server snapshot cannot contain. The reload commits first.
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      // The index committed after the refresh began, but its request was
+      // issued before the refresh's — its snapshot is older, so the
+      // later-issued refresh response must apply wholesale.
+      resolveRefresh(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "fresh-rename",
+          first_message: "detail-2",
+        }),
+      );
+      await refresh;
+
+      expect(sessions.activeSession?.display_name).toBe("fresh-rename");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.display_name,
+      ).toBe("fresh-rename");
+    });
+
+    it("chases again when a second rename cancels the enrichment fetch", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network"));
+      await sessions.navigateToSession("sel");
+
+      // First rename on the empty cache commits an interim snapshot and
+      // starts an enrichment fetch, which stays in flight...
+      vi.mocked(api.renameSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", display_name: "one" }),
+      );
+      let resolveChase!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveChase = r;
+        }),
+      );
+      await sessions.renameSession("sel", "one");
+
+      // ...when a second rename cancels it. The cache is still only the
+      // interim rename shape, so a fresh enrichment fetch must be issued —
+      // otherwise the detail-only fields never arrive.
+      vi.mocked(api.renameSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", display_name: "two" }),
+      );
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "sel",
+          project: "proj-b",
+          display_name: "two",
+          first_message: "enriched-detail",
+        }),
+      );
+      await sessions.renameSession("sel", "two");
+      await new Promise((r) => setTimeout(r, 0));
+
+      // The cancelled first chase resolving late must stay discarded.
+      resolveChase(
+        makeSession({ id: "sel", display_name: "one", first_message: "stale" }),
+      );
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(sessions.activeSession?.display_name).toBe("two");
+      expect(sessions.activeSession?.first_message).toBe("enriched-detail");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

@@ -388,18 +388,22 @@ class SessionsStore {
   // navigation/refresh commits stay unconditional because the coordinator
   // already serializes them against each other.
   private indexRequestOrdinal = 0;
-  // Commit-order counter for sidebar index requests, bumped when a loader
-  // publishes its rows, plus a per-row stamp of the commit that last
+  // Per-row stamp of the index REQUEST ordinal whose commit last
   // re-published each row. A detail response (navigation/refresh/hydration)
-  // resolving after an index commit that re-listed ITS row may predate that
-  // index's server snapshot: its detail-owned fields still apply, but
-  // index-owned fields (display_name, counts, timestamps) must not revert
-  // the committed row — reconcileDetailResponse keeps the row's index
-  // fields in that case. A commit that did not re-list the row (an
-  // unrelated loadMore page) says nothing about it, so the response still
-  // applies wholesale.
-  private indexCommitOrdinal = 0;
+  // defers its index-owned fields (display_name, counts, timestamps) to the
+  // row only when the stamping index request was issued AFTER the detail
+  // request began — then the index's server snapshot is the newer one. An
+  // index issued before the detail request, or a commit that never re-listed
+  // the row (an unrelated loadMore page), says nothing newer, so the
+  // response applies wholesale. Together with the commit records above this
+  // makes request-issue order the single freshness rule in both directions.
   private indexCommitByRow = new Map<string, number>();
+  // True while activeSessionDetail is a fabricated rename snapshot (the
+  // rename endpoint returns the DB-session shape without detail-only
+  // fields). Cleared by any read-derived commit for the active session;
+  // a rename seeing it still set re-issues the enrichment fetch, so rapid
+  // renames cannot cancel the only fetch and strand the interim shape.
+  private interimActiveDetail = false;
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -587,9 +591,8 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-      const commitOrdinal = ++this.indexCommitOrdinal;
       for (const row of index.sessions) {
-        this.indexCommitByRow.set(row.id, commitOrdinal);
+        this.indexCommitByRow.set(row.id, requestOrdinal);
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch {
@@ -652,7 +655,6 @@ class SessionsStore {
         if (signal.aborted) return;
         const detailCommitGeneration = this.detailCommitGeneration(id);
         const issuedAtIndexOrdinal = this.indexRequestOrdinal;
-        const indexCommitsAtStart = this.indexCommitOrdinal;
         try {
           configureGeneratedClient();
           const raw = await callGenerated(
@@ -665,7 +667,7 @@ class SessionsStore {
           const hydrated = this.reconcileDetailResponse(
             id,
             raw,
-            indexCommitsAtStart,
+            issuedAtIndexOrdinal,
           );
           // A superseded hydration still carries valid detail for the active
           // session, so let it back the breadcrumb when the new index excludes
@@ -797,9 +799,8 @@ class SessionsStore {
       ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-      const commitOrdinal = ++this.indexCommitOrdinal;
       for (const row of index.sessions) {
-        this.indexCommitByRow.set(row.id, commitOrdinal);
+        this.indexCommitByRow.set(row.id, requestOrdinal);
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch (error) {
@@ -926,19 +927,28 @@ class SessionsStore {
       deleted,
       issuedAtIndexOrdinal,
     });
+    // A read-derived commit (finite ordinal) carries the full detail shape;
+    // it supersedes any interim rename snapshot backing the active session.
+    if (
+      !deleted &&
+      Number.isFinite(issuedAtIndexOrdinal) &&
+      id === this.activeSessionId
+    ) {
+      this.interimActiveDetail = false;
+    }
   }
 
-  // See indexCommitOrdinal: when an index committed while a detail read was
-  // in flight, take only detail-owned fields from the response and keep the
-  // row's committed index-owned fields. When none did, the response is the
-  // freshest source for every field (e.g. a refresh propagating a remote
-  // rename) and is returned untouched.
+  // See indexCommitByRow: when an index request issued after this detail
+  // read began has committed the row, take only detail-owned fields from
+  // the response and keep the row's committed index-owned fields. Otherwise
+  // the response is the freshest source for every field (e.g. a refresh
+  // propagating a remote rename) and is returned untouched.
   private reconcileDetailResponse(
     id: string,
     session: Session,
-    indexCommitsAtStart: number,
+    issuedAtIndexOrdinal: number,
   ): Session {
-    if ((this.indexCommitByRow.get(id) ?? 0) <= indexCommitsAtStart) {
+    if ((this.indexCommitByRow.get(id) ?? 0) <= issuedAtIndexOrdinal) {
       return session;
     }
     const row = this.sessions.find((s) => s.id === id);
@@ -965,6 +975,7 @@ class SessionsStore {
     this.childSessionsRead.cancel();
     this.activeSessionId = id;
     this.activeSessionDetail = null;
+    this.interimActiveDetail = false;
     this.activeSessionUsageVersion = 0;
     this.childSessionsVersion++;
   }
@@ -1084,7 +1095,6 @@ class SessionsStore {
     }
     const signal = this.activeDetailRead.begin();
     const issuedAtIndexOrdinal = this.indexRequestOrdinal;
-    const indexCommitsAtStart = this.indexCommitOrdinal;
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
@@ -1100,7 +1110,7 @@ class SessionsStore {
           const session = this.reconcileDetailResponse(
             id,
             raw,
-            indexCommitsAtStart,
+            issuedAtIndexOrdinal,
           );
           const idx = this.sessions.findIndex((s) => s.id === id);
           if (idx >= 0) {
@@ -1153,7 +1163,6 @@ class SessionsStore {
     }
     const signal = this.activeDetailRead.begin();
     const issuedAtIndexOrdinal = this.indexRequestOrdinal;
-    const indexCommitsAtStart = this.indexCommitOrdinal;
     try {
       configureGeneratedClient();
       const raw = await callGenerated(
@@ -1169,7 +1178,7 @@ class SessionsStore {
       const session = this.reconcileDetailResponse(
         id,
         raw,
-        indexCommitsAtStart,
+        issuedAtIndexOrdinal,
       );
       const idx = this.sessions.findIndex((s) => s.id === id);
       if (idx >= 0) {
@@ -1740,8 +1749,11 @@ class SessionsStore {
       // derived detail-only fields (decode confidence, health explanations).
       // Merging onto a populated cache preserves those, but a fabricated
       // base is only an interim snapshot: chase with a fresh detail read so
-      // the enriched shape arrives instead of masquerading as hydrated.
-      if (cached === null) {
+      // the enriched shape arrives instead of masquerading as hydrated. A
+      // still-interim cache re-chases — this rename just cancelled the
+      // previous enrichment fetch.
+      if (cached === null || this.interimActiveDetail) {
+        this.interimActiveDetail = true;
         void this.refreshActiveSession();
       }
     }
