@@ -3261,6 +3261,32 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("detail");
     });
 
+    it("fills the cached detail with fetched signal detail for an off-list session", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "offlist", first_message: "detail" }),
+      );
+      await sessions.navigateToSession("offlist");
+      expect(sessions.activeSession?.health_score_basis).toBeUndefined();
+
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "offlist",
+          first_message: "detail",
+          health_score_basis: ["clean_termination"],
+          health_penalties: { tool_failures: 5 },
+        }),
+      );
+      await sessions.fetchSignalDetail("offlist");
+
+      expect(sessions.activeSession?.health_score_basis).toEqual([
+        "clean_termination",
+      ]);
+      expect(sessions.activeSession?.health_penalties).toEqual({
+        tool_failures: 5,
+      });
+    });
   });
 
   describe("route cancellation", () => {

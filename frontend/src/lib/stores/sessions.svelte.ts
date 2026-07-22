@@ -1121,6 +1121,21 @@ class SessionsStore {
         };
       }
     }
+    // A cache-only session (opened from search, off the loaded pages) has no
+    // list row to carry the signal detail; fill the cache the same way.
+    const cached = this.activeSessionDetail;
+    if (
+      cached &&
+      cached.id === id &&
+      cached.health_score_basis === undefined &&
+      detail.basis != null
+    ) {
+      this.activeSessionDetail = {
+        ...cached,
+        health_score_basis: detail.basis,
+        health_penalties: detail.penalties,
+      };
+    }
   }
 
   navigateSession(delta: number, filter?: (s: Session) => boolean) {
