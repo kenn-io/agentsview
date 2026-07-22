@@ -33,3 +33,11 @@ https://viteplus.dev/guide/.
   typeahead/combobox components for single-choice selectors unless the native
   control is explicitly justified.
 - Existing native selects are legacy exceptions, not examples to copy.
+
+## Localization
+
+- Keep the message catalogues in `messages/*.json` in sync. When you add,
+  remove, or rename a user-facing key, update every locale listed in
+  `project.inlang/settings.json` and keep their key sets identical.
+- After changing a message catalogue or localized component, run
+  `npm run i18n:compile` and `npm run check` when practical.
