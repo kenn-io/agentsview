@@ -3969,6 +3969,85 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("enriched-detail");
     });
 
+    it("does not let a superseded hydration invalidate a newer one", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Hydration H1 is in flight under the old index version...
+      let resolveH1!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveH1 = r;
+        }),
+      );
+      const h1 = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      sessions.selectSession("sel");
+
+      // ...a reload commits a new index version, and hydration H2 starts
+      // under it.
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load({ force: true });
+      let resolveH2!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveH2 = r;
+        }),
+      );
+      const h2 = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+
+      // H1 resolves first and seeds the empty cache (its commit is
+      // older-issued). That commit must not invalidate the later-issued H2,
+      // whose response is the newer one.
+      resolveH1(
+        makeSession({ id: "sel", project: "proj-a", first_message: "H1" }),
+      );
+      await h1;
+      resolveH2(
+        makeSession({ id: "sel", project: "proj-a", first_message: "H2-newer" }),
+      );
+      await h2;
+
+      expect(sessions.activeSession?.first_message).toBe("H2-newer");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.is_index_only,
+      ).toBe(false);
+    });
+
+    it("does not resurrect a 404-deleted row when a reload fails", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-a", first_message: "detail" }),
+      );
+      await sessions.hydrateVisibleSessions(["gone"]);
+      sessions.selectSession("gone");
+      expect(sessions.activeSession?.id).toBe("gone");
+
+      // A reload is in flight when a refresh 404s and removes the row...
+      let rejectIndex!: (e: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((_r, rej) => {
+          rejectIndex = rej;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+
+      // ...and the reload then fails. Restoring the pre-reload list must
+      // reapply the deletion instead of resurrecting the hydrated ghost row.
+      rejectIndex(new Error("network"));
+      await reload;
+
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.total).toBe(0);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

@@ -597,11 +597,26 @@ class SessionsStore {
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch {
       // Restore previous state so a transient failure
-      // doesn't wipe the visible session list.
+      // doesn't wipe the visible session list — but reapply deletion
+      // tombstones committed while this load was in flight: a refresh 404
+      // removed its row from the live list, and the pre-load snapshot still
+      // contains it.
       if (this.loadVersion === version) {
-        this.sessions = prev.sessions;
+        const deletedMidFlight = (id: string) => {
+          const commit = this.activeDetailCommitBySession.get(id);
+          return (
+            commit !== undefined &&
+            commit.deleted &&
+            commit.generation !== (detailCommits.get(id) ?? 0)
+          );
+        };
+        const restored = prev.sessions.filter((s) => !deletedMidFlight(s.id));
+        this.sessions = restored;
         this.nextCursor = prev.nextCursor;
-        this.total = prev.total;
+        this.total = Math.max(
+          0,
+          prev.total - (prev.sessions.length - restored.length),
+        );
       }
     } finally {
       if (this.loadVersion === version) {
@@ -681,8 +696,15 @@ class SessionsStore {
           // (mergeHydratedSession) owns updates once the version check
           // passes. Successful active-detail writes count as commits so a
           // staler index response cannot overwrite them.
+          // A commit invalidates this hydration only when its underlying
+          // request was issued no earlier than this one's: a superseded
+          // hydration from an older index version seeding the cache must
+          // not discard this later-issued response, while a rename/404
+          // (Infinity) or a read issued at or after this one still does.
+          const latestCommit = this.activeDetailCommitBySession.get(id);
           const detailFresh =
-            detailCommitGeneration === this.detailCommitGeneration(id);
+            detailCommitGeneration === this.detailCommitGeneration(id) ||
+            (latestCommit?.issuedAtIndexOrdinal ?? 0) < issuedAtIndexOrdinal;
           if (
             hydrated.id === this.activeSessionId &&
             !hydrated.is_index_only &&
