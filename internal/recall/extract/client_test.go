@@ -13,6 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type scriptedResponse struct {
@@ -1209,37 +1212,50 @@ func TestClientRejectsOversizedContent(t *testing.T) {
 	}
 }
 
-// TestEntrySchemaMirrorsResponseLimits pins that the limits enforced locally
-// are also requested from the server: a compliant constrained-decoding
-// endpoint then never produces a response the client refuses.
-func TestEntrySchemaMirrorsResponseLimits(t *testing.T) {
-	entriesSchema, ok := entrySchema["properties"].(map[string]any)["entries"].(map[string]any)
-	if !ok {
-		t.Fatal("entry schema has no entries property")
-	}
-	if got := entriesSchema["maxItems"]; got != maxResponseEntries {
-		t.Fatalf("entries maxItems = %v, want %d", got, maxResponseEntries)
-	}
-	fields, ok := entriesSchema["items"].(map[string]any)["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("entry schema has no item properties")
-	}
-	if got := fields["title"].(map[string]any)["maxLength"]; got != maxEntryTitleChars {
-		t.Fatalf("title maxLength = %v, want %d", got, maxEntryTitleChars)
-	}
-	if got := fields["body"].(map[string]any)["maxLength"]; got != maxEntryBodyChars {
-		t.Fatalf("body maxLength = %v, want %d", got, maxEntryBodyChars)
-	}
+// TestClientRequestSchemaKeepsLargeBodyLimitLocal pins the server boundary:
+// large maxLength values make some JSON-schema-to-grammar implementations
+// reject the entire request, while the client still rejects oversized bodies
+// in TestClientRejectsOversizedContent.
+func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{
+		{finishReason: "stop", content: entriesJSON(t, "one")},
+	}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+
+	responseFormat, ok := requests[0]["response_format"].(map[string]any)
+	require.True(t, ok, "request has no response_format object")
+	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
+	require.True(t, ok, "response_format has no json_schema object")
+	schema, ok := jsonSchema["schema"].(map[string]any)
+	require.True(t, ok, "json_schema has no schema object")
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok, "entry schema has no properties object")
+	entriesSchema, ok := properties["entries"].(map[string]any)
+	require.True(t, ok, "entry schema has no entries property")
+	assert.Equal(t, float64(maxResponseEntries), entriesSchema["maxItems"])
+	items, ok := entriesSchema["items"].(map[string]any)
+	require.True(t, ok, "entries schema has no items object")
+	fields, ok := items["properties"].(map[string]any)
+	require.True(t, ok, "entry schema has no item properties")
+	title, ok := fields["title"].(map[string]any)
+	require.True(t, ok, "entry schema has no title property")
+	assert.Equal(t, float64(maxEntryTitleChars), title["maxLength"])
+	body, ok := fields["body"].(map[string]any)
+	require.True(t, ok, "entry schema has no body property")
+	assert.NotContains(t, body, "maxLength")
 	entities, ok := fields["entities"].(map[string]any)
-	if !ok {
-		t.Fatal("entry schema has no entities property")
-	}
-	if got := entities["maxItems"]; got != maxEntryEntities {
-		t.Fatalf("entities maxItems = %v, want %d", got, maxEntryEntities)
-	}
-	if got := entities["items"].(map[string]any)["maxLength"]; got != maxEntityChars {
-		t.Fatalf("entity maxLength = %v, want %d", got, maxEntityChars)
-	}
+	require.True(t, ok, "entry schema has no entities property")
+	assert.Equal(t, float64(maxEntryEntities), entities["maxItems"])
+	entityItems, ok := entities["items"].(map[string]any)
+	require.True(t, ok, "entities schema has no items object")
+	assert.Equal(t, float64(maxEntityChars), entityItems["maxLength"])
 }
 
 func TestSplitFloorChars(t *testing.T) {

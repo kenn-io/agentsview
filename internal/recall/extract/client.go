@@ -149,16 +149,18 @@ const maxRetryDelay = 30 * time.Second
 // v2: minLength constraints on entry title and body.
 // v3: truncation always splits; the entry-capped compact retry is gone.
 // v4: maxItems/maxLength bounds on entries, fields, and entities.
-const extractionProtocolVersion = 4
+// v5: body maxLength is enforced client-side only for grammar compatibility.
+const extractionProtocolVersion = 5
 
 // Local resource bounds on a single distill response. The transport cap
 // only bounds bytes; within it a compromised or misconfigured endpoint
 // could return tens of thousands of entries or multi-megabyte fields, and
 // accepting them would balloon the archive (and its FTS index) and hold
-// the write lock through the inserts. entrySchema declares the same limits
-// (maxItems/maxLength), so a compliant constrained-decoding server never
-// produces a response the client refuses. Lengths count Unicode code
-// points to match JSON Schema maxLength semantics.
+// the write lock through the inserts. entrySchema declares every limit except
+// the body maxLength: some JSON-schema grammar compilers expand a 5000-character
+// string bound into a grammar too large to parse. The transport and client-side
+// checks still bound bodies safely. Lengths count Unicode code points to match
+// JSON Schema maxLength semantics where the schema carries the constraint.
 const (
 	maxResponseEntries = 100
 	maxEntryTitleChars = 500
@@ -209,7 +211,6 @@ var entrySchema = map[string]any{
 					},
 					"body": map[string]any{
 						"type": "string", "minLength": 1,
-						"maxLength": maxEntryBodyChars,
 					},
 					"entities": map[string]any{
 						"type":     "array",

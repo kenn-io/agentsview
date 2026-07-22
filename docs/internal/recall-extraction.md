@@ -351,10 +351,12 @@ The daemon scheduler mirrors the embedding scheduler's shape:
 Concurrency is one pass at a time, one session at a time, one unit per model
 call. Each response is bounded locally as well as by the transport size cap: the
 client refuses responses exceeding fixed limits on entries per call and on
-title, body, and entity lengths, and the requested JSON schema declares the same
-bounds (`maxItems`/`maxLength`), so a compliant constrained-decoding server
-never produces a refused response while a non-compliant one cannot balloon the
-archive or hold its write lock through oversized inserts.
+title, body, and entity lengths. The requested JSON schema declares the entry,
+title, entity-count, and entity-length bounds. The 5000-character body bound is
+enforced client-side only because expanding that large `maxLength` makes some
+JSON-schema grammar compilers reject the request before inference. A
+non-compliant endpoint still cannot balloon the archive or hold its write lock
+through oversized inserts.
 
 ## Activation
 
