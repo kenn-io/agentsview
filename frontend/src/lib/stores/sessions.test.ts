@@ -4384,6 +4384,88 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(0);
     });
 
+    it("publishes a committed rename for a row with no prior sidebar row", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      // A cache-only session (opened from search, off the filtered list) is
+      // active...
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "a", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.navigateToSession("a");
+
+      // ...an index reload is issued, then the session is renamed and the
+      // user navigates to another session, discarding the cache.
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.renameSession).mockResolvedValueOnce(
+        makeSession({ id: "a", display_name: "renamed" }),
+      );
+      await sessions.renameSession("a", "renamed");
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "b", project: "proj-b", first_message: "b-detail" }),
+      );
+      await sessions.navigateToSession("b");
+
+      // The pre-rename index resolves, listing the renamed session for the
+      // first time. There is no prior sidebar row to preserve — the
+      // committed rename snapshot must still outrank the stale index name.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "a", project: "proj-a", display_name: "old" }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(
+        sessions.sessions.find((s) => s.id === "a")?.display_name,
+      ).toBe("renamed");
+    });
+
+    it("does not double-subtract a deleted root re-listed by a stale page", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "root1", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+
+      // Page 2 is in flight when an already-loaded root is deleted; the
+      // delete path decrements the total once.
+      let resolvePage!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolvePage = r;
+        }),
+      );
+      const more = sessions.loadMore();
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("root1");
+      expect(sessions.total).toBe(1);
+
+      // The stale page re-lists the deleted root alongside a new one.
+      // Dropping the tombstoned duplicate must not decrement again.
+      resolvePage({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({ id: "root2", project: "proj-a" }),
+        ],
+        total: 2,
+        next_cursor: null,
+      });
+      await more;
+
+      expect(sessions.sessions.some((s) => s.id === "root1")).toBe(false);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
