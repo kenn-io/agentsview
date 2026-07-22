@@ -3214,6 +3214,46 @@ describe("SessionsStore", () => {
       ).toBe(false);
     });
 
+    it("restores the active row when a stale index resolves after a rename", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "detail" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // An index reload is in flight when the user renames the session...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "sel", display_name: "renamed" }),
+      );
+      await sessions.renameSession("sel", "renamed");
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+
+      // ...and resolves afterward with a pre-rename snapshot of the row.
+      // The committed rename must keep backing both the sidebar row and the
+      // breadcrumb, not survive only inside the detail cache while the
+      // stale row is what gets displayed.
+      resolveIndex({
+        sessions: [makeSkinnyRow({ id: "sel", project: "proj-a" })],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.display_name,
+      ).toBe("renamed");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
