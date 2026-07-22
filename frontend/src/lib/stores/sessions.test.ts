@@ -3814,6 +3814,58 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("renamed");
     });
 
+    it("reconciles against the cache when the re-published row was dropped", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A refresh is in flight...
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...while one reload re-publishes the row with a newer rename (the
+      // cache absorbs it), and a second reload then excludes the row.
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "sel",
+          project: "proj-a",
+          display_name: "server-renamed",
+        }),
+      ]);
+      await sessions.load({ force: true });
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load({ force: true });
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+
+      // The stale refresh response resolves with the row now absent: the
+      // absorbed index fields live only in the cache, and the response must
+      // reconcile against them rather than applying wholesale.
+      resolveRefresh(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "old",
+          first_message: "detail-2",
+        }),
+      );
+      await refresh;
+
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+      expect(sessions.activeSession?.first_message).toBe("detail-2");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

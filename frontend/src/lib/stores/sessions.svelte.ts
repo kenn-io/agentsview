@@ -942,8 +942,13 @@ class SessionsStore {
       return session;
     }
     const row = this.sessions.find((s) => s.id === id);
-    if (!row) return session;
-    return mergeIndexFieldsIntoDetail(row, session);
+    if (row) return mergeIndexFieldsIntoDetail(row, session);
+    // The re-published row was since excluded by a later reload; the
+    // absorbed index fields survive only in the active cache, so reconcile
+    // against that instead of letting the stale response apply wholesale.
+    const cached = this.activeSessionDetail;
+    if (cached?.id === id) return mergeIndexFieldsIntoDetail(cached, session);
+    return session;
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
