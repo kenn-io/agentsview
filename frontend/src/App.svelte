@@ -123,10 +123,13 @@
   // Load active session's messages when selection changes.
   // Only track activeSessionId — untrack the rest to prevent
   // reactive loops from messages.loading / messages.messages.
+  let lastMessageLoadSessionId: string | null = null;
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
     untrack(() => {
+      const idChanged = id !== lastMessageLoadSessionId;
+      lastMessageLoadSessionId = id;
       if (route !== "sessions") {
         sessions.cancelRouteReads();
         messages.cancelInFlight();
@@ -137,14 +140,20 @@
         return;
       }
       // Preserve selection when a pending scroll is queued
-      // for this specific session (e.g. search result
-      // navigation sets session + ordinal before this effect
-      // fires). Clear if the pending scroll targets a
-      // different session or there is no pending scroll.
+      // for this specific session. Route-first navigation
+      // (search results, insight evidence) queues ordinal +
+      // URL before the deep-link effect selects the target,
+      // so also match the routed session — but only when this
+      // run wasn't triggered by a local selection change,
+      // otherwise a stale URL would preserve the previous
+      // navigation's intent across the user's new selection.
+      // Clear if the pending scroll targets a different
+      // session or there is no pending scroll.
       const pendingMatchesSession =
         ui.pendingScrollOrdinal !== null &&
         (ui.pendingScrollSession === null ||
-          ui.pendingScrollSession === id);
+          ui.pendingScrollSession === id ||
+          (!idChanged && ui.pendingScrollSession === router.sessionId));
       if (!pendingMatchesSession) {
         ui.clearSelection();
         ui.pendingScrollOrdinal = null;
@@ -410,32 +419,72 @@
     });
   });
 
-  // Deep-link: select session from URL and handle ?msg param.
+  // Deep-link: select and hydrate the routed session. Tracking
+  // activeSession (not just the URL) makes hydration self-healing:
+  // if a sidebar reload rebuilds the list mid-flight and the routed
+  // row is lost or reverts to index-only, this re-fires and
+  // re-hydrates. Refires caused by session-state changes (rather
+  // than a URL change) act only while the routed session is still
+  // the active one, so a newer local selection that has not synced
+  // to the URL yet is never snapped back. navigateToSession dedupes
+  // in-flight requests, and a failed fetch changes no tracked
+  // state, so this cannot loop.
+  let lastRoutedSessionId: string | null = null;
+  $effect(() => {
+    const sid = router.sessionId;
+    const hydrated = sessions.activeSession !== undefined;
+    untrack(() => {
+      if (!sid) {
+        lastRoutedSessionId = null;
+        return;
+      }
+      const sidChanged = sid !== lastRoutedSessionId;
+      lastRoutedSessionId = sid;
+      if (sidChanged) {
+        if (sid !== sessions.activeSessionId || !hydrated) {
+          void sessions.navigateToSession(sid);
+        }
+      } else if (sid === sessions.activeSessionId && !hydrated) {
+        void sessions.navigateToSession(sid);
+      }
+    });
+  });
+
+  // Deep-link: clear the selection when the URL drops its session.
+  // Tracks the route alongside the session id: entering bare /sessions
+  // from a non-session page leaves the id null both sides, so a
+  // session-id-only dependency would not rerun and a stale active
+  // session would keep showing instead of the list. Route is
+  // authoritative URL state that local selection does not mutate, so
+  // tracking it cannot trigger a spurious deselect.
+  $effect(() => {
+    const sid = router.sessionId;
+    const route = router.route;
+    untrack(() => {
+      if (
+        !sid && route === "sessions" &&
+        sessions.activeSessionId !== null
+      ) {
+        sessions.deselectSession();
+      }
+    });
+  });
+
+  // Deep-link: apply the ?msg param. Kept separate from the
+  // hydration effect above so scroll intent is not re-applied
+  // every time hydration state changes.
   $effect(() => {
     const sid = router.sessionId;
     const msgParam = router.params["msg"] ?? null;
     untrack(() => {
-      if (sid) {
-        if (
-          sid !== sessions.activeSessionId ||
-          sessions.activeSession === undefined
-        ) {
-          sessions.navigateToSession(sid);
-        }
-        if (msgParam) {
-          if (msgParam === "last") {
-            ui.pendingScrollOrdinal = -1;
-            ui.pendingScrollSession = sid;
-          } else {
-            const ordinal = parseInt(msgParam, 10);
-            if (Number.isFinite(ordinal)) {
-              ui.scrollToOrdinal(ordinal, sid);
-            }
-          }
-        }
-      } else if (router.route === "sessions") {
-        if (sessions.activeSessionId !== null) {
-          sessions.deselectSession();
+      if (!sid || !msgParam) return;
+      if (msgParam === "last") {
+        ui.pendingScrollOrdinal = -1;
+        ui.pendingScrollSession = sid;
+      } else {
+        const ordinal = parseInt(msgParam, 10);
+        if (Number.isFinite(ordinal)) {
+          ui.scrollToOrdinal(ordinal, sid);
         }
       }
     });

@@ -2219,6 +2219,73 @@ func TestManagerAbortsPassOnSchemaViolation(t *testing.T) {
 	}
 }
 
+// TestManagerContinuesAfterClientOnlyResponseLimit pins that a response
+// exceeding the transport cap or a bound omitted from the request schema
+// poisons only that session. Treating either as a transport or schema failure
+// would abort before the later candidate is visited.
+func TestManagerContinuesAfterClientOnlyResponseLimit(t *testing.T) {
+	cases := map[string]struct {
+		oversized string
+		wantError string
+	}{
+		"entry body": {
+			oversized: `{"entries":[{"type":"fact","title":"too long",` +
+				`"body":"` + strings.Repeat("x", maxEntryBodyChars+1) +
+				`","entities":[]}]}`,
+			wantError: "body is 5001 characters",
+		},
+		"transport body": {
+			oversized: strings.Repeat("x", maxResponseBodyBytes+1),
+			wantError: "response body exceeds the 16777216-byte transport cap",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := newTestArchive(t)
+			ctx := context.Background()
+			server, log := modelServer(t, func(text string, _ int) (int, string) {
+				if strings.Contains(text, "oversize") {
+					return http.StatusOK, completionBody(t, tc.oversized)
+				}
+				return http.StatusOK, completionBody(t, entriesJSON(t, "later"))
+			})
+			seedSession(t, d, "sess-a", turnMessages("oversize this", "done"), nil)
+			seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+			m := newManager(t, d, server.URL, nil)
+
+			result, err := m.RunPass(ctx, PassOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Sessions)
+			assert.Equal(t, 1, result.Failed)
+			assert.Equal(t, 2, result.Units)
+			assert.Equal(t, 2, result.Entries)
+			assert.Equal(t, 3, log.count(),
+				"one rejected call must not prevent both units of the later session")
+
+			failed, found, err := d.ExtractProgress(
+				ctx, "sess-a", m.Fingerprint(),
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, db.ExtractProgressFailed, failed.State)
+			assert.Contains(t, failed.LastError, tc.wantError)
+
+			done, found, err := d.ExtractProgress(
+				ctx, "sess-b", m.Fingerprint(),
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, db.ExtractProgressDone, done.State)
+			entry, err := d.GetRecallEntry(
+				ctx, EntryID(m.Fingerprint(), "sess-b", 0, 0),
+			)
+			require.NoError(t, err)
+			require.NotNil(t, entry)
+			assert.Equal(t, "later", entry.Title)
+		})
+	}
+}
+
 // TestBoundedLastErrorCapsStoredText pins the persistence-side bound on
 // externally derived error text: whatever the client lets through, a
 // failure row must not store megabytes per session.

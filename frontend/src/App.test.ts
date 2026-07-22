@@ -185,6 +185,211 @@ describe("App session URL date state", () => {
     expect(navigateToSession).toHaveBeenCalledTimes(2);
   });
 
+  it("clears a stale active session entering /sessions from a non-session page (#1190)", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    // Leave for a non-session page: the URL drops the session id but the
+    // deselect guard only clears on the sessions route, so the active
+    // session is intentionally preserved here.
+    router.navigate("usage");
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("session-1");
+
+    // Enter the bare sessions list. The session id stays null across this
+    // transition, so a session-id-only dependency would not rerun; tracking
+    // the route makes the effect fire and clear the stale selection.
+    router.navigate("sessions");
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
+  it("keeps route-first search scroll intent when entering the sessions route", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    const navigateToSession = vi
+      .spyOn(sessions, "navigateToSession")
+      .mockResolvedValue();
+
+    router.route = "usage";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    // Route-first search activation: URL and scroll intent are queued
+    // before the deep-link effect selects the target session.
+    router.navigateToSession("session-2");
+    ui.scrollToOrdinal(7, "session-2");
+    await flushEffects();
+
+    expect(navigateToSession).toHaveBeenCalledWith("session-2");
+    expect(ui.pendingScrollOrdinal).toBe(7);
+    expect(ui.pendingScrollSession).toBe("session-2");
+  });
+
+  it("clears stale route-first scroll intent when the user selects another session", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+
+    router.route = "sessions";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    // Route-first navigation to B queues its scroll intent; B's
+    // hydration never lands (mocked), so the URL still names B when
+    // the user selects C from the sidebar.
+    router.navigateToSession("session-b");
+    ui.scrollToOrdinal(7, "session-b");
+    await flushEffects();
+    expect(ui.pendingScrollOrdinal).toBe(7);
+
+    sessions.activeSessionId = "session-c";
+    await flushEffects();
+
+    expect(ui.pendingScrollOrdinal).toBeNull();
+    expect(ui.pendingScrollSession).toBeNull();
+  });
+
+  it("rehydrates the routed session when a sidebar rebuild drops its row", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    const navigateToSession = vi
+      .spyOn(sessions, "navigateToSession")
+      .mockResolvedValue();
+
+    sessions.sessions = [
+      {
+        id: "session-1",
+        project: "proj-a",
+        machine: "local",
+        agent: "claude",
+        first_message: "hello",
+        started_at: "2026-02-20T12:30:00Z",
+        ended_at: "2026-02-20T12:31:00Z",
+        message_count: 2,
+        user_message_count: 1,
+        total_output_tokens: 0,
+        peak_context_tokens: 0,
+        has_total_output_tokens: false,
+        has_peak_context_tokens: false,
+        is_automated: false,
+        is_teammate: false,
+        is_index_only: false,
+        created_at: "2026-02-20T12:30:00Z",
+      } as unknown as (typeof sessions.sessions)[number],
+    ];
+    sessions.activeSessionId = "session-1";
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(navigateToSession).not.toHaveBeenCalled();
+
+    sessions.sessions = [];
+    await flushEffects();
+
+    expect(navigateToSession).toHaveBeenCalledWith("session-1");
+  });
+
   it("treats rolling window and termination as sessions route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);

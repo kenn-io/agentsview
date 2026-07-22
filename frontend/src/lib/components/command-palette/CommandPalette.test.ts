@@ -42,8 +42,6 @@ const {
         created_at: string;
       }>,
       filters: { project: "" },
-      selectSession: vi.fn(),
-      navigateToSession: vi.fn(),
       deselectSession: vi.fn(),
     },
     mockSearchStore: {
@@ -286,7 +284,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("name-only result (ordinal === -1) hydrates session and clears selection without scrolling", async () => {
+  it("name-only result (ordinal === -1) routes and clears selection without scrolling", async () => {
     mockSearchStore.results = [
       makeSearchResult({
         session_id: "claude:nameonly123",
@@ -307,8 +305,6 @@ describe("CommandPalette", () => {
     item.click();
     await tick();
 
-    expect(mockSessions.selectSession).not.toHaveBeenCalled();
-    expect(mockSessions.navigateToSession).toHaveBeenCalledWith("claude:nameonly123");
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("claude:nameonly123");
     expect(mockUi.scrollToOrdinal).not.toHaveBeenCalled();
     expect(mockUi.clearScrollState).toHaveBeenCalled();
@@ -364,10 +360,22 @@ describe("CommandPalette", () => {
     item.click();
     await tick();
 
-    expect(mockSessions.selectSession).not.toHaveBeenCalled();
-    expect(mockSessions.navigateToSession).toHaveBeenCalledWith("codex:search123");
-    expect(mockUi.scrollToOrdinal).toHaveBeenCalledWith(7, "codex:search123");
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
+    expect(mockUi.scrollToOrdinal).toHaveBeenCalledWith(7, "codex:search123");
+
+    unmount(component);
+  });
+
+  it("recent result click routes to the session and closes the palette", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const item = await tickUntil(".palette-item");
+    item.click();
+    await tick();
+
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("s1");
+    expect(mockUi.activeModal).toBeNull();
 
     unmount(component);
   });
@@ -425,7 +433,6 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.setMode).toHaveBeenNthCalledWith(1, "semantic");
     expect(mockSearchStore.setMode).toHaveBeenNthCalledWith(2, "semantic");
     expect(mockSearchStore.retry).not.toHaveBeenCalled();
-    expect(mockSessions.navigateToSession).not.toHaveBeenCalled();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
     radios[0]?.dispatchEvent(
@@ -474,7 +481,6 @@ describe("CommandPalette", () => {
 
       expect(mockSearchStore.retry).toHaveBeenCalledOnce();
       expect(mockSearchStore.setMode).not.toHaveBeenCalled();
-      expect(mockSessions.navigateToSession).not.toHaveBeenCalled();
       expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
       unmount(component);

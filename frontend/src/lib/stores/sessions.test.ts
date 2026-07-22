@@ -751,6 +751,87 @@ describe("SessionsStore", () => {
       );
     });
 
+    it("keeps the active appended row when the reloaded index omits it", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "offpage",
+          first_message: "hydrated offpage detail",
+        }),
+      );
+
+      await sessions.load();
+      await sessions.navigateToSession("offpage");
+      expect(sessions.activeSession?.first_message).toBe(
+        "hydrated offpage detail",
+      );
+
+      await sessions.load();
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "offpage",
+      ]);
+      expect(sessions.activeSession?.first_message).toBe(
+        "hydrated offpage detail",
+      );
+    });
+
+    it("moves the appended active row into place when pagination reaches it", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "listed" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "offpage",
+          first_message: "hydrated offpage detail",
+        }),
+      );
+
+      await sessions.load();
+      await sessions.navigateToSession("offpage");
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "offpage",
+      ]);
+
+      // A page that doesn't contain the appended row keeps it at the
+      // tail, preserving index order for keyboard navigation.
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "middle" })],
+        total: 4,
+        next_cursor: "page-3",
+      });
+      await sessions.loadMore();
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "middle",
+        "offpage",
+      ]);
+
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [
+          makeSkinnyRow({ id: "offpage" }),
+          makeSkinnyRow({ id: "last" }),
+        ],
+        total: 4,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "listed",
+        "middle",
+        "offpage",
+        "last",
+      ]);
+      expect(sessions.activeSession?.first_message).toBe(
+        "hydrated offpage detail",
+      );
+    });
+
     it("refreshes hydrated agent identity fields from the sidebar index", async () => {
       mockSidebarIndex([
         makeSkinnyRow({

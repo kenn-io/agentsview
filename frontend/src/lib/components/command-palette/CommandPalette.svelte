@@ -160,14 +160,18 @@
     }
   }
 
+  // Route-first: commit the URL and let App's deep-link effect own
+  // selection and hydration, exactly as a direct deep link does.
+  // Selecting through the sessions store before the route commits
+  // starts hydration under the old route, where it can be cancelled
+  // or lost (#1190).
   function selectSession(s: Session) {
-    sessions.selectSession(s.id);
     router.navigateToSession(s.id);
     close();
   }
 
   function selectSearchResult(r: PaletteSearchResult) {
-    void sessions.navigateToSession(r.session_id);
+    router.navigateToSession(r.session_id);
     if (r.ordinal !== -1) {
       ui.scrollToOrdinal(r.ordinal, r.session_id);
     } else {
@@ -175,7 +179,6 @@
       // previously highlighted ordinal is not left active.
       ui.clearScrollState();
     }
-    router.navigateToSession(r.session_id);
     close();
   }
 

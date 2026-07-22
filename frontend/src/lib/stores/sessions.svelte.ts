@@ -526,6 +526,20 @@ class SessionsStore {
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
+      this.sidebarIndexIds = new Set(index.sessions.map((row) => row.id));
+      // Keep the active session's hydrated row when the new index
+      // page doesn't contain it: navigateToSession appends deep-linked,
+      // cross-page, and subagent targets, and dropping them here would
+      // revert activeSession to undefined mid-view. It stays outside
+      // sidebarIndexIds, so later pages keep it at the tail until
+      // pagination reaches its real position.
+      const activeId = this.activeSessionId;
+      if (activeId && !this.sessions.some((s) => s.id === activeId)) {
+        const kept = existing.get(activeId);
+        if (kept && !kept.is_index_only) {
+          this.sessions = [...this.sessions, kept];
+        }
+      }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch {
@@ -544,6 +558,10 @@ class SessionsStore {
   }
 
   sidebarIndexVersion: number = $state(0);
+  // Session ids supplied by the loaded sidebar index pages; rows in
+  // this.sessions outside this set were appended out of position
+  // (see loadSidebarPage / loadMore).
+  private sidebarIndexIds: Set<string> = new Set();
   hydratedSessionsByVersion: Map<number, Map<string, Session>> =
     $state(new Map());
 
@@ -669,13 +687,31 @@ class SessionsStore {
         signal,
       ) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
-      this.sessions.push(
-        ...index.sessions.map((row) =>
-          sidebarIndexRowToSession(row, this.sessions.find(
-            (existing) => existing.id === row.id,
-          ))
-        ),
+      // Merge index-page order first, appended rows last. Rows outside
+      // sidebarIndexIds were appended out of position (the active
+      // session kept by loadSidebarPage, navigateToSession targets);
+      // they stay at the tail until pagination reaches their real
+      // position, then merge in place carrying their hydrated fields.
+      const existingById = new Map(
+        this.sessions.map((session) => [session.id, session]),
       );
+      for (const row of index.sessions) {
+        this.sidebarIndexIds.add(row.id);
+      }
+      const paged = this.sessions.filter(
+        (s) => this.sidebarIndexIds.has(s.id) &&
+          !index.sessions.some((row) => row.id === s.id),
+      );
+      const appended = this.sessions.filter(
+        (s) => !this.sidebarIndexIds.has(s.id),
+      );
+      this.sessions = [
+        ...paged,
+        ...index.sessions.map((row) =>
+          sidebarIndexRowToSession(row, existingById.get(row.id))
+        ),
+        ...appended,
+      ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
     } catch (error) {
@@ -803,11 +839,20 @@ class SessionsStore {
     void this.hydrateSelectedIndexOnlySession(id);
   }
 
+  private navigateInFlight: { id: string; promise: Promise<void> } | null =
+    null;
+
   /**
    * Navigate to a session by ID, loading it into the sessions list if
    * not already present (e.g. subagent sessions filtered from groups).
+   * Re-invocations for the same still-active session join the in-flight
+   * fetch instead of restarting it, so reactive callers can re-request
+   * hydration without duplicating requests.
    */
   async navigateToSession(id: string) {
+    if (this.navigateInFlight?.id === id && this.activeSessionId === id) {
+      return this.navigateInFlight.promise;
+    }
     this.setActiveSession(id);
     const existing = this.sessions.find((s) => s.id === id);
     if (existing) {
@@ -815,25 +860,35 @@ class SessionsStore {
       return;
     }
     const signal = this.navigateRead.begin();
-    try {
-      configureGeneratedClient();
-      const session = await callGenerated(
-        () => SessionsService.getApiV1SessionsId({ id }),
-        signal,
-      ) as unknown as Session;
-      if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
-        const idx = this.sessions.findIndex((s) => s.id === id);
-        if (idx >= 0) {
-          this.mergeHydratedSession(session);
-        } else {
-          this.sessions = [...this.sessions, session];
+    const entry = { id, promise: Promise.resolve() };
+    entry.promise = (async () => {
+      try {
+        configureGeneratedClient();
+        const session = await callGenerated(
+          () => SessionsService.getApiV1SessionsId({ id }),
+          signal,
+        ) as unknown as Session;
+        if (
+          this.activeSessionId === id && this.navigateRead.isCurrent(signal)
+        ) {
+          const idx = this.sessions.findIndex((s) => s.id === id);
+          if (idx >= 0) {
+            this.mergeHydratedSession(session);
+          } else {
+            this.sessions = [...this.sessions, session];
+          }
+        }
+      } catch {
+        // Session not found — selection stands without metadata
+      } finally {
+        this.navigateRead.finish(signal);
+        if (this.navigateInFlight === entry) {
+          this.navigateInFlight = null;
         }
       }
-    } catch {
-      // Session not found — selection stands without metadata
-    } finally {
-      this.navigateRead.finish(signal);
-    }
+    })();
+    this.navigateInFlight = entry;
+    return entry.promise;
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {

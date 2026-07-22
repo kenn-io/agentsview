@@ -31,6 +31,43 @@ test.describe("Navigation", () => {
     await expect(sp.exportBtn).toContainText("Export CSV");
   });
 
+  test("search result for an unlisted session keeps the breadcrumb project (#1190)", async ({ page }) => {
+    // The target stays off the sidebar index page, as with a paginated
+    // or filtered index in production. Search still finds it; opening
+    // the result hydrates it by ID, and the index reload that entering
+    // the sessions route triggers must not drop the hydrated row after
+    // the detail fetch lands.
+    const sessionId = "test-session-duration-subagent-1";
+    await page.goto("/usage");
+    await page.route("**/api/v1/sessions/sidebar-index**", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.sessions = body.sessions.filter(
+        (s: { id: string }) => s.id !== sessionId,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.fulfill({ response, json: body });
+    });
+
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.locator(".palette-input");
+    await expect(input).toBeVisible();
+    await input.fill("synchronous DB read");
+
+    const result = page.locator(".palette-item", {
+      hasText: "synchronous DB read",
+    }).first();
+    await expect(result).toBeVisible();
+    const indexReloaded = page.waitForResponse("**/api/v1/sessions/sidebar-index**");
+    await result.click();
+
+    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}`));
+    await indexReloaded;
+    await expect(page.locator(".breadcrumb-current")).toHaveText(
+      /project-duration/,
+    );
+  });
+
   test("subagent cost rollup", async ({ page }, testInfo) => {
     await page.route("**/api/v1/sessions/*/usage**", async (route) => {
       const rollup = new URL(route.request().url()).searchParams.get("rollup");

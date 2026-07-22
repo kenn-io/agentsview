@@ -61,6 +61,14 @@ var errProtocolViolation = errors.New(
 	"distill response violates the extraction protocol",
 )
 
+// errClientOnlyResponseLimit marks a resource bound enforced only after the
+// response arrives. Unlike a schema violation, it indicts one model output,
+// not the endpoint: the manager fails that session behind its backoff and
+// continues through the remaining candidates.
+var errClientOnlyResponseLimit = errors.New(
+	"distill response exceeds a client-only resource limit",
+)
+
 // requestStatusError carries the HTTP status of a permanent server
 // rejection so callers can tell endpoint-scoped failures from
 // input-specific ones.
@@ -149,22 +157,25 @@ const maxRetryDelay = 30 * time.Second
 // v2: minLength constraints on entry title and body.
 // v3: truncation always splits; the entry-capped compact retry is gone.
 // v4: maxItems/maxLength bounds on entries, fields, and entities.
-const extractionProtocolVersion = 4
+// v5: body maxLength is enforced client-side only for grammar compatibility.
+const extractionProtocolVersion = 5
 
 // Local resource bounds on a single distill response. The transport cap
 // only bounds bytes; within it a compromised or misconfigured endpoint
 // could return tens of thousands of entries or multi-megabyte fields, and
 // accepting them would balloon the archive (and its FTS index) and hold
-// the write lock through the inserts. entrySchema declares the same limits
-// (maxItems/maxLength), so a compliant constrained-decoding server never
-// produces a response the client refuses. Lengths count Unicode code
-// points to match JSON Schema maxLength semantics.
+// the write lock through the inserts. entrySchema declares every limit except
+// the body maxLength: some JSON-schema grammar compilers expand a 5000-character
+// string bound into a grammar too large to parse. The transport and client-side
+// checks still bound bodies safely. Lengths count Unicode code points to match
+// JSON Schema maxLength semantics where the schema carries the constraint.
 const (
-	maxResponseEntries = 100
-	maxEntryTitleChars = 500
-	maxEntryBodyChars  = 5000
-	maxEntryEntities   = 50
-	maxEntityChars     = 200
+	maxResponseBodyBytes = 16 << 20
+	maxResponseEntries   = 100
+	maxEntryTitleChars   = 500
+	maxEntryBodyChars    = 5000
+	maxEntryEntities     = 50
+	maxEntityChars       = 200
 )
 
 // Entry is one distilled memory entry as the model produces it.
@@ -209,7 +220,6 @@ var entrySchema = map[string]any{
 					},
 					"body": map[string]any{
 						"type": "string", "minLength": 1,
-						"maxLength": maxEntryBodyChars,
 					},
 					"entities": map[string]any{
 						"type":     "array",
@@ -443,7 +453,9 @@ func (c *Client) distill(
 			c.transportErrorDetail(cause))}
 	}
 	defer func() { _ = response.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(
+		response.Body, int64(maxResponseBodyBytes)+1,
+	))
 	if err != nil {
 		// Read errors quote raw wire bytes — a malformed chunked trailer
 		// line is echoed verbatim — so the detail follows the same policy
@@ -452,6 +464,14 @@ func (c *Client) distill(
 			err: fmt.Errorf("reading distill response: %s",
 				c.transportErrorDetail(err)),
 		}
+	}
+	responseTooLarge := len(raw) > maxResponseBodyBytes
+	if responseTooLarge {
+		// Non-success responses are classified by their status below; their
+		// diagnostic excerpt never needs the sentinel byte. A successful
+		// response is checked before JSON decoding so truncation cannot
+		// masquerade as a transient parse failure.
+		raw = raw[:maxResponseBodyBytes]
 	}
 	if response.StatusCode == http.StatusBadRequest {
 		detail := c.responseDetail(raw)
@@ -502,6 +522,12 @@ func (c *Client) distill(
 				response.StatusCode, c.responseDetail(raw),
 			),
 		}
+	}
+	if responseTooLarge {
+		return nil, Usage{}, fmt.Errorf(
+			"%w: response body exceeds the %d-byte transport cap",
+			errClientOnlyResponseLimit, maxResponseBodyBytes,
+		)
 	}
 
 	var parsed struct {
@@ -558,6 +584,9 @@ func (c *Client) distill(
 	}
 	entries, err := parseEntries(choice.Message.Content)
 	if err != nil {
+		if errors.Is(err, errClientOnlyResponseLimit) {
+			return nil, parsed.Usage, err
+		}
 		// The server was asked for constrained decoding, so a violation
 		// means it did not enforce the schema; at temperature zero that is
 		// deterministic and not worth retrying.
@@ -774,7 +803,8 @@ func parseEntries(content string) ([]Entry, error) {
 		}
 		if n := utf8.RuneCountInString(entry.Body); n > maxEntryBodyChars {
 			return nil, fmt.Errorf(
-				"entry %d: body is %d characters, limit %d",
+				"%w: entry %d body is %d characters, limit %d",
+				errClientOnlyResponseLimit,
 				i, n, maxEntryBodyChars,
 			)
 		}
