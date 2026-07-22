@@ -324,6 +324,50 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.Len(t, got, 0, "usage events after clear =")
 }
 
+func TestUsageEventsReplaceRejectsDuplicateDedupKeysAndRollsBack(t *testing.T) {
+	// A parser emitting two events with the same dedup key (e.g. Grok
+	// retry/replay lines sharing a prompt_id, before the parser-side
+	// last-wins dedupe) violates idx_usage_events_dedup and must fail
+	// the whole replace, leaving the prior events untouched. Parsers
+	// therefore dedupe in memory before handing events to the DB.
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "grok:dup", "proj", func(s *Session) {
+		s.Agent = "grok"
+	})
+
+	prior := []UsageEvent{{
+		SessionID:   "grok:dup",
+		Source:      "session",
+		Model:       "grok-4.5",
+		InputTokens: 1,
+		DedupKey:    "session:grok:dup:p-1:grok-4.5",
+	}}
+	require.NoError(t, d.ReplaceSessionUsageEvents("grok:dup", prior))
+
+	dup := []UsageEvent{{
+		SessionID:   "grok:dup",
+		Source:      "session",
+		Model:       "grok-4.5",
+		InputTokens: 2,
+		DedupKey:    "session:grok:dup:p-2:grok-4.5",
+	}, {
+		SessionID:   "grok:dup",
+		Source:      "session",
+		Model:       "grok-4.5",
+		InputTokens: 3,
+		DedupKey:    "session:grok:dup:p-2:grok-4.5",
+	}}
+	err := d.ReplaceSessionUsageEvents("grok:dup", dup)
+	require.Error(t, err, "duplicate dedup keys must violate idx_usage_events_dedup")
+
+	got, err := d.GetUsageEvents(ctx, "grok:dup")
+	require.NoError(t, err, "GetUsageEvents after failed replace")
+	require.Len(t, got, 1, "failed replace must roll back to the prior events")
+	assert.Equal(t, 1, got[0].InputTokens, "prior event must survive the rollback")
+}
+
 func TestGetDailyUsageWithData(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

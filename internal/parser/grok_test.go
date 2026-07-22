@@ -462,6 +462,25 @@ func TestGrokProviderPerTurnUsageDedupsByPromptID(t *testing.T) {
 	}, keys)
 }
 
+func TestGrokProviderPerTurnUsageLastWinsOnDuplicatePromptID(t *testing.T) {
+	// Retry/replay lines re-emit a turn's payload under the same
+	// prompt_id. They must collapse to a single event (the DB enforces a
+	// unique (session_id, source, dedup_key) index — a duplicate would
+	// roll back the whole usage replace), keeping the last payload.
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"timestamp":1784575476,"params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"p-aaa","usage":{"modelUsage":{"grok-4.5":{"inputTokens":1100,"outputTokens":10,"cachedReadTokens":1000}}}}}}`,
+		`{"timestamp":1784575480,"params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"p-aaa","usage":{"modelUsage":{"grok-4.5":{"inputTokens":1200,"outputTokens":15,"cachedReadTokens":1000}}}}}}`,
+	}, "\n"))
+
+	require.Len(t, result.UsageEvents, 1)
+	event := result.UsageEvents[0]
+	assert.Equal(t, "session:grok:sess-1:p-aaa:grok-4.5", event.DedupKey)
+	assert.Equal(t, 200, event.InputTokens)
+	assert.Equal(t, 15, event.OutputTokens)
+	assert.Equal(t, "2026-07-20T19:24:40Z", event.OccurredAt)
+	assert.Equal(t, 15, result.Session.TotalOutputTokens)
+}
+
 func TestGrokProviderPerTurnUsageDatesByTurnTimestamp(t *testing.T) {
 	// A session spanning several days must bucket each turn's usage on
 	// the day the turn happened, not the session's end date.

@@ -204,6 +204,19 @@ func parseGrokUsageEvents(
 ) ([]ParsedUsageEvent, error) {
 	sessionFallback := timeString(endedAt, startedAt)
 	var events []ParsedUsageEvent
+	// Last-wins in-memory dedupe: a re-emitted payload for the same turn
+	// and model (retry/replay lines share a prompt_id) is a rewrite of
+	// that turn, and duplicate DedupKeys would violate the DB's unique
+	// (session_id, source, dedup_key) index and roll back the replace.
+	eventIndex := map[string]int{}
+	emit := func(ev ParsedUsageEvent) {
+		if i, ok := eventIndex[ev.DedupKey]; ok {
+			events[i] = ev
+			return
+		}
+		eventIndex[ev.DedupKey] = len(events)
+		events = append(events, ev)
+	}
 	turn := 0
 	_, err := readJSONLFrom(path, 0, func(line string) {
 		usage := gjson.Get(line, "params.update.usage")
@@ -227,7 +240,7 @@ func parseGrokUsageEvents(
 		emitted := false
 		if modelUsage.IsObject() {
 			modelUsage.ForEach(func(model, modelData gjson.Result) bool {
-				events = append(events, grokUsageEvent(
+				emit(grokUsageEvent(
 					sessionID, model.Str, turnKey, modelData, occurredAt,
 				))
 				emitted = true
@@ -239,7 +252,7 @@ func parseGrokUsageEvents(
 			if model == "" {
 				model = "grok-summary"
 			}
-			events = append(events, grokUsageEvent(
+			emit(grokUsageEvent(
 				sessionID, model, turnKey, usage, occurredAt,
 			))
 		}

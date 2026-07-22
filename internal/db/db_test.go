@@ -930,9 +930,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionCopilotReportedCost(t *testing.T) {
-	assert.Equal(t, 69, CurrentDataVersion(),
-		"Copilot reported-cost parsing requires a data version bump")
+func TestCurrentDataVersionGrokPerTurnUsage(t *testing.T) {
+	assert.Equal(t, 70, CurrentDataVersion(),
+		"Grok per-turn usage parsing requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
