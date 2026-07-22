@@ -3721,6 +3721,99 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("detail");
     });
 
+    it("prefers a later-issued index over a detail commit issued earlier", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A refresh is issued first...
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...then a reload is issued, whose server snapshot carries a newer
+      // remote rename. The refresh commits while the reload is pending.
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      resolveRefresh(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "old",
+          first_message: "detail-2",
+        }),
+      );
+      await refresh;
+
+      // The refresh's request predates the reload's, so its commit must not
+      // outrank the later-issued index snapshot: the newer rename wins and
+      // the refresh contributes its detail-owned fields through the row.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({
+            id: "sel",
+            project: "proj-a",
+            display_name: "server-renamed",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+      expect(sessions.activeSession?.first_message).toBe("detail-2");
+      const row = sessions.sessions.find((s) => s.id === "sel");
+      expect(row?.display_name).toBe("server-renamed");
+    });
+
+    it("refetches enriched detail after renaming an unhydrated session", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      // Deep-link navigation failed transiently: the session is active with
+      // an empty detail cache.
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network"));
+      await sessions.navigateToSession("sel");
+
+      // The rename endpoint returns a plain DB-session shape without the
+      // derived detail-only fields, so committing it can only be an interim
+      // snapshot: a fresh detail GET must follow to fetch the enriched
+      // shape the detail UI needs.
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "sel", display_name: "renamed" }),
+      );
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "sel",
+          project: "proj-b",
+          display_name: "renamed",
+          first_message: "enriched-detail",
+        }),
+      );
+      await sessions.renameSession("sel", "renamed");
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(sessions.activeSession?.first_message).toBe("enriched-detail");
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

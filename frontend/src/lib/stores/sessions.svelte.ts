@@ -368,9 +368,16 @@ class SessionsStore {
   // monotonic, and never removed: resetting one could make a stale capture
   // compare equal again.
   private activeDetailRead = new LatestRead();
+  // Each commit records the sidebar index-request ordinal current when its
+  // underlying request was issued (Infinity for write-derived rename/404
+  // commits, which reflect a server mutation and always win). The post-index
+  // reconciliation restores committed detail over the index only when the
+  // commit's request is at least as new as the index request — a detail read
+  // issued before the index was requested cannot outrank the index's later
+  // server snapshot.
   private activeDetailCommitBySession = new Map<
     string,
-    { generation: number; deleted: boolean }
+    { generation: number; deleted: boolean; issuedAtIndexOrdinal: number }
   >();
   // Issue-order counter for sidebar index requests. Read-derived hydration
   // commits only count as commits when no newer index request was issued
@@ -546,7 +553,7 @@ class SessionsStore {
   ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
-    this.indexRequestOrdinal++;
+    const requestOrdinal = ++this.indexRequestOrdinal;
     const detailCommits = this.snapshotDetailCommits();
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
@@ -584,7 +591,7 @@ class SessionsStore {
       for (const row of index.sessions) {
         this.indexCommitByRow.set(row.id, commitOrdinal);
       }
-      this.syncActiveSessionAfterIndexCommit(detailCommits);
+      this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
@@ -681,11 +688,7 @@ class SessionsStore {
             detailFresh
           ) {
             this.activeSessionDetail = hydrated;
-            // Count as a commit only when no newer index request was issued
-            // since this fetch began — see indexRequestOrdinal.
-            if (issuedAtIndexOrdinal === this.indexRequestOrdinal) {
-              this.bumpDetailCommit(id, false);
-            }
+            this.bumpDetailCommit(id, false, issuedAtIndexOrdinal);
           }
           if (
             version !== this.sidebarIndexVersion ||
@@ -701,11 +704,8 @@ class SessionsStore {
           }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
-          if (
-            hydrated.id === this.activeSessionId &&
-            issuedAtIndexOrdinal === this.indexRequestOrdinal
-          ) {
-            this.bumpDetailCommit(id, false);
+          if (hydrated.id === this.activeSessionId) {
+            this.bumpDetailCommit(id, false, issuedAtIndexOrdinal);
           }
         } catch {
           // Visible hydration is best-effort; the skinny row remains usable.
@@ -767,7 +767,7 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
-    this.indexRequestOrdinal++;
+    const requestOrdinal = ++this.indexRequestOrdinal;
     const detailCommits = this.snapshotDetailCommits();
     const signal = this.routeSignal();
     this.loading = true;
@@ -801,7 +801,7 @@ class SessionsStore {
       for (const row of index.sessions) {
         this.indexCommitByRow.set(row.id, commitOrdinal);
       }
-      this.syncActiveSessionAfterIndexCommit(detailCommits);
+      this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch (error) {
       if (signal.aborted || isAbortError(error)) return;
       throw error;
@@ -915,11 +915,16 @@ class SessionsStore {
     return this.activeDetailCommitBySession.get(id)?.generation ?? 0;
   }
 
-  private bumpDetailCommit(id: string, deleted: boolean): void {
+  private bumpDetailCommit(
+    id: string,
+    deleted: boolean,
+    issuedAtIndexOrdinal: number,
+  ): void {
     const current = this.activeDetailCommitBySession.get(id);
     this.activeDetailCommitBySession.set(id, {
       generation: (current?.generation ?? 0) + 1,
       deleted,
+      issuedAtIndexOrdinal,
     });
   }
 
@@ -1001,11 +1006,20 @@ class SessionsStore {
   // strictly fresher detail on top.
   private syncActiveSessionAfterIndexCommit(
     snapshot: ReadonlyMap<string, number>,
+    requestOrdinal: number,
   ) {
     const id = this.activeSessionId;
     if (id === null) return;
     const commit = this.activeDetailCommitBySession.get(id);
-    if (!commit || commit.generation === (snapshot.get(id) ?? 0)) {
+    if (
+      commit === undefined ||
+      commit.generation === (snapshot.get(id) ?? 0) ||
+      (!commit.deleted && commit.issuedAtIndexOrdinal < requestOrdinal)
+    ) {
+      // Nothing committed mid-flight, or the commit's request predates this
+      // index request — the index's server snapshot is at least as fresh, so
+      // absorb its refreshes into the cache (the commit's detail-owned
+      // fields survive through the row's existing-field carry-over).
       this.cacheActiveSessionDetailFromList(id);
       return;
     }
@@ -1064,6 +1078,7 @@ class SessionsStore {
       return;
     }
     const signal = this.activeDetailRead.begin();
+    const issuedAtIndexOrdinal = this.indexRequestOrdinal;
     const indexCommitsAtStart = this.indexCommitOrdinal;
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
@@ -1088,7 +1103,7 @@ class SessionsStore {
           } else {
             this.activeSessionDetail = session;
           }
-          this.bumpDetailCommit(id, false);
+          this.bumpDetailCommit(id, false, issuedAtIndexOrdinal);
         }
       } catch {
         // Session not found — selection stands without metadata
@@ -1132,6 +1147,7 @@ class SessionsStore {
       return this.refreshActiveSession();
     }
     const signal = this.activeDetailRead.begin();
+    const issuedAtIndexOrdinal = this.indexRequestOrdinal;
     const indexCommitsAtStart = this.indexCommitOrdinal;
     try {
       configureGeneratedClient();
@@ -1161,7 +1177,7 @@ class SessionsStore {
         // breadcrumb.
         this.activeSessionDetail = session;
       }
-      this.bumpDetailCommit(id, false);
+      this.bumpDetailCommit(id, false, issuedAtIndexOrdinal);
     } catch (e) {
       // The session may have been deleted, locally or on another machine. On
       // a definitive not-found drop the cached detail so the breadcrumb
@@ -1174,7 +1190,7 @@ class SessionsStore {
         this.activeSessionId === id &&
         this.activeDetailRead.isCurrent(signal)
       ) {
-        this.bumpDetailCommit(id, true);
+        this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
         this.activeSessionDetail = null;
         // A hydrated matching row would keep backing activeSession as a
         // ghost of the deleted session; drop it and keep the pagination
@@ -1709,12 +1725,20 @@ class SessionsStore {
     // watcher refresh.
     if (this.activeSessionId === id) {
       this.activeDetailRead.cancel();
-      this.bumpDetailCommit(id, false);
-      const base =
-        this.activeSessionDetail?.id === id
-          ? this.activeSessionDetail
-          : { ...updated, is_index_only: false };
-      this.activeSessionDetail = applyRename(base);
+      this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
+      const cached =
+        this.activeSessionDetail?.id === id ? this.activeSessionDetail : null;
+      this.activeSessionDetail = applyRename(
+        cached ?? { ...updated, is_index_only: false },
+      );
+      // The rename endpoint returns the plain DB-session shape, without the
+      // derived detail-only fields (decode confidence, health explanations).
+      // Merging onto a populated cache preserves those, but a fabricated
+      // base is only an interim snapshot: chase with a fresh detail read so
+      // the enriched shape arrives instead of masquerading as hydrated.
+      if (cached === null) {
+        void this.refreshActiveSession();
+      }
     }
   }
 
