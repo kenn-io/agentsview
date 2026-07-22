@@ -339,6 +339,65 @@ func TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes(t *testi
 	}
 }
 
+// TestAvailableUnwatchedPollRootsBlocksMixedRelativeAndAbsoluteScopes pins the
+// path-form parity between this gate and the engine: ReconcileWatchRoots
+// expands requested roots against configured dirs in absolute form
+// (cleanRootPath), so a blocked scope configured relative and a pollable root
+// configured absolute (or vice versa) still overlap on the engine side. The
+// daemon-side blocking check must compare the same form, or the poll
+// reconciles the deferred scope authoritatively and tombstones its sessions.
+func TestAvailableUnwatchedPollRootsBlocksMixedRelativeAndAbsoluteScopes(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	t.Chdir(base)
+	scope := requireExistingPollRoot(t, base, "scope")
+	sub := requireExistingPollRoot(t, scope, "sub")
+	missingProbe := filepath.Join(base, "missing-probe")
+
+	tests := []struct {
+		name        string
+		obligations []pollingObligation
+	}{
+		{
+			name: "relative blocked scope defers absolute descendant",
+			obligations: []pollingObligation{
+				{Key: "blocked", Roots: []string{"scope"}, Probe: missingProbe},
+				{Key: "poll", Roots: []string{sub}},
+			},
+		},
+		{
+			name: "absolute blocked scope defers relative descendant",
+			obligations: []pollingObligation{
+				{Key: "blocked", Roots: []string{scope}, Probe: missingProbe},
+				{Key: "poll", Roots: []string{filepath.Join("scope", "sub")}},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Empty(t, availableUnwatchedPollRoots(tc.obligations),
+				"a blocked scope must defer overlapping roots regardless of "+
+					"the path form each side was configured with")
+		})
+	}
+}
+
+// TestAvailableUnwatchedPollRootsBlocksScopesUnderFilesystemRoot pins the
+// filesystem-root edge: a blocked scope at the filesystem root ("/" on Unix,
+// the volume root on Windows) already ends in the separator, so naive
+// root+separator prefix matching never sees any candidate as its descendant.
+func TestAvailableUnwatchedPollRootsBlocksScopesUnderFilesystemRoot(t *testing.T) {
+	candidate := t.TempDir()
+	fsRoot := filepath.VolumeName(candidate) + string(filepath.Separator)
+	obligations := []pollingObligation{
+		{Key: "blocked", Roots: []string{fsRoot},
+			Probe: filepath.Join(candidate, "missing-probe")},
+		{Key: "poll", Roots: []string{candidate}},
+	}
+	assert.Empty(t, availableUnwatchedPollRoots(obligations),
+		"a blocked filesystem-root scope must defer every candidate beneath it")
+}
+
 // TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope drives the
 // real engine: agent A's configured dir is an ancestor of agent B's, B's probe
 // is missing, and A stays pollable. Polling A's root must not expand into B's

@@ -858,9 +858,14 @@ func probeWatchRecoveryScope(cfg config.Config) watchRecoveryScope {
 // dir in either direction (an outer root over an unmounted nested root, or
 // Codex's shallow parent probe over a sibling provider's missing dir) would
 // read that scope as an empty discovery and tombstone every baselined
-// session beneath it. Callers pass cleaned paths.
+// session beneath it. Both sides are normalized to absolute form here because
+// the engine expands roots against configured dirs after filepath.Abs
+// (cleanRootPath): a scope configured relative and a path configured absolute
+// still overlap on the engine side, so they must overlap here too.
 func overlapsDeferredScope(path string, deferred map[string]struct{}) bool {
+	path = absRootPath(path)
 	for dir := range deferred {
+		dir = absRootPath(dir)
 		if path == dir || pathWithinRoot(path, dir) || pathWithinRoot(dir, path) {
 			return true
 		}
@@ -868,10 +873,27 @@ func overlapsDeferredScope(path string, deferred map[string]struct{}) bool {
 	return false
 }
 
+// absRootPath mirrors the engine's cleanRootPath so daemon-side scope-overlap
+// checks compare the same path form the engine's root expansion uses.
+func absRootPath(path string) string {
+	cleaned := filepath.Clean(path)
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	return abs
+}
+
 // pathWithinRoot reports whether the cleaned path lies strictly below the
-// cleaned root.
+// cleaned root. A cleaned filesystem root ("/" on Unix, a volume root on
+// Windows) already ends in the separator, so the descendant prefix is only
+// suffixed when missing.
 func pathWithinRoot(path, root string) bool {
-	return strings.HasPrefix(path, root+string(filepath.Separator))
+	prefix := root
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	return path != root && strings.HasPrefix(path, prefix)
 }
 
 // newForegroundSyncRunner builds the daemon's foreground local-sync runner used
