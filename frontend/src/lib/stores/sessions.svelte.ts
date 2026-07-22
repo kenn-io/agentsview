@@ -891,12 +891,23 @@ class SessionsStore {
   }
 
   // Seed activeSessionDetail from a hydrated sidebar row so the open session
-  // survives a later reload that drops it from the filtered/first page. Skips
-  // index-only stubs; hydration then seeds the cache via mergeHydratedSession.
+  // survives a later reload that drops it from the filtered/first page. An
+  // index-only stub cannot seed an empty cache (hydration does that via
+  // mergeHydratedSession), but its index fields still refresh an existing
+  // cached detail: a cache-only session whose row re-enters the index must
+  // absorb renames and count changes the index carries.
   private cacheActiveSessionDetailFromList(id: string) {
     if (id !== this.activeSessionId) return;
     const row = this.sessions.find((s) => s.id === id);
-    if (row && !row.is_index_only) this.activeSessionDetail = row;
+    if (!row) return;
+    if (!row.is_index_only) {
+      this.activeSessionDetail = row;
+      return;
+    }
+    const cached = this.activeSessionDetail;
+    if (cached?.id === id) {
+      this.activeSessionDetail = mergeIndexFieldsIntoDetail(row, cached);
+    }
   }
 
   private navigateInFlight: { id: string; promise: Promise<void> } | null =
@@ -1685,6 +1696,15 @@ function sidebarIndexRowToSession(
     created_at: row.created_at,
   };
   if (!existing || existing.is_index_only) return skinny;
+  return mergeIndexFieldsIntoDetail(skinny, existing);
+}
+
+// Overlay the index-owned fields of a skinny row onto previously hydrated
+// detail, keeping the detail-only fields (first_message, tokens, health).
+function mergeIndexFieldsIntoDetail(
+  skinny: Session,
+  existing: Session,
+): Session {
   return {
     ...skinny,
     ...existing,

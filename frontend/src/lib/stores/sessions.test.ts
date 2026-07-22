@@ -826,6 +826,38 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("new-name");
     });
 
+    it("folds index refreshes of a cache-only session's returning row into the cache", async () => {
+      mockSidebarIndex([]);
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "offpage",
+          display_name: "old-name",
+          first_message: "hydrated offpage detail",
+        }),
+      );
+
+      await sessions.load();
+      await sessions.navigateToSession("offpage");
+      expect(sessions.activeSession?.display_name).toBe("old-name");
+
+      // The open cache-only session's row enters the index (filter change,
+      // index shift) carrying a refreshed name, as an index-only stub...
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "offpage", display_name: "new-name" }),
+      ]);
+      await sessions.load();
+
+      // ...and a later reload excludes it again: the breadcrumb must keep
+      // the refreshed index fields on top of the cached hydrated detail.
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      expect(sessions.activeSession?.first_message).toBe(
+        "hydrated offpage detail",
+      );
+      expect(sessions.activeSession?.display_name).toBe("new-name");
+    });
+
     it("keeps the open off-page session when the reloaded index omits it", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
       vi.mocked(api.getSession).mockResolvedValue(
