@@ -1428,30 +1428,36 @@ func (db *DB) listRecallEvidence(
 	if len(ids) == 0 {
 		return result, nil
 	}
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT id, entry_id, session_id, message_start_ordinal,
-			message_end_ordinal, message_start_source_uuid,
-			message_end_source_uuid, content_digest, tool_use_id, snippet
-		FROM recall_evidence
-		WHERE entry_id IN (`+listPlaceholders(len(ids))+`)
-		ORDER BY entry_id ASC, id ASC`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying recall evidence: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		e, err := scanRecallEvidenceRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scanning recall evidence: %w", err)
+	err := queryChunked(ids, func(chunk []string) error {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
 		}
-		result[e.EntryID] = append(result[e.EntryID], e)
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT id, entry_id, session_id, message_start_ordinal,
+				message_end_ordinal, message_start_source_uuid,
+				message_end_source_uuid, content_digest, tool_use_id, snippet
+			FROM recall_evidence
+			WHERE entry_id IN (`+listPlaceholders(len(chunk))+`)
+			ORDER BY entry_id ASC, id ASC`, args...)
+		if err != nil {
+			return fmt.Errorf("querying recall evidence: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			e, err := scanRecallEvidenceRow(rows)
+			if err != nil {
+				return fmt.Errorf("scanning recall evidence: %w", err)
+			}
+			result[e.EntryID] = append(result[e.EntryID], e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 func toCoreRecallEntries(entries []RecallEntry) []corerecall.Entry {

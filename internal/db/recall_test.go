@@ -2359,6 +2359,43 @@ func TestQueryRecallEntriesHonorsStatusFilter(t *testing.T) {
 	assert.Equal(t, "arc", page.RecallEntries[0].ID)
 }
 
+func TestListRecallEvidenceHydratesMoreThanSQLiteBindLimit(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+
+	const entryCount = 33_000
+	entryIDs := make([]string, entryCount)
+	for i := range entryIDs {
+		entryIDs[i] = fmt.Sprintf("entry-%05d", i)
+	}
+	for _, entryID := range []string{entryIDs[0], entryIDs[len(entryIDs)-1]} {
+		_, err := d.InsertRecallEntry(RecallEntry{
+			ID:              entryID,
+			Type:            "fact",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Large evidence hydration",
+			Body:            "Evidence remains available across large candidate sets.",
+			SourceSessionID: "s1",
+			Evidence: []RecallEvidence{{
+				SessionID:           "s1",
+				MessageStartOrdinal: 1,
+				MessageEndOrdinal:   2,
+				Snippet:             entryID,
+			}},
+		})
+		require.NoError(t, err)
+	}
+
+	evidence, err := d.listRecallEvidence(context.Background(), entryIDs)
+	require.NoError(t, err)
+	require.Len(t, evidence, 2)
+	for _, entryID := range []string{entryIDs[0], entryIDs[len(entryIDs)-1]} {
+		require.Len(t, evidence[entryID], 1)
+		assert.Equal(t, entryID, evidence[entryID][0].Snippet)
+	}
+}
+
 func TestVacuumPreservesRecallEntriesFTSSearchable(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
