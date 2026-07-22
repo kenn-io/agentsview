@@ -372,6 +372,15 @@ class SessionsStore {
     string,
     { generation: number; deleted: boolean }
   >();
+  // Issue-order counter for sidebar index requests. Read-derived hydration
+  // commits only count as commits when no newer index request was issued
+  // after the hydration's fetch began: a hydration that predates the index
+  // request cannot carry fresher server state than the index's snapshot, so
+  // letting it win the post-index reconciliation would revert newer index
+  // fields. Rename and 404 commits are write-derived and always win;
+  // navigation/refresh commits stay unconditional because the coordinator
+  // already serializes them against each other.
+  private indexRequestOrdinal = 0;
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -525,6 +534,7 @@ class SessionsStore {
   ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
+    this.indexRequestOrdinal++;
     const detailCommits = this.snapshotDetailCommits();
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
@@ -618,6 +628,7 @@ class SessionsStore {
       const promise = this.runSidebarHydration(async () => {
         if (signal.aborted) return;
         const detailCommitGeneration = this.detailCommitGeneration(id);
+        const issuedAtIndexOrdinal = this.indexRequestOrdinal;
         try {
           configureGeneratedClient();
           const hydrated = await callGenerated(
@@ -645,7 +656,11 @@ class SessionsStore {
             detailFresh
           ) {
             this.activeSessionDetail = hydrated;
-            this.bumpDetailCommit(id, false);
+            // Count as a commit only when no newer index request was issued
+            // since this fetch began — see indexRequestOrdinal.
+            if (issuedAtIndexOrdinal === this.indexRequestOrdinal) {
+              this.bumpDetailCommit(id, false);
+            }
           }
           if (
             version !== this.sidebarIndexVersion ||
@@ -661,7 +676,10 @@ class SessionsStore {
           }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
-          if (hydrated.id === this.activeSessionId) {
+          if (
+            hydrated.id === this.activeSessionId &&
+            issuedAtIndexOrdinal === this.indexRequestOrdinal
+          ) {
             this.bumpDetailCommit(id, false);
           }
         } catch {
@@ -724,6 +742,7 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
+    this.indexRequestOrdinal++;
     const detailCommits = this.snapshotDetailCommits();
     const signal = this.routeSignal();
     this.loading = true;

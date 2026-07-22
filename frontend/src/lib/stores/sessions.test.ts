@@ -3453,6 +3453,58 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("detail");
     });
 
+    it("does not count a pre-reload hydration as fresher than the reload", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+
+      // Hydration of the selected row is issued BEFORE the index reload...
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      sessions.selectSession("sel");
+
+      // ...then a reload starts whose server snapshot carries a newer remote
+      // rename, and the older hydration resolves while it is in flight.
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await hydration;
+
+      // The hydration request predates the reload, so its snapshot cannot
+      // outrank the reload's: the newer index fields must win in the row and
+      // be absorbed into the cache, not be replaced by the older hydration.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({
+            id: "sel",
+            project: "proj-a",
+            display_name: "server-renamed",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.display_name,
+      ).toBe("server-renamed");
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
