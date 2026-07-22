@@ -366,7 +366,7 @@ func TestParseKiloLegacySessionMCPResponsePairs(t *testing.T) {
 		{"ts": 1700000000000, "type": "say", "say": "text",
 			"text": "Use MCP"},
 		{"ts": 1700000001000, "type": "ask",
-			"ask": "use_mcp_server",
+			"ask":  "use_mcp_server",
 			"text": `{"type":"use_mcp_tool","serverName":"brave","toolName":"search","arguments":"{\"query\":\"agentsview\"}"}`},
 		{"ts": 1700000002000, "type": "say",
 			"say":  "mcp_server_response",
@@ -404,7 +404,7 @@ func TestParseKiloLegacySessionMCPUseMcpToolShape(t *testing.T) {
 		{"ts": 1700000000000, "type": "say", "say": "text",
 			"text": "Use MCP"},
 		{"ts": 1700000001000, "type": "ask",
-			"ask": "use_mcp_server",
+			"ask":  "use_mcp_server",
 			"text": `{"type":"use_mcp_tool","serverName":"chrome-devtools","toolName":"take_snapshot","arguments":"{\"verbose\":false}"}`},
 		{"ts": 1700000002000, "type": "say",
 			"say":  "mcp_server_response",
@@ -1065,7 +1065,7 @@ func TestParseKiloLegacySessionCodebaseSearchResultPairs(t *testing.T) {
 		{Timestamp: 1688836852000, Type: "ask", Ask: "tool",
 			Text: `{"tool":"codebaseSearch","query":"find foo","path":null}`},
 		{Timestamp: 1688836853000, Type: "say",
-			Say: "codebase_search_result",
+			Say:  "codebase_search_result",
 			Text: `{"tool":"codebaseSearch","content":{"query":"find foo","results":[{"filePath":"src/foo.ts","score":0.9}]}}`},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
@@ -1107,7 +1107,7 @@ func TestParseKiloLegacySessionCodebaseSearchResultStandalone(t *testing.T) {
 	msgs := []kiloLegacyMessage{
 		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "task"},
 		{Timestamp: 1688836852000, Type: "say",
-			Say: "codebase_search_result",
+			Say:  "codebase_search_result",
 			Text: `{"tool":"codebaseSearch","content":{"query":"orphan","results":[]}}`},
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
