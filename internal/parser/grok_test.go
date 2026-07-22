@@ -418,21 +418,64 @@ func parseGrokUsageFixtureWithSummary(
 	return result
 }
 
-func TestGrokProviderLatestUsageSnapshot(t *testing.T) {
+func TestGrokProviderPerTurnUsageEvents(t *testing.T) {
+	// Usage payloads are per-turn measurements, not cumulative snapshots:
+	// every turn must produce its own event, and cachedReadTokens moving
+	// down between turns (10 -> 13 with a lower input) must be preserved
+	// as-is rather than treated as a snapshot to overwrite.
 	result := parseGrokUsageFixture(t, strings.Join([]string{
 		`{"params":{"update":{"usage":{"inputTokens":100,"outputTokens":20,"cachedReadTokens":10,"reasoningTokens":4}}}}`,
 		`{"params":{"update":{"usage":{"inputTokens":8,"outputTokens":3,"cachedReadTokens":13,"reasoningTokens":1}}}}`,
 		`not json`,
 	}, "\n"))
 
-	require.Len(t, result.UsageEvents, 1)
-	event := result.UsageEvents[0]
-	assert.Equal(t, 0, event.InputTokens)
-	assert.Equal(t, 13, event.CacheReadInputTokens)
-	assert.Equal(t, 3, event.OutputTokens)
-	assert.Equal(t, 1, event.ReasoningTokens)
-	assert.Equal(t, "grok-summary", event.Model)
-	assert.Equal(t, "session:grok:sess-1:grok-summary", event.DedupKey)
+	require.Len(t, result.UsageEvents, 2)
+	first, second := result.UsageEvents[0], result.UsageEvents[1]
+	assert.Equal(t, 90, first.InputTokens)
+	assert.Equal(t, 10, first.CacheReadInputTokens)
+	assert.Equal(t, 20, first.OutputTokens)
+	assert.Equal(t, 4, first.ReasoningTokens)
+	assert.Equal(t, "session:grok:sess-1:turn-1:grok-summary", first.DedupKey)
+	assert.Equal(t, 0, second.InputTokens)
+	assert.Equal(t, 13, second.CacheReadInputTokens)
+	assert.Equal(t, 3, second.OutputTokens)
+	assert.Equal(t, 1, second.ReasoningTokens)
+	assert.Equal(t, "session:grok:sess-1:turn-2:grok-summary", second.DedupKey)
+	assert.Equal(t, 23, result.Session.TotalOutputTokens)
+}
+
+func TestGrokProviderPerTurnUsageDedupsByPromptID(t *testing.T) {
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"timestamp":1784575476,"params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"p-aaa","usage":{"modelUsage":{"grok-4.5":{"inputTokens":1100,"outputTokens":10,"cachedReadTokens":1000}}}}}}`,
+		`{"timestamp":1784575500,"params":{"update":{"sessionUpdate":"turn_completed","prompt_id":"p-bbb","usage":{"modelUsage":{"grok-4.5":{"inputTokens":200,"outputTokens":20,"cachedReadTokens":128},"grok-4.5-build":{"inputTokens":50,"outputTokens":5,"cachedReadTokens":0}}}}}}`,
+	}, "\n"))
+
+	require.Len(t, result.UsageEvents, 3)
+	keys := make([]string, 0, len(result.UsageEvents))
+	for _, event := range result.UsageEvents {
+		keys = append(keys, event.DedupKey)
+	}
+	assert.ElementsMatch(t, []string{
+		"session:grok:sess-1:p-aaa:grok-4.5",
+		"session:grok:sess-1:p-bbb:grok-4.5",
+		"session:grok:sess-1:p-bbb:grok-4.5-build",
+	}, keys)
+}
+
+func TestGrokProviderPerTurnUsageDatesByTurnTimestamp(t *testing.T) {
+	// A session spanning several days must bucket each turn's usage on
+	// the day the turn happened, not the session's end date.
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"timestamp":1779735600,"params":{"update":{"usage":{"inputTokens":10,"outputTokens":1}}}}`,
+		`{"timestamp":1779822000,"params":{"update":{"usage":{"inputTokens":20,"outputTokens":2}}}}`,
+		`{"params":{"update":{"usage":{"inputTokens":30,"outputTokens":3}}}}`,
+	}, "\n"))
+
+	require.Len(t, result.UsageEvents, 3)
+	assert.Equal(t, "2026-05-25T19:00:00Z", result.UsageEvents[0].OccurredAt)
+	assert.Equal(t, "2026-05-26T19:00:00Z", result.UsageEvents[1].OccurredAt)
+	// No per-turn timestamp: falls back to the session window (updatedAt).
+	assert.Equal(t, "2026-07-08T10:30:00Z", result.UsageEvents[2].OccurredAt)
 }
 
 func TestGrokProviderUpdatesWithoutUsageEmitNoEvents(t *testing.T) {

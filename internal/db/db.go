@@ -313,7 +313,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (69: Copilot shutdown events persist the authoritative AI-credit total as
 // reported cost. Re-parsing populates cost_usd and cost_source on existing
 // Copilot rows from session.shutdown totalNanoAiu values.)
-const dataVersion = 69
+// (70: Grok per-turn usage reparse. turn_completed usage payloads are
+// per-turn measurements, not cumulative snapshots — one event per turn
+// and model replaces the single last-payload event per session, with
+// occurred_at from each turn's timestamp. Existing Grok rows undercount
+// multi-turn sessions and need re-parsing.)
+const dataVersion = 70
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
