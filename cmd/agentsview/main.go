@@ -2555,6 +2555,11 @@ func startPeriodicSync(
 	// scheduled reconcile below (Task 5) untouched.
 	go startArchiveAudit(ctx, cfg, engine, database, lock, idleTracker, emitter)
 
+	// Remote object roots are static config; resolve them once. The scheduled
+	// reconcile targets are re-probed each tick because disk availability
+	// changes.
+	remoteRoots := remoteSourceSyncRoots(cfg)
+
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -2566,6 +2571,7 @@ func startPeriodicSync(
 		log.Println("Running scheduled reconciliation...")
 		idleTracker.Do(func() {
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(cfg))
+			runRemoteSourceSyncPass(ctx, engine, remoteRoots)
 			recomputePendingSessions(engine, database)
 		})
 	}

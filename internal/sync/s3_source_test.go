@@ -1347,3 +1347,145 @@ func TestFilterFilesByMtimeAppliesCutoffToProviderDiscoveredClaudeS3(t *testing.
 	assert.Empty(t, got,
 		"an unchanged old provider-discovered Claude S3 object must be cut off")
 }
+
+// scopeRecordingS3Factory is a Claude provider factory whose discovery emits a
+// fixed s3:// source and records the roots each provider was constructed with,
+// so a scoped pass's root filtering is observable.
+type scopeRecordingS3Factory struct {
+	source parser.SourceRef
+	roots  [][]string
+}
+
+func (f *scopeRecordingS3Factory) Definition() parser.AgentDef {
+	return parser.AgentDef{
+		Type:        parser.AgentClaude,
+		DisplayName: "Claude Code",
+		FileBased:   true,
+	}
+}
+
+func (f *scopeRecordingS3Factory) Capabilities() parser.Capabilities {
+	return parser.Capabilities{
+		Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+		},
+	}
+}
+
+func (f *scopeRecordingS3Factory) NewProvider(
+	cfg parser.ProviderConfig,
+) parser.Provider {
+	f.roots = append(f.roots, append([]string(nil), cfg.Roots...))
+	return scopeRecordingS3Provider{
+		ProviderBase: parser.ProviderBase{
+			Def:  f.Definition(),
+			Caps: f.Capabilities(),
+		},
+		source: f.source,
+	}
+}
+
+type scopeRecordingS3Provider struct {
+	parser.ProviderBase
+	source parser.SourceRef
+}
+
+func (p scopeRecordingS3Provider) Discover(
+	context.Context,
+) ([]parser.SourceRef, error) {
+	return []parser.SourceRef{p.source}, nil
+}
+
+func (p scopeRecordingS3Provider) FindSource(
+	context.Context, parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	return parser.SourceRef{}, false, nil
+}
+
+func (p scopeRecordingS3Provider) Fingerprint(
+	context.Context, parser.SourceRef,
+) (parser.SourceFingerprint, error) {
+	return parser.SourceFingerprint{}, nil
+}
+
+func (p scopeRecordingS3Provider) Parse(
+	context.Context, parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{}, nil
+}
+
+// TestSyncRootsSinceScopedRemoteRootSyncsNewObject covers the seam the
+// daemon's periodic remote-source pass relies on: SyncRootsSince scoped to a
+// configured s3:// root discovers and syncs a new remote object, and the
+// provider is constructed with only the remote root so the pass never walks
+// the provider's local roots.
+func TestSyncRootsSinceScopedRemoteRootSyncsNewObject(t *testing.T) {
+	database := openTestDB(t)
+	localRoot := t.TempDir()
+	const remoteRoot = "s3://bucket/remote-box/raw/claude"
+	const uri = remoteRoot + "/test-proj/new-session.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello from S3").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	oldFetch := fetchS3Object
+	oldStat := statS3Object
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statS3Object = oldStat
+	})
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statS3Object = func(string) (parser.S3Object, error) {
+		return parser.S3Object{}, missingS3ObjectError()
+	}
+
+	factory := &scopeRecordingS3Factory{source: parser.SourceRef{
+		Provider:       parser.AgentClaude,
+		Key:            uri,
+		DisplayPath:    uri,
+		FingerprintKey: uri,
+		ProjectHint:    "test-proj",
+		Opaque: parser.S3DiscoveredSource{
+			URI:         uri,
+			Project:     "test-proj",
+			Machine:     "remote-box",
+			Size:        int64(len(content)),
+			MtimeNS:     mtime,
+			Fingerprint: "s3:fingerprint:new-session",
+		},
+	}}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {localRoot, remoteRoot},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.SyncRootsSince(
+		context.Background(), []string{remoteRoot}, time.Time{}, nil,
+	)
+
+	assert.Equal(t, 1, stats.Synced, "the new S3 object must sync")
+	assert.Zero(t, stats.Failed)
+	require.Equal(t, [][]string{{remoteRoot}}, factory.roots,
+		"the scoped pass must construct the provider with only the remote root")
+	sess, err := database.GetSessionFull(
+		context.Background(), "remote-box~new-session",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess, "the synced S3 session must be queryable")
+	assert.Equal(t, "remote-box", sess.Machine)
+	require.NotNil(t, sess.FilePath)
+	assert.Equal(t, uri, *sess.FilePath,
+		"the stored source must be the s3:// URI, not a temp path")
+}
