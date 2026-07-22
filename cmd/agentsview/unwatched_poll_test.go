@@ -11,6 +11,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 type recordingUnwatchedPollSyncer struct {
@@ -283,6 +288,103 @@ func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
 	requirePollWithin(t, syncer.wake, time.Second)
 	assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
 		"the shared scope must resume once every probe returns")
+}
+
+// TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes pins the
+// cross-obligation analogue of overlapsDeferredScope: a missing probe blocks
+// its own roots, but ReconcileWatchRoots expands every requested root to the
+// configured dirs above and below it, so a still-available ancestor or
+// descendant root from another obligation would pull the deferred scope back
+// into an authoritative pass and tombstone its sessions.
+func TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes(t *testing.T) {
+	base := t.TempDir()
+	nested := requireExistingPollRoot(t, base, "nested")
+	missingProbe := filepath.Join(nested, "missing-probe")
+	unrelated := requireExistingPollRoot(t, t.TempDir(), "other")
+
+	tests := []struct {
+		name        string
+		obligations []pollingObligation
+		want        []string
+	}{
+		{
+			name: "blocked descendant defers available ancestor",
+			obligations: []pollingObligation{
+				{Key: "base", Roots: []string{base, unrelated}},
+				{Key: "nested", Roots: []string{nested}, Probe: missingProbe},
+			},
+			want: []string{unrelated},
+		},
+		{
+			name: "blocked ancestor defers available descendant",
+			obligations: []pollingObligation{
+				{Key: "nested", Roots: []string{nested, unrelated}},
+				{Key: "base", Roots: []string{base}, Probe: filepath.Join(base, "gone")},
+			},
+			want: []string{unrelated},
+		},
+		{
+			name: "available probes keep overlapping roots pollable",
+			obligations: []pollingObligation{
+				{Key: "base", Roots: []string{base}},
+				{Key: "nested", Roots: []string{nested}, Probe: nested},
+			},
+			want: []string{base, nested},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, availableUnwatchedPollRoots(tc.obligations))
+		})
+	}
+}
+
+// TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope drives the
+// real engine: agent A's configured dir is an ancestor of agent B's, B's probe
+// is missing, and A stays pollable. Polling A's root must not expand into B's
+// configured scope and tombstone B's baselined session as an empty discovery.
+func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T) {
+	base := t.TempDir()
+	nested := requireExistingPollRoot(t, base, "nested")
+	sourcePath := filepath.Join(nested, "project", "archived-session.jsonl")
+
+	database := dbtest.OpenTestDB(t)
+	const sessionID = "claude:archived"
+	dbtest.SeedSession(t, database, sessionID, "project",
+		func(session *db.Session) {
+			session.Agent = string(parser.AgentClaude)
+			session.FilePath = &sourcePath
+		})
+	require.NoError(t,
+		database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+		t.Context(), "local", []db.SessionSourcePath{{
+			Agent: string(parser.AgentClaude), FilePath: sourcePath,
+		}},
+	))
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenHands: {base},
+			parser.AgentClaude:    {nested},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	obligations := []pollingObligation{
+		{Key: "persistent:" + base, Roots: []string{base}, Probe: base},
+		{Key: "nested-gate", Roots: []string{nested},
+			Probe: filepath.Join(nested, "missing-subtree")},
+	}
+	roots := availableUnwatchedPollRoots(obligations)
+	pollUnwatchedRootsOnce(t.Context(), engine, roots)
+
+	assert.Empty(t, roots,
+		"an ancestor overlapping a blocked scope must not stay pollable")
+	preserved, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.NotNil(t, preserved,
+		"polling must not tombstone sessions under the deferred nested scope")
 }
 
 func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(

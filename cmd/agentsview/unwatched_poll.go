@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -240,6 +241,13 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 // it, not just one: Gemini's shallow <root> metadata plan and recursive
 // <root>/tmp plan both reconcile <root>, and the present shallow plan must not
 // make <root> pollable while the subtree holding every session is missing.
+//
+// Blocking extends beyond exact root matches to every candidate overlapping a
+// blocked root in either direction (overlapsDeferredScope): ReconcileWatchRoots
+// expands each requested root to the configured dirs above and below it, so a
+// pollable ancestor or descendant of a blocked root would reconcile the
+// deferred scope as an authoritative empty discovery and tombstone its
+// sessions.
 func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
 	candidates := make(map[string]struct{})
 	blocked := make(map[string]struct{})
@@ -255,7 +263,7 @@ func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
 				continue
 			}
 			if probeMissing {
-				blocked[root] = struct{}{}
+				blocked[filepath.Clean(root)] = struct{}{}
 				continue
 			}
 			if _, err := os.Stat(root); err == nil {
@@ -263,8 +271,10 @@ func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
 			}
 		}
 	}
-	for root := range blocked {
-		delete(candidates, root)
+	for root := range candidates {
+		if overlapsDeferredScope(filepath.Clean(root), blocked) {
+			delete(candidates, root)
+		}
 	}
 	return unwatchedPollRoots(candidates)
 }
