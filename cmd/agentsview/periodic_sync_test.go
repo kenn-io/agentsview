@@ -103,6 +103,47 @@ func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {
 	}
 }
 
+func TestScheduledReconcileDefersNestedUnavailableRoots(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "aider")
+	require.NoError(t, os.MkdirAll(parent, 0o755))
+	child := filepath.Join(parent, "unavailable")
+	sourcePath := filepath.Join(child, "project", ".aider.chat.history.md#0")
+
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentAider: {parent, child},
+	}}
+	database := dbtest.OpenTestDB(t)
+	sessionID := "aider:nested-archived"
+	dbtest.SeedSession(t, database, sessionID, "project",
+		func(session *db.Session) {
+			session.Agent = string(parser.AgentAider)
+			session.FilePath = &sourcePath
+		})
+	require.NoError(t,
+		database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+		t.Context(), "local", []db.SessionSourcePath{{
+			Agent: string(parser.AgentAider), FilePath: sourcePath,
+		}},
+	))
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: cfg.AgentDirs,
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	targets := scheduledReconcileTargets(cfg)
+	runScheduledSyncPass(t.Context(), engine, targets)
+
+	assert.Empty(t, targets,
+		"a present root must defer with a missing nested same-agent scope: "+
+			"the engine expands it back to the missing dir")
+	preserved, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.NotNil(t, preserved,
+		"scheduled reconciliation must preserve sessions under the missing nested root")
+}
+
 type fakeScheduledEngine struct {
 	calls []scheduledReconcileTarget
 	err   error

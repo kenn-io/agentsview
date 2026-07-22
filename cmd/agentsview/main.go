@@ -2728,15 +2728,23 @@ type scheduledReconcileTarget struct {
 // scheduledReconcileTargets selects the configured roots for providers that
 // declare PeriodicReconcile. Every other provider is covered by the watcher and
 // the degraded-coverage poller, so the scheduled pass leaves them untouched.
+// A candidate scope overlapping a missing same-agent scope in either direction
+// is deferred with it: the engine expands a requested root to every configured
+// same-agent dir that is its ancestor or descendant, so reconciling the
+// present scope would read the missing one as an authoritative empty discovery
+// and tombstone every session beneath it.
 func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
 	roots, _, _ := collectWatchRoots(cfg)
-	deferred := make(map[watchScope]struct{})
+	deferred := make(map[parser.AgentType]map[string]struct{})
 	for _, root := range roots {
 		if root.exists {
 			continue
 		}
 		for _, scope := range root.scopes {
-			deferred[scope] = struct{}{}
+			if deferred[scope.agent] == nil {
+				deferred[scope.agent] = make(map[string]struct{})
+			}
+			deferred[scope.agent][scope.syncDir] = struct{}{}
 		}
 	}
 	byAgent := make(map[parser.AgentType][]string)
@@ -2745,7 +2753,7 @@ func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
 			continue
 		}
 		for _, scope := range root.scopes {
-			if _, blocked := deferred[scope]; blocked {
+			if overlapsDeferredScope(scope.syncDir, deferred[scope.agent]) {
 				continue
 			}
 			byAgent[scope.agent] = appendUniqueString(byAgent[scope.agent], scope.syncDir)
