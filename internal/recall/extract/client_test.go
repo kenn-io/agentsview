@@ -1212,6 +1212,27 @@ func TestClientRejectsOversizedContent(t *testing.T) {
 	}
 }
 
+// TestClientClassifiesTransportOverflowWithoutRetry pins the HTTP boundary:
+// reading exactly at the cap cannot reveal whether the body was truncated.
+// The extra sentinel byte must turn an oversized 200 into a client-only limit
+// error instead of a transient JSON parse failure and retry ladder.
+func TestClientClassifiesTransportOverflowWithoutRetry(t *testing.T) {
+	var requests []map[string]any
+	server := newScriptedServer(t, []scriptedResponse{{
+		finishReason: "stop",
+		content:      strings.Repeat("x", maxResponseBodyBytes+1),
+	}}, &requests)
+	defer server.Close()
+
+	_, _, err := testClient(server.URL).DistillWithRecovery(
+		context.Background(), "p", "text", 3,
+	)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errClientOnlyResponseLimit)
+	assert.False(t, endpointScopedRejection(err))
+	assert.Len(t, requests, 1, "a deterministic overflow must not retry")
+}
+
 // TestClientRequestSchemaKeepsLargeBodyLimitLocal pins the server boundary:
 // large maxLength values make some JSON-schema-to-grammar implementations
 // reject the entire request, while the client still rejects oversized bodies

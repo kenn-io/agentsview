@@ -170,11 +170,12 @@ const extractionProtocolVersion = 5
 // checks still bound bodies safely. Lengths count Unicode code points to match
 // JSON Schema maxLength semantics where the schema carries the constraint.
 const (
-	maxResponseEntries = 100
-	maxEntryTitleChars = 500
-	maxEntryBodyChars  = 5000
-	maxEntryEntities   = 50
-	maxEntityChars     = 200
+	maxResponseBodyBytes = 16 << 20
+	maxResponseEntries   = 100
+	maxEntryTitleChars   = 500
+	maxEntryBodyChars    = 5000
+	maxEntryEntities     = 50
+	maxEntityChars       = 200
 )
 
 // Entry is one distilled memory entry as the model produces it.
@@ -452,7 +453,9 @@ func (c *Client) distill(
 			c.transportErrorDetail(cause))}
 	}
 	defer func() { _ = response.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(
+		response.Body, int64(maxResponseBodyBytes)+1,
+	))
 	if err != nil {
 		// Read errors quote raw wire bytes — a malformed chunked trailer
 		// line is echoed verbatim — so the detail follows the same policy
@@ -461,6 +464,14 @@ func (c *Client) distill(
 			err: fmt.Errorf("reading distill response: %s",
 				c.transportErrorDetail(err)),
 		}
+	}
+	responseTooLarge := len(raw) > maxResponseBodyBytes
+	if responseTooLarge {
+		// Non-success responses are classified by their status below; their
+		// diagnostic excerpt never needs the sentinel byte. A successful
+		// response is checked before JSON decoding so truncation cannot
+		// masquerade as a transient parse failure.
+		raw = raw[:maxResponseBodyBytes]
 	}
 	if response.StatusCode == http.StatusBadRequest {
 		detail := c.responseDetail(raw)
@@ -511,6 +522,12 @@ func (c *Client) distill(
 				response.StatusCode, c.responseDetail(raw),
 			),
 		}
+	}
+	if responseTooLarge {
+		return nil, Usage{}, fmt.Errorf(
+			"%w: response body exceeds the %d-byte transport cap",
+			errClientOnlyResponseLimit, maxResponseBodyBytes,
+		)
 	}
 
 	var parsed struct {
