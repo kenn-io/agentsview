@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"testing"
 
@@ -17,6 +18,10 @@ type trashHandlerResponse struct {
 
 type emptyTrashHandlerResponse struct {
 	Deleted int `json:"deleted"`
+}
+
+type metadataConflictsHandlerResponse struct {
+	Conflicts []db.MetadataConflict `json:"conflicts"`
 }
 
 func TestSessionManagementRenameHandler(t *testing.T) {
@@ -93,4 +98,41 @@ func TestSessionManagementEmptyTrashHandler(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	trash := decode[trashHandlerResponse](t, w)
 	assert.Empty(t, trash.Sessions)
+}
+
+func TestSessionManagementMetadataConflictsHandler(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "alpha", 2)
+	require.NoError(t, te.db.SetSyncState("artifact_origin_id", "desktop-d4e5f6"))
+	require.NoError(t, te.db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`INSERT INTO metadata_conflicts
+				(session_gid, field, winning_order_key, losing_order_key,
+				 winning_origin, losing_origin, winning_op, losing_op,
+				 winning_value, losing_value)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			"desktop-d4e5f6~s1",
+			"display_name",
+			"2026-06-14T01:02:03.000000002Z-00000000000000000000-bbb",
+			"2026-06-14T01:02:03.000000002Z-00000000000000000000-aaa",
+			"desktop-d4e5f6",
+			"laptop-a1b2c3",
+			"rename",
+			"rename",
+			`{"display_name":"Winner"}`,
+			`{"display_name":"Other"}`,
+		)
+		return err
+	}))
+
+	w := te.get(t, "/api/v1/sessions/s1/metadata-conflicts")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := decode[metadataConflictsHandlerResponse](t, w)
+	require.Len(t, resp.Conflicts, 1)
+	assert.Equal(t, "display_name", resp.Conflicts[0].Field)
+	assert.Equal(t, `{"display_name":"Winner"}`, resp.Conflicts[0].WinningValue)
+
+	w = te.get(t, "/api/v1/sessions/missing/metadata-conflicts")
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	assertErrorResponse(t, w, "session not found")
 }

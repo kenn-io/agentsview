@@ -163,7 +163,7 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	pushOnce := func() bool {
 		tx, err := ps.pg.BeginTx(ctx, nil)
 		require.NoError(t, err, "begin tx")
-		changed, err := ps.pushSecretFindings(ctx, tx, sessID)
+		changed, err := ps.pushSecretFindings(ctx, tx, sessID, sessID)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSecretFindings: %v", err)

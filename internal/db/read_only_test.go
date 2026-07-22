@@ -234,7 +234,8 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 		return readonly.InsertMessages(nil)
 	})
 	requireReadOnlyOp(t, "BulkStarSessions", func() error {
-		return readonly.BulkStarSessions(nil)
+		_, err := readonly.BulkStarSessions(nil)
+		return err
 	})
 	requireReadOnlyOp(t, "DeleteParserExcludedSessions", func() error {
 		_, err := readonly.DeleteParserExcludedSessions(nil)
@@ -268,6 +269,7 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 
 func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS artifact_sessions_update_queue")
 	execRawSQLite(t, path, "ALTER TABLE sessions DROP COLUMN display_name")
 	requireOpenReadOnlyFails(t, path, "schema missing sessions.display_name")
 }
@@ -299,10 +301,25 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"extract generation", "recall_extract_generations", "state"},
 		{"extract progress stamp", "recall_extract_progress",
 			"content_stamped_at"},
+		{"artifact export authority", "artifact_export_queue", "pending"},
+		{"artifact checkpoint revision", "artifact_checkpoint_heads", "publication_revision"},
+		{"artifact checkpoint size", "artifact_checkpoint_heads", "checkpoint_size"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			conn := openReadOnlySchemaProbe(t)
+			if tt.table == "sessions" {
+				_, err := conn.Exec("DROP TRIGGER IF EXISTS artifact_sessions_update_queue")
+				require.NoError(t, err)
+			}
+			if tt.table == "artifact_export_queue" {
+				_, err := conn.Exec(`
+					DROP INDEX IF EXISTS idx_artifact_export_queue_pending;
+					DROP TRIGGER IF EXISTS artifact_sessions_insert_queue;
+					DROP TRIGGER IF EXISTS artifact_sessions_update_queue;
+					DROP TRIGGER IF EXISTS artifact_sessions_delete_queue`)
+				require.NoError(t, err)
+			}
 			_, err := conn.Exec(
 				"ALTER TABLE " + tt.table + " DROP COLUMN " + tt.column)
 			require.NoError(t, err)
@@ -328,6 +345,8 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"recall_query_exposures", "query_id"},
 		{"recall_extract_generations", "fingerprint"},
 		{"recall_extract_progress", "session_id"},
+		{"artifact_export_queue", "session_id"},
+		{"artifact_publication_revisions", "origin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {

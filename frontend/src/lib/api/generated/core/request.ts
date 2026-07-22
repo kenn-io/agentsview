@@ -234,10 +234,15 @@ export const getResponseBody = async (response: Response): Promise<any> => {
     try {
       const contentType = response.headers.get('Content-Type');
       if (contentType) {
-        const jsonTypes = ['application/json', 'application/problem+json']
-        const isJSON = jsonTypes.some(type => contentType.toLowerCase().startsWith(type));
+        const normalizedContentType = contentType.toLowerCase();
+        const jsonTypes = ['application/json', 'application/problem+json'];
+        const binaryTypes = ['application/octet-stream', 'application/zstd'];
+        const isJSON = jsonTypes.some(type => normalizedContentType.startsWith(type));
+        const isBinary = binaryTypes.some(type => normalizedContentType.startsWith(type));
         if (isJSON) {
           return await response.json();
+        } else if (isBinary) {
+          return await response.blob();
         } else {
           return await response.text();
         }

@@ -12,8 +12,8 @@ func (s *Store) StarSession(sessionID string) (bool, error) {
 	return false, db.ErrReadOnly
 }
 
-func (s *Store) UnstarSession(sessionID string) error {
-	return db.ErrReadOnly
+func (s *Store) UnstarSession(sessionID string) (bool, error) {
+	return false, db.ErrReadOnly
 }
 
 func (s *Store) ListStarredSessionIDs(ctx context.Context) ([]string, error) {
@@ -35,8 +35,8 @@ func (s *Store) ListStarredSessionIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
-func (s *Store) BulkStarSessions(sessionIDs []string) error {
-	return db.ErrReadOnly
+func (s *Store) BulkStarSessions(sessionIDs []string) ([]string, error) {
+	return nil, db.ErrReadOnly
 }
 
 func (s *Store) PinMessage(sessionID string, messageID int64, note *string) (int64, error) {

@@ -123,3 +123,54 @@ func TestToolCallsFilePathIndex(t *testing.T) {
 	require.NoError(t, err, "checking idx_tool_calls_file_path")
 	assert.True(t, exists, "idx_tool_calls_file_path index missing")
 }
+
+func TestEnsureSchemaMigratesPinnedMessageSourceUUIDBeforeIndex(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.ExecContext(ctx,
+		`CREATE SCHEMA IF NOT EXISTS `+schemaTestSchema)
+	require.NoError(t, err, "creating test schema")
+	_, err = pg.ExecContext(ctx, `
+		CREATE TABLE pinned_messages (
+			id BIGSERIAL PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			message_id INT NOT NULL,
+			ordinal INT NOT NULL,
+			note TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (session_id, message_id)
+		)`)
+	require.NoError(t, err, "creating legacy pinned_messages table")
+
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
+		"EnsureSchema should add source_uuid before creating its index")
+
+	var columnExists bool
+	err = pg.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = $1
+			  AND table_name = 'pinned_messages'
+			  AND column_name = 'source_uuid'
+		)`, schemaTestSchema).Scan(&columnExists)
+	require.NoError(t, err, "checking pinned_messages.source_uuid")
+	assert.True(t, columnExists, "pinned_messages.source_uuid missing")
+
+	var indexExists bool
+	err = pg.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = $1
+			  AND tablename = 'pinned_messages'
+			  AND indexname = 'idx_pinned_source_uuid'
+		)`, schemaTestSchema).Scan(&indexExists)
+	require.NoError(t, err, "checking idx_pinned_source_uuid")
+	assert.True(t, indexExists, "idx_pinned_source_uuid index missing")
+}

@@ -317,6 +317,12 @@ func writeOneSessionBatchTx(
 	if deletedAt.Valid {
 		return 0, ErrSessionTrashed
 	}
+	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
+		tx, write.Session.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
 	replacementTranscriptChanged := false
 	if write.ReplaceMessages && sessionExists {
 		stored, err := sessionMessagesTx(
@@ -347,7 +353,7 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if err := replaceSessionUsageEventsTx(
-		tx, write.Session.ID, write.UsageEvents,
+		tx, write.Session.ID, write.UsageEvents, false,
 	); err != nil {
 		return 0, err
 	}
@@ -442,6 +448,18 @@ func writeOneSessionBatchTx(
 	if err := replaceSecretFindingsTx(tx, write.Session.ID, write.Findings,
 		write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion); err != nil {
 		return 0, err
+	}
+	queueGenerationAfter, queueExistsAfter, err := artifactExportGenerationTx(
+		tx, write.Session.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if queueExistedBefore == queueExistsAfter &&
+		queueGenerationBefore == queueGenerationAfter {
+		if err := enqueueArtifactExportTx(tx, write.Session.ID); err != nil {
+			return 0, err
+		}
 	}
 
 	return len(msgs), nil

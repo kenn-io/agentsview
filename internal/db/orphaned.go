@@ -323,9 +323,12 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	return count, nil
 }
 
-// CopySyncStateFrom copies pg_sync_state rows from the source database into the
-// current database. ResyncAll uses this to preserve durable local sync metadata
-// such as the PG push owner marker across the temp-DB swap.
+// CopySyncStateFrom copies durable synchronization authority from the source
+// database into the current database. Alongside selected pg_sync_state rows it
+// preserves artifact publication work, publications, checkpoint heads and
+// floors, and repair work across the temp-database resync swap. Transient
+// bookkeeping such as last_sync_* timestamps is deliberately left behind so
+// the rebuilt DB reports its own sync times.
 func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -346,24 +349,190 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 
-	// Older databases may have no pg_sync_state table.
-	var tableExists int
-	err = conn.QueryRowContext(
-		ctx, "SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='pg_sync_state'",
-	).Scan(&tableExists)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+		return fmt.Errorf("beginning sync state copy: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if oldDBHasTable(ctx, tx, "pg_sync_state") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
+			SELECT key, value FROM old_db.pg_sync_state
+			WHERE key = 'pg_push_marker_id'
+			   OR key LIKE 'artifact\_%' ESCAPE '\'`); err != nil {
+			return fmt.Errorf("copying sync state: %w", err)
 		}
-		return fmt.Errorf("probing pg_sync_state table: %w", err)
 	}
 
-	_, err = conn.ExecContext(ctx, `
-		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
-		SELECT key, value FROM old_db.pg_sync_state
-		WHERE key = 'pg_push_marker_id'`)
+	headRevisionExpr := "0"
+	if oldDBHasColumn(ctx, tx, "artifact_checkpoint_heads", "publication_revision") {
+		headRevisionExpr = "publication_revision"
+	}
+	headSizeExpr := "0"
+	if oldDBHasColumn(ctx, tx, "artifact_checkpoint_heads", "checkpoint_size") {
+		headSizeExpr = "checkpoint_size"
+	}
+	artifactCopies := []struct {
+		table string
+		sql   string
+	}{
+		{
+			"artifact_export_queue",
+			`INSERT INTO main.artifact_export_queue(session_id, enqueued_at, generation, pending)
+			 SELECT session_id, enqueued_at, generation + 1, pending
+			 FROM old_db.artifact_export_queue WHERE true
+			 ON CONFLICT(session_id) DO UPDATE SET
+				enqueued_at = CASE
+					WHEN artifact_export_queue.pending = 1 AND excluded.pending = 1
+						THEN min(artifact_export_queue.enqueued_at, excluded.enqueued_at)
+					WHEN artifact_export_queue.pending = 1
+						THEN artifact_export_queue.enqueued_at
+					ELSE excluded.enqueued_at
+				END,
+				generation = max(artifact_export_queue.generation, excluded.generation) + 1,
+				pending = max(artifact_export_queue.pending, excluded.pending)`,
+		},
+		{
+			"artifact_publications",
+			`INSERT OR REPLACE INTO main.artifact_publications(
+				origin, session_id, manifest_hash, source_fingerprint)
+			 SELECT origin, session_id, manifest_hash, source_fingerprint
+			 FROM old_db.artifact_publications`,
+		},
+		{
+			"artifact_publication_revisions",
+			`INSERT INTO main.artifact_publication_revisions(origin, revision)
+			 SELECT origin, revision FROM old_db.artifact_publication_revisions WHERE true
+			 ON CONFLICT(origin) DO UPDATE SET
+				revision = max(artifact_publication_revisions.revision, excluded.revision)`,
+		},
+		{
+			"artifact_checkpoint_heads",
+			`INSERT OR REPLACE INTO main.artifact_checkpoint_heads(
+				origin, sequence, publication_revision, session_map_sha256,
+				checkpoint_sha256, checkpoint_size)
+			 SELECT origin, sequence, ` + headRevisionExpr + `, session_map_sha256,
+				checkpoint_sha256, ` + headSizeExpr + `
+			 FROM old_db.artifact_checkpoint_heads`,
+		},
+		{
+			"artifact_checkpoint_floors",
+			`INSERT INTO main.artifact_checkpoint_floors(origin, sequence)
+			 SELECT origin, sequence FROM old_db.artifact_checkpoint_floors WHERE true
+			 ON CONFLICT(origin) DO UPDATE SET
+				sequence = max(artifact_checkpoint_floors.sequence, excluded.sequence)`,
+		},
+		{
+			"artifact_checkpoint_landings",
+			`INSERT OR REPLACE INTO main.artifact_checkpoint_landings(origin, sequence)
+			 SELECT origin, sequence FROM old_db.artifact_checkpoint_landings`,
+		},
+		{
+			"artifact_peer_checkpoint_heads",
+			`INSERT OR REPLACE INTO main.artifact_peer_checkpoint_heads(
+				origin, sequence, checkpoint_sha256, checkpoint_size)
+			 SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+			 FROM old_db.artifact_peer_checkpoint_heads`,
+		},
+		{
+			"artifact_checkpoint_landing_sessions",
+			`INSERT OR REPLACE INTO main.artifact_checkpoint_landing_sessions(
+				origin, gid, manifest_hash)
+			 SELECT origin, gid, manifest_hash
+			 FROM old_db.artifact_checkpoint_landing_sessions`,
+		},
+		{
+			"artifact_repair_queue",
+			`INSERT OR REPLACE INTO main.artifact_repair_queue(
+				origin, kind, name, sha256, size, detected_at)
+			 SELECT origin, kind, name, sha256, size, detected_at
+			 FROM old_db.artifact_repair_queue`,
+		},
+	}
+	for _, copy := range artifactCopies {
+		if !oldDBHasTable(ctx, tx, copy.table) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, copy.sql); err != nil {
+			return fmt.Errorf("copying %s: %w", copy.table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing sync state copy: %w", err)
+	}
+	return nil
+}
+
+// CopyMetadataReplayFrom copies the durable artifact metadata replay tables
+// (metadata provenance, applied events, replay state, and conflicts) from
+// the source database. ResyncAll uses this so previously applied peer
+// metadata events are not replayed against an empty LWW register after a
+// full rebuild, which would let old events overwrite newer local state.
+func (d *DB) CopyMetadataReplayFrom(sourcePath string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	ctx := context.Background()
+	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("copying sync state: %w", err)
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(
+		ctx, "ATTACH DATABASE ? AS old_db", sourcePath,
+	); err != nil {
+		return fmt.Errorf("attaching source db: %w", err)
+	}
+	defer func() {
+		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
+	}()
+
+	copies := []struct {
+		table   string
+		columns string
+	}{
+		{
+			"metadata_artifact_provenance",
+			"origin, order_key, artifact_hash, session_gid, op",
+		},
+		{
+			"metadata_applied_events",
+			"origin, order_key, artifact_hash, applied_at",
+		},
+		{
+			"metadata_replay_state",
+			"session_gid, field, order_key, hlc, artifact_hash, " +
+				"origin, op, value, updated_at",
+		},
+		{
+			"metadata_conflicts",
+			"session_gid, field, winning_order_key, losing_order_key, " +
+				"winning_origin, losing_origin, winning_op, losing_op, " +
+				"winning_value, losing_value, created_at",
+		},
+	}
+	for _, c := range copies {
+		// Older databases may predate the metadata replay tables.
+		var tableExists int
+		err := conn.QueryRowContext(ctx,
+			"SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name=?",
+			c.table,
+		).Scan(&tableExists)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return fmt.Errorf("probing %s table: %w", c.table, err)
+		}
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+			`INSERT OR IGNORE INTO main.%s (%s)
+			 SELECT %s FROM old_db.%s`,
+			c.table, c.columns, c.columns, c.table,
+		)); err != nil {
+			return fmt.Errorf("copying %s: %w", c.table, err)
+		}
 	}
 	return nil
 }

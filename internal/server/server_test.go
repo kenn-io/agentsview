@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -51,13 +53,77 @@ const (
 
 // testEnv sets up a server with a temporary database.
 type testEnv struct {
-	srv         *server.Server
-	handler     http.Handler
-	db          *db.DB
-	engine      *sync.Engine
-	broadcaster *server.Broadcaster
-	claudeDir   string
-	dataDir     string
+	srv           *server.Server
+	handler       http.Handler
+	db            *db.DB
+	engine        *sync.Engine
+	broadcaster   *server.Broadcaster
+	claudeDir     string
+	dataDir       string
+	artifactStore artifact.ArtifactStore
+	artifactFault *faultInjectArtifactStore
+}
+
+type faultInjectArtifactStore struct {
+	artifact.ArtifactStore
+	mu        stdlibsync.RWMutex
+	createErr error
+}
+
+func (s *faultInjectArtifactStore) Create(
+	ctx context.Context,
+	ref artifact.Ref,
+	identity artifact.Identity,
+	mediaType string,
+	src io.Reader,
+) (artifact.CreateResult, error) {
+	s.mu.RLock()
+	err := s.createErr
+	s.mu.RUnlock()
+	if err != nil {
+		return artifact.CreateResult{}, err
+	}
+	return s.ArtifactStore.Create(ctx, ref, identity, mediaType, src)
+}
+
+func (s *faultInjectArtifactStore) setCreateError(err error) {
+	s.mu.Lock()
+	s.createErr = err
+	s.mu.Unlock()
+}
+
+func (s *faultInjectArtifactStore) Verify(
+	ctx context.Context, budget artifact.WorkBudget,
+) (artifact.MaintenanceResult, error) {
+	return s.ArtifactStore.(artifact.ArtifactMaintainer).Verify(ctx, budget)
+}
+
+func (s *faultInjectArtifactStore) EmptyTrash(
+	ctx context.Context, grace time.Duration, budget artifact.WorkBudget,
+) (artifact.MaintenanceResult, error) {
+	return s.ArtifactStore.(artifact.ArtifactMaintainer).EmptyTrash(ctx, grace, budget)
+}
+
+func (s *faultInjectArtifactStore) GarbageCollect(
+	ctx context.Context, budget artifact.WorkBudget,
+) (artifact.MaintenanceResult, error) {
+	return s.ArtifactStore.(artifact.ArtifactMaintainer).GarbageCollect(ctx, budget)
+}
+
+func (s *faultInjectArtifactStore) Repack(
+	ctx context.Context, budget artifact.WorkBudget,
+) (artifact.MaintenanceResult, error) {
+	return s.ArtifactStore.(artifact.ArtifactMaintainer).Repack(ctx, budget)
+}
+
+func (s *faultInjectArtifactStore) ListQuarantined(
+	ctx context.Context, cursor artifact.Cursor, limit int,
+) ([]artifact.QuarantinedEntry, artifact.Cursor, error) {
+	return s.ArtifactStore.(artifact.ArtifactQuarantineStore).ListQuarantined(ctx, cursor, limit)
+}
+
+func (s *faultInjectArtifactStore) TrashQuarantined(ctx context.Context, token string) error {
+	return s.ArtifactStore.(artifact.ArtifactQuarantineStore).TrashQuarantined(ctx, token)
 }
 
 // setupOption customizes the config used by setup.
@@ -98,6 +164,21 @@ func setupWithServerOpts(
 	return setupWithServerOptsAndDBTemplate(t, srvOpts, nil, opts...)
 }
 
+func setupArtifact(
+	t *testing.T,
+	opts ...setupOption,
+) *testEnv {
+	return setupArtifactWithServerOpts(t, nil, opts...)
+}
+
+func setupArtifactWithServerOpts(
+	t *testing.T,
+	srvOpts []server.Option,
+	opts ...setupOption,
+) *testEnv {
+	return setupWithServerOptsAndDBTemplateMode(t, srvOpts, nil, true, opts...)
+}
+
 func setupWithDBTemplate(
 	t *testing.T,
 	dbFiles map[string][]byte,
@@ -112,6 +193,16 @@ func setupWithServerOptsAndDBTemplate(
 	dbFiles map[string][]byte,
 	opts ...setupOption,
 ) *testEnv {
+	return setupWithServerOptsAndDBTemplateMode(t, srvOpts, dbFiles, false, opts...)
+}
+
+func setupWithServerOptsAndDBTemplateMode(
+	t *testing.T,
+	srvOpts []server.Option,
+	dbFiles map[string][]byte,
+	withArtifacts bool,
+	opts ...setupOption,
+) *testEnv {
 	t.Helper()
 	dir := tempDirWithRetryCleanup(t)
 	cfg := config.Config{
@@ -123,6 +214,9 @@ func setupWithServerOptsAndDBTemplate(
 	}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.ArtifactOriginID != "" {
+		withArtifacts = true
 	}
 	if dbFiles != nil {
 		writeDBTemplateFiles(t, cfg.DBPath, dbFiles)
@@ -149,19 +243,35 @@ func setupWithServerOptsAndDBTemplate(
 		Emitter: broadcaster,
 	}
 	engine := sync.NewEngine(database, engineCfg)
+	var artifactStore artifact.ArtifactStore
+	var artifactFault *faultInjectArtifactStore
+	if withArtifacts {
+		repository, err := artifact.OpenRepository(t.Context(), cfg.DataDir)
+		require.NoError(t, err)
+		artifactFault = &faultInjectArtifactStore{
+			ArtifactStore: repository.Store(),
+		}
+		artifactStore = artifactFault
+		srvOpts = append(srvOpts, server.WithArtifactStore(artifactStore))
+		t.Cleanup(func() {
+			require.NoError(t, repository.Close())
+		})
+	}
 
 	// Prepend so caller-provided srvOpts can still override.
 	srvOpts = append([]server.Option{server.WithBroadcaster(broadcaster)}, srvOpts...)
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	return &testEnv{
-		srv:         srv,
-		handler:     wrapTestHandler(cfg, srv.Handler()),
-		db:          database,
-		engine:      engine,
-		broadcaster: broadcaster,
-		claudeDir:   claudeDir,
-		dataDir:     dir,
+		srv:           srv,
+		handler:       wrapTestHandler(cfg, srv.Handler()),
+		db:            database,
+		engine:        engine,
+		broadcaster:   broadcaster,
+		claudeDir:     claudeDir,
+		dataDir:       dir,
+		artifactStore: artifactStore,
+		artifactFault: artifactFault,
 	}
 }
 
@@ -261,18 +371,27 @@ func setupNoSyncMode(t *testing.T) *testEnv {
 		WriteTimeout: 30 * time.Second,
 	}
 	broadcaster := server.NewBroadcaster(0)
+	repository, err := artifact.OpenRepository(t.Context(), cfg.DataDir)
+	require.NoError(t, err)
+	artifactFault := &faultInjectArtifactStore{
+		ArtifactStore: repository.Store(),
+	}
+	t.Cleanup(func() { require.NoError(t, repository.Close()) })
 	srv := server.New(
 		cfg, database, nil,
 		server.WithBroadcaster(broadcaster),
+		server.WithArtifactStore(artifactFault),
 	)
 
 	return &testEnv{
-		srv:         srv,
-		handler:     wrapTestHandler(cfg, srv.Handler()),
-		db:          database,
-		engine:      nil,
-		broadcaster: broadcaster,
-		dataDir:     dir,
+		srv:           srv,
+		handler:       wrapTestHandler(cfg, srv.Handler()),
+		db:            database,
+		engine:        nil,
+		broadcaster:   broadcaster,
+		dataDir:       dir,
+		artifactStore: artifactFault,
+		artifactFault: artifactFault,
 	}
 }
 
@@ -823,6 +942,79 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
 	mode = resolveSchema(mode)
 	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
+}
+
+func TestArtifactOpenAPIDocumentsStreamingAndPagination(t *testing.T) {
+	te := setupArtifact(t)
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	type schema struct {
+		Ref        string            `json:"$ref"`
+		Type       any               `json:"type"`
+		Format     string            `json:"format"`
+		Properties map[string]schema `json:"properties"`
+	}
+	type mediaType struct {
+		Schema schema `json:"schema"`
+	}
+	type operation struct {
+		Parameters []struct {
+			Name string `json:"name"`
+			In   string `json:"in"`
+		} `json:"parameters"`
+		RequestBody *struct {
+			Content map[string]mediaType `json:"content"`
+		} `json:"requestBody"`
+		Responses map[string]struct {
+			Content map[string]mediaType `json:"content"`
+		} `json:"responses"`
+	}
+	var spec struct {
+		Paths      map[string]map[string]operation `json:"paths"`
+		Components struct {
+			Schemas map[string]schema `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	origins := spec.Paths["/api/v1/artifacts/origins"]["get"]
+	params := map[string]string{}
+	for _, param := range origins.Parameters {
+		params[param.Name] = param.In
+	}
+	assert.Equal(t, "query", params["cursor"])
+	assert.Equal(t, "query", params["limit"])
+	originsSchema := origins.Responses["200"].Content["application/json"].Schema
+	require.True(t, strings.HasPrefix(originsSchema.Ref, "#/components/schemas/"))
+	originsSchema = spec.Components.Schemas[strings.TrimPrefix(
+		originsSchema.Ref, "#/components/schemas/")]
+	assert.Contains(t, originsSchema.Properties, "next_cursor")
+
+	path := spec.Paths["/api/v1/artifacts/{origin}/{kind}/{name}"]
+	getOp, ok := path["get"]
+	require.True(t, ok, "raw artifact GET missing from OpenAPI")
+	getSchema := getOp.Responses["200"].Content["application/octet-stream"].Schema
+	assert.Equal(t, "string", getSchema.Type)
+	assert.Equal(t, "binary", getSchema.Format)
+	assert.Contains(t, getOp.Responses, "404")
+	assert.Equal(t, "string", getOp.Responses["404"].Content["text/plain"].Schema.Type)
+
+	checkpointOp, ok := spec.Paths["/api/v1/artifacts/{origin}/checkpoint"]["get"]
+	require.True(t, ok, "latest checkpoint GET missing from OpenAPI")
+	checkpointSchema := checkpointOp.Responses["200"].Content["application/octet-stream"].Schema
+	assert.Equal(t, "string", checkpointSchema.Type)
+	assert.Equal(t, "binary", checkpointSchema.Format)
+
+	postOp, ok := path["post"]
+	require.True(t, ok, "raw artifact POST missing from OpenAPI")
+	require.NotNil(t, postOp.RequestBody)
+	postSchema := postOp.RequestBody.Content["application/octet-stream"].Schema
+	assert.Equal(t, "string", postSchema.Type)
+	assert.Equal(t, "binary", postSchema.Format)
+	assert.NotEmpty(t, postOp.Responses["200"].Content["application/json"].Schema.Ref)
+	assert.Contains(t, postOp.Responses, "400")
+	assert.Equal(t, "string", postOp.Responses["400"].Content["text/plain"].Schema.Type)
 }
 
 func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {

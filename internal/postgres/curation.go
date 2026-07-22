@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -43,15 +44,20 @@ func (s *Store) StarSession(sessionID string) (bool, error) {
 }
 
 // UnstarSession removes a session star from the shared PG dashboard
-// metadata.
-func (s *Store) UnstarSession(sessionID string) error {
-	if _, err := s.pg.Exec(
+// metadata and reports whether a row was removed.
+func (s *Store) UnstarSession(sessionID string) (bool, error) {
+	res, err := s.pg.Exec(
 		`DELETE FROM starred_sessions WHERE session_id = $1`,
 		sessionID,
-	); err != nil {
-		return fmt.Errorf("unstarring session %s: %w", sessionID, err)
+	)
+	if err != nil {
+		return false, fmt.Errorf("unstarring session %s: %w", sessionID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking unstar result for %s: %w", sessionID, err)
+	}
+	return n > 0, nil
 }
 
 // ListStarredSessionIDs returns shared PG-starred session IDs.
@@ -80,35 +86,60 @@ func (s *Store) ListStarredSessionIDs(
 
 // BulkStarSessions stars multiple existing sessions in one transaction.
 // Unknown session IDs are skipped.
-func (s *Store) BulkStarSessions(sessionIDs []string) error {
+func (s *Store) BulkStarSessions(sessionIDs []string) ([]string, error) {
 	if len(sessionIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	tx, err := s.pg.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning star transaction: %w", err)
+		return nil, fmt.Errorf("beginning star transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
+	// Check existence separately from the insert so stale IDs are skipped and
+	// the caller learns which sessions were actually starred, mirroring the
+	// SQLite backend.
+	exists, err := tx.Prepare(`SELECT 1 FROM sessions WHERE id = $1`)
+	if err != nil {
+		return nil, fmt.Errorf("preparing existence statement: %w", err)
+	}
+	defer exists.Close()
+	insert, err := tx.Prepare(`
 		INSERT INTO starred_sessions (session_id)
-		SELECT $1 WHERE EXISTS (
-			SELECT 1 FROM sessions WHERE id = $1
-		)
+		VALUES ($1)
 		ON CONFLICT (session_id) DO NOTHING`)
 	if err != nil {
-		return fmt.Errorf("preparing star statement: %w", err)
+		return nil, fmt.Errorf("preparing star statement: %w", err)
 	}
-	defer stmt.Close()
+	defer insert.Close()
 
+	starred := make([]string, 0, len(sessionIDs))
 	for _, id := range sessionIDs {
-		if _, err := stmt.Exec(id); err != nil {
-			return fmt.Errorf("starring session %s: %w", id, err)
+		var one int
+		switch err := exists.QueryRow(id).Scan(&one); {
+		case errors.Is(err, sql.ErrNoRows):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("checking session %s: %w", id, err)
+		}
+		res, err := insert.Exec(id)
+		if err != nil {
+			return nil, fmt.Errorf("starring session %s: %w", id, err)
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("checking star insert result for %s: %w", id, err)
+		}
+		if rowsAffected > 0 {
+			starred = append(starred, id)
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing star transaction: %w", err)
+	}
+	return starred, nil
 }
 
 // PinMessage creates or updates a shared PG pin for a message. PG

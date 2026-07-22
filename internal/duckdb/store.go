@@ -748,6 +748,31 @@ func (s *Store) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated 
 	return out, rows.Err()
 }
 
+// MachineSessionCounts returns the number of non-deleted sessions per machine,
+// keyed by machine name.
+func (s *Store) MachineSessionCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := s.duck.QueryContext(ctx,
+		`SELECT machine, COUNT(*) FROM sessions
+		 WHERE deleted_at IS NULL
+		 GROUP BY machine`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var machine string
+		var count int
+		if err := rows.Scan(&machine, &count); err != nil {
+			return nil, err
+		}
+		counts[machine] = count
+	}
+	return counts, rows.Err()
+}
+
 func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
 	rows, err := s.queryContext(ctx,
 		`SELECT DISTINCT machine FROM sessions WHERE `+

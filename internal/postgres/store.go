@@ -451,6 +451,51 @@ func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
 	return total, nil
 }
 
+// SoftDeleteSessionsReturningIDs moves multiple sessions to the trash and
+// returns the IDs that changed state.
+func (s *Store) SoftDeleteSessionsReturningIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	deleted := make([]string, 0, len(ids))
+	const batchSize = 500
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		pb := &paramBuilder{}
+		placeholders := make([]string, 0, end-start)
+		for _, id := range ids[start:end] {
+			placeholders = append(placeholders, pb.add(id))
+		}
+		rows, err := s.pg.Query(
+			`UPDATE sessions
+			 SET deleted_at = NOW(),
+			     updated_at = NOW()
+			 WHERE id IN (`+strings.Join(placeholders, ",")+
+				`) AND deleted_at IS NULL
+			 RETURNING id`,
+			pb.args...,
+		)
+		if err != nil {
+			return deleted, mapPGWriteError("soft deleting sessions", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return deleted, fmt.Errorf("scanning soft deleted session: %w", err)
+			}
+			deleted = append(deleted, id)
+		}
+		if err := rows.Close(); err != nil {
+			return deleted, fmt.Errorf("closing soft deleted session rows: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return deleted, fmt.Errorf("iterating soft deleted sessions: %w", err)
+		}
+	}
+	return deleted, nil
+}
+
 // RestoreSession restores a trashed session.
 func (s *Store) RestoreSession(id string) (int64, error) {
 	res, err := s.pg.Exec(

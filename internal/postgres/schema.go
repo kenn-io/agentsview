@@ -222,10 +222,6 @@ CREATE INDEX IF NOT EXISTS idx_pinned_session
 CREATE INDEX IF NOT EXISTS idx_pinned_created
     ON pinned_messages (created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_pinned_source_uuid
-    ON pinned_messages (session_id, source_uuid)
-    WHERE source_uuid <> '';
-
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern TEXT PRIMARY KEY,
     input_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -746,6 +742,11 @@ func EnsureSchema(
 			"adding messages.thinking_text",
 		},
 		{
+			"pinned_messages", "source_uuid",
+			`source_uuid TEXT NOT NULL DEFAULT ''`,
+			"adding pinned_messages.source_uuid",
+		},
+		{
 			"sessions", "termination_status",
 			`termination_status TEXT`,
 			"adding sessions.termination_status",
@@ -972,12 +973,17 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		 ON sessions(cwd) WHERE cwd != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_project_git_branch
 		 ON sessions(project, git_branch) WHERE git_branch != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_source_session
+		 ON sessions(source_session_id) WHERE source_session_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_compact_boundary
 		 ON messages(session_id, ordinal) WHERE is_compact_boundary = TRUE`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sidechain
 		 ON messages(session_id) WHERE is_sidechain = TRUE`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_pinned_source_uuid
+		 ON pinned_messages(session_id, source_uuid)
+		 WHERE source_uuid <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_covering
 		 ON messages(timestamp, session_id, ordinal, model,
 		             claude_message_id, claude_request_id)
@@ -991,6 +997,12 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		// SQLite partial index so legacy schemas migrate cleanly.
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
 		 ON tool_calls(file_path) WHERE file_path IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_subagent_session
+		 ON tool_calls(subagent_session_id)
+		 WHERE subagent_session_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_result_events_subagent_session
+		 ON tool_result_events(subagent_session_id)
+		 WHERE subagent_session_id IS NOT NULL`,
 		// idx_messages_session_role backs the dense-flow unit-range boundary
 		// fetch (user ordinals by session), mirroring the SQLite index.
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_role

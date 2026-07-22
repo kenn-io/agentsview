@@ -4,6 +4,9 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"go.kenn.io/agentsview/internal/config"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // pushReason labels why a push was triggered, for logging.
@@ -29,12 +32,12 @@ const defaultFlushTimeout = 30 * time.Second
 // under test. In production, after is time.After and floor is a
 // time.Ticker channel.
 type pushLoop struct {
-	debounce time.Duration
-	dirty    chan struct{}
-	floor    <-chan time.Time
-	after    func(time.Duration) <-chan time.Time
-	push     func(ctx context.Context, reason pushReason) error
-	label    string
+	logPrefix string
+	debounce  time.Duration
+	dirty     chan struct{}
+	floor     <-chan time.Time
+	after     func(time.Duration) <-chan time.Time
+	push      func(ctx context.Context, reason pushReason) error
 	// flushTimeout bounds the final shutdown-flush push. Zero means
 	// no bound (used in tests that inject a fake pusher).
 	flushTimeout time.Duration
@@ -46,7 +49,7 @@ func newPushLoop(
 	debounce, interval time.Duration,
 	push func(context.Context, pushReason) error,
 ) (*pushLoop, *time.Ticker) {
-	return newPushLoopWithLabel("pg watch", debounce, interval, push)
+	return newNamedPushLoop("pg watch", debounce, interval, push)
 }
 
 func newPushLoopWithLabel(
@@ -54,14 +57,22 @@ func newPushLoopWithLabel(
 	debounce, interval time.Duration,
 	push func(context.Context, pushReason) error,
 ) (*pushLoop, *time.Ticker) {
+	return newNamedPushLoop(label, debounce, interval, push)
+}
+
+func newNamedPushLoop(
+	logPrefix string,
+	debounce, interval time.Duration,
+	push func(context.Context, pushReason) error,
+) (*pushLoop, *time.Ticker) {
 	ticker := time.NewTicker(interval)
 	return &pushLoop{
+		logPrefix:    logPrefix,
 		debounce:     debounce,
 		dirty:        make(chan struct{}, 1),
 		floor:        ticker.C,
 		after:        time.After,
 		push:         push,
-		label:        label,
 		flushTimeout: defaultFlushTimeout,
 	}, ticker
 }
@@ -112,6 +123,42 @@ func (l *pushLoop) Run(ctx context.Context) {
 
 func (l *pushLoop) doPush(ctx context.Context, reason pushReason) {
 	if err := l.push(ctx, reason); err != nil {
-		log.Printf("%s: push (%s) failed: %v", l.label, reason, err)
+		prefix := l.logPrefix
+		if prefix == "" {
+			prefix = "watch"
+		}
+		log.Printf("%s: push (%s) failed: %v", prefix, reason, err)
 	}
+}
+
+type watchedSinkConfig struct {
+	AppConfig config.Config
+	Engine    *syncpkg.Engine
+	Debounce  time.Duration
+	Interval  time.Duration
+	LogPrefix string
+	Push      func(context.Context, pushReason) error
+}
+
+func runWatchedSink(ctx context.Context, cfg watchedSinkConfig) {
+	loop, ticker := newNamedPushLoop(
+		cfg.LogPrefix, cfg.Debounce, cfg.Interval, cfg.Push,
+	)
+	defer ticker.Stop()
+
+	stopWatcher, unwatchedDirs := startFileWatcher(cfg.AppConfig, cfg.Engine,
+		func(batch syncpkg.WatchBatch) {
+			syncWatchBatch(ctx, cfg.Engine, batch)
+			loop.NotifyDirty()
+		},
+	)
+	defer stopWatcher()
+	if len(unwatchedDirs) > 0 {
+		log.Printf(
+			"%s: %d root(s) not watched; relying on the %s floor for coverage",
+			cfg.LogPrefix, len(unwatchedDirs), cfg.Interval,
+		)
+	}
+
+	loop.Run(ctx)
 }

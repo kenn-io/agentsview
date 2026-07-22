@@ -1329,6 +1329,16 @@ var readOnlyRequiredTables = []string{
 	"recall_query_exposures",
 	"recall_extract_generations",
 	"recall_extract_progress",
+	"artifact_export_queue",
+	"artifact_publications",
+	"artifact_publication_revisions",
+	"artifact_checkpoint_heads",
+	"artifact_checkpoint_floors",
+	"artifact_checkpoint_landings",
+	"artifact_checkpoint_landing_sessions",
+	"artifact_peer_checkpoint_heads",
+	"artifact_repair_queue",
+	"metadata_artifact_provenance",
 }
 
 var (
@@ -1629,6 +1639,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "deleted_at",
 			"ALTER TABLE sessions ADD COLUMN deleted_at TEXT",
+		},
+		{
+			"artifact_checkpoint_heads", "publication_revision",
+			"ALTER TABLE artifact_checkpoint_heads ADD COLUMN publication_revision INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"artifact_checkpoint_heads", "checkpoint_size",
+			"ALTER TABLE artifact_checkpoint_heads ADD COLUMN checkpoint_size INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"messages", "is_system",
@@ -2094,6 +2112,12 @@ func (db *DB) migrateColumns() error {
 	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
 		return err
 	}
+	if _, err := w.Exec(`
+		INSERT OR IGNORE INTO artifact_export_queue(session_id)
+		SELECT id FROM sessions
+		WHERE machine = 'local' AND deleted_at IS NULL`); err != nil {
+		return fmt.Errorf("bootstrapping artifact export queue: %w", err)
+	}
 	if err := installSyncMarkerSchemaLocked(w); err != nil {
 		return err
 	}
@@ -2247,6 +2271,47 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.scrubProjectIdentityGitRemoteCredentialsLocked(w); err != nil {
 		return err
+	}
+
+	if _, err := w.Exec(`
+		CREATE TABLE IF NOT EXISTS metadata_applied_events (
+			origin        TEXT NOT NULL,
+			order_key     TEXT NOT NULL,
+			artifact_hash TEXT NOT NULL,
+			applied_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (origin, order_key)
+		);
+		CREATE TABLE IF NOT EXISTS metadata_replay_state (
+			session_gid   TEXT NOT NULL,
+			field         TEXT NOT NULL,
+			order_key     TEXT NOT NULL,
+			hlc           TEXT NOT NULL,
+			artifact_hash TEXT NOT NULL,
+			origin        TEXT NOT NULL,
+			op            TEXT NOT NULL,
+			value         TEXT NOT NULL DEFAULT '',
+			updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (session_gid, field)
+		);
+		CREATE TABLE IF NOT EXISTS metadata_conflicts (
+			id                INTEGER PRIMARY KEY,
+			session_gid       TEXT NOT NULL,
+			field             TEXT NOT NULL,
+			winning_order_key TEXT NOT NULL,
+			losing_order_key  TEXT NOT NULL,
+			winning_origin    TEXT NOT NULL,
+			losing_origin     TEXT NOT NULL,
+			winning_op        TEXT NOT NULL,
+			losing_op         TEXT NOT NULL,
+			winning_value     TEXT NOT NULL DEFAULT '',
+			losing_value      TEXT NOT NULL DEFAULT '',
+			created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(session_gid, field, winning_order_key, losing_order_key)
+		);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating metadata replay tables: %w", err,
+		)
 	}
 
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
@@ -2792,6 +2857,7 @@ func (db *DB) backfillMessageTokenCoverageLocked(
 	}
 	defer stmt.Close()
 
+	sessions := make(map[string]struct{})
 	for _, candidate := range candidates {
 		if _, err := stmt.Exec(
 			candidate.hasContext, candidate.hasOutput, candidate.id,
@@ -2800,6 +2866,12 @@ func (db *DB) backfillMessageTokenCoverageLocked(
 				"updating message token backfill %d: %w",
 				candidate.id, err,
 			)
+		}
+		sessions[candidate.sessionID] = struct{}{}
+	}
+	for sessionID := range sessions {
+		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
+			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -2815,7 +2887,7 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 	w *writerHandle,
 ) ([]messageTokenCoverageBackfillCandidate, error) {
 	rows, err := w.Query(
-		`SELECT id, token_usage, context_tokens, output_tokens,
+		`SELECT id, session_id, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens
 		 FROM messages
 		 WHERE (has_context_tokens = 0 OR has_output_tokens = 0)
@@ -2833,11 +2905,12 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 	var candidates []messageTokenCoverageBackfillCandidate
 	for rows.Next() {
 		var id int64
+		var sessionID string
 		var tokenUsage string
 		var contextTokens, outputTokens int
 		var hasContextTokens, hasOutputTokens bool
 		if err := rows.Scan(
-			&id, &tokenUsage, &contextTokens,
+			&id, &sessionID, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens,
 			&hasOutputTokens,
 		); err != nil {
@@ -2855,6 +2928,7 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 		}
 		candidates = append(candidates, messageTokenCoverageBackfillCandidate{
 			id:         id,
+			sessionID:  sessionID,
 			hasContext: hasContext,
 			hasOutput:  hasOutput,
 		})
@@ -2867,6 +2941,7 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 
 type messageTokenCoverageBackfillCandidate struct {
 	id         int64
+	sessionID  string
 	hasContext bool
 	hasOutput  bool
 }
@@ -3625,6 +3700,47 @@ func (db *DB) GetSyncState(key string) (string, error) {
 		return "", nil
 	}
 	return value, err
+}
+
+// SyncStateValues reads the non-empty values for exact sync-state keys. Queries
+// are bounded so callers can bulk-resolve state without exceeding SQLite's
+// historical variable limit.
+func (db *DB) SyncStateValues(keys []string) (map[string]string, error) {
+	states := map[string]string{}
+	const batchSize = 900
+	for start := 0; start < len(keys); start += batchSize {
+		end := min(start+batchSize, len(keys))
+		batch := keys[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, len(batch))
+		for i, key := range batch {
+			args[i] = key
+		}
+		rows, err := db.getReader().Query(
+			`SELECT key, value FROM pg_sync_state
+			 WHERE key IN (`+placeholders+`) AND value <> ''`,
+			args...,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var key, value string
+			if err := rows.Scan(&key, &value); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			states[key] = value
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return states, nil
 }
 
 // SetSyncState writes a value to the pg_sync_state table.

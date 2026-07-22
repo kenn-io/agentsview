@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,6 +20,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
@@ -56,20 +58,29 @@ const (
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
-	mu             gosync.RWMutex
-	cfg            config.Config
-	db             db.Store
-	engine         *sync.Engine
-	onDemandEngine *sync.Engine
-	sessions       service.SessionService
-	broadcaster    *Broadcaster
-	mux            *http.ServeMux
-	api            huma.API
-	httpSrv        *http.Server
-	version        VersionInfo
-	dataDir        string
+	mu                    gosync.RWMutex
+	sessionLifecycleMu    gosync.Mutex
+	artifactImportPending bool
+	artifactBaselineDone  bool
+	cfg                   config.Config
+	db                    db.Store
+	engine                *sync.Engine
+	onDemandEngine        *sync.Engine
+	sessions              service.SessionService
+	broadcaster           *Broadcaster
+	metadata              *artifact.MetadataRecorder
+	metadataAppend        func(context.Context, artifact.MetadataEventInput) error
+	mux                   *http.ServeMux
+	api                   huma.API
+	httpSrv               *http.Server
+	version               VersionInfo
+	dataDir               string
 
-	httpRemoteCleanupRegistry *remotesync.CleanupRegistry
+	httpRemoteCleanupRegistry  *remotesync.CleanupRegistry
+	artifactCursors            *artifactCursorRegistry
+	artifactStoreCursorsMu     gosync.Mutex
+	artifactStoreCursors       *artifactStoreCursorRegistry
+	artifactStoreCursorsClosed bool
 
 	// baseCtx, when set, is used as the base context for all
 	// incoming requests. Cancelling it causes SSE handlers to
@@ -87,6 +98,14 @@ type Server struct {
 	// handler, used only by tests to guarantee handlers
 	// exceed a short timeout. Zero in production.
 	handlerDelay time.Duration
+	// beforeSessionLifecycleLock observes lock attempts in concurrency tests.
+	// Production servers leave it nil.
+	beforeSessionLifecycleLock func()
+	// beginArtifactRepositoryReset and republishArtifactRepositoryReset expose
+	// the reset commit boundary to the daemon lifecycle. Tests may hold the
+	// post-move publication phase deterministically.
+	beginArtifactRepositoryReset     func(context.Context, string, string, *artifact.Repository, func() error) (*artifact.Repository, artifact.RepositoryResetResult, error)
+	republishArtifactRepositoryReset func(context.Context, string, *db.DB, string, *artifact.Repository, artifact.RepositoryResetResult) (artifact.RepositoryResetResult, error)
 
 	// updateCheckFn is the function called to check for
 	// updates. Defaults to update.CheckForUpdate; tests
@@ -135,6 +154,221 @@ type Server struct {
 	vectorPushSource postgres.VectorPushSource
 
 	ensurePricing func(context.Context, *db.DB) error
+
+	artifactStore          artifact.ArtifactStore
+	artifactOps            artifactOperationLifetime
+	documentArtifactRoutes bool
+}
+
+type artifactOperationLifetime struct {
+	mu             gosync.Mutex
+	cond           *gosync.Cond
+	store          artifact.ArtifactStore
+	active         int
+	resetting      bool
+	resetCommitted bool
+	resetCancel    context.CancelFunc
+	closing        bool
+	closed         bool
+	closeErr       error
+}
+
+func (l *artifactOperationLifetime) setStore(store artifact.ArtifactStore) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.store = store
+}
+
+func (l *artifactOperationLifetime) acquire() (artifact.ArtifactStore, func(), error) {
+	l.mu.Lock()
+	if l.resetting || l.closing || l.closed || l.store == nil {
+		l.mu.Unlock()
+		return nil, nil, errors.New("artifact store is not available")
+	}
+	l.active++
+	store := l.store
+	l.mu.Unlock()
+	return store, l.release, nil
+}
+
+func (l *artifactOperationLifetime) release() {
+	var store artifact.ArtifactStore
+	l.mu.Lock()
+	if l.active > 0 {
+		l.active--
+	}
+	if l.cond != nil {
+		l.cond.Broadcast()
+	}
+	if l.closing && !l.resetting && l.active == 0 && !l.closed {
+		l.closed = true
+		store = l.store
+	}
+	l.mu.Unlock()
+	if store != nil {
+		err := store.Close()
+		l.mu.Lock()
+		l.closeErr = errors.Join(l.closeErr, err)
+		l.mu.Unlock()
+	}
+}
+
+func (l *artifactOperationLifetime) beginReset(
+	ctx context.Context,
+) (artifact.ArtifactStore, context.Context, error) {
+	if ctx == nil {
+		return nil, nil, errors.New("artifact store reset context is required")
+	}
+	l.mu.Lock()
+	if l.resetting || l.closing || l.closed || l.store == nil {
+		l.mu.Unlock()
+		return nil, nil, errors.New("artifact store is not available for reset")
+	}
+	resetCtx, cancel := context.WithCancel(ctx)
+	l.resetting = true
+	l.resetCommitted = false
+	l.resetCancel = cancel
+	if l.cond == nil {
+		l.cond = gosync.NewCond(&l.mu)
+	}
+	stopWake := context.AfterFunc(resetCtx, func() {
+		l.mu.Lock()
+		l.cond.Broadcast()
+		l.mu.Unlock()
+	})
+	defer stopWake()
+	for l.active > 0 && resetCtx.Err() == nil && !l.closing {
+		l.cond.Wait()
+	}
+	cause := resetCtx.Err()
+	if l.closing || l.closed {
+		cause = errors.Join(cause, errors.New("artifact store is closing"))
+	}
+	if cause != nil {
+		l.resetting = false
+		l.resetCommitted = false
+		l.resetCancel = nil
+		l.cond.Broadcast()
+		var closeStore artifact.ArtifactStore
+		if l.closing && l.active == 0 && !l.closed {
+			l.closed = true
+			closeStore = l.store
+		}
+		l.mu.Unlock()
+		if closeStore != nil {
+			closeErr := closeStore.Close()
+			l.mu.Lock()
+			l.closeErr = errors.Join(l.closeErr, closeErr)
+			l.mu.Unlock()
+			cause = errors.Join(cause, closeErr)
+		}
+		cancel()
+		return nil, nil, cause
+	}
+	store := l.store
+	l.mu.Unlock()
+	return store, resetCtx, nil
+}
+
+// commitResetMutation revalidates an admitted reset at Docbank's final
+// pre-move boundary. The closing check and mutation commit are serialized, but
+// the mutex is released before the filesystem move and SQLite republish.
+func (l *artifactOperationLifetime) commitResetMutation(
+	ctx context.Context,
+) error {
+	if ctx == nil {
+		return errors.New("artifact store reset context is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !l.resetting || l.closing || l.closed || l.store == nil {
+		return errors.New("artifact store is closing before reset mutation")
+	}
+	l.resetCommitted = true
+	return nil
+}
+
+func (l *artifactOperationLifetime) setResetStore(store artifact.ArtifactStore) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.resetting || !l.resetCommitted {
+		return errors.New("artifact store reset mutation is not committed")
+	}
+	l.store = store
+	return nil
+}
+
+func (l *artifactOperationLifetime) finishReset(store artifact.ArtifactStore) error {
+	var closeStore artifact.ArtifactStore
+	var cancel context.CancelFunc
+	l.mu.Lock()
+	if !l.resetting {
+		l.mu.Unlock()
+		return errors.New("artifact store reset is not active")
+	}
+	l.store = store
+	l.resetting = false
+	l.resetCommitted = false
+	cancel = l.resetCancel
+	l.resetCancel = nil
+	if l.closing && !l.closed {
+		l.closed = true
+		closeStore = store
+	}
+	if l.cond != nil {
+		l.cond.Broadcast()
+	}
+	l.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if closeStore == nil {
+		return nil
+	}
+	err := closeStore.Close()
+	l.mu.Lock()
+	l.closeErr = errors.Join(l.closeErr, err)
+	l.mu.Unlock()
+	return err
+}
+
+func (l *artifactOperationLifetime) closeWhenIdle() error {
+	var store artifact.ArtifactStore
+	var cancel context.CancelFunc
+	l.mu.Lock()
+	l.closing = true
+	cancel = l.resetCancel
+	if l.cond != nil {
+		l.cond.Broadcast()
+	}
+	if !l.resetting && l.active == 0 && !l.closed {
+		l.closed = true
+		store = l.store
+	}
+	existingErr := l.closeErr
+	l.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if store == nil {
+		return existingErr
+	}
+	err := store.Close()
+	l.mu.Lock()
+	l.closeErr = errors.Join(l.closeErr, err)
+	joined := l.closeErr
+	l.mu.Unlock()
+	return joined
+}
+
+func (s *Server) lockSessionLifecycle() {
+	if s.beforeSessionLifecycleLock != nil {
+		s.beforeSessionLifecycleLock()
+	}
+	s.sessionLifecycleMu.Lock()
 }
 
 // New creates a new Server.
@@ -160,15 +394,19 @@ func New(
 	}
 
 	s := &Server{
-		cfg:                       cfg,
-		db:                        database,
-		engine:                    engine,
-		sessions:                  sessions,
-		mux:                       http.NewServeMux(),
-		httpRemoteCleanupRegistry: new(remotesync.CleanupRegistry),
-		insightLogDrainTimeout:    defaultInsightLogDrainTimeout,
-		insightLogStopWaitTimeout: defaultInsightLogStopWaitTimeout,
-		ensurePricing:             pricingrefresh.EnsureCurrent,
+		cfg:                              cfg,
+		db:                               database,
+		engine:                           engine,
+		sessions:                         sessions,
+		mux:                              http.NewServeMux(),
+		httpRemoteCleanupRegistry:        new(remotesync.CleanupRegistry),
+		artifactCursors:                  newArtifactCursorRegistry(),
+		artifactStoreCursors:             newArtifactStoreCursorRegistry(),
+		insightLogDrainTimeout:           defaultInsightLogDrainTimeout,
+		insightLogStopWaitTimeout:        defaultInsightLogStopWaitTimeout,
+		ensurePricing:                    pricingrefresh.EnsureCurrent,
+		beginArtifactRepositoryReset:     artifact.BeginRepositoryReset,
+		republishArtifactRepositoryReset: artifact.RepublishRepositoryReset,
 		generateStreamFunc: func(
 			ctx context.Context, agent, prompt string,
 			onLog insight.LogFunc,
@@ -185,6 +423,13 @@ func New(
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	s.artifactOps.setStore(s.artifactStore)
+	if local, ok := database.(*db.DB); ok && !local.ReadOnly() && s.artifactStore != nil {
+		s.metadata = artifact.NewMetadataRecorder(local, artifact.MetadataRecorderOptions{
+			Origin: cfg.ArtifactOriginID,
+			Store:  s.artifactStore,
+		})
 	}
 	if s.version.APIVersion == 0 {
 		s.version.APIVersion = APIVersion
@@ -227,6 +472,13 @@ func WithVersion(v VersionInfo) Option {
 // WithDataDir sets the data directory used for update caching.
 func WithDataDir(dir string) Option {
 	return func(s *Server) { s.dataDir = dir }
+}
+
+// WithArtifactStore gives the server ownership of the one logical artifact
+// store shared by every artifact route. Shutdown closes it after active
+// artifact operations release their leases.
+func WithArtifactStore(store artifact.ArtifactStore) Option {
+	return func(s *Server) { s.artifactStore = store }
 }
 
 // WithBaseContext sets the base context for all incoming HTTP
@@ -387,6 +639,10 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/v1/artifacts") {
+		http.NotFound(w, r)
+		return
+	}
 	// Try to serve the exact file
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {
@@ -941,7 +1197,12 @@ func localInterfaceIPs() map[string]bool {
 }
 
 // ListenAndServe starts the HTTP server.
-func (s *Server) ListenAndServe() error {
+func (s *Server) ListenAndServe() (retErr error) {
+	defer func() {
+		if closeErr := s.closeArtifactResources(); closeErr != nil {
+			retErr = errors.Join(retErr, closeErr)
+		}
+	}()
 	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
 	listenCtx := context.Background()
 	if s.baseCtx != nil {
@@ -962,7 +1223,12 @@ func (s *Server) ListenAndServe() error {
 }
 
 // Serve starts the HTTP server on an existing listener.
-func (s *Server) Serve(ln net.Listener) error {
+func (s *Server) Serve(ln net.Listener) (retErr error) {
+	defer func() {
+		if closeErr := s.closeArtifactResources(); closeErr != nil {
+			retErr = errors.Join(retErr, closeErr)
+		}
+	}()
 	addr := ln.Addr().String()
 	srv := &http.Server{
 		Addr:        addr,
@@ -981,6 +1247,14 @@ func (s *Server) Serve(ln net.Listener) error {
 	s.mu.Unlock()
 	log.Printf("Starting server at http://%s", addr)
 	return srv.Serve(ln)
+}
+
+func (s *Server) closeArtifactResources() error {
+	if s.artifactCursors != nil {
+		s.artifactCursors.close()
+	}
+	s.closeArtifactStoreCursorRegistry()
+	return s.artifactOps.closeWhenIdle()
 }
 
 // Shutdown gracefully shuts down the HTTP server, then closes the
@@ -1002,7 +1276,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if engine != nil {
 		engine.Close()
 	}
-	return err
+	return errors.Join(err, s.closeArtifactResources())
 }
 
 // FindAvailablePort finds an available port starting from the

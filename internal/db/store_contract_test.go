@@ -129,6 +129,7 @@ func TestStoreContract(t *testing.T) {
 		{"stars_and_pins", contractStarsAndPins},
 		{"analytics_trends_and_usage", contractAnalyticsTrendsAndUsage},
 		{"local_only_methods", contractLocalOnlyMethods},
+		{"machine_counts_and_conflicts", contractMachineCountsAndConflicts},
 	}
 
 	for _, backend := range storeContractBackends() {
@@ -241,6 +242,32 @@ func contractSessionsCursorFiltersAndDates(
 	machines, err := store.GetMachines(ctx, false, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"linux", "mac"}, machines)
+}
+
+func contractMachineCountsAndConflicts(
+	t *testing.T,
+	store Store,
+	_ storeContractFixture,
+	_ storeContractBackend,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	counts, err := store.MachineSessionCounts(ctx)
+	require.NoError(t, err)
+	// The seed places non-deleted sessions on both machines.
+	require.Positive(t, counts["linux"])
+	require.Positive(t, counts["mac"])
+	for machine := range counts {
+		require.Contains(t, []string{"linux", "mac"}, machine,
+			"unexpected machine in session counts: %q", machine)
+	}
+
+	// No conflicts are seeded; every backend reports zero (read-only
+	// mirrors do not carry the local metadata ledger at all).
+	conflicts, err := store.CountMetadataConflicts(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, conflicts)
 }
 
 func contractMessagesOrderingAndToolResults(
@@ -392,13 +419,23 @@ func contractStarsAndPins(
 	ok, err := store.StarSession(fixture.alphaID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, store.BulkStarSessions([]string{fixture.gammaID, "missing-session"}))
+	bulkStarred, err := store.BulkStarSessions([]string{fixture.gammaID, "missing-session"})
+	require.NoError(t, err)
+	require.Equal(t, []string{fixture.gammaID}, bulkStarred)
+	bulkStarred, err = store.BulkStarSessions([]string{fixture.alphaID, fixture.gammaID})
+	require.NoError(t, err)
+	require.Empty(t, bulkStarred)
 
 	stars, err := store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{fixture.alphaID, fixture.gammaID}, stars)
 
-	require.NoError(t, store.UnstarSession(fixture.gammaID))
+	removed, err := store.UnstarSession(fixture.gammaID)
+	require.NoError(t, err)
+	require.True(t, removed)
+	removed, err = store.UnstarSession(fixture.gammaID)
+	require.NoError(t, err)
+	require.False(t, removed)
 	stars, err = store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.alphaID}, stars)

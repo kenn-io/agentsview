@@ -638,7 +638,10 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		t.Helper()
 		tx, err := pg.BeginTx(ctx, nil)
 		require.NoError(t, err, "BeginTx")
-		if err := sync.pushSession(ctx, tx, s, markerID, nil); err != nil {
+		if err := sync.pushSession(ctx, tx, s, pushedSessionIdentity{
+			ID:      s.ID,
+			Machine: s.Machine,
+		}, markerID, nil); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSession: %v", err)
 		}
@@ -704,7 +707,12 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
-	require.NoError(t, sync.pushSession(ctx, tx, remoteSession, markerID, nil), "pushSession")
+	require.NoError(t, sync.pushSession(
+		ctx, tx, remoteSession, pushedSessionIdentity{
+			ID:      remoteSession.ID,
+			Machine: remoteSession.Machine,
+		}, markerID, nil,
+	), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
 
 	var got string
@@ -1053,7 +1061,7 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 		Machine:   "test-machine",
 		Agent:     "claude",
 		CreatedAt: "2026-01-01T00:00:00Z",
-	}, markerID, nil)
+	}, pushedSessionIdentity{ID: sessionID, Machine: "test-machine"}, markerID, nil)
 	require.ErrorIs(t, err, errSessionExcluded)
 	require.NoError(t, tx.Rollback(), "Rollback")
 
@@ -1814,6 +1822,272 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 		"second incremental push must not rewrite the session")
 }
 
+func TestPushPreservesMixedLocalAndImportedMachinesForPGStore(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_mixed_machine_attribution_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB := testDB(t)
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "laptop-a1b2c3",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	localSess := db.Session{
+		ID:           "local-session-001",
+		Project:      "local-proj",
+		Machine:      "local",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+	importedSess := db.Session{
+		ID:           "desktop-d4e5f6~foreign-session-001",
+		Project:      "foreign-proj",
+		Machine:      "desktop-d4e5f6",
+		Agent:        "codex",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:01:00Z",
+	}
+	for _, sess := range []db.Session{localSess, importedSess} {
+		require.NoError(t, localDB.UpsertSession(sess), "UpsertSession %s", sess.ID)
+		require.NoError(t, localDB.InsertMessages([]db.Message{{
+			SessionID:     sess.ID,
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "hello from " + sess.Machine,
+			ContentLength: len("hello from " + sess.Machine),
+		}}), "InsertMessages %s", sess.ID)
+	}
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+	assert.Equal(t, 2, res.SessionsPushed)
+
+	rows, err := pg.Query(`SELECT id, machine FROM sessions`)
+	require.NoError(t, err, "querying pushed machines")
+	defer rows.Close()
+	gotMachines := map[string]string{}
+	for rows.Next() {
+		var id, machine string
+		require.NoError(t, rows.Scan(&id, &machine), "scanning pushed machine")
+		gotMachines[id] = machine
+	}
+	require.NoError(t, rows.Err(), "iterating pushed machines")
+	assert.Equal(t, "laptop-a1b2c3", gotMachines[localSess.ID])
+	assert.Equal(t, "desktop-d4e5f6", gotMachines[importedSess.ID])
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	machines, err := store.GetMachines(ctx, false, false)
+	require.NoError(t, err, "GetMachines")
+	assert.ElementsMatch(t, []string{"desktop-d4e5f6", "laptop-a1b2c3"}, machines)
+
+	importedPage, err := store.ListSessions(ctx, db.SessionFilter{
+		Machine: "desktop-d4e5f6",
+		Limit:   10,
+	})
+	require.NoError(t, err, "ListSessions imported machine")
+	require.Equal(t, 1, importedPage.Total)
+	require.Len(t, importedPage.Sessions, 1)
+	assert.Equal(t, importedSess.ID, importedPage.Sessions[0].ID)
+	assert.Equal(t, "desktop-d4e5f6", importedPage.Sessions[0].Machine)
+
+	localPage, err := store.ListSessions(ctx, db.SessionFilter{
+		Machine: "laptop-a1b2c3",
+		Limit:   10,
+	})
+	require.NoError(t, err, "ListSessions local machine")
+	require.Equal(t, 1, localPage.Total)
+	require.Len(t, localPage.Sessions, 1)
+	assert.Equal(t, localSess.ID, localPage.Sessions[0].ID)
+	assert.Equal(t, "laptop-a1b2c3", localPage.Sessions[0].Machine)
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+	assert.Zero(t, res.SessionsPushed, "unchanged mixed-machine sessions should not be re-pushed")
+}
+
+func TestPushKeepsSameNativeIDDistinctAcrossMachines(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_native_id_collision_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	const nativeID = "shared-native-session-001"
+	const machineA = "laptop-a1b2c3"
+	const machineB = "desktop-d4e5f6"
+	const projectA = "laptop-proj"
+	const projectB = "desktop-proj"
+	pgIDA := nativeID
+	pgIDB := prefixedSessionID(machineB, nativeID)
+
+	localA := testDB(t)
+	localB := testDB(t)
+	syncA := &Sync{
+		pg:         pg,
+		local:      localA,
+		machine:    machineA,
+		schema:     schema,
+		schemaDone: true,
+	}
+	syncB := &Sync{
+		pg:         pg,
+		local:      localB,
+		machine:    machineB,
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	seed := func(local *db.DB, project, content string) db.Session {
+		t.Helper()
+		sess := db.Session{
+			ID:           nativeID,
+			Project:      project,
+			Machine:      "local",
+			Agent:        "claude",
+			MessageCount: 1,
+			CreatedAt:    "2026-01-01T00:00:00Z",
+		}
+		require.NoError(t, local.UpsertSession(sess), "UpsertSession")
+		require.NoError(t, local.InsertMessages([]db.Message{{
+			SessionID:     nativeID,
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       content,
+			ContentLength: len(content),
+		}}), "InsertMessages")
+		return sess
+	}
+	sessA := seed(localA, projectA, "from laptop")
+	sessB := seed(localB, projectB, "from desktop")
+
+	res, err := syncA.Push(ctx, false, nil)
+	require.NoError(t, err, "Push A")
+	assert.Zero(t, res.Errors, "first A push should report no failures")
+	assert.Equal(t, 1, res.SessionsPushed)
+
+	res, err = syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "Push B")
+	assert.Zero(t, res.Errors, "first B push should report no failures")
+	assert.Equal(t, 1, res.SessionsPushed)
+
+	rows, err := pg.Query(
+		`SELECT id, machine, project FROM sessions ORDER BY id`,
+	)
+	require.NoError(t, err, "querying pushed collision rows")
+	defer rows.Close()
+	got := map[string]db.Session{}
+	for rows.Next() {
+		var row db.Session
+		require.NoError(t, rows.Scan(
+			&row.ID, &row.Machine, &row.Project,
+		), "scanning collision row")
+		got[row.ID] = row
+	}
+	require.NoError(t, rows.Err(), "iterating collision rows")
+	require.Len(t, got, 2)
+	assert.Equal(t, machineA, got[pgIDA].Machine)
+	assert.Equal(t, projectA, got[pgIDA].Project)
+	assert.Equal(t, machineB, got[pgIDB].Machine)
+	assert.Equal(t, projectB, got[pgIDB].Project)
+
+	var contentA, contentB string
+	require.NoError(t, pg.QueryRow(
+		`SELECT content FROM messages WHERE session_id = $1 AND ordinal = 0`,
+		pgIDA,
+	).Scan(&contentA), "reading A message")
+	require.NoError(t, pg.QueryRow(
+		`SELECT content FROM messages WHERE session_id = $1 AND ordinal = 0`,
+		pgIDB,
+	).Scan(&contentB), "reading B message")
+	assert.Equal(t, "from laptop", contentA)
+	assert.Equal(t, "from desktop", contentB)
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	pageA, err := store.ListSessions(ctx, db.SessionFilter{
+		Machine: machineA,
+		Limit:   10,
+	})
+	require.NoError(t, err, "ListSessions A")
+	require.Equal(t, 1, pageA.Total)
+	require.Len(t, pageA.Sessions, 1)
+	assert.Equal(t, pgIDA, pageA.Sessions[0].ID)
+	assert.Equal(t, projectA, pageA.Sessions[0].Project)
+	pageB, err := store.ListSessions(ctx, db.SessionFilter{
+		Machine: machineB,
+		Limit:   10,
+	})
+	require.NoError(t, err, "ListSessions B")
+	require.Equal(t, 1, pageB.Total)
+	require.Len(t, pageB.Sessions, 1)
+	assert.Equal(t, pgIDB, pageB.Sessions[0].ID)
+	assert.Equal(t, projectB, pageB.Sessions[0].Project)
+
+	res, err = syncA.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push A")
+	assert.Zero(t, res.Errors, "second A push should report no failures")
+	assert.Zero(t, res.SessionsPushed)
+	res, err = syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push B")
+	assert.Zero(t, res.Errors, "second B push should report no failures")
+	assert.Zero(t, res.SessionsPushed)
+
+	var rowCount int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id IN ($1, $2)`,
+		pgIDA, pgIDB,
+	).Scan(&rowCount), "counting collision rows")
+	assert.Equal(t, 2, rowCount)
+
+	updatedB := sessB
+	updatedB.Project = "desktop-proj-updated"
+	require.NoError(t, localB.UpsertSession(updatedB), "update B session")
+	// UpsertSession does not write local_modified_at, so mark the session
+	// modified explicitly; otherwise the incremental push will not re-list it.
+	require.NoError(t, localB.BumpLocalModifiedAt(nativeID),
+		"mark updated B session modified")
+	res, err = syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "updated Push B")
+	assert.Zero(t, res.Errors, "updated B push should report no failures")
+	assert.Equal(t, 1, res.SessionsPushed)
+
+	var projectAfterA, projectAfterB string
+	require.NoError(t, pg.QueryRow(
+		`SELECT project FROM sessions WHERE id = $1`,
+		pgIDA,
+	).Scan(&projectAfterA), "reading A project after B update")
+	require.NoError(t, pg.QueryRow(
+		`SELECT project FROM sessions WHERE id = $1`,
+		pgIDB,
+	).Scan(&projectAfterB), "reading B project after update")
+	assert.Equal(t, sessA.Project, projectAfterA)
+	assert.Equal(t, updatedB.Project, projectAfterB)
+}
+
 // TestPushDetectsResetWhenCompetingMachineRowsExist verifies that a PG reset is
 // detected even when another pusher has repopulated rows under a machine value
 // this host also writes. The local session carries Machine "remote-host" (as a
@@ -2323,11 +2597,18 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 		schemaDone: true,
 	}
 
-	const sessID = "conflict-001"
+	// A same-id collision against a different live machine is resolved by
+	// storing the session under a machine-prefixed id, not skipped. A skipped
+	// conflict now arises only when the id cannot be re-prefixed: an imported
+	// foreign-origin session already carries its origin's prefix, so when PG
+	// holds that id under a different owner marker -- e.g. a third machine
+	// imported and pushed the same session first -- this push must leave the
+	// row to its owner and report it as a skipped conflict.
+	const sessID = "machine-a~conflict-001"
 	require.NoError(t, localDB.UpsertSession(db.Session{
 		ID:           sessID,
 		Project:      "proj",
-		Machine:      "machine-b",
+		Machine:      "machine-a",
 		Agent:        "claude",
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
@@ -2352,4 +2633,18 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 	assert.Zero(t, res.Errors, "push should not report failed sessions")
 	assert.Zero(t, res.SessionsPushed, "conflicting session should not be counted as pushed")
 	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in PushResult")
+
+	// The conflicting row is left untouched and no doubly-prefixed row is
+	// created in this pusher's namespace.
+	var ownerMarker string
+	require.NoError(t, pg.QueryRow(
+		`SELECT owner_marker FROM sessions WHERE id = $1`, sessID,
+	).Scan(&ownerMarker), "reading conflicting row owner")
+	assert.Equal(t, "other-owner", ownerMarker)
+	var doublyPrefixed int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		prefixedSessionID("machine-b", sessID),
+	).Scan(&doublyPrefixed), "counting doubly-prefixed rows")
+	assert.Zero(t, doublyPrefixed)
 }

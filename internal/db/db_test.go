@@ -994,6 +994,47 @@ func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	assert.Equal(t, "subagent_notification", tc.ResultEvents[1].Source, "result event 1 source")
 }
 
+func TestSessionSubagentSessionIDs(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s-sub", "proj")
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "s-sub", Ordinal: 0, Role: "assistant",
+			Content: "spawn", HasToolUse: true,
+			ToolCalls: []ToolCall{
+				{
+					SessionID: "s-sub", ToolName: "Task", Category: "Task",
+					ToolUseID: "call-1", SubagentSessionID: "sub-a",
+					ResultEvents: []ToolResultEvent{
+						{
+							ToolUseID: "call-1", SubagentSessionID: "sub-a",
+							Source: "subagent", Status: "ok", EventIndex: 0,
+						},
+						{
+							ToolUseID: "call-1", SubagentSessionID: "sub-b",
+							Source: "subagent", Status: "ok", EventIndex: 1,
+						},
+					},
+				},
+				{
+					SessionID: "s-sub", ToolName: "Read", Category: "file",
+					ToolUseID: "call-2",
+				},
+			},
+		},
+	}), "InsertMessages")
+
+	ids, err := d.SessionSubagentSessionIDs("s-sub")
+	require.NoError(t, err, "SessionSubagentSessionIDs")
+	// "sub-a" appears on both the tool call and a result event (deduped);
+	// "sub-b" only on a result event; the empty subagent id is excluded.
+	assert.ElementsMatch(t, []string{"sub-a", "sub-b"}, ids)
+
+	none, err := d.SessionSubagentSessionIDs("missing")
+	require.NoError(t, err, "SessionSubagentSessionIDs missing")
+	assert.Empty(t, none)
+}
+
 func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -4712,11 +4753,16 @@ func TestStarSession(t *testing.T) {
 	assert.Equal(t, []string{"s1"}, ids, "listed = %v, want [s1]", ids)
 
 	// Unstar.
-	err = d.UnstarSession("s1")
+	removed, err := d.UnstarSession("s1")
 	require.NoError(t, err, "UnstarSession")
+	assert.True(t, removed, "UnstarSession should report removed star")
 	ids, err = d.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs after unstar")
 	assert.Empty(t, ids, "listed after unstar = %v, want []", ids)
+
+	removed, err = d.UnstarSession("s1")
+	require.NoError(t, err, "UnstarSession no-op")
+	assert.False(t, removed, "UnstarSession should report no-op")
 
 	// Star non-existent session returns false (no FK error).
 	ok, err = d.StarSession("nonexistent")
@@ -4731,8 +4777,13 @@ func TestBulkStarSessions(t *testing.T) {
 	insertSession(t, d, "s2", "proj")
 
 	// Bulk star with mix of valid and invalid IDs.
-	err := d.BulkStarSessions([]string{"s1", "s2", "nonexistent"})
+	starred, err := d.BulkStarSessions([]string{"s1", "s2", "nonexistent"})
 	require.NoError(t, err, "BulkStarSessions")
+	assert.ElementsMatch(t, []string{"s1", "s2"}, starred, "starred ids returned")
+
+	starred, err = d.BulkStarSessions([]string{"s1", "s2"})
+	require.NoError(t, err, "BulkStarSessions already starred")
+	assert.Empty(t, starred, "already-starred ids should not be returned")
 
 	ids, err := d.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs")
@@ -5079,6 +5130,25 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.SetSyncState("pg_push_marker_id", "marker-123"),
 		"seed source marker")
+	require.NoError(t, srcDB.SetSyncState("artifact_origin_id", "laptop-a1b2c3"),
+		"seed source artifact origin")
+	require.NoError(t, srcDB.SetSyncState("artifact_metadata_hlc", "hlc-42"),
+		"seed source artifact hlc")
+	resetPending := ArtifactResetRepublishPending{
+		Version:         1,
+		RootFingerprint: strings.Repeat("a", 64),
+		Origin:          "laptop-a1b2c3",
+		Token:           strings.Repeat("b", 64),
+		BaselineHLC:     "2026-07-22T12:00:00.000000000Z-0000000000",
+	}
+	require.NoError(t, srcDB.SetArtifactResetRepublishPending(t.Context(), resetPending),
+		"seed source artifact reset marker")
+	require.NoError(t,
+		srcDB.SetSyncState("artifact_import:peer-b4c5d6:peer-b4c5d6~sess-1", "hash-imp"),
+		"seed source import watermark")
+	require.NoError(t,
+		srcDB.SetSyncState("artifact_export:laptop-a1b2c3:sess-2", "hash-exp"),
+		"seed source export watermark")
 	require.NoError(t, srcDB.SetSyncState("last_sync_started_at", "old-start"),
 		"seed source started")
 	require.NoError(t, srcDB.SetSyncState("last_sync_finished_at", "old-finish"),
@@ -5099,6 +5169,23 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState pg_push_marker_id")
 	assert.Equal(t, "marker-123", gotMarker)
+
+	durableArtifactKeys := map[string]string{
+		"artifact_origin_id":                             "laptop-a1b2c3",
+		"artifact_metadata_hlc":                          "hlc-42",
+		"artifact_import:peer-b4c5d6:peer-b4c5d6~sess-1": "hash-imp",
+		"artifact_export:laptop-a1b2c3:sess-2":           "hash-exp",
+	}
+	for key, want := range durableArtifactKeys {
+		got, err := dstDB.GetSyncState(key)
+		require.NoError(t, err, "GetSyncState %s", key)
+		assert.Equal(t, want, got, "artifact key %s must survive the copy", key)
+	}
+	gotResetPending, found, err := dstDB.ArtifactResetRepublishPending(t.Context())
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, resetPending, gotResetPending,
+		"artifact reset recovery authority must survive the copy")
 
 	gotStarted, err := dstDB.GetSyncState("last_sync_started_at")
 	require.NoError(t, err, "GetSyncState last_sync_started_at")
@@ -5130,6 +5217,109 @@ func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
 	got, err := dstDB.GetSyncState("pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState")
 	assert.Equal(t, "safe", got)
+}
+
+func TestCopyMetadataReplayFrom(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+
+	// Seed the LWW register and applied-event markers without touching
+	// session rows, exactly as local curation bookkeeping does.
+	winner := MetadataProjection{
+		EventOrigin:    "laptop-a1b2c3",
+		OrderKey:       "0000000002",
+		HLC:            "hlc-2",
+		ArtifactHash:   "hash-2",
+		SessionGID:     "laptop-a1b2c3~sess-1",
+		LocalSessionID: "sess-1",
+		Field:          "display_name",
+		Op:             "rename",
+		Value:          `{"display_name":"kept"}`,
+	}
+	res, err := srcDB.RecordLocalMetadataProjection(ctx, winner)
+	require.NoError(t, err, "record winning projection")
+	require.True(t, res.Applied, "winning projection applied")
+
+	// A stale peer event loses and records a conflict row.
+	loser := winner
+	loser.EventOrigin = "peer-b4c5d6"
+	loser.OrderKey = "0000000001"
+	loser.HLC = "hlc-1"
+	loser.ArtifactHash = "hash-1"
+	loser.Value = `{"display_name":"stale"}`
+	res, err = srcDB.RecordLocalMetadataProjection(ctx, loser)
+	require.NoError(t, err, "record losing projection")
+	require.True(t, res.Conflict, "losing projection records a conflict")
+	require.NoError(t, srcDB.Close(), "Close src")
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+
+	require.NoError(t, dstDB.CopyMetadataReplayFrom(srcPath),
+		"CopyMetadataReplayFrom")
+
+	for _, ev := range []MetadataProjection{winner, loser} {
+		applied, err := dstDB.MetadataEventApplied(ctx, ev.EventOrigin, ev.OrderKey)
+		require.NoError(t, err, "MetadataEventApplied %s/%s", ev.EventOrigin, ev.OrderKey)
+		assert.True(t, applied,
+			"applied-event marker %s/%s must survive the copy",
+			ev.EventOrigin, ev.OrderKey)
+	}
+	for _, ev := range []MetadataProjection{winner, loser} {
+		provenance, err := dstDB.MetadataArtifactProvenanceForSession(
+			ctx, ev.EventOrigin, ev.SessionGID, ev.Op,
+		)
+		require.NoError(t, err)
+		require.Len(t, provenance, 1,
+			"metadata artifact provenance must survive the copy")
+		assert.Equal(t, ev.OrderKey, provenance[0].OrderKey)
+		assert.Equal(t, ev.ArtifactHash, provenance[0].ArtifactHash)
+	}
+
+	op, ok, err := dstDB.MetadataReplayStateOp(ctx, winner.SessionGID, winner.Field)
+	require.NoError(t, err, "MetadataReplayStateOp")
+	require.True(t, ok, "replay state must survive the copy")
+	assert.Equal(t, "rename", op)
+
+	conflicts, err := dstDB.ListMetadataConflicts(ctx, []string{winner.SessionGID})
+	require.NoError(t, err, "ListMetadataConflicts")
+	require.Len(t, conflicts, 1, "conflict row must survive the copy")
+	assert.Equal(t, "laptop-a1b2c3", conflicts[0].WinningOrigin)
+	assert.Equal(t, "peer-b4c5d6", conflicts[0].LosingOrigin)
+}
+
+func TestCopyMetadataReplayFrom_NoSourceTables(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Simulate an older source database that predates the metadata
+	// replay tables.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	for _, table := range []string{
+		"metadata_applied_events",
+		"metadata_replay_state",
+		"metadata_conflicts",
+	} {
+		_, err := srcDB.getWriter().Exec("DROP TABLE " + table)
+		require.NoError(t, err, "drop %s", table)
+	}
+	require.NoError(t, srcDB.Close(), "Close src")
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+
+	require.NoError(t, dstDB.CopyMetadataReplayFrom(srcPath),
+		"CopyMetadataReplayFrom with missing source tables")
+
+	applied, err := dstDB.MetadataEventApplied(ctx, "laptop-a1b2c3", "0000000001")
+	require.NoError(t, err, "MetadataEventApplied")
+	assert.False(t, applied)
 }
 
 func TestCopySessionMetadataFrom(t *testing.T) {
@@ -6864,6 +7054,8 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	// dropping a column referenced by an index.
 	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_sessions_termination_status`)
 	requireNoError(t, err, "drop termination_status index")
+	_, err = conn.Exec(`DROP TRIGGER IF EXISTS artifact_sessions_update_queue`)
+	requireNoError(t, err, "drop artifact session update trigger")
 	_, err = conn.Exec(`ALTER TABLE sessions DROP COLUMN termination_status`)
 	requireNoError(t, err, "drop termination_status column")
 

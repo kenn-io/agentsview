@@ -103,6 +103,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		remoteSyncAuth := isRemoteSyncPath(r.URL.Path)
+		if isArtifactDaemonMutationPath(r.URL.Path) && !s.hasWritableArtifactStore() {
+			remoteSyncAuth = false
+		}
 
 		// When auth is not required, skip token checks entirely
 		// except for machine-to-machine remote sync archive APIs,
@@ -164,7 +167,14 @@ func isSSEPath(path string) bool {
 }
 
 func isRemoteSyncPath(path string) bool {
-	return strings.HasPrefix(path, "/api/v1/remote-sync/")
+	return strings.HasPrefix(path, "/api/v1/remote-sync/") ||
+		isArtifactDaemonMutationPath(path)
+}
+
+func isArtifactDaemonMutationPath(path string) bool {
+	return path == "/api/v1/artifacts/exchange" ||
+		path == "/api/v1/artifacts/maintenance" ||
+		path == "/api/v1/artifacts/reset"
 }
 
 // setCORSOnAuthError adds CORS headers to 401 responses so

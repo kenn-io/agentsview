@@ -52,6 +52,7 @@ func (s *scopedSyncStateStore) ensureMigration() error {
 			"last_push_at",
 			lastPushBoundaryStateKey,
 			lastPushTargetFingerprintKey,
+			artifactIdentityModeStateKey,
 		} {
 			scopedKey := s.scopedKey(key)
 			scopedValue, err := s.base.GetSyncState(scopedKey)

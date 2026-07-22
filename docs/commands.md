@@ -182,15 +182,22 @@ starts a detached daemon so SQLite writes stay owned by one process. Set
 write-owner lock and exits when done.
 
 ```bash
-agentsview sync [flags]
+agentsview sync [artifact-target] [flags]
 ```
 
-| Flag     | Default | Description                                    |
-| -------- | ------- | ---------------------------------------------- |
-| `--full` | `false` | Force a full resync regardless of data version |
-| `--host` |         | SSH hostname for deprecated remote sync        |
-| `--user` |         | SSH username for deprecated remote sync        |
-| `--port` | `22`    | SSH port for deprecated remote sync            |
+| Flag                | Default | Description                                                |
+| ------------------- | ------- | ---------------------------------------------------------- |
+| `--full`            | `false` | Force a full resync regardless of data version             |
+| `--host`            |         | SSH hostname for deprecated remote sync                    |
+| `--user`            |         | SSH username for deprecated remote sync                    |
+| `--port`            | `22`    | SSH port for deprecated remote sync                        |
+| `--artifact-folder` |         | Artifact folder, HTTP(S) peer, or `s3://` target           |
+| `--init`            | `false` | Adopt an origin and publish the first artifact baseline    |
+| `--token`           |         | Bearer token for an HTTP(S) artifact peer                  |
+| `--allow-insecure`  | `false` | Permit plaintext HTTP to a non-loopback artifact peer      |
+| `--watch`           | `false` | Continue artifact exchange after the initial sync          |
+| `--debounce`        | `30s`   | Coalesce changes before artifact exchange (`--watch` only) |
+| `--interval`        | `15m`   | Periodic artifact-exchange floor (`--watch` only)          |
 
 **Examples:**
 
@@ -199,9 +206,19 @@ agentsview sync           # incremental sync and exit
 agentsview sync --full    # full resync and exit
 agentsview sync --host buildbox.local
 agentsview sync --host buildbox.local --user wes --port 2222
+agentsview sync --init /path/to/dedicated-artifact-share
+agentsview sync --watch https://peer.example.test:8080 --token "$TOKEN"
+agentsview sync s3://my-bucket/agentsview
 ```
 
 After syncing, a summary of session and message counts is printed to stdout.
+
+The optional positional artifact target and `--artifact-folder` select the same
+folder, HTTP(S), or S3-compatible exchange target. Despite the legacy flag name,
+the target does not have to be a folder. Do not point either form at
+`AGENTSVIEW_DATA_DIR`, its private `artifacts` Docbank vault, a live SQLite
+database, or a raw agent-session directory. `--debounce` and `--interval` have
+no effect without `--watch`.
 
 When `--host` is set, AgentsView syncs only that remote host and fails fast on
 error. If the local daemon has a matching configured `[[remote_hosts]]` entry,
@@ -218,6 +235,41 @@ normally. This is not SSH remote sync: object storage is treated as a read-only
 session source, using object size and `LastModified` metadata to skip unchanged
 sessions and downloading only objects that need parsing. See
 [Configuration — S3-Compatible Session Sources](/configuration/#s3-compatible-session-sources).
+
+#### Artifact Vault Maintenance
+
+`agentsview sync gc` retains reachable logical artifacts and runs one bounded
+physical-maintenance pass in the local Docbank vault. It accepts no positional
+target. If a writable daemon is available, the command delegates maintenance to
+that owner; otherwise it requires exclusive direct ownership.
+
+```bash
+agentsview sync gc [flags]
+```
+
+| Flag                 | Default   | Description                                          |
+| -------------------- | --------- | ---------------------------------------------------- |
+| `--dry-run`          | `false`   | Preview logical retention; skip physical reclamation |
+| `--grace`            | `168h`    | Age before unreachable logical artifacts enter trash |
+| `--quarantine-grace` | `168h`    | Diagnostic retention for quarantined artifacts       |
+| `--max-objects`      | `1024`    | Object budget for each physical stage                |
+| `--max-bytes`        | `256 MiB` | Soft byte budget for blob GC and repacking           |
+| `--trash-cursor`     |           | Resume physical trash emptying                       |
+| `--gc-cursor`        |           | Resume physical blob garbage collection              |
+| `--repack-cursor`    |           | Resume physical repacking                            |
+
+When work remains, output includes a complete resume command with the required
+opaque cursors.
+
+#### Artifact Vault Reset
+
+`agentsview sync artifact-reset` accepts no arguments or operation-specific
+flags. It is a last-resort, fail-closed recovery command: AgentsView verifies
+ownership, moves the failed vault to a timestamped diagnostic path, creates a
+fresh vault, and republishes local-origin artifacts from SQLite. The diagnostic
+vault must be removed manually after investigation. Foreign relay artifacts
+return only when a trusted peer or target sends them again; imported SQLite
+sessions are not removed.
 
 #### Configured Remote Hosts
 

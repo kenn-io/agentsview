@@ -13,6 +13,8 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { normalizeChangedGeneratedFiles } from "./generated-file-normalizer.mjs";
+
 const frontendDir = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -43,6 +45,44 @@ function suppressExpectedAbortLogging() {
   writeFileSync(
     requestPath,
     source.replace(generatedCatch, cancellationAwareCatch),
+  );
+}
+
+function preserveBinaryResponseBodies() {
+  const requestPath = join(
+    frontendDir,
+    "src/lib/api/generated/core/request.ts",
+  );
+  const source = readFileSync(requestPath, "utf8");
+  const generatedDecoder = `        const jsonTypes = ['application/json', 'application/problem+json']
+        const isJSON = jsonTypes.some(type => contentType.toLowerCase().startsWith(type));
+        if (isJSON) {
+          return await response.json();
+        } else {
+          return await response.text();
+        }
+`;
+  const binaryAwareDecoder = `        const normalizedContentType = contentType.toLowerCase();
+        const jsonTypes = ['application/json', 'application/problem+json'];
+        const binaryTypes = ['application/octet-stream', 'application/zstd'];
+        const isJSON = jsonTypes.some(type => normalizedContentType.startsWith(type));
+        const isBinary = binaryTypes.some(type => normalizedContentType.startsWith(type));
+        if (isJSON) {
+          return await response.json();
+        } else if (isBinary) {
+          return await response.blob();
+        } else {
+          return await response.text();
+        }
+`;
+  if (!source.includes(generatedDecoder)) {
+    throw new Error(
+      "generated request body handler no longer matches the binary-body patch",
+    );
+  }
+  writeFileSync(
+    requestPath,
+    source.replace(generatedDecoder, binaryAwareDecoder),
   );
 }
 
@@ -89,6 +129,8 @@ try {
     run("npx", openapiArgs, { cwd: frontendDir });
   }
   suppressExpectedAbortLogging();
+  preserveBinaryResponseBodies();
+  normalizeChangedGeneratedFiles(repoRoot);
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
 }

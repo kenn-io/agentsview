@@ -173,6 +173,11 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			d, err := Open(path)
 			require.NoError(t, err)
 			assert.True(t, d.NeedsResync())
+			pending, err := d.PendingArtifactExports(t.Context(), 10)
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			assert.Equal(t, "legacy-session", pending[0].SessionID,
+				"artifact bootstrap runs after the deleted_at migration")
 
 			session := requireSessionExists(t, d, "legacy-session")
 			assert.Equal(t, "project-a", session.Project)
@@ -223,6 +228,10 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			require.NoError(t, err)
 			defer reopened.Close()
 			require.True(t, reopened.NeedsResync())
+			pending, err = reopened.PendingArtifactExports(t.Context(), 10)
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			assert.Equal(t, "legacy-session", pending[0].SessionID)
 		})
 	}
 }

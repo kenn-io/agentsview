@@ -13,12 +13,14 @@
     LinkIcon,
     SearchIcon,
     SquareTerminalIcon,
+    TriangleAlertIcon,
   } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
   import type { Session } from "../../api/types.js";
   import {
     OpenersService,
     SessionsService,
+    type DbMetadataConflict,
     type ResumeRequest,
     type ResumeResponse,
   } from "../../api/generated/index";
@@ -77,6 +79,9 @@
   const directoryRead = new LatestRead();
   const costRead = new LatestRead();
   const breakdownRead = new LatestRead();
+  let metadataConflicts = $state<DbMetadataConflict[]>([]);
+  let conflictsOpen = $state(false);
+  let conflictRequestSeq = 0;
 
   interface Opener {
     id: string;
@@ -161,6 +166,31 @@
         ) {
           pendingSessionDirId = null;
         }
+      });
+  });
+
+  $effect(() => {
+    if (!session) {
+      metadataConflicts = [];
+      conflictsOpen = false;
+      conflictRequestSeq++;
+      return;
+    }
+    const id = session.id;
+    metadataConflicts = [];
+    conflictsOpen = false;
+    const seq = ++conflictRequestSeq;
+    configureGeneratedClient();
+    SessionsService.getApiV1SessionsIdMetadataConflicts({ id })
+      .then((res) => {
+        if (seq !== conflictRequestSeq || session?.id !== id) return;
+        metadataConflicts = Array.isArray(res.conflicts)
+          ? (res.conflicts as DbMetadataConflict[])
+          : [];
+      })
+      .catch(() => {
+        if (seq !== conflictRequestSeq) return;
+        metadataConflicts = [];
       });
   });
 
@@ -582,6 +612,90 @@
       : m.session_breadcrumb_failed());
   }
 
+  type ConflictSide = "winning" | "losing";
+
+  function conflictFieldLabel(field: string): string {
+    if (field === "display_name") return m.session_breadcrumb_conflict_field_name();
+    if (field === "deleted_at") return m.session_breadcrumb_conflict_field_trash();
+    if (field === "starred") return m.session_breadcrumb_conflict_field_star();
+    if (field === "purge") return m.session_breadcrumb_conflict_field_delete_everywhere();
+    if (field.startsWith("pin:")) return m.session_breadcrumb_conflict_field_pin();
+    return field.replaceAll("_", " ");
+  }
+
+  function parseJSONValue(value: string): Record<string, unknown> | null {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed !== null && typeof parsed === "object"
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function conflictSideValue(
+    conflict: DbMetadataConflict,
+    side: ConflictSide,
+  ): string {
+    const op = side === "winning"
+      ? conflict.winning_op
+      : conflict.losing_op;
+    const value = side === "winning"
+      ? conflict.winning_value
+      : conflict.losing_value;
+    if (conflict.field === "display_name") {
+      const parsed = parseJSONValue(value);
+      const displayName = parsed?.display_name;
+      if (typeof displayName === "string" && displayName.trim()) {
+        return displayName;
+      }
+      return m.session_breadcrumb_conflict_default_title();
+    }
+    if (conflict.field === "deleted_at") {
+      if (op === "restore") return m.session_breadcrumb_conflict_restored();
+      if (op === "soft_delete") return m.session_breadcrumb_conflict_in_trash();
+    }
+    if (conflict.field === "starred") {
+      if (op === "star") return m.session_breadcrumb_conflict_starred();
+      if (op === "unstar") return m.session_breadcrumb_conflict_unstarred();
+    }
+    if (conflict.field === "purge") {
+      return op === "purge"
+        ? m.session_breadcrumb_conflict_field_delete_everywhere()
+        : op;
+    }
+    if (conflict.field.startsWith("pin:")) {
+      const parsed = parseJSONValue(value);
+      const ordinal = parsed?.ordinal;
+      const sourceUUID = parsed?.source_uuid;
+      const note = parsed?.note;
+      const target = typeof sourceUUID === "string" && sourceUUID
+        ? sourceUUID.slice(0, 8)
+        : typeof ordinal === "number"
+          ? `#${ordinal}`
+          : "pin";
+      if (op === "unpin") {
+        return m.session_breadcrumb_conflict_unpinned_target({ target });
+      }
+      if (typeof note === "string" && note.trim()) {
+        return m.session_breadcrumb_conflict_pinned_target_note({ target, note });
+      }
+      return m.session_breadcrumb_conflict_pinned_target({ target });
+    }
+    return value || op;
+  }
+
+  function conflictOrigin(
+    conflict: DbMetadataConflict,
+    side: ConflictSide,
+  ): string {
+    return side === "winning"
+      ? conflict.winning_origin || m.session_breadcrumb_conflict_unknown_origin()
+      : conflict.losing_origin || m.session_breadcrumb_conflict_unknown_origin();
+  }
+
   async function handleOpenIn(opener: Opener) {
     if (!session) return;
     showOpenMenu = false;
@@ -699,6 +813,9 @@
       } else if (showOpenMenu) {
         showOpenMenu = false;
         e.preventDefault();
+      } else if (conflictsOpen) {
+        conflictsOpen = false;
+        e.preventDefault();
       }
       return;
     }
@@ -729,6 +846,9 @@
     // Close open menu
     if (!(target as HTMLElement).closest?.(".open-group")) {
       showOpenMenu = false;
+    }
+    if (!(target as HTMLElement).closest?.(".conflict-group")) {
+      conflictsOpen = false;
     }
   }
 </script>
@@ -822,6 +942,63 @@
       >
         {getGradeLabel(session.health_grade)}
       </button>
+      {#if metadataConflicts.length > 0}
+        <span class="conflict-group">
+          <button
+            class="conflict-badge"
+            class:conflict-badge--active={conflictsOpen}
+            onclick={(e) => { e.stopPropagation(); conflictsOpen = !conflictsOpen; }}
+            title={m.session_breadcrumb_metadata_conflicts()}
+            aria-label={m.session_breadcrumb_metadata_conflicts()}
+            aria-expanded={conflictsOpen}
+          >
+            <TriangleAlertIcon size="11" strokeWidth="2.3" aria-hidden="true" />
+            {metadataConflicts.length}
+          </button>
+          {#if conflictsOpen}
+            <div class="conflict-menu">
+              <div class="conflict-menu-title">{m.session_breadcrumb_metadata_conflicts()}</div>
+              {#each metadataConflicts as conflict (conflict.id)}
+                <div class="conflict-row">
+                  <div class="conflict-field">
+                    {conflictFieldLabel(conflict.field)}
+                  </div>
+                  <div class="conflict-value-row conflict-value-row--winner">
+                    <span class="conflict-label">{m.session_breadcrumb_conflict_current()}</span>
+                    <span
+                      class="conflict-value"
+                      title={conflictSideValue(conflict, "winning")}
+                    >
+                      {conflictSideValue(conflict, "winning")}
+                    </span>
+                    <span
+                      class="conflict-origin"
+                      title={conflict.winning_order_key}
+                    >
+                      {conflictOrigin(conflict, "winning")}
+                    </span>
+                  </div>
+                  <div class="conflict-value-row">
+                    <span class="conflict-label">{m.session_breadcrumb_conflict_other()}</span>
+                    <span
+                      class="conflict-value"
+                      title={conflictSideValue(conflict, "losing")}
+                    >
+                      {conflictSideValue(conflict, "losing")}
+                    </span>
+                    <span
+                      class="conflict-origin"
+                      title={conflict.losing_order_key}
+                    >
+                      {conflictOrigin(conflict, "losing")}
+                    </span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </span>
+      {/if}
       {#if showDropdown}
         <span class="open-group">
           <button
@@ -1260,6 +1437,107 @@
 
   .grade-badge:hover {
     opacity: 0.85;
+  }
+
+  .conflict-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .conflict-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    height: 20px;
+    min-width: 22px;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--accent-red, #e55) 45%, transparent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-red, #e55) 10%, var(--bg-tertiary));
+    color: var(--accent-red, #e55);
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+
+  .conflict-badge:hover,
+  .conflict-badge--active {
+    background: color-mix(in srgb, var(--accent-red, #e55) 16%, var(--bg-tertiary));
+    border-color: color-mix(in srgb, var(--accent-red, #e55) 70%, transparent);
+  }
+
+  .conflict-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    width: min(330px, calc(100vw - 24px));
+    max-height: min(380px, calc(100vh - 96px));
+    overflow-y: auto;
+    margin-top: 4px;
+    padding: 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-popover);
+  }
+
+  .conflict-menu-title {
+    padding: 2px 4px 7px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .conflict-row {
+    padding: 8px 4px;
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .conflict-field {
+    margin-bottom: 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .conflict-value-row {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr) 88px;
+    align-items: center;
+    gap: 6px;
+    min-height: 22px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .conflict-value-row--winner {
+    color: var(--text-secondary);
+  }
+
+  .conflict-label {
+    font-weight: 700;
+  }
+
+  .conflict-value {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .conflict-origin {
+    min-width: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .open-group {

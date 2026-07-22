@@ -22,6 +22,7 @@
   "nav_pinned": "고정됨",
   "nav_insights": "인사이트",
   "nav_trash": "휴지통",
+  "nav_peers": "피어",
   "nav_search_sessions": "세션 검색...",
   "nav_search_sessions_shortcut": "세션 검색 ({shortcut})",
   "header_transcript_normal_title": "일반 트랜스크립트 - 모든 메시지 표시",
@@ -202,7 +203,9 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel}개 단계"
       }
@@ -215,6 +218,23 @@
   "session_breadcrumb_find_in_session_shortcut": "세션에서 찾기 (/)",
   "session_breadcrumb_rename": "이름 변경",
   "session_breadcrumb_delete": "삭제",
+  "session_breadcrumb_metadata_conflicts": "메타데이터 충돌",
+  "session_breadcrumb_conflict_field_name": "이름",
+  "session_breadcrumb_conflict_field_trash": "휴지통",
+  "session_breadcrumb_conflict_field_star": "고정",
+  "session_breadcrumb_conflict_field_delete_everywhere": "모든 기기에서 삭제",
+  "session_breadcrumb_conflict_field_pin": "메시지 고정",
+  "session_breadcrumb_conflict_default_title": "기본 제목",
+  "session_breadcrumb_conflict_restored": "복원됨",
+  "session_breadcrumb_conflict_in_trash": "휴지통에 있음",
+  "session_breadcrumb_conflict_starred": "고정됨",
+  "session_breadcrumb_conflict_unstarred": "고정 해제됨",
+  "session_breadcrumb_conflict_unpinned_target": "{target} 고정 해제됨",
+  "session_breadcrumb_conflict_pinned_target": "{target} 고정됨",
+  "session_breadcrumb_conflict_pinned_target_note": "{target} 고정됨: {note}",
+  "session_breadcrumb_conflict_unknown_origin": "알 수 없는 출처",
+  "session_breadcrumb_conflict_current": "현재",
+  "session_breadcrumb_conflict_other": "기타",
   "session_breadcrumb_resumed_in": "{target}에서 재개됨",
   "session_breadcrumb_command_copied": "명령어가 복사되었습니다!",
   "session_breadcrumb_failed": "실패",
@@ -475,6 +495,60 @@
   "sidebar_row_rename": "이름 변경",
   "sidebar_row_open_in_new_tab": "새 탭에서 열기",
   "sidebar_row_delete": "삭제",
+  "peers_title": "피어",
+  "peers_refresh_status": "피어 상태 새로 고침",
+  "peers_conflict_count_singular": "메타데이터 충돌 1건",
+  "peers_conflict_count_plural": "메타데이터 충돌 {count}건",
+  "peers_loading": "피어를 불러오는 중...",
+  "peers_load_more": "더 보기",
+  "peers_loading_more": "더 불러오는 중...",
+  "peers_sync_error": "동기화 오류",
+  "peers_pagination_error": "피어를 더 불러올 수 없습니다.",
+  "peers_empty": "피어가 없습니다",
+  "peers_unavailable": "이 서버에서는 아티팩트 동기화를 사용할 수 없습니다.",
+  "peers_this_machine": "이 컴퓨터",
+  "peers_in_sync": "동기화됨",
+  "peers_pending": "{count}개 대기 중",
+  "peers_local_sessions_title": "이 피어의 세션 중 이 데이터베이스에 있는 세션",
+  "peers_local_sessions": "로컬 {count}개",
+  "peers_published_sessions_title": "이 피어가 게시한 세션",
+  "peers_published_sessions": "게시됨 {count}개",
+  "peers_checkpoint_title": "최신 체크포인트 순번",
+  "peers_checkpoint": "체크포인트 #{seq}",
+  "peers_last_published_title": "마지막 체크포인트 게시 시각",
+  "peers_updated": "{time} 업데이트됨",
+  "trash_title": "휴지통",
+  "trash_empty_local_title": "로컬 휴지통 비우기",
+  "trash_emptying": "비우는 중...",
+  "trash_empty_local": "로컬 휴지통 비우기",
+  "trash_loading": "휴지통을 불러오는 중...",
+  "trash_empty": "휴지통이 비어 있습니다",
+  "trash_empty_desc": "삭제된 세션이 여기에 표시됩니다.",
+  "trash_messages": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "메시지 {countLabel}개"
+      }
+    }
+  ],
+  "trash_deleted": "{time} 삭제됨",
+  "trash_restore_session": "세션 복원",
+  "trash_restore": "복원",
+  "trash_delete_everywhere_prompt": "모든 기기에서 삭제할까요?",
+  "trash_confirm_delete_everywhere": "모든 기기에서 삭제 확인",
+  "trash_deleting": "삭제 중...",
+  "trash_confirm": "확인",
+  "trash_cancel": "취소",
+  "trash_delete_everywhere": "모든 기기에서 삭제",
+  "trash_delete_everywhere_title": "모든 기기에서 삭제",
   "shared_all_projects": "모든 프로젝트",
   "shared_project_filter_placeholder": "프로젝트 필터링...",
   "shared_select_project": "프로젝트 선택",
@@ -614,7 +688,9 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
       }
@@ -1694,32 +1770,6 @@
   "system_boundary_stop_hook": "중지 훅 피드백",
   "system_boundary_title": "시스템 경계: {subtype}",
   "system_boundary_show_content": "내용 표시",
-  "trash_loading": "휴지통을 불러오는 중...",
-  "trash_empty": "휴지통이 비어 있습니다",
-  "trash_empty_desc": "삭제된 세션이 여기에 표시됩니다.",
-  "trash_title": "휴지통",
-  "trash_emptying": "비우는 중...",
-  "trash_empty_trash": "휴지통 비우기",
-  "trash_msgs": [
-    {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
-      "match": {
-        "countPlural=other": "메시지 {countLabel}개"
-      }
-    }
-  ],
-  "trash_deleted_ago": "{time} 삭제됨",
-  "trash_restore_session": "세션 복원",
-  "trash_restore": "복원",
-  "trash_permanently_delete": "영구 삭제",
-  "trash_delete_forever": "영구 삭제",
   "trends_term": "용어",
   "trends_per1k_messages": "메시지 1,000건당",
   "trends_count": "개수",

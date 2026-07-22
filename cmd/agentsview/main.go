@@ -18,6 +18,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -316,6 +317,25 @@ func runServe(cfg config.Config, opts serveOptions) {
 	}
 	cfg = preparedCfg
 
+	// Reconcile an already-adopted artifact origin so every origin lookup
+	// (recorder, peer import, folder sync) agrees: the config.toml origin is
+	// authoritative and overwrites a divergent DB sync-state value. Serve
+	// never creates an origin — a machine opts into artifact sync only via
+	// `sync --init`, a sync run, or an incoming peer exchange, and until then
+	// curation stays local with no metadata ledger writes.
+	if cfg.DataDir != "" && !database.ReadOnly() && cfg.ArtifactOriginID != "" {
+		if err := artifact.AdoptOrigin(database, cfg.ArtifactOriginID); err != nil {
+			fatal("reconcile artifact origin id: %v", err)
+		}
+	}
+	artifactStore, err := openServeArtifactStore(ctx, cfg.DataDir)
+	if err != nil {
+		fatal("open artifact store: %v", err)
+	}
+	if err := recoverServeArtifactRepository(ctx, database, artifactStore); err != nil {
+		fatal("recover artifact repository reset: %v", errors.Join(err, artifactStore.Close()))
+	}
+
 	srvOpts := []server.Option{
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
@@ -328,6 +348,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
+		server.WithArtifactStore(artifactStore),
 	}
 	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
 	if src := newVectorPushSource(cfg); src != nil {
@@ -449,6 +470,32 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
 	}
+}
+
+func openServeArtifactStore(ctx context.Context, dataDir string) (artifact.ArtifactStore, error) {
+	repository, err := artifact.OpenRepository(ctx, dataDir)
+	if err != nil {
+		return nil, err
+	}
+	store := repository.Store()
+	if err := artifact.RecoverArtifactPacking(ctx, store); err != nil {
+		return nil, errors.Join(err, repository.Close())
+	}
+	return store, nil
+}
+
+func recoverServeArtifactRepository(
+	ctx context.Context, database *db.DB, store artifact.ArtifactStore,
+) error {
+	if database == nil || database.ReadOnly() {
+		return nil
+	}
+	origin, err := artifact.StoredOrigin(database)
+	if err != nil || origin == "" {
+		return err
+	}
+	_, _, err = artifact.RecoverRepositoryResetRepublish(ctx, database, store, origin)
+	return err
 }
 
 func runDeferredStartupSyncFallback(

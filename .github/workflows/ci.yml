@@ -311,6 +311,11 @@ jobs:
           TEST_SSH_USER: testuser
           TEST_SSH_KEY: ${{ github.workspace }}/testdata/ssh/test_key
 
+      - name: Run MinIO object-store integration test
+        run: make test-minio
+        env:
+          CGO_ENABLED: "1"
+
   e2e:
     runs-on: ubuntu-latest
     steps:

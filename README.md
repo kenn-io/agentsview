@@ -103,6 +103,27 @@ Use `--public-origin` (repeatable or comma-separated) to trust additional
 browser origins. If you expose the UI beyond loopback, also enable
 `--require-auth`.
 
+## Local-First Artifact Sync
+
+Artifact sync is for a fully trusted personal fleet. It exchanges immutable
+artifacts through a dedicated folder, HTTP peer, or S3-compatible target and
+imports them into each machine's local SQLite archive:
+
+```bash
+agentsview sync --init /path/to/agentsview-artifacts
+agentsview sync /path/to/agentsview-artifacts
+agentsview sync --watch /path/to/agentsview-artifacts
+```
+
+Do not sync the live SQLite database, `AGENTSVIEW_DATA_DIR`, or whole raw agent
+directories. SQLite remains the authoritative local archive; the
+`AGENTSVIEW_DATA_DIR/artifacts` directory is a private AgentsView-owned Docbank
+vault, not an external sync target. Two intermittent machines only sync when
+both can reach the same transport unless you provide a rendezvous such as a NAS
+folder, cloud-synced folder, S3-compatible bucket, or always-on peer. See
+[Trusted-Fleet Artifact Sync](docs/artifact-sync.md) for setup and safety
+boundaries.
+
 ## Docker
 
 The container image defaults to local `agentsview serve`. Set `PG_SERVE=1` to

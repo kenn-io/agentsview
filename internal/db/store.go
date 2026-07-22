@@ -41,6 +41,7 @@ type Store interface {
 	GetMessagesWindow(ctx context.Context, sessionID string, w MessageWindow) ([]Message, error)
 	GetAllMessages(ctx context.Context, sessionID string) ([]Message, error)
 	GetResumeModelCounts(ctx context.Context, sessionID string) ([]ModelCount, error)
+	GetMessageForMetadataPin(ctx context.Context, sessionID string, messageID int64) (*Message, error)
 	GetSessionActivity(ctx context.Context, sessionID string) (*SessionActivityResponse, error)
 
 	// Timing.
@@ -59,6 +60,9 @@ type Store interface {
 	GetSessionVersion(id string) (count int, version int64, ok bool)
 
 	// Metadata.
+	ListMetadataConflicts(ctx context.Context, sessionGIDs []string) ([]MetadataConflict, error)
+	CountMetadataConflicts(ctx context.Context) (int, error)
+	MachineSessionCounts(ctx context.Context) (map[string]int, error)
 	GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (Stats, error)
 	GetProjects(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]ProjectInfo, error)
 	GetActiveProjectLabels(ctx context.Context) ([]string, error)
@@ -94,9 +98,9 @@ type Store interface {
 
 	// Stars.
 	StarSession(sessionID string) (bool, error)
-	UnstarSession(sessionID string) error
+	UnstarSession(sessionID string) (bool, error)
 	ListStarredSessionIDs(ctx context.Context) ([]string, error)
-	BulkStarSessions(sessionIDs []string) error
+	BulkStarSessions(sessionIDs []string) ([]string, error)
 
 	// Pins.
 	PinMessage(sessionID string, messageID int64, note *string) (int64, error)
@@ -130,6 +134,7 @@ type Store interface {
 	RenameSession(id string, displayName *string) error
 	SoftDeleteSession(id string) error
 	SoftDeleteSessions(ids []string) (int, error)
+	SoftDeleteSessionsReturningIDs(ids []string) ([]string, error)
 	RestoreSession(id string) (int64, error)
 	DeleteSessionIfTrashed(id string) (int64, error)
 	ListTrashedSessions(ctx context.Context) ([]Session, error)
