@@ -150,7 +150,9 @@ func (p *piProvider) sourceForOMPHeaderSessionID(
 		if !ok {
 			continue
 		}
-		if ompHeaderSessionID(src.Path) == sessionID {
+		headerID := ompHeaderSessionID(src.Path)
+		if headerID == sessionID ||
+			(headerID == "" && piSessionIDFromPath("", src.Path) == sessionID) {
 			return source, true, nil
 		}
 	}

@@ -63,6 +63,34 @@ func TestOMPProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+func TestOMPProviderFindsV1SessionByFilenameID(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "v1-session.jsonl")
+	writeSourceFile(t, sourcePath, strings.Join([]string{
+		`{"type":"session","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/v1-project"}`,
+		`{"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		"",
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentOMP, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID: "host~omp:v1-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: found})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "omp:v1-session", outcome.Results[0].Result.Session.ID)
+}
+
 // TestOMPProviderDiscoversTitleSlotSession reproduces issue #959: OMP
 // v16.3+ writes a fixed-width title slot line before the session header,
 // so discovery must look past it instead of only sniffing the first line.
