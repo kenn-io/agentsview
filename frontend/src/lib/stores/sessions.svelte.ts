@@ -377,8 +377,24 @@ class SessionsStore {
   // server snapshot.
   private activeDetailCommitBySession = new Map<
     string,
-    { generation: number; deleted: boolean; issuedAtIndexOrdinal: number }
+    {
+      generation: number;
+      deleted: boolean;
+      issuedAtIndexOrdinal: number;
+      committedAtTick: number;
+    }
   >();
+  // Generations are globally unique (not per-id counters) so pruning an
+  // entry and later recreating it can never produce a generation equal to
+  // one an in-flight request captured in its snapshot.
+  private detailCommitGenerationCounter = 0;
+  // Issue ticks of every in-flight request (index loads and detail reads).
+  // Reconciliation entries committed before the oldest in-flight request's
+  // issue can no longer influence any comparison — in-flight snapshots saw
+  // them as unchanged, and future requests get larger ticks — so publish
+  // prunes them, keeping these maps bounded by live rows plus in-flight
+  // work instead of every session ever seen.
+  private inFlightRequestTicks = new Set<number>();
   // Last committed session snapshot per id, kept so an index publish can
   // honor a superseding commit even when no prior sidebar row exists (a
   // cache-only session renamed and then deselected). Written by non-deletion
@@ -574,6 +590,7 @@ class SessionsStore {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
     const requestOrdinal = ++this.requestClock;
+    this.inFlightRequestTicks.add(requestOrdinal);
     const detailCommits = this.snapshotDetailCommits();
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
@@ -637,6 +654,7 @@ class SessionsStore {
         });
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
+      this.pruneReconciliationState();
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list — but reapply deletion
@@ -662,6 +680,7 @@ class SessionsStore {
         );
       }
     } finally {
+      this.inFlightRequestTicks.delete(requestOrdinal);
       if (this.loadVersion === version) {
         this.loading = false;
       }
@@ -713,6 +732,7 @@ class SessionsStore {
         if (signal.aborted) return;
         const detailCommitGeneration = this.detailCommitGeneration(id);
         const issuedAtIndexOrdinal = ++this.requestClock;
+        this.inFlightRequestTicks.add(issuedAtIndexOrdinal);
         try {
           configureGeneratedClient();
           const raw = await callGenerated(
@@ -779,6 +799,7 @@ class SessionsStore {
         } catch {
           // Visible hydration is best-effort; the skinny row remains usable.
         } finally {
+          this.inFlightRequestTicks.delete(issuedAtIndexOrdinal);
           inflight.delete(id);
         }
       });
@@ -837,6 +858,7 @@ class SessionsStore {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
     const requestOrdinal = ++this.requestClock;
+    this.inFlightRequestTicks.add(requestOrdinal);
     const detailCommits = this.snapshotDetailCommits();
     // Rows already loaded when this request began had any mid-flight
     // deletion applied to the total by the delete path itself; a stale page
@@ -910,10 +932,12 @@ class SessionsStore {
         });
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
+      this.pruneReconciliationState();
     } catch (error) {
       if (signal.aborted || isAbortError(error)) return;
       throw error;
     } finally {
+      this.inFlightRequestTicks.delete(requestOrdinal);
       if (this.loadVersion === version) {
         this.loading = false;
       }
@@ -1029,11 +1053,11 @@ class SessionsStore {
     issuedAtIndexOrdinal: number,
     snapshot?: Session,
   ): void {
-    const current = this.activeDetailCommitBySession.get(id);
     this.activeDetailCommitBySession.set(id, {
-      generation: (current?.generation ?? 0) + 1,
+      generation: ++this.detailCommitGenerationCounter,
       deleted,
       issuedAtIndexOrdinal,
+      committedAtTick: this.requestClock,
     });
     if (deleted) {
       this.committedDetailByRow.delete(id);
@@ -1163,8 +1187,17 @@ class SessionsStore {
   // total once per removed group. The caller records the ancestor's own
   // deletion commit.
   private removeSessionSubtree(id: string): ReadonlySet<string> {
+    // A cache-only active session (deep link, search) has no sidebar row
+    // but may descend from the deleted ancestor; include it so callers
+    // clear the selection instead of leaving a ghost.
+    const cachedActive = this.activeSessionDetail;
+    const knownRows =
+      cachedActive !== null &&
+        !this.sessions.some((row) => row.id === cachedActive.id)
+        ? [...this.sessions, cachedActive]
+        : this.sessions;
     const subtree = this.expandTombstoned(
-      this.sessions,
+      knownRows,
       (rid) => rid === id,
     );
     subtree.add(id);
@@ -1181,6 +1214,24 @@ class SessionsStore {
       this.total - this.countDroppedRoots(droppedRows, presentIds),
     );
     return subtree;
+  }
+
+  private pruneReconciliationState(): void {
+    let horizon = Infinity;
+    for (const tick of this.inFlightRequestTicks) {
+      if (tick < horizon) horizon = tick;
+    }
+    for (const [id, commit] of this.activeDetailCommitBySession) {
+      if (commit.committedAtTick < horizon) {
+        this.activeDetailCommitBySession.delete(id);
+        this.committedDetailByRow.delete(id);
+      }
+    }
+    for (const [id, stamp] of this.indexCommitByRow) {
+      if (stamp.ordinal < horizon) {
+        this.indexCommitByRow.delete(id);
+      }
+    }
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
@@ -1312,6 +1363,7 @@ class SessionsStore {
     }
     const signal = this.activeDetailRead.begin();
     const issuedAtIndexOrdinal = ++this.requestClock;
+    this.inFlightRequestTicks.add(issuedAtIndexOrdinal);
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
@@ -1348,6 +1400,7 @@ class SessionsStore {
       } catch {
         // Session not found — selection stands without metadata
       } finally {
+        this.inFlightRequestTicks.delete(issuedAtIndexOrdinal);
         this.activeDetailRead.finish(signal);
         if (this.navigateInFlight === entry) {
           this.navigateInFlight = null;
@@ -1388,6 +1441,7 @@ class SessionsStore {
     }
     const signal = this.activeDetailRead.begin();
     const issuedAtIndexOrdinal = ++this.requestClock;
+    this.inFlightRequestTicks.add(issuedAtIndexOrdinal);
     try {
       configureGeneratedClient();
       const raw = await callGenerated(
@@ -1461,6 +1515,7 @@ class SessionsStore {
         this.removeSessionSubtree(id);
       }
     } finally {
+      this.inFlightRequestTicks.delete(issuedAtIndexOrdinal);
       this.activeDetailRead.finish(signal);
     }
   }
@@ -1855,7 +1910,13 @@ class SessionsStore {
     // snapshot was taken after these tombstones and would otherwise keep
     // the deleted rows visible. Known local descendants are tombstoned with
     // their roots, mirroring the backend's subtree removal.
-    const subtree = this.expandTombstoned(this.sessions, (rid) =>
+    const cachedActive = this.activeSessionDetail;
+    const knownRows =
+      cachedActive !== null &&
+        !this.sessions.some((row) => row.id === cachedActive.id)
+        ? [...this.sessions, cachedActive]
+        : this.sessions;
+    const subtree = this.expandTombstoned(knownRows, (rid) =>
       idSet.has(rid)
     );
     for (const id of ids) subtree.add(id);

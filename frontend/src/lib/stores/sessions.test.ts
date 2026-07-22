@@ -4760,6 +4760,53 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBeNull();
     });
 
+    it("prunes reconciliation state once no in-flight request needs it", async () => {
+      const makePage = (prefix: string) =>
+        Array.from({ length: 40 }, (_v, i) =>
+          makeSkinnyRow({ id: `${prefix}-${i}`, project: "proj-a" }));
+
+      // Three successive filter-change reloads publish disjoint row sets,
+      // with no requests left in flight between them.
+      for (const prefix of ["one", "two", "three"]) {
+        mockSidebarIndex(makePage(prefix));
+        await sessions.load({ force: true });
+      }
+
+      // Reconciliation bookkeeping must stay bounded by live rows plus
+      // in-flight work, not accumulate every row ever published.
+      const stamps = (sessions as any).indexCommitByRow as Map<
+        string,
+        unknown
+      >;
+      expect(stamps.size).toBeLessThanOrEqual(40 + 1);
+    });
+
+    it("clears a cache-only active descendant when its ancestor is deleted", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "root1", project: "proj-a" })]);
+      await sessions.load();
+
+      // A child session opened from a deep link exists only in the detail
+      // cache; its parent is the listed root.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "child1",
+          project: "proj-a",
+          parent_session_id: "root1",
+          first_message: "c",
+        }),
+      );
+      await sessions.navigateToSession("child1");
+      expect(sessions.activeSession?.id).toBe("child1");
+
+      // Deleting the root removes the subtree backend-side; the cache-only
+      // active child belongs to it and must be cleared, not left as a ghost.
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("root1");
+
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.activeSessionId).toBeNull();
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
