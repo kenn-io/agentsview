@@ -11,8 +11,13 @@ import type {
   UsagePairwiseComparisonResponse,
   UsageSummaryResponse,
 } from "../api/types/usage.js";
+import { testMoney } from "../test/money.js";
 
-const usageServiceMocks = vi.hoisted(() => ({
+const usageServiceMocks = vi.hoisted(() => {
+  const money = (dollars: number) => ({
+    microdollars: Math.round(dollars * 1_000_000),
+  });
+  return {
   getApiV1UsageSummary: vi.fn().mockResolvedValue({
     from: "2024-01-01",
     to: "2024-01-31",
@@ -21,7 +26,7 @@ const usageServiceMocks = vi.hoisted(() => ({
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 0,
+      totalCost: money(0),
     },
     daily: [],
     projectTotals: [
@@ -32,7 +37,7 @@ const usageServiceMocks = vi.hoisted(() => ({
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: money(0),
       },
       {
         project_key: "pl1:sha256:beta",
@@ -41,7 +46,7 @@ const usageServiceMocks = vi.hoisted(() => ({
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: money(0),
       },
     ],
     modelTotals: [
@@ -51,7 +56,7 @@ const usageServiceMocks = vi.hoisted(() => ({
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: money(0),
       },
       {
         model: "gpt-4o",
@@ -59,7 +64,7 @@ const usageServiceMocks = vi.hoisted(() => ({
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: money(0),
       },
     ],
     agentTotals: [],
@@ -74,40 +79,40 @@ const usageServiceMocks = vi.hoisted(() => ({
       uncachedInputTokens: 0,
       outputTokens: 0,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: money(0),
     },
   }),
   getApiV1UsageComparison: vi.fn().mockResolvedValue({
     priorFrom: "2023-12-01",
     priorTo: "2023-12-31",
-    priorTotalCost: 1,
+    priorTotalCost: money(1),
     deltaPct: 0.5,
   }),
   getApiV1UsagePairwiseComparison: vi.fn().mockResolvedValue({
     left: {
-      totalCost: 1,
+      totalCost: money(1),
       inputTokens: 10,
       outputTokens: 5,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalTokens: 15,
       sessionCount: 1,
-      costPerSession: 1,
+      costPerSession: money(1),
       tokensPerSession: 15,
     },
     right: {
-      totalCost: 2,
+      totalCost: money(2),
       inputTokens: 20,
       outputTokens: 10,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalTokens: 30,
       sessionCount: 2,
-      costPerSession: 1,
+      costPerSession: money(1),
       tokensPerSession: 15,
     },
     deltas: {
-      totalCostDelta: 1,
+      totalCostDelta: money(1),
       totalCostDeltaRatio: 1,
       inputTokensDelta: 10,
       inputTokensDeltaRatio: 1,
@@ -121,14 +126,15 @@ const usageServiceMocks = vi.hoisted(() => ({
       totalTokensDeltaRatio: 1,
       sessionCountDelta: 1,
       sessionCountDeltaRatio: 1,
-      costPerSessionDelta: 0,
+      costPerSessionDelta: money(0),
       costPerSessionRatio: 0,
       tokensPerSessionDelta: 0,
       tokensPerSessionRatio: 0,
     },
   }),
   getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
-}));
+  };
+});
 
 const apiRuntimeMocks = vi.hoisted(() => {
   class ApiError extends Error {
@@ -200,7 +206,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost,
+      totalCost: testMoney(totalCost),
     },
     daily: [],
     projectTotals: [
@@ -211,7 +217,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: testMoney(0),
       },
       {
         project_key: "pl1:sha256:beta",
@@ -220,7 +226,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: testMoney(0),
       },
     ],
     modelTotals: [
@@ -230,7 +236,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: testMoney(0),
       },
       {
         model: "gpt-4o",
@@ -238,7 +244,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
         outputTokens: 0,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 0,
+        cost: testMoney(0),
       },
     ],
     agentTotals: [],
@@ -253,7 +259,7 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
       uncachedInputTokens: 0,
       outputTokens: 0,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
@@ -262,7 +268,7 @@ function usageComparison(): UsageComparison {
   return {
     priorFrom: "2023-12-01",
     priorTo: "2023-12-31",
-    priorTotalCost: 1,
+    priorTotalCost: testMoney(1),
     deltaPct: 0.5,
   };
 }
@@ -286,7 +292,7 @@ function usageSummaryWithOptions(options: {
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost,
+      totalCost: testMoney(totalCost),
     },
     daily: [],
     projectTotals: projects.map((project) => ({
@@ -296,7 +302,7 @@ function usageSummaryWithOptions(options: {
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 0,
+      cost: testMoney(0),
     })),
     modelTotals: models.map((model) => ({
       model,
@@ -304,7 +310,7 @@ function usageSummaryWithOptions(options: {
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 0,
+      cost: testMoney(0),
     })),
     agentTotals: [],
     sessionCounts: {
@@ -318,7 +324,7 @@ function usageSummaryWithOptions(options: {
       uncachedInputTokens: 0,
       outputTokens: 0,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
@@ -326,29 +332,29 @@ function usageSummaryWithOptions(options: {
 function usagePairwiseComparison(): UsagePairwiseComparisonResponse {
   return {
     left: {
-      totalCost: 1,
+      totalCost: testMoney(1),
       inputTokens: 10,
       outputTokens: 5,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalTokens: 15,
       sessionCount: 1,
-      costPerSession: 1,
+      costPerSession: testMoney(1),
       tokensPerSession: 15,
     },
     right: {
-      totalCost: 2,
+      totalCost: testMoney(2),
       inputTokens: 20,
       outputTokens: 10,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalTokens: 30,
       sessionCount: 2,
-      costPerSession: 1,
+      costPerSession: testMoney(1),
       tokensPerSession: 15,
     },
     deltas: {
-      totalCostDelta: 1,
+      totalCostDelta: testMoney(1),
       totalCostDeltaRatio: 1,
       inputTokensDelta: 10,
       inputTokensDeltaRatio: 1,
@@ -362,7 +368,7 @@ function usagePairwiseComparison(): UsagePairwiseComparisonResponse {
       totalTokensDeltaRatio: 1,
       sessionCountDelta: 1,
       sessionCountDeltaRatio: 1,
-      costPerSessionDelta: 0,
+      costPerSessionDelta: testMoney(0),
       costPerSessionRatio: 0,
       tokensPerSessionDelta: 0,
       tokensPerSessionRatio: 0,
@@ -868,7 +874,7 @@ describe("UsageStore session filter params", () => {
         return Promise.resolve({
           priorFrom: "2023-12-01",
           priorTo: "2023-12-31",
-          priorTotalCost: 1,
+          priorTotalCost: testMoney(1),
           deltaPct: 0.5,
         });
       },
@@ -901,14 +907,14 @@ describe("UsageStore session filter params", () => {
     expect(usage.summary?.comparison).toEqual({
       priorFrom: "2023-12-01",
       priorTo: "2023-12-31",
-      priorTotalCost: 1,
+      priorTotalCost: testMoney(1),
       deltaPct: 0.5,
     });
     expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
     expect(
       usageServiceMocks.getApiV1UsageComparison,
     ).toHaveBeenCalledWith(
-      expect.objectContaining({ currentCost: 0 }),
+      expect.objectContaining({ currentMicrodollars: 0 }),
     );
     expect(
       usageServiceMocks.getApiV1UsagePairwiseComparison,
@@ -952,7 +958,7 @@ describe("UsageStore session filter params", () => {
 
     expect(usage.querying.summary).toBe(false);
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usage.summary?.totals.totalCost).toBe(2);
+    expect(usage.summary?.totals.totalCost).toEqual(testMoney(2));
   });
 
   it("aborts stale top sessions when a new full refresh starts", async () => {
@@ -1156,7 +1162,7 @@ describe("UsageStore session filter params", () => {
     expect(usage.summary?.comparison).toEqual({
       priorFrom: "2023-12-01",
       priorTo: "2023-12-31",
-      priorTotalCost: 1,
+      priorTotalCost: testMoney(1),
       deltaPct: 0.5,
     });
     expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
@@ -1203,7 +1209,7 @@ describe("UsageStore session filter params", () => {
       ...usagePairwiseComparison(),
       left: {
         ...usagePairwiseComparison().left,
-        totalCost: 99,
+        totalCost: testMoney(99),
       },
     });
     await Promise.resolve();
@@ -1213,11 +1219,11 @@ describe("UsageStore session filter params", () => {
       ...usagePairwiseComparison(),
       left: {
         ...usagePairwiseComparison().left,
-        totalCost: 3,
+        totalCost: testMoney(3),
       },
       deltas: {
         ...usagePairwiseComparison().deltas,
-        totalCostDelta: 2,
+        totalCostDelta: testMoney(2),
         totalCostDeltaRatio: 2,
       },
     };
@@ -1263,7 +1269,7 @@ describe("UsageStore session filter params", () => {
           outputTokens: 0,
           cacheCreationTokens: 0,
           cacheReadTokens: 0,
-          totalCost: 0,
+          totalCost: testMoney(0),
         },
         daily: [],
         projectTotals: [],
@@ -1280,7 +1286,7 @@ describe("UsageStore session filter params", () => {
           uncachedInputTokens: 0,
           outputTokens: 0,
           hitRate: 0,
-          savingsVsUncached: 0,
+          savingsVsUncached: testMoney(0),
         },
       });
 

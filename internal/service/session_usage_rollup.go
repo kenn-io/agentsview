@@ -6,6 +6,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type sessionUsageRowsProvider interface {
@@ -16,7 +17,7 @@ type sessionUsageRowsProvider interface {
 // descendants. SubagentCount includes descendants without usage rows.
 type SessionUsageRollup struct {
 	Usage         *db.SessionUsage
-	CostUSD       float64
+	Cost          money.Money
 	HasCost       bool
 	CostSource    export.CostSource
 	SubagentCount int
@@ -58,7 +59,7 @@ func GetSessionUsageRollup(
 	}
 	subagentContributing := false
 	allPriced := true
-	totalCostUSD := 0.0
+	var totalCost money.Money
 	var hasComputedCost, hasReportedCost bool
 	if provider, ok := store.(sessionUsageRowsProvider); ok {
 		rows, err := provider.GetSessionUsageRows(ctx, usageIDs)
@@ -79,12 +80,12 @@ func GetSessionUsageRollup(
 					allPriced = false
 					continue
 				}
-				totalCostUSD += cost.Cost
+				totalCost = money.MustAdd(totalCost, cost.Cost)
 				recordRollupCostSource(
 					cost.CostSource, &hasComputedCost, &hasReportedCost)
 			}
 		} else {
-			subagentContributing, totalCostUSD, allPriced,
+			subagentContributing, totalCost, allPriced,
 				hasComputedCost, hasReportedCost, err =
 				sumRollupUsageFallback(ctx, store, root, usageIDs)
 			if err != nil {
@@ -92,7 +93,7 @@ func GetSessionUsageRollup(
 			}
 		}
 	} else {
-		subagentContributing, totalCostUSD, allPriced,
+		subagentContributing, totalCost, allPriced,
 			hasComputedCost, hasReportedCost, err =
 			sumRollupUsageFallback(ctx, store, root, usageIDs)
 		if err != nil {
@@ -101,7 +102,7 @@ func GetSessionUsageRollup(
 	}
 	out.HasCost = subagentContributing && allPriced
 	if out.HasCost {
-		out.CostUSD = totalCostUSD
+		out.Cost = totalCost
 		out.CostSource = export.CombinedCostSource(
 			hasComputedCost, hasReportedCost)
 	}
@@ -113,7 +114,7 @@ func sumRollupUsageFallback(
 	store db.Store,
 	root *db.SessionUsage,
 	usageIDs []string,
-) (subagentContributing bool, totalCostUSD float64, allPriced,
+) (subagentContributing bool, totalCost money.Money, allPriced,
 	hasComputedCost, hasReportedCost bool, err error) {
 	allPriced = true
 	if root.BreakdownCount > 0 && !root.HasCost {
@@ -126,22 +127,22 @@ func sumRollupUsageFallback(
 	for _, id := range usageIDs[1:] {
 		usage, getErr := store.GetSessionUsage(ctx, id, false)
 		if getErr != nil {
-			return false, 0, false, false, false, getErr
+			return false, money.Money{}, false, false, false, getErr
 		}
 		if usage == nil || usage.BreakdownCount == 0 {
 			continue
 		}
 		subagentContributing = true
 		if usage.HasCost {
-			totalCostUSD += usage.CostUSD
+			totalCost = money.MustAdd(totalCost, usage.Cost)
 			recordRollupCostSource(
 				usage.CostSource, &hasComputedCost, &hasReportedCost)
 		} else {
 			allPriced = false
 		}
 	}
-	totalCostUSD += root.CostUSD
-	return subagentContributing, totalCostUSD, allPriced,
+	totalCost = money.MustAdd(totalCost, root.Cost)
+	return subagentContributing, totalCost, allPriced,
 		hasComputedCost, hasReportedCost, nil
 }
 

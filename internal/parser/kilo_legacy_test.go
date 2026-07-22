@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // writeKiloLegacyFixture creates a minimal Kilo (legacy) task directory
@@ -128,8 +130,8 @@ func TestParseKiloLegacySessionProjectFromWorkspaceDir(t *testing.T) {
 		"project should derive from Current Workspace Directory")
 	require.Len(t, sess.UsageEvents, 1,
 		"a cost usage event should be emitted for the session")
-	require.NotNil(t, sess.UsageEvents[0].CostUSD)
-	assert.InDelta(t, 0.02, *sess.UsageEvents[0].CostUSD, 0.0001)
+	require.NotNil(t, sess.UsageEvents[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.02"), *sess.UsageEvents[0].Cost)
 }
 
 func TestParseKiloLegacySessionProjectFromAPIHistoryFallback(t *testing.T) {
@@ -597,9 +599,9 @@ func TestParseKiloLegacySessionAPIRecordingTracksPeakAndCost(t *testing.T) {
 	assert.Equal(t, 170, ev.OutputTokens)
 	assert.Equal(t, 1000+2500, ev.InputTokens,
 		"input tokens are summed across api_req_started events")
-	require.NotNil(t, ev.CostUSD,
-		"present-positive cost should populate CostUSD")
-	assert.InDelta(t, 0.046, *ev.CostUSD, 0.0001,
+	require.NotNil(t, ev.Cost,
+		"present-positive cost should populate Cost")
+	assert.Equal(t, money.MustParseDollars("0.046"), *ev.Cost,
 		"summed cost across events")
 	assert.Equal(t, "Z.AI", ev.Model,
 		"inferenceProvider is surfaced as the usage-event model label")
@@ -1224,8 +1226,8 @@ func TestParseKiloLegacySessionPartialCostExcluded(t *testing.T) {
 	require.Len(t, sess.UsageEvents, 1)
 	// The first request is a valid JSON payload (usageMissing) and
 	// counts in the denominator. Since only one of two requests has
-	// cost, CostUSD must not be set.
-	assert.Nil(t, sess.UsageEvents[0].CostUSD,
+	// cost, Cost must not be set.
+	assert.Nil(t, sess.UsageEvents[0].Cost,
 		"partial cost must not be treated as authoritative")
 	assert.Equal(t, 120, sess.UsageEvents[0].OutputTokens,
 		"output tokens from the priced request are still counted")
@@ -1253,9 +1255,9 @@ func TestParseKiloLegacySessionWorkspaceDirExcluded(t *testing.T) {
 	// Workspace metadata is not a valid JSON payload, so it is
 	// excluded from the denominator. The single priced request
 	// is authoritative.
-	require.NotNil(t, sess.UsageEvents[0].CostUSD,
+	require.NotNil(t, sess.UsageEvents[0].Cost,
 		"single priced request with workspace metadata excluded should be authoritative")
-	assert.InDelta(t, 0.034, *sess.UsageEvents[0].CostUSD, 0.0001)
+	assert.Equal(t, money.MustParseDollars("0.034"), *sess.UsageEvents[0].Cost)
 }
 
 func TestKiloLegacyDiscoverRejectsSymlinkedTaskDir(t *testing.T) {

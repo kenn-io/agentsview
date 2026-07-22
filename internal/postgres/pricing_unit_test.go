@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type pricingProbeDriver struct{}
@@ -118,10 +119,10 @@ func (c *pricingProbeConn) QueryContext(
 	return &pricingProbeRows{
 		columns: []string{
 			"model_pattern",
-			"input_per_mtok",
-			"output_per_mtok",
-			"cache_creation_per_mtok",
-			"cache_read_per_mtok",
+			"input_microdollars_per_mtok",
+			"output_microdollars_per_mtok",
+			"cache_creation_microdollars_per_mtok",
+			"cache_read_microdollars_per_mtok",
 			"updated_at",
 		},
 		values: values,
@@ -167,39 +168,39 @@ func TestCustomPricingOverridesPricingMap(t *testing.T) {
 		dbPrices   []db.ModelPricing
 		custom     map[string]config.CustomModelRate
 		model      string
-		wantInput  float64
+		wantInput  money.Money
 		wantSource export.PricingRowSource
 	}{
 		{
 			name:       "db pricing only",
-			dbPrices:   []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0}},
+			dbPrices:   []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: money.MustParseDollars("1.0")}},
 			model:      "acme-ultra-2.1",
-			wantInput:  1.0,
+			wantInput:  money.MustParseDollars("1"),
 			wantSource: export.PricingRowSourceFetched,
 		},
 		{
 			name:       "custom overrides db",
-			dbPrices:   []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0}},
-			custom:     map[string]config.CustomModelRate{"acme-ultra-2.1": {Input: 9.0}},
+			dbPrices:   []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: money.MustParseDollars("1.0")}},
+			custom:     map[string]config.CustomModelRate{"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("9.0").Microdollars}},
 			model:      "acme-ultra-2.1",
-			wantInput:  9.0,
+			wantInput:  money.MustParseDollars("9"),
 			wantSource: export.PricingRowSourceCustom,
 		},
 		{
 			name:       "custom adds new model",
-			custom:     map[string]config.CustomModelRate{"new-model": {Input: 4.0}},
+			custom:     map[string]config.CustomModelRate{"new-model": {InputMicrodollarsPerMTok: money.MustParseDollars("4.0").Microdollars}},
 			model:      "new-model",
-			wantInput:  4.0,
+			wantInput:  money.MustParseDollars("4"),
 			wantSource: export.PricingRowSourceCustom,
 		},
 		{
 			name: "custom keeps source when rates match fallback",
 			custom: map[string]config.CustomModelRate{
 				"gpt-5.5": {
-					Input:         fallback["gpt-5.5"].InputPerMTok,
-					Output:        fallback["gpt-5.5"].OutputPerMTok,
-					CacheCreation: fallback["gpt-5.5"].CacheWritePerMTok,
-					CacheRead:     fallback["gpt-5.5"].CacheReadPerMTok,
+					InputMicrodollarsPerMTok:         fallback["gpt-5.5"].InputPerMTok.Microdollars,
+					OutputMicrodollarsPerMTok:        fallback["gpt-5.5"].OutputPerMTok.Microdollars,
+					CacheCreationMicrodollarsPerMTok: fallback["gpt-5.5"].CacheWritePerMTok.Microdollars,
+					CacheReadMicrodollarsPerMTok:     fallback["gpt-5.5"].CacheReadPerMTok.Microdollars,
 				},
 			},
 			model:      "gpt-5.5",
@@ -208,10 +209,10 @@ func TestCustomPricingOverridesPricingMap(t *testing.T) {
 		},
 		{
 			name:       "custom does not affect other models",
-			dbPrices:   []db.ModelPricing{{ModelPattern: "db-model", InputPerMTok: 2.0}},
-			custom:     map[string]config.CustomModelRate{"other": {Input: 99.0}},
+			dbPrices:   []db.ModelPricing{{ModelPattern: "db-model", InputPerMTok: money.MustParseDollars("2.0")}},
+			custom:     map[string]config.CustomModelRate{"other": {InputMicrodollarsPerMTok: money.MustParseDollars("99.0").Microdollars}},
 			model:      "db-model",
-			wantInput:  2.0,
+			wantInput:  money.MustParseDollars("2"),
 			wantSource: export.PricingRowSourceFetched,
 		},
 	}
@@ -224,7 +225,7 @@ func TestCustomPricingOverridesPricingMap(t *testing.T) {
 			s.applyCustomPricing(out)
 			got, ok := out[tt.model]
 			require.True(t, ok, "model %q not in map", tt.model)
-			assert.InDelta(t, tt.wantInput, got.InputPerMTok, 0.001)
+			assert.Equal(t, tt.wantInput, got.InputPerMTok)
 			assert.Equal(t, tt.wantSource, got.Source)
 		})
 	}
@@ -234,7 +235,7 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	block := make(chan struct{})
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 	}
@@ -268,15 +269,15 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	require.NoError(t, first.err, "first loadPricingMap")
 	require.NoError(t, second.err, "second loadPricingMap")
 	require.Equal(t, 1, state.queryCount(), "pricing queries")
-	first.prices[0].Rates.InputPerMTok = 99.0
+	first.prices[0].Rates.InputPerMTok = money.MustParseDollars("99")
 	secondByPattern := pricingRowsByPattern(second.prices)
-	assert.InDelta(t, 1.0, secondByPattern["db-model"].InputPerMTok, 0.001)
+	assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
 }
 
 func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 	}
 	pg := newPricingProbeDB(t, state)
@@ -288,7 +289,7 @@ func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	byPattern := pricingRowsByPattern(prices)
 	require.Len(t, byPattern, 1,
 		"explicit DB rows should define the effective pricing table")
-	assert.InDelta(t, 1.0, byPattern["db-model"].InputPerMTok, 0.001)
+	assert.Equal(t, money.MustParseDollars("1"), byPattern["db-model"].InputPerMTok)
 }
 
 func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
@@ -298,7 +299,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	defer unblock()
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 	}
@@ -337,7 +338,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	second := <-secondResult
 	require.NoError(t, second.err, "second loadPricingMap")
 	secondByPattern := pricingRowsByPattern(second.prices)
-	assert.InDelta(t, 1.0, secondByPattern["db-model"].InputPerMTok, 0.001)
+	assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
 	assert.Equal(t, 1, state.queryCount(), "pricing queries")
 }
 
@@ -346,7 +347,7 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 	defer close(block)
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 		done:  make(chan struct{}),
@@ -383,7 +384,7 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 	defer close(releaseCanceledQuery)
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 		block:            block,
 		afterCancelBlock: releaseCanceledQuery,
@@ -422,7 +423,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 	defer close(block)
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 	}
@@ -443,7 +444,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 
 	store.SetCustomPricing(map[string]config.CustomModelRate{
-		"custom-model": {Input: 9.0},
+		"custom-model": {InputMicrodollarsPerMTok: money.MustParseDollars("9.0").Microdollars},
 	})
 	go func() {
 		prices, err := store.loadPricingMap(context.Background())
@@ -458,7 +459,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 		}},
 	}
 	pg := newPricingProbeDB(t, state)
@@ -467,7 +468,7 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	first, err := store.loadPricingMap(context.Background())
 	require.NoError(t, err, "first loadPricingMap")
 	state.setRows([][]driver.Value{{
-		"db-model", 7.0, 2.0, 3.0, 4.0, "2026-06-08",
+		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
 	}})
 	second, err := store.loadPricingMap(context.Background())
 	require.NoError(t, err, "second loadPricingMap")
@@ -475,8 +476,8 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	require.Equal(t, 2, state.queryCount(), "pricing queries")
 	firstByPattern := pricingRowsByPattern(first)
 	secondByPattern := pricingRowsByPattern(second)
-	assert.InDelta(t, 1.0, firstByPattern["db-model"].InputPerMTok, 0.001)
-	assert.InDelta(t, 7.0, secondByPattern["db-model"].InputPerMTok, 0.001)
+	assert.Equal(t, money.MustParseDollars("1"), firstByPattern["db-model"].InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("7"), secondByPattern["db-model"].InputPerMTok)
 }
 
 func pricingRowsByPattern(
@@ -508,17 +509,17 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 	query, args := pgPricingUpsertStatement([]db.ModelPricing{
 		{
 			ModelPattern:         "model-a",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 		},
 		{
 			ModelPattern:         "model-b",
-			InputPerMTok:         5,
-			OutputPerMTok:        6,
-			CacheCreationPerMTok: 7,
-			CacheReadPerMTok:     8,
+			InputPerMTok:         money.MustParseDollars("5"),
+			OutputPerMTok:        money.MustParseDollars("6"),
+			CacheCreationPerMTok: money.MustParseDollars("7"),
+			CacheReadPerMTok:     money.MustParseDollars("8"),
 			UpdatedAt:            "source-time",
 		},
 	}, "call-time")
@@ -527,8 +528,8 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 		"VALUES ($1, $2, $3, $4, $5, $6), "+
 			"($7, $8, $9, $10, $11, $12)")
 	assert.Contains(t, query,
-		"model_pricing.input_per_mtok IS DISTINCT FROM")
-	assert.Contains(t, query, "EXCLUDED.input_per_mtok")
+		"model_pricing.input_microdollars_per_mtok IS DISTINCT FROM")
+	assert.Contains(t, query, "EXCLUDED.input_microdollars_per_mtok")
 	assert.NotContains(t, query,
 		"model_pricing.updated_at IS DISTINCT FROM")
 	require.Len(t, args, 12)
@@ -542,60 +543,60 @@ func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
 	existing := []db.ModelPricing{
 		{
 			ModelPattern:         "_fallback_version",
-			InputPerMTok:         0,
-			OutputPerMTok:        0,
-			CacheCreationPerMTok: 0,
-			CacheReadPerMTok:     0,
+			InputPerMTok:         money.MustParseDollars("0"),
+			OutputPerMTok:        money.MustParseDollars("0"),
+			CacheCreationPerMTok: money.MustParseDollars("0"),
+			CacheReadPerMTok:     money.MustParseDollars("0"),
 			UpdatedAt:            "v1",
 		},
 		{
 			ModelPattern:         "same-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "old",
 		},
 		{
 			ModelPattern:         "changed-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "old",
 		},
 	}
 	desired := []db.ModelPricing{
 		{
 			ModelPattern:         "_fallback_version",
-			InputPerMTok:         0,
-			OutputPerMTok:        0,
-			CacheCreationPerMTok: 0,
-			CacheReadPerMTok:     0,
+			InputPerMTok:         money.MustParseDollars("0"),
+			OutputPerMTok:        money.MustParseDollars("0"),
+			CacheCreationPerMTok: money.MustParseDollars("0"),
+			CacheReadPerMTok:     money.MustParseDollars("0"),
 			UpdatedAt:            "v2",
 		},
 		{
 			ModelPattern:         "same-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "new",
 		},
 		{
 			ModelPattern:         "changed-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        9,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("9"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "new",
 		},
 		{
 			ModelPattern:         "missing-model",
-			InputPerMTok:         5,
-			OutputPerMTok:        6,
-			CacheCreationPerMTok: 7,
-			CacheReadPerMTok:     8,
+			InputPerMTok:         money.MustParseDollars("5"),
+			OutputPerMTok:        money.MustParseDollars("6"),
+			CacheCreationPerMTok: money.MustParseDollars("7"),
+			CacheReadPerMTok:     money.MustParseDollars("8"),
 			UpdatedAt:            "new",
 		},
 	}
@@ -620,15 +621,15 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 	t.Cleanup(func() { local.Close() })
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "same-model",
-		InputPerMTok:         1,
-		OutputPerMTok:        2,
-		CacheCreationPerMTok: 3,
-		CacheReadPerMTok:     4,
+		InputPerMTok:         money.MustParseDollars("1"),
+		OutputPerMTok:        money.MustParseDollars("2"),
+		CacheCreationPerMTok: money.MustParseDollars("3"),
+		CacheReadPerMTok:     money.MustParseDollars("4"),
 	}}), "seed local pricing")
 
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"same-model", 1.0, 2.0, 3.0, 4.0, "old",
+			"same-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "old",
 		}},
 	}
 	pg := newPricingProbeDB(t, state)

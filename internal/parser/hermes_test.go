@@ -12,6 +12,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // newHermesTestProvider builds a concrete hermesProvider for the given roots so
@@ -658,7 +660,7 @@ func TestBuildHermesStateResultPopulatesSessionAggregateTokens(t *testing.T) {
 func TestHermesUsageEvents_UnknownCostStatusLeavesCostUnpriced(t *testing.T) {
 	// estimated_cost_usd is a literal 0 with cost_status "unknown":
 	// Hermes does not actually know the cost, so the event must leave
-	// CostUSD nil and let agentsview price it from the catalog rather
+	// Cost nil and let agentsview price it from the catalog rather
 	// than asserting a false known $0.
 	events := hermesUsageEvents(hermesStateSession{
 		model:         "gpt-5.5",
@@ -668,7 +670,7 @@ func TestHermesUsageEvents_UnknownCostStatusLeavesCostUnpriced(t *testing.T) {
 		costStatus:    "unknown",
 	}, "hermes:unknown-cost")
 	require.Len(t, events, 1)
-	assert.Nil(t, events[0].CostUSD)
+	assert.Nil(t, events[0].Cost)
 }
 
 func TestHermesUsageEvents_IncludedCostStatusIsKnownZero(t *testing.T) {
@@ -683,14 +685,14 @@ func TestHermesUsageEvents_IncludedCostStatusIsKnownZero(t *testing.T) {
 		costSource:   "provider_models_api",
 	}, "hermes:included-cost")
 	require.Len(t, events, 1)
-	require.NotNil(t, events[0].CostUSD)
-	assert.Equal(t, 0.0, *events[0].CostUSD)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{}, *events[0].Cost)
 }
 
 func TestHermesUsageEvents_IncludedWithoutCostSourceLeavesCostUnpriced(t *testing.T) {
 	// Hermes marks models it does not price (e.g. gpt-5.5) cost_status
 	// "included" with cost_source "none". That is a default placeholder,
-	// not a confident free-usage signal, so the event must leave CostUSD
+	// not a confident free-usage signal, so the event must leave Cost
 	// nil and let agentsview price it from the catalog instead of
 	// reporting a false $0.
 	for _, src := range []string{"none", ""} {
@@ -703,7 +705,7 @@ func TestHermesUsageEvents_IncludedWithoutCostSourceLeavesCostUnpriced(t *testin
 			costSource:    src,
 		}, "hermes:included-no-source")
 		require.Len(t, events, 1)
-		assert.Nilf(t, events[0].CostUSD,
+		assert.Nilf(t, events[0].Cost,
 			"cost_source %q must not produce a confident $0", src)
 	}
 }
@@ -717,8 +719,8 @@ func TestHermesUsageEvents_ActualCostTakesPrecedence(t *testing.T) {
 		costStatus:    "unknown",
 	}, "hermes:actual-cost")
 	require.Len(t, events, 1)
-	require.NotNil(t, events[0].CostUSD)
-	assert.Equal(t, 1.23, *events[0].CostUSD)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 1_230_000}, *events[0].Cost)
 }
 
 func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
@@ -729,8 +731,8 @@ func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
 		costStatus:    "",
 	}, "hermes:estimate-cost")
 	require.Len(t, events, 1)
-	require.NotNil(t, events[0].CostUSD)
-	assert.Equal(t, 0.5, *events[0].CostUSD)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 500_000}, *events[0].Cost)
 }
 
 func TestBuildHermesStateResultLeavesAggregatesUnsetWhenNoTokens(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
@@ -1468,7 +1469,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 		Model:        "gpt-5.5",
 		InputTokens:  1000000,
 		OutputTokens: 500000,
-		CostUSD:      nil,
+		Cost:         nil,
 		OccurredAt:   started,
 		DedupKey:     "session:" + sessID,
 	}}), "ReplaceSessionUsageEvents")
@@ -1497,7 +1498,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 		Timezone: "UTC",
 	})
 	require.NoError(t, err, "GetDailyUsage")
-	assert.InDelta(t, 20.0, result.Totals.TotalCost, 1e-9,
+	assert.Equal(t, money.MustParseDollars("20"), result.Totals.TotalCost,
 		"gpt-5.5 usage should be priced from the catalog")
 }
 
@@ -1519,10 +1520,10 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	defer localDB.Close()
 	require.NoError(t, localDB.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-4.6-opus-high-thinking",
-		InputPerMTok:         5.0,
-		OutputPerMTok:        25.0,
-		CacheCreationPerMTok: 6.25,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("5.0"),
+		OutputPerMTok:        money.MustParseDollars("25.0"),
+		CacheCreationPerMTok: money.MustParseDollars("6.25"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}), "UpsertModelPricing")
 	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
@@ -1532,8 +1533,8 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 		OutputTokens:     567,
 		CacheWriteTokens: 12,
 		CacheReadTokens:  34,
-		ChargedCents:     15.66,
-		CursorTokenFee:   3.32,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
 		UserEmail:        "member@example.com",
 		IsHeadless:       false,
@@ -1568,7 +1569,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Equal(t, 567, result.Daily[0].OutputTokens)
 	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
 	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
-	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.1566"), result.Daily[0].TotalCost)
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total)
@@ -1596,14 +1597,14 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 			occurred_at, model, kind,
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
-			charged_cents, cursor_token_fee,
+			charged_microdollars, cursor_token_fee_microdollars,
 			user_id, user_email, is_headless, dedup_key
 		) VALUES (
 			'2026-05-14T09:05:00Z'::timestamptz,
 			'claude-4.6-opus-high-thinking',
 			'USAGE_EVENT_KIND_USAGE_BASED',
 			10, 20, 0, 30,
-			1.25, 0.25,
+			12500, 2500,
 			'other-user', 'other@example.com', false, 'other-machine-row'
 		)`)
 	require.NoError(t, err, "seed existing pg row")
@@ -1619,8 +1620,8 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 		OutputTokens:     567,
 		CacheWriteTokens: 12,
 		CacheReadTokens:  34,
-		ChargedCents:     15.66,
-		CursorTokenFee:   3.32,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
 		UserEmail:        "member@example.com",
 		IsHeadless:       false,
@@ -2101,7 +2102,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	// reset branch re-runs EnsureSchema, but CREATE TABLE IF NOT EXISTS does
 	// not re-add a column to an existing table, so the failure persists.
 	_, err = pg.Exec(
-		`ALTER TABLE model_pricing DROP COLUMN cache_read_per_mtok`,
+		`ALTER TABLE model_pricing DROP COLUMN cache_read_microdollars_per_mtok`,
 	)
 	require.NoError(t, err, "drop model_pricing column")
 
@@ -2114,7 +2115,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	// absent) and re-push the session.
 	_, err = pg.Exec(
 		`ALTER TABLE model_pricing
-		 ADD COLUMN cache_read_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0`,
+		 ADD COLUMN cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0`,
 	)
 	require.NoError(t, err, "restore model_pricing column")
 

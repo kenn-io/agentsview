@@ -1,6 +1,7 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import { squarify } from "../../utils/treemap.js";
+  import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
   interface TreemapItem {
     id: string;
@@ -32,11 +33,6 @@
     ro.observe(containerEl);
     return () => ro.disconnect();
   });
-
-  function formatCost(v: number): string {
-    if (v >= 100) return `$${v.toFixed(0)}`;
-    return `$${v.toFixed(2)}`;
-  }
 
   interface Tile {
     id: string;
@@ -136,7 +132,7 @@
           y={tile.y + 30}
           class="tile-value"
         >
-          {formatCost(tile.value)}
+          {formatMoney(moneyFromMicrodollars(tile.value))}
         </text>
         {#if tile.meta}
           <text

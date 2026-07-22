@@ -2,12 +2,9 @@
   import { Card } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
+  import { formatMoney } from "../../money.js";
 
   let { report }: { report: Report } = $props();
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
-  }
 
   function fmtInt(v: number): string {
     return v.toLocaleString();
@@ -98,7 +95,7 @@
       },
       {
         label: m.activity_total_cost(),
-        value: fmtCost(t.cost),
+        value: formatMoney(t.cost),
       },
     ];
   });

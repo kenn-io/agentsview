@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestHandleSessionUsage_PricedSession(t *testing.T) {
@@ -51,7 +52,7 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 		"total_output_tokens": float64(1234),
 		"peak_context_tokens": float64(56789),
 		"has_token_data":      true,
-		"cost_usd":            0.01134,
+		"cost":                map[string]any{"microdollars": float64(11340)},
 		"has_cost":            true,
 		"cost_source":         "computed",
 		"models":              []any{"gpt-5.1"},
@@ -80,8 +81,10 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 			"output_tokens":               float64(500),
 			"cache_creation_input_tokens": float64(200),
 			"cache_read_input_tokens":     float64(300),
-			"cost_usd":                    0.01134,
-			"has_cost":                    true,
+			"cost": map[string]any{
+				"microdollars": float64(11340),
+			},
+			"has_cost": true,
 		},
 	}, got["breakdown"], "breakdown rows with ?breakdown=true")
 }
@@ -113,8 +116,8 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, float64(1), got["rollup_subagent_count"])
 	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.Equal(t, "computed", got["rollup_cost_source"])
-	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
+	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
+		got["rollup_cost"])
 }
 
 func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
@@ -129,8 +132,8 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 		s.ParentSessionID = &parent
 		s.RelationshipType = "subagent"
 	})
-	reportedRootCost := 0.03
-	reportedChildCost := 0.02
+	reportedRootCost := money.MustParseDollars("0.03")
+	reportedChildCost := money.MustParseDollars("0.02")
 	require.NoError(t, te.db.ReplaceSessionUsageEvents("copilot-rollup-root", []db.UsageEvent{
 		{
 			Source: "shutdown", Model: "gpt-5.1",
@@ -140,14 +143,14 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 		{
 			Source: "shutdown", Model: "gpt-5.1",
 			InputTokens: 1000, OutputTokens: 500,
-			CostUSD: &reportedRootCost, CostStatus: "exact",
+			Cost: &reportedRootCost, CostStatus: "exact",
 			CostSource: db.CopilotReportedCostSource,
 			OccurredAt: tsSeed, DedupKey: "final",
 		},
 	}))
 	require.NoError(t, te.db.ReplaceSessionUsageEvents("copilot-rollup-child", []db.UsageEvent{{
 		Source: "provider", Model: "gpt-5.1",
-		CostUSD: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
+		Cost: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
 		OccurredAt: tsSeed, DedupKey: "child",
 	}}))
 
@@ -158,8 +161,8 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 	assert.Equal(t, true, got["has_rollup_cost"])
 	assert.Equal(t, "reported", got["cost_source"])
 	assert.Equal(t, "reported", got["rollup_cost_source"])
-	assert.InDelta(t, reportedRootCost+reportedChildCost,
-		got["rollup_cost_usd"], 1e-12)
+	assert.Equal(t, map[string]any{"microdollars": float64(50_000)},
+		got["rollup_cost"])
 }
 
 func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
@@ -228,7 +231,8 @@ func TestHandleSessionUsage_RollupTraversesContinuationAndDedupesSharedRows(t *t
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, float64(1), got["rollup_subagent_count"])
 	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
+	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
+		got["rollup_cost"])
 }
 
 func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
@@ -260,7 +264,8 @@ func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, float64(1), got["rollup_subagent_count"])
 	assert.Equal(t, true, got["has_rollup_cost"])
-	assert.InDelta(t, 0.021, got["rollup_cost_usd"], 1e-9)
+	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
+		got["rollup_cost"])
 }
 
 func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t *testing.T) {
@@ -291,9 +296,9 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, float64(1), got["rollup_subagent_count"])
 	assert.Equal(t, false, got["has_rollup_cost"])
-	_, hasRollupCost := got["rollup_cost_usd"]
+	_, hasRollupCost := got["rollup_cost"]
 	assert.False(t, hasRollupCost)
-	assert.InDelta(t, 0.0105, got["cost_usd"], 1e-9)
+	assert.Equal(t, map[string]any{"microdollars": float64(10500)}, got["cost"])
 }
 
 func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
@@ -324,9 +329,9 @@ func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, float64(1), got["rollup_subagent_count"])
 	assert.Equal(t, false, got["has_rollup_cost"])
-	_, hasRollupCost := got["rollup_cost_usd"]
+	_, hasRollupCost := got["rollup_cost"]
 	assert.False(t, hasRollupCost)
-	assert.InDelta(t, 0.0105, got["cost_usd"], 1e-9)
+	assert.Equal(t, map[string]any{"microdollars": float64(10500)}, got["cost"])
 }
 
 func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
@@ -348,7 +353,7 @@ func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
 		"total_output_tokens": float64(0),
 		"peak_context_tokens": float64(0),
 		"has_token_data":      false,
-		"cost_usd":            float64(0),
+		"cost":                map[string]any{"microdollars": float64(0)},
 		"has_cost":            false,
 		"models":              []any{},
 		"unpriced_models":     []any{},
@@ -420,7 +425,7 @@ func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
 	assert.Equal(t, 125, usage.Breakdown[1].OutputTokens)
 	assert.Equal(t, 50, usage.Breakdown[1].CacheCreationInputTokens)
 	assert.Equal(t, 25, usage.Breakdown[1].CacheReadInputTokens)
-	assert.InDelta(t, 0.01416, usage.CostUSD, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.01416"), usage.Cost)
 }
 
 func TestHandleSessionUsage_NotFound(t *testing.T) {
@@ -461,10 +466,10 @@ func seedSessionUsagePricing(t *testing.T, d *db.DB) {
 	t.Helper()
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "gpt-5.1",
-		InputPerMTok:         3.0,
-		OutputPerMTok:        15.0,
-		CacheCreationPerMTok: 3.75,
-		CacheReadPerMTok:     0.30,
+		InputPerMTok:         money.MustParseDollars("3.0"),
+		OutputPerMTok:        money.MustParseDollars("15.0"),
+		CacheCreationPerMTok: money.MustParseDollars("3.75"),
+		CacheReadPerMTok:     money.MustParseDollars("0.30"),
 	}}))
 }
 

@@ -645,7 +645,7 @@ agentsview session usage <id> [--format json]
   "total_output_tokens": 15230,
   "peak_context_tokens": 84000,
   "has_token_data": true,
-  "cost_usd": 2.41,
+  "cost": {"microdollars": 2410000},
   "has_cost": true,
   "cost_source": "computed",
   "models": ["claude-opus-4-7"],
@@ -663,7 +663,7 @@ agentsview session usage <id> [--format json]
       "output_tokens": 640,
       "cache_creation_input_tokens": 0,
       "cache_read_input_tokens": 43000,
-      "cost_usd": 0.58,
+      "cost": {"microdollars": 580000},
       "has_cost": true
     }
   ],
@@ -676,7 +676,7 @@ agentsview session usage <id> [--format json]
 | `total_output_tokens` | Sum of generated output tokens across the session                    |
 | `peak_context_tokens` | Highest context-token count observed during the session              |
 | `has_token_data`      | `false` when the session has no per-message token usage              |
-| `cost_usd`            | Reported session cost when available, otherwise a model-pricing estimate; `0` when `has_cost` is `false` |
+| `cost`                | Model-pricing estimate as an integer microdollar object; zero when `has_cost` is `false` |
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
 | `cost_source`         | Omitted without a complete cost; `reported` for an authoritative session total, otherwise `computed`, `reported`, or `mixed` for the contributing rows |
 | `ai_credits`          | Omitted unless the priced agent uses AI Credits; derived from `cost_usd` at 100 credits per dollar |
@@ -685,8 +685,7 @@ agentsview session usage <id> [--format json]
 | `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
 | `breakdown`           | Per-step usage rows, in session order; when a reported session total exists, row costs are estimated allocations that sum to it; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`      | `true` when the report came from an already-running daemon           |
-| `rollup_cost_usd`      | REST only, with `rollup=true`; present only when `has_rollup_cost` is true, then carries the complete cost across the root and explicit subagent descendants |
-| `rollup_cost_source`   | REST only, with `rollup=true`; provenance of `rollup_cost_usd` across sessions, so a reported root plus a computed child is `mixed` |
+| `rollup_cost`          | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants |
 | `has_rollup_cost`      | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced |
 | `rollup_subagent_count`| REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows |
 
@@ -698,7 +697,7 @@ Each `breakdown` row carries the fields shown in the example:
 | `message_ordinal` | Ordinal of the originating message; omitted when the row is not tied to one |
 | `source`          | `message` for per-message token usage; otherwise the usage-event source |
 | `label`           | Display label — `Prompt N` for message rows, `Step N` for other rows tied to a message, else the source name |
-| `cost_usd`        | Per-row estimate; for a reported multi-model session, catalog-cost weights allocate the session total across rows so the breakdown sums to `cost_usd`; `0` with `has_cost: false` when the model is unpriced |
+| `cost`            | Per-row integer microdollar object; zero with `has_cost: false` when the model is unpriced |
 
 Human output is a five-line summary:
 

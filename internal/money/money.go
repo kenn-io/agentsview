@@ -4,6 +4,7 @@ package money
 import (
 	"errors"
 	"math"
+	"math/big"
 	"math/bits"
 )
 
@@ -19,6 +20,38 @@ var (
 // representation of a monetary value.
 type Money struct {
 	Microdollars int64 `json:"microdollars"`
+}
+
+// SignedCostPerMillion prices a row whose rates may be signed, such as cache
+// savings. Products are summed exactly and the combined result is rounded once
+// to the nearest microdollar, with halves away from zero.
+func SignedCostPerMillion(parts []RatedTokens) (Money, error) {
+	total := new(big.Int)
+	for _, part := range parts {
+		if part.Tokens < 0 {
+			return Money{}, ErrNegative
+		}
+		product := new(big.Int).Mul(
+			big.NewInt(part.Tokens),
+			big.NewInt(part.Rate.Microdollars),
+		)
+		total.Add(total, product)
+	}
+
+	negative := total.Sign() < 0
+	magnitude := new(big.Int).Abs(total)
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(magnitude, big.NewInt(microdollarsPerDollar), remainder)
+	if remainder.Cmp(big.NewInt(microdollarsPerDollar/2)) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
+	}
+	if !quotient.IsInt64() {
+		return Money{}, ErrOverflow
+	}
+	return Money{Microdollars: quotient.Int64()}, nil
 }
 
 // RatedTokens pairs a nonnegative token count with a nonnegative
@@ -61,6 +94,50 @@ func Sum(values ...Money) (Money, error) {
 		}
 	}
 	return total, nil
+}
+
+// MustAdd returns the exact sum and panics if the signed 64-bit range is
+// exceeded. It is intended for aggregating already validated application
+// values, where overflow means the archive is outside the supported domain.
+func MustAdd(a, b Money) Money {
+	total, err := Add(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return total
+}
+
+// MustSub returns the exact difference and panics on overflow.
+func MustSub(a, b Money) Money {
+	difference, err := Sub(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return difference
+}
+
+// Divide divides Money by a positive integer and rounds to the nearest
+// microdollar, with halves away from zero.
+func Divide(value Money, divisor int64) (Money, error) {
+	if divisor <= 0 {
+		return Money{}, ErrInvalidDecimal
+	}
+	numerator := big.NewInt(value.Microdollars)
+	negative := numerator.Sign() < 0
+	magnitude := new(big.Int).Abs(numerator)
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(magnitude, big.NewInt(divisor), remainder)
+	twiceRemainder := new(big.Int).Lsh(remainder, 1)
+	if twiceRemainder.Cmp(big.NewInt(divisor)) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
+	}
+	if !quotient.IsInt64() {
+		return Money{}, ErrOverflow
+	}
+	return Money{Microdollars: quotient.Int64()}, nil
 }
 
 // CostPerMillion prices one usage row. Products are accumulated without

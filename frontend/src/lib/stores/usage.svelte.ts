@@ -739,7 +739,7 @@ class UsageStore {
       const comparison = await callGenerated(() =>
         UsageService.getApiV1UsageComparison({
           ...params,
-          currentCost: summary.totals.totalCost,
+          currentMicrodollars: summary.totals.totalCost.microdollars,
         }),
         signal,
       ) as unknown as UsageComparison;

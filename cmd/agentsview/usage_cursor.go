@@ -119,7 +119,7 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 			OutputTokens:     ev.TokenUsage.OutputTokens,
 			CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
 			CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
-			ChargedCents:     ev.ChargedCents,
+			Charged:          ev.Charged,
 			CursorTokenFee:   ev.CursorTokenFee,
 			UserID:           ev.UserID,
 			UserEmail:        ev.UserEmail,

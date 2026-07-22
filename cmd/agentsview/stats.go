@@ -398,9 +398,9 @@ func printCacheEconomics(w io.Writer, c *db.StatsCacheEconomics) {
 	fmt.Fprintln(w, "Cache economics (claude-only)")
 	fmt.Fprintf(w, "  Overall hit ratio:   %.2f\n",
 		c.CacheHitRatio.Overall)
-	fmt.Fprintf(w, "  $ spent:             $%.2f\n", c.DollarsSpent)
-	fmt.Fprintf(w, "  $ saved vs uncached: $%.2f\n",
-		c.DollarsSavedVsUncached)
+	fmt.Fprintf(w, "  $ spent:             %s\n", fmtCost(c.DollarsSpent))
+	fmt.Fprintf(w, "  $ saved vs uncached: %s\n",
+		fmtCost(c.DollarsSavedVsUncached))
 	fmt.Fprintln(w)
 }
 

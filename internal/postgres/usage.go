@@ -12,6 +12,7 @@ import (
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const pgUsageMessageEligibility = `
@@ -230,7 +231,7 @@ SELECT
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	NULL::double precision AS cost_usd,
+	NULL::bigint AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
@@ -263,7 +264,7 @@ SELECT
 	ue.cache_creation_input_tokens,
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
-	ue.cost_usd,
+	ue.cost_microdollars,
 	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
@@ -308,7 +309,7 @@ SELECT
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	NULL::double precision AS cost_usd,
+	NULL::bigint AS cost_microdollars,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -335,7 +336,7 @@ SELECT
 	ue.cache_creation_input_tokens,
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
-	ue.cost_usd,
+	ue.cost_microdollars,
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -364,7 +365,7 @@ SELECT
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	NULL::double precision AS cost_usd,
+	NULL::bigint AS cost_microdollars,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -386,12 +387,12 @@ SELECT
 	ue.model,
 	'' AS token_usage,
 	ue.input_tokens,
-			ue.output_tokens,
-			ue.cache_creation_input_tokens,
-			ue.cache_read_input_tokens,
-			ue.reasoning_tokens,
-			ue.cost_usd,
-			ue.cost_source,
+	ue.output_tokens,
+	ue.cache_creation_input_tokens,
+	ue.cache_read_input_tokens,
+	ue.reasoning_tokens,
+	ue.cost_microdollars,
+	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -449,7 +450,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.cache_creation_input_tokens,
 		ue.cache_read_input_tokens,
 		ue.reasoning_tokens,
-		ue.cost_usd,
+		ue.cost_microdollars,
 		ue.cost_source,
 		ue.dedup_key
 	FROM usage_events ue
@@ -498,7 +499,7 @@ type pgUsageScanRow struct {
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
 	reasoningTokens          int
-	costUSD                  sql.NullFloat64
+	cost                     sql.NullInt64
 	costStatus               string
 	costSource               string
 	claudeMessageID          string
@@ -527,7 +528,7 @@ type pgDailyUsageScanRow struct {
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
 	reasoningTokens          int
-	costUSD                  sql.NullFloat64
+	cost                     sql.NullInt64
 	costSource               string
 	claudeMessageID          string
 	claudeRequestID          string
@@ -559,7 +560,7 @@ SELECT
 	u.cache_creation_input_tokens,
 	u.cache_read_input_tokens,
 	u.reasoning_tokens,
-	u.cost_usd,
+	u.cost_microdollars,
 	u.cost_status,
 	u.cost_source,
 	u.claude_message_id,
@@ -607,11 +608,11 @@ SELECT
 	u.input_tokens,
 		u.output_tokens,
 		u.cache_creation_input_tokens,
-		u.cache_read_input_tokens,
-		u.reasoning_tokens,
-		u.cost_usd,
-		u.cost_source,
-		u.claude_message_id,
+	u.cache_read_input_tokens,
+	u.reasoning_tokens,
+	u.cost_microdollars,
+	u.cost_source,
+	u.claude_message_id,
 	u.claude_request_id,
 	u.source_uuid,
 	u.usage_dedup_key,
@@ -755,8 +756,7 @@ SELECT
 	cu.cache_write_tokens AS cache_creation_input_tokens,
 	cu.cache_read_tokens AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
-	cu.charged_cents / 100.0 AS cost_usd,
-	'cursor-reported' AS cost_source,
+	cu.charged_microdollars AS cost_microdollars,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -843,7 +843,7 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 		&r.cacheCreationInputTokens,
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
-		&r.costUSD,
+		&r.cost,
 		&r.costStatus,
 		&r.costSource,
 		&r.claudeMessageID,
@@ -882,7 +882,7 @@ func scanPGDailyUsageRowWithMachine(
 		&r.cacheCreationInputTokens,
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
-		&r.costUSD,
+		&r.cost,
 		&r.costSource,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
@@ -937,7 +937,7 @@ func pgFloorNegativeTokens(v int) int {
 
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
-) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings money.Money) {
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
@@ -957,19 +957,24 @@ func pgDailyUsageAmounts(
 
 	lookup := pricing.Lookup(r.model)
 	rates := lookup.Rates
-	if r.costUSD.Valid && r.costSource != db.CopilotReportedCostSource {
-		cost = r.costUSD.Float64
+	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
+		cost = money.Money{Microdollars: r.cost.Int64}
 		pricing.RecordReported(r.model, lookup)
 	} else {
 		cost = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
 		pricing.RecordComputed(r.model, lookup)
 	}
-	readDelta := float64(cacheRdTok) *
-		(rates.InputPerMTok - rates.CacheReadPerMTok) / 1_000_000
-	createDelta := float64(cacheCrTok) *
-		(rates.InputPerMTok - rates.CacheWritePerMTok) / 1_000_000
-	savings = readDelta + createDelta
+	readRate := money.MustSub(rates.InputPerMTok, rates.CacheReadPerMTok)
+	creationRate := money.MustSub(rates.InputPerMTok, rates.CacheWritePerMTok)
+	var err error
+	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
+		{Tokens: int64(cacheRdTok), Rate: readRate},
+		{Tokens: int64(cacheCrTok), Rate: creationRate},
+	})
+	if err != nil {
+		panic(err)
+	}
 	return
 }
 
@@ -1004,7 +1009,7 @@ func pgUsageDedupTokenForRow(
 
 func pgSessionRowCost(
 	r pgUsageScanRow, pricing *export.PricingResolver,
-) (cost float64, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -1021,18 +1026,18 @@ func pgSessionRowCost(
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	if r.costUSD.Valid {
+	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return r.costUSD.Float64, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return 0, true, false
+		return money.Money{}, true, false
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return 0, false, true
+		return money.Money{}, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
@@ -1043,7 +1048,7 @@ func pgSessionRowCost(
 func pgSessionUsageBreakdownEntry(
 	r pgUsageScanRow,
 	ordinal int,
-	cost float64,
+	cost money.Money,
 	priced bool,
 ) db.SessionUsageBreakdownEntry {
 	var inTok, outTok, crTok, rdTok int
@@ -1069,7 +1074,7 @@ func pgSessionUsageBreakdownEntry(
 		OutputTokens:             outTok,
 		CacheCreationInputTokens: crTok,
 		CacheReadInputTokens:     rdTok,
-		CostUSD:                  cost,
+		Cost:                     cost,
 		HasCost:                  priced,
 	}
 	if r.messageOrdinal.Valid {
@@ -1191,8 +1196,8 @@ func (s *Store) GetSessionUsage(
 	}
 	defer rows.Close()
 
-	var cost float64
-	var authoritativeCost *float64
+	var cost money.Money
+	var authoritativeCost *money.Money
 	var hasComputedCost, hasReportedCost bool
 	contributing := false
 	allPriced := true
@@ -1220,11 +1225,11 @@ func (s *Store) GetSessionUsage(
 		}
 
 		costRow := r
-		authoritative := r.costSource == db.CopilotReportedCostSource && r.costUSD.Valid
+		authoritative := r.costSource == db.CopilotReportedCostSource && r.cost.Valid
 		if authoritative {
-			v := r.costUSD.Float64
+			v := money.Money{Microdollars: r.cost.Int64}
 			authoritativeCost = &v
-			costRow.costUSD = sql.NullFloat64{}
+			costRow.cost = sql.NullInt64{}
 		}
 		c, priced, contributes := pgSessionRowCost(costRow, rateResolver)
 		if !contributes {
@@ -1233,14 +1238,14 @@ func (s *Store) GetSessionUsage(
 		contributing = true
 		modelsSet[r.model] = struct{}{}
 		if !authoritative {
-			if r.costUSD.Valid {
+			if r.cost.Valid {
 				hasReportedCost = true
 			} else {
 				hasComputedCost = true
 			}
 		}
 		if priced {
-			cost += c
+			cost = money.MustAdd(cost, c)
 		} else {
 			allPriced = false
 			unpricedSet[r.model] = struct{}{}
@@ -1255,13 +1260,13 @@ func (s *Store) GetSessionUsage(
 		return nil, fmt.Errorf("iterating pg session usage rows: %w", err)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
-		weights := make([]float64, len(breakdown))
+		weights := make([]money.Money, len(breakdown))
 		for i := range breakdown {
-			weights[i] = breakdown[i].CostUSD
+			weights[i] = breakdown[i].Cost
 		}
 		costs := export.AllocateCostByWeight(*authoritativeCost, weights)
 		for i := range breakdown {
-			breakdown[i].CostUSD = costs[i]
+			breakdown[i].Cost = costs[i]
 			breakdown[i].HasCost = true
 		}
 	}
@@ -1279,16 +1284,15 @@ func (s *Store) GetSessionUsage(
 		BreakdownCount: breakdownCount,
 		Breakdown:      breakdown,
 	}
-	if authoritativeCost != nil {
-		out.CostUSD = *authoritativeCost
-		out.CostSource = export.CostSourceReported
-	} else if out.HasCost {
-		out.CostUSD = cost
-		out.CostSource = export.CombinedCostSource(
-			hasComputedCost, hasReportedCost)
-	}
 	if out.HasCost {
-		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
+		if authoritativeCost != nil {
+			out.Cost = *authoritativeCost
+			out.CostSource = export.CostSourceReported
+		} else {
+			out.Cost = cost
+			out.CostSource = export.CombinedCostSource(hasComputedCost, hasReportedCost)
+		}
+		out.AICredits = db.AICreditsFromCost(sess.Agent, out.Cost)
 	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedStringSetKeys(unpricedSet)
@@ -1338,16 +1342,15 @@ func (s *Store) GetDailyUsage(
 		model   string
 	}
 	type bucket struct {
-		inputTok      int
-		outputTok     int
-		cacheCr       int
-		cacheRd       int
-		cost          float64
-		aggregateCost float64
+		inputTok  int
+		outputTok int
+		cacheCr   int
+		cacheRd   int
+		cost      money.Money
 	}
 	type sessionCost struct {
-		estimated     map[accumKey]float64
-		authoritative *float64
+		estimated     map[accumKey]money.Money
+		authoritative *money.Money
 	}
 	accum := make(map[accumKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
@@ -1358,7 +1361,7 @@ func (s *Store) GetDailyUsage(
 		seenSessions = make(map[string]db.UsageSessionInfo)
 	}
 	projectLabels := make(map[string]struct{})
-	var totalSavings float64
+	var totalSavings money.Money
 
 	for rows.Next() {
 		r, scanErr := scanPGDailyUsageRowWithMachine(rows, f.Breakdowns)
@@ -1399,7 +1402,7 @@ func (s *Store) GetDailyUsage(
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
 			pgDailyUsageAmounts(r, rateResolver)
-		totalSavings += savings
+		totalSavings = money.MustAdd(totalSavings, savings)
 
 		key := accumKey{
 			date: date, project: r.project,
@@ -1417,13 +1420,12 @@ func (s *Store) GetDailyUsage(
 
 		sc := sessionCosts[r.sessionID]
 		if sc.estimated == nil {
-			sc.estimated = make(map[accumKey]float64)
+			sc.estimated = make(map[accumKey]money.Money)
 		}
-		sc.estimated[key] += cost
+		sc.estimated[key] = money.MustAdd(sc.estimated[key], cost)
 		if useAuthoritativeCost &&
-			r.costSource == db.CopilotReportedCostSource &&
-			r.costUSD.Valid {
-			v := r.costUSD.Float64
+			r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
 			sc.authoritative = &v
 			rateResolver.RecordUnattributedReported()
 		}
@@ -1462,7 +1464,7 @@ func (s *Store) GetDailyUsage(
 				}
 				return a.model < b.model
 			})
-			weights := make([]float64, len(keys))
+			weights := make([]money.Money, len(keys))
 			for i, key := range keys {
 				weights[i] = sc.estimated[key]
 			}
@@ -1473,8 +1475,7 @@ func (s *Store) GetDailyUsage(
 					b = &bucket{}
 					accum[key] = b
 				}
-				b.cost += costs[i]
-				b.aggregateCost += costs[i]
+				b.cost = money.MustAdd(b.cost, costs[i])
 			}
 		} else {
 			for key, cost := range sc.estimated {
@@ -1483,8 +1484,7 @@ func (s *Store) GetDailyUsage(
 					b = &bucket{}
 					accum[key] = b
 				}
-				b.cost += cost
-				b.aggregateCost += cost
+				b.cost = money.MustAdd(b.cost, cost)
 			}
 		}
 	}
@@ -1495,12 +1495,11 @@ func (s *Store) GetDailyUsage(
 			model string
 		}
 		type modelAccum struct {
-			inputTok      int
-			outputTok     int
-			cacheCr       int
-			cacheRd       int
-			cost          float64
-			aggregateCost float64
+			inputTok  int
+			outputTok int
+			cacheCr   int
+			cacheRd   int
+			cost      money.Money
 		}
 		dm := make(map[dateModelKey]*modelAccum)
 		for key, b := range accum {
@@ -1514,8 +1513,7 @@ func (s *Store) GetDailyUsage(
 			ma.outputTok += b.outputTok
 			ma.cacheCr += b.cacheCr
 			ma.cacheRd += b.cacheRd
-			ma.cost += b.cost
-			ma.aggregateCost += b.aggregateCost
+			ma.cost = money.MustAdd(ma.cost, b.cost)
 		}
 
 		type dayData struct{ models map[string]*modelAccum }
@@ -1555,8 +1553,8 @@ func (s *Store) GetDailyUsage(
 				if left == nil || right == nil {
 					return left != nil
 				}
-				if left.cost != right.cost {
-					return left.cost > right.cost
+				if left.cost.Microdollars != right.cost.Microdollars {
+					return left.cost.Microdollars > right.cost.Microdollars
 				}
 				return modelNames[i] < modelNames[j]
 			})
@@ -1571,7 +1569,7 @@ func (s *Store) GetDailyUsage(
 				entry.OutputTokens += ma.outputTok
 				entry.CacheCreationTokens += ma.cacheCr
 				entry.CacheReadTokens += ma.cacheRd
-				entry.TotalCost += ma.aggregateCost
+				entry.TotalCost = money.MustAdd(entry.TotalCost, ma.cost)
 				mbd = append(mbd, db.ModelBreakdown{
 					ModelName:           m,
 					InputTokens:         ma.inputTok,
@@ -1588,7 +1586,7 @@ func (s *Store) GetDailyUsage(
 			totals.OutputTokens += entry.OutputTokens
 			totals.CacheCreationTokens += entry.CacheCreationTokens
 			totals.CacheReadTokens += entry.CacheReadTokens
-			totals.TotalCost += entry.TotalCost
+			totals.TotalCost = money.MustAdd(totals.TotalCost, entry.TotalCost)
 		}
 		if daily == nil {
 			daily = []db.DailyUsageEntry{}
@@ -1597,7 +1595,7 @@ func (s *Store) GetDailyUsage(
 
 		var aiCredits float64
 		for key, b := range accum {
-			aiCredits += db.AICreditsFromCost(key.agent, b.aggregateCost)
+			aiCredits += db.AICreditsFromCost(key.agent, b.cost)
 		}
 		if aiCredits > 0 {
 			totals.CopilotAICredits = aiCredits
@@ -1654,8 +1652,7 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		cur.aggregateCost += b.aggregateCost
+		cur.cost = money.MustAdd(cur.cost, b.cost)
 		dm.models[key.model] = cur
 
 		cur = dm.projects[key.project]
@@ -1663,7 +1660,7 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.aggregateCost
+		cur.cost = money.MustAdd(cur.cost, b.cost)
 		dm.projects[key.project] = cur
 
 		cur = dm.agents[key.agent]
@@ -1671,7 +1668,7 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.aggregateCost
+		cur.cost = money.MustAdd(cur.cost, b.cost)
 		dm.agents[key.agent] = cur
 
 		cur = dm.machines[key.machine]
@@ -1679,7 +1676,7 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost += b.aggregateCost
+		cur.cost = money.MustAdd(cur.cost, b.cost)
 		dm.machines[key.machine] = cur
 	}
 
@@ -1706,8 +1703,8 @@ func (s *Store) GetDailyUsage(
 		sort.Slice(modelNames, func(i, j int) bool {
 			left := dm.models[modelNames[i]]
 			right := dm.models[modelNames[j]]
-			if left.cost != right.cost {
-				return left.cost > right.cost
+			if left.cost.Microdollars != right.cost.Microdollars {
+				return left.cost.Microdollars > right.cost.Microdollars
 			}
 			return modelNames[i] < modelNames[j]
 		})
@@ -1719,7 +1716,7 @@ func (s *Store) GetDailyUsage(
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
-			entry.TotalCost += b.aggregateCost
+			entry.TotalCost = money.MustAdd(entry.TotalCost, b.cost)
 			mbd = append(mbd, db.ModelBreakdown{
 				ModelName:           m,
 				InputTokens:         b.inputTok,
@@ -1743,8 +1740,8 @@ func (s *Store) GetDailyUsage(
 			})
 		}
 		sort.Slice(pbd, func(i, j int) bool {
-			if pbd[i].Cost != pbd[j].Cost {
-				return pbd[i].Cost > pbd[j].Cost
+			if pbd[i].Cost.Microdollars != pbd[j].Cost.Microdollars {
+				return pbd[i].Cost.Microdollars > pbd[j].Cost.Microdollars
 			}
 			return pbd[i].Project < pbd[j].Project
 		})
@@ -1762,8 +1759,8 @@ func (s *Store) GetDailyUsage(
 			})
 		}
 		sort.Slice(abd, func(i, j int) bool {
-			if abd[i].Cost != abd[j].Cost {
-				return abd[i].Cost > abd[j].Cost
+			if abd[i].Cost.Microdollars != abd[j].Cost.Microdollars {
+				return abd[i].Cost.Microdollars > abd[j].Cost.Microdollars
 			}
 			return abd[i].Agent < abd[j].Agent
 		})
@@ -1783,8 +1780,8 @@ func (s *Store) GetDailyUsage(
 			})
 		}
 		sort.Slice(machineBreakdowns, func(i, j int) bool {
-			if machineBreakdowns[i].Cost != machineBreakdowns[j].Cost {
-				return machineBreakdowns[i].Cost > machineBreakdowns[j].Cost
+			if machineBreakdowns[i].Cost.Microdollars != machineBreakdowns[j].Cost.Microdollars {
+				return machineBreakdowns[i].Cost.Microdollars > machineBreakdowns[j].Cost.Microdollars
 			}
 			return machineBreakdowns[i].MachineName < machineBreakdowns[j].MachineName
 		})
@@ -1795,7 +1792,7 @@ func (s *Store) GetDailyUsage(
 		totals.OutputTokens += entry.OutputTokens
 		totals.CacheCreationTokens += entry.CacheCreationTokens
 		totals.CacheReadTokens += entry.CacheReadTokens
-		totals.TotalCost += entry.TotalCost
+		totals.TotalCost = money.MustAdd(totals.TotalCost, entry.TotalCost)
 	}
 
 	if daily == nil {
@@ -1872,8 +1869,8 @@ func (s *Store) GetTopSessionsByCost(
 	loc := usageLocation(f)
 	type sessAccum struct {
 		totalTokens       int
-		cost              float64
-		authoritativeCost *float64
+		cost              money.Money
+		authoritativeCost *money.Money
 	}
 
 	accum := make(map[string]*sessAccum)
@@ -1915,11 +1912,10 @@ func (s *Store) GetTopSessionsByCost(
 			order = append(order, r.sessionID)
 		}
 		sa.totalTokens += inputTok + outputTok + cacheCrTok + cacheRdTok
-		sa.cost += cost
+		sa.cost = money.MustAdd(sa.cost, cost)
 		if f.Model == "" && f.ExcludeModel == "" &&
-			r.costSource == db.CopilotReportedCostSource &&
-			r.costUSD.Valid {
-			v := r.costUSD.Float64
+			r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
 			sa.authoritativeCost = &v
 		}
 	}
@@ -1938,7 +1934,7 @@ func (s *Store) GetTopSessionsByCost(
 			SessionID:   id,
 			DisplayName: id,
 			TotalTokens: sa.totalTokens,
-			Cost: func() float64 {
+			Cost: func() money.Money {
 				if sa.authoritativeCost != nil {
 					return *sa.authoritativeCost
 				}
@@ -1948,8 +1944,8 @@ func (s *Store) GetTopSessionsByCost(
 	}
 
 	sort.Slice(result, func(i, j int) bool {
-		if result[i].Cost != result[j].Cost {
-			return result[i].Cost > result[j].Cost
+		if result[i].Cost.Microdollars != result[j].Cost.Microdollars {
+			return result[i].Cost.Microdollars > result[j].Cost.Microdollars
 		}
 		return result[i].SessionID < result[j].SessionID
 	})

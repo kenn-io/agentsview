@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
@@ -42,22 +43,22 @@ var goldenCursorSecret = []byte("agentsview-export-golden-secret-v1")
 func TestFmtCost(t *testing.T) {
 	tests := []struct {
 		name string
-		in   float64
+		in   string
 		want string
 	}{
-		{"zero is $0.00", 0, "$0.00"},
-		{"under half a cent shows <$0.01", 0.001, "<$0.01"},
-		{"half a cent rounds up to $0.01", 0.005, "$0.01"},
-		{"typical cents", 0.45, "$0.45"},
-		{"dollars", 12.34, "$12.34"},
-		{"rounds to two decimals", 1.23456, "$1.23"},
-		{"large value", 1234.56, "$1234.56"},
+		{"zero is $0.00", "0", "$0.00"},
+		{"under half a cent shows <$0.01", "0.001", "<$0.01"},
+		{"half a cent rounds up to $0.01", "0.005", "$0.01"},
+		{"typical cents", "0.45", "$0.45"},
+		{"dollars", "12.34", "$12.34"},
+		{"rounds to two decimals", "1.23456", "$1.23"},
+		{"large value", "1234.56", "$1,234.56"},
 		// A negative input shouldn't hit the <$0.01 branch.
-		{"negative passes through", -0.42, "$-0.42"},
+		{"negative passes through", "-0.42", "-$0.42"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, fmtCost(tc.in),
+			assert.Equal(t, tc.want, fmtCost(money.MustParseDollars(tc.in)),
 				"fmtCost(%v)", tc.in)
 		})
 	}
@@ -83,9 +84,9 @@ func TestUsageDailyGolden(t *testing.T) {
 	require.NoError(t, err, "usage daily json golden command")
 	var report db.DailyUsageResult
 	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
-	assert.Equal(t, 2, report.SchemaVersion)
+	assert.Equal(t, export.UsageDailySchemaVersion, report.SchemaVersion)
 
-	assertGoldenBytes(t, "usage_daily_v2.json", []byte(stdout))
+	assertGoldenBytes(t, "usage_daily_v3.json", []byte(stdout))
 }
 
 func TestUsageDailyBreakdownGolden(t *testing.T) {
@@ -115,7 +116,7 @@ func TestUsageDailyBreakdownGolden(t *testing.T) {
 		assert.Equal(t, "golden-host", daily.MachineBreakdowns[0].MachineName)
 	}
 
-	assertGoldenBytes(t, "usage_daily_breakdown_v2.json", []byte(stdout))
+	assertGoldenBytes(t, "usage_daily_breakdown_v3.json", []byte(stdout))
 }
 
 func setupExportGoldenDataDir(t *testing.T) string {
@@ -155,17 +156,17 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         goldenComputedModel,
-			InputPerMTok:         2,
-			OutputPerMTok:        8,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     0.5,
+			InputPerMTok:         money.MustParseDollars("2"),
+			OutputPerMTok:        money.MustParseDollars("8"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("0.5"),
 		},
 		{
 			ModelPattern:         goldenReportedModel,
-			InputPerMTok:         1,
-			OutputPerMTok:        4,
-			CacheCreationPerMTok: 2,
-			CacheReadPerMTok:     0.25,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("4"),
+			CacheCreationPerMTok: money.MustParseDollars("2"),
+			CacheReadPerMTok:     money.MustParseDollars("0.25"),
 		},
 	}), "seed golden pricing")
 	seedGoldenExportSession(t, database, goldenExportSessionSpec{
@@ -173,7 +174,7 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 		startedAt: "2026-07-03T11:00:00Z",
 		endedAt:   "2026-07-03T11:10:00Z",
 		model:     goldenReportedModel,
-		costUSD:   dbtest.Ptr(0.0125),
+		costUSD:   dbtest.Ptr(money.MustParseDollars("0.0125")),
 		cwd:       "/fixtures/path-project/pkg",
 	})
 	seedGoldenExportSession(t, database, goldenExportSessionSpec{
@@ -202,7 +203,7 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 		startedAt: "2026-07-01T08:00:00Z",
 		endedAt:   "2026-07-01T08:05:00Z",
 		model:     goldenReportedModel,
-		costUSD:   dbtest.Ptr(0.0042),
+		costUSD:   dbtest.Ptr(money.MustParseDollars("0.0042")),
 	})
 	seedGoldenProjectIdentities(t, database)
 }
@@ -258,7 +259,7 @@ type goldenExportSessionSpec struct {
 	model        string
 	tokenJSON    json.RawMessage
 	outputTokens int
-	costUSD      *float64
+	costUSD      *money.Money
 	cwd          string
 	gitBranch    string
 }
@@ -329,7 +330,7 @@ func seedGoldenExportSession(
 				Model:          spec.model,
 				InputTokens:    300,
 				OutputTokens:   60,
-				CostUSD:        spec.costUSD,
+				Cost:           spec.costUSD,
 				OccurredAt:     addMinutes(spec.startedAt, 1),
 				DedupKey:       spec.id + ":provider-usage",
 			}},
@@ -596,7 +597,7 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 	})
 
 	assert.Equal(t, "/api/v1/usage/summary", gotPath)
-	assert.Contains(t, out, `"totalCost": 0.42`)
+	assert.Contains(t, out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
@@ -772,7 +773,7 @@ func TestRunUsageDailyDefaultRangeUsesDaemonDefaults(t *testing.T) {
 	assert.Equal(t, "false", gotQuery.Get("no_default_range"))
 	assert.NotContains(t, gotQuery, "from")
 	assert.NotContains(t, gotQuery, "to")
-	assert.Contains(t, out, `"totalCost": 0.42`)
+	assert.Contains(t, out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
@@ -797,7 +798,7 @@ func TestRunUsageDailyAllPreservesEmptyRangeWithDiscoveredDaemon(t *testing.T) {
 	assert.Equal(t, "true", gotQuery.Get("no_default_range"))
 	assert.NotContains(t, gotQuery, "from")
 	assert.NotContains(t, gotQuery, "to")
-	assert.Contains(t, out, `"totalCost": 0.42`)
+	assert.Contains(t, out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
@@ -822,7 +823,7 @@ func TestRunUsageDailyNoSyncUsesDiscoveredDaemon(t *testing.T) {
 	})
 
 	assert.Equal(t, "/api/v1/usage/summary", gotPath)
-	assert.Contains(t, out, `"totalCost": 0.42`)
+	assert.Contains(t, out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
@@ -848,7 +849,7 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 	assert.Contains(t, out, `"totalCost"`)
 	var got db.DailyUsageResult
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Greater(t, got.Totals.TotalCost, 600.0,
+	assert.Greater(t, got.Totals.TotalCost.Microdollars, int64(600_000_000),
 		"offline read-only usage must preserve custom pricing")
 }
 
@@ -921,8 +922,8 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 	d := newTestDB(t)
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-model",
-		InputPerMTok:  1,
-		OutputPerMTok: 1,
+		InputPerMTok:  money.MustParseDollars("1"),
+		OutputPerMTok: money.MustParseDollars("1"),
 	}}))
 
 	recent := time.Now().UTC().AddDate(0, 0, -2).Format(time.RFC3339)
@@ -1060,13 +1061,13 @@ func seedUsageDailyExportMetadataFixture(
 			TokenUsage: json.RawMessage(`{"input_tokens":200,"output_tokens":100}`),
 		},
 	}))
-	cost := 0.25
+	cost := money.MustParseDollars("0.25")
 	ordinal := 1
 	require.NoError(t, database.ReplaceSessionUsageEvents(
 		"usage-meta-reported-cost", []db.UsageEvent{{
 			SessionID: "usage-meta-reported-cost", MessageOrdinal: &ordinal,
 			Source: "session", Model: "gpt-5.1", InputTokens: 100,
-			OutputTokens: 50, CostUSD: &cost,
+			OutputTokens: 50, Cost: &cost,
 			OccurredAt: "2026-06-01T10:01:00Z",
 			DedupKey:   "usage-meta-reported-cost:event",
 		}},
@@ -1082,7 +1083,7 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 				OutputTokens:        12000,
 				CacheCreationTokens: 8000,
 				CacheReadTokens:     30000,
-				TotalCost:           0.45,
+				TotalCost:           money.MustParseDollars("0.45"),
 				ModelsUsed:          []string{"claude-sonnet-4-20250514"},
 				ModelBreakdowns: []db.ModelBreakdown{
 					{
@@ -1091,7 +1092,7 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 						OutputTokens:        12000,
 						CacheCreationTokens: 8000,
 						CacheReadTokens:     30000,
-						Cost:                0.45,
+						Cost:                money.MustParseDollars("0.45"),
 					},
 				},
 			},
@@ -1101,7 +1102,7 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 			OutputTokens:        12000,
 			CacheCreationTokens: 8000,
 			CacheReadTokens:     30000,
-			TotalCost:           0.45,
+			TotalCost:           money.MustParseDollars("0.45"),
 		},
 	}
 
@@ -1417,7 +1418,7 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 // sampleDailyUsageJSON is a full usage summary body with a single day and
 // non-zero totals, shared by the HTTP and daemon usage tests.
 const sampleDailyUsageJSON = `{
-	"schema_version": 2,
+	"schema_version": 3,
 	"from": "2026-06-01",
 	"to": "2026-06-02",
 	"pricing": {
@@ -1432,10 +1433,10 @@ const sampleDailyUsageJSON = `{
 		"models": {
 			"gpt-5.1": {
 				"matched_pattern": "gpt-5.1",
-				"input_cost_per_mtok": 1,
-				"output_cost_per_mtok": 2,
-				"cache_write_cost_per_mtok": 3,
-				"cache_read_cost_per_mtok": 4,
+				"input_cost_per_mtok": {"microdollars": 1000000},
+				"output_cost_per_mtok": {"microdollars": 2000000},
+				"cache_write_cost_per_mtok": {"microdollars": 3000000},
+				"cache_read_cost_per_mtok": {"microdollars": 4000000},
 				"cost_source": "reported"
 			}
 		}
@@ -1449,13 +1450,13 @@ const sampleDailyUsageJSON = `{
 	"totals": {
 		"inputTokens": 10,
 		"outputTokens": 20,
-		"totalCost": 0.42
+		"totalCost": {"microdollars": 420000}
 	},
 	"daily": [{
 		"date": "2026-06-01",
 		"inputTokens": 10,
 		"outputTokens": 20,
-		"totalCost": 0.42,
+		"totalCost": {"microdollars": 420000},
 		"modelsUsed": ["gpt-5.1"]
 	}],
 	"sessionCounts": {
@@ -1470,7 +1471,7 @@ const sampleDailyUsageJSON = `{
 const emptyDailyUsageJSON = `{"totals":{},"daily":[]}`
 
 // totalCostOnlyUsageJSON carries a non-zero total cost but no daily rows.
-const totalCostOnlyUsageJSON = `{"totals":{"totalCost":0.42},"daily":[]}`
+const totalCostOnlyUsageJSON = `{"totals":{"totalCost":{"microdollars":420000}},"daily":[]}`
 
 // newAgentDataDir creates a temp data dir and points AGENTSVIEW_DATA_DIR at it.
 func newAgentDataDir(t *testing.T) string {
@@ -1501,7 +1502,7 @@ func writeJSONResponse(w http.ResponseWriter, body string) {
 // but zero token/cost totals — the "no token data" case.
 const zeroTotalsCopilotUsageJSON = `{
   "daily": [],
-  "totals": {"inputTokens":0,"outputTokens":0,"cacheCreationTokens":0,"cacheReadTokens":0,"totalCost":0},
+  "totals": {"inputTokens":0,"outputTokens":0,"cacheCreationTokens":0,"cacheReadTokens":0,"totalCost":{"microdollars":0}},
   "sessionCounts": {"total":2,"byProject":{},"byAgent":{"copilot":2}}
 }`
 

@@ -15,7 +15,7 @@ export class UsageService {
    * @throws ApiError
    */
   public static getApiV1UsageComparison({
-    currentCost,
+    currentMicrodollars,
     from,
     to,
     timezone,
@@ -38,9 +38,9 @@ export class UsageService {
     sessionCounts = true,
   }: {
     /**
-     * Current period total cost
+     * Current period total cost in microdollars
      */
-    currentCost: number,
+    currentMicrodollars: number,
     /**
      * Range start date
      */
@@ -146,7 +146,7 @@ export class UsageService {
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
         'session_counts': sessionCounts,
-        'current_cost': currentCost,
+        'current_microdollars': currentMicrodollars,
       },
       errors: {
         400: `Bad Request`,

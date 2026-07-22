@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const (
@@ -156,19 +157,19 @@ type CannedUsageSummary struct {
 	OutputTokens        int                    `json:"output_tokens"`
 	CacheCreationTokens int                    `json:"cache_creation_tokens"`
 	CacheReadTokens     int                    `json:"cache_read_tokens"`
-	TotalCost           float64                `json:"total_cost"`
-	CacheSavings        float64                `json:"cache_savings"`
+	TotalCost           money.Money            `json:"total_cost"`
+	CacheSavings        money.Money            `json:"cache_savings"`
 	ModelBreakdowns     []CannedModelBreakdown `json:"model_breakdowns,omitempty"`
 	TopSessionsByCost   []db.TopSessionEntry   `json:"top_sessions_by_cost,omitempty"`
 }
 
 type CannedModelBreakdown struct {
-	ModelName           string  `json:"model_name"`
-	InputTokens         int     `json:"input_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	CacheReadTokens     int     `json:"cache_read_tokens"`
-	Cost                float64 `json:"cost"`
+	ModelName           string      `json:"model_name"`
+	InputTokens         int         `json:"input_tokens"`
+	OutputTokens        int         `json:"output_tokens"`
+	CacheCreationTokens int         `json:"cache_creation_tokens"`
+	CacheReadTokens     int         `json:"cache_read_tokens"`
+	Cost                money.Money `json:"cost"`
 }
 
 type CannedEvidenceRef struct {
@@ -1124,8 +1125,8 @@ func CannedEvidenceRefs(
 			usage.OutputTokens > 0 ||
 			usage.CacheCreationTokens > 0 ||
 			usage.CacheReadTokens > 0 ||
-			usage.TotalCost != 0 ||
-			usage.CacheSavings != 0 ||
+			usage.TotalCost.Microdollars != 0 ||
+			usage.CacheSavings.Microdollars != 0 ||
 			len(usage.ModelBreakdowns) > 0 ||
 			len(usage.TopSessionsByCost) > 0)
 	refs := []CannedEvidenceRef{

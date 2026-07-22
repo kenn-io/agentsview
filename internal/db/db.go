@@ -182,7 +182,7 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (30: Hermes parser no longer treats cost_status
 // "included" as a confident $0 when cost_source is "none"/empty (its
 // default for models it does not price, e.g. gpt-5.5). Such rows now
-// leave cost_usd nil so they are catalog-priced. Existing Hermes rows
+// leave cost_microdollars nil so they are catalog-priced. Existing Hermes rows
 // need re-parsing so their usage cost reflects the catalog instead of a
 // baked-in $0.)
 //
@@ -311,8 +311,8 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (68: Hermes skill_view metadata. Re-parsing populates tool_calls.skill_name
 // for existing Hermes sessions so historical skill usage appears in analytics.)
 // (69: Copilot shutdown events persist the authoritative AI-credit total as
-// reported cost. Re-parsing populates cost_usd and cost_source on existing
-// Copilot rows from session.shutdown totalNanoAiu values.)
+// reported cost. Re-parsing populates cost_microdollars and cost_source on
+// existing Copilot rows from session.shutdown totalNanoAiu values.)
 // (70: Grok per-turn usage reparse. turn_completed usage payloads are
 // per-turn measurements, not cumulative snapshots — one event per turn
 // and model replaces the single last-payload event per session, with
@@ -2142,6 +2142,9 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+	if err := migrateMoneyColumnsLocked(w); err != nil {
+		return err
+	}
 	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
 		return err
 	}

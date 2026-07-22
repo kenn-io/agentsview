@@ -5,6 +5,7 @@
 import type { ConfigDuckDBConfig } from './ConfigDuckDBConfig';
 import type { ConfigPGConfig } from './ConfigPGConfig';
 export type DaemonPushRequest = {
+  automatic?: boolean;
   duckdb?: ConfigDuckDBConfig;
   exclude_projects?: any[] | null;
   full: boolean;

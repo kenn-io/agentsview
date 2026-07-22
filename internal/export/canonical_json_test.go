@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestCanonicalPricingJSONOrdersObjectKeys(t *testing.T) {
@@ -66,7 +67,7 @@ func TestEffectivePricingDigestIgnoresPricingRowInsertionOrder(t *testing.T) {
 func TestEffectivePricingDigestChangesWhenRateChanges(t *testing.T) {
 	rows := digestFixtureRows(t)
 	changed := digestFixtureRows(t)
-	changed[0].Rates.OutputPerMTok = 16
+	changed[0].Rates.OutputPerMTok = money.MustParseDollars("16")
 
 	digest, err := EffectivePricingDigest(rows)
 	require.NoError(t, err)
@@ -86,21 +87,9 @@ func TestEffectivePricingDigestFixture(t *testing.T) {
 
 	require.Equal(t, "sha256:"+fmt.Sprintf("%x", sum), digest)
 	assert.Equal(t,
-		"sha256:2fefcc08c76a96e8972e858bf83d9f90e394ba1558c9d71a4a488ebcc6e925f1",
+		"sha256:af16a07941c06a54c4ae531ce8d14df0d8a84d2c9e803b4dee93ef95bba6ab28",
 		digest,
 	)
-}
-
-func TestEffectivePricingDigestRejectsNonFiniteRates(t *testing.T) {
-	_, err := EffectivePricingDigest([]EffectivePricingRow{{
-		ModelPattern: "bad-model",
-		Rates: ModelRates{
-			InputPerMTok: math.NaN(),
-		},
-	}})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "canonical")
 }
 
 func digestFixtureRows(t *testing.T) []EffectivePricingRow {
@@ -111,10 +100,10 @@ func digestFixtureRows(t *testing.T) []EffectivePricingRow {
 		{
 			ModelPattern: "claude-*",
 			Rates: ModelRates{
-				InputPerMTok:      3,
-				OutputPerMTok:     15,
-				CacheWritePerMTok: 3.75,
-				CacheReadPerMTok:  0.30,
+				InputPerMTok:      money.MustParseDollars("3"),
+				OutputPerMTok:     money.MustParseDollars("15"),
+				CacheWritePerMTok: money.MustParseDollars("3.75"),
+				CacheReadPerMTok:  money.MustParseDollars("0.30"),
 				UpdatedAt:         &updatedAt,
 				Source:            PricingRowSourceEmbedded,
 			},
@@ -122,10 +111,10 @@ func digestFixtureRows(t *testing.T) []EffectivePricingRow {
 		{
 			ModelPattern: "gpt-*",
 			Rates: ModelRates{
-				InputPerMTok:      1,
-				OutputPerMTok:     5,
-				CacheWritePerMTok: 1.25,
-				CacheReadPerMTok:  0.10,
+				InputPerMTok:      money.MustParseDollars("1"),
+				OutputPerMTok:     money.MustParseDollars("5"),
+				CacheWritePerMTok: money.MustParseDollars("1.25"),
+				CacheReadPerMTok:  money.MustParseDollars("0.10"),
 				Source:            PricingRowSourceCustom,
 			},
 		},

@@ -11,7 +11,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
+
+func jsonNumberPtr(value string) *json.Number {
+	number := json.Number(value)
+	return &number
+}
 
 func TestParseRooCodeSession(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -26,7 +33,7 @@ func TestParseRooCodeSession(t *testing.T) {
 		Task:      "Test task description",
 		TokensIn:  100,
 		TokensOut: 200,
-		TotalCost: new(0.05),
+		TotalCost: jsonNumberPtr("0.05"),
 		Workspace: "/Users/test/project",
 		Mode:      "code",
 		Status:    "completed",
@@ -121,7 +128,7 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 		Task:      "Task with partial messages",
 		TokensIn:  50,
 		TokensOut: 100,
-		TotalCost: new(0.02),
+		TotalCost: jsonNumberPtr("0.02"),
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
@@ -241,7 +248,7 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 		TokensOut:     200,
 		CacheReads:    50,
 		CacheWrites:   30,
-		TotalCost:     new(0.05),
+		TotalCost:     jsonNumberPtr("0.05"),
 		Workspace:     "/Users/test/project",
 		APIConfigName: "anthropic/claude-sonnet-4",
 	}
@@ -284,8 +291,8 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 	assert.Equal(t, 200, sess.UsageEvents[0].OutputTokens)
 	assert.Equal(t, 50, sess.UsageEvents[0].CacheReadInputTokens)
 	assert.Equal(t, 30, sess.UsageEvents[0].CacheCreationInputTokens)
-	require.NotNil(t, sess.UsageEvents[0].CostUSD)
-	assert.Equal(t, 0.05, *sess.UsageEvents[0].CostUSD)
+	require.NotNil(t, sess.UsageEvents[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 50_000}, *sess.UsageEvents[0].Cost)
 
 	// Model should be set on every parsed message.
 	for _, msg := range msgs {
@@ -296,26 +303,32 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 
 func TestParseRooCodeSessionCostPresence(t *testing.T) {
 	tests := []struct {
-		name       string
-		totalCost  *float64
-		wantCost   bool
-		wantCostUS float64
+		name      string
+		totalCost *json.Number
+		hasCost   bool
+		wantCost  money.Money
+		wantErr   error
 	}{
 		{
 			name:      "explicit zero cost is authoritative",
-			totalCost: new(0.0),
-			wantCost:  true,
+			totalCost: jsonNumberPtr("0"),
+			hasCost:   true,
 		},
 		{
-			name:       "positive cost is recorded",
-			totalCost:  new(0.05),
-			wantCost:   true,
-			wantCostUS: 0.05,
+			name:      "positive cost is recorded",
+			totalCost: jsonNumberPtr("0.05"),
+			hasCost:   true,
+			wantCost:  money.Money{Microdollars: 50_000},
 		},
 		{
-			name:      "absent cost leaves CostUSD nil",
+			name:      "absent cost leaves Cost nil",
 			totalCost: nil,
-			wantCost:  false,
+			hasCost:   false,
+		},
+		{
+			name:      "negative reported cost is rejected",
+			totalCost: jsonNumberPtr("-0.01"),
+			wantErr:   money.ErrNegative,
 		},
 	}
 
@@ -365,17 +378,21 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 			))
 
 			sess, _, err := parseRooCodeSession(taskDir, "", "")
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
 			require.NoError(t, err)
 
 			// Token-bearing session always emits a usage event.
 			require.Len(t, sess.UsageEvents, 1)
-			if tt.wantCost {
-				require.NotNil(t, sess.UsageEvents[0].CostUSD,
-					"present totalCost must set CostUSD, including zero")
-				assert.Equal(t, tt.wantCostUS, *sess.UsageEvents[0].CostUSD)
+			if tt.hasCost {
+				require.NotNil(t, sess.UsageEvents[0].Cost,
+					"present totalCost must set Cost, including zero")
+				assert.Equal(t, tt.wantCost, *sess.UsageEvents[0].Cost)
 			} else {
-				assert.Nil(t, sess.UsageEvents[0].CostUSD,
-					"absent totalCost must leave CostUSD nil")
+				assert.Nil(t, sess.UsageEvents[0].Cost,
+					"absent totalCost must leave Cost nil")
 			}
 		})
 	}
@@ -393,7 +410,7 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 		Task:      "No config test",
 		TokensIn:  500,
 		TokensOut: 150,
-		TotalCost: new(0.02),
+		TotalCost: jsonNumberPtr("0.02"),
 	}
 	historyJSON, err := json.Marshal(historyItem)
 	require.NoError(t, err)
@@ -431,8 +448,8 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 	assert.Equal(t, "session", sess.UsageEvents[0].Source)
 	assert.Equal(t, 500, sess.UsageEvents[0].InputTokens)
 	assert.Equal(t, 150, sess.UsageEvents[0].OutputTokens)
-	require.NotNil(t, sess.UsageEvents[0].CostUSD)
-	assert.Equal(t, 0.02, *sess.UsageEvents[0].CostUSD)
+	require.NotNil(t, sess.UsageEvents[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 20_000}, *sess.UsageEvents[0].Cost)
 }
 
 func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
@@ -672,7 +689,7 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 		Task:          "Repeated tool test",
 		TokensIn:      100,
 		TokensOut:     200,
-		TotalCost:     new(0.01),
+		TotalCost:     jsonNumberPtr("0.01"),
 		Workspace:     "/Users/test/project",
 		APIConfigName: "anthropic/claude-sonnet-4",
 	}

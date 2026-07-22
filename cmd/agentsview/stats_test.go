@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // renderStatsHuman renders stats through printStatsHuman and returns the
@@ -88,16 +89,16 @@ func writeCustomModelPricingConfig(t *testing.T, dataDir string) {
 		filepath.Join(dataDir, "config.toml"),
 		[]byte(`
 [custom_model_pricing."claude-sonnet-4-20250514"]
-input = 300.0
-output = 1500.0
-cache_creation = 375.0
-cache_read = 30.0
+input_microdollars_per_mtok = 300000000
+output_microdollars_per_mtok = 1500000000
+cache_creation_microdollars_per_mtok = 375000000
+cache_read_microdollars_per_mtok = 30000000
 
 [custom_model_pricing."claude-opus-4-20250514"]
-input = 1500.0
-output = 7500.0
-cache_creation = 1875.0
-cache_read = 150.0
+input_microdollars_per_mtok = 1500000000
+output_microdollars_per_mtok = 7500000000
+cache_creation_microdollars_per_mtok = 1875000000
+cache_read_microdollars_per_mtok = 150000000
 `),
 		0o600,
 	))
@@ -188,8 +189,8 @@ func TestPrintStatsHuman_Populated(t *testing.T) {
 			CacheHitRatio: db.CacheHitRatioDistribution{
 				Overall: 0.78,
 			},
-			DollarsSavedVsUncached: 88.54,
-			DollarsSpent:           42.13,
+			DollarsSavedVsUncached: money.MustParseDollars("88.54"),
+			DollarsSpent:           money.MustParseDollars("42.13"),
 		},
 		Adoption: &db.StatsAdoption{
 			ClaudeOnly:          true,
@@ -346,7 +347,7 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 		"/api/v1/session-stats": func(w http.ResponseWriter, r *http.Request) {
 			gotQuery = r.URL.Query()
 			writeJSONResponse(w, `{
-				"schema_version": 1,
+				"schema_version": 2,
 				"window": {
 					"since": "2026-04-01T00:00:00Z",
 					"until": "2026-04-15T00:00:00Z",
@@ -515,7 +516,8 @@ func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
 	var got db.SessionStats
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	require.NotNil(t, got.CacheEconomics)
-	assert.Greater(t, got.CacheEconomics.DollarsSpent, 600.0,
+	assert.Greater(t, got.CacheEconomics.DollarsSpent.Microdollars,
+		int64(600_000_000),
 		"custom pricing should be applied to the read-only stats DB handle")
 }
 
@@ -615,17 +617,17 @@ func seedGoldenFixtureDB(t *testing.T, d *db.DB) {
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-4-20250514",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
+			InputPerMTok:         money.MustParseDollars("3.0"),
+			OutputPerMTok:        money.MustParseDollars("15.0"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:     money.MustParseDollars("0.30"),
 		},
 		{
 			ModelPattern:         "claude-opus-4-20250514",
-			InputPerMTok:         15.0,
-			OutputPerMTok:        75.0,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.50,
+			InputPerMTok:         money.MustParseDollars("15.0"),
+			OutputPerMTok:        money.MustParseDollars("75.0"),
+			CacheCreationPerMTok: money.MustParseDollars("18.75"),
+			CacheReadPerMTok:     money.MustParseDollars("1.50"),
 		},
 	}), "seed pricing")
 

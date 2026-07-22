@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
@@ -166,22 +167,23 @@ func (s *Store) GetSessionUsageRows(
 				cacheCreationInputTokens: r.cacheCreationInputTokens,
 				cacheReadInputTokens:     r.cacheReadInputTokens,
 				reasoningTokens:          r.reasoningTokens,
-				costUSD:                  r.costUSD,
+				cost:                     r.cost,
+				costSource:               r.costSource,
 				model:                    r.model,
 			},
 			rateResolver,
 		)
 		costRow := r
-		var sessionCost *float64
-		if r.costSource == db.CopilotReportedCostSource && r.costUSD.Valid {
-			v := r.costUSD.Float64
+		var sessionCost *money.Money
+		if r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
 			sessionCost = &v
-			costRow.costUSD = sql.NullFloat64{}
+			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
 		cost, priced, contributes := pgSessionRowCost(costRow, rateResolver)
 		costSource := export.CostSourceComputed
-		if costRow.costUSD.Valid {
+		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
 		out = append(out, activity.UsageRow{
@@ -476,16 +478,16 @@ func (s *Store) activityReportUsage(
 		}
 		_, outputTok, _, _, _, _ := pgDailyUsageAmounts(o.scan, rateResolver)
 		costRow := o.scan
-		var sessionCost *float64
-		if o.scan.costSource == db.CopilotReportedCostSource && o.scan.costUSD.Valid {
-			v := o.scan.costUSD.Float64
+		var sessionCost *money.Money
+		if o.scan.costSource == db.CopilotReportedCostSource && o.scan.cost.Valid {
+			v := money.Money{Microdollars: o.scan.cost.Int64}
 			sessionCost = &v
-			costRow.costUSD = sql.NullFloat64{}
+			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
 		cost, priced, contributes := pgActivityReportRowStatus(costRow, rateResolver)
 		costSource := export.CostSourceComputed
-		if costRow.costUSD.Valid {
+		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
 		row := o.row
@@ -506,7 +508,7 @@ func (s *Store) activityReportUsage(
 
 func pgActivityReportRowStatus(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
-) (cost float64, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -523,18 +525,18 @@ func pgActivityReportRowStatus(
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	if r.costUSD.Valid {
+	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return r.costUSD.Float64, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return 0, true, false
+		return money.Money{}, true, false
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return 0, false, true
+		return money.Money{}, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)

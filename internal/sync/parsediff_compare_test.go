@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1010,11 +1011,11 @@ func TestCompareUsageEvents(t *testing.T) {
 	})
 
 	t.Run("cost columns are ignored", func(t *testing.T) {
-		cost := 0.42
+		cost := money.MustParseDollars("0.42")
 		stored := []db.UsageEvent{
 			pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "", nil),
 		}
-		stored[0].CostUSD = &cost
+		stored[0].Cost = &cost
 		stored[0].CostStatus = "final"
 		stored[0].CostSource = "pricing"
 		parsed := []db.UsageEvent{

@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -71,7 +72,7 @@ func (db *DB) GetSessionStats(
 	}
 
 	stats := &SessionStats{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Window: StatsWindow{
 			Since: from.UTC().Format(time.RFC3339),
 			Until: to.UTC().Format(time.RFC3339),
@@ -954,8 +955,8 @@ type sessionCacheTotals struct {
 	inputTok     int64
 	cacheCreateT int64
 	cacheReadT   int64
-	dollarsSpent float64
-	dollarsNoCac float64 // cost if the workload had never cached
+	dollarsSpent money.Money
+	dollarsNoCac money.Money // cost if the workload had never cached
 }
 
 // computeCacheEconomics populates stats.CacheEconomics for Claude
@@ -1012,8 +1013,8 @@ func (db *DB) computeCacheEconomics(
 	var (
 		cacheReadSum   int64
 		denominatorSum int64
-		dollarsSpent   float64
-		dollarsNoCache float64
+		dollarsSpent   money.Money
+		dollarsNoCache money.Money
 	)
 	// Iterate in session-id order so floating-point sums stay
 	// deterministic across runs; Go's map iteration order is
@@ -1030,8 +1031,8 @@ func (db *DB) computeCacheEconomics(
 		}
 		denom := totals.inputTok + totals.cacheReadT +
 			totals.cacheCreateT
-		dollarsSpent += totals.dollarsSpent
-		dollarsNoCache += totals.dollarsNoCac
+		dollarsSpent = money.MustAdd(dollarsSpent, totals.dollarsSpent)
+		dollarsNoCache = money.MustAdd(dollarsNoCache, totals.dollarsNoCac)
 		if denom <= 0 {
 			continue
 		}
@@ -1052,7 +1053,7 @@ func (db *DB) computeCacheEconomics(
 	// frontend/src/lib/utils/usageSavings.ts) surface that "costlier
 	// than uncached" state directly, so do not clamp it away here —
 	// hiding it would mask real cache-efficiency regressions.
-	ce.DollarsSavedVsUncached = dollarsNoCache - dollarsSpent
+	ce.DollarsSavedVsUncached = money.MustSub(dollarsNoCache, dollarsSpent)
 
 	stats.CacheEconomics = ce
 	return nil
@@ -1134,18 +1135,22 @@ func addMessageToCacheTotals(
 	totals.cacheReadT += int64(cacheRdTok)
 
 	rates := pricing.Lookup(model).Rates
-	totals.dollarsSpent += rates.CostForTokens(
-		inputTok, outputTok, 0, cacheCrTok, cacheRdTok)
+	totals.dollarsSpent = money.MustAdd(
+		totals.dollarsSpent,
+		rates.CostForTokens(inputTok, outputTok, 0, cacheCrTok, cacheRdTok),
+	)
 	// Uncached counterfactual: cache_creation tokens would still
 	// have been sent as ordinary input (so they are billed at the
 	// input rate, not dropped), and cache_read tokens are re-billed
 	// at the input rate too. This matches the rest of the codebase
 	// (see internal/db/usage.go and the savings calculation in
 	// frontend/src/lib/utils/usageSavings.ts).
-	totals.dollarsNoCac += (float64(inputTok)*rates.InputPerMTok +
-		float64(outputTok)*rates.OutputPerMTok +
-		float64(cacheCrTok)*rates.InputPerMTok +
-		float64(cacheRdTok)*rates.InputPerMTok) / 1_000_000
+	totals.dollarsNoCac = money.MustAdd(
+		totals.dollarsNoCac,
+		rates.CostForTokens(
+			inputTok+cacheCrTok+cacheRdTok, outputTok, 0, 0, 0,
+		),
+	)
 }
 
 // computeTemporal fills stats.Temporal.HourlyUTC and ReporterTimezone.

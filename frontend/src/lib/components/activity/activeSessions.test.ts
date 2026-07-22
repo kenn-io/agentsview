@@ -4,11 +4,12 @@ import type {
   ActivityReportInterval,
   ActivitySessionRow,
 } from "../../api/generated/index";
+import { testMoney } from "../../test/money.js";
 
 function row(id: string): ActivitySessionRow {
   return {
     session_id: id, title: id, project: "p", agent: "claude",
-    primary_model: "m", models: ["m"], agent_minutes: 1, cost: 0,
+    primary_model: "m", models: ["m"], agent_minutes: 1, cost: testMoney(0),
     output_tokens: 0, first_active: null, last_active: null, timing_quality: "timed",
   } as ActivitySessionRow;
 }

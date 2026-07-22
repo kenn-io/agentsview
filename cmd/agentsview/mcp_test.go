@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -265,17 +266,17 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 
 	expected := service.UsagePairwiseComparisonResponse{
 		Left: service.UsagePairwiseComparisonSide{
-			TotalCost:    1.25,
+			TotalCost:    money.MustParseDollars("1.25"),
 			TotalTokens:  150,
 			SessionCount: 2,
 		},
 		Right: service.UsagePairwiseComparisonSide{
-			TotalCost:    3.5,
+			TotalCost:    money.MustParseDollars("3.5"),
 			TotalTokens:  420,
 			SessionCount: 5,
 		},
 		Deltas: service.UsagePairwiseComparisonDelta{
-			TotalCostDelta:    2.25,
+			TotalCostDelta:    money.MustParseDollars("2.25"),
 			TotalTokensDelta:  270,
 			SessionCountDelta: 3,
 		},

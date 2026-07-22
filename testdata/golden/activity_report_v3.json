@@ -1,12 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
     "effective_row_count": 2428,
-    "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
+    "digest": "sha256:f929bb40d51293f4e0c97a5b53fdbd09c4f6a291bee18a7a19616d4b1ca11a2e",
     "cost_source": "mixed",
     "fallback": {
       "used": false,
@@ -15,18 +15,34 @@
     "models": {
       "fixture-model-computed": {
         "matched_pattern": "fixture-model-computed",
-        "input_cost_per_mtok": 2,
-        "output_cost_per_mtok": 8,
-        "cache_write_cost_per_mtok": 3,
-        "cache_read_cost_per_mtok": 0.5,
+        "input_cost_per_mtok": {
+          "microdollars": 2000000
+        },
+        "output_cost_per_mtok": {
+          "microdollars": 8000000
+        },
+        "cache_write_cost_per_mtok": {
+          "microdollars": 3000000
+        },
+        "cache_read_cost_per_mtok": {
+          "microdollars": 500000
+        },
         "cost_source": "computed"
       },
       "fixture-model-reported": {
         "matched_pattern": "fixture-model-reported",
-        "input_cost_per_mtok": 1,
-        "output_cost_per_mtok": 4,
-        "cache_write_cost_per_mtok": 2,
-        "cache_read_cost_per_mtok": 0.25,
+        "input_cost_per_mtok": {
+          "microdollars": 1000000
+        },
+        "output_cost_per_mtok": {
+          "microdollars": 4000000
+        },
+        "cache_write_cost_per_mtok": {
+          "microdollars": 2000000
+        },
+        "cache_read_cost_per_mtok": {
+          "microdollars": 250000
+        },
         "cost_source": "reported"
       }
     }
@@ -70,7 +86,9 @@
       "max_agents": 1,
       "agent_minutes": 3,
       "output_tokens": 240,
-      "cost": 0.00476,
+      "cost": {
+        "microdollars": 4760
+      },
       "automated_at_peak": 0,
       "interactive_at_peak": 1
     },
@@ -80,7 +98,9 @@
       "max_agents": 1,
       "agent_minutes": 3,
       "output_tokens": 60,
-      "cost": 0.0125,
+      "cost": {
+        "microdollars": 12500
+      },
       "automated_at_peak": 0,
       "interactive_at_peak": 1
     },
@@ -90,7 +110,9 @@
       "max_agents": 0,
       "agent_minutes": 0,
       "output_tokens": 0,
-      "cost": 0,
+      "cost": {
+        "microdollars": 0
+      },
       "automated_at_peak": 0,
       "interactive_at_peak": 0
     }
@@ -108,11 +130,17 @@
     "distinct_projects": 2,
     "distinct_models": 2,
     "output_tokens": 300,
-    "cost": 0.01726,
+    "cost": {
+      "microdollars": 17260
+    },
     "automated_agent_minutes": 0,
     "interactive_agent_minutes": 6,
-    "automated_cost": 0,
-    "interactive_cost": 0.01726,
+    "automated_cost": {
+      "microdollars": 0
+    },
+    "interactive_cost": {
+      "microdollars": 17260
+    },
     "automated_sessions": 0,
     "interactive_sessions": 2
   },
@@ -121,61 +149,97 @@
       "project_key": "pl1:sha256:a998e358fa5132eaf9ac2cb16ee752c99400d52800c8e5c43eb8905909a05106",
       "key": "path-project",
       "agent_minutes": 3,
-      "cost": 0.0125,
+      "cost": {
+        "microdollars": 12500
+      },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
-      "automated_cost": 0,
-      "interactive_cost": 0.0125
+      "automated_cost": {
+        "microdollars": 0
+      },
+      "interactive_cost": {
+        "microdollars": 12500
+      }
     },
     {
       "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
       "key": "remote-project",
       "agent_minutes": 3,
-      "cost": 0.00476,
+      "cost": {
+        "microdollars": 4760
+      },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
-      "automated_cost": 0,
-      "interactive_cost": 0.00476
+      "automated_cost": {
+        "microdollars": 0
+      },
+      "interactive_cost": {
+        "microdollars": 4760
+      }
     }
   ],
   "by_model": [
     {
       "key": "fixture-model-computed",
       "agent_minutes": 3,
-      "cost": 0.00476,
+      "cost": {
+        "microdollars": 4760
+      },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
-      "automated_cost": 0,
-      "interactive_cost": 0.00476
+      "automated_cost": {
+        "microdollars": 0
+      },
+      "interactive_cost": {
+        "microdollars": 4760
+      }
     },
     {
       "key": "fixture-model-reported",
       "agent_minutes": 3,
-      "cost": 0.0125,
+      "cost": {
+        "microdollars": 12500
+      },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
-      "automated_cost": 0,
-      "interactive_cost": 0.0125
+      "automated_cost": {
+        "microdollars": 0
+      },
+      "interactive_cost": {
+        "microdollars": 12500
+      }
     }
   ],
   "by_agent": [
     {
       "key": "claude",
       "agent_minutes": 3,
-      "cost": 0.0125,
+      "cost": {
+        "microdollars": 12500
+      },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
-      "automated_cost": 0,
-      "interactive_cost": 0.0125
+      "automated_cost": {
+        "microdollars": 0
+      },
+      "interactive_cost": {
+        "microdollars": 12500
+      }
     },
     {
       "key": "codex",
       "agent_minutes": 3,
-      "cost": 0.00476,
+      "cost": {
+        "microdollars": 4760
+      },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
-      "automated_cost": 0,
-      "interactive_cost": 0.00476
+      "automated_cost": {
+        "microdollars": 0
+      },
+      "interactive_cost": {
+        "microdollars": 4760
+      }
     }
   ],
   "by_session": [
@@ -190,7 +254,9 @@
         "fixture-model-reported"
       ],
       "agent_minutes": 3,
-      "cost": 0.0125,
+      "cost": {
+        "microdollars": 12500
+      },
       "output_tokens": 60,
       "first_active": "2026-07-03T11:00:00Z",
       "last_active": "2026-07-03T11:03:00Z",
@@ -208,7 +274,9 @@
         "fixture-model-computed"
       ],
       "agent_minutes": 3,
-      "cost": 0.00476,
+      "cost": {
+        "microdollars": 4760
+      },
       "output_tokens": 240,
       "first_active": "2026-07-03T10:00:00Z",
       "last_active": "2026-07-03T10:03:00Z",

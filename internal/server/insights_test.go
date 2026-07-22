@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/server"
 )
 
@@ -736,17 +737,17 @@ func TestGenerateCannedInsight_ModelCostPromptIncludesModelBreakdown(t *testing.
 	if err := te.db.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         "claude-opus-4-7",
-			InputPerMTok:         15,
-			OutputPerMTok:        75,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.5,
+			InputPerMTok:         money.MustParseDollars("15"),
+			OutputPerMTok:        money.MustParseDollars("75"),
+			CacheCreationPerMTok: money.MustParseDollars("18.75"),
+			CacheReadPerMTok:     money.MustParseDollars("1.5"),
 		},
 		{
 			ModelPattern:         "claude-sonnet-4-6",
-			InputPerMTok:         3,
-			OutputPerMTok:        15,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.3,
+			InputPerMTok:         money.MustParseDollars("3"),
+			OutputPerMTok:        money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:     money.MustParseDollars("0.3"),
 		},
 	}); err != nil {
 		t.Fatalf("UpsertModelPricing: %v", err)

@@ -29,6 +29,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // kiloLegacyDefaultDirs returns the platform-specific default
@@ -488,12 +490,15 @@ func parseKiloLegacySession(
 		if totalOutputTok > 0 {
 			event.OutputTokens = totalOutputTok
 		}
-		// Only set CostUSD when every API request reports cost data.
-		// If any request lacks cost data, the aggregate CostUSD is not
+		// Only set Cost when every API request reports cost data.
+		// If any request lacks cost data, the aggregate Cost is not
 		// set to prevent partial sums from being treated as authoritative.
 		if totalRequests > 0 && requestsWithCost == totalRequests {
-			cost := totalCost
-			event.CostUSD = &cost
+			cost, costErr := money.FromFloatDollars(totalCost)
+			if costErr != nil {
+				return nil, nil, fmt.Errorf("converting Kilo reported cost: %w", costErr)
+			}
+			event.Cost = &cost
 		}
 		if totalCacheReads > 0 {
 			event.CacheReadInputTokens = totalCacheReads

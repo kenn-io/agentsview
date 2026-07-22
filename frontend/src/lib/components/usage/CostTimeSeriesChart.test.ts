@@ -10,6 +10,8 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
 import { usage } from "../../stores/usage.svelte.js";
+import { testMoney } from "../../test/money.js";
+import type { Money } from "../../money.js";
 import type {
   DailyUsageEntry,
   UsageSummaryResponse,
@@ -62,7 +64,7 @@ function dailyEntry(index: number): DailyUsageEntry {
     outputTokens: 50,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
-    totalCost: 10,
+    totalCost: testMoney(10),
     modelsUsed: ["model"],
     projectBreakdowns: [
       {
@@ -72,7 +74,7 @@ function dailyEntry(index: number): DailyUsageEntry {
         outputTokens: 50,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 10,
+        cost: testMoney(10),
       },
     ],
   };
@@ -87,7 +89,7 @@ function usageSummary(): UsageSummaryResponse {
       outputTokens: 750,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 150,
+      totalCost: testMoney(150),
     },
     daily: Array.from({ length: 15 }, (_, i) => dailyEntry(i)),
     projectTotals: [
@@ -98,7 +100,7 @@ function usageSummary(): UsageSummaryResponse {
         outputTokens: 750,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 150,
+        cost: testMoney(150),
       },
     ],
     modelTotals: [],
@@ -114,14 +116,14 @@ function usageSummary(): UsageSummaryResponse {
       uncachedInputTokens: 1500,
       outputTokens: 750,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
 
 function modelDailyEntry(
   index: number,
-  models: Array<{ modelName: string; cost: number }>,
+  models: Array<{ modelName: string; cost: Money }>,
 ): DailyUsageEntry {
   const entry = dailyEntry(index);
   entry.projectBreakdowns = undefined;
@@ -178,11 +180,11 @@ describe("CostTimeSeriesChart", () => {
 	usage.summary = usageSummary();
 	usage.summary.daily = [dailyEntry(0)];
 	usage.summary.daily[0]!.projectBreakdowns = [
-		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: 6 },
+		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
 		{
 			...usage.summary.daily[0]!.projectBreakdowns![0]!,
 			project_key: "pl1:sha256:other-archive",
-			cost: 4,
+			cost: testMoney(4),
 		},
 	];
 
@@ -199,12 +201,12 @@ describe("CostTimeSeriesChart", () => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary.daily = [
       modelDailyEntry(0, [
-        { modelName: "claude-sonnet-5", cost: 6 },
-        { modelName: "claude-opus-4-8", cost: 4 },
+        { modelName: "claude-sonnet-5", cost: testMoney(6) },
+        { modelName: "claude-opus-4-8", cost: testMoney(4) },
       ]),
       modelDailyEntry(1, [
-        { modelName: "claude-sonnet-5", cost: 3 },
-        { modelName: "claude-opus-4-8", cost: 2 },
+        { modelName: "claude-sonnet-5", cost: testMoney(3) },
+        { modelName: "claude-opus-4-8", cost: testMoney(2) },
       ]),
     ];
 
@@ -230,8 +232,8 @@ describe("CostTimeSeriesChart", () => {
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary.daily = [
-      modelDailyEntry(0, [{ modelName: "single-model", cost: 6 }]),
-      modelDailyEntry(1, [{ modelName: "single-model", cost: 3 }]),
+      modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
+      modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ];
 
     const component = mount(CostTimeSeriesChart, { target: document.body });
@@ -251,7 +253,7 @@ describe("CostTimeSeriesChart", () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 6 }, (_, index) => ({
       modelName: `model-${index}`,
-      cost: 6 - index,
+      cost: testMoney(6 - index),
     }));
     usage.summary.daily = [modelDailyEntry(0, models)];
 

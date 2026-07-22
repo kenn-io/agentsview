@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // Copilot JSONL event types.
@@ -261,7 +263,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 	if hasReportedCost {
 		for i := range b.usageEvents {
 			if b.usageEvents[i].CostSource == copilotReportedCostSource {
-				b.usageEvents[i].CostUSD = nil
+				b.usageEvents[i].Cost = nil
 				b.usageEvents[i].CostStatus = ""
 				b.usageEvents[i].CostSource = ""
 			}
@@ -313,10 +315,15 @@ func (b *copilotSessionBuilder) handleShutdown(
 				OccurredAt: occurredAt,
 			})
 		}
-		costUSD := float64(totalNanoAiu.Int()) / 1e11
+		total := totalNanoAiu.Int()
+		microdollars := total / 100_000
+		if total%100_000 >= 50_000 {
+			microdollars++
+		}
+		cost := money.Money{Microdollars: microdollars}
 		// Carry the session-wide total on exactly one stable row so storage
 		// and sync remain row-oriented without multiplying it by model count.
-		events[0].CostUSD = &costUSD
+		events[0].Cost = &cost
 		events[0].CostStatus = "exact"
 		events[0].CostSource = copilotReportedCostSource
 	}

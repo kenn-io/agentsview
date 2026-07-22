@@ -8,6 +8,7 @@
     ActivityReportInterval,
     ActivitySessionRow,
   } from "../../api/generated/index";
+  import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
   let {
     report,
@@ -116,7 +117,7 @@
           count: b.output_tokens,
           countLabel: b.output_tokens.toLocaleString(),
         })} · ` +
-        `$${b.cost.toFixed(2)}`,
+        formatMoney(b.cost),
     };
   }
 
@@ -185,7 +186,7 @@
   ]);
 
   function bucketOverlayValue(b: ActivityBucket): number {
-    return overlayMetric === "cost" ? b.cost : b.output_tokens;
+    return overlayMetric === "cost" ? b.cost.microdollars : b.output_tokens;
   }
 
   function trimDecimal(v: number, digits: number): string {
@@ -201,7 +202,7 @@
   }
 
   function fmtOverlayTick(v: number): string {
-    if (overlayMetric === "cost") return `$${v.toFixed(2)}`;
+    if (overlayMetric === "cost") return formatMoney(moneyFromMicrodollars(v));
     return fmtCompact(v);
   }
 

@@ -758,7 +758,7 @@ func loadPushUsageEventFingerprints(
 		SELECT session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_microdollars, cost_status, cost_source,
 			occurred_at, dedup_key
 		 FROM usage_events
 		WHERE session_id = ANY($1)

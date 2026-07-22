@@ -2,6 +2,7 @@
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { seriesColorMap } from "../../utils/projectColor.js";
   import { m } from "../../i18n/index.js";
+  import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
   const CHART_H = 180;
   const X_LABEL_H = 20;
@@ -56,18 +57,18 @@
         for (const b of day.projectBreakdowns) {
 		  labels[b.project_key] = b.project;
           totals.set(b.project_key,
-            (totals.get(b.project_key) ?? 0) + b.cost);
+            (totals.get(b.project_key) ?? 0) + b.cost.microdollars);
         }
       } else if (groupBy === "model" && day.modelBreakdowns) {
         for (const b of day.modelBreakdowns) {
           totals.set(b.modelName,
-            (totals.get(b.modelName) ?? 0) + b.cost);
+            (totals.get(b.modelName) ?? 0) + b.cost.microdollars);
 		  labels[b.modelName] = b.modelName;
         }
       } else if (groupBy === "agent" && day.agentBreakdowns) {
         for (const b of day.agentBreakdowns) {
           totals.set(b.agent,
-            (totals.get(b.agent) ?? 0) + b.cost);
+            (totals.get(b.agent) ?? 0) + b.cost.microdollars);
 		  labels[b.agent] = b.agent;
         }
       }
@@ -77,7 +78,7 @@
     if (totals.size === 0) {
       const points = daily.map((d) => ({
         date: d.date,
-        values: { total: d.totalCost },
+        values: { total: d.totalCost.microdollars },
       }));
       let maxY = 0;
       for (const pt of points) {
@@ -101,15 +102,15 @@
 
       if (groupBy === "project" && day.projectBreakdowns) {
         items = day.projectBreakdowns.map((b) => ({
-		  key: b.project_key, cost: b.cost,
+		  key: b.project_key, cost: b.cost.microdollars,
         }));
       } else if (groupBy === "model" && day.modelBreakdowns) {
         items = day.modelBreakdowns.map((b) => ({
-          key: b.modelName, cost: b.cost,
+          key: b.modelName, cost: b.cost.microdollars,
         }));
       } else if (groupBy === "agent" && day.agentBreakdowns) {
         items = day.agentBreakdowns.map((b) => ({
-          key: b.agent, cost: b.cost,
+          key: b.agent, cost: b.cost.microdollars,
         }));
       }
 
@@ -319,9 +320,7 @@
   });
 
   function fmtYLabel(v: number): string {
-    if (v >= 100) return `$${v.toFixed(0)}`;
-    if (v >= 1) return `$${v.toFixed(1)}`;
-    return `$${v.toFixed(2)}`;
+    return formatMoney(moneyFromMicrodollars(v));
   }
 
   const yTicks = $derived.by(() => {

@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestFetchAllUsageEvents(t *testing.T) {
@@ -86,10 +88,16 @@ func TestFetchAllUsageEvents(t *testing.T) {
 	require.Len(t, events, 2)
 	assert.Equal(t, "claude-4.6-opus-high-thinking", events[0].Model)
 	assert.Equal(t, 1234, events[0].TokenUsage.InputTokens)
-	assert.Equal(t, 15.66, events[0].ChargedCents)
+	assert.Equal(t, money.Money{Microdollars: 156_600}, events[0].Charged)
+	assert.Equal(t, money.Money{Microdollars: 33_200}, events[0].CursorTokenFee)
 	assert.Equal(t, "member@example.com", events[0].UserEmail)
 	assert.Equal(t, false, events[0].IsHeadless)
 	assert.Equal(t, time.UnixMilli(1748700000000).UTC(), events[0].Timestamp)
+}
+
+func TestParseOptionalCentsRejectsNegativeCharge(t *testing.T) {
+	_, err := parseOptionalCents(json.Number("-1"))
+	assert.ErrorIs(t, err, money.ErrNegative)
 }
 
 func TestListUsageEventsRejectsNonNumericUserID(t *testing.T) {

@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"errors"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type storeContractBackend struct {
@@ -550,7 +550,7 @@ func contractAnalyticsTrendsAndUsage(
 	require.GreaterOrEqual(t, len(daily.Daily), 2)
 	require.Equal(t, 315, daily.Totals.InputTokens)
 	require.Equal(t, 130, daily.Totals.OutputTokens)
-	require.InDelta(t, 0.002435, daily.Totals.TotalCost, 0.00001)
+	require.Equal(t, money.MustParseDollars("0.002435"), daily.Totals.TotalCost)
 
 	top, err := store.GetTopSessionsByCost(ctx, UsageFilter{
 		From: "2026-01-10",
@@ -574,7 +574,7 @@ func contractAnalyticsTrendsAndUsage(
 	require.True(t, usage.HasTokenData)
 	require.True(t, usage.HasCost)
 	require.Equal(t, []string{"claude-sonnet-contract"}, usage.Models)
-	require.InDelta(t, 0.002355, usage.CostUSD, 0.00001)
+	require.Equal(t, money.MustParseDollars("0.002355"), usage.Cost)
 }
 
 func contractLocalOnlyMethods(
@@ -753,17 +753,17 @@ func seedStoreContractSQLite(
 	require.NoError(t, pricingStore.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-contract",
-			InputPerMTok:         3,
-			OutputPerMTok:        15,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.3,
+			InputPerMTok:         money.MustParseDollars("3"),
+			OutputPerMTok:        money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:     money.MustParseDollars("0.3"),
 		},
 		{
 			ModelPattern:         "codex-mini-contract",
-			InputPerMTok:         1,
-			OutputPerMTok:        5,
-			CacheCreationPerMTok: 1,
-			CacheReadPerMTok:     0.1,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("5"),
+			CacheCreationPerMTok: money.MustParseDollars("1"),
+			CacheReadPerMTok:     money.MustParseDollars("0.1"),
 		},
 	}))
 
@@ -920,7 +920,7 @@ func seedStoreContractSQLite(
 					Model:        "codex-mini-contract",
 					InputTokens:  0,
 					OutputTokens: 30,
-					CostUSD:      floatPtr(0.00005),
+					Cost:         Ptr(money.MustParseDollars("0.00005")),
 					CostStatus:   "reported",
 					CostSource:   "fixture",
 					OccurredAt:   "2026-01-12T10:04:00Z",
@@ -1174,13 +1174,6 @@ func requireReadOnly(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
-}
-
-func floatPtr(v float64) *float64 {
-	if math.IsNaN(v) {
-		return nil
-	}
-	return &v
 }
 
 func TestStoreContractBackendsAreRegisteredExplicitly(t *testing.T) {

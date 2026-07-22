@@ -2,6 +2,7 @@
   import { usage } from "../../stores/usage.svelte.js";
   import { savingsState } from "../../utils/usageSavings.js";
   import { m } from "../../i18n/index.js";
+  import { formatMoney, moneyFromMicrodollars, ZERO_MONEY } from "../../money.js";
 
   function fmtTokens(v: number): string {
     if (v >= 1_000_000_000) {
@@ -17,10 +18,6 @@
       return `${k}K`;
     }
     return String(v);
-  }
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
   }
 
   interface Bar {
@@ -68,9 +65,9 @@
   });
 
   const savings = $derived(
-    usage.summary?.cacheStats?.savingsVsUncached ?? 0,
+    usage.summary?.cacheStats?.savingsVsUncached ?? ZERO_MONEY,
   );
-  const savingsLabel = $derived(savingsState(savings));
+  const savingsLabel = $derived(savingsState(savings.microdollars));
 </script>
 
 <div class="cache-panel">
@@ -99,11 +96,11 @@
 
     {#if savingsLabel === "saved"}
       <div class="savings-callout saved">
-        {m.usage_saved_vs_uncached({ cost: fmtCost(savings) })}
+        {m.usage_saved_vs_uncached({ cost: formatMoney(savings) })}
       </div>
     {:else if savingsLabel === "costlier"}
       <div class="savings-callout costlier">
-        {m.usage_more_than_uncached({ cost: fmtCost(Math.abs(savings)) })}
+        {m.usage_more_than_uncached({ cost: formatMoney(moneyFromMicrodollars(Math.abs(savings.microdollars))) })}
       </div>
     {/if}
   {/if}

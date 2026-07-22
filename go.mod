@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/ccoveille/go-safecast/v2 v2.0.1
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/dmarkham/enumer v1.6.3
 	github.com/duckdb/duckdb-go/v2 v2.10504.0

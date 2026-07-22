@@ -538,7 +538,7 @@ agentsview token-use 550e8400-e29b-41d4-a716-446655440000
   "total_output_tokens": 15230,
   "peak_context_tokens": 84000,
   "has_token_data": true,
-  "cost_usd": 2.41,
+  "cost": {"microdollars": 2410000},
   "has_cost": true,
   "models": ["claude-opus-4-7"],
   "server_running": false
