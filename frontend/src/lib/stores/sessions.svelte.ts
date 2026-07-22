@@ -42,11 +42,6 @@ type LoadOptions = {
 
 const SESSION_PAGE_SIZE = 500;
 const SIDEBAR_HYDRATION_CONCURRENCY = 6;
-
-type DetailFreshnessSnapshot = {
-  reads: ReadonlyMap<string, number>;
-  commits: ReadonlyMap<string, number>;
-};
 const LIVE_REFRESH_DEBOUNCE_MS = 300;
 const SAFETY_NET_REFRESH_MS = 5 * 60 * 1000;
 const RECENTLY_DELETED_TTL_MS = 10_000;
@@ -360,24 +355,19 @@ class SessionsStore {
   // Single coordinator for every read that commits to activeSessionDetail
   // (navigation and watcher refresh): the newest read cancels older in-flight
   // ones, so a stale response resolving late can never overwrite fresher
-  // cached detail. The generation counters extend that freshness to sidebar
-  // hydration, which shares its fetches with non-active rows and so cannot
-  // claim the coordinator itself: a hydration only touches active-session
-  // state when no read began and no rename committed for that same session
-  // since it was issued. Freshness is tracked per session id — a read for
-  // one session must not stale an in-flight hydration of another session
-  // that a later selection may join. Entries are monotonic and never
-  // removed: resetting one could make a stale capture compare equal again.
-  //
-  // Two tiers per session: the read generation advances when a read merely
-  // BEGINS (or a rename/404 invalidates in-flight reads) and guards against
-  // stale writes into the cache; the commit generation advances only when
-  // fresher state actually COMMITS (navigation/refresh resolves, a rename
-  // commits, a 404 commits a deletion). Only a commit proves the cache — or
-  // a deletion — is fresher than a concurrently loaded index; a read that
-  // began and failed proves nothing.
+  // cached detail. The commit generations extend that freshness to sidebar
+  // hydration and index reconciliation, which cannot claim the coordinator
+  // themselves (hydration shares its fetches with non-active rows). A
+  // session's commit generation advances only when fresher state actually
+  // COMMITS to its active-detail state: a navigation or refresh resolving, a
+  // rename or hydration committing its snapshot, a 404 committing a
+  // deletion. A read that merely BEGAN proves nothing — it may fail, and if
+  // it commits it commits later and wins — so it never invalidates anything.
+  // Generations are per session id (activity on one session says nothing
+  // about another's in-flight hydration, which a later selection may join),
+  // monotonic, and never removed: resetting one could make a stale capture
+  // compare equal again.
   private activeDetailRead = new LatestRead();
-  private activeDetailGenerationBySession = new Map<string, number>();
   private activeDetailCommitBySession = new Map<
     string,
     { generation: number; deleted: boolean }
@@ -535,7 +525,7 @@ class SessionsStore {
   ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
-    const detailFreshness = this.snapshotDetailFreshness();
+    const detailCommits = this.snapshotDetailCommits();
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
     // pages are still being fetched after page 1 is published.
@@ -568,7 +558,7 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-      this.syncActiveSessionAfterIndexCommit(detailFreshness);
+      this.syncActiveSessionAfterIndexCommit(detailCommits);
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
@@ -734,7 +724,7 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
-    const detailFreshness = this.snapshotDetailFreshness();
+    const detailCommits = this.snapshotDetailCommits();
     const signal = this.routeSignal();
     this.loading = true;
     try {
@@ -763,7 +753,7 @@ class SessionsStore {
       ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-      this.syncActiveSessionAfterIndexCommit(detailFreshness);
+      this.syncActiveSessionAfterIndexCommit(detailCommits);
     } catch (error) {
       if (signal.aborted || isAbortError(error)) return;
       throw error;
@@ -873,14 +863,6 @@ class SessionsStore {
     return this.machinesPromise;
   }
 
-  private detailGeneration(id: string): number {
-    return this.activeDetailGenerationBySession.get(id) ?? 0;
-  }
-
-  private bumpDetailGeneration(id: string): void {
-    this.activeDetailGenerationBySession.set(id, this.detailGeneration(id) + 1);
-  }
-
   private detailCommitGeneration(id: string): number {
     return this.activeDetailCommitBySession.get(id)?.generation ?? 0;
   }
@@ -893,29 +875,12 @@ class SessionsStore {
     });
   }
 
-  private snapshotDetailFreshness(): DetailFreshnessSnapshot {
-    return {
-      reads: new Map(this.activeDetailGenerationBySession),
-      commits: new Map(
-        [...this.activeDetailCommitBySession].map(
-          ([id, commit]) => [id, commit.generation],
-        ),
+  private snapshotDetailCommits(): ReadonlyMap<string, number> {
+    return new Map(
+      [...this.activeDetailCommitBySession].map(
+        ([id, commit]) => [id, commit.generation],
       ),
-    };
-  }
-
-  // A session's read generation advances only when something newer starts a
-  // read for (or commits to) that session's active-detail state — never on
-  // plain cancellation, so a hydration joined at selection time can still
-  // seed an empty cache.
-  private beginActiveDetailRead(id: string): AbortSignal {
-    this.bumpDetailGeneration(id);
-    return this.activeDetailRead.begin();
-  }
-
-  private cancelActiveDetailRead(id: string): void {
-    this.bumpDetailGeneration(id);
-    this.activeDetailRead.cancel();
+    );
   }
 
   private setActiveSession(id: string | null) {
@@ -956,30 +921,26 @@ class SessionsStore {
 
   // After an index commit, reconcile the active session's sidebar row and
   // detail cache in whichever direction is fresher. When something newer
-  // actually COMMITTED mid-flight (navigation/refresh/rename/hydration, or
-  // a 404 deletion), the committed state wins over the older index
-  // snapshot: a deletion removes the re-listed row (the index predates the
-  // 404) and committed detail replaces it. When nothing committed but a
-  // read merely began — it may still be in flight or have failed, proving
-  // nothing about the cache's freshness — leave the row and the cache
-  // alone, and let the read commit through mergeHydratedSession if and when
-  // it resolves. Otherwise the merged row may have absorbed index refreshes
-  // (renames, counts) the cache never saw — resync the cache from it so a
-  // later reload that excludes the row doesn't revert the breadcrumb to
-  // stale fields.
+  // COMMITTED mid-flight (navigation/refresh/rename/hydration, or a 404
+  // deletion), the committed state wins over the older index snapshot: a
+  // deletion removes the re-listed row (the index predates the 404) and
+  // committed detail replaces it. When nothing committed mid-flight, the
+  // committed index is at least as fresh as the cache — any commit the
+  // cache holds resolved before this index request was even issued, so the
+  // server produced the index rows afterwards — and the merged row may
+  // carry index refreshes (renames, counts) the cache never saw: absorb
+  // them into the cache so a later reload that excludes the row doesn't
+  // revert the breadcrumb to stale fields. A read that merely began and
+  // hasn't committed changes nothing here; if it resolves, it commits
+  // strictly fresher detail on top.
   private syncActiveSessionAfterIndexCommit(
-    snapshot: DetailFreshnessSnapshot,
+    snapshot: ReadonlyMap<string, number>,
   ) {
     const id = this.activeSessionId;
     if (id === null) return;
     const commit = this.activeDetailCommitBySession.get(id);
-    if (!commit || commit.generation === (snapshot.commits.get(id) ?? 0)) {
-      // Nothing committed mid-flight. If a read began without committing
-      // (still in flight, or it failed), leave both sides alone; otherwise
-      // absorb the index's refreshes into the cache.
-      if (this.detailGeneration(id) === (snapshot.reads.get(id) ?? 0)) {
-        this.cacheActiveSessionDetailFromList(id);
-      }
+    if (!commit || commit.generation === (snapshot.get(id) ?? 0)) {
+      this.cacheActiveSessionDetailFromList(id);
       return;
     }
     if (commit.deleted) {
@@ -1036,7 +997,7 @@ class SessionsStore {
       await this.hydrateSelectedIndexOnlySession(id);
       return;
     }
-    const signal = this.beginActiveDetailRead(id);
+    const signal = this.activeDetailRead.begin();
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
@@ -1084,7 +1045,15 @@ class SessionsStore {
   async refreshActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
-    const signal = this.beginActiveDetailRead(id);
+    // Navigation and refresh issue the identical detail GET. Join a pending
+    // same-session navigation instead of cancelling it to reissue the same
+    // request: if this refresh then failed transiently, the cancelled
+    // navigation could no longer fill the empty cache and nothing would
+    // retry until the next watcher event.
+    if (this.navigateInFlight?.id === id) {
+      return this.navigateInFlight.promise;
+    }
+    const signal = this.activeDetailRead.begin();
     try {
       configureGeneratedClient();
       const session = await callGenerated(
@@ -1121,7 +1090,6 @@ class SessionsStore {
         this.activeSessionId === id &&
         this.activeDetailRead.isCurrent(signal)
       ) {
-        this.bumpDetailGeneration(id);
         this.bumpDetailCommit(id, true);
         this.activeSessionDetail = null;
         // A hydrated matching row would keep backing activeSession as a
@@ -1656,7 +1624,7 @@ class SessionsStore {
     // cancelled has nothing else to back the breadcrumb until the next
     // watcher refresh.
     if (this.activeSessionId === id) {
-      this.cancelActiveDetailRead(id);
+      this.activeDetailRead.cancel();
       this.bumpDetailCommit(id, false);
       const base =
         this.activeSessionDetail?.id === id

@@ -2984,37 +2984,6 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("restored");
     });
 
-    it("ignores a stale navigation response resolving after a newer refresh", async () => {
-      mockSidebarIndex([]);
-      await sessions.load();
-
-      // Navigation fetch for an out-of-list session stays in flight...
-      let resolveNavigate!: (s: Session) => void;
-      vi.mocked(api.getSession).mockReturnValueOnce(
-        new Promise<Session>((r) => {
-          resolveNavigate = r;
-        }),
-      );
-      const nav = sessions.navigateToSession("sel");
-      await Promise.resolve();
-
-      // ...while a watcher-driven refresh for the same session resolves
-      // first with a fresher snapshot.
-      vi.mocked(api.getSession).mockResolvedValueOnce(
-        makeSession({ id: "sel", project: "proj-a", first_message: "NEWER" }),
-      );
-      await sessions.refreshActiveSession();
-      expect(sessions.activeSession?.first_message).toBe("NEWER");
-
-      // The older navigation response must not clobber the newer detail.
-      resolveNavigate(
-        makeSession({ id: "sel", project: "proj-a", first_message: "OLDER" }),
-      );
-      await nav;
-
-      expect(sessions.activeSession?.first_message).toBe("NEWER");
-    });
-
     it("does not let a pre-rename refresh response revert a rename", async () => {
       mockSidebarIndex([]);
       await sessions.load();
@@ -3408,6 +3377,80 @@ describe("SessionsStore", () => {
       expect(
         sessions.sessions.find((s) => s.id === "sel")?.display_name,
       ).toBe("renamed");
+    });
+
+    it("resyncs the cache from a newer index despite an uncommitted read", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // An index reload carrying a newer remote rename is in flight when a
+      // watcher refresh starts and fails without committing anything...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network"));
+      await sessions.refreshActiveSession();
+
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({
+            id: "sel",
+            project: "proj-a",
+            display_name: "server-renamed",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      // The committed index is at least as fresh as any pre-flight commit,
+      // so the cache must absorb it even though a read began mid-flight —
+      // otherwise a later reload that excludes the row falls back to the
+      // stale cached name.
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load();
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+    });
+
+    it("lets a refresh join an in-flight navigation for the same session", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      // Deep-link navigation to an off-list session is in flight...
+      let resolveNavigate!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveNavigate = r;
+        }),
+      );
+      const nav = sessions.navigateToSession("deep");
+      await Promise.resolve();
+
+      // ...when a watcher refresh fires for the same session. Both issue the
+      // identical detail GET: the refresh must join the pending navigation
+      // rather than cancel it and reissue — a cancelled navigation plus a
+      // transiently failing refresh would leave the cache empty with nothing
+      // to retry. No further response is queued: a second fetch would fail.
+      const refresh = sessions.refreshActiveSession();
+
+      resolveNavigate(
+        makeSession({ id: "deep", project: "proj-b", first_message: "detail" }),
+      );
+      await Promise.all([nav, refresh]);
+
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      expect(sessions.activeSession?.first_message).toBe("detail");
     });
 
     it("ignores a stale hydration resolving after a newer refresh", async () => {
