@@ -3176,6 +3176,44 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("detail");
     });
 
+    it("keeps a joined hydration fresh across another session's detail read", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Viewport hydration of the row is in flight...
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+
+      // ...while a navigation resolves detail for a DIFFERENT session.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "other", project: "proj-b" }),
+      );
+      await sessions.navigateToSession("other");
+      expect(sessions.activeSession?.id).toBe("other");
+
+      // The user then selects the still-hydrating row; selection joins the
+      // in-flight request. The other session's read must not mark this
+      // session's hydration stale — no newer read for THIS session exists,
+      // so the joined response still owns the row and the detail cache.
+      sessions.selectSession("sel");
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "detail" }),
+      );
+      await hydration;
+
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+      expect(sessions.activeSession?.first_message).toBe("detail");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.is_index_only,
+      ).toBe(false);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

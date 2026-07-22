@@ -355,12 +355,16 @@ class SessionsStore {
   // Single coordinator for every read that commits to activeSessionDetail
   // (navigation and watcher refresh): the newest read cancels older in-flight
   // ones, so a stale response resolving late can never overwrite fresher
-  // cached detail. The generation counter extends that freshness to sidebar
+  // cached detail. The generation counters extend that freshness to sidebar
   // hydration, which shares its fetches with non-active rows and so cannot
   // claim the coordinator itself: a hydration only touches active-session
-  // state when no read began and no rename committed since it was issued.
+  // state when no read began and no rename committed for that same session
+  // since it was issued. Freshness is tracked per session id — a read for
+  // one session must not stale an in-flight hydration of another session
+  // that a later selection may join. Entries are monotonic and never
+  // removed: resetting one could make a stale capture compare equal again.
   private activeDetailRead = new LatestRead();
-  private activeDetailGeneration = 0;
+  private activeDetailGenerationBySession = new Map<string, number>();
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -514,7 +518,7 @@ class SessionsStore {
   ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
-    const detailGeneration = this.activeDetailGeneration;
+    const detailGenerations = this.snapshotDetailGenerations();
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
     // pages are still being fetched after page 1 is published.
@@ -550,11 +554,12 @@ class SessionsStore {
       // An included active row may have absorbed index refreshes (renames,
       // counts) that the detail cache never saw; resync it so a later reload
       // that excludes the row doesn't revert the breadcrumb to stale fields.
-      // Skip when a navigation/refresh/rename committed while this index was
-      // in flight — the cache is then fresher than the merged row.
+      // Skip when a navigation/refresh/rename committed for the now-active
+      // session while this index was in flight — the cache is then fresher
+      // than the merged row.
       if (
         this.activeSessionId !== null &&
-        detailGeneration === this.activeDetailGeneration
+        this.detailGenerationUnchanged(detailGenerations, this.activeSessionId)
       ) {
         this.cacheActiveSessionDetailFromList(this.activeSessionId);
       }
@@ -616,7 +621,7 @@ class SessionsStore {
 
       const promise = this.runSidebarHydration(async () => {
         if (signal.aborted) return;
-        const detailGeneration = this.activeDetailGeneration;
+        const detailGeneration = this.detailGeneration(id);
         try {
           configureGeneratedClient();
           const hydrated = await callGenerated(
@@ -626,13 +631,14 @@ class SessionsStore {
           // A superseded hydration still carries valid detail for the active
           // session, so let it back the breadcrumb when the new index excludes
           // the row — but only fill an empty cache, and only when no newer
-          // navigation/refresh/rename touched active-detail state while this
-          // response was in flight. A stale response must never overwrite
-          // detail already resolved for this session by a newer request; the
-          // fresh path below (mergeHydratedSession) owns updates once the
-          // version check passes.
+          // navigation/refresh/rename touched THIS session's active-detail
+          // state while this response was in flight (another session's read
+          // says nothing about this one). A stale response must never
+          // overwrite detail already resolved for this session by a newer
+          // request; the fresh path below (mergeHydratedSession) owns updates
+          // once the version check passes.
           const detailFresh =
-            detailGeneration === this.activeDetailGeneration;
+            detailGeneration === this.detailGeneration(id);
           if (
             hydrated.id === this.activeSessionId &&
             !hydrated.is_index_only &&
@@ -715,7 +721,7 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
-    const detailGeneration = this.activeDetailGeneration;
+    const detailGenerations = this.snapshotDetailGenerations();
     const signal = this.routeSignal();
     this.loading = true;
     try {
@@ -748,7 +754,7 @@ class SessionsStore {
       // never saw; resync it (same reasoning as loadSidebarPage).
       if (
         this.activeSessionId !== null &&
-        detailGeneration === this.activeDetailGeneration
+        this.detailGenerationUnchanged(detailGenerations, this.activeSessionId)
       ) {
         this.cacheActiveSessionDetailFromList(this.activeSessionId);
       }
@@ -861,16 +867,36 @@ class SessionsStore {
     return this.machinesPromise;
   }
 
-  // The generation advances only when something newer commits to (or starts
-  // a read for) active-detail state — never on plain cancellation, so a
-  // hydration joined at selection time can still seed an empty cache.
-  private beginActiveDetailRead(): AbortSignal {
-    this.activeDetailGeneration++;
+  private detailGeneration(id: string): number {
+    return this.activeDetailGenerationBySession.get(id) ?? 0;
+  }
+
+  private bumpDetailGeneration(id: string): void {
+    this.activeDetailGenerationBySession.set(id, this.detailGeneration(id) + 1);
+  }
+
+  private snapshotDetailGenerations(): ReadonlyMap<string, number> {
+    return new Map(this.activeDetailGenerationBySession);
+  }
+
+  private detailGenerationUnchanged(
+    snapshot: ReadonlyMap<string, number>,
+    id: string,
+  ): boolean {
+    return this.detailGeneration(id) === (snapshot.get(id) ?? 0);
+  }
+
+  // A session's generation advances only when something newer commits to (or
+  // starts a read for) that session's active-detail state — never on plain
+  // cancellation, so a hydration joined at selection time can still seed an
+  // empty cache.
+  private beginActiveDetailRead(id: string): AbortSignal {
+    this.bumpDetailGeneration(id);
     return this.activeDetailRead.begin();
   }
 
-  private cancelActiveDetailRead(): void {
-    this.activeDetailGeneration++;
+  private cancelActiveDetailRead(id: string): void {
+    this.bumpDetailGeneration(id);
     this.activeDetailRead.cancel();
   }
 
@@ -935,7 +961,7 @@ class SessionsStore {
       await this.hydrateSelectedIndexOnlySession(id);
       return;
     }
-    const signal = this.beginActiveDetailRead();
+    const signal = this.beginActiveDetailRead(id);
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
@@ -982,7 +1008,7 @@ class SessionsStore {
   async refreshActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
-    const signal = this.beginActiveDetailRead();
+    const signal = this.beginActiveDetailRead(id);
     try {
       configureGeneratedClient();
       const session = await callGenerated(
@@ -1018,7 +1044,7 @@ class SessionsStore {
         this.activeSessionId === id &&
         this.activeDetailRead.isCurrent(signal)
       ) {
-        this.activeDetailGeneration++;
+        this.bumpDetailGeneration(id);
         this.activeSessionDetail = null;
         // A hydrated matching row would keep backing activeSession as a
         // ghost of the deleted session; drop it and keep the pagination
@@ -1543,16 +1569,16 @@ class SessionsStore {
     }
     // Renaming the active session invalidates any in-flight active-detail
     // read or hydration: both were issued before the rename and would revert
-    // the name with a pre-rename snapshot. Cancel and advance the generation
-    // even when the detail cache is empty (index-only row with hydration in
-    // flight) — the cache-population paths all check the generation.
+    // the name with a pre-rename snapshot. Cancel and advance the session's
+    // generation even when the detail cache is empty (index-only row with
+    // hydration in flight) — the cache-population paths all check it.
     // The rename response is itself a full post-rename snapshot (the endpoint
     // reads the session back), so commit it as the active detail: an
     // index-only or out-of-list active session whose pending read was just
     // cancelled has nothing else to back the breadcrumb until the next
     // watcher refresh.
     if (this.activeSessionId === id) {
-      this.cancelActiveDetailRead();
+      this.cancelActiveDetailRead(id);
       const base =
         this.activeSessionDetail?.id === id
           ? this.activeSessionDetail
