@@ -765,6 +765,67 @@ describe("SessionsStore", () => {
       );
     });
 
+    it("keeps refreshed active-row fields when a later reload excludes the row", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "active", display_name: "old-name" }),
+      ]);
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "active", first_message: "hydrated detail" }),
+      );
+
+      await sessions.load();
+      sessions.selectSession("active");
+      await vi.waitFor(() => {
+        expect(sessions.activeSession?.first_message).toBe("hydrated detail");
+      });
+
+      // An index refresh renames the still-included active row...
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "active", display_name: "new-name" }),
+      ]);
+      await sessions.load();
+
+      // ...and a later reload excludes it: the breadcrumb must keep the
+      // refreshed fields, not revert to the pre-refresh cached snapshot.
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      expect(sessions.activeSession?.first_message).toBe("hydrated detail");
+      expect(sessions.activeSession?.display_name).toBe("new-name");
+    });
+
+    it("keeps active-row fields refreshed by a later page through an excluding reload", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "active", display_name: "old-name" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "active", first_message: "hydrated detail" }),
+      );
+
+      await sessions.load();
+      sessions.selectSession("active");
+      await vi.waitFor(() => {
+        expect(sessions.activeSession?.first_message).toBe("hydrated detail");
+      });
+
+      // The index shifted while paginating: page 2 re-lists the active row
+      // with a refreshed name.
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "active", display_name: "new-name" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      expect(sessions.activeSession?.first_message).toBe("hydrated detail");
+      expect(sessions.activeSession?.display_name).toBe("new-name");
+    });
+
     it("keeps the open off-page session when the reloaded index omits it", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
       vi.mocked(api.getSession).mockResolvedValue(
@@ -3199,6 +3260,7 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSession?.first_message).toBe("detail");
     });
+
   });
 
   describe("route cancellation", () => {

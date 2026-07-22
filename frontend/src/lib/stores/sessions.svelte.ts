@@ -514,6 +514,7 @@ class SessionsStore {
   ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
+    const detailGeneration = this.activeDetailGeneration;
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
     // pages are still being fetched after page 1 is published.
@@ -546,6 +547,17 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+      // An included active row may have absorbed index refreshes (renames,
+      // counts) that the detail cache never saw; resync it so a later reload
+      // that excludes the row doesn't revert the breadcrumb to stale fields.
+      // Skip when a navigation/refresh/rename committed while this index was
+      // in flight — the cache is then fresher than the merged row.
+      if (
+        this.activeSessionId !== null &&
+        detailGeneration === this.activeDetailGeneration
+      ) {
+        this.cacheActiveSessionDetailFromList(this.activeSessionId);
+      }
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
@@ -703,6 +715,7 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
+    const detailGeneration = this.activeDetailGeneration;
     const signal = this.routeSignal();
     this.loading = true;
     try {
@@ -731,6 +744,14 @@ class SessionsStore {
       ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+      // A re-listed active row can carry index refreshes the detail cache
+      // never saw; resync it (same reasoning as loadSidebarPage).
+      if (
+        this.activeSessionId !== null &&
+        detailGeneration === this.activeDetailGeneration
+      ) {
+        this.cacheActiveSessionDetailFromList(this.activeSessionId);
+      }
     } catch (error) {
       if (signal.aborted || isAbortError(error)) return;
       throw error;
