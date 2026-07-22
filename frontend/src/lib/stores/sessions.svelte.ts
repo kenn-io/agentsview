@@ -393,6 +393,12 @@ class SessionsStore {
       // stale page (see loadSidebarPage).
       removedRow: boolean;
       removedRootAtDeletion: boolean;
+      // Provenance of the removed row: the query signature it was loaded
+      // under (off-page total subtraction applies only within the same
+      // query) and its parent link (clearSubtreeTombstones needs it for
+      // rows whose snapshots are gone).
+      removedUnderSignature?: string;
+      parentSessionId?: string;
     }
   >();
   // Generations are globally unique (not per-id counters) so pruning an
@@ -439,7 +445,7 @@ class SessionsStore {
   // makes request-issue order the single freshness rule in both directions.
   private indexCommitByRow = new Map<
     string,
-    { ordinal: number; row: Session }
+    { ordinal: number; row: Session; querySignature: string }
   >();
   // True while activeSessionDetail is a fabricated rename snapshot (the
   // rename endpoint returns the DB-session shape without detail-only
@@ -601,6 +607,7 @@ class SessionsStore {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
     const requestOrdinal = ++this.requestClock;
+    const querySignature = JSON.stringify(params);
     this.inFlightRequestTicks.add(requestOrdinal);
     const detailCommits = this.snapshotDetailCommits();
     // Keep the existing list visible during reloads, but mark
@@ -666,6 +673,7 @@ class SessionsStore {
           if (
             commit.deleted &&
             commit.removedRootAtDeletion &&
+            commit.removedUnderSignature === querySignature &&
             commit.generation !== (detailCommits.get(cid) ?? 0) &&
             commit.issuedAtIndexOrdinal >= requestOrdinal &&
             !incomingIds.has(cid)
@@ -684,6 +692,7 @@ class SessionsStore {
         this.indexCommitByRow.set(session.id, {
           ordinal: requestOrdinal,
           row: session,
+          querySignature,
         });
       }
       // A COMPLETE publish (no further pages) that excludes the id is
@@ -827,10 +836,19 @@ class SessionsStore {
           // when a reload has excluded the row this is the only update the
           // off-list session will get (the version check below discards the
           // row merge, and no hydration retries an absent row).
+          // An epoch invalidation (messages event) marks this response
+          // stale in place: it must not seed the cache either. The check
+          // only means something while this hydration's version is still
+          // current — after a version change the old epoch entry is pruned
+          // and the reload's own freshness machinery governs instead.
+          const epochValid =
+            version !== this.sidebarIndexVersion ||
+            epoch === (this.sidebarHydrationEpochByVersion.get(version) ?? 0);
           if (
             hydrated.id === this.activeSessionId &&
             !hydrated.is_index_only &&
-            detailFresh
+            detailFresh &&
+            epochValid
           ) {
             this.activeSessionDetail = hydrated;
             this.bumpDetailCommit(id, false, issuedAtIndexOrdinal, hydrated);
@@ -930,6 +948,10 @@ class SessionsStore {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
     const requestOrdinal = ++this.requestClock;
+    const querySignature = JSON.stringify({
+      ...this.apiParams,
+      limit: SESSION_PAGE_SIZE,
+    });
     this.inFlightRequestTicks.add(requestOrdinal);
     const detailCommits = this.snapshotDetailCommits();
     // Rows already loaded when this request began had any mid-flight
@@ -1001,6 +1023,7 @@ class SessionsStore {
         this.indexCommitByRow.set(session.id, {
           ordinal: requestOrdinal,
           row: session,
+          querySignature,
         });
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
@@ -1140,6 +1163,12 @@ class SessionsStore {
       removedRootAtDeletion: deleted && previous?.deleted === true
         ? previous.removedRootAtDeletion
         : false,
+      removedUnderSignature: deleted && previous?.deleted === true
+        ? previous.removedUnderSignature
+        : undefined,
+      parentSessionId: deleted && previous?.deleted === true
+        ? previous.parentSessionId
+        : undefined,
     });
     if (deleted) {
       this.committedDetailByRow.delete(id);
@@ -1334,6 +1363,15 @@ class SessionsStore {
         commit.removedRow = true;
         commit.removedRootAtDeletion =
           !row.parent_session_id || !presentIds.has(row.parent_session_id);
+        commit.removedUnderSignature =
+          this.indexCommitByRow.get(row.id)?.querySignature;
+      }
+    }
+    for (const known of knownRows) {
+      if (!subtree.has(known.id)) continue;
+      const commit = this.activeDetailCommitBySession.get(known.id);
+      if (commit?.deleted && known.parent_session_id) {
+        commit.parentSessionId = known.parent_session_id;
       }
     }
     return subtree;
@@ -1377,6 +1415,7 @@ class SessionsStore {
       for (const [cid, commit] of this.activeDetailCommitBySession) {
         if (!commit.deleted || cleared.has(cid)) continue;
         const parent =
+          commit.parentSessionId ??
           this.indexCommitByRow.get(cid)?.row.parent_session_id ??
           this.committedDetailByRow.get(cid)?.parent_session_id;
         if (parent && cleared.has(parent)) {
@@ -2098,6 +2137,15 @@ class SessionsStore {
         commit.removedRow = true;
         commit.removedRootAtDeletion =
           !row.parent_session_id || !presentIds.has(row.parent_session_id);
+        commit.removedUnderSignature =
+          this.indexCommitByRow.get(row.id)?.querySignature;
+      }
+    }
+    for (const known of knownRows) {
+      if (!subtree.has(known.id)) continue;
+      const commit = this.activeDetailCommitBySession.get(known.id);
+      if (commit?.deleted && known.parent_session_id) {
+        commit.parentSessionId = known.parent_session_id;
       }
     }
     if (this.activeSessionId && subtree.has(this.activeSessionId)) {

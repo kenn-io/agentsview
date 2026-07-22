@@ -5430,6 +5430,80 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("fresh");
     });
 
+    it("does not seed the cache from an epoch-invalidated hydration", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Selection hydration is in flight when a messages event invalidates
+      // the hydration caches (same index version, bumped epoch).
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      sessions.selectSession("sel");
+      await Promise.resolve();
+      (sessions as any).invalidateHydratedSessionDetails();
+
+      // The invalidated response resolves; its content predates the
+      // messages change, so it must not seed the active-session cache.
+      resolveHydration(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          first_message: "stale-detail",
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // A reload excludes the row: with no valid cache, the breadcrumb
+      // empties instead of surfacing the invalidated snapshot.
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load({ force: true });
+
+      expect(sessions.activeSession).toBeUndefined();
+    });
+
+    it("scopes off-page deletion accounting to the same query", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "rootA", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "rootB", project: "proj-a" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      // Filters change and a paginated reload for the NEW query is in
+      // flight when a root loaded under the OLD query is deleted. The old
+      // row was never part of the new query's total.
+      sessions.filters.project = "proj-x";
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load();
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("rootB");
+
+      resolveIndex({
+        sessions: [makeSkinnyRow({ id: "rootX", project: "proj-x" })],
+        total: 5,
+        next_cursor: "page-2",
+      });
+      await reload;
+
+      expect(sessions.total).toBe(5);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
