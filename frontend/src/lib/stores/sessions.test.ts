@@ -4807,6 +4807,50 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBeNull();
     });
 
+    it("lets a later-issued hydration supersede a transient refresh 404", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A refresh is in flight...
+      let rejectRefresh!: (e: unknown) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((_r, rej) => {
+          rejectRefresh = rej;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...then a later-issued hydration starts, and the refresh 404s
+      // first (a transient server-side gap, e.g. mid-resync).
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      rejectRefresh(makeNotFoundError("sel"));
+      await refresh;
+
+      // The hydration was issued after the 404's request: its successful
+      // response is newer evidence and must supersede the read-derived
+      // tombstone instead of being discarded.
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "H" }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.first_message).toBe("H");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

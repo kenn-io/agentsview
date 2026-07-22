@@ -363,10 +363,12 @@ class SessionsStore {
   // rename or hydration committing its snapshot, a 404 committing a
   // deletion. A read that merely BEGAN proves nothing — it may fail, and if
   // it commits it commits later and wins — so it never invalidates anything.
-  // Generations are per session id (activity on one session says nothing
-  // about another's in-flight hydration, which a later selection may join),
-  // monotonic, and never removed: resetting one could make a stale capture
-  // compare equal again.
+  // Generations are drawn from one global counter (see
+  // detailCommitGenerationCounter) so entries pruned by
+  // pruneReconciliationState can never be recreated with a generation an
+  // in-flight snapshot already captured; per-session maps keep activity on
+  // one session from invalidating another's in-flight hydration, which a
+  // later selection may join.
   private activeDetailRead = new LatestRead();
   // Each commit records the sidebar index-request ordinal current when its
   // underlying request was issued (Infinity for write-derived rename/404
@@ -624,7 +626,7 @@ class SessionsStore {
       // descendants, whose groups the backend removes with them — instead
       // of reinserting them.
       const tombstoned = this.expandTombstoned(index.sessions, (rid) =>
-        this.deletedSinceSnapshot(rid, detailCommits)
+        this.deletedSinceSnapshot(rid, detailCommits, requestOrdinal)
       );
       const dropped = index.sessions.filter((row) => tombstoned.has(row.id));
       const rows = index.sessions.filter((row) => !tombstoned.has(row.id));
@@ -664,7 +666,7 @@ class SessionsStore {
       if (this.loadVersion === version) {
         const restoredTombstones = this.expandTombstoned(
           prev.sessions,
-          (rid) => this.deletedSinceSnapshot(rid, detailCommits),
+          (rid) => this.deletedSinceSnapshot(rid, detailCommits, requestOrdinal),
         );
         const droppedRows = prev.sessions.filter((s) =>
           restoredTombstones.has(s.id)
@@ -886,7 +888,7 @@ class SessionsStore {
       // Same deletion-tombstone guard as loadSidebarPage for appended
       // pages, including descendants of tombstoned rows.
       const tombstoned = this.expandTombstoned(index.sessions, (rid) =>
-        this.deletedSinceSnapshot(rid, detailCommits)
+        this.deletedSinceSnapshot(rid, detailCommits, requestOrdinal)
       );
       const dropped = index.sessions.filter((row) => tombstoned.has(row.id));
       const rows = index.sessions.filter((row) => !tombstoned.has(row.id));
@@ -1109,12 +1111,17 @@ class SessionsStore {
   private deletedSinceSnapshot(
     id: string,
     snapshot: ReadonlyMap<string, number>,
+    requestOrdinal: number,
   ): boolean {
     const commit = this.activeDetailCommitBySession.get(id);
     return (
       commit !== undefined &&
       commit.deleted &&
-      commit.generation !== (snapshot.get(id) ?? 0)
+      commit.generation !== (snapshot.get(id) ?? 0) &&
+      // A read-derived tombstone (finite tick) only outranks requests
+      // issued before it; a response from a later-issued request reflects
+      // newer server state and supersedes the transient 404.
+      commit.issuedAtIndexOrdinal >= requestOrdinal
     );
   }
 
@@ -1186,7 +1193,10 @@ class SessionsStore {
   // each so stale responses cannot reinsert them, and decrement the root
   // total once per removed group. The caller records the ancestor's own
   // deletion commit.
-  private removeSessionSubtree(id: string): ReadonlySet<string> {
+  private removeSessionSubtree(
+    id: string,
+    tombstoneTick: number = Number.POSITIVE_INFINITY,
+  ): ReadonlySet<string> {
     // A cache-only active session (deep link, search) has no sidebar row
     // but may descend from the deleted ancestor; include it so callers
     // clear the selection instead of leaving a ghost.
@@ -1203,7 +1213,7 @@ class SessionsStore {
     subtree.add(id);
     for (const rid of subtree) {
       if (rid !== id) {
-        this.bumpDetailCommit(rid, true, Number.POSITIVE_INFINITY);
+        this.bumpDetailCommit(rid, true, tombstoneTick);
       }
     }
     const droppedRows = this.sessions.filter((s) => subtree.has(s.id));
@@ -1303,7 +1313,7 @@ class SessionsStore {
     if (
       commit === undefined ||
       commit.generation === (snapshot.get(id) ?? 0) ||
-      (!commit.deleted && commit.issuedAtIndexOrdinal < requestOrdinal)
+      commit.issuedAtIndexOrdinal < requestOrdinal
     ) {
       // Nothing committed mid-flight, or the commit's request predates this
       // index request — the index's server snapshot is at least as fresh, so
@@ -1507,12 +1517,16 @@ class SessionsStore {
         this.activeSessionId === id &&
         this.activeDetailRead.isCurrent(signal)
       ) {
-        this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
+        // Read-derived tombstone: recorded at this refresh's own issue
+        // tick so later-issued successful responses can supersede it.
+        // Infinity is reserved for confirmed mutations (explicit deletes,
+        // renames).
+        this.bumpDetailCommit(id, true, issuedAtIndexOrdinal);
         this.activeSessionDetail = null;
         // A hydrated matching row would keep backing activeSession as a
         // ghost of the deleted session; drop it and keep the pagination
         // total consistent, mirroring deleteSession.
-        this.removeSessionSubtree(id);
+        this.removeSessionSubtree(id, issuedAtIndexOrdinal);
       }
     } finally {
       this.inFlightRequestTicks.delete(issuedAtIndexOrdinal);
