@@ -1055,6 +1055,7 @@ class SessionsStore {
     issuedAtIndexOrdinal: number,
     snapshot?: Session,
   ): void {
+    const previous = this.activeDetailCommitBySession.get(id);
     this.activeDetailCommitBySession.set(id, {
       generation: ++this.detailCommitGenerationCounter,
       deleted,
@@ -1074,6 +1075,28 @@ class SessionsStore {
       id === this.activeSessionId
     ) {
       this.interimActiveDetail = false;
+    }
+    // A live commit superseding a read-derived tombstone proves the session
+    // exists: restore the sidebar row and root total the transient 404
+    // removed. The appended position is approximate; the scheduled
+    // authoritative reload corrects ordering.
+    if (
+      !deleted &&
+      previous !== undefined &&
+      previous.deleted &&
+      Number.isFinite(previous.issuedAtIndexOrdinal) &&
+      snapshot !== undefined &&
+      !this.sessions.some((row) => row.id === id)
+    ) {
+      const presentIds = new Set(this.sessions.map((row) => row.id));
+      this.sessions = [...this.sessions, { ...snapshot }];
+      if (
+        !snapshot.parent_session_id ||
+        !presentIds.has(snapshot.parent_session_id)
+      ) {
+        this.total += 1;
+      }
+      this.scheduleIndexRefresh();
     }
   }
 

@@ -4851,6 +4851,51 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("H");
     });
 
+    it("restores the sidebar row when a hydration revives a 404d session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      let rejectRefresh!: (e: unknown) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((_r, rej) => {
+          rejectRefresh = rej;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      rejectRefresh(makeNotFoundError("sel"));
+      await refresh;
+      expect(sessions.sessions.some((s) => s.id === "sel")).toBe(false);
+      expect(sessions.total).toBe(0);
+
+      // The superseding hydration proves the session exists: besides
+      // recovering the breadcrumb, the sidebar row and root total the
+      // transient 404 removed must come back.
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "H" }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.first_message).toBe("H");
+      expect(sessions.sessions.some((s) => s.id === "sel")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
