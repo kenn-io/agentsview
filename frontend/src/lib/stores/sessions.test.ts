@@ -4645,6 +4645,121 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(0);
     });
 
+    it("protects a non-active hydration from an older index request", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "a", project: "proj-a", display_name: "old" }),
+        makeSkinnyRow({ id: "b", project: "proj-a" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "b", project: "proj-a", first_message: "b-detail" }),
+      );
+      sessions.selectSession("b");
+      await Promise.resolve();
+
+      // An index reload is issued...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+
+      // ...then the NON-active row hydrates with a newer remote rename and
+      // the user selects it.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "a",
+          project: "proj-a",
+          display_name: "hydra-renamed",
+        }),
+      );
+      await sessions.hydrateVisibleSessions(["a"]);
+      sessions.selectSession("a");
+      expect(sessions.activeSession?.display_name).toBe("hydra-renamed");
+
+      // The older index resolves with the pre-rename name. The hydration
+      // was issued after this index request, so its fields must win even
+      // though the row was not active when it committed.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "a", project: "proj-a", display_name: "old" }),
+          makeSkinnyRow({ id: "b", project: "proj-a" }),
+        ],
+        total: 2,
+      });
+      await reload;
+
+      expect(sessions.activeSession?.display_name).toBe("hydra-renamed");
+      expect(
+        sessions.sessions.find((s) => s.id === "a")?.display_name,
+      ).toBe("hydra-renamed");
+    });
+
+    it("removes known descendants when a refresh 404s for their root", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "root1", project: "proj-a", first_message: "d" }),
+      );
+      sessions.selectSession("root1");
+      await Promise.resolve();
+
+      // The root is deleted elsewhere; a refresh 404s. The backend hides
+      // the whole subtree, so the loaded descendant must go with its root.
+      vi.mocked(api.getSession).mockRejectedValueOnce(
+        makeNotFoundError("root1"),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.sessions.length).toBe(0);
+      expect(sessions.total).toBe(0);
+    });
+
+    it("clears an active descendant when its ancestor is deleted", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "child1", project: "proj-a", first_message: "c" }),
+      );
+      sessions.selectSession("child1");
+      await sessions.hydrateVisibleSessions(["child1"]);
+      expect(sessions.activeSession?.id).toBe("child1");
+
+      // Deleting the parent removes the whole subtree; the active child is
+      // part of it, so the selection must clear rather than leaving the
+      // cached detail backing a ghost active session.
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("root1");
+
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.activeSessionId).toBeNull();
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

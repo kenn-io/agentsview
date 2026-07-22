@@ -772,9 +772,10 @@ class SessionsStore {
           }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
-          if (hydrated.id === this.activeSessionId) {
-            this.bumpDetailCommit(id, false, issuedAtIndexOrdinal, hydrated);
-          }
+          // Record the commit for every merged row, active or not: the
+          // session may be selected before an older index request resolves,
+          // and the publish-side supersedes check needs the ordinal.
+          this.bumpDetailCommit(id, false, issuedAtIndexOrdinal, hydrated);
         } catch {
           // Visible hydration is best-effort; the skinny row remains usable.
         } finally {
@@ -1157,6 +1158,31 @@ class SessionsStore {
     return removed;
   }
 
+  // Remove a deleted session and its known local descendants, tombstoning
+  // each so stale responses cannot reinsert them, and decrement the root
+  // total once per removed group. The caller records the ancestor's own
+  // deletion commit.
+  private removeSessionSubtree(id: string): ReadonlySet<string> {
+    const subtree = this.expandTombstoned(
+      this.sessions,
+      (rid) => rid === id,
+    );
+    subtree.add(id);
+    for (const rid of subtree) {
+      if (rid !== id) {
+        this.bumpDetailCommit(rid, true, Number.POSITIVE_INFINITY);
+      }
+    }
+    const droppedRows = this.sessions.filter((s) => subtree.has(s.id));
+    const presentIds = new Set(this.sessions.map((s) => s.id));
+    this.sessions = this.sessions.filter((s) => !subtree.has(s.id));
+    this.total = Math.max(
+      0,
+      this.total - this.countDroppedRoots(droppedRows, presentIds),
+    );
+    return subtree;
+  }
+
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
     return new Map(
       [...this.activeDetailCommitBySession].map(
@@ -1238,13 +1264,7 @@ class SessionsStore {
     if (commit.deleted) {
       // Honor the deletion tombstone instead of letting the stale index
       // resurrect the row (mirrors refreshActiveSession's 404 removal).
-      const droppedRows = this.sessions.filter((s) => s.id === id);
-      const presentIds = new Set(this.sessions.map((s) => s.id));
-      this.sessions = this.sessions.filter((s) => s.id !== id);
-      this.total = Math.max(
-        0,
-        this.total - this.countDroppedRoots(droppedRows, presentIds),
-      );
+      this.removeSessionSubtree(id);
       return;
     }
     this.restoreActiveRowFromDetailCache(id);
@@ -1438,13 +1458,7 @@ class SessionsStore {
         // A hydrated matching row would keep backing activeSession as a
         // ghost of the deleted session; drop it and keep the pagination
         // total consistent, mirroring deleteSession.
-        const droppedRows = this.sessions.filter((s) => s.id === id);
-        const presentIds = new Set(this.sessions.map((s) => s.id));
-        this.sessions = this.sessions.filter((s) => s.id !== id);
-        this.total = Math.max(
-          0,
-          this.total - this.countDroppedRoots(droppedRows, presentIds),
-        );
+        this.removeSessionSubtree(id);
       }
     } finally {
       this.activeDetailRead.finish(signal);
@@ -1819,26 +1833,10 @@ class SessionsStore {
     // (and its failure-restore path) cannot resurrect the row.
     this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
     // The backend removes the whole subtree from sidebar queries; mirror it
-    // locally, tombstoning known descendants so stale responses cannot
-    // reinsert them either.
-    const subtree = this.expandTombstoned(
-      this.sessions,
-      (rid) => rid === id,
-    );
-    subtree.add(id);
-    for (const rid of subtree) {
-      if (rid !== id) {
-        this.bumpDetailCommit(rid, true, Number.POSITIVE_INFINITY);
-      }
-    }
-    const droppedRows = this.sessions.filter((s) => subtree.has(s.id));
-    const presentIds = new Set(this.sessions.map((s) => s.id));
-    this.sessions = this.sessions.filter((s) => !subtree.has(s.id));
-    this.total = Math.max(
-      0,
-      this.total - this.countDroppedRoots(droppedRows, presentIds),
-    );
-    if (this.activeSessionId === id) {
+    // locally so stale responses cannot reinsert descendants either.
+    const removed = this.removeSessionSubtree(id);
+    // The active session may be a descendant removed with its ancestor.
+    if (this.activeSessionId !== null && removed.has(this.activeSessionId)) {
       this.setActiveSession(null);
     }
     this.addRecentlyDeleted([id]);
@@ -1871,7 +1869,7 @@ class SessionsStore {
       0,
       this.total - this.countDroppedRoots(droppedRows, presentIds),
     );
-    if (this.activeSessionId && idSet.has(this.activeSessionId)) {
+    if (this.activeSessionId && subtree.has(this.activeSessionId)) {
       this.setActiveSession(null);
     }
     this.addRecentlyDeleted(ids);
