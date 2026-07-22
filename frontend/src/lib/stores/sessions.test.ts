@@ -3678,6 +3678,49 @@ describe("SessionsStore", () => {
       expect(row?.first_message).toBe("detail-2");
     });
 
+    it("seeds a post-reload cache with the reload's index fields", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+
+      // Hydration of the selected row is in flight when a full reload
+      // commits a newer remote rename, re-listing the row as index-only...
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      sessions.selectSession("sel");
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "sel",
+          project: "proj-a",
+          display_name: "server-renamed",
+        }),
+      ]);
+      await sessions.load({ force: true });
+
+      // ...and the superseded hydration then resolves. It may still seed the
+      // empty cache (the breadcrumb needs detail), but with the committed
+      // row's newer index-owned fields, not its own pre-reload snapshot.
+      resolveHydration(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "old",
+          first_message: "detail",
+        }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+      expect(sessions.activeSession?.first_message).toBe("detail");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
