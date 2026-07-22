@@ -596,6 +596,9 @@ class SessionsStore {
       // A deletion that committed while this index was in flight supersedes
       // the index's older server snapshot: drop tombstoned rows instead of
       // reinserting them.
+      const dropped = index.sessions.filter((row) =>
+        this.deletedSinceSnapshot(row.id, detailCommits)
+      );
       const rows = index.sessions.filter(
         (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
       );
@@ -603,10 +606,7 @@ class SessionsStore {
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
       this.nextCursor = index.next_cursor ?? null;
-      this.total = Math.max(
-        0,
-        index.total - (index.sessions.length - rows.length),
-      );
+      this.total = Math.max(0, index.total - this.countDroppedRoots(dropped));
       for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
       }
@@ -618,14 +618,16 @@ class SessionsStore {
       // removed its row from the live list, and the pre-load snapshot still
       // contains it.
       if (this.loadVersion === version) {
-        const restored = prev.sessions.filter(
+        const droppedRows = prev.sessions.filter((s) =>
+          this.deletedSinceSnapshot(s.id, detailCommits)
+        );
+        this.sessions = prev.sessions.filter(
           (s) => !this.deletedSinceSnapshot(s.id, detailCommits),
         );
-        this.sessions = restored;
         this.nextCursor = prev.nextCursor;
         this.total = Math.max(
           0,
-          prev.total - (prev.sessions.length - restored.length),
+          prev.total - this.countDroppedRoots(droppedRows),
         );
       }
     } finally {
@@ -823,6 +825,9 @@ class SessionsStore {
         this.sessions.map((session) => [session.id, session]),
       );
       // Same deletion-tombstone guard as loadSidebarPage for appended pages.
+      const dropped = index.sessions.filter((row) =>
+        this.deletedSinceSnapshot(row.id, detailCommits)
+      );
       const rows = index.sessions.filter(
         (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
       );
@@ -834,10 +839,7 @@ class SessionsStore {
         ),
       ];
       this.nextCursor = index.next_cursor ?? null;
-      this.total = Math.max(
-        0,
-        index.total - (index.sessions.length - rows.length),
-      );
+      this.total = Math.max(0, index.total - this.countDroppedRoots(dropped));
       for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
       }
@@ -1017,6 +1019,17 @@ class SessionsStore {
     );
   }
 
+  // The paginated sidebar total counts root groups, while rows include
+  // roots and their descendants: only removing a parentless row can shrink
+  // the root count — a descendant's removal leaves its group in place.
+  // Orphan promotion after a root deletion is settled by the next
+  // authoritative index response.
+  private countDroppedRoots(
+    rows: ReadonlyArray<{ parent_session_id?: string | null }>,
+  ): number {
+    return rows.filter((row) => !row.parent_session_id).length;
+  }
+
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
     return new Map(
       [...this.activeDetailCommitBySession].map(
@@ -1098,12 +1111,12 @@ class SessionsStore {
     if (commit.deleted) {
       // Honor the deletion tombstone instead of letting the stale index
       // resurrect the row (mirrors refreshActiveSession's 404 removal).
-      const before = this.sessions.length;
+      const droppedRows = this.sessions.filter((s) => s.id === id);
       this.sessions = this.sessions.filter((s) => s.id !== id);
-      const removed = before - this.sessions.length;
-      if (removed > 0) {
-        this.total = Math.max(0, this.total - removed);
-      }
+      this.total = Math.max(
+        0,
+        this.total - this.countDroppedRoots(droppedRows),
+      );
       return;
     }
     this.restoreActiveRowFromDetailCache(id);
@@ -1163,18 +1176,26 @@ class SessionsStore {
           this.activeSessionId === id &&
           this.activeDetailRead.isCurrent(signal)
         ) {
-          const session = this.reconcileDetailResponse(
-            id,
-            raw,
-            issuedAtIndexOrdinal,
-          );
-          const idx = this.sessions.findIndex((s) => s.id === id);
-          if (idx >= 0) {
-            this.mergeHydratedSession(session);
-          } else {
-            this.activeSessionDetail = session;
+          // Same later-issued-read guard as refreshActiveSession.
+          const latestTick =
+            this.activeDetailCommitBySession.get(id)?.issuedAtIndexOrdinal ??
+              0;
+          if (
+            !Number.isFinite(latestTick) || latestTick <= issuedAtIndexOrdinal
+          ) {
+            const session = this.reconcileDetailResponse(
+              id,
+              raw,
+              issuedAtIndexOrdinal,
+            );
+            const idx = this.sessions.findIndex((s) => s.id === id);
+            if (idx >= 0) {
+              this.mergeHydratedSession(session);
+            } else {
+              this.activeSessionDetail = session;
+            }
+            this.bumpDetailCommit(id, false, issuedAtIndexOrdinal);
           }
-          this.bumpDetailCommit(id, false, issuedAtIndexOrdinal);
         }
       } catch {
         // Session not found — selection stands without metadata
@@ -1231,6 +1252,16 @@ class SessionsStore {
       ) {
         return;
       }
+      // A commit from a later-issued READ (e.g. a hydration issued after
+      // this request began) already holds fresher detail than this
+      // response; leave it in place. Write-derived commits (Infinity) are
+      // excluded: they invalidate stale reads through the coordinator, and
+      // a read issued after them observes post-write state and must commit.
+      const latestTick =
+        this.activeDetailCommitBySession.get(id)?.issuedAtIndexOrdinal ?? 0;
+      if (Number.isFinite(latestTick) && latestTick > issuedAtIndexOrdinal) {
+        return;
+      }
       const session = this.reconcileDetailResponse(
         id,
         raw,
@@ -1265,12 +1296,12 @@ class SessionsStore {
         // A hydrated matching row would keep backing activeSession as a
         // ghost of the deleted session; drop it and keep the pagination
         // total consistent, mirroring deleteSession.
-        const before = this.sessions.length;
+        const droppedRows = this.sessions.filter((s) => s.id === id);
         this.sessions = this.sessions.filter((s) => s.id !== id);
-        const removed = before - this.sessions.length;
-        if (removed > 0) {
-          this.total = Math.max(0, this.total - removed);
-        }
+        this.total = Math.max(
+          0,
+          this.total - this.countDroppedRoots(droppedRows),
+        );
       }
     } finally {
       this.activeDetailRead.finish(signal);
@@ -1644,12 +1675,12 @@ class SessionsStore {
     // Tombstone the explicit delete so an index load that was in flight
     // (and its failure-restore path) cannot resurrect the row.
     this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
-    const before = this.sessions.length;
+    const droppedRows = this.sessions.filter((s) => s.id === id);
     this.sessions = this.sessions.filter((s) => s.id !== id);
-    const removed = before - this.sessions.length;
-    if (removed > 0) {
-      this.total = Math.max(0, this.total - removed);
-    }
+    this.total = Math.max(
+      0,
+      this.total - this.countDroppedRoots(droppedRows),
+    );
     if (this.activeSessionId === id) {
       this.setActiveSession(null);
     }

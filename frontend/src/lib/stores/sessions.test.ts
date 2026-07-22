@@ -4157,6 +4157,125 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(0);
     });
 
+    it("does not let an older refresh overwrite a later hydration commit", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A refresh is issued and stays in flight...
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...then a messages event invalidates hydration caches and a
+      // later-issued hydration resolves and commits newer detail first.
+      (sessions as any).invalidateHydratedSessionDetails();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "H-newer" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      expect(sessions.activeSession?.first_message).toBe("H-newer");
+
+      // The earlier-issued refresh resolving late must not overwrite the
+      // later-issued hydration's commit with its older snapshot.
+      resolveRefresh(
+        makeSession({ id: "sel", project: "proj-a", first_message: "R-stale" }),
+      );
+      await refresh;
+
+      expect(sessions.activeSession?.first_message).toBe("H-newer");
+    });
+
+    it("does not decrement the root total when a child row is removed", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "c1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      expect(sessions.total).toBe(1);
+
+      // A reload whose snapshot predates the deletion is in flight when the
+      // child is explicitly deleted; the paginated total counts root groups,
+      // so neither the delete nor the tombstoned publish may decrement it.
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("c1");
+      expect(sessions.total).toBe(1);
+
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "c1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.sessions.some((s) => s.id === "c1")).toBe(false);
+      expect(sessions.total).toBe(1);
+    });
+
+    it("does not append a deleted row from a stale loadMore page", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "keep", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+
+      // Page 2 is in flight when the not-yet-loaded session it carries is
+      // explicitly deleted...
+      let resolvePage!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolvePage = r;
+        }),
+      );
+      const more = sessions.loadMore();
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("gone");
+
+      // ...and the stale page then resolves still listing it. The appended
+      // page must honor the tombstone and adjust the root total.
+      resolvePage({
+        sessions: [makeSkinnyRow({ id: "gone", project: "proj-a" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await more;
+
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.sessions.some((s) => s.id === "keep")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
