@@ -4276,6 +4276,114 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("keeps a rename on a row after the user selects another session", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "a", project: "proj-a", display_name: "old" }),
+        makeSkinnyRow({ id: "b", project: "proj-a" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "a", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["a"]);
+      sessions.selectSession("a");
+
+      // A re-hydration of A is in flight when A is renamed and the user
+      // then selects B...
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["a"]);
+      await Promise.resolve();
+      vi.mocked(api.renameSession).mockResolvedValueOnce(
+        makeSession({ id: "a", display_name: "renamed" }),
+      );
+      await sessions.renameSession("a", "renamed");
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "b", project: "proj-a", first_message: "b-detail" }),
+      );
+      sessions.selectSession("b");
+
+      // ...and A's stale pre-rename response resolves. A is no longer the
+      // active session, but its committed rename must still win.
+      resolveHydration(
+        makeSession({ id: "a", project: "proj-a", display_name: "old" }),
+      );
+      await hydration;
+
+      expect(
+        sessions.sessions.find((s) => s.id === "a")?.display_name,
+      ).toBe("renamed");
+    });
+
+    it("removes batch-deleted rows even when the forced reload fails", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+      expect(sessions.total).toBe(1);
+
+      vi.mocked(api.batchDeleteSessions).mockResolvedValueOnce({});
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await sessions.batchDeleteSessions(["gone"]);
+
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.total).toBe(0);
+    });
+
+    it("keeps local root deletions when a later page's stale total arrives", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "root1", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      expect(sessions.total).toBe(2);
+
+      // A root loaded on page 1 is deleted...
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("root1");
+      expect(sessions.total).toBe(1);
+
+      // ...then page 2 resolves carrying the cursor's page-1-era total.
+      // The stale snapshot total must not undo the local deletion.
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "root2", project: "proj-a" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      expect(sessions.total).toBe(1);
+    });
+
+    it("counts a promoted orphan row as a root when it is deleted", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({
+            id: "orphan",
+            project: "proj-a",
+            parent_session_id: "missing-root",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      expect(sessions.total).toBe(1);
+
+      // The orphan's parent is not in the list, so the sidebar promotes it
+      // to its own root group; deleting it must decrement the root total.
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("orphan");
+
+      expect(sessions.total).toBe(0);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

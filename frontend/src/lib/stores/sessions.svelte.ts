@@ -602,11 +602,24 @@ class SessionsStore {
       const rows = index.sessions.filter(
         (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
       );
-      this.sessions = rows.map((row) =>
-        sidebarIndexRowToSession(row, existing.get(row.id))
-      );
+      const incomingIds = new Set(index.sessions.map((row) => row.id));
+      this.sessions = rows.map((row) => {
+        const prior = existing.get(row.id);
+        // A rename/read that committed for this row after this index was
+        // requested outranks the index's snapshot — keep the prior row.
+        if (
+          prior &&
+          this.commitSupersedesIndex(row.id, detailCommits, requestOrdinal)
+        ) {
+          return prior;
+        }
+        return sidebarIndexRowToSession(row, prior);
+      });
       this.nextCursor = index.next_cursor ?? null;
-      this.total = Math.max(0, index.total - this.countDroppedRoots(dropped));
+      this.total = Math.max(
+        0,
+        index.total - this.countDroppedRoots(dropped, incomingIds),
+      );
       for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
       }
@@ -621,13 +634,14 @@ class SessionsStore {
         const droppedRows = prev.sessions.filter((s) =>
           this.deletedSinceSnapshot(s.id, detailCommits)
         );
+        const prevIds = new Set(prev.sessions.map((s) => s.id));
         this.sessions = prev.sessions.filter(
           (s) => !this.deletedSinceSnapshot(s.id, detailCommits),
         );
         this.nextCursor = prev.nextCursor;
         this.total = Math.max(
           0,
-          prev.total - this.countDroppedRoots(droppedRows),
+          prev.total - this.countDroppedRoots(droppedRows, prevIds),
         );
       }
     } finally {
@@ -732,10 +746,11 @@ class SessionsStore {
           ) {
             return;
           }
-          // Same-version guard for the active row: a hydration issued before
-          // a newer commit resolved must not clobber the row or the cache
-          // with its older snapshot.
-          if (hydrated.id === this.activeSessionId && !detailFresh) {
+          // A hydration issued before a newer commit resolved must not
+          // clobber the row or the cache with its older snapshot. This
+          // holds for every row: a rename commits for its session id even
+          // if the user has since selected another session.
+          if (!detailFresh) {
             return;
           }
           cache.set(id, hydrated);
@@ -831,15 +846,29 @@ class SessionsStore {
       const rows = index.sessions.filter(
         (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
       );
+      const incomingIds = new Set(index.sessions.map((row) => row.id));
       const pageIds = new Set(rows.map((row) => row.id));
       this.sessions = [
         ...this.sessions.filter((s) => !pageIds.has(s.id)),
-        ...rows.map((row) =>
-          sidebarIndexRowToSession(row, existingById.get(row.id))
-        ),
+        ...rows.map((row) => {
+          const prior = existingById.get(row.id);
+          if (
+            prior &&
+            this.commitSupersedesIndex(row.id, detailCommits, requestOrdinal)
+          ) {
+            return prior;
+          }
+          return sidebarIndexRowToSession(row, prior);
+        }),
       ];
       this.nextCursor = index.next_cursor ?? null;
-      this.total = Math.max(0, index.total - this.countDroppedRoots(dropped));
+      // Cursor responses carry the total from the first page's snapshot,
+      // which predates any local deletions since then: keep the locally
+      // maintained total and subtract only this page's tombstoned roots.
+      this.total = Math.max(
+        0,
+        this.total - this.countDroppedRoots(dropped, incomingIds),
+      );
       for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
       }
@@ -1020,14 +1049,38 @@ class SessionsStore {
   }
 
   // The paginated sidebar total counts root groups, while rows include
-  // roots and their descendants: only removing a parentless row can shrink
-  // the root count — a descendant's removal leaves its group in place.
-  // Orphan promotion after a root deletion is settled by the next
+  // roots and their descendants: only removing a row that anchors its own
+  // group can shrink the root count — a descendant's removal leaves its
+  // group in place. A row anchors a group when it has no parent OR its
+  // parent is absent from the surrounding set (the sidebar promotes such
+  // orphans to root groups). Deeper orphan chains are settled by the next
   // authoritative index response.
   private countDroppedRoots(
-    rows: ReadonlyArray<{ parent_session_id?: string | null }>,
+    rows: ReadonlyArray<{ id: string; parent_session_id?: string | null }>,
+    presentIds: ReadonlySet<string>,
   ): number {
-    return rows.filter((row) => !row.parent_session_id).length;
+    return rows.filter(
+      (row) =>
+        !row.parent_session_id || !presentIds.has(row.parent_session_id),
+    ).length;
+  }
+
+  // A non-deletion commit that landed while an index request was in flight
+  // and whose own request is at least as new as the index's supersedes the
+  // index's older snapshot for that row (see syncActiveSessionAfterIndexCommit
+  // for the active-session cache side of the same rule).
+  private commitSupersedesIndex(
+    id: string,
+    snapshot: ReadonlyMap<string, number>,
+    requestOrdinal: number,
+  ): boolean {
+    const commit = this.activeDetailCommitBySession.get(id);
+    return (
+      commit !== undefined &&
+      !commit.deleted &&
+      commit.generation !== (snapshot.get(id) ?? 0) &&
+      commit.issuedAtIndexOrdinal >= requestOrdinal
+    );
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
@@ -1112,10 +1165,11 @@ class SessionsStore {
       // Honor the deletion tombstone instead of letting the stale index
       // resurrect the row (mirrors refreshActiveSession's 404 removal).
       const droppedRows = this.sessions.filter((s) => s.id === id);
+      const presentIds = new Set(this.sessions.map((s) => s.id));
       this.sessions = this.sessions.filter((s) => s.id !== id);
       this.total = Math.max(
         0,
-        this.total - this.countDroppedRoots(droppedRows),
+        this.total - this.countDroppedRoots(droppedRows, presentIds),
       );
       return;
     }
@@ -1297,10 +1351,11 @@ class SessionsStore {
         // ghost of the deleted session; drop it and keep the pagination
         // total consistent, mirroring deleteSession.
         const droppedRows = this.sessions.filter((s) => s.id === id);
+        const presentIds = new Set(this.sessions.map((s) => s.id));
         this.sessions = this.sessions.filter((s) => s.id !== id);
         this.total = Math.max(
           0,
-          this.total - this.countDroppedRoots(droppedRows),
+          this.total - this.countDroppedRoots(droppedRows, presentIds),
         );
       }
     } finally {
@@ -1676,10 +1731,11 @@ class SessionsStore {
     // (and its failure-restore path) cannot resurrect the row.
     this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
     const droppedRows = this.sessions.filter((s) => s.id === id);
+    const presentIds = new Set(this.sessions.map((s) => s.id));
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.total = Math.max(
       0,
-      this.total - this.countDroppedRoots(droppedRows),
+      this.total - this.countDroppedRoots(droppedRows, presentIds),
     );
     if (this.activeSessionId === id) {
       this.setActiveSession(null);
@@ -1698,6 +1754,17 @@ class SessionsStore {
       this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
     }
     const idSet = new Set(ids);
+    // Remove rows and adjust the root total immediately: the forced reload
+    // below is authoritative when it succeeds, but if it fails its restore
+    // snapshot was taken after these tombstones and would otherwise keep
+    // the deleted rows visible.
+    const presentIds = new Set(this.sessions.map((s) => s.id));
+    const droppedRows = this.sessions.filter((s) => idSet.has(s.id));
+    this.sessions = this.sessions.filter((s) => !idSet.has(s.id));
+    this.total = Math.max(
+      0,
+      this.total - this.countDroppedRoots(droppedRows, presentIds),
+    );
     if (this.activeSessionId && idSet.has(this.activeSessionId)) {
       this.setActiveSession(null);
     }
@@ -1833,9 +1900,12 @@ class SessionsStore {
     // index-only or out-of-list active session whose pending read was just
     // cancelled has nothing else to back the breadcrumb until the next
     // watcher refresh.
+    // Record the write commit for ANY renamed session: hydrations and
+    // index publishes consult it per id, so a stale response cannot revert
+    // the rename even after the user selects another session.
+    this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
     if (this.activeSessionId === id) {
       this.activeDetailRead.cancel();
-      this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
       const cached =
         this.activeSessionDetail?.id === id ? this.activeSessionDetail : null;
       this.activeSessionDetail = applyRename(
