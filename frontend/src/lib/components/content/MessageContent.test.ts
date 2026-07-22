@@ -125,6 +125,39 @@ function makeMessage(
   };
 }
 
+function makeSession(
+  overrides: Partial<Session> = {},
+): Session {
+  return {
+    id: "session-1",
+    agent: "claude",
+    project: "proj-a",
+    machine: "test",
+    first_message: "hello",
+    started_at: "2026-02-20T12:30:00Z",
+    ended_at: "2026-02-20T12:31:00Z",
+    message_count: 3,
+    user_message_count: 2,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
+    is_automated: false,
+    created_at: "2026-02-20T12:30:00Z",
+    ...overrides,
+  } as Session;
+}
+
+async function renderRole(
+  message: MessageWithTokenFlags,
+  props: Record<string, unknown> = {},
+) {
+  const component = mount(MessageContent, {
+    target: document.body,
+    props: { message, ...props },
+  });
+  await tick();
+  return component;
+}
+
 afterEach(() => {
   setLocale("en");
   document.body.innerHTML = "";
@@ -140,6 +173,146 @@ beforeEach(() => {
 });
 
 describe("MessageContent", () => {
+  it("labels inline teammate transcript messages as Teammate", async () => {
+    const content = `Another Claude session sent a message:
+<teammate-message teammate_id="batch-d-browser" color="pink" summary="Batch D complete; item 9 needs delegation">
+Batch D (browser/picker/tabs/media-monitor) is done...
+</teammate-message>`;
+    sessionsState.sessions = [makeSession()];
+    sessionsState.activeSession = sessionsState.sessions[0]!;
+
+    const component = await renderRole(
+      makeMessage({
+        id: 10,
+        role: "user",
+        content,
+        content_length: content.length,
+      }),
+    );
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "Teammate",
+    );
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
+      "T",
+    );
+    unmount(component);
+  });
+
+  it("keeps ordinary user prompts labeled as User", async () => {
+    sessionsState.sessions = [makeSession()];
+    const component = await renderRole(
+      makeMessage({ id: 11, role: "user", content: "Please summarize this." }),
+    );
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "User",
+    );
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
+      "U",
+    );
+    unmount(component);
+  });
+
+  it("keeps teammate ancestry rows labeled as Teammate", async () => {
+    sessionsState.sessions = [
+      makeSession({
+        id: "teammate-session",
+        first_message: "<teammate-message>hello</teammate-message>",
+      }),
+    ];
+    const component = await renderRole(
+      makeMessage({ id: 12, role: "user", session_id: "teammate-session" }),
+    );
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "Teammate",
+    );
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
+      "T",
+    );
+    unmount(component);
+  });
+
+  it("does not relabel teammate wrappers inside fenced code blocks", async () => {
+    const content = "```xml\n<teammate-message teammate_id=\"batch-d-browser\">\nreply\n</teammate-message>\n```";
+    sessionsState.sessions = [makeSession()];
+    const component = await renderRole(
+      makeMessage({
+        id: 13,
+        role: "user",
+        content,
+        content_length: content.length,
+      }),
+    );
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "User",
+    );
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
+      "U",
+    );
+    unmount(component);
+  });
+
+  it("keeps inline teammate, ancestry, subagent, and code-fence rows separated", async () => {
+    const cases = [
+      {
+        content: '<teammate-message teammate_id="t">reply</teammate-message>',
+        session: makeSession(),
+        props: {},
+        label: "Teammate",
+        icon: "T",
+      },
+      {
+        content: "ordinary",
+        session: makeSession({
+          id: "teammate-session",
+          first_message: "<teammate-message>hello</teammate-message>",
+        }),
+        props: {},
+        label: "Teammate",
+        icon: "T",
+      },
+      {
+        content: "ordinary",
+        session: makeSession(),
+        props: { isSubagentContext: true },
+        label: "Agent",
+        icon: "S",
+      },
+      {
+        content: "```xml\n<teammate-message teammate_id=\"t\">reply</teammate-message>\n```",
+        session: makeSession(),
+        props: {},
+        label: "User",
+        icon: "U",
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      document.body.innerHTML = "";
+      sessionsState.sessions = [testCase.session];
+      const component = await renderRole(
+        makeMessage({
+          id: 100 + index,
+          role: "user",
+          session_id: testCase.session.id,
+          content: testCase.content,
+          content_length: testCase.content.length,
+        }),
+        testCase.props,
+      );
+      expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+        testCase.label,
+      );
+      expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
+        testCase.icon,
+      );
+      unmount(component);
+    }
+  });
+
   it("renders message controls in Simplified Chinese without translating content", async () => {
     setLocale("zh-CN");
     const component = mount(MessageContent, {

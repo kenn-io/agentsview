@@ -144,6 +144,19 @@
     return false;
   }
 
+  const INLINE_TEAMMATE_MESSAGE_RE =
+    /<teammate-message\b[^>]*\bteammate_id\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)[^>]*>[\s\S]*?<\/teammate-message\s*>/;
+
+  let hasInlineTeammateMessage = $derived(
+    isUser &&
+    !isSubagentContext &&
+    segments.some(
+      (segment) =>
+        segment.type === "text" &&
+        INLINE_TEAMMATE_MESSAGE_RE.test(segment.content),
+    ),
+  );
+
   /** Classify the session kind, walking the parent chain. */
   let sessionKind = $derived.by((): "teammate" | "subagent" | "user" => {
     const s = owningSession;
@@ -158,7 +171,8 @@
   let roleLabel = $derived.by(() => {
     if (!isUser) return m.message_content_role_assistant();
     if (isSubagentContext) return m.message_content_role_agent();
-    if (sessionKind === "teammate") return m.message_content_role_teammate();
+    if (sessionKind === "teammate" || hasInlineTeammateMessage)
+      return m.message_content_role_teammate();
     if (sessionKind === "subagent") return m.message_content_role_agent();
     return m.message_content_role_user();
   });
@@ -166,7 +180,7 @@
   let roleIcon = $derived.by(() => {
     if (!isUser) return "A";
     if (isSubagentContext) return "S";
-    if (sessionKind === "teammate") return "T";
+    if (sessionKind === "teammate" || hasInlineTeammateMessage) return "T";
     if (sessionKind === "subagent") return "S";
     return "U";
   });
