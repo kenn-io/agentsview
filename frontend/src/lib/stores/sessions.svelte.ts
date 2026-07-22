@@ -593,12 +593,21 @@ class SessionsStore {
         session.id,
         session,
       ]));
-      this.sessions = index.sessions.map((row) =>
+      // A deletion that committed while this index was in flight supersedes
+      // the index's older server snapshot: drop tombstoned rows instead of
+      // reinserting them.
+      const rows = index.sessions.filter(
+        (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
+      );
+      this.sessions = rows.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
       this.nextCursor = index.next_cursor ?? null;
-      this.total = index.total;
-      for (const row of index.sessions) {
+      this.total = Math.max(
+        0,
+        index.total - (index.sessions.length - rows.length),
+      );
+      for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
@@ -609,15 +618,9 @@ class SessionsStore {
       // removed its row from the live list, and the pre-load snapshot still
       // contains it.
       if (this.loadVersion === version) {
-        const deletedMidFlight = (id: string) => {
-          const commit = this.activeDetailCommitBySession.get(id);
-          return (
-            commit !== undefined &&
-            commit.deleted &&
-            commit.generation !== (detailCommits.get(id) ?? 0)
-          );
-        };
-        const restored = prev.sessions.filter((s) => !deletedMidFlight(s.id));
+        const restored = prev.sessions.filter(
+          (s) => !this.deletedSinceSnapshot(s.id, detailCommits),
+        );
         this.sessions = restored;
         this.nextCursor = prev.nextCursor;
         this.total = Math.max(
@@ -819,16 +822,23 @@ class SessionsStore {
       const existingById = new Map(
         this.sessions.map((session) => [session.id, session]),
       );
-      const pageIds = new Set(index.sessions.map((row) => row.id));
+      // Same deletion-tombstone guard as loadSidebarPage for appended pages.
+      const rows = index.sessions.filter(
+        (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
+      );
+      const pageIds = new Set(rows.map((row) => row.id));
       this.sessions = [
         ...this.sessions.filter((s) => !pageIds.has(s.id)),
-        ...index.sessions.map((row) =>
+        ...rows.map((row) =>
           sidebarIndexRowToSession(row, existingById.get(row.id))
         ),
       ];
       this.nextCursor = index.next_cursor ?? null;
-      this.total = index.total;
-      for (const row of index.sessions) {
+      this.total = Math.max(
+        0,
+        index.total - (index.sessions.length - rows.length),
+      );
+      for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
@@ -988,6 +998,23 @@ class SessionsStore {
     const cached = this.activeSessionDetail;
     if (cached?.id === id) return mergeIndexFieldsIntoDetail(cached, session);
     return session;
+  }
+
+  // True when a deletion committed for id after the given commit snapshot
+  // was taken — i.e. mid-flight relative to whichever request captured it.
+  // Index publishing, the reload failure-restore, and reconciliation all
+  // honor these tombstones so a response whose server snapshot predates the
+  // deletion cannot resurrect the row.
+  private deletedSinceSnapshot(
+    id: string,
+    snapshot: ReadonlyMap<string, number>,
+  ): boolean {
+    const commit = this.activeDetailCommitBySession.get(id);
+    return (
+      commit !== undefined &&
+      commit.deleted &&
+      commit.generation !== (snapshot.get(id) ?? 0)
+    );
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {

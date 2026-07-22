@@ -4123,6 +4123,40 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(0);
     });
 
+    it("does not reinsert a deleted row from a stale successful reload", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-a", first_message: "detail" }),
+      );
+      await sessions.hydrateVisibleSessions(["gone"]);
+
+      // A reload whose server snapshot predates the deletion is in flight
+      // when the user deletes the (non-active) row...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("gone");
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+
+      // ...and the reload then resolves successfully, still listing the row.
+      // Publishing must honor the deletion tombstone for every row, not just
+      // the active session's.
+      resolveIndex({
+        sessions: [makeSkinnyRow({ id: "gone", project: "proj-a" })],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.total).toBe(0);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
