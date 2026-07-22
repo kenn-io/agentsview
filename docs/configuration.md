@@ -276,7 +276,7 @@ can still be parsed.
 | Visual Studio Copilot | (platform-specific, see below)                                                   | Trace JSONL files                                                                                                               |
 | VS Code Copilot       | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | Windsurf              | (platform-specific, see below)                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` workspace chat data                                                                |
-| Trae                  | (platform-specific, see below)                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` and `globalStorage/state.vscdb` chat data                                        |
+| Trae                  | (platform-specific, see below)                                                   | Legacy inline chat data in SQLite `workspaceStorage/<hash>/state.vscdb` and `globalStorage/state.vscdb`; modern encrypted layouts are detected as unsupported |
 | Warp                  | (platform-specific, see below)                                                   | SQLite database                                                                                                                 |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                         | JSONL per session                                                                                                               |
 | ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                            | SQLite database (`db.sqlite`) with usage rows                                                                                   |
@@ -329,8 +329,9 @@ Trae stores chats in `workspaceStorage/<hash>/state.vscdb` and
 AgentsView watches `workspaceStorage` and `globalStorage`, then reads chat
 records from those SQLite stores.
 
-Trae local parsing is supported, but remote HTTP and SSH target resolution is
-still disabled. A Trae root is a full user profile, and AgentsView does not
+Trae legacy inline-message parsing is supported. Modern encrypted transcript
+layouts are detected and reported as unsupported. Remote HTTP and SSH target
+resolution is still disabled. A Trae root is a full user profile, and AgentsView does not
 archive or ship that profile wholesale. The follow-up path is Windsurf-style
 curated file targets only: `state.vscdb`, `state.vscdb-wal`, and
 `workspace.json` for each supported workspace store.

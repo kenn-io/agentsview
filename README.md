@@ -356,6 +356,7 @@ thread JSON files.
 | VSCode Copilot        | `~/Library/Application Support/Code/User/` (macOS)                                                                                                                      |
 | Visual Studio Copilot | `%LOCALAPPDATA%\\Temp\\VSGitHubCopilotLogs\\traces\\` (Windows), `~/Library/Caches/VSGitHubCopilotLogs/traces/` (macOS), `~/.cache/VSGitHubCopilotLogs/traces/` (Linux) |
 | Windsurf              | `~/Library/Application Support/Windsurf/User/` (macOS), `~/.config/Windsurf/User/` (Linux), `%APPDATA%\\Windsurf\\User\\` (Windows)                                     |
+| Trae                  | `%APPDATA%\\Trae\\User\\` (Windows), `~/Library/Application Support/Trae/User/` (macOS), `~/.config/Trae/User/` (Linux)                                                                                             |
 | Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                         |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                |
 | ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                     |

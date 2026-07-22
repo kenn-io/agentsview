@@ -976,6 +976,12 @@ func formatAnomalySummary(a sync.AnomalyStats) string {
 	}
 	var b strings.Builder
 	b.WriteString("Parser anomalies (this run):\n")
+	if a.UnsupportedSourceLayoutsTotal > 0 {
+		fmt.Fprintf(&b, "  unsupported source layouts: %d total\n", a.UnsupportedSourceLayoutsTotal)
+		for _, agent := range slices.Sorted(maps.Keys(a.UnsupportedSourceLayoutsByAgent)) {
+			fmt.Fprintf(&b, "    %s: %d\n", agent, a.UnsupportedSourceLayoutsByAgent[agent])
+		}
+	}
 	if a.MalformedLinesTotal > 0 {
 		fmt.Fprintf(&b,
 			"  malformed lines: %d total\n", a.MalformedLinesTotal,

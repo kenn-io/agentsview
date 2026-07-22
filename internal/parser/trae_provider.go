@@ -154,10 +154,16 @@ func traeParseContainerOutcome(
 	if err != nil {
 		return ParseOutcome{}, err
 	}
+	state := classifyTraeLayout(src.Root, snapshot)
 	if !snapshot.authoritative {
 		return ParseOutcome{
 			ResultSetComplete: false,
-			SkipReason:        SkipNoSession,
+			SkipReason: func() SkipReason {
+				if state == traeLayoutUnsupported {
+					return SkipUnsupportedSource
+				}
+				return SkipNoSession
+			}(),
 		}, nil
 	}
 	results := make([]ParseResultOutcome, 0, len(snapshot.records))
@@ -175,9 +181,14 @@ func traeParseContainerOutcome(
 	}
 	if len(results) == 0 {
 		return ParseOutcome{
-			ResultSetComplete: snapshot.complete,
-			ForceReplace:      snapshot.complete,
-			SkipReason:        SkipNoSession,
+			ResultSetComplete: state != traeLayoutUnsupported && snapshot.complete,
+			ForceReplace:      state != traeLayoutUnsupported && snapshot.complete,
+			SkipReason: func() SkipReason {
+				if state == traeLayoutUnsupported {
+					return SkipUnsupportedSource
+				}
+				return SkipNoSession
+			}(),
 		}, nil
 	}
 	return ParseOutcome{
@@ -307,6 +318,7 @@ type traeSessionSnapshot struct {
 	ids           map[string]struct{}
 	authoritative bool
 	complete      bool
+	malformed     bool
 }
 
 func (s traeSessionSnapshot) record(id string) (traeSessionRecord, bool) {
@@ -357,19 +369,27 @@ func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
 		var session traeSession
 		if err := json.Unmarshal(raw, &session); err != nil {
 			snapshot.complete = false
+			snapshot.malformed = true
 			continue
 		}
 		id := strings.TrimSpace(session.SessionID)
-		if id == "" || len(session.Messages) == 0 {
+		if id == "" {
+			snapshot.complete = false
+			snapshot.malformed = true
+			continue
+		}
+		if len(session.Messages) == 0 {
 			snapshot.complete = false
 			continue
 		}
 		if !traeSessionProducesMessages(session) {
 			snapshot.complete = false
+			snapshot.malformed = true
 			continue
 		}
 		if _, ok := seen[id]; ok {
 			snapshot.complete = false
+			snapshot.malformed = true
 			continue
 		}
 		seen[id] = struct{}{}

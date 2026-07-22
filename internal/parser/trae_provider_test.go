@@ -28,6 +28,18 @@ func writeTraeDB(t *testing.T, path, value string, extraKey string) {
 	require.NoError(t, err)
 }
 
+func writeTraeDBWithoutStorageKey(t *testing.T, path string, extraKey string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, extraKey, `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]}`)
+	require.NoError(t, err)
+}
+
 func setTraeDBValue(t *testing.T, path, value string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
@@ -373,6 +385,80 @@ func TestTraeMalformedSessionEntryKeepsContainerIncomplete(t *testing.T) {
 	assert.Equal(t, path, changed[0].Key)
 }
 
+func TestTraeEncryptedLayoutOutcomeUnsupported(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, path string)
+	}{
+		{
+			name: "empty stub",
+			setup: func(t *testing.T, path string) {
+				writeTraeDB(t, path, traeStoreValue(t, []any{
+					map[string]any{
+						"sessionId": "stub",
+						"messages":  []any{},
+					},
+				}), "memento/unrelated-chat-storage")
+			},
+		},
+		{
+			name: "missing storage key",
+			setup: func(t *testing.T, path string) {
+				writeTraeDBWithoutStorageKey(t, path, "memento/unrelated-chat-storage")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := traeProfileRoot(t)
+			path := filepath.Join(root, "globalStorage", traeStateDBName)
+			test.setup(t, path)
+			writeTraeModularData(t, root, "encrypted header")
+
+			factory, ok := ProviderFactoryByType(AgentTrae)
+			require.True(t, ok)
+			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
+			sources, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
+			assert.False(t, outcome.ResultSetComplete)
+			assert.False(t, outcome.ForceReplace)
+		})
+	}
+}
+
+func TestTraeMixedLegacyAndEmptyStubPreservesInlineSession(t *testing.T) {
+	root := traeProfileRoot(t)
+	path := filepath.Join(root, "globalStorage", traeStateDBName)
+	writeTraeDB(t, path, traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "real",
+			"messages":  []any{map[string]any{"role": "user", "content": "legacy"}},
+		},
+		map[string]any{
+			"sessionId": "stub",
+			"messages":  []any{map[string]any{"role": "assistant", "content": ""}},
+		},
+	}), "memento/unrelated-chat-storage")
+	writeTraeModularData(t, root, "encrypted header")
+
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "trae:real", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, SkipNone, outcome.SkipReason)
+}
+
 func TestTraeUnparseableSessionStatesKeepContainerIncomplete(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -448,6 +534,59 @@ func TestTraeUnparseableSessionStatesKeepContainerIncomplete(t *testing.T) {
 			assert.True(t, ok)
 			_, err = provider.Parse(context.Background(), ParseRequest{Source: found})
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestTraeUnparseableEncryptedSessionsStayIncomplete(t *testing.T) {
+	cases := []struct {
+		name    string
+		session map[string]any
+	}{
+		{
+			name: "empty content",
+			session: map[string]any{
+				"sessionId": "empty-content",
+				"createdAt": 1715340600000,
+				"messages":  []any{map[string]any{"role": "user", "content": "   "}},
+			},
+		},
+		{
+			name: "unknown role",
+			session: map[string]any{
+				"sessionId": "unknown-role",
+				"createdAt": 1715340600000,
+				"messages":  []any{map[string]any{"role": "system", "content": "ignored"}},
+			},
+		},
+		{
+			name: "partial init",
+			session: map[string]any{
+				"sessionId": "partial-init",
+				"createdAt": 1715340600000,
+				"messages":  []any{map[string]any{"role": "assistant", "content": "", "agentTaskContent": map[string]any{}}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := traeProfileRoot(t)
+			path := filepath.Join(root, "globalStorage", traeStateDBName)
+			writeTraeDB(t, path, traeStoreValue(t, []any{tc.session}), "memento/unrelated-chat-storage")
+			writeTraeModularData(t, root, "encrypted header")
+
+			factory, ok := ProviderFactoryByType(AgentTrae)
+			require.True(t, ok)
+			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
+			sources, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			assert.Equal(t, SkipNoSession, outcome.SkipReason)
+			assert.False(t, outcome.ResultSetComplete)
+			assert.False(t, outcome.ForceReplace)
 		})
 	}
 }

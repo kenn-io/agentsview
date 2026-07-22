@@ -96,6 +96,8 @@ type SyncStats struct {
 // the central validateAndSanitize pass. It is a per-run summary only; no
 // new persisted columns back it.
 type AnomalyStats struct {
+	UnsupportedSourceLayoutsByAgent map[string]int `json:"unsupported_source_layouts_by_agent,omitempty"`
+	UnsupportedSourceLayoutsTotal   int            `json:"unsupported_source_layouts_total,omitempty"`
 	// MalformedLinesByAgent maps an agent type to the total number of
 	// parser malformed lines reported by sessions of that agent in this
 	// run. Only non-zero agents are present.
@@ -154,10 +156,22 @@ func (s SanitizeStats) IsZero() bool {
 // IsZero reports whether the run observed no anomalies at all, so the CLI
 // summary can omit the anomaly section entirely on clean runs.
 func (a AnomalyStats) IsZero() bool {
-	return a.MalformedLinesTotal == 0 &&
+	return a.UnsupportedSourceLayoutsTotal == 0 &&
+		a.MalformedLinesTotal == 0 &&
 		a.UnknownSchemaSessionsTotal == 0 &&
 		a.GenMetadataWithoutUsageTotal == 0 &&
 		a.Sanitize.IsZero()
+}
+
+func (a *AnomalyStats) RecordUnsupportedSourceLayouts(agent string, n int) {
+	if n <= 0 {
+		return
+	}
+	if a.UnsupportedSourceLayoutsByAgent == nil {
+		a.UnsupportedSourceLayoutsByAgent = make(map[string]int)
+	}
+	a.UnsupportedSourceLayoutsByAgent[agent] += n
+	a.UnsupportedSourceLayoutsTotal += n
 }
 
 // RecordMalformedLines attributes n parser malformed lines to the given
@@ -214,6 +228,9 @@ func (a *AnomalyStats) addSanitize(v validationStats) {
 
 // merge folds another AnomalyStats into the receiver.
 func (a *AnomalyStats) merge(o AnomalyStats) {
+	for agent, n := range o.UnsupportedSourceLayoutsByAgent {
+		a.RecordUnsupportedSourceLayouts(agent, n)
+	}
 	for agent, n := range o.MalformedLinesByAgent {
 		a.RecordMalformedLines(agent, n)
 	}
@@ -243,7 +260,8 @@ type anomalyAccumulator struct {
 	// malformedFiles tracks source paths whose malformed-line count has
 	// already been recorded this run, so a file that forks into several
 	// sessions counts its malformed lines once. Reset each run.
-	malformedFiles map[string]bool
+	malformedFiles     map[string]bool
+	unsupportedSources map[string]bool
 }
 
 // reset clears the accumulator at the start of a sync run.
@@ -251,7 +269,21 @@ func (a *anomalyAccumulator) reset() {
 	a.mu.Lock()
 	a.stats = AnomalyStats{}
 	a.malformedFiles = nil
+	a.unsupportedSources = nil
 	a.mu.Unlock()
+}
+
+func (a *anomalyAccumulator) recordUnsupportedSourceLayout(agent, source string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.unsupportedSources == nil {
+		a.unsupportedSources = make(map[string]bool)
+	}
+	if a.unsupportedSources[source] {
+		return
+	}
+	a.unsupportedSources[source] = true
+	a.stats.RecordUnsupportedSourceLayouts(agent, 1)
 }
 
 // recordMalformedLines accumulates an agent's parser malformed-line count for

@@ -9,12 +9,39 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 )
+
+func TestDoctorSyncTraeEncryptedLayout(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Trae", "User")
+	state := filepath.Join(root, "globalStorage", "state.vscdb")
+	require.NoError(t, os.MkdirAll(filepath.Dir(state), 0o755))
+	conn, err := sql.Open("sqlite3", state)
+	require.NoError(t, err)
+	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+	_, err = conn.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
+		"memento/icube-ai-agent-storage",
+		`{"list":[{"sessionId":"stub","messages":[]}]}`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	modular := filepath.Join(filepath.Dir(root), "ModularData", "ai-agent", "database.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(modular), 0o755))
+	require.NoError(t, os.WriteFile(modular, []byte("encrypted header"), 0o644))
+
+	var out bytes.Buffer
+	writeDoctorTraeEncryptedLayouts(&out, doctorSyncReport{
+		AgentRoots:         []doctorAgentRoot{{Agent: parser.AgentTrae, Path: root, Exists: true}},
+		TraeEncryptedRoots: collectDoctorTraeEncryptedRoots([]doctorAgentRoot{{Agent: parser.AgentTrae, Path: root, Exists: true}}),
+	})
+	assert.Contains(t, out.String(), "unsupported encrypted transcript layout")
+}
 
 func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
 	dataDir := testDataDir(t)

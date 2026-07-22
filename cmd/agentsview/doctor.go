@@ -52,6 +52,7 @@ type doctorSyncReport struct {
 	doctorDBInspection
 	TempFiles           []string
 	AgentRoots          []doctorAgentRoot
+	TraeEncryptedRoots  []string
 	DebugLines          []string
 	DebugLogErr         error
 	HasResyncFailureLog bool
@@ -100,6 +101,7 @@ func collectDoctorSyncReport(cfg config.Config) doctorSyncReport {
 	report.doctorDBInspection = inspectDoctorDB(cfg.DBPath)
 	report.TempFiles = listDoctorResyncTempFiles(cfg.DBPath)
 	report.AgentRoots = collectDoctorAgentRoots(cfg)
+	report.TraeEncryptedRoots = collectDoctorTraeEncryptedRoots(report.AgentRoots)
 	report.DebugLines, report.DebugLogErr = readDoctorDebugLines(
 		filepath.Join(cfg.DataDir, "debug.log"),
 	)
@@ -332,11 +334,29 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 	writeDoctorSummaryMode(w, report)
 	writeDoctorUnknownSchema(w, report)
 	writeDoctorMissingSecretScans(w, report)
+	writeDoctorTraeEncryptedLayouts(w, report)
 	writeDoctorTempFiles(w, report.TempFiles)
 	writeDoctorAgentRoots(w, report.AgentRoots)
 	writeDoctorDebugEvidence(w, report)
 	fmt.Fprintf(w, "Likely cause: %s\n",
 		doctorLikelyCause(report, currentVersion))
+}
+
+func writeDoctorTraeEncryptedLayouts(w io.Writer, report doctorSyncReport) {
+	for _, root := range report.TraeEncryptedRoots {
+		fmt.Fprintf(w, "Trae: unsupported encrypted transcript layout detected at %s\n", root)
+		fmt.Fprintln(w, "  -> legacy inline-message parsing is supported; modern encrypted transcripts are not readable")
+	}
+}
+
+func collectDoctorTraeEncryptedRoots(roots []doctorAgentRoot) []string {
+	var detected []string
+	for _, root := range roots {
+		if root.Agent == parser.AgentTrae && root.Exists && parser.TraeEncryptedLayoutDetected(root.Path) {
+			detected = append(detected, root.Path)
+		}
+	}
+	return detected
 }
 
 func doctorStartupDecision(

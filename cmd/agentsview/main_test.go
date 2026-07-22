@@ -1418,6 +1418,19 @@ func TestFormatAnomalySummary(t *testing.T) {
 				"timestamps blanked: 1",
 			},
 		},
+		{
+			name: "unsupported Trae layout only",
+			anomalies: agentsync.AnomalyStats{
+				UnsupportedSourceLayoutsByAgent: map[string]int{"trae": 2},
+				UnsupportedSourceLayoutsTotal:   2,
+			},
+			wantContain: []string{
+				"Parser anomalies (this run):",
+				"unsupported source layouts: 2 total",
+				"trae: 2",
+			},
+			wantOmit: []string{"malformed lines", "sanitized fields"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

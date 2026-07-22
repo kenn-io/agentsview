@@ -359,12 +359,37 @@ func TestAnomalyStats_IsZero(t *testing.T) {
 			a:    AnomalyStats{Sanitize: SanitizeStats{ModelClamped: 1}},
 			want: false,
 		},
+		{
+			name: "unsupported source layout only",
+			a:    AnomalyStats{UnsupportedSourceLayoutsTotal: 1},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, tt.a.IsZero())
 		})
 	}
+}
+
+func TestAnomalyStats_RecordUnsupportedSourceLayouts(t *testing.T) {
+	var a AnomalyStats
+	a.RecordUnsupportedSourceLayouts("trae", 2)
+	a.RecordUnsupportedSourceLayouts("trae", 1)
+	a.RecordUnsupportedSourceLayouts("trae", 0)
+	assert.Equal(t, 3, a.UnsupportedSourceLayoutsTotal)
+	assert.Equal(t, 3, a.UnsupportedSourceLayoutsByAgent["trae"])
+}
+
+func TestAnomalyAccumulator_DedupesUnsupportedSource(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.recordUnsupportedSourceLayout("trae", "state.vscdb")
+	acc.recordUnsupportedSourceLayout("trae", "state.vscdb")
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+	assert.Equal(t, 1, stats.Anomalies.UnsupportedSourceLayoutsTotal)
+	assert.Equal(t, 1, stats.Anomalies.UnsupportedSourceLayoutsByAgent["trae"])
 }
 
 func TestProgress_Percent(t *testing.T) {
