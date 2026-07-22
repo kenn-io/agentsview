@@ -3437,11 +3437,13 @@ describe("SessionsStore", () => {
       const nav = sessions.navigateToSession("deep");
       await Promise.resolve();
 
-      // ...when a watcher refresh fires for the same session. Both issue the
-      // identical detail GET: the refresh must join the pending navigation
-      // rather than cancel it and reissue — a cancelled navigation plus a
-      // transiently failing refresh would leave the cache empty with nothing
-      // to retry. No further response is queued: a second fetch would fail.
+      // ...when a watcher refresh fires for the same session. The refresh
+      // must not cancel the pending navigation (a cancelled navigation plus
+      // a transiently failing refresh would leave the cache empty with
+      // nothing to retry): it joins the navigation, then chases with a
+      // fresh read. Here the chase fails transiently — the navigation's
+      // committed result must survive.
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network"));
       const refresh = sessions.refreshActiveSession();
 
       resolveNavigate(
@@ -3449,8 +3451,123 @@ describe("SessionsStore", () => {
       );
       await Promise.all([nav, refresh]);
 
-      expect(api.getSession).toHaveBeenCalledTimes(1);
+      expect(api.getSession).toHaveBeenCalledTimes(2);
       expect(sessions.activeSession?.first_message).toBe("detail");
+    });
+
+    it("chases a joined navigation with a fresh read for the newer event", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      // Deep-link navigation is in flight with a pre-event snapshot...
+      let resolveNavigate!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveNavigate = r;
+        }),
+      );
+      const nav = sessions.navigateToSession("deep");
+      await Promise.resolve();
+
+      // ...when an event-driven refresh fires because the session just
+      // changed. Joining alone would commit the pre-event snapshot with no
+      // guaranteed later refresh; after the navigation settles, the refresh
+      // must issue a fresh read that observes the post-event state.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "deep",
+          project: "proj-b",
+          display_name: "post-event",
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      resolveNavigate(
+        makeSession({
+          id: "deep",
+          project: "proj-b",
+          display_name: "pre-event",
+        }),
+      );
+      await Promise.all([nav, refresh]);
+
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+      expect(sessions.activeSession?.display_name).toBe("post-event");
+    });
+
+    it("clears a deleted session after a refresh joined its navigation", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+
+      let resolveNavigate!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveNavigate = r;
+        }),
+      );
+      const nav = sessions.navigateToSession("gone");
+      await Promise.resolve();
+
+      // The session is deleted server-side; the deletion event triggers a
+      // refresh while the pre-delete navigation is still in flight. The
+      // chase read 404s — the navigation's ghost snapshot must not stand.
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
+      const refresh = sessions.refreshActiveSession();
+      resolveNavigate(
+        makeSession({ id: "gone", project: "proj-b", first_message: "ghost" }),
+      );
+      await Promise.all([nav, refresh]);
+
+      expect(sessions.activeSession).toBeUndefined();
+    });
+
+    it("does not reconcile against an index commit that skipped the row", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [
+          makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+        ],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A refresh carrying a genuinely newer rename is in flight...
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...when an unrelated loadMore page commits WITHOUT re-listing the
+      // active row. That commit says nothing about this row's index fields,
+      // so the response must still apply wholesale.
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "other", project: "proj-a" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+
+      resolveRefresh(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "fresh-title",
+        }),
+      );
+      await refresh;
+
+      expect(sessions.activeSession?.display_name).toBe("fresh-title");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.display_name,
+      ).toBe("fresh-title");
     });
 
     it("does not count a pre-reload hydration as fresher than the reload", async () => {

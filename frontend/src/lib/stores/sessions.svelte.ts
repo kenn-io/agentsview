@@ -382,12 +382,17 @@ class SessionsStore {
   // already serializes them against each other.
   private indexRequestOrdinal = 0;
   // Commit-order counter for sidebar index requests, bumped when a loader
-  // publishes its rows. A detail response (navigation/refresh/hydration)
-  // resolving after an index committed mid-flight may predate that index's
-  // server snapshot: its detail-owned fields still apply, but index-owned
-  // fields (display_name, counts, timestamps) must not revert the committed
-  // row — reconcileDetailResponse keeps the row's index fields in that case.
+  // publishes its rows, plus a per-row stamp of the commit that last
+  // re-published each row. A detail response (navigation/refresh/hydration)
+  // resolving after an index commit that re-listed ITS row may predate that
+  // index's server snapshot: its detail-owned fields still apply, but
+  // index-owned fields (display_name, counts, timestamps) must not revert
+  // the committed row — reconcileDetailResponse keeps the row's index
+  // fields in that case. A commit that did not re-list the row (an
+  // unrelated loadMore page) says nothing about it, so the response still
+  // applies wholesale.
   private indexCommitOrdinal = 0;
+  private indexCommitByRow = new Map<string, number>();
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -575,7 +580,10 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-      this.indexCommitOrdinal++;
+      const commitOrdinal = ++this.indexCommitOrdinal;
+      for (const row of index.sessions) {
+        this.indexCommitByRow.set(row.id, commitOrdinal);
+      }
       this.syncActiveSessionAfterIndexCommit(detailCommits);
     } catch {
       // Restore previous state so a transient failure
@@ -789,7 +797,10 @@ class SessionsStore {
       ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-      this.indexCommitOrdinal++;
+      const commitOrdinal = ++this.indexCommitOrdinal;
+      for (const row of index.sessions) {
+        this.indexCommitByRow.set(row.id, commitOrdinal);
+      }
       this.syncActiveSessionAfterIndexCommit(detailCommits);
     } catch (error) {
       if (signal.aborted || isAbortError(error)) return;
@@ -922,7 +933,9 @@ class SessionsStore {
     session: Session,
     indexCommitsAtStart: number,
   ): Session {
-    if (indexCommitsAtStart === this.indexCommitOrdinal) return session;
+    if ((this.indexCommitByRow.get(id) ?? 0) <= indexCommitsAtStart) {
+      return session;
+    }
     const row = this.sessions.find((s) => s.id === id);
     if (!row) return session;
     return mergeIndexFieldsIntoDetail(row, session);
@@ -1101,16 +1114,22 @@ class SessionsStore {
     this.childSessions = new Map();
   }
 
-  async refreshActiveSession() {
+  async refreshActiveSession(): Promise<void> {
     const id = this.activeSessionId;
     if (!id) return;
     // Navigation and refresh issue the identical detail GET. Join a pending
     // same-session navigation instead of cancelling it to reissue the same
     // request: if this refresh then failed transiently, the cancelled
     // navigation could no longer fill the empty cache and nothing would
-    // retry until the next watcher event.
+    // retry until the next watcher event. The event that triggered this
+    // refresh may postdate the navigation's request, though, so chase with
+    // a fresh read once the navigation settles — it observes the post-event
+    // state (including a deletion), while a transient chase failure still
+    // leaves the navigation's committed result in place.
     if (this.navigateInFlight?.id === id) {
-      return this.navigateInFlight.promise;
+      await this.navigateInFlight.promise;
+      if (this.activeSessionId !== id) return;
+      return this.refreshActiveSession();
     }
     const signal = this.activeDetailRead.begin();
     const indexCommitsAtStart = this.indexCommitOrdinal;
