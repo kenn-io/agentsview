@@ -4466,6 +4466,86 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("ignores a stale 404 after a later read confirmed the session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A refresh is in flight...
+      let rejectRefresh!: (e: unknown) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((_r, rej) => {
+          rejectRefresh = rej;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...while a later-issued hydration confirms the session exists.
+      (sessions as any).invalidateHydratedSessionDetails();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "H" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      expect(sessions.activeSession?.first_message).toBe("H");
+
+      // The earlier refresh then 404s. Newer evidence outranks the stale
+      // response: the session must not be tombstoned.
+      rejectRefresh(makeNotFoundError("sel"));
+      await refresh;
+
+      expect(sessions.activeSession?.first_message).toBe("H");
+      expect(sessions.sessions.some((s) => s.id === "sel")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
+    it("classifies dropped page rows against all loaded rows", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "root1", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+
+      // A never-loaded child of an already-loaded root is deleted while
+      // page 2 is in flight...
+      let resolvePage!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolvePage = r;
+        }),
+      );
+      const more = sessions.loadMore();
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("child1");
+      expect(sessions.total).toBe(2);
+
+      // ...and the stale page re-lists it alongside another root. The child
+      // belongs to root1's group (loaded on page 1): dropping it must not
+      // count as a dropped root group.
+      resolvePage({
+        sessions: [
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+          makeSkinnyRow({ id: "root2", project: "proj-a" }),
+        ],
+        total: 2,
+        next_cursor: null,
+      });
+      await more;
+
+      expect(sessions.sessions.some((s) => s.id === "child1")).toBe(false);
+      expect(sessions.sessions.some((s) => s.id === "root2")).toBe(true);
+      expect(sessions.total).toBe(2);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

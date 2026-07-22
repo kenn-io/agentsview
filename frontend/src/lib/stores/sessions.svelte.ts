@@ -880,9 +880,15 @@ class SessionsStore {
       const newlyDropped = dropped.filter(
         (row) => !loadedIdsAtStart.has(row.id),
       );
+      // Classify against everything loaded plus this page: a dropped child
+      // whose parent lives on an earlier page is not a promoted root.
+      const paginationContext = new Set([
+        ...loadedIdsAtStart,
+        ...incomingIds,
+      ]);
       this.total = Math.max(
         0,
-        this.total - this.countDroppedRoots(newlyDropped, incomingIds),
+        this.total - this.countDroppedRoots(newlyDropped, paginationContext),
       );
       for (const row of rows) {
         this.indexCommitByRow.set(row.id, requestOrdinal);
@@ -1360,9 +1366,23 @@ class SessionsStore {
       // empties instead of showing a ghost session; transient failures keep
       // the cache and the next watcher refresh retries. callGenerated rethrows
       // generated errors as the runtime ApiError, so match that class.
+      // A 404 from a request issued before newer successful evidence — a
+      // later-issued read commit or an index that re-listed the row — is a
+      // stale response, not proof of deletion; keep the session and let the
+      // next refresh decide. Write commits (Infinity) are excluded as
+      // evidence: they persist indefinitely and would immunize ever-renamed
+      // sessions against genuine deletions.
+      const latestCommit = this.activeDetailCommitBySession.get(id);
+      const newerEvidence =
+        (latestCommit !== undefined &&
+          !latestCommit.deleted &&
+          Number.isFinite(latestCommit.issuedAtIndexOrdinal) &&
+          latestCommit.issuedAtIndexOrdinal > issuedAtIndexOrdinal) ||
+        (this.indexCommitByRow.get(id) ?? 0) > issuedAtIndexOrdinal;
       if (
         e instanceof ApiError &&
         e.status === 404 &&
+        !newerEvidence &&
         this.activeSessionId === id &&
         this.activeDetailRead.isCurrent(signal)
       ) {
