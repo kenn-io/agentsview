@@ -629,6 +629,92 @@ describe("UIStore", () => {
     });
   });
 
+  describe("Calls detail preference", () => {
+    it("defaults the Calls detail to expanded", async () => {
+      const original = globalThis.localStorage;
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?vitalsCallsDefault");
+        expect(mod.ui.vitalsCallsExpanded).toBe(true);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("restores a collapsed Calls detail preference", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) =>
+            key === "agentsview-session-vitals-calls-expanded"
+              ? "false"
+              : null,
+          ),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?vitalsCallsCollapsed");
+        expect(mod.ui.vitalsCallsExpanded).toBe(false);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("persists Calls detail changes", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem: vi.fn(() => null), setItem },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?vitalsCallsPersist");
+        setItem.mockClear();
+
+        mod.ui.toggleVitalsCalls();
+        await tick();
+
+        expect(mod.ui.vitalsCallsExpanded).toBe(false);
+        expect(setItem).toHaveBeenCalledWith(
+          "agentsview-session-vitals-calls-expanded",
+          "false",
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
   describe("postMessage theme control", () => {
     it("should change theme on valid theme:set message", () => {
       ui.theme = "light";

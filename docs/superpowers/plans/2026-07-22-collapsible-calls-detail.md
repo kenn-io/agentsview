@@ -343,7 +343,7 @@ Calls becomes a button.
 ```ts
 const headers = page
   .locator(".v-section .v-h")
-  .filter({ hasText: /^(Session|Time spent|Timeline|Calls)/ });
+  .filter({ hasText: /(Session|Time spent|Timeline|Calls)/ });
 await expect(headers).toHaveCount(4);
 ```
 

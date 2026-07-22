@@ -22,7 +22,7 @@
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
   import SubagentCalls from "./SubagentCalls.svelte";
-  import { XIcon } from "../../icons.js";
+  import { ChevronRightIcon, XIcon } from "../../icons.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import type { Session } from "../../api/types/core.js";
 
@@ -526,99 +526,123 @@
 
     {#if timing.turns.length > 0}
       <section class="v-section">
-        <header class="v-h">
-          <span>{m.session_vitals_calls()}</span>
-          <span class="v-meta">
-            {m.session_vitals_calls_summary({
-              count: timing.tool_call_count,
-              countLabel: formatNumber(timing.tool_call_count),
-              runningCount: timing.running ? 1 : 0,
-            })}
-          </span>
+        <header
+          class="v-h calls-header"
+          class:expanded={ui.vitalsCallsExpanded}
+        >
+          <button
+            type="button"
+            class="calls-disclosure"
+            aria-expanded={ui.vitalsCallsExpanded}
+            onclick={() => ui.toggleVitalsCalls()}
+          >
+            <span class="calls-heading">
+              <span
+                class="calls-chevron"
+                class:open={ui.vitalsCallsExpanded}
+              >
+                <ChevronRightIcon
+                  size="10"
+                  strokeWidth="2.4"
+                  aria-hidden="true"
+                />
+              </span>
+              <span>{m.session_vitals_calls()}</span>
+            </span>
+            <span class="v-meta">
+              {m.session_vitals_calls_summary({
+                count: timing.tool_call_count,
+                countLabel: formatNumber(timing.tool_call_count),
+                runningCount: timing.running ? 1 : 0,
+              })}
+            </span>
+          </button>
         </header>
-        <div class="scale-axis">
-          <span>0</span>
-          <span>{formatDuration(timing.total_duration_ms / 4)}</span>
-          <span>{formatDuration(timing.total_duration_ms / 2)}</span>
-          <span
-            >{formatDuration(
-              (3 * timing.total_duration_ms) / 4,
-            )}</span
-          >
-          <span class:now={timing.running}
-            >{timing.running
-              ? m.session_vitals_now()
-              : formatDuration(timing.total_duration_ms)}</span
-          >
-        </div>
-        <div class="calls">
-          {#each timing.turns as turn (turn.message_id)}
-            {@const isLive =
-              turn.duration_ms == null &&
-              isLastTurn(turn) &&
-              !!timing.running}
-            {@const liveElapsed = isLive ? liveElapsedFor(turn) : undefined}
-            {#if turn.calls.length === 1}
-              {@const call = turn.calls[0]!}
-              <CallRow
-                {call}
-                barWidthPct={callBarPct(call, timing)}
-                isSlow={isSlowCall(call)}
-                {isLive}
-                liveDurationMs={liveElapsed}
-                dimmed={categoryFilter !== null &&
-                  call.category !== categoryFilter}
-                isSubagentExpanded={!!call.subagent_session_id &&
-                  expandedSubagentIds.has(call.subagent_session_id)}
-                onClick={() => ui.scrollToOrdinal(turn.ordinal)}
-                onChevronClick={() => {
-                  void toggleSubagent(call);
-                }}
-              />
-              {#if call.subagent_session_id && expandedSubagentIds.has(call.subagent_session_id)}
-                {@const subT = subagentTimings.get(
-                  call.subagent_session_id,
-                )}
-                {#if subT}
-                  <SubagentCalls
-                    timing={subT}
-                    barScalePct={(c) => callBarPct(c, subT)}
-                    {categoryFilter}
-                  />
+        {#if ui.vitalsCallsExpanded}
+          <div class="scale-axis">
+            <span>0</span>
+            <span>{formatDuration(timing.total_duration_ms / 4)}</span>
+            <span>{formatDuration(timing.total_duration_ms / 2)}</span>
+            <span
+              >{formatDuration(
+                (3 * timing.total_duration_ms) / 4,
+              )}</span
+            >
+            <span class:now={timing.running}
+              >{timing.running
+                ? m.session_vitals_now()
+                : formatDuration(timing.total_duration_ms)}</span
+            >
+          </div>
+          <div class="calls">
+            {#each timing.turns as turn (turn.message_id)}
+              {@const isLive =
+                turn.duration_ms == null &&
+                isLastTurn(turn) &&
+                !!timing.running}
+              {@const liveElapsed = isLive ? liveElapsedFor(turn) : undefined}
+              {#if turn.calls.length === 1}
+                {@const call = turn.calls[0]!}
+                <CallRow
+                  {call}
+                  barWidthPct={callBarPct(call, timing)}
+                  isSlow={isSlowCall(call)}
+                  {isLive}
+                  liveDurationMs={liveElapsed}
+                  dimmed={categoryFilter !== null &&
+                    call.category !== categoryFilter}
+                  isSubagentExpanded={!!call.subagent_session_id &&
+                    expandedSubagentIds.has(call.subagent_session_id)}
+                  onClick={() => ui.scrollToOrdinal(turn.ordinal)}
+                  onChevronClick={() => {
+                    void toggleSubagent(call);
+                  }}
+                />
+                {#if call.subagent_session_id && expandedSubagentIds.has(call.subagent_session_id)}
+                  {@const subT = subagentTimings.get(
+                    call.subagent_session_id,
+                  )}
+                  {#if subT}
+                    <SubagentCalls
+                      timing={subT}
+                      barScalePct={(c) => callBarPct(c, subT)}
+                      {categoryFilter}
+                    />
+                  {/if}
                 {/if}
+              {:else}
+                <CallGroup
+                  calls={turn.calls}
+                  groupDurationMs={turn.duration_ms}
+                  barScalePct={(c) => callBarPct(c, timing)}
+                  headerBarPct={turnHeaderBarPct(turn, timing)}
+                  {isLive}
+                  liveDurationMs={liveElapsed}
+                  isSlow={isSlowCall}
+                  dimmed={categoryFilter !== null &&
+                    turn.primary_category !== categoryFilter}
+                  onCallClick={() => ui.scrollToOrdinal(turn.ordinal)}
+                  onSubagentExpand={(c) => {
+                    void toggleSubagent(c);
+                  }}
+                  {expandedSubagentIds}
+                />
+                {#each turn.calls.filter((c) => !!c.subagent_session_id && expandedSubagentIds.has(c.subagent_session_id)) as expandedCall (expandedCall.tool_use_id)}
+                  {@const subT = subagentTimings.get(
+                    expandedCall.subagent_session_id!,
+                  )}
+                  {#if subT}
+                    <SubagentCalls
+                      timing={subT}
+                      barScalePct={(c) => callBarPct(c, subT)}
+                      {categoryFilter}
+                    />
+                  {/if}
+                {/each}
               {/if}
-            {:else}
-              <CallGroup
-                calls={turn.calls}
-                groupDurationMs={turn.duration_ms}
-                barScalePct={(c) => callBarPct(c, timing)}
-                headerBarPct={turnHeaderBarPct(turn, timing)}
-                {isLive}
-                liveDurationMs={liveElapsed}
-                isSlow={isSlowCall}
-                dimmed={categoryFilter !== null &&
-                  turn.primary_category !== categoryFilter}
-                onCallClick={() => ui.scrollToOrdinal(turn.ordinal)}
-                onSubagentExpand={(c) => {
-                  void toggleSubagent(c);
-                }}
-                {expandedSubagentIds}
-              />
-              {#each turn.calls.filter((c) => !!c.subagent_session_id && expandedSubagentIds.has(c.subagent_session_id)) as expandedCall (expandedCall.tool_use_id)}
-                {@const subT = subagentTimings.get(
-                  expandedCall.subagent_session_id!,
-                )}
-                {#if subT}
-                  <SubagentCalls
-                    timing={subT}
-                    barScalePct={(c) => callBarPct(c, subT)}
-                    {categoryFilter}
-                  />
-                {/if}
-              {/each}
-            {/if}
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
       </section>
     {/if}
   {:else if sessionTiming.error}
@@ -952,6 +976,52 @@
   /* Calls section --------------------------------------------------- */
   /* Adapted from the session-duration UX mockup, with the raw colors mapped to
      theme tokens. */
+  .calls-header {
+    margin-bottom: 0;
+  }
+  .calls-header.expanded {
+    margin-bottom: 9px;
+  }
+  .calls-disclosure {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: calc(100% + 8px);
+    padding: 2px 4px;
+    margin: -2px -4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .calls-disclosure:hover {
+    background: var(--bg-surface-hover);
+  }
+  .calls-disclosure:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+  }
+  .calls-heading,
+  .calls-chevron {
+    display: inline-flex;
+    align-items: center;
+  }
+  .calls-heading {
+    gap: 4px;
+  }
+  .calls-chevron {
+    transition: transform 0.15s ease-out;
+  }
+  .calls-chevron.open {
+    transform: rotate(90deg);
+  }
   .scale-axis {
     display: flex;
     justify-content: space-between;

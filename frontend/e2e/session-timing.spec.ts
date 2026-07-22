@@ -40,12 +40,12 @@ test.describe("Session Vital Signs", () => {
   test("renders all four sections", async ({ page }) => {
     await gotoShowcase(page);
 
-    // Section headers live inside `.v-h > span` (text-only spans),
-    // not semantic <h*> headings, so we match by text on .v-h
-    // instead of the plan-sketch's `getByRole("heading")`.
+    // Section labels are not semantic headings, so match the compact
+    // section-header rows. Calls uses a disclosure button while the other
+    // sections keep text-only labels.
     const headers = page
-      .locator(".v-section .v-h > span:first-child")
-      .filter({ hasText: /^(Session|Time spent|Timeline|Calls)$/ });
+      .locator(".v-section .v-h")
+      .filter({ hasText: /(Session|Time spent|Timeline|Calls)/ });
     await expect(headers).toHaveCount(4);
 
     await expect(

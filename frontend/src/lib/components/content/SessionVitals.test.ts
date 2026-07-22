@@ -79,6 +79,7 @@ describe("SessionVitals", () => {
     }));
     sessionTiming.reset();
     ui.vitalsOpen = true;
+    ui.vitalsCallsExpanded = true;
   });
 
   afterEach(() => {
@@ -323,6 +324,47 @@ describe("SessionVitals", () => {
     });
   });
 
+  it("collapses and restores the Calls detail while keeping its summary", async () => {
+    mocks.fetchSessionTiming.mockResolvedValue(timingWithCall());
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1" },
+    });
+    await tick();
+    await tick();
+
+    const disclosure = document.querySelector<HTMLButtonElement>(
+      'button[aria-expanded="true"]',
+    );
+    expect(disclosure).not.toBeNull();
+    expect(disclosure?.textContent).toContain(
+      m.session_vitals_calls(),
+    );
+    expect(document.querySelector(".scale-axis")).not.toBeNull();
+    expect(document.querySelector(".calls")).not.toBeNull();
+
+    disclosure!.click();
+    await tick();
+
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    expect(disclosure?.textContent).toContain(
+      m.session_vitals_calls_summary({
+        count: 1,
+        countLabel: "1",
+        runningCount: 0,
+      }),
+    );
+    expect(document.querySelector(".scale-axis")).toBeNull();
+    expect(document.querySelector(".calls")).toBeNull();
+
+    disclosure!.click();
+    await tick();
+
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".scale-axis")).not.toBeNull();
+    expect(document.querySelector(".calls")).not.toBeNull();
+  });
+
   it("aborts a pending sub-agent timing read when collapsed", async () => {
     const signals: AbortSignal[] = [];
     mocks.fetchSessionTiming.mockImplementation(
@@ -424,6 +466,33 @@ describe("SessionVitals", () => {
     expect(signals[0]?.aborted).toBe(true);
   });
 });
+
+function timingWithCall(): SessionTiming {
+  return {
+    ...mocks.timing,
+    tool_duration_ms: 400,
+    tool_call_count: 1,
+    turns: [
+      {
+        message_id: 1,
+        ordinal: 1,
+        started_at: "2026-07-14T12:00:00Z",
+        duration_ms: 400,
+        primary_category: "Bash",
+        calls: [
+          {
+            tool_use_id: "call-1",
+            tool_name: "Bash",
+            category: "Bash",
+            duration_ms: 400,
+            is_parallel: false,
+            input_preview: "go test ./...",
+          },
+        ],
+      },
+    ],
+  };
+}
 
 function parentTimingWithSubagent(): SessionTiming {
   return {
