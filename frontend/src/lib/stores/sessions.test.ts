@@ -3505,6 +3505,62 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.display_name).toBe("server-renamed");
     });
 
+    it("keeps mid-flight index commits' fields over an older refresh response", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "old",
+          first_message: "detail-1",
+        }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A watcher refresh is in flight...
+      let resolveRefresh!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveRefresh = r;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+
+      // ...when an index reload commits a newer remote rename.
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "sel",
+          project: "proj-a",
+          display_name: "server-renamed",
+        }),
+      ]);
+      await sessions.load({ force: true });
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+
+      // The refresh response predates that commit. Its detail-owned fields
+      // still apply, but the committed index's fields must not be reverted.
+      resolveRefresh(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "old",
+          first_message: "detail-2",
+        }),
+      );
+      await refresh;
+
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+      expect(sessions.activeSession?.first_message).toBe("detail-2");
+      const row = sessions.sessions.find((s) => s.id === "sel");
+      expect(row?.display_name).toBe("server-renamed");
+      expect(row?.first_message).toBe("detail-2");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

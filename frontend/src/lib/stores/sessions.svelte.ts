@@ -381,6 +381,13 @@ class SessionsStore {
   // navigation/refresh commits stay unconditional because the coordinator
   // already serializes them against each other.
   private indexRequestOrdinal = 0;
+  // Commit-order counter for sidebar index requests, bumped when a loader
+  // publishes its rows. A detail response (navigation/refresh/hydration)
+  // resolving after an index committed mid-flight may predate that index's
+  // server snapshot: its detail-owned fields still apply, but index-owned
+  // fields (display_name, counts, timestamps) must not revert the committed
+  // row — reconcileDetailResponse keeps the row's index fields in that case.
+  private indexCommitOrdinal = 0;
   private childSessionsRead = new LatestRead();
 
   private liveRefreshStarted = false;
@@ -568,6 +575,7 @@ class SessionsStore {
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+      this.indexCommitOrdinal++;
       this.syncActiveSessionAfterIndexCommit(detailCommits);
     } catch {
       // Restore previous state so a transient failure
@@ -629,12 +637,21 @@ class SessionsStore {
         if (signal.aborted) return;
         const detailCommitGeneration = this.detailCommitGeneration(id);
         const issuedAtIndexOrdinal = this.indexRequestOrdinal;
+        const indexCommitsAtStart = this.indexCommitOrdinal;
         try {
           configureGeneratedClient();
-          const hydrated = await callGenerated(
+          const raw = await callGenerated(
             () => SessionsService.getApiV1SessionsId({ id }),
             signal,
           ) as unknown as Session;
+          // The version/epoch checks below catch full reloads, but a
+          // loadMore page committing mid-flight re-lists rows without
+          // changing the index version; reconcile against that too.
+          const hydrated = this.reconcileDetailResponse(
+            id,
+            raw,
+            indexCommitsAtStart,
+          );
           // A superseded hydration still carries valid detail for the active
           // session, so let it back the breadcrumb when the new index excludes
           // the row — but only fill an empty cache, and only when no newer
@@ -772,6 +789,7 @@ class SessionsStore {
       ];
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+      this.indexCommitOrdinal++;
       this.syncActiveSessionAfterIndexCommit(detailCommits);
     } catch (error) {
       if (signal.aborted || isAbortError(error)) return;
@@ -892,6 +910,22 @@ class SessionsStore {
       generation: (current?.generation ?? 0) + 1,
       deleted,
     });
+  }
+
+  // See indexCommitOrdinal: when an index committed while a detail read was
+  // in flight, take only detail-owned fields from the response and keep the
+  // row's committed index-owned fields. When none did, the response is the
+  // freshest source for every field (e.g. a refresh propagating a remote
+  // rename) and is returned untouched.
+  private reconcileDetailResponse(
+    id: string,
+    session: Session,
+    indexCommitsAtStart: number,
+  ): Session {
+    if (indexCommitsAtStart === this.indexCommitOrdinal) return session;
+    const row = this.sessions.find((s) => s.id === id);
+    if (!row) return session;
+    return mergeIndexFieldsIntoDetail(row, session);
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
@@ -1017,11 +1051,12 @@ class SessionsStore {
       return;
     }
     const signal = this.activeDetailRead.begin();
+    const indexCommitsAtStart = this.indexCommitOrdinal;
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
         configureGeneratedClient();
-        const session = await callGenerated(
+        const raw = await callGenerated(
           () => SessionsService.getApiV1SessionsId({ id }),
           signal,
         ) as unknown as Session;
@@ -1029,6 +1064,11 @@ class SessionsStore {
           this.activeSessionId === id &&
           this.activeDetailRead.isCurrent(signal)
         ) {
+          const session = this.reconcileDetailResponse(
+            id,
+            raw,
+            indexCommitsAtStart,
+          );
           const idx = this.sessions.findIndex((s) => s.id === id);
           if (idx >= 0) {
             this.mergeHydratedSession(session);
@@ -1073,9 +1113,10 @@ class SessionsStore {
       return this.navigateInFlight.promise;
     }
     const signal = this.activeDetailRead.begin();
+    const indexCommitsAtStart = this.indexCommitOrdinal;
     try {
       configureGeneratedClient();
-      const session = await callGenerated(
+      const raw = await callGenerated(
         () => SessionsService.getApiV1SessionsId({ id }),
         signal,
       ) as unknown as Session;
@@ -1085,6 +1126,11 @@ class SessionsStore {
       ) {
         return;
       }
+      const session = this.reconcileDetailResponse(
+        id,
+        raw,
+        indexCommitsAtStart,
+      );
       const idx = this.sessions.findIndex((s) => s.id === id);
       if (idx >= 0) {
         this.mergeHydratedSession(session);
