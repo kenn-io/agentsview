@@ -726,7 +726,14 @@ func translateFSEvent(root string, event fsevents.Event) (backendEvent, bool) {
 }
 
 func (b *darwinWatchBackend) forwardKqueue() {
-	defer b.finish()
+	// The lifecycle goroutine also produces on b.errors, so the shared output
+	// channels must not close until it has exited. Start always launches the
+	// lifecycle goroutine before this one, and Stop closes b.stop, so the join
+	// below cannot block forever.
+	defer func() {
+		<-b.lifecycleDone
+		b.finish()
+	}()
 	events := b.kqueue.Events()
 	errorsCh := b.kqueue.Errors()
 	for events != nil || errorsCh != nil {

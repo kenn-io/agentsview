@@ -1571,6 +1571,70 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 	assert.Equal(t, int32(3), attempts.Load())
 }
 
+// TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic stops the watcher
+// while the recovery handoff is inside its polling-release callback, which
+// runs with the backend mutex released. The lifecycle goroutine reports the
+// release failure on the shared error channel after the callback returns, so
+// the kqueue forwarder must not close that channel until the lifecycle
+// goroutine has exited; a premature close panics with a send on a closed
+// channel.
+func TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic(t *testing.T) {
+	root := t.TempDir()
+	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
+	require.NoError(t, err)
+	backend.retryInitial = 5 * time.Millisecond
+	backend.retryMax = 10 * time.Millisecond
+
+	backend.newStream = func(_ string, _ func([]fsevents.Event)) (darwinStream, error) {
+		return &handoffRecordingStream{}, nil
+	}
+	releaseEntered := make(chan struct{})
+	stopStarted := make(chan struct{})
+	var releaseCalls atomic.Int32
+	batches := make(chan WatchBatch, 8)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(_ context.Context, batch WatchBatch) error {
+			batches <- batch
+			return nil
+		}, backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
+		WatcherOptions{
+			OnPollingRequired: func(PollingObligation) error { return nil },
+			OnPollingReleased: func(string) error {
+				if releaseCalls.Add(1) > 1 {
+					return nil
+				}
+				close(releaseEntered)
+				<-stopStarted
+				// Give the kqueue forwarder time to observe the stop signal
+				// and run its shutdown path before the release failure is
+				// reported on the shared error channel.
+				time.Sleep(200 * time.Millisecond)
+				return errors.New("release failed during shutdown")
+			},
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(watcher.Stop)
+	results := watcher.RegisterRoots([]WatchRoot{{
+		Path: root, Recursive: true, Exists: true,
+		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: root}},
+	}}, 10)
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(t, watcher.Start())
+
+	backend.requestFallback(darwinFallbackNativeDrop)
+	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
+	requireReceiveWithin(t, releaseEntered, 30*time.Second)
+
+	stopDone := make(chan struct{})
+	go func() {
+		watcher.Stop()
+		close(stopDone)
+	}()
+	close(stopStarted)
+	requireReceiveWithin(t, stopDone, 30*time.Second)
+}
+
 func TestDarwinWatcherFallbackTransfersMissingRootPollingBeforeRecovery(t *testing.T) {
 	parent := t.TempDir()
 	present := filepath.Join(parent, "present")
