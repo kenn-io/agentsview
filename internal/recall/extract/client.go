@@ -61,6 +61,14 @@ var errProtocolViolation = errors.New(
 	"distill response violates the extraction protocol",
 )
 
+// errClientOnlyResponseLimit marks a resource bound enforced only after the
+// response arrives. Unlike a schema violation, it indicts one model output,
+// not the endpoint: the manager fails that session behind its backoff and
+// continues through the remaining candidates.
+var errClientOnlyResponseLimit = errors.New(
+	"distill response exceeds a client-only resource limit",
+)
+
 // requestStatusError carries the HTTP status of a permanent server
 // rejection so callers can tell endpoint-scoped failures from
 // input-specific ones.
@@ -559,6 +567,9 @@ func (c *Client) distill(
 	}
 	entries, err := parseEntries(choice.Message.Content)
 	if err != nil {
+		if errors.Is(err, errClientOnlyResponseLimit) {
+			return nil, parsed.Usage, err
+		}
 		// The server was asked for constrained decoding, so a violation
 		// means it did not enforce the schema; at temperature zero that is
 		// deterministic and not worth retrying.
@@ -775,7 +786,8 @@ func parseEntries(content string) ([]Entry, error) {
 		}
 		if n := utf8.RuneCountInString(entry.Body); n > maxEntryBodyChars {
 			return nil, fmt.Errorf(
-				"entry %d: body is %d characters, limit %d",
+				"%w: entry %d body is %d characters, limit %d",
+				errClientOnlyResponseLimit,
 				i, n, maxEntryBodyChars,
 			)
 		}

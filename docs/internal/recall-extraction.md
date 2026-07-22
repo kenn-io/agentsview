@@ -356,7 +356,9 @@ title, entity-count, and entity-length bounds. The 5000-character body bound is
 enforced client-side only because expanding that large `maxLength` makes some
 JSON-schema grammar compilers reject the request before inference. A
 non-compliant endpoint still cannot balloon the archive or hold its write lock
-through oversized inserts.
+through oversized inserts. An oversized body fails only its source session
+behind the normal backoff; it is not an endpoint-scoped schema violation that
+aborts the remaining pass.
 
 ## Activation
 
