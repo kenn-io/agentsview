@@ -5077,6 +5077,59 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("v2");
     });
 
+    it("counts a revived subtree once when the child revives first", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "root1", project: "proj-a", first_message: "d" }),
+      );
+      sessions.selectSession("root1");
+      await sessions.hydrateVisibleSessions(["root1"]);
+
+      // The root transiently 404s, removing the subtree.
+      vi.mocked(api.getSession).mockRejectedValueOnce(
+        makeNotFoundError("root1"),
+      );
+      await sessions.refreshActiveSession();
+      expect(sessions.sessions.length).toBe(0);
+      expect(sessions.total).toBe(0);
+
+      // The child revives first (as a promoted orphan root, +1)...
+      (sessions as any).invalidateHydratedSessionDetails();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "child1",
+          project: "proj-a",
+          parent_session_id: "root1",
+          first_message: "c",
+        }),
+      );
+      await sessions.hydrateVisibleSessions(["child1"]);
+      expect(sessions.total).toBe(1);
+
+      // ...then the root revives, demoting the child back to nested. The
+      // group must be counted once, not twice.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "root1", project: "proj-a", first_message: "d2" }),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.sessions.some((s) => s.id === "root1")).toBe(true);
+      expect(sessions.sessions.some((s) => s.id === "child1")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

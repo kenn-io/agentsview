@@ -1102,17 +1102,16 @@ class SessionsStore {
       snapshot !== undefined &&
       !this.sessions.some((row) => row.id === id)
     ) {
-      const presentIds = new Set(this.sessions.map((row) => row.id));
+      // Adjust the total by the change in locally represented root groups:
+      // a revived orphan child counts as a promoted root, and a parent
+      // reviving later demotes it again, so the group is counted exactly
+      // once regardless of revival order.
+      const rootGroupsBefore = this.countRootGroups(this.sessions);
       this.sessions = [...this.sessions, { ...snapshot }];
-      // Root status is judged against the CURRENT rows: a revived
-      // descendant whose parent is still absent is a promoted orphan root
-      // now, whatever it was at deletion time.
-      if (
-        !snapshot.parent_session_id ||
-        !presentIds.has(snapshot.parent_session_id)
-      ) {
-        this.total += 1;
-      }
+      this.total = Math.max(
+        0,
+        this.total + this.countRootGroups(this.sessions) - rootGroupsBefore,
+      );
       this.scheduleIndexRefresh();
     }
   }
@@ -1288,6 +1287,15 @@ class SessionsStore {
         this.indexCommitByRow.delete(id);
       }
     }
+  }
+
+  // Count locally represented root groups: rows that are parentless or
+  // whose parent is absent from the set (promoted orphans).
+  private countRootGroups(rows: ReadonlyArray<Session>): number {
+    const ids = new Set(rows.map((row) => row.id));
+    return rows.filter(
+      (row) => !row.parent_session_id || !ids.has(row.parent_session_id),
+    ).length;
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
