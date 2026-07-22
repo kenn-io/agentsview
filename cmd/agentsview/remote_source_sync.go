@@ -41,10 +41,17 @@ func remoteSourceSyncRoots(cfg config.Config) []string {
 	return roots
 }
 
-// isRemoteSourceRoot mirrors the sync engine's remote reconciliation root
-// check.
+// isRemoteSourceRoot matches provider discovery's scheme check exactly:
+// Claude and Codex s3 discovery recognize only lowercase "s3://", and startup
+// cleans any other spelling as a filesystem path that yields nothing. Selecting
+// case-insensitively here would make the periodic pass claim roots the
+// providers cannot sync, so selection is lowercase-only to keep periodic
+// behavior identical to startup behavior. (The engine's
+// isRemoteReconciliationRoot stays case-insensitive on purpose: excluding an
+// uppercase root from local reconciliation is a harmless no-op, since no
+// sessions can ever exist under it.)
 func isRemoteSourceRoot(dir string) bool {
-	return strings.HasPrefix(strings.ToLower(dir), "s3://")
+	return strings.HasPrefix(dir, "s3://")
 }
 
 // runRemoteSourceSyncPass syncs the configured remote roots so new or changed

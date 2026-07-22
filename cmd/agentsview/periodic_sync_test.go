@@ -127,11 +127,12 @@ func TestRemoteSourceSyncRootsSelectsSchemeRoots(t *testing.T) {
 		},
 	}
 	assert.Equal(t, []string{
-		"S3://bucket/upper/raw/codex",
 		"s3://bucket/machine/raw/claude",
 		"s3://bucket/machine/raw/codex",
 	}, remoteSourceSyncRoots(cfg),
-		"remote roots are selected by scheme, deduplicated, and sorted")
+		"remote roots are selected by exact lowercase scheme, deduplicated, "+
+			"and sorted; provider discovery recognizes only lowercase s3://, "+
+			"so an uppercase root is a filesystem path here as it is at startup")
 }
 
 func TestRemoteSourceSyncRootsEmptyForLocalOnlyConfig(t *testing.T) {
