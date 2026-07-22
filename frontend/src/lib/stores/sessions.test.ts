@@ -3254,6 +3254,88 @@ describe("SessionsStore", () => {
       ).toBe("renamed");
     });
 
+    it("keeps newer index fields when a failed refresh preceded the commit", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "old" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // An index reload is in flight, carrying a newer rename from another
+      // machine...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+
+      // ...when a watcher refresh starts and fails transiently. The read
+      // began but committed nothing, so the cache holds no fresher state
+      // than the index — restoring it would revert the newer rename.
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network"));
+      await sessions.refreshActiveSession();
+
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({
+            id: "sel",
+            project: "proj-a",
+            display_name: "server-renamed",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.display_name,
+      ).toBe("server-renamed");
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+    });
+
+    it("does not let a stale index resurrect a 404-deleted active row", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-a", first_message: "detail" }),
+      );
+      await sessions.hydrateVisibleSessions(["gone"]);
+      sessions.selectSession("gone");
+
+      // An index reload whose server snapshot predates the deletion is in
+      // flight when a refresh 404s and removes the row...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("gone"));
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+
+      // ...the stale index still lists the session; committing it must honor
+      // the deletion instead of resurrecting the row.
+      resolveIndex({
+        sessions: [makeSkinnyRow({ id: "gone", project: "proj-a" })],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.activeSession).toBeUndefined();
+      expect(sessions.total).toBe(0);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
