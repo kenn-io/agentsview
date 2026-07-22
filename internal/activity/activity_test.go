@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func mustLoad(t *testing.T, name string) *time.Location {
@@ -208,18 +209,18 @@ func TestAggregate_PartialDayClipsUsage(t *testing.T) {
 	}
 	usage := []UsageRow{
 		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 100, Cost: 1.0, ClaudeMessageID: "a", ClaudeRequestID: "x"},
+			OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "a", ClaudeRequestID: "x"},
 		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T14:00:00Z",
-			OutputTokens: 200, Cost: 2.0, ClaudeMessageID: "b", ClaudeRequestID: "y"},
+			OutputTokens: 200, Cost: money.MustParseDollars("2.0"), ClaudeMessageID: "b", ClaudeRequestID: "y"},
 	}
 	sessions := []SessionMeta{{SessionID: "s1", Project: "p", Agent: "claude"}}
 	r := Aggregate(p, sessions, nil, usage)
 	assert.True(t, r.Partial, "mid-day report must be partial")
 	assert.Equal(t, 100, r.Totals.OutputTokens, "row at/after effEnd excluded from totals")
-	assert.InDelta(t, 1.0, r.Totals.Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.Cost)
 	require.Len(t, r.BySession, 1)
 	assert.Equal(t, 100, r.BySession[0].OutputTokens, "session row clipped to as_of")
-	assert.InDelta(t, 1.0, r.BySession[0].Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("1.0"), r.BySession[0].Cost)
 }
 
 func TestAggregate_OverlapUnionVsSumAndPeakAt(t *testing.T) {
@@ -484,9 +485,9 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 		{SessionID: "ti", Ordinal: 2, Timestamp: "2026-06-16T10:03:00Z", Role: "assistant", Model: "m1"},
 	}
 	usage := []UsageRow{
-		{SessionID: "ta", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, Cost: 1.0, ClaudeMessageID: "ta", ClaudeRequestID: "r"},
-		{SessionID: "ti", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 20, Cost: 2.0, ClaudeMessageID: "ti", ClaudeRequestID: "r"},
-		{SessionID: "ua", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 40, Cost: 4.0, ClaudeMessageID: "ua", ClaudeRequestID: "r"},
+		{SessionID: "ta", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "ta", ClaudeRequestID: "r"},
+		{SessionID: "ti", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 20, Cost: money.MustParseDollars("2.0"), ClaudeMessageID: "ti", ClaudeRequestID: "r"},
+		{SessionID: "ua", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 40, Cost: money.MustParseDollars("4.0"), ClaudeMessageID: "ua", ClaudeRequestID: "r"},
 	}
 	sessions := []SessionMeta{
 		{SessionID: "ta", Project: "P", Agent: "claude", IsAutomated: true},
@@ -499,22 +500,22 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	proj := r.ByProject[0]
 	assert.Equal(t, "P", proj.Key)
 	assert.InDelta(t, 5.0, proj.AgentMinutes, 1e-9, "2+3 timed minutes")
-	assert.InDelta(t, 7.0, proj.Cost, 1e-9, "1+2+4 includes the untimed session")
+	assert.Equal(t, money.MustParseDollars("7"), proj.Cost, "1+2+4 includes the untimed session")
 	assert.InDelta(t, 2.0, proj.AutomatedAgentMinutes, 1e-9)
 	assert.InDelta(t, 3.0, proj.InteractiveAgentMinutes, 1e-9)
-	assert.InDelta(t, 5.0, proj.AutomatedCost, 1e-9, "ta 1 + ua 4")
-	assert.InDelta(t, 2.0, proj.InteractiveCost, 1e-9, "ti 2")
+	assert.Equal(t, money.MustParseDollars("5"), proj.AutomatedCost, "ta 1 + ua 4")
+	assert.Equal(t, money.MustParseDollars("2"), proj.InteractiveCost, "ti 2")
 	assert.InDelta(t, proj.AgentMinutes,
 		proj.AutomatedAgentMinutes+proj.InteractiveAgentMinutes, 1e-9)
-	assert.InDelta(t, proj.Cost, proj.AutomatedCost+proj.InteractiveCost, 1e-9)
-	assert.InDelta(t, r.Totals.Cost, proj.Cost, 1e-9,
+	assert.Equal(t, proj.Cost, money.MustAdd(proj.AutomatedCost, proj.InteractiveCost))
+	assert.Equal(t, r.Totals.Cost, proj.Cost,
 		"cost breakdown sums to total cost; untimed cost is not dropped")
 
 	assert.InDelta(t, 5.0, r.Totals.AgentMinutes, 1e-9)
 	assert.InDelta(t, 2.0, r.Totals.AutomatedAgentMinutes, 1e-9)
 	assert.InDelta(t, 3.0, r.Totals.InteractiveAgentMinutes, 1e-9)
-	assert.InDelta(t, 5.0, r.Totals.AutomatedCost, 1e-9)
-	assert.InDelta(t, 2.0, r.Totals.InteractiveCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.AutomatedCost)
+	assert.Equal(t, money.MustParseDollars("2.0"), r.Totals.InteractiveCost)
 
 	autoByID := map[string]bool{}
 	for _, row := range r.BySession {
@@ -527,9 +528,9 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	require.Len(t, r.ByModel, 1)
 	assert.Equal(t, "m1", r.ByModel[0].Key)
 	assert.InDelta(t, 5.0, r.ByModel[0].AgentMinutes, 1e-9)
-	assert.InDelta(t, 7.0, r.ByModel[0].Cost, 1e-9)
-	assert.InDelta(t, 5.0, r.ByModel[0].AutomatedCost, 1e-9)
-	assert.InDelta(t, 2.0, r.ByModel[0].InteractiveCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("7.0"), r.ByModel[0].Cost)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.ByModel[0].AutomatedCost)
+	assert.Equal(t, money.MustParseDollars("2.0"), r.ByModel[0].InteractiveCost)
 }
 
 // TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel confirms a session
@@ -550,7 +551,7 @@ func TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel(t *testing.T) {
 	// known model but ZERO cost.
 	usage := []UsageRow{
 		{SessionID: "u", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 0, Cost: 0, ClaudeMessageID: "u", ClaudeRequestID: "r"},
+			OutputTokens: 0, Cost: money.MustParseDollars("0"), ClaudeMessageID: "u", ClaudeRequestID: "r"},
 	}
 	sessions := []SessionMeta{
 		{SessionID: "u", Project: "P", Agent: "claude"},
@@ -589,11 +590,11 @@ func TestAggregate_BreakdownCostDeterministicAcrossSessionOrder(t *testing.T) {
 	// the order is normalized.
 	usage := []UsageRow{
 		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 10, Cost: 0.1, ClaudeMessageID: "s1", ClaudeRequestID: "r"},
+			OutputTokens: 10, Cost: money.MustParseDollars("0.1"), ClaudeMessageID: "s1", ClaudeRequestID: "r"},
 		{SessionID: "s2", Model: "m1", Timestamp: "2026-06-16T11:00:00Z",
-			OutputTokens: 20, Cost: 0.2, ClaudeMessageID: "s2", ClaudeRequestID: "r"},
+			OutputTokens: 20, Cost: money.MustParseDollars("0.2"), ClaudeMessageID: "s2", ClaudeRequestID: "r"},
 		{SessionID: "s3", Model: "m1", Timestamp: "2026-06-16T12:00:00Z",
-			OutputTokens: 30, Cost: 0.3, ClaudeMessageID: "s3", ClaudeRequestID: "r"},
+			OutputTokens: 30, Cost: money.MustParseDollars("0.3"), ClaudeMessageID: "s3", ClaudeRequestID: "r"},
 	}
 	meta := func(id string) SessionMeta {
 		return SessionMeta{SessionID: id, Project: "P", Agent: "claude"}

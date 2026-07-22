@@ -16,6 +16,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
@@ -363,7 +364,7 @@ type sessionUsageResponse struct {
 	TotalOutputTokens   int                             `json:"total_output_tokens"`
 	PeakContextTokens   int                             `json:"peak_context_tokens"`
 	HasTokenData        bool                            `json:"has_token_data"`
-	CostUSD             float64                         `json:"cost_usd"`
+	Cost                money.Money                     `json:"cost"`
 	HasCost             bool                            `json:"has_cost"`
 	AICredits           float64                         `json:"ai_credits,omitempty"`
 	Models              []string                        `json:"models"`
@@ -371,7 +372,7 @@ type sessionUsageResponse struct {
 	BreakdownCount      int                             `json:"breakdown_count"`
 	Breakdown           []sessionUsageBreakdownResponse `json:"breakdown"`
 	ServerRunning       bool                            `json:"server_running"`
-	RollupCostUSD       *float64                        `json:"rollup_cost_usd,omitempty"`
+	RollupCost          *money.Money                    `json:"rollup_cost,omitempty"`
 	HasRollupCost       *bool                           `json:"has_rollup_cost,omitempty"`
 	RollupSubagentCount *int                            `json:"rollup_subagent_count,omitempty"`
 }
@@ -383,18 +384,18 @@ type sessionUsageInput struct {
 }
 
 type sessionUsageBreakdownResponse struct {
-	Ordinal                  int     `json:"ordinal"`
-	MessageOrdinal           *int    `json:"message_ordinal,omitempty"`
-	Source                   string  `json:"source"`
-	Label                    string  `json:"label"`
-	Timestamp                string  `json:"timestamp"`
-	Model                    string  `json:"model"`
-	InputTokens              int     `json:"input_tokens"`
-	OutputTokens             int     `json:"output_tokens"`
-	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
-	CostUSD                  float64 `json:"cost_usd"`
-	HasCost                  bool    `json:"has_cost"`
+	Ordinal                  int         `json:"ordinal"`
+	MessageOrdinal           *int        `json:"message_ordinal,omitempty"`
+	Source                   string      `json:"source"`
+	Label                    string      `json:"label"`
+	Timestamp                string      `json:"timestamp"`
+	Model                    string      `json:"model"`
+	InputTokens              int         `json:"input_tokens"`
+	OutputTokens             int         `json:"output_tokens"`
+	CacheCreationInputTokens int         `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int         `json:"cache_read_input_tokens"`
+	Cost                     money.Money `json:"cost"`
+	HasCost                  bool        `json:"has_cost"`
 }
 
 type sessionUsageErrorBody struct {
@@ -433,7 +434,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 			OutputTokens:             entry.OutputTokens,
 			CacheCreationInputTokens: entry.CacheCreationInputTokens,
 			CacheReadInputTokens:     entry.CacheReadInputTokens,
-			CostUSD:                  entry.CostUSD,
+			Cost:                     entry.Cost,
 			HasCost:                  entry.HasCost,
 		})
 	}
@@ -444,7 +445,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		TotalOutputTokens: usage.TotalOutputTokens,
 		PeakContextTokens: usage.PeakContextTokens,
 		HasTokenData:      usage.HasTokenData,
-		CostUSD:           usage.CostUSD,
+		Cost:              usage.Cost,
 		HasCost:           usage.HasCost,
 		AICredits:         usage.AICredits,
 		Models:            usage.Models,
@@ -472,7 +473,7 @@ func (s *Server) humaSessionUsage(
 		}
 		body := newSessionUsageHumaResponse(rollup.Usage)
 		if rollup.HasCost {
-			body.RollupCostUSD = &rollup.CostUSD
+			body.RollupCost = &rollup.Cost
 		}
 		body.HasRollupCost = &rollup.HasCost
 		body.RollupSubagentCount = &rollup.SubagentCount

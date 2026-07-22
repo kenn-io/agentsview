@@ -2,10 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type DbProjectBreakdown = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  cost: number;
+  cost: MoneyMoney;
   inputTokens: number;
   outputTokens: number;
   project: string;

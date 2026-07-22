@@ -2,12 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type CacheStats = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   hitRate: number;
   outputTokens: number;
-  savingsVsUncached: number;
+  savingsVsUncached: MoneyMoney;
   uncachedInputTokens: number;
 };
 

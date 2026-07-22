@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	"go.kenn.io/agentsview/internal/service"
@@ -94,9 +95,9 @@ func (s *usageSummaryCountsSpy) GetDailyUsage(
 		return db.DailyUsageResult{
 			Daily: []db.DailyUsageEntry{{
 				Date:      "2024-06-01",
-				TotalCost: 1,
+				TotalCost: money.MustParseDollars("1"),
 			}},
-			Totals: db.UsageTotals{TotalCost: 1},
+			Totals: db.UsageTotals{TotalCost: money.MustParseDollars("1")},
 			SessionCounts: db.UsageSessionCounts{
 				Total:     1,
 				ByProject: map[string]int{"proj": 1},
@@ -182,7 +183,8 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 	s := newRoutedTestServerWithStore(t, spy)
 
 	w := serveGet(t, s,
-		"/api/v1/usage/comparison?"+oneDayUsageRange+"&current_cost=3")
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=3000000")
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assertUsageQueryCalls(t, spy, 1, 0, 0)
@@ -191,7 +193,7 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
 	assert.Equal(t, "2024-05-31", out.PriorFrom)
 	assert.Equal(t, "2024-05-31", out.PriorTo)
-	assert.Equal(t, 1.0, out.PriorTotalCost)
+	assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
 	assert.Equal(t, 2.0, out.DeltaPct)
 }
 
@@ -201,7 +203,9 @@ func TestUsageComparisonCopiesGitBranchFilterToPriorPeriod(t *testing.T) {
 	branch := db.EncodeBranchFilterToken("alpha", "main")
 
 	w := serveGet(t, s,
-		"/api/v1/usage/comparison?"+oneDayUsageRange+"&current_cost=3&git_branch="+url.QueryEscape(branch))
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=3000000&git_branch="+
+			url.QueryEscape(branch))
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	require.Len(t, spy.filters, 1)
@@ -225,7 +229,8 @@ func TestUsageComparisonCopiesResolvedProjectExclusionToPriorPeriod(
 
 	w := serveGet(t, s,
 		"/api/v1/usage/comparison?"+oneDayUsageRange+
-			"&current_cost=3&exclude_project_key="+url.QueryEscape(projectKey))
+			"&current_microdollars=3000000&exclude_project_key="+
+			url.QueryEscape(projectKey))
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	require.Len(t, spy.filters, 1)
@@ -248,7 +253,7 @@ func TestUsageComparisonNoDefaultRangeRequiresConcreteRange(t *testing.T) {
 	s := newRoutedTestServerWithStore(t, spy)
 
 	w := serveGet(t, s,
-		"/api/v1/usage/comparison?no_default_range=true&current_cost=3")
+		"/api/v1/usage/comparison?no_default_range=true&current_microdollars=3000000")
 	assertRecorderStatus(t, w, http.StatusBadRequest)
 	assert.Contains(t, w.Body.String(), "requires from and to")
 
@@ -260,7 +265,8 @@ func TestUsageComparisonAllowsZeroCurrentCost(t *testing.T) {
 	s := newRoutedTestServerWithStore(t, spy)
 
 	w := serveGet(t, s,
-		"/api/v1/usage/comparison?"+oneDayUsageRange+"&current_cost=0")
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=0")
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assertUsageQueryCalls(t, spy, 1, 0, 0)

@@ -224,7 +224,7 @@ func remoteUsageJSON(spec remoteUsageSpec) string {
 		"total_output_tokens": %d,
 		"peak_context_tokens": 2048,
 		"has_token_data": true,
-		"cost_usd": 0.5,
+		"cost": {"microdollars": 500000},
 		"has_cost": true,
 		"models": ["gpt-5.1"],
 		"unpriced_models": []%s
@@ -1279,7 +1279,7 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 				"total_output_tokens": 42,
 				"peak_context_tokens": 2048,
 				"has_token_data": true,
-				"cost_usd": 0.5,
+				"cost": {"microdollars": 500000},
 				"has_cost": true,
 				"models": ["gpt-5.1"],
 				"unpriced_models": []
@@ -1349,7 +1349,7 @@ func TestTokenUse_UsesDiscoveredDaemon(t *testing.T) {
 				"total_output_tokens": 42,
 				"peak_context_tokens": 2048,
 				"has_token_data": true,
-				"cost_usd": 0.5,
+				"cost": {"microdollars": 500000},
 				"has_cost": true,
 				"models": ["gpt-5.1"],
 				"unpriced_models": []

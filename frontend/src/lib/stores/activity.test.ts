@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Report } from "../api/types/activity.js";
+import { testMoney } from "../test/money.js";
 
 const api = vi.hoisted(() => ({
   getActivityReport: vi.fn(),
@@ -64,7 +65,7 @@ function makeReport(overrides: Partial<Report> = {}): Report {
       distinct_projects: 0,
       distinct_models: 0,
       output_tokens: 0,
-      cost: 0,
+      cost: testMoney(0),
     },
     by_project: [],
     by_model: [],

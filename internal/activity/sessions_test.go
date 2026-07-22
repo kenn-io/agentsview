@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,7 @@ func TestSessionsTable_TimedAndUntimed(t *testing.T) {
 	}
 	usage := []UsageRow{
 		{SessionID: "a", Model: "opus", Timestamp: "2026-06-16T10:03:00Z",
-			OutputTokens: 50, Cost: 0.5, UsageDedupKey: "k1"},
+			OutputTokens: 50, Cost: money.MustParseDollars("0.5"), UsageDedupKey: "k1"},
 	}
 	r := Aggregate(p, sessions, act, usage)
 
@@ -59,7 +60,7 @@ func TestSessionsTable_TimedAndUntimed(t *testing.T) {
 	require.NotNil(t, a.AgentMinutes)
 	assert.InDelta(t, 4.0, *a.AgentMinutes, 1e-9)
 	assert.Equal(t, "opus", a.PrimaryModel)
-	assert.InDelta(t, 0.5, a.Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.5"), a.Cost)
 
 	u := bySid["u"]
 	assert.Equal(t, "untimed", u.TimingQuality)
@@ -81,7 +82,7 @@ func TestSessionsTable_UntimedKeepsCost(t *testing.T) {
 	}
 	usage := []UsageRow{
 		{SessionID: "u", Model: "sonnet", Timestamp: "2026-06-16T11:00:00Z",
-			OutputTokens: 30, Cost: 0.25, UsageDedupKey: "k1"},
+			OutputTokens: 30, Cost: money.MustParseDollars("0.25"), UsageDedupKey: "k1"},
 	}
 	r := Aggregate(p, sessions, nil, usage)
 
@@ -89,7 +90,7 @@ func TestSessionsTable_UntimedKeepsCost(t *testing.T) {
 	u := r.BySession[0]
 	assert.Equal(t, "untimed", u.TimingQuality)
 	assert.Nil(t, u.AgentMinutes)
-	assert.InDelta(t, 0.25, u.Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.25"), u.Cost)
 	assert.Equal(t, 30, u.OutputTokens)
 	assert.Equal(t, "sonnet", u.PrimaryModel)
 	assert.Equal(t, []string{"sonnet"}, u.Models)
@@ -100,14 +101,14 @@ func TestSessionsTable_UntimedKeepsCost(t *testing.T) {
 	require.Len(t, r.ByModel, 1)
 	assert.Equal(t, "sonnet", r.ByModel[0].Key)
 	assert.InDelta(t, 0.0, r.ByModel[0].AgentMinutes, 1e-9)
-	assert.InDelta(t, 0.25, r.ByModel[0].Cost, 1e-9)
-	assert.InDelta(t, 0.25, r.ByModel[0].InteractiveCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.25"), r.ByModel[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.25"), r.ByModel[0].InteractiveCost)
 	require.Len(t, r.ByProject, 1)
 	assert.Equal(t, "proj1", r.ByProject[0].Key)
-	assert.InDelta(t, 0.25, r.ByProject[0].Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.25"), r.ByProject[0].Cost)
 	require.Len(t, r.ByAgent, 1)
 	assert.Equal(t, "codex", r.ByAgent[0].Key)
-	assert.InDelta(t, 0.25, r.ByAgent[0].Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.25"), r.ByAgent[0].Cost)
 }
 
 func TestSessionsTable_MixedModelsAndUnknownDropped(t *testing.T) {

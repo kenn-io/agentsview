@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/postgres"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -100,8 +101,8 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	backend.ensurePricing = func(_ context.Context, database *db.DB) error {
 		require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
 			ModelPattern:  "new-model",
-			InputPerMTok:  2,
-			OutputPerMTok: 8,
+			InputPerMTok:  money.MustParseDollars("2"),
+			OutputPerMTok: money.MustParseDollars("8"),
 		}}))
 		return nil
 	}
@@ -116,7 +117,7 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	rate, err := backend.database.GetModelPricing("new-model")
 	require.NoError(t, err)
 	require.NotNil(t, rate)
-	assert.Equal(t, 8.0, rate.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
 func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import type { UsageSummaryResponse } from "../../api/types/usage.js";
+import { testMoney } from "../../test/money.js";
 
 const usageServiceMocks = vi.hoisted(() => ({
   getApiV1UsageSummary: vi.fn().mockResolvedValue({}),
@@ -31,7 +32,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
       outputTokens: 50,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 12,
+      totalCost: testMoney(12),
     },
     daily: [],
     projectTotals: [],
@@ -42,7 +43,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
       outputTokens: 30 - i * 10,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 8 - i * 4,
+      cost: testMoney(8 - i * 4),
     })),
     sessionCounts: { total: 2, byProject: {}, byAgent: {} },
     cacheStats: {
@@ -51,7 +52,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
       uncachedInputTokens: 100,
       outputTokens: 50,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
@@ -66,7 +67,7 @@ function summaryWithDuplicateProjectLabels(): UsageSummaryResponse {
       outputTokens: 30,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 8,
+      cost: testMoney(8),
     },
     {
       project_key: "pl1:sha256:second",
@@ -75,7 +76,7 @@ function summaryWithDuplicateProjectLabels(): UsageSummaryResponse {
       outputTokens: 20,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 4,
+      cost: testMoney(4),
     },
   ];
   return summary;
@@ -90,7 +91,7 @@ function summaryWithModels(): UsageSummaryResponse {
       outputTokens: 30,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 8,
+      cost: testMoney(8),
     },
     {
       model: "claude-opus-4-8",
@@ -98,7 +99,7 @@ function summaryWithModels(): UsageSummaryResponse {
       outputTokens: 20,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 4,
+      cost: testMoney(4),
     },
   ];
   return summary;

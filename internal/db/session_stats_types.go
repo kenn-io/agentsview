@@ -1,7 +1,9 @@
 package db
 
-// SessionStats is the top-level v1 output of GetSessionStats.
-// schema_version is locked at 1. Additive fields (new keys that
+import "go.kenn.io/agentsview/internal/money"
+
+// SessionStats is the top-level v2 output of GetSessionStats.
+// schema_version is locked at 2. Additive fields (new keys that
 // old consumers can ignore) and semantic tightening (e.g., routing
 // an existing field through a stricter definition) are allowed
 // within v1 without a bump as long as the field *shape* stays
@@ -151,8 +153,8 @@ type StatsAgentPortfolio struct {
 type StatsCacheEconomics struct {
 	ClaudeOnly             bool                      `json:"claude_only"`
 	CacheHitRatio          CacheHitRatioDistribution `json:"cache_hit_ratio"`
-	DollarsSavedVsUncached float64                   `json:"dollars_saved_vs_uncached"`
-	DollarsSpent           float64                   `json:"dollars_spent"`
+	DollarsSavedVsUncached money.Money               `json:"saved_vs_uncached"`
+	DollarsSpent           money.Money               `json:"spent"`
 }
 
 type CacheHitRatioDistribution struct {

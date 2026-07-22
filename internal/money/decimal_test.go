@@ -96,3 +96,22 @@ func TestParseDollarsAndCents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, money.Money{Microdollars: 156_600}, cents)
 }
+
+func TestFromFloatDollarsConvertsUnavoidableUpstreamBoundary(t *testing.T) {
+	got, err := money.FromFloatDollars(0.0424128)
+	require.NoError(t, err)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, got)
+
+	_, err = money.FromFloatDollars(math.NaN())
+	assert.ErrorIs(t, err, money.ErrInvalidDecimal)
+}
+
+func TestMustParseDollars(t *testing.T) {
+	assert.Equal(t, money.Money{Microdollars: 1_250_000}, money.MustParseDollars("1.25"))
+	assert.Panics(t, func() { money.MustParseDollars("invalid") })
+}
+
+func TestFromFloatDollarsRejectsNegativeSourceCharge(t *testing.T) {
+	_, err := money.FromFloatDollars(-0.01)
+	assert.ErrorIs(t, err, money.ErrNegative)
+}

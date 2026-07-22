@@ -8999,7 +8999,7 @@ func toDBUsageEvents(
 			CacheCreationInputTokens: ev.CacheCreationInputTokens,
 			CacheReadInputTokens:     ev.CacheReadInputTokens,
 			ReasoningTokens:          ev.ReasoningTokens,
-			CostUSD:                  ev.CostUSD,
+			Cost:                     ev.Cost,
 			CostStatus:               ev.CostStatus,
 			CostSource:               ev.CostSource,
 			OccurredAt:               ev.OccurredAt,

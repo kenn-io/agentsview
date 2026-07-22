@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
@@ -225,8 +226,8 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 		require.Same(t, database, got)
 		require.NoError(t, got.UpsertModelPricing([]db.ModelPricing{{
 			ModelPattern:  "new-model",
-			InputPerMTok:  2,
-			OutputPerMTok: 8,
+			InputPerMTok:  money.MustParseDollars("2"),
+			OutputPerMTok: money.MustParseDollars("8"),
 		}}))
 		return nil
 	}
@@ -248,7 +249,7 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	rate, err := database.GetModelPricing("new-model")
 	require.NoError(t, err)
 	require.NotNil(t, rate)
-	assert.Equal(t, 8.0, rate.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
 func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {

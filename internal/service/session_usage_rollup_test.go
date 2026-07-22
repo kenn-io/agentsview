@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -51,9 +52,9 @@ func (s *rollupStore) GetChildSessions(
 func TestGetSessionUsageRollupIncludesOnlyPricedSubagentsOnce(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
-			"a":    {SessionID: "a", HasCost: true, CostUSD: 2, BreakdownCount: 1},
-			"b":    {SessionID: "b", HasCost: true, CostUSD: 4, BreakdownCount: 1},
+			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
+			"a":    {SessionID: "a", HasCost: true, Cost: money.MustParseDollars("2"), BreakdownCount: 1},
+			"b":    {SessionID: "b", HasCost: true, Cost: money.MustParseDollars("4"), BreakdownCount: 1},
 			"u":    {SessionID: "u", HasCost: false, BreakdownCount: 1},
 		},
 		children: map[string][]db.Session{
@@ -71,16 +72,16 @@ func TestGetSessionUsageRollupIncludesOnlyPricedSubagentsOnce(t *testing.T) {
 	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 3, got.SubagentCount)
-	require.Zero(t, got.CostUSD)
+	require.Zero(t, got.Cost)
 	require.False(t, got.HasCost, "unpriced contributing row must make the aggregate incomplete")
 }
 
 func TestGetSessionUsageRollupIncludesNestedPricedSubagents(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
-			"a":    {SessionID: "a", HasCost: true, CostUSD: 2, BreakdownCount: 1},
-			"b":    {SessionID: "b", HasCost: true, CostUSD: 4, BreakdownCount: 1},
+			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
+			"a":    {SessionID: "a", HasCost: true, Cost: money.MustParseDollars("2"), BreakdownCount: 1},
+			"b":    {SessionID: "b", HasCost: true, Cost: money.MustParseDollars("4"), BreakdownCount: 1},
 		},
 		children: map[string][]db.Session{
 			"root": {{ID: "a", RelationshipType: "subagent"}},
@@ -91,7 +92,7 @@ func TestGetSessionUsageRollupIncludesNestedPricedSubagents(t *testing.T) {
 	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 2, got.SubagentCount)
-	require.Equal(t, 7.0, got.CostUSD)
+	require.Equal(t, money.MustParseDollars("7"), got.Cost)
 	require.True(t, got.HasCost)
 }
 
@@ -115,7 +116,7 @@ func TestGetSessionUsageRollupCountsEmptySubagentAndTerminatesCycle(t *testing.T
 func TestGetSessionUsageRollupRequiresContributingSubagentForHasCost(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root":  {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+			"root":  {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
 			"empty": {SessionID: "empty"},
 		},
 		children: map[string][]db.Session{
@@ -126,14 +127,14 @@ func TestGetSessionUsageRollupRequiresContributingSubagentForHasCost(t *testing.
 	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
-	require.Zero(t, got.CostUSD)
+	require.Zero(t, got.Cost)
 	require.False(t, got.HasCost, "root-only priced usage must not be labeled as a total")
 }
 
 func TestGetSessionUsageRollupReturnsChildSessionError(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
 		},
 		childErr: map[string]error{
 			"root": errors.New("child lookup failed"),
@@ -148,7 +149,7 @@ func TestGetSessionUsageRollupReturnsChildSessionError(t *testing.T) {
 func TestGetSessionUsageRollupReturnsChildUsageError(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
 		},
 		children: map[string][]db.Session{
 			"root": {{ID: "child", RelationshipType: "subagent"}},
@@ -166,16 +167,16 @@ func TestGetSessionUsageRollupReturnsChildUsageError(t *testing.T) {
 func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root":   {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
-			"nested": {SessionID: "nested", HasCost: true, CostUSD: 2, BreakdownCount: 2},
+			"root":   {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
+			"nested": {SessionID: "nested", HasCost: true, Cost: money.MustParseDollars("2"), BreakdownCount: 2},
 		},
 		children: map[string][]db.Session{
 			"root":         {{ID: "continuation", RelationshipType: "continuation"}},
 			"continuation": {{ID: "nested", RelationshipType: "subagent"}},
 		},
 		rows: []activity.UsageRow{
-			{SessionID: "root", Cost: 1, Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
-			{SessionID: "nested", Cost: 2, Priced: true, Contributes: true, ClaudeMessageID: "unique", ClaudeRequestID: "request"},
+			{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+			{SessionID: "nested", Cost: money.MustParseDollars("2"), Priced: true, Contributes: true, ClaudeMessageID: "unique", ClaudeRequestID: "request"},
 		},
 	}
 
@@ -183,20 +184,20 @@ func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.True(t, got.HasCost)
-	require.Equal(t, 3.0, got.CostUSD)
+	require.Equal(t, money.MustParseDollars("3"), got.Cost)
 }
 
 func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root":   {SessionID: "root", HasCost: true, CostUSD: 1, BreakdownCount: 1},
-			"nested": {SessionID: "nested", HasCost: true, CostUSD: 1, BreakdownCount: 1},
+			"root":   {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
+			"nested": {SessionID: "nested", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
 		},
 		children: map[string][]db.Session{
 			"root": {{ID: "nested", RelationshipType: "subagent"}},
 		},
 		rows: []activity.UsageRow{
-			{SessionID: "root", Cost: 1, Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
+			{SessionID: "root", Cost: money.MustParseDollars("1"), Priced: true, Contributes: true, ClaudeMessageID: "shared", ClaudeRequestID: "request"},
 		},
 	}
 
@@ -204,5 +205,5 @@ func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.False(t, got.HasCost)
-	require.Zero(t, got.CostUSD)
+	require.Zero(t, got.Cost)
 }

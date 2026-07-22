@@ -7,13 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestFoldProjectTotalsKeepsDistinctOpaqueProjectKeys(t *testing.T) {
 	got := foldProjectTotals([]db.DailyUsageEntry{{
 		ProjectBreakdowns: []db.ProjectBreakdown{
-			{ProjectKey: "pl1:sha256:first", Project: "", Cost: 1},
-			{ProjectKey: "pl1:sha256:second", Project: "", Cost: 2},
+			{ProjectKey: "pl1:sha256:first", Project: "", Cost: money.MustParseDollars("1")},
+			{ProjectKey: "pl1:sha256:second", Project: "", Cost: money.MustParseDollars("2")},
 		},
 	}})
 

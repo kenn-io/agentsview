@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,14 +112,14 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 		IsAutomated:      true,
 		Cwd:              "/repo/alpha/worktrees/feature/sub",
 	})
-	reported := 0.0123
+	reported := money.MustParseDollars("0.0123")
 	require.NoError(t, d.ReplaceSessionUsageEvents("alpha-child", []UsageEvent{{
 		Source:          "provider",
 		Model:           "model-reported",
 		InputTokens:     200,
 		OutputTokens:    40,
 		ReasoningTokens: 7,
-		CostUSD:         &reported,
+		Cost:            &reported,
 		OccurredAt:      "2026-05-01T10:04:00Z",
 	}}), "replace usage events")
 
@@ -194,7 +195,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 	require.NotNil(t, child.RelationshipType, "child relationship_type")
 	assert.Equal(t, "subagent", *child.RelationshipType)
 	assert.Equal(t, 7, child.ModelUsage.ReasoningTokens)
-	assert.Equal(t, reported, child.ModelUsage.CostUSD)
+	assert.Equal(t, reported, child.ModelUsage.Cost)
 	assert.True(t, child.ModelUsage.HasCost)
 	require.NotNil(t, child.Worktree, "child worktree")
 	assert.Equal(t, Ptr("feature"), child.Worktree.Name)
@@ -422,7 +423,7 @@ func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 	assert.Zero(t, usage.OutputTokens)
 	assert.Equal(t, 25, usage.ReasoningTokens)
 	assert.True(t, usage.HasCost)
-	assert.InDelta(t, 0.0005, usage.CostUSD, 0.0000001)
+	assert.Equal(t, money.MustParseDollars("0.0005"), usage.Cost)
 	require.Contains(t, usage.ByModel, "model-computed")
 	assert.Equal(t, 25, usage.ByModel["model-computed"].ReasoningTokens)
 	assert.Equal(t, export.CostSourceComputed,
@@ -472,7 +473,7 @@ func TestSessionSummaryExportIncludesMessageReasoningTokens(t *testing.T) {
 	assert.Zero(t, usage.OutputTokens)
 	assert.Equal(t, 25, usage.ReasoningTokens)
 	assert.True(t, usage.HasCost)
-	assert.InDelta(t, 0.0006, usage.CostUSD, 0.0000001)
+	assert.Equal(t, money.MustParseDollars("0.0006"), usage.Cost)
 	require.Contains(t, usage.ByModel, "model-computed")
 	assert.Equal(t, 25, usage.ByModel["model-computed"].ReasoningTokens)
 }
@@ -1067,7 +1068,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 	d := testSessionExportDB(t)
 	ctx := context.Background()
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern: "snapshot-model", InputPerMTok: 1,
+		ModelPattern: "snapshot-model", InputPerMTok: money.MustParseDollars("1"),
 	}}))
 	for i, endedAt := range []string{
 		"2026-05-01T10:00:00Z", "2026-05-01T09:00:00Z",
@@ -1092,7 +1093,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 			return nil
 		}
 		return d.UpsertModelPricing([]ModelPricing{{
-			ModelPattern: "snapshot-model", InputPerMTok: 99,
+			ModelPattern: "snapshot-model", InputPerMTok: money.MustParseDollars("99"),
 		}})
 	})
 	require.NoError(t, err)
@@ -1110,7 +1111,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 	for _, page := range pages {
 		require.Len(t, page.Rows, 1)
 		require.NotNil(t, page.Rows[0].ModelUsage)
-		assert.InDelta(t, 1.0, page.Rows[0].ModelUsage.CostUSD, 1e-9)
+		assert.Equal(t, money.MustParseDollars("1.0"), page.Rows[0].ModelUsage.Cost)
 	}
 }
 
@@ -1464,24 +1465,24 @@ func seedSessionExportPricing(t *testing.T, d *DB) {
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern:         "model-computed",
-			InputPerMTok:         10,
-			OutputPerMTok:        20,
-			CacheCreationPerMTok: 30,
-			CacheReadPerMTok:     1,
+			InputPerMTok:         money.MustParseDollars("10"),
+			OutputPerMTok:        money.MustParseDollars("20"),
+			CacheCreationPerMTok: money.MustParseDollars("30"),
+			CacheReadPerMTok:     money.MustParseDollars("1"),
 		},
 		{
 			ModelPattern:         "model-reported",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     0.5,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("0.5"),
 		},
 		{
 			ModelPattern:         "unreturned-model",
-			InputPerMTok:         100,
-			OutputPerMTok:        200,
-			CacheCreationPerMTok: 300,
-			CacheReadPerMTok:     50,
+			InputPerMTok:         money.MustParseDollars("100"),
+			OutputPerMTok:        money.MustParseDollars("200"),
+			CacheCreationPerMTok: money.MustParseDollars("300"),
+			CacheReadPerMTok:     money.MustParseDollars("50"),
 		},
 	}), "upsert pricing")
 }

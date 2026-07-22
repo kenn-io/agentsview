@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type usageProbeDriver struct{}
@@ -93,14 +94,14 @@ func (c *usageProbeConn) QueryContext(
 		return &usageProbeRows{
 			columns: []string{
 				"model_pattern",
-				"input_per_mtok",
-				"output_per_mtok",
-				"cache_creation_per_mtok",
-				"cache_read_per_mtok",
+				"input_microdollars_per_mtok",
+				"output_microdollars_per_mtok",
+				"cache_creation_microdollars_per_mtok",
+				"cache_read_microdollars_per_mtok",
 				"updated_at",
 			},
 			values: [][]driver.Value{{
-				"claude-sonnet", 3.0, 15.0, 3.75, 0.3, "2026-06-08",
+				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(300000), "2026-06-08",
 			}},
 		}, nil
 	}
@@ -167,7 +168,7 @@ func (c *usageProbeConn) QueryContext(
 				"cache_creation_input_tokens",
 				"cache_read_input_tokens",
 				"reasoning_tokens",
-				"cost_usd",
+				"cost_microdollars",
 				"claude_message_id",
 				"claude_request_id",
 				"source_uuid",
@@ -267,7 +268,7 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "gpt-5.4",
 		Rates: export.ModelRates{
-			InputPerMTok: 1.0, OutputPerMTok: 2.0,
+			InputPerMTok: money.MustParseDollars("1.0"), OutputPerMTok: money.MustParseDollars("2.0"),
 		},
 	}})
 
@@ -282,8 +283,12 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 	)
 	assert.Equal(t, rawInput, inTok, "daily input")
 	assert.Equal(t, rawOutput, outTok, "daily output")
-	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
-	assert.InDelta(t, wantCost, cost, 1e-9, "daily cost")
+	wantCost, err := money.CostPerMillion([]money.RatedTokens{
+		{Tokens: int64(rawInput), Rate: money.MustParseDollars("1")},
+		{Tokens: int64(rawOutput), Rate: money.MustParseDollars("2")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, wantCost, cost, "daily cost")
 
 	cost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
 		usageSource:  "session",
@@ -293,7 +298,7 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 	}, resolver)
 	require.True(t, priced, "priced")
 	require.True(t, contributes, "contributes")
-	assert.InDelta(t, wantCost, cost, 1e-9, "session cost")
+	assert.Equal(t, wantCost, cost, "session cost")
 }
 
 func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
@@ -366,7 +371,7 @@ func TestPGBoundedDailyUsageRowsCTEProjectsReasoningTokens(t *testing.T) {
 
 	normalized := strings.ToLower(query)
 	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
-	assert.Contains(t, normalized, "ue.cache_read_input_tokens,\n\t\tue.reasoning_tokens,\n\t\tue.cost_usd")
+	assert.Contains(t, normalized, "ue.cache_read_input_tokens,\n\t\tue.reasoning_tokens,\n\t\tue.cost_microdollars")
 	assert.Contains(t, normalized, "from usage_event_timestamp_rows ue\njoin sessions s")
 }
 
@@ -482,7 +487,7 @@ func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
 		[]export.EffectivePricingRow{{
 			ModelPattern: "reasoning-model",
 			Rates: export.ModelRates{
-				OutputPerMTok: 20,
+				OutputPerMTok: money.MustParseDollars("20"),
 				Source:        export.PricingRowSourceFetched,
 			},
 		}},
@@ -496,7 +501,7 @@ func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
 
 	assert.True(t, contributes)
 	assert.True(t, priced)
-	assert.InDelta(t, 0.0005, cost, 0.0000001)
+	assert.Equal(t, money.MustParseDollars("0.0005"), cost)
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
 	require.Contains(t, block.Models, "reasoning-model")
@@ -509,8 +514,8 @@ func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 		[]export.EffectivePricingRow{{
 			ModelPattern: "gpt-5.4",
 			Rates: export.ModelRates{
-				InputPerMTok:  1,
-				OutputPerMTok: 2,
+				InputPerMTok:  money.MustParseDollars("1"),
+				OutputPerMTok: money.MustParseDollars("2"),
 			},
 		}},
 	)
@@ -524,7 +529,7 @@ func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 	inTok, outTok, _, _, cost, _ := pgDailyUsageAmounts(row, resolver)
 	assert.Equal(t, 1000, inTok)
 	assert.Zero(t, outTok)
-	assert.InDelta(t, 0.002, cost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.002"), cost)
 
 	sessionCost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
 		usageSource: "message",
@@ -533,5 +538,5 @@ func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 	}, resolver)
 	assert.True(t, priced)
 	assert.True(t, contributes)
-	assert.InDelta(t, 0.002, sessionCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.002"), sessionCost)
 }

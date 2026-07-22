@@ -45,7 +45,7 @@ test.describe("Navigation", () => {
           total_output_tokens: 0,
           peak_context_tokens: 0,
           has_token_data: false,
-          cost_usd: 1,
+          cost: { microdollars: 1_000_000 },
           has_cost: true,
           models: [],
           unpriced_models: [],
@@ -55,7 +55,7 @@ test.describe("Navigation", () => {
           ...(rollup === "true"
             ? {
                 has_rollup_cost: complete,
-                ...(complete ? { rollup_cost_usd: 3 } : {}),
+                ...(complete ? { rollup_cost: { microdollars: 3_000_000 } } : {}),
                 rollup_subagent_count: 1,
               }
             : {}),

@@ -8,6 +8,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
@@ -488,7 +489,7 @@ func (db *DB) activityReportUsage(
 
 func sqliteActivityReportRowStatus(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
-) (cost float64, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -501,18 +502,18 @@ func sqliteActivityReportRowStatus(
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	if r.costUSD.Valid {
+	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return r.costUSD.Float64, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return 0, true, false
+		return money.Money{}, true, false
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return 0, false, true
+		return money.Money{}, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)

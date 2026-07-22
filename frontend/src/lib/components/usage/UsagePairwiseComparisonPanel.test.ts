@@ -6,6 +6,7 @@ import type {
   UsagePairwiseComparisonResponse,
   UsageSummaryResponse,
 } from "../../api/types/usage.js";
+import { testMoney } from "../../test/money.js";
 
 function usageSummary(): UsageSummaryResponse {
   return {
@@ -16,7 +17,7 @@ function usageSummary(): UsageSummaryResponse {
       outputTokens: 200,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 99.99,
+      totalCost: testMoney(99.99),
     },
     daily: [],
     projectTotals: [
@@ -27,7 +28,7 @@ function usageSummary(): UsageSummaryResponse {
         outputTokens: 100,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 10,
+        cost: testMoney(10),
       },
       {
         project_key: "pl1:sha256:beta",
@@ -36,7 +37,7 @@ function usageSummary(): UsageSummaryResponse {
         outputTokens: 50,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 8,
+        cost: testMoney(8),
       },
     ],
     modelTotals: [
@@ -46,7 +47,7 @@ function usageSummary(): UsageSummaryResponse {
         outputTokens: 100,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 10,
+        cost: testMoney(10),
       },
       {
         model: "gpt-4o",
@@ -54,7 +55,7 @@ function usageSummary(): UsageSummaryResponse {
         outputTokens: 50,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 8,
+        cost: testMoney(8),
       },
     ],
     agentTotals: [],
@@ -69,7 +70,7 @@ function usageSummary(): UsageSummaryResponse {
       uncachedInputTokens: 400,
       outputTokens: 200,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
@@ -77,29 +78,29 @@ function usageSummary(): UsageSummaryResponse {
 function pairwiseComparison(): UsagePairwiseComparisonResponse {
   return {
     left: {
-      totalCost: 4,
+      totalCost: testMoney(4),
       inputTokens: 200,
       outputTokens: 100,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalTokens: 300,
       sessionCount: 2,
-      costPerSession: 2,
+      costPerSession: testMoney(2),
       tokensPerSession: 150,
     },
     right: {
-      totalCost: 5.5,
+      totalCost: testMoney(5.5),
       inputTokens: 100,
       outputTokens: 50,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalTokens: 150,
       sessionCount: 1,
-      costPerSession: 5.5,
+      costPerSession: testMoney(5.5),
       tokensPerSession: 150,
     },
     deltas: {
-      totalCostDelta: 1.5,
+      totalCostDelta: testMoney(1.5),
       totalCostDeltaRatio: 0.375,
       inputTokensDelta: -100,
       inputTokensDeltaRatio: -0.5,
@@ -113,7 +114,7 @@ function pairwiseComparison(): UsagePairwiseComparisonResponse {
       totalTokensDeltaRatio: -0.5,
       sessionCountDelta: -1,
       sessionCountDeltaRatio: -0.5,
-      costPerSessionDelta: 3.5,
+      costPerSessionDelta: testMoney(3.5),
       costPerSessionRatio: 1.75,
       tokensPerSessionDelta: 0,
       tokensPerSessionRatio: 0,

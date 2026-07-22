@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // Params controls one range aggregation. RangeStart/RangeEnd are the resolved
@@ -57,7 +58,7 @@ type UsageRow struct {
 	Model           string
 	Timestamp       string // ts, RFC3339 or ""
 	OutputTokens    int
-	Cost            float64
+	Cost            money.Money
 	Priced          bool
 	Contributes     bool
 	Agent           string
@@ -119,12 +120,12 @@ func SanitizeProjectLabels(
 }
 
 type Bucket struct {
-	Start        string  `json:"start"`
-	End          string  `json:"end"`
-	MaxAgents    int     `json:"max_agents"`
-	AgentMinutes float64 `json:"agent_minutes"`
-	OutputTokens int     `json:"output_tokens"`
-	Cost         float64 `json:"cost"`
+	Start        string      `json:"start"`
+	End          string      `json:"end"`
+	MaxAgents    int         `json:"max_agents"`
+	AgentMinutes float64     `json:"agent_minutes"`
+	OutputTokens int         `json:"output_tokens"`
+	Cost         money.Money `json:"cost"`
 	// Automated/interactive split of the concurrency peak: the live automated
 	// and interactive counts AT the instant MaxAgents first occurs. They sum to
 	// MaxAgents, so a stacked bar reflects the true peak rather than stacking two
@@ -149,20 +150,20 @@ type Peak struct {
 }
 
 type Totals struct {
-	ActiveMinutes    float64 `json:"active_minutes"`
-	IdleMinutes      float64 `json:"idle_minutes"`
-	AgentMinutes     float64 `json:"agent_minutes"`
-	Sessions         int     `json:"sessions"`
-	UntimedSessions  int     `json:"untimed_sessions"`
-	DistinctProjects int     `json:"distinct_projects"`
-	DistinctModels   int     `json:"distinct_models"`
-	OutputTokens     int     `json:"output_tokens"`
-	Cost             float64 `json:"cost"`
+	ActiveMinutes    float64     `json:"active_minutes"`
+	IdleMinutes      float64     `json:"idle_minutes"`
+	AgentMinutes     float64     `json:"agent_minutes"`
+	Sessions         int         `json:"sessions"`
+	UntimedSessions  int         `json:"untimed_sessions"`
+	DistinctProjects int         `json:"distinct_projects"`
+	DistinctModels   int         `json:"distinct_models"`
+	OutputTokens     int         `json:"output_tokens"`
+	Cost             money.Money `json:"cost"`
 	// Additive automated/interactive segments (segment + segment == combined).
-	AutomatedAgentMinutes   float64 `json:"automated_agent_minutes"`
-	InteractiveAgentMinutes float64 `json:"interactive_agent_minutes"`
-	AutomatedCost           float64 `json:"automated_cost"`
-	InteractiveCost         float64 `json:"interactive_cost"`
+	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
+	AutomatedCost           money.Money `json:"automated_cost"`
+	InteractiveCost         money.Money `json:"interactive_cost"`
 	// Session counts split by class (AutomatedSessions + InteractiveSessions
 	// == Sessions), so the summary card can show "total (auto / int)".
 	AutomatedSessions   int `json:"automated_sessions"`
@@ -174,31 +175,31 @@ type Totals struct {
 // additive automated/interactive segments of each, exposed for a stacked-bar
 // rendering the current UI does not yet draw (it shows the combined metric).
 type KeyMinutes struct {
-	ProjectKey              string  `json:"project_key,omitempty"`
-	Key                     string  `json:"key"`
-	AgentMinutes            float64 `json:"agent_minutes"`
-	Cost                    float64 `json:"cost"`
-	AutomatedAgentMinutes   float64 `json:"automated_agent_minutes"`
-	InteractiveAgentMinutes float64 `json:"interactive_agent_minutes"`
-	AutomatedCost           float64 `json:"automated_cost"`
-	InteractiveCost         float64 `json:"interactive_cost"`
+	ProjectKey              string      `json:"project_key,omitempty"`
+	Key                     string      `json:"key"`
+	AgentMinutes            float64     `json:"agent_minutes"`
+	Cost                    money.Money `json:"cost"`
+	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
+	AutomatedCost           money.Money `json:"automated_cost"`
+	InteractiveCost         money.Money `json:"interactive_cost"`
 }
 
 type SessionRow struct {
-	SessionID     string   `json:"session_id"`
-	ProjectKey    string   `json:"project_key"`
-	Title         string   `json:"title"`
-	Project       string   `json:"project"`
-	Agent         string   `json:"agent"`
-	PrimaryModel  string   `json:"primary_model"`
-	Models        []string `json:"models"`
-	AgentMinutes  *float64 `json:"agent_minutes"` // nil when untimed
-	Cost          float64  `json:"cost"`
-	OutputTokens  int      `json:"output_tokens"`
-	FirstActive   *string  `json:"first_active"`
-	LastActive    *string  `json:"last_active"`
-	TimingQuality string   `json:"timing_quality"` // "timed" | "untimed"
-	IsAutomated   bool     `json:"is_automated"`
+	SessionID     string      `json:"session_id"`
+	ProjectKey    string      `json:"project_key"`
+	Title         string      `json:"title"`
+	Project       string      `json:"project"`
+	Agent         string      `json:"agent"`
+	PrimaryModel  string      `json:"primary_model"`
+	Models        []string    `json:"models"`
+	AgentMinutes  *float64    `json:"agent_minutes"` // nil when untimed
+	Cost          money.Money `json:"cost"`
+	OutputTokens  int         `json:"output_tokens"`
+	FirstActive   *string     `json:"first_active"`
+	LastActive    *string     `json:"last_active"`
+	TimingQuality string      `json:"timing_quality"` // "timed" | "untimed"
+	IsAutomated   bool        `json:"is_automated"`
 }
 
 // interval is an internal half-open active span anchored to one session.
@@ -550,9 +551,9 @@ func minTime(a, b time.Time) time.Time {
 // buildSessionsTable consumes it to build per-session rows and model breakdowns
 // from the same deduped survivor set dedupUsage returns.
 type usageAgg struct {
-	cost         float64
+	cost         money.Money
 	outputTokens int
-	models       map[string]float64 // model -> cost (for primary/mixed)
+	models       map[string]money.Money // model -> cost (for primary/mixed)
 }
 
 type usageDedupToken struct {
@@ -635,16 +636,16 @@ func applyUsage(r *Report, p Params, windows []BucketWindow, start, end time.Tim
 	usage []UsageRow, automatedBy map[string]bool) {
 	for _, u := range dedupUsage(start, end, p.EffectiveEnd, usage) {
 		r.Totals.OutputTokens += u.OutputTokens
-		r.Totals.Cost += u.Cost
+		r.Totals.Cost = money.MustAdd(r.Totals.Cost, u.Cost)
 		if automatedBy[u.SessionID] {
-			r.Totals.AutomatedCost += u.Cost
+			r.Totals.AutomatedCost = money.MustAdd(r.Totals.AutomatedCost, u.Cost)
 		} else {
-			r.Totals.InteractiveCost += u.Cost
+			r.Totals.InteractiveCost = money.MustAdd(r.Totals.InteractiveCost, u.Cost)
 		}
 		t, _ := parseTS(u.Timestamp)
 		if b := windowIndex(windows, t); b >= 0 && b < len(r.Buckets) {
 			r.Buckets[b].OutputTokens += u.OutputTokens
-			r.Buckets[b].Cost += u.Cost
+			r.Buckets[b].Cost = money.MustAdd(r.Buckets[b].Cost, u.Cost)
 		}
 	}
 }
@@ -716,13 +717,13 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	for _, u := range dedupUsage(start, end, effEnd, usage) {
 		c := cost[u.SessionID]
 		if c == nil {
-			c = &usageAgg{models: map[string]float64{}}
+			c = &usageAgg{models: map[string]money.Money{}}
 			cost[u.SessionID] = c
 		}
-		c.cost += u.Cost
+		c.cost = money.MustAdd(c.cost, u.Cost)
 		c.outputTokens += u.OutputTokens
 		if u.Model != "" {
-			c.models[u.Model] += u.Cost
+			c.models[u.Model] = money.MustAdd(c.models[u.Model], u.Cost)
 		}
 	}
 	projSet := map[string]struct{}{}
@@ -751,10 +752,10 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 			l := a.last.Format(time.RFC3339)
 			row.FirstActive, row.LastActive = &f, &l
 			row.PrimaryModel, row.Models = primaryAndModels(a.modelMins)
-			addKey(byProject, s.Project, mins, 0, au)
-			addKey(byAgent, s.Agent, mins, 0, au)
+			addKey(byProject, s.Project, mins, money.Money{}, au)
+			addKey(byAgent, s.Agent, mins, money.Money{}, au)
 			for m, mm := range a.modelMins {
-				addKey(byModel, m, mm, 0, au)
+				addKey(byModel, m, mm, money.Money{}, au)
 			}
 		} else {
 			r.Totals.UntimedSessions++
@@ -763,7 +764,7 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 			row.Cost = c.cost
 			row.OutputTokens = c.outputTokens
 			if row.PrimaryModel == "" {
-				row.PrimaryModel, row.Models = primaryAndModels(c.models)
+				row.PrimaryModel, row.Models = primaryAndMoneyModels(c.models)
 			}
 			// Cost rolls up for every session with usage, timed or not, so the
 			// cost breakdown sums to Totals.Cost. Minutes stay timed-only above.
@@ -794,29 +795,29 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 // from deduped usage (all sessions, timed or not).
 type keyAgg struct {
 	minutes      float64
-	cost         float64
+	cost         money.Money
 	autoMinutes  float64
 	interMinutes float64
-	autoCost     float64
-	interCost    float64
+	autoCost     money.Money
+	interCost    money.Money
 }
 
 // addKey accumulates minutes and cost into the key's aggregate, routing the
 // values into the automated or interactive segment by the session's class.
-func addKey(m map[string]*keyAgg, key string, minutes, cost float64, automated bool) {
+func addKey(m map[string]*keyAgg, key string, minutes float64, cost money.Money, automated bool) {
 	a := m[key]
 	if a == nil {
 		a = &keyAgg{}
 		m[key] = a
 	}
 	a.minutes += minutes
-	a.cost += cost
+	a.cost = money.MustAdd(a.cost, cost)
 	if automated {
 		a.autoMinutes += minutes
-		a.autoCost += cost
+		a.autoCost = money.MustAdd(a.autoCost, cost)
 	} else {
 		a.interMinutes += minutes
-		a.interCost += cost
+		a.interCost = money.MustAdd(a.interCost, cost)
 	}
 }
 
@@ -827,7 +828,7 @@ func addKey(m map[string]*keyAgg, key string, minutes, cost float64, automated b
 func breakdownRows(m map[string]*keyAgg, dropModelKeys bool) []KeyMinutes {
 	out := make([]KeyMinutes, 0, len(m))
 	for k, v := range m {
-		if k == "" || (v.minutes == 0 && v.cost == 0) {
+		if k == "" || (v.minutes == 0 && v.cost.Microdollars == 0) {
 			continue
 		}
 		if dropModelKeys && k == "unknown" {
@@ -875,6 +876,26 @@ func primaryAndModels(w map[string]float64) (string, []string) {
 		keys = append(keys, k)
 		if v > best {
 			best, primary = v, k
+		}
+	}
+	sort.Strings(keys)
+	if primary == "" && len(keys) > 0 {
+		primary = keys[0]
+	}
+	return primary, keys
+}
+
+func primaryAndMoneyModels(w map[string]money.Money) (string, []string) {
+	var keys []string
+	primary := ""
+	var best int64
+	for k, v := range w {
+		if k == "" || k == "unknown" {
+			continue
+		}
+		keys = append(keys, k)
+		if v.Microdollars > best {
+			best, primary = v.Microdollars, k
 		}
 	}
 	sort.Strings(keys)

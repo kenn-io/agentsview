@@ -2,10 +2,7 @@
   import { Card } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
-  }
+  import { ZERO_MONEY, compareMoney, divideMoney, formatMoney } from "../../money.js";
 
   function fmtTokens(v: number): string {
     if (v >= 1_000_000_000) {
@@ -47,25 +44,25 @@
 
   const dailyBurn = $derived.by(() => {
     const s = usage.summary;
-    if (!s || !s.daily || s.daily.length === 0) return 0;
-    return s.totals.totalCost / s.daily.length;
+    if (!s || !s.daily || s.daily.length === 0) return ZERO_MONEY;
+    return divideMoney(s.totals.totalCost, s.daily.length);
   });
 
   const peak = $derived.by(() => {
     const s = usage.summary;
     if (!s || !s.daily || s.daily.length === 0) {
-      return { date: "", cost: 0 };
+      return { date: "", cost: ZERO_MONEY };
     }
     let best = s.daily[0]!;
     for (const d of s.daily) {
-      if (d.totalCost > best.totalCost) best = d;
+      if (compareMoney(d.totalCost, best.totalCost) > 0) best = d;
     }
     return { date: best.date, cost: best.totalCost };
   });
 
   const activeDays = $derived(
     usage.summary?.daily?.filter(
-      (d) => d.totalCost > 0,
+      (d) => d.totalCost.microdollars > 0,
     ).length ?? 0,
   );
 
@@ -93,7 +90,7 @@
     const baseCards: SummaryCard[] = [
       {
         label: () => m.usage_summary_total_cost(),
-        value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
+        value: () => formatMoney(usage.summary?.totals.totalCost ?? ZERO_MONEY),
         sub: () => vsPrior ?? "",
         featured: true,
       },
@@ -121,12 +118,12 @@
       },
       {
         label: () => m.usage_summary_daily_burn(),
-        value: () => fmtCost(dailyBurn),
+        value: () => formatMoney(dailyBurn),
         sub: () => m.usage_summary_avg_day(),
       },
       {
         label: () => m.usage_summary_peak_day(),
-        value: () => fmtCost(peak.cost),
+        value: () => formatMoney(peak.cost),
         sub: () => peak.date,
       },
       {

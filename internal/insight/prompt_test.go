@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestBuildPrompt(t *testing.T) {
@@ -546,11 +547,11 @@ func TestCannedEvidenceRefsIncludesUsageModelBreakdown(t *testing.T) {
 	usage := &CannedUsageSummary{
 		InputTokens:  150,
 		OutputTokens: 30,
-		TotalCost:    0.04,
+		TotalCost:    money.MustParseDollars("0.04"),
 		ModelBreakdowns: []CannedModelBreakdown{{
 			ModelName:   "claude-opus-4-7",
 			InputTokens: 100,
-			Cost:        0.03,
+			Cost:        money.MustParseDollars("0.03"),
 		}},
 	}
 

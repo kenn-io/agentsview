@@ -11,6 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func tempDBPath(t *testing.T, name string) string {
@@ -94,10 +95,10 @@ func requireReadOnlyOp(t *testing.T, name string, op func() error) {
 func testModelPricing(pattern string) ModelPricing {
 	return ModelPricing{
 		ModelPattern:         pattern,
-		InputPerMTok:         1,
-		OutputPerMTok:        2,
-		CacheCreationPerMTok: 3,
-		CacheReadPerMTok:     4,
+		InputPerMTok:         money.MustParseDollars("1"),
+		OutputPerMTok:        money.MustParseDollars("2"),
+		CacheCreationPerMTok: money.MustParseDollars("3"),
+		CacheReadPerMTok:     money.MustParseDollars("4"),
 	}
 }
 

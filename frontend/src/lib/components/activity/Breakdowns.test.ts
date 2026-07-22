@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import Breakdowns from "./Breakdowns.svelte";
 import type { Report } from "../../api/types.js";
+import { testMoney } from "../../test/money.js";
 
 function makeReport(): Report {
   return {
@@ -10,9 +11,9 @@ function makeReport(): Report {
     totals: {
       active_minutes: 0, idle_minutes: 0, agent_minutes: 0, sessions: 0,
       untimed_sessions: 0, distinct_projects: 0, distinct_models: 0,
-      output_tokens: 0, cost: 0,
+      output_tokens: 0, cost: testMoney(0),
       automated_agent_minutes: 0, interactive_agent_minutes: 0,
-      automated_cost: 0, interactive_cost: 0,
+      automated_cost: testMoney(0), interactive_cost: testMoney(0),
       automated_sessions: 0, interactive_sessions: 0,
     },
     partial: false,
@@ -28,14 +29,14 @@ function makeReport(): Report {
     buckets: [],
     by_project: [
       {
-        key: "alpha", project_key: "pl1:sha256:alpha", agent_minutes: 30, cost: 0,
+        key: "alpha", project_key: "pl1:sha256:alpha", agent_minutes: 30, cost: testMoney(0),
         interactive_agent_minutes: 20, automated_agent_minutes: 10,
-        interactive_cost: 0, automated_cost: 0,
+        interactive_cost: testMoney(0), automated_cost: testMoney(0),
       },
       {
-        key: "beta", project_key: "pl1:sha256:beta", agent_minutes: 10, cost: 0,
+        key: "beta", project_key: "pl1:sha256:beta", agent_minutes: 10, cost: testMoney(0),
         interactive_agent_minutes: 10, automated_agent_minutes: 0,
-        interactive_cost: 0, automated_cost: 0,
+        interactive_cost: testMoney(0), automated_cost: testMoney(0),
       },
     ],
     by_model: [],
@@ -101,14 +102,14 @@ describe("Breakdowns", () => {
     // usage; they must not render as empty "0" bars in the minutes view.
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: 1,
+        key: "timed", agent_minutes: 30, cost: testMoney(1),
         interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: 1, automated_cost: 0,
+        interactive_cost: testMoney(1), automated_cost: testMoney(0),
       },
       {
-        key: "costonly", agent_minutes: 0, cost: 5,
+        key: "costonly", agent_minutes: 0, cost: testMoney(5),
         interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: 5, automated_cost: 0,
+        interactive_cost: testMoney(5), automated_cost: testMoney(0),
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -128,14 +129,14 @@ describe("Breakdowns", () => {
     const report = makeReport();
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: 1,
+        key: "timed", agent_minutes: 30, cost: testMoney(1),
         interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: 1, automated_cost: 0,
+        interactive_cost: testMoney(1), automated_cost: testMoney(0),
       },
       {
-        key: "costonly", agent_minutes: 0, cost: 5,
+        key: "costonly", agent_minutes: 0, cost: testMoney(5),
         interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: 5, automated_cost: 0,
+        interactive_cost: testMoney(5), automated_cost: testMoney(0),
       },
     ] as Report["by_project"];
     const target = document.createElement("div");

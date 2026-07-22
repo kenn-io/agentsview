@@ -1,12 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
     "effective_row_count": 2428,
-    "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
+    "digest": "sha256:f929bb40d51293f4e0c97a5b53fdbd09c4f6a291bee18a7a19616d4b1ca11a2e",
     "cost_source": "mixed",
     "fallback": {
       "used": false,
@@ -15,18 +15,34 @@
     "models": {
       "fixture-model-computed": {
         "matched_pattern": "fixture-model-computed",
-        "input_cost_per_mtok": 2,
-        "output_cost_per_mtok": 8,
-        "cache_write_cost_per_mtok": 3,
-        "cache_read_cost_per_mtok": 0.5,
+        "input_cost_per_mtok": {
+          "microdollars": 2000000
+        },
+        "output_cost_per_mtok": {
+          "microdollars": 8000000
+        },
+        "cache_write_cost_per_mtok": {
+          "microdollars": 3000000
+        },
+        "cache_read_cost_per_mtok": {
+          "microdollars": 500000
+        },
         "cost_source": "computed"
       },
       "fixture-model-reported": {
         "matched_pattern": "fixture-model-reported",
-        "input_cost_per_mtok": 1,
-        "output_cost_per_mtok": 4,
-        "cache_write_cost_per_mtok": 2,
-        "cache_read_cost_per_mtok": 0.25,
+        "input_cost_per_mtok": {
+          "microdollars": 1000000
+        },
+        "output_cost_per_mtok": {
+          "microdollars": 4000000
+        },
+        "cache_write_cost_per_mtok": {
+          "microdollars": 2000000
+        },
+        "cache_read_cost_per_mtok": {
+          "microdollars": 250000
+        },
         "cost_source": "reported"
       }
     }
@@ -64,7 +80,9 @@
       "outputTokens": 60,
       "cacheCreationTokens": 0,
       "cacheReadTokens": 0,
-      "totalCost": 0.0042,
+      "totalCost": {
+        "microdollars": 4200
+      },
       "modelsUsed": [
         "fixture-model-reported"
       ],
@@ -75,7 +93,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0042
+          "cost": {
+            "microdollars": 4200
+          }
         }
       ],
       "projectBreakdowns": [
@@ -86,7 +106,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0042
+          "cost": {
+            "microdollars": 4200
+          }
         }
       ],
       "agentBreakdowns": [
@@ -96,7 +118,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0042
+          "cost": {
+            "microdollars": 4200
+          }
         }
       ],
       "machineBreakdowns": [
@@ -106,7 +130,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0042
+          "cost": {
+            "microdollars": 4200
+          }
         }
       ]
     },
@@ -116,7 +142,9 @@
       "outputTokens": 160,
       "cacheCreationTokens": 0,
       "cacheReadTokens": 0,
-      "totalCost": 0.00288,
+      "totalCost": {
+        "microdollars": 2880
+      },
       "modelsUsed": [
         "fixture-model-computed"
       ],
@@ -127,7 +155,9 @@
           "outputTokens": 160,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.00288
+          "cost": {
+            "microdollars": 2880
+          }
         }
       ],
       "projectBreakdowns": [
@@ -138,7 +168,9 @@
           "outputTokens": 160,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.00288
+          "cost": {
+            "microdollars": 2880
+          }
         }
       ],
       "agentBreakdowns": [
@@ -148,7 +180,9 @@
           "outputTokens": 160,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.00288
+          "cost": {
+            "microdollars": 2880
+          }
         }
       ],
       "machineBreakdowns": [
@@ -158,7 +192,9 @@
           "outputTokens": 160,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.00288
+          "cost": {
+            "microdollars": 2880
+          }
         }
       ]
     },
@@ -168,7 +204,9 @@
       "outputTokens": 300,
       "cacheCreationTokens": 80,
       "cacheReadTokens": 400,
-      "totalCost": 0.01726,
+      "totalCost": {
+        "microdollars": 17260
+      },
       "modelsUsed": [
         "fixture-model-reported",
         "fixture-model-computed"
@@ -180,7 +218,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0125
+          "cost": {
+            "microdollars": 12500
+          }
         },
         {
           "modelName": "fixture-model-computed",
@@ -188,7 +228,9 @@
           "outputTokens": 240,
           "cacheCreationTokens": 80,
           "cacheReadTokens": 400,
-          "cost": 0.00476
+          "cost": {
+            "microdollars": 4760
+          }
         }
       ],
       "projectBreakdowns": [
@@ -199,7 +241,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0125
+          "cost": {
+            "microdollars": 12500
+          }
         },
         {
           "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
@@ -208,7 +252,9 @@
           "outputTokens": 240,
           "cacheCreationTokens": 80,
           "cacheReadTokens": 400,
-          "cost": 0.00476
+          "cost": {
+            "microdollars": 4760
+          }
         }
       ],
       "agentBreakdowns": [
@@ -218,7 +264,9 @@
           "outputTokens": 60,
           "cacheCreationTokens": 0,
           "cacheReadTokens": 0,
-          "cost": 0.0125
+          "cost": {
+            "microdollars": 12500
+          }
         },
         {
           "agent": "codex",
@@ -226,7 +274,9 @@
           "outputTokens": 240,
           "cacheCreationTokens": 80,
           "cacheReadTokens": 400,
-          "cost": 0.00476
+          "cost": {
+            "microdollars": 4760
+          }
         }
       ],
       "machineBreakdowns": [
@@ -236,7 +286,9 @@
           "outputTokens": 300,
           "cacheCreationTokens": 80,
           "cacheReadTokens": 400,
-          "cost": 0.01726
+          "cost": {
+            "microdollars": 17260
+          }
         }
       ]
     }
@@ -246,8 +298,12 @@
     "outputTokens": 520,
     "cacheCreationTokens": 80,
     "cacheReadTokens": 400,
-    "totalCost": 0.02434,
-    "cacheSavings": 0.00052
+    "totalCost": {
+      "microdollars": 24340
+    },
+    "cacheSavings": {
+      "microdollars": 520
+    }
   },
   "sessionCounts": {
     "total": 4,

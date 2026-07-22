@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const sessionExportOrder = "last_activity_at DESC, id ASC"
@@ -84,7 +85,7 @@ type SessionModelUsage struct {
 	CacheCreationInputTokens int                                   `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                                   `json:"cache_read_input_tokens"`
 	ReasoningTokens          int                                   `json:"reasoning_tokens"`
-	CostUSD                  float64                               `json:"cost_usd"`
+	Cost                     money.Money                           `json:"cost"`
 	HasCost                  bool                                  `json:"has_cost"`
 	ByModel                  map[string]SessionModelUsageBreakdown `json:"by_model"`
 }
@@ -96,7 +97,7 @@ type SessionModelUsageBreakdown struct {
 	CacheCreationInputTokens int               `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int               `json:"cache_read_input_tokens"`
 	ReasoningTokens          int               `json:"reasoning_tokens"`
-	CostUSD                  float64           `json:"cost_usd"`
+	Cost                     money.Money       `json:"cost"`
 	HasCost                  bool              `json:"has_cost"`
 	CostSource               export.CostSource `json:"cost_source"`
 }
@@ -157,7 +158,7 @@ type sessionExportUsageAccum struct {
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
 	reasoningTokens          int
-	costUSD                  float64
+	cost                     money.Money
 	contributing             bool
 	allPriced                bool
 	seen                     map[usageDedupToken]struct{}
@@ -169,7 +170,7 @@ type sessionExportModelUsageAccum struct {
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
 	reasoningTokens          int
-	costUSD                  float64
+	cost                     money.Money
 	contributing             bool
 	allPriced                bool
 	computed                 bool
@@ -782,7 +783,7 @@ func (db *DB) attachSessionExportUsage(
 		a.cacheReadInputTokens += cacheRdTok
 		a.reasoningTokens += reasoningTok
 		if priced {
-			a.costUSD += cost
+			a.cost = money.MustAdd(a.cost, cost)
 		} else {
 			a.allPriced = false
 		}
@@ -797,13 +798,13 @@ func (db *DB) attachSessionExportUsage(
 		ma.cacheCreationInputTokens += cacheCrTok
 		ma.cacheReadInputTokens += cacheRdTok
 		ma.reasoningTokens += reasoningTok
-		if r.costUSD.Valid {
+		if r.cost.Valid {
 			ma.reported = true
 		} else {
 			ma.computed = true
 		}
 		if priced {
-			ma.costUSD += cost
+			ma.cost = money.MustAdd(ma.cost, cost)
 		} else {
 			ma.allPriced = false
 		}
@@ -824,7 +825,7 @@ func (db *DB) attachSessionExportUsage(
 			CacheCreationInputTokens: a.cacheCreationInputTokens,
 			CacheReadInputTokens:     a.cacheReadInputTokens,
 			ReasoningTokens:          a.reasoningTokens,
-			CostUSD:                  a.costUSD,
+			Cost:                     a.cost,
 			HasCost:                  a.contributing && a.allPriced,
 			ByModel:                  sessionExportModelUsageBreakdowns(a.byModel),
 		}
@@ -1176,7 +1177,7 @@ func sessionExportModelUsageBreakdowns(
 			CacheCreationInputTokens: a.cacheCreationInputTokens,
 			CacheReadInputTokens:     a.cacheReadInputTokens,
 			ReasoningTokens:          a.reasoningTokens,
-			CostUSD:                  a.costUSD,
+			Cost:                     a.cost,
 			HasCost:                  a.contributing && a.allPriced,
 			CostSource:               sessionExportCostSource(a.computed, a.reported),
 		}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -53,7 +54,7 @@ type usageTopSessionsInput struct {
 
 type usageComparisonInput struct {
 	UsageFilterInput
-	CurrentCost float64 `query:"current_cost" required:"true" doc:"Current period total cost"`
+	CurrentMicrodollars int64 `query:"current_microdollars" required:"true" doc:"Current period total cost in microdollars"`
 }
 
 type usagePairwiseComparisonInput struct {
@@ -173,7 +174,9 @@ func (s *Server) humaUsageComparison(
 			"usage comparison requires from and to when no_default_range is true",
 		)
 	}
-	comparison, err := s.computeUsageComparison(ctx, f, in.CurrentCost)
+	comparison, err := s.computeUsageComparison(ctx, f, money.Money{
+		Microdollars: in.CurrentMicrodollars,
+	})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
@@ -227,7 +230,7 @@ func usageInputAPIError(err *service.UsageInputError) error {
 func (s *Server) computeUsageComparison(
 	ctx context.Context,
 	f db.UsageFilter,
-	currentCost float64,
+	currentCost money.Money,
 ) (*Comparison, error) {
 	fromT, err := time.Parse("2006-01-02", f.From)
 	if err != nil {
@@ -255,8 +258,10 @@ func (s *Server) computeUsageComparison(
 		PriorTo:        priorFilter.To,
 		PriorTotalCost: priorResult.Totals.TotalCost,
 	}
-	if c.PriorTotalCost > 0 {
-		c.DeltaPct = (currentCost - c.PriorTotalCost) / c.PriorTotalCost
+	if c.PriorTotalCost.Microdollars > 0 {
+		delta := money.MustSub(currentCost, c.PriorTotalCost)
+		c.DeltaPct = float64(delta.Microdollars) /
+			float64(c.PriorTotalCost.Microdollars)
 	}
 	return c, nil
 }

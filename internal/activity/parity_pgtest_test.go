@@ -30,6 +30,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/money"
 	postgresstore "go.kenn.io/agentsview/internal/postgres"
 )
 
@@ -212,10 +213,10 @@ func seedParitySQLite(t *testing.T) *db.DB {
 	// Explicit pricing for both models so all three backends price the same
 	// token amounts identically (the syncs copy model_pricing to PG/DuckDB).
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
-		{ModelPattern: "model-x", InputPerMTok: 3, OutputPerMTok: 15,
-			CacheCreationPerMTok: 3.75, CacheReadPerMTok: 0.3},
-		{ModelPattern: "model-y", InputPerMTok: 1, OutputPerMTok: 5,
-			CacheCreationPerMTok: 1.25, CacheReadPerMTok: 0.1},
+		{ModelPattern: "model-x", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3")},
+		{ModelPattern: "model-y", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("5"),
+			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1")},
 	}), "seeding pricing")
 
 	var writes []db.SessionBatchWrite
@@ -496,7 +497,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
 	require.Equal(t, 9, r.Totals.Sessions, "fixture session count")
-	require.Greater(t, r.Totals.Cost, 0.0, "fixture must exercise cost")
+	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 500 (parity-d wins the dedup) + 0 (parity-e deduped away;
 	// parity-f zero-cost) + 250 (parity-sub) + 9000 (parity-fork, unique)

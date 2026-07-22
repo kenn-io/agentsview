@@ -2,13 +2,14 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type DbUsageTotals = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  cacheSavings: number;
+  cacheSavings: MoneyMoney;
   copilotAICredits?: number;
   inputTokens: number;
   outputTokens: number;
-  totalCost: number;
+  totalCost: MoneyMoney;
 };
 

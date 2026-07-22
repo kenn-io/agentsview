@@ -181,14 +181,14 @@ func (c *pushAliasRoutingConn) QueryContext(
 		return &pushAliasRoutingRows{
 			columns: []string{"probe"},
 		}, nil
-	case strings.Contains(normalized, "select model_pattern, input_per_mtok"):
+	case strings.Contains(normalized, "select model_pattern, input_microdollars_per_mtok"):
 		return &pushAliasRoutingRows{
 			columns: []string{
 				"model_pattern",
-				"input_per_mtok",
-				"output_per_mtok",
-				"cache_creation_per_mtok",
-				"cache_read_per_mtok",
+				"input_microdollars_per_mtok",
+				"output_microdollars_per_mtok",
+				"cache_creation_microdollars_per_mtok",
+				"cache_read_microdollars_per_mtok",
 				"updated_at",
 			},
 		}, nil

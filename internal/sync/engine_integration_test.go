@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -367,7 +368,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	assert.Equal(t, 510, daily.Totals.InputTokens)
 	assert.Equal(t, 131456, daily.Totals.CacheReadTokens)
 	assert.Equal(t, 326, daily.Totals.OutputTokens)
-	assert.InDelta(t, 0.0424128, daily.Totals.TotalCost, 1e-9)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, daily.Totals.TotalCost)
 
 	usage, err := database.GetSessionUsage(
 		context.Background(), "grok:sess-1", true,
@@ -376,13 +377,13 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NotNil(t, usage)
 	assert.Contains(t, usage.Models, "grok-4.5-build")
 	assert.True(t, usage.HasCost)
-	assert.InDelta(t, 0.0424128, usage.CostUSD, 1e-9)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, usage.Cost)
 	require.Len(t, usage.Breakdown, 1)
 	assert.Equal(t, 510, usage.Breakdown[0].InputTokens)
 	assert.Equal(t, 131456, usage.Breakdown[0].CacheReadInputTokens)
 	assert.Equal(t, 326, usage.Breakdown[0].OutputTokens)
 	assert.True(t, usage.Breakdown[0].HasCost)
-	assert.InDelta(t, 0.0424128, usage.Breakdown[0].CostUSD, 1e-9)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, usage.Breakdown[0].Cost)
 
 	events, err := database.GetUsageEvents(
 		context.Background(), "grok:sess-1",
@@ -390,8 +391,8 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, 122, events[0].ReasoningTokens)
-	require.NotNil(t, events[0].CostUSD)
-	assert.InDelta(t, 0.0424128, *events[0].CostUSD, 1e-9)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, *events[0].Cost)
 
 	exported, err := database.ExportSessionSummaries(
 		context.Background(),
@@ -2476,7 +2477,7 @@ func (f usageParityFactory) NewProvider(parser.ProviderConfig) parser.Provider {
 func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {
 	const rawID = "usage-equivalent"
 	messageOrdinal := 0
-	costUSD := 0.0125
+	costUSD := money.MustParseDollars("0.0125")
 	started := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	return &usageParityProvider{
 		ProviderBase: parser.ProviderBase{
@@ -2509,7 +2510,7 @@ func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {
 				Source: "literal-provider-usage", Model: "literal-model-v1",
 				InputTokens: 101, OutputTokens: 37,
 				CacheCreationInputTokens: 23, CacheReadInputTokens: 19,
-				ReasoningTokens: 11, CostUSD: &costUSD,
+				ReasoningTokens: 11, Cost: &costUSD,
 				CostStatus: "exact", CostSource: "literal-fixture",
 				OccurredAt: "2026-01-02T03:04:05Z",
 				DedupKey:   "usage-equivalent:event-1",
@@ -2575,13 +2576,13 @@ func TestResyncContributorPersistsEquivalentUsageEvents(t *testing.T) {
 		"contributor usage must differ only by its persisted session namespace")
 
 	messageOrdinal := 0
-	costUSD := 0.0125
+	costUSD := money.MustParseDollars("0.0125")
 	assert.Equal(t, db.UsageEvent{
 		SessionID: "usage-equivalent", MessageOrdinal: &messageOrdinal,
 		Source: "literal-provider-usage", Model: "literal-model-v1",
 		InputTokens: 101, OutputTokens: 37,
 		CacheCreationInputTokens: 23, CacheReadInputTokens: 19,
-		ReasoningTokens: 11, CostUSD: &costUSD,
+		ReasoningTokens: 11, Cost: &costUSD,
 		CostStatus: "exact", CostSource: "literal-fixture",
 		OccurredAt: "2026-01-02T03:04:05Z",
 		DedupKey:   "usage-equivalent:event-1",
@@ -7995,8 +7996,8 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 	require.NoError(t, env.db.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:  "claude-opus-4-8",
-			InputPerMTok:  15,
-			OutputPerMTok: 75,
+			InputPerMTok:  money.MustParseDollars("15"),
+			OutputPerMTok: money.MustParseDollars("75"),
 		},
 	}), "UpsertModelPricing")
 
@@ -8007,8 +8008,8 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 	require.NoError(t, err, "GetModelPricing")
 	require.NotNil(t, pricing,
 		"model pricing must survive the resync swap")
-	assert.Equal(t, 15.0, pricing.InputPerMTok, "input rate")
-	assert.Equal(t, 75.0, pricing.OutputPerMTok, "output rate")
+	assert.Equal(t, money.MustParseDollars("15"), pricing.InputPerMTok, "input rate")
+	assert.Equal(t, money.MustParseDollars("75"), pricing.OutputPerMTok, "output rate")
 }
 
 func TestResyncAllAbortsWhenSessionSnapshotMetadataCannotCopy(t *testing.T) {

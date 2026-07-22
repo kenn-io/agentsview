@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
@@ -14,10 +15,10 @@ func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "claude-test",
 		Rates: ModelRates{
-			InputPerMTok:      3,
-			OutputPerMTok:     15,
-			CacheWritePerMTok: 3.75,
-			CacheReadPerMTok:  0.30,
+			InputPerMTok:      money.MustParseDollars("3"),
+			OutputPerMTok:     money.MustParseDollars("15"),
+			CacheWritePerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:  money.MustParseDollars("0.30"),
 			UpdatedAt:         &updatedAt,
 			Source:            PricingRowSourceFetched,
 		},
@@ -40,28 +41,28 @@ func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	assert.Equal(t, lookup.Rates.OutputPerMTok, model.OutputCostPerMTok)
 	assert.Equal(t, lookup.Rates.CacheWritePerMTok, model.CacheWriteCostPerMTok)
 	assert.Equal(t, lookup.Rates.CacheReadPerMTok, model.CacheReadCostPerMTok)
-	assert.Equal(t, 45.45, cost)
+	assert.Equal(t, money.MustParseDollars("45.45"), cost)
 }
 
 func TestModelRatesCostForTokensTreatsReasoningAsOutputBreakdown(t *testing.T) {
 	rates := ModelRates{
-		InputPerMTok:  1,
-		OutputPerMTok: 10,
+		InputPerMTok:  money.MustParseDollars("1"),
+		OutputPerMTok: money.MustParseDollars("10"),
 	}
 
 	cost := rates.CostForTokens(1_000_000, 2_000_000, 500_000, 0, 0)
 
-	assert.Equal(t, 21.0, cost)
+	assert.Equal(t, money.MustParseDollars("21"), cost)
 }
 
 func TestModelRatesCostForTokensBillsReasoningOnlyRowsAsOutput(t *testing.T) {
 	rates := ModelRates{
-		OutputPerMTok: 10,
+		OutputPerMTok: money.MustParseDollars("10"),
 	}
 
 	cost := rates.CostForTokens(0, 0, 500_000, 0, 0)
 
-	assert.Equal(t, 5.0, cost)
+	assert.Equal(t, money.MustParseDollars("5"), cost)
 }
 
 func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
@@ -69,15 +70,15 @@ func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
 		{
 			ModelPattern: "claude-test",
 			Rates: ModelRates{
-				InputPerMTok: 3, OutputPerMTok: 15,
-				CacheWritePerMTok: 3.75, CacheReadPerMTok: 0.30,
+				InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
+				CacheWritePerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.30"),
 				Source: PricingRowSourceEmbedded,
 			},
 		},
 		{
 			ModelPattern: "unused-model",
 			Rates: ModelRates{
-				InputPerMTok: 100, OutputPerMTok: 200,
+				InputPerMTok: money.MustParseDollars("100"), OutputPerMTok: money.MustParseDollars("200"),
 				Source: PricingRowSourceCustom,
 			},
 		},
@@ -160,7 +161,7 @@ func TestPricingResolverCostSource(t *testing.T) {
 			resolver := NewPricingResolver([]EffectivePricingRow{{
 				ModelPattern: "claude-test",
 				Rates: ModelRates{
-					InputPerMTok: 3, OutputPerMTok: 15,
+					InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 					Source: PricingRowSourceCustom,
 				},
 			}})
@@ -181,7 +182,7 @@ func TestPricingResolverCostSourceDefaultsComputedWithoutModels(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "claude-test",
 		Rates: ModelRates{
-			InputPerMTok: 3, OutputPerMTok: 15,
+			InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 			Source: PricingRowSourceCustom,
 		},
 	}})
@@ -197,7 +198,7 @@ func TestPricingResolverLookupCachesByReportedModel(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "claude-test",
 		Rates: ModelRates{
-			InputPerMTok: 3, OutputPerMTok: 15,
+			InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 			Source: PricingRowSourceCustom,
 		},
 	}})
@@ -281,7 +282,7 @@ func TestPricingResolverTableVersionFollowsBaseSource(t *testing.T) {
 			rows: []EffectivePricingRow{{
 				ModelPattern: "fetched",
 				Rates: ModelRates{
-					InputPerMTok: 1, Source: PricingRowSourceFetched,
+					InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceFetched,
 					UpdatedAt: &updatedAt,
 				},
 			}},
@@ -293,13 +294,13 @@ func TestPricingResolverTableVersionFollowsBaseSource(t *testing.T) {
 				{
 					ModelPattern: "custom",
 					Rates: ModelRates{
-						InputPerMTok: 1, Source: PricingRowSourceCustom,
+						InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceCustom,
 					},
 				},
 				{
 					ModelPattern: "fetched",
 					Rates: ModelRates{
-						InputPerMTok: 1, Source: PricingRowSourceFetched,
+						InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceFetched,
 						UpdatedAt: &updatedAt,
 					},
 				},
@@ -311,7 +312,7 @@ func TestPricingResolverTableVersionFollowsBaseSource(t *testing.T) {
 			rows: []EffectivePricingRow{{
 				ModelPattern: "custom",
 				Rates: ModelRates{
-					InputPerMTok: 1, Source: PricingRowSourceCustom,
+					InputPerMTok: money.MustParseDollars("1"), Source: PricingRowSourceCustom,
 				},
 			}},
 			want: "custom",
@@ -331,7 +332,7 @@ func TestPricingResolverJSONNesting(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "claude-test",
 		Rates: ModelRates{
-			InputPerMTok: 3, OutputPerMTok: 15,
+			InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 			Source: PricingRowSourceCustom,
 		},
 	}})
@@ -355,7 +356,7 @@ func rowWithSource(pattern string, source PricingRowSource) EffectivePricingRow 
 	return EffectivePricingRow{
 		ModelPattern: pattern,
 		Rates: ModelRates{
-			InputPerMTok: 1, OutputPerMTok: 2,
+			InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("2"),
 			Source: source,
 		},
 	}

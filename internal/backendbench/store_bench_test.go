@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
@@ -341,10 +342,10 @@ func seedBenchmarkFixture(b *testing.B, store *db.DB, fixture benchmarkFixture) 
 	if err := store.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         "claude-bench-*",
-			InputPerMTok:         3,
-			OutputPerMTok:        15,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
+			InputPerMTok:         money.MustParseDollars("3"),
+			OutputPerMTok:        money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:     money.MustParseDollars("0.30"),
 		},
 	}); err != nil {
 		b.Fatalf("seed pricing: %v", err)

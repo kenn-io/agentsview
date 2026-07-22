@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL,
+    cost_microdollars INTEGER,
     cost_status TEXT NOT NULL DEFAULT '',
     cost_source TEXT NOT NULL DEFAULT '',
     occurred_at TEXT,
@@ -202,8 +202,8 @@ CREATE TABLE IF NOT EXISTS cursor_usage_events (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    charged_cents REAL NOT NULL DEFAULT 0,
-    cursor_token_fee REAL NOT NULL DEFAULT 0,
+    charged_microdollars INTEGER NOT NULL DEFAULT 0,
+    cursor_token_fee_microdollars INTEGER NOT NULL DEFAULT 0,
     user_id TEXT NOT NULL DEFAULT '',
     user_email TEXT NOT NULL DEFAULT '',
     is_headless INTEGER NOT NULL DEFAULT 0,
@@ -813,10 +813,10 @@ CREATE TABLE IF NOT EXISTS pg_sync_state (
 -- Model pricing for cost calculation
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern    TEXT PRIMARY KEY,
-    input_per_mtok   REAL NOT NULL DEFAULT 0,
-    output_per_mtok  REAL NOT NULL DEFAULT 0,
-    cache_creation_per_mtok REAL NOT NULL DEFAULT 0,
-    cache_read_per_mtok     REAL NOT NULL DEFAULT 0,
+    input_microdollars_per_mtok   INTEGER NOT NULL DEFAULT 0,
+    output_microdollars_per_mtok  INTEGER NOT NULL DEFAULT 0,
+    cache_creation_microdollars_per_mtok INTEGER NOT NULL DEFAULT 0,
+    cache_read_microdollars_per_mtok     INTEGER NOT NULL DEFAULT 0,
     updated_at       TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // TestDuckBuildAnalyticsWhereSubagents verifies that the DuckDB
@@ -230,10 +231,10 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "mixed-model",
 		Rates: export.ModelRates{
-			InputPerMTok:      1,
-			OutputPerMTok:     2,
-			CacheWritePerMTok: 3,
-			CacheReadPerMTok:  4,
+			InputPerMTok:      money.MustParseDollars("1"),
+			OutputPerMTok:     money.MustParseDollars("2"),
+			CacheWritePerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:  money.MustParseDollars("4"),
 			Source:            export.PricingRowSourceFetched,
 		},
 	}})
@@ -242,13 +243,13 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 		"mixed-model",
 		1000, 2000, 3000, 4000,
 		100, 200, 300, 400, 500,
-		0.25,
+		250_000,
 		true,
 		resolver,
 	)
 	require.True(t, priced)
 	require.True(t, contributes)
-	assert.InDelta(t, 0.25+(100*1+200*2+400*3+500*4)/1_000_000.0, cost, 1e-12)
+	assert.Equal(t, money.Money{Microdollars: 253_700}, cost)
 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
@@ -263,14 +264,14 @@ func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testi
 		"unknown-model",
 		1000, 2000, 0, 0,
 		1000, 2000, 0, 0, 0,
-		0.25,
+		250_000,
 		true,
 		resolver,
 	)
 
 	require.True(t, contributes)
 	assert.False(t, priced)
-	assert.Equal(t, 0.25, cost)
+	assert.Equal(t, money.Money{Microdollars: 250_000}, cost)
 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
@@ -285,7 +286,7 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "reasoning-model",
 		Rates: export.ModelRates{
-			OutputPerMTok: 2,
+			OutputPerMTok: money.MustParseDollars("2"),
 			Source:        export.PricingRowSourceFetched,
 		},
 	}})
@@ -301,7 +302,7 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 
 	require.True(t, contributes)
 	assert.True(t, priced)
-	assert.InDelta(t, 0.0006, cost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0006"), cost)
 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
@@ -314,7 +315,7 @@ func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "zero-model",
 		Rates: export.ModelRates{
-			InputPerMTok: 1,
+			InputPerMTok: money.MustParseDollars("1"),
 			Source:       export.PricingRowSourceFetched,
 		},
 	}})

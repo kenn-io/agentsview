@@ -3,11 +3,15 @@
 // API surfaces depend on their field names.
 package export
 
-import "time"
+import (
+	"time"
 
-const UsageDailySchemaVersion = 2
-const ActivityReportSchemaVersion = 2
-const SessionSummarySchemaVersion = 2
+	"go.kenn.io/agentsview/internal/money"
+)
+
+const UsageDailySchemaVersion = 3
+const ActivityReportSchemaVersion = 3
+const SessionSummarySchemaVersion = 3
 
 // CostSource is a closed contract enum. Adding a value requires a schema version
 // bump for any export surface that emits it.
@@ -37,12 +41,12 @@ type PricingFallback struct {
 }
 
 type EffectiveModelRate struct {
-	MatchedPattern        *string    `json:"matched_pattern"`
-	InputCostPerMTok      float64    `json:"input_cost_per_mtok"`
-	OutputCostPerMTok     float64    `json:"output_cost_per_mtok"`
-	CacheWriteCostPerMTok float64    `json:"cache_write_cost_per_mtok"`
-	CacheReadCostPerMTok  float64    `json:"cache_read_cost_per_mtok"`
-	CostSource            CostSource `json:"cost_source"`
+	MatchedPattern        *string     `json:"matched_pattern"`
+	InputCostPerMTok      money.Money `json:"input_cost_per_mtok"`
+	OutputCostPerMTok     money.Money `json:"output_cost_per_mtok"`
+	CacheWriteCostPerMTok money.Money `json:"cache_write_cost_per_mtok"`
+	CacheReadCostPerMTok  money.Money `json:"cache_read_cost_per_mtok"`
+	CostSource            CostSource  `json:"cost_source"`
 }
 
 // ProjectResolution is a closed contract enum. Adding a value requires a schema

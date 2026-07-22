@@ -2812,7 +2812,7 @@ func pgUsageEventFingerprint(
 		`SELECT message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_microdollars, cost_status, cost_source,
 			occurred_at, dedup_key
 		 FROM usage_events
 		 WHERE session_id = $1
@@ -2965,7 +2965,7 @@ func bulkInsertUsageEvents(
 			session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_usd, cost_status, cost_source,
+			reasoning_tokens, cost_microdollars, cost_status, cost_source,
 			occurred_at, dedup_key) VALUES `)
 		args := make([]any, 0, len(batch)*14)
 		for j, ev := range batch {
@@ -2989,8 +2989,8 @@ func bulkInsertUsageEvents(
 				ordinal = *ev.MessageOrdinal
 			}
 			var cost any
-			if ev.CostUSD != nil {
-				cost = *ev.CostUSD
+			if ev.Cost != nil {
+				cost = ev.Cost.Microdollars
 			}
 			args = append(args,
 				ev.SessionID,
@@ -3034,7 +3034,7 @@ func bulkInsertCursorUsageEvents(
 			occurred_at, model, kind,
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
-			charged_cents, cursor_token_fee,
+			charged_microdollars, cursor_token_fee_microdollars,
 			user_id, user_email, is_headless, dedup_key
 		) VALUES `)
 		args := make([]any, 0, len(batch)*13)
@@ -3060,8 +3060,8 @@ func bulkInsertCursorUsageEvents(
 				ev.OutputTokens,
 				ev.CacheWriteTokens,
 				ev.CacheReadTokens,
-				ev.ChargedCents,
-				ev.CursorTokenFee,
+				ev.Charged.Microdollars,
+				ev.CursorTokenFee.Microdollars,
 				sanitizePG(ev.UserID),
 				sanitizePG(ev.UserEmail),
 				ev.IsHeadless,

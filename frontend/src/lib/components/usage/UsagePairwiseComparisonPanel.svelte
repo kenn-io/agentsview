@@ -3,14 +3,8 @@
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
-
-  function fmtCost(value: number): string {
-    return `$${value.toFixed(2)}`;
-  }
-
-  function fmtSignedCost(value: number): string {
-    return `${value >= 0 ? "+" : "-"}$${Math.abs(value).toFixed(2)}`;
-  }
+  import type { Money } from "../../money.js";
+  import { formatMoney, formatSignedMoney } from "../../money.js";
 
   function fmtCount(value: number): string {
     return String(value);
@@ -44,9 +38,9 @@
     return `${prefix}${(value * 100).toFixed(1)}%`;
   }
 
-  function fmtMaybeCost(value: number | null | undefined): string {
+  function fmtMaybeCost(value: Money | null | undefined): string {
     if (value == null) return m.shared_none();
-    return fmtCost(value);
+    return formatMoney(value);
   }
 
   function fmtMaybeTokens(value: number | null | undefined): string {
@@ -54,9 +48,9 @@
     return fmtTokens(value);
   }
 
-  function fmtMaybeSignedCost(value: number | null | undefined): string {
+  function fmtMaybeSignedCost(value: Money | null | undefined): string {
     if (value == null) return m.shared_none();
-    return fmtSignedCost(value);
+    return formatSignedMoney(value);
   }
 
   function fmtMaybeSignedTokens(value: number | null | undefined): string {
@@ -117,9 +111,9 @@
     return [
       {
         label: m.usage_total_cost(),
-        left: fmtCost(comparison.left.totalCost),
-        right: fmtCost(comparison.right.totalCost),
-        delta: fmtSignedCost(comparison.deltas.totalCostDelta),
+        left: formatMoney(comparison.left.totalCost),
+        right: formatMoney(comparison.right.totalCost),
+        delta: formatSignedMoney(comparison.deltas.totalCostDelta),
         ratio: fmtRatio(comparison.deltas.totalCostDeltaRatio),
       },
       {

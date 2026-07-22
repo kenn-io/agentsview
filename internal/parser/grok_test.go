@@ -10,6 +10,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func writeGrokFixtureFile(t *testing.T, path, body string) {
@@ -470,10 +473,10 @@ func TestGrokProviderUpdatesUsageByModel(t *testing.T) {
 	}
 	assert.Equal(t, 2, models["grok-a"].OutputTokens)
 	assert.Equal(t, 3, models["grok-b"].OutputTokens)
-	require.NotNil(t, models["grok-a"].CostUSD)
-	require.NotNil(t, models["grok-b"].CostUSD)
-	assert.InDelta(t, 1.0, *models["grok-a"].CostUSD, 1e-12)
-	assert.InDelta(t, 0.25, *models["grok-b"].CostUSD, 1e-12)
+	require.NotNil(t, models["grok-a"].Cost)
+	require.NotNil(t, models["grok-b"].Cost)
+	assert.Equal(t, money.Money{Microdollars: 1_000_000}, *models["grok-a"].Cost)
+	assert.Equal(t, money.Money{Microdollars: 250_000}, *models["grok-b"].Cost)
 	assert.NotContains(t, models, "grok-summary")
 }
 
@@ -483,8 +486,11 @@ func TestGrokProviderUpdatesUsageTopLevelFallback(t *testing.T) {
 	require.Len(t, result.UsageEvents, 1)
 	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
 	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
-	require.NotNil(t, result.UsageEvents[0].CostUSD)
-	assert.InDelta(t, 0.0424128, *result.UsageEvents[0].CostUSD, 1e-12)
+	require.NotNil(t, result.UsageEvents[0].Cost)
+	assert.Equal(t,
+		money.Money{Microdollars: 42_413},
+		*result.UsageEvents[0].Cost,
+	)
 }
 
 func TestGrokProviderUpdatesUsageTopLevelFallbackWithoutSummaryModel(t *testing.T) {
@@ -498,15 +504,21 @@ func TestGrokProviderUpdatesUsageTopLevelFallbackWithoutSummaryModel(t *testing.
 	require.Len(t, result.UsageEvents, 1)
 	assert.Equal(t, "grok-summary", result.UsageEvents[0].Model)
 	assert.Equal(t, 12, result.UsageEvents[0].InputTokens)
-	assert.Nil(t, result.UsageEvents[0].CostUSD)
+	assert.Nil(t, result.UsageEvents[0].Cost)
 }
 
 func TestGrokProviderUpdatesUsageReportedZeroCost(t *testing.T) {
 	result := parseGrokUsageFixture(t, `{"params":{"update":{"usage":{"inputTokens":12,"outputTokens":4,"costUsdTicks":0,"modelUsage":{}}}}}`)
 
 	require.Len(t, result.UsageEvents, 1)
-	require.NotNil(t, result.UsageEvents[0].CostUSD)
-	assert.Equal(t, 0.0, *result.UsageEvents[0].CostUSD)
+	require.NotNil(t, result.UsageEvents[0].Cost)
+	assert.Equal(t, money.Money{}, *result.UsageEvents[0].Cost)
+}
+
+func TestGrokUsageCostRejectsNegativeCharge(t *testing.T) {
+	_, err := grokUsageCost(gjson.Parse(`{"costUsdTicks":-1}`))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, money.ErrNegative)
 }
 
 func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {

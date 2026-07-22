@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type DbDailyUsageEntry = {
   agentBreakdowns: any[] | null;
   cacheCreationTokens: number;
@@ -13,6 +14,6 @@ export type DbDailyUsageEntry = {
   modelsUsed: any[] | null;
   outputTokens: number;
   projectBreakdowns: any[] | null;
-  totalCost: number;
+  totalCost: MoneyMoney;
 };
 

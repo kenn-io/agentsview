@@ -5,6 +5,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
   import { TableHeaderCell } from "@kenn-io/kit-ui";
+  import { compareMoney, formatMoney } from "../../money.js";
 
   let {
     report,
@@ -71,7 +72,7 @@
       case "agent_minutes":
         return (a.agent_minutes ?? 0) - (b.agent_minutes ?? 0);
       case "cost":
-        return a.cost - b.cost;
+        return compareMoney(a.cost, b.cost);
       case "first_active": {
         const av = a.first_active ?? "";
         const bv = b.first_active ?? "";
@@ -120,10 +121,6 @@
     untimed.sort((a, b) => a.session_id.localeCompare(b.session_id));
     return [...timed, ...untimed];
   });
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
-  }
 
   function fmtMinutes(v: number | null): string {
     if (v === null) return "—";
@@ -253,7 +250,7 @@
               <td class="col-num col-minutes">
                 {fmtMinutes(row.agent_minutes)}
               </td>
-              <td class="col-num col-cost">{fmtCost(row.cost)}</td>
+              <td class="col-num col-cost">{formatMoney(row.cost)}</td>
               <td class="col-window">
                 {fmtWindow(row.first_active, row.last_active)}
               </td>

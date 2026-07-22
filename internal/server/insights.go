@@ -13,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -491,7 +492,7 @@ func foldCannedModelBreakdowns(
 		outputTok int
 		cacheCr   int
 		cacheRd   int
-		cost      float64
+		cost      money.Money
 	}
 	byModel := make(map[string]*modelAccum)
 	for _, day := range daily {
@@ -505,7 +506,7 @@ func foldCannedModelBreakdowns(
 			acc.outputTok += model.OutputTokens
 			acc.cacheCr += model.CacheCreationTokens
 			acc.cacheRd += model.CacheReadTokens
-			acc.cost += model.Cost
+			acc.cost = money.MustAdd(acc.cost, model.Cost)
 		}
 	}
 	out := make([]insight.CannedModelBreakdown, 0, len(byModel))
@@ -520,8 +521,8 @@ func foldCannedModelBreakdowns(
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
+		if out[i].Cost.Microdollars != out[j].Cost.Microdollars {
+			return out[i].Cost.Microdollars > out[j].Cost.Microdollars
 		}
 		return out[i].ModelName < out[j].ModelName
 	})

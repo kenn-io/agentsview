@@ -6,6 +6,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,10 +30,10 @@ func TestUpsertModelPricing(t *testing.T) {
 	prices := []ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-4",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
+			InputPerMTok:         money.MustParseDollars("3.0"),
+			OutputPerMTok:        money.MustParseDollars("15.0"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:     money.MustParseDollars("0.30"),
 		},
 	}
 
@@ -44,10 +45,10 @@ func TestUpsertModelPricing(t *testing.T) {
 	require.NotNil(t, got, "expected pricing")
 
 	assert.Equal(t, "claude-sonnet-4", got.ModelPattern)
-	assert.Equal(t, 3.0, got.InputPerMTok)
-	assert.Equal(t, 15.0, got.OutputPerMTok)
-	assert.Equal(t, 3.75, got.CacheCreationPerMTok)
-	assert.Equal(t, 0.30, got.CacheReadPerMTok)
+	assert.Equal(t, money.MustParseDollars("3.0"), got.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("15.0"), got.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("3.75"), got.CacheCreationPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.30"), got.CacheReadPerMTok)
 	assert.NotEmpty(t, got.UpdatedAt, "expected UpdatedAt to be set")
 }
 
@@ -57,10 +58,10 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	initial := []ModelPricing{
 		{
 			ModelPattern:         "claude-opus-4",
-			InputPerMTok:         15.0,
-			OutputPerMTok:        75.0,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.50,
+			InputPerMTok:         money.MustParseDollars("15.0"),
+			OutputPerMTok:        money.MustParseDollars("75.0"),
+			CacheCreationPerMTok: money.MustParseDollars("18.75"),
+			CacheReadPerMTok:     money.MustParseDollars("1.50"),
 		},
 	}
 	err := d.UpsertModelPricing(initial)
@@ -69,10 +70,10 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	updated := []ModelPricing{
 		{
 			ModelPattern:         "claude-opus-4",
-			InputPerMTok:         10.0,
-			OutputPerMTok:        50.0,
-			CacheCreationPerMTok: 12.50,
-			CacheReadPerMTok:     1.00,
+			InputPerMTok:         money.MustParseDollars("10.0"),
+			OutputPerMTok:        money.MustParseDollars("50.0"),
+			CacheCreationPerMTok: money.MustParseDollars("12.50"),
+			CacheReadPerMTok:     money.MustParseDollars("1.00"),
 		},
 	}
 	err = d.UpsertModelPricing(updated)
@@ -82,70 +83,70 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	require.NoError(t, err, "GetModelPricing after update")
 	require.NotNil(t, got, "expected pricing")
 
-	assert.Equal(t, 10.0, got.InputPerMTok)
-	assert.Equal(t, 50.0, got.OutputPerMTok)
-	assert.Equal(t, 12.50, got.CacheCreationPerMTok)
-	assert.Equal(t, 1.00, got.CacheReadPerMTok)
+	assert.Equal(t, money.MustParseDollars("10.0"), got.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("50.0"), got.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("12.50"), got.CacheCreationPerMTok)
+	assert.Equal(t, money.MustParseDollars("1.00"), got.CacheReadPerMTok)
 }
 
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
 	existing := []ModelPricing{
 		{
 			ModelPattern:         "_fallback_version",
-			InputPerMTok:         0,
-			OutputPerMTok:        0,
-			CacheCreationPerMTok: 0,
-			CacheReadPerMTok:     0,
+			InputPerMTok:         money.MustParseDollars("0"),
+			OutputPerMTok:        money.MustParseDollars("0"),
+			CacheCreationPerMTok: money.MustParseDollars("0"),
+			CacheReadPerMTok:     money.MustParseDollars("0"),
 			UpdatedAt:            "v1",
 		},
 		{
 			ModelPattern:         "same-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "old",
 		},
 		{
 			ModelPattern:         "changed-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "old",
 		},
 	}
 	desired := []ModelPricing{
 		{
 			ModelPattern:         "_fallback_version",
-			InputPerMTok:         0,
-			OutputPerMTok:        0,
-			CacheCreationPerMTok: 0,
-			CacheReadPerMTok:     0,
+			InputPerMTok:         money.MustParseDollars("0"),
+			OutputPerMTok:        money.MustParseDollars("0"),
+			CacheCreationPerMTok: money.MustParseDollars("0"),
+			CacheReadPerMTok:     money.MustParseDollars("0"),
 			UpdatedAt:            "v2",
 		},
 		{
 			ModelPattern:         "same-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        2,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("2"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "new",
 		},
 		{
 			ModelPattern:         "changed-model",
-			InputPerMTok:         1,
-			OutputPerMTok:        9,
-			CacheCreationPerMTok: 3,
-			CacheReadPerMTok:     4,
+			InputPerMTok:         money.MustParseDollars("1"),
+			OutputPerMTok:        money.MustParseDollars("9"),
+			CacheCreationPerMTok: money.MustParseDollars("3"),
+			CacheReadPerMTok:     money.MustParseDollars("4"),
 			UpdatedAt:            "new",
 		},
 		{
 			ModelPattern:         "missing-model",
-			InputPerMTok:         5,
-			OutputPerMTok:        6,
-			CacheCreationPerMTok: 7,
-			CacheReadPerMTok:     8,
+			InputPerMTok:         money.MustParseDollars("5"),
+			OutputPerMTok:        money.MustParseDollars("6"),
+			CacheCreationPerMTok: money.MustParseDollars("7"),
+			CacheReadPerMTok:     money.MustParseDollars("8"),
 			UpdatedAt:            "new",
 		},
 	}
@@ -210,17 +211,17 @@ func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
 	// Seed an existing row (simulating a LiteLLM rate already present).
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "claude-opus-4-6",
-		InputPerMTok:         5.0,
-		OutputPerMTok:        25.0,
-		CacheCreationPerMTok: 6.25,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("5.0"),
+		OutputPerMTok:        money.MustParseDollars("25.0"),
+		CacheCreationPerMTok: money.MustParseDollars("6.25"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}), "UpsertModelPricing")
 
 	// Insert-missing with a DIFFERENT rate for the same pattern, plus a
 	// brand-new pattern.
 	err := d.InsertMissingModelPricing([]ModelPricing{
-		{ModelPattern: "claude-opus-4-6", InputPerMTok: 999.0, OutputPerMTok: 999.0},
-		{ModelPattern: "gpt-5.4", InputPerMTok: 2.5, OutputPerMTok: 15.0},
+		{ModelPattern: "claude-opus-4-6", InputPerMTok: money.MustParseDollars("999.0"), OutputPerMTok: money.MustParseDollars("999.0")},
+		{ModelPattern: "gpt-5.4", InputPerMTok: money.MustParseDollars("2.5"), OutputPerMTok: money.MustParseDollars("15.0")},
 	})
 	require.NoError(t, err, "InsertMissingModelPricing")
 
@@ -228,12 +229,12 @@ func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
 	opus, err := d.GetModelPricing("claude-opus-4-6")
 	require.NoError(t, err, "GetModelPricing opus")
 	require.NotNil(t, opus)
-	assert.Equal(t, 5.0, opus.InputPerMTok, "opus InputPerMTok not overwritten")
+	assert.Equal(t, money.MustParseDollars("5.0"), opus.InputPerMTok, "opus InputPerMTok not overwritten")
 	// New row was inserted.
 	gpt, err := d.GetModelPricing("gpt-5.4")
 	require.NoError(t, err, "GetModelPricing gpt")
 	require.NotNil(t, gpt)
-	assert.Equal(t, 2.5, gpt.InputPerMTok, "gpt-5.4 InputPerMTok inserted")
+	assert.Equal(t, money.MustParseDollars("2.5"), gpt.InputPerMTok, "gpt-5.4 InputPerMTok inserted")
 }
 
 func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
@@ -245,10 +246,10 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	require.True(t, ok, "expected gpt-5.5 fallback rates")
 	d.SetCustomPricing(map[string]config.CustomModelRate{
 		"gpt-5.5": {
-			Input:         fallbackRates.InputPerMTok,
-			Output:        fallbackRates.OutputPerMTok,
-			CacheCreation: fallbackRates.CacheWritePerMTok,
-			CacheRead:     fallbackRates.CacheReadPerMTok,
+			InputMicrodollarsPerMTok:         fallbackRates.InputPerMTok.Microdollars,
+			OutputMicrodollarsPerMTok:        fallbackRates.OutputPerMTok.Microdollars,
+			CacheCreationMicrodollarsPerMTok: fallbackRates.CacheWritePerMTok.Microdollars,
+			CacheReadMicrodollarsPerMTok:     fallbackRates.CacheReadPerMTok.Microdollars,
 		},
 	})
 

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestPricingBlockJSONShape(t *testing.T) {
@@ -29,10 +30,10 @@ func TestPricingBlockJSONShape(t *testing.T) {
 		Models: map[string]export.EffectiveModelRate{
 			"claude-test": {
 				MatchedPattern:        &matchedPattern,
-				InputCostPerMTok:      3,
-				OutputCostPerMTok:     15,
-				CacheWriteCostPerMTok: 3.75,
-				CacheReadCostPerMTok:  0.30,
+				InputCostPerMTok:      money.MustParseDollars("3"),
+				OutputCostPerMTok:     money.MustParseDollars("15"),
+				CacheWriteCostPerMTok: money.MustParseDollars("3.75"),
+				CacheReadCostPerMTok:  money.MustParseDollars("0.30"),
 				CostSource:            export.CostSourceComputed,
 			},
 		},
@@ -54,10 +55,10 @@ func TestPricingBlockJSONShape(t *testing.T) {
 		"models": {
 			"claude-test": {
 				"matched_pattern": "claude-*",
-				"input_cost_per_mtok": 3,
-				"output_cost_per_mtok": 15,
-				"cache_write_cost_per_mtok": 3.75,
-				"cache_read_cost_per_mtok": 0.3,
+				"input_cost_per_mtok": {"microdollars": 3000000},
+				"output_cost_per_mtok": {"microdollars": 15000000},
+				"cache_write_cost_per_mtok": {"microdollars": 3750000},
+				"cache_read_cost_per_mtok": {"microdollars": 300000},
 				"cost_source": "computed"
 			}
 		}

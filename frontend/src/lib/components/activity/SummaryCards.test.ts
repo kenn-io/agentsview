@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mount, tick } from "svelte";
 import SummaryCards from "./SummaryCards.svelte";
 import type { Report } from "../../api/types.js";
+import { testMoney } from "../../test/money.js";
 
 function makeReport(totals: Partial<Report["totals"]> = {}): Report {
   return {
@@ -27,11 +28,11 @@ function makeReport(totals: Partial<Report["totals"]> = {}): Report {
       distinct_projects: 0,
       distinct_models: 0,
       output_tokens: 0,
-      cost: 0,
+      cost: testMoney(0),
       automated_agent_minutes: 0,
       interactive_agent_minutes: 0,
-      automated_cost: 0,
-      interactive_cost: 0,
+      automated_cost: testMoney(0),
+      interactive_cost: testMoney(0),
       automated_sessions: 0,
       interactive_sessions: 3,
       ...totals,

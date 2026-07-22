@@ -2,10 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type ActivitySessionRow = {
   agent: string;
   agent_minutes: number | null;
-  cost: number;
+  cost: MoneyMoney;
   first_active: string | null;
   is_automated: boolean;
   last_active: string | null;

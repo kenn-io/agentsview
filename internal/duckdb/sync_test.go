@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,14 +118,14 @@ func TestPushIncrementalMirrorsUsageOnlyChange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Usage-only rewrite: no message or session-file change.
-	cost := 1.25
+	cost := money.MustParseDollars("1.25")
 	require.NoError(t, local.ReplaceSessionUsageEvents("sess-2", []db.UsageEvent{{
 		SessionID:    "sess-2",
 		Source:       "session",
 		Model:        "model-x",
 		InputTokens:  10,
 		OutputTokens: 5,
-		CostUSD:      &cost,
+		Cost:         &cost,
 		OccurredAt:   "2026-02-01T00:02:30.000Z",
 	}}))
 
@@ -138,13 +139,13 @@ func TestPushIncrementalMirrorsUsageOnlyChange(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 	var model string
-	var costUSD float64
+	var costMicrodollars int64
 	require.NoError(t, conn.QueryRow(
-		`SELECT model, cost_usd FROM usage_events WHERE session_id = ?`,
+		`SELECT model, cost_microdollars FROM usage_events WHERE session_id = ?`,
 		"sess-2",
-	).Scan(&model, &costUSD))
+	).Scan(&model, &costMicrodollars))
 	assert.Equal(t, "model-x", model)
-	assert.InDelta(t, 1.25, costUSD, 1e-9)
+	assert.Equal(t, int64(1_250_000), costMicrodollars)
 }
 
 func TestPushAppliesDeletionJournalDelta(t *testing.T) {
@@ -1243,8 +1244,8 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES ('other-machine-model', 1, 2, 3, 4, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 
@@ -1252,7 +1253,7 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 
 	var input, output float64
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT input_per_mtok, output_per_mtok
+		`SELECT input_microdollars_per_mtok, output_microdollars_per_mtok
 		 FROM model_pricing WHERE model_pattern = ?`,
 		"other-machine-model",
 	).Scan(&input, &output))
@@ -1265,10 +1266,10 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-test",
-		InputPerMTok:         3,
-		OutputPerMTok:        15,
-		CacheCreationPerMTok: 1,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("3"),
+		OutputPerMTok:        money.MustParseDollars("15"),
+		CacheCreationPerMTok: money.MustParseDollars("1"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}))
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
@@ -2042,10 +2043,10 @@ func seedDuckDBSyncFixture(t *testing.T, local *db.DB) syncFixture {
 	ctx := context.Background()
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-test",
-		InputPerMTok:         3,
-		OutputPerMTok:        15,
-		CacheCreationPerMTok: 1,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("3"),
+		OutputPerMTok:        money.MustParseDollars("15"),
+		CacheCreationPerMTok: money.MustParseDollars("1"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}))
 	alphaID := "duck-sync-alpha"
 	betaID := "duck-sync-beta"

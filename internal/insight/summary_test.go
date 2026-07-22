@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func sampleReport() activity.Report {
@@ -17,7 +18,7 @@ func sampleReport() activity.Report {
 		Totals: activity.Totals{
 			ActiveMinutes: 120, IdleMinutes: 60, AgentMinutes: 200,
 			Sessions: 9, DistinctProjects: 2, DistinctModels: 2,
-			OutputTokens: 5000, Cost: 4.25,
+			OutputTokens: 5000, Cost: money.MustParseDollars("4.25"),
 		},
 		ByProject: []activity.KeyMinutes{{Key: "alpha", AgentMinutes: 150}, {Key: "beta", AgentMinutes: 50}},
 		ByModel:   []activity.KeyMinutes{{Key: "model-x", AgentMinutes: 120}, {Key: "model-y", AgentMinutes: 80}},

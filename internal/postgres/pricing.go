@@ -9,6 +9,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -213,9 +214,9 @@ func (s *Store) mergeDBPricing(
 ) (int, error) {
 	rows, err := s.pg.QueryContext(
 		ctx,
-		`SELECT model_pattern, input_per_mtok,
-			output_per_mtok, cache_creation_per_mtok,
-			cache_read_per_mtok, updated_at
+		`SELECT model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
 		 FROM model_pricing`,
 	)
 	if err != nil {
@@ -260,10 +261,18 @@ func (s *Store) mergeDBPricing(
 func (s *Store) applyCustomPricing(out map[string]export.ModelRates) {
 	for model, cp := range s.customPricing {
 		rates := export.ModelRates{
-			InputPerMTok:      cp.Input,
-			OutputPerMTok:     cp.Output,
-			CacheWritePerMTok: cp.CacheCreation,
-			CacheReadPerMTok:  cp.CacheRead,
+			InputPerMTok: money.Money{
+				Microdollars: cp.InputMicrodollarsPerMTok,
+			},
+			OutputPerMTok: money.Money{
+				Microdollars: cp.OutputMicrodollarsPerMTok,
+			},
+			CacheWritePerMTok: money.Money{
+				Microdollars: cp.CacheCreationMicrodollarsPerMTok,
+			},
+			CacheReadPerMTok: money.Money{
+				Microdollars: cp.CacheReadMicrodollarsPerMTok,
+			},
 		}
 		rates.Source = pgCustomPricingSource()
 		out[model] = rates
@@ -281,8 +290,8 @@ func pgPricingUpsertStatement(
 ) (string, []any) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing
-		(model_pattern, input_per_mtok, output_per_mtok,
-		 cache_creation_per_mtok, cache_read_per_mtok,
+		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+		 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
 		 updated_at)
 	VALUES `)
 	args := make([]any, 0, len(prices)*6)
@@ -311,19 +320,19 @@ func pgPricingUpsertStatement(
 	}
 	b.WriteString(`
 	ON CONFLICT (model_pattern) DO UPDATE SET
-		input_per_mtok = EXCLUDED.input_per_mtok,
-		output_per_mtok = EXCLUDED.output_per_mtok,
-		cache_creation_per_mtok = EXCLUDED.cache_creation_per_mtok,
-		cache_read_per_mtok = EXCLUDED.cache_read_per_mtok,
+		input_microdollars_per_mtok = EXCLUDED.input_microdollars_per_mtok,
+		output_microdollars_per_mtok = EXCLUDED.output_microdollars_per_mtok,
+		cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok,
+		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
 		updated_at = EXCLUDED.updated_at
-	WHERE model_pricing.input_per_mtok IS DISTINCT FROM
-			EXCLUDED.input_per_mtok
-		OR model_pricing.output_per_mtok IS DISTINCT FROM
-			EXCLUDED.output_per_mtok
-		OR model_pricing.cache_creation_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_creation_per_mtok
-		OR model_pricing.cache_read_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_read_per_mtok`)
+	WHERE model_pricing.input_microdollars_per_mtok IS DISTINCT FROM
+			EXCLUDED.input_microdollars_per_mtok
+		OR model_pricing.output_microdollars_per_mtok IS DISTINCT FROM
+			EXCLUDED.output_microdollars_per_mtok
+		OR model_pricing.cache_creation_microdollars_per_mtok IS DISTINCT FROM
+			EXCLUDED.cache_creation_microdollars_per_mtok
+		OR model_pricing.cache_read_microdollars_per_mtok IS DISTINCT FROM
+			EXCLUDED.cache_read_microdollars_per_mtok`)
 	return b.String(), args
 }
 
@@ -331,9 +340,9 @@ func listPGModelPricing(
 	ctx context.Context, pg *sql.DB,
 ) ([]db.ModelPricing, error) {
 	rows, err := pg.QueryContext(ctx,
-		`SELECT model_pattern, input_per_mtok,
-			output_per_mtok, cache_creation_per_mtok,
-			cache_read_per_mtok, updated_at
+		`SELECT model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok, cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
 		 FROM model_pricing`,
 	)
 	if err != nil {

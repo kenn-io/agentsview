@@ -18,6 +18,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type hermesStateSession struct {
@@ -1054,16 +1056,22 @@ func hermesUsageEvents(
 	// price (e.g. gpt-5.5), which is NOT a confident $0 and must fall
 	// through to catalog pricing. Likewise "unknown"/empty with a 0
 	// estimate is not a real figure and must not masquerade as $0.
-	var cost *float64
+	var cost *money.Money
 	switch {
 	case ss.actualCost.Valid:
-		v := ss.actualCost.Float64
+		v, err := money.FromFloatDollars(ss.actualCost.Float64)
+		if err != nil {
+			return nil
+		}
 		cost = &v
 	case ss.costStatus == "included" && hermesHasCostSource(ss.costSource):
-		zero := 0.0
+		zero := money.Money{}
 		cost = &zero
 	case ss.estimatedCost.Valid && ss.estimatedCost.Float64 > 0:
-		v := ss.estimatedCost.Float64
+		v, err := money.FromFloatDollars(ss.estimatedCost.Float64)
+		if err != nil {
+			return nil
+		}
 		cost = &v
 	}
 	return []ParsedUsageEvent{{
@@ -1075,7 +1083,7 @@ func hermesUsageEvents(
 		CacheCreationInputTokens: max(ss.cacheWriteTokens, 0),
 		CacheReadInputTokens:     max(ss.cacheReadTokens, 0),
 		ReasoningTokens:          max(ss.reasoningTokens, 0),
-		CostUSD:                  cost,
+		Cost:                     cost,
 		CostStatus:               ss.costStatus,
 		CostSource:               ss.costSource,
 		OccurredAt:               timeString(ss.endedAt, ss.startedAt),

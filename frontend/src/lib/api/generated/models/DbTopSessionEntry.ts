@@ -2,9 +2,10 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type DbTopSessionEntry = {
   agent: string;
-  cost: number;
+  cost: MoneyMoney;
   displayName: string;
   project: string;
   sessionId: string;

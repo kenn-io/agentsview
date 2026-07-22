@@ -10,6 +10,8 @@ import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
+import { testMoney } from "../../test/money.js";
+import type { Money } from "../../money.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
 
 const { generateForSession } = vi.hoisted(() => ({
@@ -93,9 +95,9 @@ interface SessionUsage {
   total_output_tokens: number;
   peak_context_tokens: number;
   has_token_data: boolean;
-  cost_usd: number;
+  cost: Money;
   has_cost: boolean;
-  rollup_cost_usd?: number;
+  rollup_cost?: Money;
   has_rollup_cost?: boolean;
   rollup_subagent_count?: number;
   models: string[];
@@ -116,7 +118,7 @@ interface SessionUsageBreakdownEntry {
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
-  cost_usd: number;
+  cost: Money;
   has_cost: boolean;
 }
 
@@ -128,7 +130,7 @@ function makeUsage(overrides: Partial<SessionUsage> = {}): SessionUsage {
     total_output_tokens: 0,
     peak_context_tokens: 0,
     has_token_data: false,
-    cost_usd: 0,
+    cost: testMoney(0),
     has_cost: false,
     models: [],
     unpriced_models: [],
@@ -1128,7 +1130,7 @@ describe("SessionBreadcrumb", () => {
 
     it("renders the session cost when usage reports a priced cost", async () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
-        makeUsage({ has_cost: true, cost_usd: 1.234 }),
+        makeUsage({ has_cost: true, cost: testMoney(1.234) }),
       );
 
       const component = mount(SessionBreadcrumb, {
@@ -1151,9 +1153,9 @@ describe("SessionBreadcrumb", () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
         makeUsage({
           has_cost: true,
-          cost_usd: 1,
+          cost: testMoney(1),
           has_rollup_cost: true,
-          rollup_cost_usd: 3,
+          rollup_cost: testMoney(3),
           rollup_subagent_count: 2,
         }),
       );
@@ -1181,7 +1183,7 @@ describe("SessionBreadcrumb", () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
         makeUsage({
           has_cost: true,
-          cost_usd: 1,
+          cost: testMoney(1),
           has_rollup_cost: false,
           rollup_subagent_count: 1,
         }),
@@ -1201,7 +1203,7 @@ describe("SessionBreadcrumb", () => {
 
     it("renders the cost badge between the token badges and the model badge", async () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
-        makeUsage({ has_cost: true, cost_usd: 4.12 }),
+        makeUsage({ has_cost: true, cost: testMoney(4.12) }),
       );
       messages.sessionId = "run:123456789abcdef";
       messages.messages = [makeAssistantMessage("claude-opus-4-8")];
@@ -1245,7 +1247,7 @@ describe("SessionBreadcrumb", () => {
 
     it("renders no cost badge when the session has no priced cost", async () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
-        makeUsage({ has_cost: false, cost_usd: 0 }),
+        makeUsage({ has_cost: false, cost: testMoney(0) }),
       );
 
       const component = mount(SessionBreadcrumb, {
@@ -1300,7 +1302,7 @@ describe("SessionBreadcrumb", () => {
           output_tokens: 500,
           cache_creation_input_tokens: 200,
           cache_read_input_tokens: 300,
-          cost_usd: 0.017,
+          cost: testMoney(0.017),
           has_cost: true,
         },
         {
@@ -1313,7 +1315,7 @@ describe("SessionBreadcrumb", () => {
           output_tokens: 20,
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 0,
-          cost_usd: 0.005,
+          cost: testMoney(0.005),
           has_cost: true,
         },
       ];
@@ -1322,7 +1324,7 @@ describe("SessionBreadcrumb", () => {
           Promise.resolve(
             makeUsage({
               has_cost: true,
-              cost_usd: 0.022,
+              cost: testMoney(0.022),
               breakdown_count: 2,
               breakdown: breakdown ? rows : [],
             }),
@@ -1410,7 +1412,7 @@ describe("SessionBreadcrumb", () => {
                     output_tokens: 10 + i,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
-                    cost_usd: 0,
+                    cost: testMoney(0),
                     has_cost: false,
                   }))
                 : [],
@@ -1477,7 +1479,7 @@ describe("SessionBreadcrumb", () => {
               output_tokens: 10,
               cache_creation_input_tokens: 0,
               cache_read_input_tokens: 0,
-              cost_usd: 0,
+              cost: testMoney(0),
               has_cost: false,
             },
           ],
@@ -1527,7 +1529,7 @@ describe("SessionBreadcrumb", () => {
             makeUsage({
               session_id: "run:bbb",
               has_cost: true,
-              cost_usd: 2,
+              cost: testMoney(2),
               breakdown_count: 1,
               breakdown: breakdown
                 ? [
@@ -1541,7 +1543,7 @@ describe("SessionBreadcrumb", () => {
                       output_tokens: 2,
                       cache_creation_input_tokens: 0,
                       cache_read_input_tokens: 0,
-                      cost_usd: 2,
+                      cost: testMoney(2),
                       has_cost: true,
                     },
                   ]
@@ -1577,7 +1579,7 @@ describe("SessionBreadcrumb", () => {
         makeUsage({
           session_id: "run:aaa",
           has_cost: true,
-          cost_usd: 9.99,
+          cost: testMoney(9.99),
           breakdown_count: 42,
         }),
       );
@@ -1593,8 +1595,8 @@ describe("SessionBreadcrumb", () => {
 
     it("refetches when a resync changes context tokens without output movement", async () => {
       sessionsService.getApiV1SessionsIdUsage
-        .mockResolvedValueOnce(makeUsage({ has_cost: true, cost_usd: 1 }))
-        .mockResolvedValueOnce(makeUsage({ has_cost: true, cost_usd: 1.75 }));
+        .mockResolvedValueOnce(makeUsage({ has_cost: true, cost: testMoney(1) }))
+        .mockResolvedValueOnce(makeUsage({ has_cost: true, cost: testMoney(1.75) }));
 
       const component = createClassComponent({
         component: SessionBreadcrumb,
@@ -1631,7 +1633,7 @@ describe("SessionBreadcrumb", () => {
           makeUsage({
             session_id: "run:aaa",
             has_cost: true,
-            cost_usd: 1.5,
+            cost: testMoney(1.5),
           }),
         )
         .mockReturnValueOnce(bRequest.promise)
@@ -1667,7 +1669,7 @@ describe("SessionBreadcrumb", () => {
         makeUsage({
           session_id: "run:bbb",
           has_cost: true,
-          cost_usd: 9.99,
+          cost: testMoney(9.99),
         }),
       );
       await flushPromises();
@@ -1678,7 +1680,7 @@ describe("SessionBreadcrumb", () => {
         makeUsage({
           session_id: "run:aaa",
           has_cost: true,
-          cost_usd: 1.5,
+          cost: testMoney(1.5),
         }),
       );
       await vi.waitFor(() => {
@@ -1714,13 +1716,13 @@ describe("SessionBreadcrumb", () => {
       await flushPromises();
       expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(2);
 
-      second.resolve(makeUsage({ has_cost: true, cost_usd: 3.5 }));
+      second.resolve(makeUsage({ has_cost: true, cost: testMoney(3.5) }));
       await vi.waitFor(() => {
         const badge = document.querySelector(".cost-badge");
         expect(badge?.textContent?.trim()).toBe("$3.50");
       });
 
-      first.resolve(makeUsage({ has_cost: true, cost_usd: 1 }));
+      first.resolve(makeUsage({ has_cost: true, cost: testMoney(1) }));
       await flushPromises();
       expect(document.querySelector(".cost-badge")?.textContent?.trim()).toBe("$3.50");
 
@@ -1732,18 +1734,18 @@ describe("SessionBreadcrumb", () => {
         .mockResolvedValueOnce(
           makeUsage({
             has_cost: true,
-            cost_usd: 1,
+            cost: testMoney(1),
             has_rollup_cost: true,
-            rollup_cost_usd: 3,
+            rollup_cost: testMoney(3),
             rollup_subagent_count: 1,
           }),
         )
         .mockResolvedValueOnce(
           makeUsage({
             has_cost: true,
-            cost_usd: 1,
+            cost: testMoney(1),
             has_rollup_cost: true,
-            rollup_cost_usd: 5,
+            rollup_cost: testMoney(5),
             rollup_subagent_count: 1,
           }),
         );
@@ -1778,9 +1780,9 @@ describe("SessionBreadcrumb", () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
         makeUsage({
           has_cost: true,
-          cost_usd: 1,
+          cost: testMoney(1),
           has_rollup_cost: true,
-          rollup_cost_usd: 3,
+          rollup_cost: testMoney(3),
           rollup_subagent_count: 1,
         }),
       );

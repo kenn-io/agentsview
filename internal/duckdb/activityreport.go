@@ -10,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
@@ -123,7 +124,7 @@ func (s *Store) GetSessionUsageRows(
 			0 AS input_tokens, 0 AS output_tokens,
 			0 AS cache_create, 0 AS cache_read,
 			COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
-			NULL AS cost_usd,
+			NULL AS cost_microdollars,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
@@ -147,7 +148,7 @@ func (s *Store) GetSessionUsageRows(
 			ue.cache_creation_input_tokens AS cache_create,
 			ue.cache_read_input_tokens AS cache_read,
 			ue.reasoning_tokens AS reasoning_tokens,
-			ue.cost_usd AS cost_usd,
+			ue.cost_microdollars AS cost_microdollars,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
@@ -168,7 +169,7 @@ func (s *Store) GetSessionUsageRows(
 		SELECT session_id, message_ordinal, ts, source, model,
 			agent, claude_message_id, claude_request_id, source_uuid,
 			usage_dedup_key, input_tokens_norm, output_tokens_norm,
-			cache_create_norm, cache_read_norm, reasoning_tokens_norm, cost_usd
+			cache_create_norm, cache_read_norm, reasoning_tokens_norm, cost_microdollars
 		FROM usage_normalized`
 	rows, err := s.queryContext(ctx, query, queryArgs...)
 	if err != nil {
@@ -184,7 +185,7 @@ func (s *Store) GetSessionUsageRows(
 			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 			&r.usageDedupKey,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
-			&r.reasoningTok, &r.costUSD,
+			&r.reasoningTok, &r.cost,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb session usage rows: %w", err)
 		}
@@ -424,7 +425,7 @@ type duckActivityReportUsageRow struct {
 	cacheCr         int
 	cacheRd         int
 	reasoningTok    int
-	costUSD         *float64
+	cost            *int64
 }
 
 // activityReportUsage returns the usage rows for the candidate sessions
@@ -485,7 +486,7 @@ func (s *Store) activityReportUsage(
 			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 			&r.usageDedupKey,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
-			&r.reasoningTok, &r.costUSD,
+			&r.reasoningTok, &r.cost,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning duckdb activity report usage: %w", err)
@@ -574,7 +575,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 				0 AS input_tokens, 0 AS output_tokens,
 					0 AS cache_create, 0 AS cache_read,
 					COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
-					NULL AS cost_usd
+					NULL AS cost_microdollars
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
 			WHERE m.token_usage != ''
@@ -597,7 +598,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 					ue.cache_creation_input_tokens AS cache_create,
 					ue.cache_read_input_tokens AS cache_read,
 					ue.reasoning_tokens AS reasoning_tokens,
-					ue.cost_usd AS cost_usd
+					ue.cost_microdollars AS cost_microdollars
 			FROM usage_events ue
 			JOIN sessions s ON s.id = ue.session_id
 			WHERE ue.model != ''
@@ -632,31 +633,31 @@ func duckActivityReportUsageQuery(inClause string) string {
 						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
 						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[2]d)
 					END AS reasoning_tokens_norm,
-					cost_usd
+					cost_microdollars
 			FROM usage_raw
 		)
 		SELECT session_id, message_ordinal, ts, source, model, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				input_tokens_norm, output_tokens_norm,
-				cache_create_norm, cache_read_norm, reasoning_tokens_norm, cost_usd
+				cache_create_norm, cache_read_norm, reasoning_tokens_norm, cost_microdollars
 		FROM usage_normalized
 		WHERE ts >= CAST(? AS TIMESTAMP)
 			AND ts <= CAST(? AS TIMESTAMP)`, inClause, db.MaxPlausibleTokens)
 }
 
 // duckActivityReportRowStatus computes one usage row's cost and pricing state the same way
-// GetDailyUsage does: an explicit cost_usd wins, otherwise the per-model
+// GetDailyUsage does: an explicit cost_microdollars wins, otherwise the per-model
 // rates price the normalized token amounts. Billable amounts equal the
 // normalized amounts when there is no explicit cost (mirroring the
 // billable_* SQL in dailyUsageAggregateRows). It returns the cache
 // savings delta and the cost.
 func duckActivityReportRowStatus(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
-) (savings, cost float64, priced, contributes bool) {
-	var explicitCost float64
+) (savings, cost money.Money, priced, contributes bool) {
+	var explicitCost int64
 	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int
-	if r.costUSD != nil {
-		explicitCost = *r.costUSD
+	if r.cost != nil {
+		explicitCost = *r.cost
 		priced = true
 		contributes = true
 	} else if r.inputTok != 0 || r.outputTok != 0 || r.reasoningTok != 0 ||
@@ -683,7 +684,7 @@ func duckActivityReportRowStatus(
 		billableInput, billableOutput, billableReasoning,
 		billableCacheCr, billableCacheRd,
 		explicitCost,
-		r.costUSD != nil,
+		r.cost != nil,
 		pricing,
 	)
 	return savings, cost, priced, contributes

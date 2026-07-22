@@ -16,6 +16,16 @@ func ParseDollars(value string) (Money, error) {
 	return Money{Microdollars: microdollars}, nil
 }
 
+// MustParseDollars parses a decimal dollar amount or panics. It is intended
+// for static constants and fixtures whose validity is established in source.
+func MustParseDollars(value string) Money {
+	parsed, err := ParseDollars(value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
+
 // ParseCents parses a decimal cent amount and rounds it to microdollars.
 func ParseCents(value string) (Money, error) {
 	microdollars, err := ParseScaledDecimal(value, 4)
@@ -23,6 +33,18 @@ func ParseCents(value string) (Money, error) {
 		return Money{}, err
 	}
 	return Money{Microdollars: microdollars}, nil
+}
+
+// FromFloatDollars converts a dollar value from an upstream boundary that has
+// already discarded its original decimal representation.
+func FromFloatDollars(value float64) (Money, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return Money{}, ErrInvalidDecimal
+	}
+	if value < 0 {
+		return Money{}, ErrNegative
+	}
+	return ParseDollars(strconv.FormatFloat(value, 'g', -1, 64))
 }
 
 // ParseScaledDecimal parses decimal text into an integer with scale fractional

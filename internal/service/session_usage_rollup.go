@@ -5,6 +5,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type sessionUsageRowsProvider interface {
@@ -15,7 +16,7 @@ type sessionUsageRowsProvider interface {
 // descendants. SubagentCount includes descendants without usage rows.
 type SessionUsageRollup struct {
 	Usage         *db.SessionUsage
-	CostUSD       float64
+	Cost          money.Money
 	HasCost       bool
 	SubagentCount int
 }
@@ -56,7 +57,7 @@ func GetSessionUsageRollup(
 	}
 	subagentContributing := false
 	allPriced := true
-	totalCostUSD := 0.0
+	var totalCost money.Money
 	if provider, ok := store.(sessionUsageRowsProvider); ok {
 		rows, err := provider.GetSessionUsageRows(ctx, usageIDs)
 		if err != nil {
@@ -74,17 +75,17 @@ func GetSessionUsageRollup(
 					allPriced = false
 					continue
 				}
-				totalCostUSD += row.Cost
+				totalCost = money.MustAdd(totalCost, row.Cost)
 			}
 		} else {
-			subagentContributing, totalCostUSD, allPriced, err =
+			subagentContributing, totalCost, allPriced, err =
 				sumRollupUsageFallback(ctx, store, root, usageIDs)
 			if err != nil {
 				return nil, err
 			}
 		}
 	} else {
-		subagentContributing, totalCostUSD, allPriced, err =
+		subagentContributing, totalCost, allPriced, err =
 			sumRollupUsageFallback(ctx, store, root, usageIDs)
 		if err != nil {
 			return nil, err
@@ -92,7 +93,7 @@ func GetSessionUsageRollup(
 	}
 	out.HasCost = subagentContributing && allPriced
 	if out.HasCost {
-		out.CostUSD = totalCostUSD
+		out.Cost = totalCost
 	}
 	return out, nil
 }
@@ -102,7 +103,7 @@ func sumRollupUsageFallback(
 	store db.Store,
 	root *db.SessionUsage,
 	usageIDs []string,
-) (subagentContributing bool, totalCostUSD float64, allPriced bool, err error) {
+) (subagentContributing bool, totalCost money.Money, allPriced bool, err error) {
 	allPriced = true
 	if root.BreakdownCount > 0 && !root.HasCost {
 		allPriced = false
@@ -110,18 +111,18 @@ func sumRollupUsageFallback(
 	for _, id := range usageIDs[1:] {
 		usage, getErr := store.GetSessionUsage(ctx, id, false)
 		if getErr != nil {
-			return false, 0, false, getErr
+			return false, money.Money{}, false, getErr
 		}
 		if usage == nil || usage.BreakdownCount == 0 {
 			continue
 		}
 		subagentContributing = true
 		if usage.HasCost {
-			totalCostUSD += usage.CostUSD
+			totalCost = money.MustAdd(totalCost, usage.Cost)
 		} else {
 			allPriced = false
 		}
 	}
-	totalCostUSD += root.CostUSD
-	return subagentContributing, totalCostUSD, allPriced, nil
+	totalCost = money.MustAdd(totalCost, root.Cost)
+	return subagentContributing, totalCost, allPriced, nil
 }

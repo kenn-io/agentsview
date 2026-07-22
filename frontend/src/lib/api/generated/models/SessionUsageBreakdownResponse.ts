@@ -2,10 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type SessionUsageBreakdownResponse = {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
-  cost_usd: number;
+  cost: MoneyMoney;
   has_cost: boolean;
   input_tokens: number;
   label: string;

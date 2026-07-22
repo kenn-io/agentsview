@@ -86,8 +86,12 @@
       "overall": 0.579437494120967
     },
     "claude_only": true,
-    "dollars_saved_vs_uncached": 2.3702250000000005,
-    "dollars_spent": 6.7420350000000004
+    "saved_vs_uncached": {
+      "microdollars": 2370225
+    },
+    "spent": {
+      "microdollars": 6742035
+    }
   },
   "code_attribution": {
     "sources": [
@@ -507,7 +511,7 @@
     "tool_retry_rate": 0.23076923076923078,
     "unknown": 0
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "temporal": {
     "hourly_utc": [
       {

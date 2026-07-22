@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1656,24 +1657,24 @@ func TestLoadFile_CustomModelPricing(t *testing.T) {
 			name: "basic rates",
 			data: map[string]any{
 				"custom_model_pricing": map[string]CustomModelRate{
-					"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+					"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars},
 				},
 			},
 			want: map[string]CustomModelRate{
-				"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+				"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars},
 			},
 		},
 		{
 			name: "multiple models with cache rates",
 			data: map[string]any{
 				"custom_model_pricing": map[string]CustomModelRate{
-					"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
-					"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+					"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars, CacheCreationMicrodollarsPerMTok: money.MustParseDollars("2.5").Microdollars, CacheReadMicrodollarsPerMTok: money.MustParseDollars("0.2").Microdollars},
+					"acme-fast-2.1":  {InputMicrodollarsPerMTok: money.MustParseDollars("0.8").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("4.0").Microdollars},
 				},
 			},
 			want: map[string]CustomModelRate{
-				"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
-				"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+				"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars, CacheCreationMicrodollarsPerMTok: money.MustParseDollars("2.5").Microdollars, CacheReadMicrodollarsPerMTok: money.MustParseDollars("0.2").Microdollars},
+				"acme-fast-2.1":  {InputMicrodollarsPerMTok: money.MustParseDollars("0.8").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("4.0").Microdollars},
 			},
 		},
 		{
@@ -1703,6 +1704,18 @@ func TestLoadFile_CustomModelPricing(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadFileRejectsNegativeCustomModelPricing(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.model]
+input_microdollars_per_mtok = -1
+output_microdollars_per_mtok = 1
+`)
+
+	err := f.LoadMinimalErr(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rates must not be negative")
 }
 
 func TestLoadFile_RemoteHosts(t *testing.T) {

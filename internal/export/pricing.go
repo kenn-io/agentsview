@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -17,27 +18,33 @@ const (
 )
 
 type ModelRates struct {
-	InputPerMTok      float64
-	OutputPerMTok     float64
-	CacheWritePerMTok float64
-	CacheReadPerMTok  float64
+	InputPerMTok      money.Money
+	OutputPerMTok     money.Money
+	CacheWritePerMTok money.Money
+	CacheReadPerMTok  money.Money
 	UpdatedAt         *time.Time
 	Source            PricingRowSource
 }
 
 func (r ModelRates) CostForTokens(
 	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
-) float64 {
+) money.Money {
 	// reasoningTokens is a breakdown of outputTokens for current sources, not
 	// additional billable output. Reasoning-only rows still bill at output rate.
 	billableOutputTokens := outputTokens
 	if billableOutputTokens == 0 {
 		billableOutputTokens = reasoningTokens
 	}
-	return (float64(inputTokens)*r.InputPerMTok +
-		float64(billableOutputTokens)*r.OutputPerMTok +
-		float64(cacheWriteTokens)*r.CacheWritePerMTok +
-		float64(cacheReadTokens)*r.CacheReadPerMTok) / 1_000_000
+	cost, err := money.CostPerMillion([]money.RatedTokens{
+		{Tokens: int64(inputTokens), Rate: r.InputPerMTok},
+		{Tokens: int64(billableOutputTokens), Rate: r.OutputPerMTok},
+		{Tokens: int64(cacheWriteTokens), Rate: r.CacheWritePerMTok},
+		{Tokens: int64(cacheReadTokens), Rate: r.CacheReadPerMTok},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return cost
 }
 
 type EffectivePricingRow struct {

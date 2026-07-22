@@ -10,6 +10,7 @@ import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
+import { testMoney } from "../../test/money.js";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -30,7 +31,7 @@ function usageSummaryWithUnsupported(kind?: string) {
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 0,
+      totalCost: testMoney(0),
     },
     daily: [],
     projectTotals: [],
@@ -47,7 +48,7 @@ function usageSummaryWithUnsupported(kind?: string) {
       uncachedInputTokens: 0,
       outputTokens: 0,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
     ...(kind ? { unsupportedUsage: { kind } } : {}),
   };
