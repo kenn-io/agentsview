@@ -1073,7 +1073,12 @@ class SessionsStore {
       deleted,
       issuedAtIndexOrdinal,
       committedAtTick: this.requestClock,
-      removedRow: false,
+      // A repeat 404 finds the row already gone: carry the removal record
+      // across consecutive deletion commits so revival still knows a row
+      // was removed. A live commit resets it.
+      removedRow: deleted && previous?.deleted === true
+        ? previous.removedRow
+        : false,
     });
     if (deleted) {
       this.committedDetailByRow.delete(id);

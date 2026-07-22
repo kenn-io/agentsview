@@ -5130,6 +5130,36 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("revives the row after consecutive 404s for the same session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // Two consecutive transient 404s: the first removes the row, the
+      // second finds it already gone. The record of the removal must
+      // survive both.
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("sel"));
+      await sessions.refreshActiveSession();
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("sel"));
+      await sessions.refreshActiveSession();
+      expect(sessions.sessions.length).toBe(0);
+
+      // A later successful refresh revives the session: the sidebar row and
+      // total must come back, not just the detail cache.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "B" }),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession?.first_message).toBe("B");
+      expect(sessions.sessions.some((s) => s.id === "sel")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
