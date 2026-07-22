@@ -666,7 +666,10 @@ class SessionsStore {
       if (this.loadVersion === version) {
         const restoredTombstones = this.expandTombstoned(
           prev.sessions,
-          (rid) => this.deletedSinceSnapshot(rid, detailCommits, requestOrdinal),
+          // A failed load carries no newer server state, so unlike a
+          // successful publish it cannot supersede a read-derived
+          // tombstone: honor anything committed after the snapshot.
+          (rid) => this.deletedSinceSnapshot(rid, detailCommits, 0),
         );
         const droppedRows = prev.sessions.filter((s) =>
           restoredTombstones.has(s.id)
@@ -1348,7 +1351,7 @@ class SessionsStore {
     if (commit.deleted) {
       // Honor the deletion tombstone instead of letting the stale index
       // resurrect the row (mirrors refreshActiveSession's 404 removal).
-      this.removeSessionSubtree(id);
+      this.removeSessionSubtree(id, commit.issuedAtIndexOrdinal);
       return;
     }
     this.restoreActiveRowFromDetailCache(id);

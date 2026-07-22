@@ -4896,6 +4896,108 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("honors a 404 tombstone when a later-issued reload fails", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "gone", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "gone", project: "proj-a", first_message: "d" }),
+      );
+      await sessions.hydrateVisibleSessions(["gone"]);
+      sessions.selectSession("gone");
+
+      // A refresh is issued, then a reload; the refresh 404s while the
+      // reload is in flight, and the reload then fails. A failed load
+      // carries no newer server state, so its restore must still honor the
+      // tombstone even though the load was issued after the 404's request.
+      let rejectRefresh!: (e: unknown) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((_r, rej) => {
+          rejectRefresh = rej;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+      let rejectIndex!: (e: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((_r, rej) => {
+          rejectIndex = rej;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      rejectRefresh(makeNotFoundError("gone"));
+      await refresh;
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+
+      rejectIndex(new Error("network"));
+      await reload;
+
+      expect(sessions.sessions.some((s) => s.id === "gone")).toBe(false);
+      expect(sessions.total).toBe(0);
+    });
+
+    it("keeps descendants revivable after their root's transient 404", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "root1", project: "proj-a", first_message: "d" }),
+      );
+      sessions.selectSession("root1");
+      await sessions.hydrateVisibleSessions(["root1"]);
+
+      // A refresh is issued, then a reload whose server snapshot lists the
+      // subtree; the refresh 404s transiently while the reload is in
+      // flight.
+      let rejectRefresh!: (e: unknown) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((_r, rej) => {
+          rejectRefresh = rej;
+        }),
+      );
+      const refresh = sessions.refreshActiveSession();
+      await Promise.resolve();
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      rejectRefresh(makeNotFoundError("root1"));
+      await refresh;
+      expect(sessions.sessions.length).toBe(0);
+
+      // The later-issued reload confirms the subtree exists. Both the root
+      // AND its descendant must supersede the read-derived tombstones —
+      // descendants inherit the ancestor's finite tick, not Infinity.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.sessions.some((s) => s.id === "root1")).toBe(true);
+      expect(sessions.sessions.some((s) => s.id === "child1")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
