@@ -5160,6 +5160,86 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("merges a fresh version-superseded hydration into the active row", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "v1" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A fresh hydration is in flight under the old index version...
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+
+      // ...when a reload commits a new version that re-lists the row,
+      // carrying its older hydrated fields.
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load({ force: true });
+
+      // The hydration resolves with newer detail. The version check bars
+      // the normal merge path, but the active row would otherwise keep
+      // showing the older data forever — the getter prefers a hydrated row
+      // over the cache, and a hydrated row is never re-hydrated.
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "v2" }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.first_message).toBe("v2");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.first_message,
+      ).toBe("v2");
+    });
+
+    it("does not revive a row a newer publish established as excluded", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // An unrelated hydration stays in flight, holding the prune horizon
+      // below the tombstone so the GC cannot collect it mid-test.
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>(() => {}),
+      );
+      const held = sessions.hydrateVisibleSessions(["held"]);
+      await Promise.resolve();
+      void held;
+
+      // A transient 404 removes the row...
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("sel"));
+      await sessions.refreshActiveSession();
+
+      // ...then a full reload (filters changed) publishes a list that
+      // excludes the session entirely.
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load({ force: true });
+      expect(sessions.total).toBe(1);
+
+      // A successful refresh revives the session. The current list
+      // authoritatively excludes it: only the detail cache may recover.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "B" }),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession?.first_message).toBe("B");
+      expect(sessions.sessions.some((s) => s.id === "sel")).toBe(false);
+      expect(sessions.total).toBe(1);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

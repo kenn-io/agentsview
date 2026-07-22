@@ -660,6 +660,20 @@ class SessionsStore {
           row: session,
         });
       }
+      // A full publish issued after a read-derived tombstone that excludes
+      // the id is authoritative for the current filters: revival must not
+      // append the row back into a list that no longer contains it.
+      for (const [cid, commit] of this.activeDetailCommitBySession) {
+        if (
+          commit.deleted &&
+          commit.removedRow &&
+          Number.isFinite(commit.issuedAtIndexOrdinal) &&
+          commit.issuedAtIndexOrdinal < requestOrdinal &&
+          !incomingIds.has(cid)
+        ) {
+          commit.removedRow = false;
+        }
+      }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
       this.pruneReconciliationState();
     } catch {
@@ -795,6 +809,14 @@ class SessionsStore {
             version !== this.sidebarIndexVersion ||
             epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
           ) {
+            // The row set moved on, but a fresh response for the ACTIVE
+            // session still outranks whatever the re-listed row carries;
+            // merge it, or the getter (which prefers a hydrated row over
+            // the cache) shows the older data and nothing re-hydrates a
+            // non-index-only row.
+            if (hydrated.id === this.activeSessionId && detailFresh) {
+              this.mergeHydratedSession(hydrated);
+            }
             return;
           }
           // A hydration issued before a newer commit resolved must not
