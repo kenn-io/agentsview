@@ -92,6 +92,9 @@ func (w *startupStateWriter) SetPhase(phase string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if phase == w.state.Phase {
+		return
+	}
 	w.state.Phase = phase
 	w.state.Detail = ""
 	w.write()
@@ -112,7 +115,11 @@ func (w *startupStateWriter) SetDetail(detail string) {
 	if detail == "" || detail == w.state.Detail {
 		return
 	}
-	if w.now().Sub(w.lastWrite) < startupDetailThrottle {
+	// Publish the first detail for a new phase immediately. This costs at most
+	// one extra write per phase and prevents the phase write itself from hiding
+	// the only useful description of a long-running step. Once detail exists,
+	// keep throttling high-frequency counter updates as before.
+	if w.state.Detail != "" && w.now().Sub(w.lastWrite) < startupDetailThrottle {
 		return
 	}
 	w.state.Detail = detail

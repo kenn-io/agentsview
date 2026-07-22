@@ -153,6 +153,54 @@ func TestStartupWorkerFailureFallsBackInProcess(t *testing.T) {
 	}
 }
 
+func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
+	cfg := config.Config{DataDir: t.TempDir()}
+	now, step := fakeClock(time.Date(2026, 7, 22, 22, 0, 0, 0, time.UTC))
+	progress := newStartupStateWriter(cfg.DataDir, now)
+	progress.SetPhase("initial sync")
+
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, mode string, onLine func(workerLine),
+	) (workerResult, error) {
+		assert.Equal(t, "startup", mode)
+		onLine(workerLine{Progress: &syncpkg.Progress{
+			Phase:  syncpkg.PhasePreparingResync,
+			Detail: "Preparing full resync",
+			Resync: true,
+		}})
+		state := readStartupState(cfg.DataDir)
+		require.NotNil(t, state)
+		assert.Equal(t, "full resync", state.Phase)
+		assert.Equal(t, "Preparing full resync", state.Detail)
+
+		step(startupDetailThrottle)
+		onLine(workerLine{Progress: &syncpkg.Progress{
+			Phase:           syncpkg.PhaseSyncing,
+			Detail:          "Syncing sessions into rebuilt database",
+			Resync:          true,
+			SessionsDone:    25,
+			SessionsTotal:   100,
+			MessagesIndexed: 800,
+		}})
+		state = readStartupState(cfg.DataDir)
+		require.NotNil(t, state)
+		assert.Equal(t, "full resync", state.Phase)
+		assert.Equal(t,
+			"Syncing sessions into rebuilt database: 25/100 sessions (25%) · 800 messages",
+			state.Detail,
+		)
+
+		stats := syncpkg.SyncStats{}
+		return workerResult{
+			Status: "ok", DiscoveryComplete: true, Stats: &stats,
+		}, nil
+	})
+	defer restore()
+
+	_, err := runStartupSyncViaWorker(t.Context(), cfg, progress)
+	require.NoError(t, err)
+}
+
 // TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed pins the Finding 1
 // contract: a spawn failure asks the caller to fall back in process, while a
 // worker that ran and reported failure is carried forward as an aborted result
