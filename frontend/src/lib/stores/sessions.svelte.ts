@@ -387,7 +387,14 @@ class SessionsStore {
   // fields. Rename and 404 commits are write-derived and always win;
   // navigation/refresh commits stay unconditional because the coordinator
   // already serializes them against each other.
-  private indexRequestOrdinal = 0;
+  //
+  // requestClock is one monotonic issue-order clock shared by sidebar index
+  // loads AND detail reads (navigation/refresh/hydration): every request
+  // takes a tick when its fetch begins, commits and row stamps record their
+  // request's tick, and freshness is strict tick comparison. A shared clock
+  // makes ties impossible, so two detail reads issued within the same index
+  // generation are still totally ordered.
+  private requestClock = 0;
   // Per-row stamp of the index REQUEST ordinal whose commit last
   // re-published each row. A detail response (navigation/refresh/hydration)
   // defers its index-owned fields (display_name, counts, timestamps) to the
@@ -557,7 +564,7 @@ class SessionsStore {
   ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
-    const requestOrdinal = ++this.indexRequestOrdinal;
+    const requestOrdinal = ++this.requestClock;
     const detailCommits = this.snapshotDetailCommits();
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
@@ -669,7 +676,7 @@ class SessionsStore {
       const promise = this.runSidebarHydration(async () => {
         if (signal.aborted) return;
         const detailCommitGeneration = this.detailCommitGeneration(id);
-        const issuedAtIndexOrdinal = this.indexRequestOrdinal;
+        const issuedAtIndexOrdinal = ++this.requestClock;
         try {
           configureGeneratedClient();
           const raw = await callGenerated(
@@ -791,7 +798,7 @@ class SessionsStore {
   async loadMore() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
-    const requestOrdinal = ++this.indexRequestOrdinal;
+    const requestOrdinal = ++this.requestClock;
     const detailCommits = this.snapshotDetailCommits();
     const signal = this.routeSignal();
     this.loading = true;
@@ -1116,7 +1123,7 @@ class SessionsStore {
       return;
     }
     const signal = this.activeDetailRead.begin();
-    const issuedAtIndexOrdinal = this.indexRequestOrdinal;
+    const issuedAtIndexOrdinal = ++this.requestClock;
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
@@ -1184,7 +1191,7 @@ class SessionsStore {
       return this.refreshActiveSession();
     }
     const signal = this.activeDetailRead.begin();
-    const issuedAtIndexOrdinal = this.indexRequestOrdinal;
+    const issuedAtIndexOrdinal = ++this.requestClock;
     try {
       configureGeneratedClient();
       const raw = await callGenerated(
@@ -1607,6 +1614,9 @@ class SessionsStore {
   async deleteSession(id: string) {
     configureGeneratedClient();
     await SessionsService.deleteApiV1SessionsId({ id });
+    // Tombstone the explicit delete so an index load that was in flight
+    // (and its failure-restore path) cannot resurrect the row.
+    this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
     const before = this.sessions.length;
     this.sessions = this.sessions.filter((s) => s.id !== id);
     const removed = before - this.sessions.length;
@@ -1626,6 +1636,9 @@ class SessionsStore {
     await SessionsService.postApiV1SessionsBatchDelete({
       requestBody: { session_ids: ids },
     });
+    for (const id of ids) {
+      this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
+    }
     const idSet = new Set(ids);
     if (this.activeSessionId && idSet.has(this.activeSessionId)) {
       this.setActiveSession(null);
@@ -1640,6 +1653,8 @@ class SessionsStore {
   async restoreSession(id: string) {
     configureGeneratedClient();
     await SessionsService.postApiV1SessionsIdRestore({ id });
+    // Clear the deletion tombstone: the session exists again.
+    this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
     this.clearRecentlyDeleted(id);
     this.invalidateFilterCaches();
     await this.load();
@@ -1654,6 +1669,7 @@ class SessionsStore {
     for (const id of ids) {
       try {
         await SessionsService.postApiV1SessionsIdRestore({ id });
+        this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
       } catch {
         failed.push(id);
       }
