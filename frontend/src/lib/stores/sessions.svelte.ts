@@ -384,6 +384,12 @@ class SessionsStore {
       deleted: boolean;
       issuedAtIndexOrdinal: number;
       committedAtTick: number;
+      // For deleted commits: whether the tombstone actually removed a
+      // sidebar row, and whether that row counted as a root group. Revival
+      // restores only what was removed — a cache-only session excluded by
+      // the filter must not be injected into the list.
+      removedRow: boolean;
+      removedRoot: boolean;
     }
   >();
   // Generations are globally unique (not per-id counters) so pruning an
@@ -1064,6 +1070,8 @@ class SessionsStore {
       deleted,
       issuedAtIndexOrdinal,
       committedAtTick: this.requestClock,
+      removedRow: false,
+      removedRoot: false,
     });
     if (deleted) {
       this.committedDetailByRow.delete(id);
@@ -1087,16 +1095,13 @@ class SessionsStore {
       !deleted &&
       previous !== undefined &&
       previous.deleted &&
+      previous.removedRow &&
       Number.isFinite(previous.issuedAtIndexOrdinal) &&
       snapshot !== undefined &&
       !this.sessions.some((row) => row.id === id)
     ) {
-      const presentIds = new Set(this.sessions.map((row) => row.id));
       this.sessions = [...this.sessions, { ...snapshot }];
-      if (
-        !snapshot.parent_session_id ||
-        !presentIds.has(snapshot.parent_session_id)
-      ) {
+      if (previous.removedRoot) {
         this.total += 1;
       }
       this.scheduleIndexRefresh();
@@ -1249,6 +1254,14 @@ class SessionsStore {
       0,
       this.total - this.countDroppedRoots(droppedRows, presentIds),
     );
+    for (const row of droppedRows) {
+      const commit = this.activeDetailCommitBySession.get(row.id);
+      if (commit?.deleted) {
+        commit.removedRow = true;
+        commit.removedRoot =
+          !row.parent_session_id || !presentIds.has(row.parent_session_id);
+      }
+    }
     return subtree;
   }
 

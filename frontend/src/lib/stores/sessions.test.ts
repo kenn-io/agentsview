@@ -4998,6 +4998,34 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("does not inject a cache-only session into the sidebar on revival", async () => {
+      mockSidebarIndex([]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "c", project: "proj-b", first_message: "detail" }),
+      );
+      await sessions.navigateToSession("c");
+      expect(sessions.sessions.length).toBe(0);
+
+      // The cache-only session (excluded by the current filter) transiently
+      // 404s...
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("c"));
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession).toBeUndefined();
+
+      // ...and a later refresh confirms it exists. The detail cache must
+      // recover, but the tombstone never removed a sidebar row: nothing may
+      // be appended to the filtered list and the root total must not grow.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "c", project: "proj-b", first_message: "again" }),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession?.first_message).toBe("again");
+      expect(sessions.sessions.length).toBe(0);
+      expect(sessions.total).toBe(0);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();
