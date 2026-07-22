@@ -3336,6 +3336,80 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(0);
     });
 
+    it("commits a hydration that resolves after a failed refresh", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+
+      // Hydration of the selected index-only row is in flight...
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      sessions.selectSession("sel");
+
+      // ...when a watcher refresh starts and fails transiently. The read
+      // began but committed nothing newer, so the hydration's successful
+      // response is still the freshest detail there is — discarding it
+      // would leave the row index-only and the breadcrumb blank.
+      vi.mocked(api.getSession).mockRejectedValueOnce(new Error("network"));
+      await sessions.refreshActiveSession();
+
+      resolveHydration(
+        makeSession({ id: "sel", project: "proj-a", first_message: "detail" }),
+      );
+      await hydration;
+
+      expect(sessions.activeSession?.first_message).toBe("detail");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.is_index_only,
+      ).toBe(false);
+    });
+
+    it("keeps hydration-committed detail over a staler index response", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+
+      // An index reload whose server snapshot predates a remote rename is in
+      // flight...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+
+      // ...while selection hydrates the index-only row, resolving with the
+      // renamed session and committing it as the active detail.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", display_name: "renamed" }),
+      );
+      sessions.selectSession("sel");
+      await sessions.hydrateVisibleSessions(["sel"]);
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+
+      // The staler index must not overwrite the committed hydration in the
+      // row or drag the cache back through the row resync.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.activeSession?.display_name).toBe("renamed");
+      expect(
+        sessions.sessions.find((s) => s.id === "sel")?.display_name,
+      ).toBe("renamed");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

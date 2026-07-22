@@ -627,7 +627,7 @@ class SessionsStore {
 
       const promise = this.runSidebarHydration(async () => {
         if (signal.aborted) return;
-        const detailGeneration = this.detailGeneration(id);
+        const detailCommitGeneration = this.detailCommitGeneration(id);
         try {
           configureGeneratedClient();
           const hydrated = await callGenerated(
@@ -637,14 +637,17 @@ class SessionsStore {
           // A superseded hydration still carries valid detail for the active
           // session, so let it back the breadcrumb when the new index excludes
           // the row — but only fill an empty cache, and only when no newer
-          // navigation/refresh/rename touched THIS session's active-detail
-          // state while this response was in flight (another session's read
-          // says nothing about this one). A stale response must never
-          // overwrite detail already resolved for this session by a newer
-          // request; the fresh path below (mergeHydratedSession) owns updates
-          // once the version check passes.
+          // detail COMMITTED for THIS session while this response was in
+          // flight (another session's activity says nothing about this one,
+          // and a read that merely began — possibly failing — proves nothing
+          // either; if it does commit, it commits later and wins). A stale
+          // response must never overwrite detail already committed for this
+          // session by a newer request; the fresh path below
+          // (mergeHydratedSession) owns updates once the version check
+          // passes. Successful active-detail writes count as commits so a
+          // staler index response cannot overwrite them.
           const detailFresh =
-            detailGeneration === this.detailGeneration(id);
+            detailCommitGeneration === this.detailCommitGeneration(id);
           if (
             hydrated.id === this.activeSessionId &&
             !hydrated.is_index_only &&
@@ -652,6 +655,7 @@ class SessionsStore {
             detailFresh
           ) {
             this.activeSessionDetail = hydrated;
+            this.bumpDetailCommit(id, false);
           }
           if (
             version !== this.sidebarIndexVersion ||
@@ -660,13 +664,16 @@ class SessionsStore {
             return;
           }
           // Same-version guard for the active row: a hydration issued before
-          // a newer refresh resolved must not clobber the row or the cache
+          // a newer commit resolved must not clobber the row or the cache
           // with its older snapshot.
           if (hydrated.id === this.activeSessionId && !detailFresh) {
             return;
           }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
+          if (hydrated.id === this.activeSessionId) {
+            this.bumpDetailCommit(id, false);
+          }
         } catch {
           // Visible hydration is best-effort; the skinny row remains usable.
         } finally {
@@ -874,6 +881,10 @@ class SessionsStore {
     this.activeDetailGenerationBySession.set(id, this.detailGeneration(id) + 1);
   }
 
+  private detailCommitGeneration(id: string): number {
+    return this.activeDetailCommitBySession.get(id)?.generation ?? 0;
+  }
+
   private bumpDetailCommit(id: string, deleted: boolean): void {
     const current = this.activeDetailCommitBySession.get(id);
     this.activeDetailCommitBySession.set(id, {
@@ -944,29 +955,31 @@ class SessionsStore {
   }
 
   // After an index commit, reconcile the active session's sidebar row and
-  // detail cache in whichever direction is fresher. When no active-detail
-  // read began and no rename/deletion committed for the now-active session
-  // while the index was in flight, the merged row may have absorbed index
-  // refreshes (renames, counts) the cache never saw — resync the cache from
-  // it so a later reload that excludes the row doesn't revert the breadcrumb
-  // to stale fields. When something newer actually COMMITTED mid-flight, the
-  // committed state wins over the older index snapshot: a deletion removes
-  // the re-listed row (the index predates the 404), and committed detail
-  // replaces it. A read that merely began — it may still be in flight or
-  // have failed — proves nothing about the cache's freshness: leave the row
-  // and the cache alone, and let the read commit through
-  // mergeHydratedSession if and when it resolves.
+  // detail cache in whichever direction is fresher. When something newer
+  // actually COMMITTED mid-flight (navigation/refresh/rename/hydration, or
+  // a 404 deletion), the committed state wins over the older index
+  // snapshot: a deletion removes the re-listed row (the index predates the
+  // 404) and committed detail replaces it. When nothing committed but a
+  // read merely began — it may still be in flight or have failed, proving
+  // nothing about the cache's freshness — leave the row and the cache
+  // alone, and let the read commit through mergeHydratedSession if and when
+  // it resolves. Otherwise the merged row may have absorbed index refreshes
+  // (renames, counts) the cache never saw — resync the cache from it so a
+  // later reload that excludes the row doesn't revert the breadcrumb to
+  // stale fields.
   private syncActiveSessionAfterIndexCommit(
     snapshot: DetailFreshnessSnapshot,
   ) {
     const id = this.activeSessionId;
     if (id === null) return;
-    if (this.detailGeneration(id) === (snapshot.reads.get(id) ?? 0)) {
-      this.cacheActiveSessionDetailFromList(id);
-      return;
-    }
     const commit = this.activeDetailCommitBySession.get(id);
     if (!commit || commit.generation === (snapshot.commits.get(id) ?? 0)) {
+      // Nothing committed mid-flight. If a read began without committing
+      // (still in flight, or it failed), leave both sides alone; otherwise
+      // absorb the index's refreshes into the cache.
+      if (this.detailGeneration(id) === (snapshot.reads.get(id) ?? 0)) {
+        this.cacheActiveSessionDetailFromList(id);
+      }
       return;
     }
     if (commit.deleted) {
