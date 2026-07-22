@@ -314,7 +314,6 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// embedded server reading rates from model_pricing only.
 	applyCustomPricing(database, cfg)
 
-
 	// Apply the config-driven custom pricing map on top of the
 	// pricing that seedPricing just wrote into model_pricing so
 	// fork-private models (e.g. MiniMax-M3, internal/private

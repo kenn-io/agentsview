@@ -338,7 +338,7 @@ func TestMustLoadConfig(t *testing.T) {
 			name:          "DefaultArgs",
 			args:          []string{},
 			wantHost:      "127.0.0.1",
-			wantPort:      9765,
+			wantPort:      8080,
 			wantPublicURL: "",
 			wantProxyMode: "",
 		},
