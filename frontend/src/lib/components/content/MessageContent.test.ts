@@ -234,12 +234,39 @@ Batch D (browser/picker/tabs/media-monitor) is done...
     unmount(component);
   });
 
+  it("keeps subagent ancestry rows labeled as Agent when inline teammate markup is present", async () => {
+    const content = '<teammate-message teammate_id="batch-d-browser">reply</teammate-message>';
+    sessionsState.sessions = [
+      makeSession({
+        id: "subagent-session",
+        relationship_type: "subagent",
+      }),
+    ];
+    const component = await renderRole(
+      makeMessage({
+        id: 13,
+        role: "user",
+        session_id: "subagent-session",
+        content,
+        content_length: content.length,
+      }),
+    );
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "Agent",
+    );
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
+      "S",
+    );
+    unmount(component);
+  });
+
   it("does not relabel teammate wrappers inside fenced code blocks", async () => {
     const content = "```xml\n<teammate-message teammate_id=\"batch-d-browser\">\nreply\n</teammate-message>\n```";
     sessionsState.sessions = [makeSession()];
     const component = await renderRole(
       makeMessage({
-        id: 13,
+        id: 14,
         role: "user",
         content,
         content_length: content.length,
@@ -273,6 +300,16 @@ Batch D (browser/picker/tabs/media-monitor) is done...
         props: {},
         label: "Teammate",
         icon: "T",
+      },
+      {
+        content: '<teammate-message teammate_id="t">reply</teammate-message>',
+        session: makeSession({
+          id: "subagent-session",
+          relationship_type: "subagent",
+        }),
+        props: {},
+        label: "Agent",
+        icon: "S",
       },
       {
         content: "ordinary",

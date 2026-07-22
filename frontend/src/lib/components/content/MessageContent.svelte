@@ -171,17 +171,17 @@
   let roleLabel = $derived.by(() => {
     if (!isUser) return m.message_content_role_assistant();
     if (isSubagentContext) return m.message_content_role_agent();
+    if (sessionKind === "subagent") return m.message_content_role_agent();
     if (sessionKind === "teammate" || hasInlineTeammateMessage)
       return m.message_content_role_teammate();
-    if (sessionKind === "subagent") return m.message_content_role_agent();
     return m.message_content_role_user();
   });
 
   let roleIcon = $derived.by(() => {
     if (!isUser) return "A";
     if (isSubagentContext) return "S";
-    if (sessionKind === "teammate" || hasInlineTeammateMessage) return "T";
     if (sessionKind === "subagent") return "S";
+    if (sessionKind === "teammate" || hasInlineTeammateMessage) return "T";
     return "U";
   });
 
