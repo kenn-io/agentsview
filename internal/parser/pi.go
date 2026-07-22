@@ -642,25 +642,32 @@ func piTimestamp(line string) time.Time {
 	return time.Time{}
 }
 
-// ompParentHeaderSessionID returns the parent OMP session's header id for a
+// ompParentHeaderSessionID returns the parent OMP session's stored raw ID for a
 // nested subagent transcript, or "" when childPath is not a nested subagent.
 // OMP stores subagents in a directory named after the parent transcript (minus
 // the .jsonl extension), so the parent transcript is the containing directory
-// plus ".jsonl".
+// plus ".jsonl". The ID resolution mirrors parent parsing: prefer the header
+// id, but support V1 parent transcripts by falling back to the parent filename.
 func ompParentHeaderSessionID(childPath string) string {
 	parent := filepath.Dir(childPath) + ".jsonl"
-	if !IsRegularFile(parent) {
+	parentID, ok := ompSessionHeaderID(parent)
+	if !ok {
 		return ""
 	}
-	return ompHeaderSessionID(parent)
+	if parentID != "" {
+		return parentID
+	}
+	return strings.TrimSuffix(filepath.Base(parent), ".jsonl")
 }
 
-// ompHeaderSessionID reads path's session header id, skipping a leading OMP
-// title slot line, and returns "" when the file is not a pi session file.
-func ompHeaderSessionID(path string) string {
+// ompSessionHeaderID reads path's session header id, skipping a leading OMP
+// title slot line. The boolean reports whether the file has a valid pi session
+// header. os.Open intentionally follows symlinks to supported parent
+// transcripts.
+func ompSessionHeaderID(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	defer f.Close()
 	s := bufio.NewScanner(f)
@@ -674,9 +681,9 @@ func ompHeaderSessionID(path string) string {
 			continue
 		}
 		if gjson.Get(line, "type").Str != "session" {
-			return ""
+			return "", false
 		}
-		return gjson.Get(line, "id").Str
+		return gjson.Get(line, "id").Str, true
 	}
-	return ""
+	return "", false
 }

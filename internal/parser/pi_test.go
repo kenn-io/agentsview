@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -566,6 +567,62 @@ func TestPiProviderOMPParentSessionMatchesParentID(t *testing.T) {
 	assert.Equal(t, "omp:child-def", child.ID)
 	assert.Equal(t, parent.ID, child.ParentSessionID,
 		"child parentSession must map to the parent's stored session ID")
+}
+
+func TestPiProviderOMPSubagentUsesV1ParentFilenameID(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	parentPath := filepath.Join(projectDir, "parent-v1.jsonl")
+	childDir := filepath.Join(projectDir, "parent-v1")
+	childPath := filepath.Join(childDir, "agent-worker.jsonl")
+	require.NoError(t, os.MkdirAll(childDir, 0o755))
+	require.NoError(t, os.WriteFile(parentPath, []byte(strings.Join([]string{
+		`{"type":"session","version":1,"timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}`,
+		`{"type":"message","timestamp":"2026-07-03T06:00:01.000Z","message":{"role":"user","content":"root"}}`,
+		"",
+	}, "\n")), 0o644))
+	require.NoError(t, os.WriteFile(childPath, []byte(strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-def","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x"}`,
+		`{"type":"message","id":"c1","parentId":null,"timestamp":"2026-07-03T06:30:01.000Z","message":{"role":"user","content":"branch"}}`,
+		"",
+	}, "\n")), 0o644))
+
+	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentOMP, "omp:")
+	require.NoError(t, err)
+
+	assert.Equal(t, "omp:child-def", child.ID)
+	assert.Equal(t, "omp:parent-v1", child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType)
+}
+
+func TestPiProviderOMPSubagentFollowsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	realParent := filepath.Join(root, "real-parent.jsonl")
+	parentLink := filepath.Join(projectDir, "linked-parent.jsonl")
+	childDir := filepath.Join(projectDir, "linked-parent")
+	childPath := filepath.Join(childDir, "agent-worker.jsonl")
+	require.NoError(t, os.MkdirAll(childDir, 0o755))
+	require.NoError(t, os.WriteFile(realParent, []byte(strings.Join([]string{
+		`{"type":"session","version":3,"id":"real-parent-id","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}`,
+		`{"type":"message","id":"p1","parentId":null,"timestamp":"2026-07-03T06:00:01.000Z","message":{"role":"user","content":"root"}}`,
+		"",
+	}, "\n")), 0o644))
+	if err := os.Symlink(realParent, parentLink); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	require.NoError(t, os.WriteFile(childPath, []byte(strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-def","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x"}`,
+		`{"type":"message","id":"c1","parentId":null,"timestamp":"2026-07-03T06:30:01.000Z","message":{"role":"user","content":"branch"}}`,
+		"",
+	}, "\n")), 0o644))
+
+	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentOMP, "omp:")
+	require.NoError(t, err)
+
+	assert.Equal(t, "omp:child-def", child.ID)
+	assert.Equal(t, "omp:real-parent-id", child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType)
 }
 
 func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
