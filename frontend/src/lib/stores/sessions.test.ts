@@ -4546,6 +4546,105 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(2);
     });
 
+    it("reconciles a stale response from the stamped row after exclusion", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", display_name: "old" }),
+      ]);
+      await sessions.load();
+
+      // Selection hydration of the index-only row is pinned in flight...
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      sessions.selectSession("sel");
+      await Promise.resolve();
+
+      // ...a reload publishes a newer remote rename onto the still
+      // index-only row (the empty cache cannot absorb it), then a second
+      // reload excludes the row entirely.
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "sel",
+          project: "proj-a",
+          display_name: "server-renamed",
+        }),
+      ]);
+      await sessions.load({ force: true });
+      mockSidebarIndex([makeSkinnyRow({ id: "other", project: "proj-b" })]);
+      await sessions.load({ force: true });
+
+      // The stale pre-rename response resolves with row and cache both
+      // absent: the newer index fields survive only in the stamped publish
+      // snapshot, which must win the reconciliation.
+      resolveHydration(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          display_name: "old",
+          first_message: "detail",
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(sessions.activeSession?.display_name).toBe("server-renamed");
+      expect(sessions.activeSession?.first_message).toBe("detail");
+    });
+
+    it("removes local descendants when their root is deleted", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+      await sessions.load();
+      expect(sessions.total).toBe(1);
+
+      // A stale reload is in flight when the root is deleted. The backend
+      // removes the whole subtree from sidebar queries; local state must
+      // match: the descendant goes with its root, counted once.
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("root1");
+
+      expect(sessions.sessions.some((s) => s.id === "child1")).toBe(false);
+      expect(sessions.total).toBe(0);
+
+      // The stale reload still lists the subtree; publishing must drop the
+      // descendant along with its tombstoned root.
+      resolveIndex({
+        sessions: [
+          makeSkinnyRow({ id: "root1", project: "proj-a" }),
+          makeSkinnyRow({
+            id: "child1",
+            project: "proj-a",
+            parent_session_id: "root1",
+          }),
+        ],
+        total: 1,
+      });
+      await reload;
+
+      expect(sessions.sessions.length).toBe(0);
+      expect(sessions.total).toBe(0);
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

@@ -410,7 +410,10 @@ class SessionsStore {
   // the row (an unrelated loadMore page), says nothing newer, so the
   // response applies wholesale. Together with the commit records above this
   // makes request-issue order the single freshness rule in both directions.
-  private indexCommitByRow = new Map<string, number>();
+  private indexCommitByRow = new Map<
+    string,
+    { ordinal: number; row: Session }
+  >();
   // True while activeSessionDetail is a fabricated rename snapshot (the
   // rename endpoint returns the DB-session shape without detail-only
   // fields). Cleared by any read-derived commit for the active session;
@@ -600,16 +603,16 @@ class SessionsStore {
         session,
       ]));
       // A deletion that committed while this index was in flight supersedes
-      // the index's older server snapshot: drop tombstoned rows instead of
-      // reinserting them.
-      const dropped = index.sessions.filter((row) =>
-        this.deletedSinceSnapshot(row.id, detailCommits)
+      // the index's older server snapshot: drop tombstoned rows — and their
+      // descendants, whose groups the backend removes with them — instead
+      // of reinserting them.
+      const tombstoned = this.expandTombstoned(index.sessions, (rid) =>
+        this.deletedSinceSnapshot(rid, detailCommits)
       );
-      const rows = index.sessions.filter(
-        (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
-      );
+      const dropped = index.sessions.filter((row) => tombstoned.has(row.id));
+      const rows = index.sessions.filter((row) => !tombstoned.has(row.id));
       const incomingIds = new Set(index.sessions.map((row) => row.id));
-      this.sessions = rows.map((row) => {
+      const published = rows.map((row) => {
         const prior = existing.get(row.id);
         // A rename/read that committed for this row after this index was
         // requested outranks the index's snapshot — keep the prior row, or
@@ -621,13 +624,17 @@ class SessionsStore {
         }
         return sidebarIndexRowToSession(row, prior);
       });
+      this.sessions = published;
       this.nextCursor = index.next_cursor ?? null;
       this.total = Math.max(
         0,
         index.total - this.countDroppedRoots(dropped, incomingIds),
       );
-      for (const row of rows) {
-        this.indexCommitByRow.set(row.id, requestOrdinal);
+      for (const session of published) {
+        this.indexCommitByRow.set(session.id, {
+          ordinal: requestOrdinal,
+          row: session,
+        });
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch {
@@ -637,12 +644,16 @@ class SessionsStore {
       // removed its row from the live list, and the pre-load snapshot still
       // contains it.
       if (this.loadVersion === version) {
+        const restoredTombstones = this.expandTombstoned(
+          prev.sessions,
+          (rid) => this.deletedSinceSnapshot(rid, detailCommits),
+        );
         const droppedRows = prev.sessions.filter((s) =>
-          this.deletedSinceSnapshot(s.id, detailCommits)
+          restoredTombstones.has(s.id)
         );
         const prevIds = new Set(prev.sessions.map((s) => s.id));
         this.sessions = prev.sessions.filter(
-          (s) => !this.deletedSinceSnapshot(s.id, detailCommits),
+          (s) => !restoredTombstones.has(s.id),
         );
         this.nextCursor = prev.nextCursor;
         this.total = Math.max(
@@ -849,28 +860,29 @@ class SessionsStore {
       const existingById = new Map(
         this.sessions.map((session) => [session.id, session]),
       );
-      // Same deletion-tombstone guard as loadSidebarPage for appended pages.
-      const dropped = index.sessions.filter((row) =>
-        this.deletedSinceSnapshot(row.id, detailCommits)
+      // Same deletion-tombstone guard as loadSidebarPage for appended
+      // pages, including descendants of tombstoned rows.
+      const tombstoned = this.expandTombstoned(index.sessions, (rid) =>
+        this.deletedSinceSnapshot(rid, detailCommits)
       );
-      const rows = index.sessions.filter(
-        (row) => !this.deletedSinceSnapshot(row.id, detailCommits),
-      );
+      const dropped = index.sessions.filter((row) => tombstoned.has(row.id));
+      const rows = index.sessions.filter((row) => !tombstoned.has(row.id));
       const incomingIds = new Set(index.sessions.map((row) => row.id));
       const pageIds = new Set(rows.map((row) => row.id));
+      const appended = rows.map((row) => {
+        const prior = existingById.get(row.id);
+        if (
+          this.commitSupersedesIndex(row.id, detailCommits, requestOrdinal)
+        ) {
+          if (prior) return prior;
+          const committed = this.committedDetailByRow.get(row.id);
+          if (committed) return { ...committed };
+        }
+        return sidebarIndexRowToSession(row, prior);
+      });
       this.sessions = [
         ...this.sessions.filter((s) => !pageIds.has(s.id)),
-        ...rows.map((row) => {
-          const prior = existingById.get(row.id);
-          if (
-            this.commitSupersedesIndex(row.id, detailCommits, requestOrdinal)
-          ) {
-            if (prior) return prior;
-            const committed = this.committedDetailByRow.get(row.id);
-            if (committed) return { ...committed };
-          }
-          return sidebarIndexRowToSession(row, prior);
-        }),
+        ...appended,
       ];
       this.nextCursor = index.next_cursor ?? null;
       // Cursor responses carry the total from the first page's snapshot,
@@ -890,8 +902,11 @@ class SessionsStore {
         0,
         this.total - this.countDroppedRoots(newlyDropped, paginationContext),
       );
-      for (const row of rows) {
-        this.indexCommitByRow.set(row.id, requestOrdinal);
+      for (const session of appended) {
+        this.indexCommitByRow.set(session.id, {
+          ordinal: requestOrdinal,
+          row: session,
+        });
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
     } catch (error) {
@@ -1045,17 +1060,20 @@ class SessionsStore {
     session: Session,
     issuedAtIndexOrdinal: number,
   ): Session {
-    if ((this.indexCommitByRow.get(id) ?? 0) <= issuedAtIndexOrdinal) {
+    const stamped = this.indexCommitByRow.get(id);
+    if (stamped === undefined || stamped.ordinal <= issuedAtIndexOrdinal) {
       return session;
     }
     const row = this.sessions.find((s) => s.id === id);
     if (row) return mergeIndexFieldsIntoDetail(row, session);
     // The re-published row was since excluded by a later reload; the
-    // absorbed index fields survive only in the active cache, so reconcile
-    // against that instead of letting the stale response apply wholesale.
+    // absorbed index fields survive in the active cache, or failing that in
+    // the stamped publish snapshot (an index-only row never fills the
+    // cache), so reconcile against those instead of letting the stale
+    // response apply wholesale.
     const cached = this.activeSessionDetail;
     if (cached?.id === id) return mergeIndexFieldsIntoDetail(cached, session);
-    return session;
+    return mergeIndexFieldsIntoDetail(stamped.row, session);
   }
 
   // True when a deletion committed for id after the given commit snapshot
@@ -1108,6 +1126,35 @@ class SessionsStore {
       commit.generation !== (snapshot.get(id) ?? 0) &&
       commit.issuedAtIndexOrdinal >= requestOrdinal
     );
+  }
+
+  // Deleting a session removes its whole subtree from the backend's
+  // sidebar queries; extend a tombstone predicate across parent chains so
+  // publication, restoration, and local removal treat the group
+  // consistently. Runs to a fixpoint over the given rows; ancestors need
+  // not be present in the row set (the predicate is consulted for parent
+  // ids directly).
+  private expandTombstoned(
+    rows: ReadonlyArray<{ id: string; parent_session_id?: string | null }>,
+    isTombstoned: (id: string) => boolean,
+  ): Set<string> {
+    const removed = new Set<string>();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const row of rows) {
+        if (removed.has(row.id)) continue;
+        const parent = row.parent_session_id;
+        if (
+          isTombstoned(row.id) ||
+          (parent && (removed.has(parent) || isTombstoned(parent)))
+        ) {
+          removed.add(row.id);
+          grew = true;
+        }
+      }
+    }
+    return removed;
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
@@ -1378,7 +1425,7 @@ class SessionsStore {
           !latestCommit.deleted &&
           Number.isFinite(latestCommit.issuedAtIndexOrdinal) &&
           latestCommit.issuedAtIndexOrdinal > issuedAtIndexOrdinal) ||
-        (this.indexCommitByRow.get(id) ?? 0) > issuedAtIndexOrdinal;
+        (this.indexCommitByRow.get(id)?.ordinal ?? 0) > issuedAtIndexOrdinal;
       if (
         e instanceof ApiError &&
         e.status === 404 &&
@@ -1771,9 +1818,22 @@ class SessionsStore {
     // Tombstone the explicit delete so an index load that was in flight
     // (and its failure-restore path) cannot resurrect the row.
     this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
-    const droppedRows = this.sessions.filter((s) => s.id === id);
+    // The backend removes the whole subtree from sidebar queries; mirror it
+    // locally, tombstoning known descendants so stale responses cannot
+    // reinsert them either.
+    const subtree = this.expandTombstoned(
+      this.sessions,
+      (rid) => rid === id,
+    );
+    subtree.add(id);
+    for (const rid of subtree) {
+      if (rid !== id) {
+        this.bumpDetailCommit(rid, true, Number.POSITIVE_INFINITY);
+      }
+    }
+    const droppedRows = this.sessions.filter((s) => subtree.has(s.id));
     const presentIds = new Set(this.sessions.map((s) => s.id));
-    this.sessions = this.sessions.filter((s) => s.id !== id);
+    this.sessions = this.sessions.filter((s) => !subtree.has(s.id));
     this.total = Math.max(
       0,
       this.total - this.countDroppedRoots(droppedRows, presentIds),
@@ -1791,17 +1851,22 @@ class SessionsStore {
     await SessionsService.postApiV1SessionsBatchDelete({
       requestBody: { session_ids: ids },
     });
-    for (const id of ids) {
-      this.bumpDetailCommit(id, true, Number.POSITIVE_INFINITY);
-    }
     const idSet = new Set(ids);
     // Remove rows and adjust the root total immediately: the forced reload
     // below is authoritative when it succeeds, but if it fails its restore
     // snapshot was taken after these tombstones and would otherwise keep
-    // the deleted rows visible.
+    // the deleted rows visible. Known local descendants are tombstoned with
+    // their roots, mirroring the backend's subtree removal.
+    const subtree = this.expandTombstoned(this.sessions, (rid) =>
+      idSet.has(rid)
+    );
+    for (const id of ids) subtree.add(id);
+    for (const rid of subtree) {
+      this.bumpDetailCommit(rid, true, Number.POSITIVE_INFINITY);
+    }
     const presentIds = new Set(this.sessions.map((s) => s.id));
-    const droppedRows = this.sessions.filter((s) => idSet.has(s.id));
-    this.sessions = this.sessions.filter((s) => !idSet.has(s.id));
+    const droppedRows = this.sessions.filter((s) => subtree.has(s.id));
+    this.sessions = this.sessions.filter((s) => !subtree.has(s.id));
     this.total = Math.max(
       0,
       this.total - this.countDroppedRoots(droppedRows, presentIds),
