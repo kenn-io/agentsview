@@ -5240,6 +5240,196 @@ describe("SessionsStore", () => {
       expect(sessions.total).toBe(1);
     });
 
+    it("subtracts a later-page root deleted during a stale reload", async () => {
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "rootA", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "rootB", project: "proj-a" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.loadMore();
+      expect(sessions.total).toBe(2);
+
+      // A reload is in flight when the later-page root is deleted. The
+      // stale first page neither lists rootB nor knows it is gone, but its
+      // committed total must still reflect the deletion.
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("rootB");
+      expect(sessions.total).toBe(1);
+
+      resolveIndex({
+        sessions: [makeSkinnyRow({ id: "rootA", project: "proj-a" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await reload;
+
+      expect(sessions.total).toBe(1);
+    });
+
+    it("forces a fresh reload after restoring a deleted session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "rootP", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.deleteSession).mockResolvedValueOnce({});
+      await sessions.deleteSession("rootP");
+      expect(sessions.total).toBe(0);
+
+      // A watcher-driven reload with a pre-restore snapshot is in flight
+      // when the user restores the session. Joining it would publish a list
+      // without the restored root; the restore must force a fresh load.
+      let resolveStale!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveStale = r;
+        }),
+      );
+      void sessions.load();
+      await Promise.resolve();
+      vi.mocked(api.restoreSession).mockResolvedValueOnce({});
+      vi.mocked(api.getSidebarSessionIndex).mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "rootP", project: "proj-a" })],
+        total: 1,
+        next_cursor: null,
+      });
+      const restore = sessions.restoreSession("rootP");
+      resolveStale({ sessions: [], total: 0, next_cursor: null });
+      await restore;
+
+      expect(sessions.sessions.some((s) => s.id === "rootP")).toBe(true);
+      expect(sessions.total).toBe(1);
+    });
+
+    it("treats any complete publish excluding the id as membership truth", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "A" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A filter reload excluding the session is issued BEFORE the 404...
+      let resolveIndex!: (v: unknown) => void;
+      vi.mocked(api.getSidebarSessionIndex).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveIndex = r;
+        }),
+      );
+      const reload = sessions.load({ force: true });
+      vi.mocked(api.getSession).mockRejectedValueOnce(makeNotFoundError("sel"));
+      await sessions.refreshActiveSession();
+
+      // ...and commits after it, excluding the session by filters.
+      resolveIndex({
+        sessions: [makeSkinnyRow({ id: "other", project: "proj-b" })],
+        total: 1,
+        next_cursor: null,
+      });
+      await reload;
+
+      // Revival must respect that complete publish's membership regardless
+      // of which request was issued first.
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "B" }),
+      );
+      await sessions.refreshActiveSession();
+
+      expect(sessions.activeSession?.first_message).toBe("B");
+      expect(sessions.sessions.some((s) => s.id === "sel")).toBe(false);
+      expect(sessions.total).toBe(1);
+    });
+
+    it("keeps newer index fields when merging a version-superseded hydration", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", message_count: 5 }),
+      ]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          message_count: 5,
+          first_message: "v1",
+        }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveHydration!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveHydration = r;
+        }),
+      );
+      const hydration = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+
+      // The reload re-lists the row with newer index-owned fields.
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "sel", project: "proj-a", message_count: 42 }),
+      ]);
+      await sessions.load({ force: true });
+
+      // The version-superseded hydration still merges its detail fields,
+      // but must not roll back the reloaded row's newer index-owned ones.
+      resolveHydration(
+        makeSession({
+          id: "sel",
+          project: "proj-a",
+          message_count: 5,
+          first_message: "v2",
+        }),
+      );
+      await hydration;
+
+      const row = sessions.sessions.find((s) => s.id === "sel");
+      expect(row?.first_message).toBe("v2");
+      expect(row?.message_count).toBe(42);
+    });
+
+    it("does not merge a hydration superseded by an epoch invalidation", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "sel", project: "proj-a", first_message: "fresh" }),
+      );
+      await sessions.hydrateVisibleSessions(["sel"]);
+      sessions.selectSession("sel");
+
+      // A hydration is in flight when a messages event invalidates the
+      // hydration caches (same index version, bumped epoch). Its response
+      // predates the messages change and must not merge back.
+      (sessions as any).invalidateHydratedSessionDetails();
+      let resolveStale!: (s: Session) => void;
+      vi.mocked(api.getSession).mockReturnValueOnce(
+        new Promise<Session>((r) => {
+          resolveStale = r;
+        }),
+      );
+      const stale = sessions.hydrateVisibleSessions(["sel"]);
+      await Promise.resolve();
+      (sessions as any).invalidateHydratedSessionDetails();
+      resolveStale(
+        makeSession({ id: "sel", project: "proj-a", first_message: "older" }),
+      );
+      await stale;
+
+      expect(sessions.activeSession?.first_message).toBe("fresh");
+    });
+
     it("ignores a stale hydration resolving after a newer refresh", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "sel", project: "proj-a" })]);
       await sessions.load();

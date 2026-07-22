@@ -387,8 +387,12 @@ class SessionsStore {
       // For deleted commits: whether the tombstone actually removed a
       // sidebar row. Revival restores a row only if one was removed — a
       // cache-only session excluded by the filter must not be injected
-      // into the list. Root status is recomputed at append time.
+      // into the list. Root status for REVIVAL is recomputed at append
+      // time; removedRootAtDeletion records the removal-time status for a
+      // different consumer — total accounting of deletions absent from a
+      // stale page (see loadSidebarPage).
       removedRow: boolean;
+      removedRootAtDeletion: boolean;
     }
   >();
   // Generations are globally unique (not per-id counters) so pruning an
@@ -650,9 +654,31 @@ class SessionsStore {
       });
       this.sessions = published;
       this.nextCursor = index.next_cursor ?? null;
+      // Root deletions committed after this request's snapshot that are
+      // absent from the returned page (a later-page root deleted
+      // mid-flight) must still come off the stale total. Only paginated
+      // responses qualify: a COMPLETE publish's total already reflects
+      // full membership, so an id absent from it was not counted at all
+      // (e.g. excluded by changed filters).
+      let offPageDeletedRoots = 0;
+      if ((index.next_cursor ?? null) !== null) {
+        for (const [cid, commit] of this.activeDetailCommitBySession) {
+          if (
+            commit.deleted &&
+            commit.removedRootAtDeletion &&
+            commit.generation !== (detailCommits.get(cid) ?? 0) &&
+            commit.issuedAtIndexOrdinal >= requestOrdinal &&
+            !incomingIds.has(cid)
+          ) {
+            offPageDeletedRoots++;
+          }
+        }
+      }
       this.total = Math.max(
         0,
-        index.total - this.countDroppedRoots(dropped, incomingIds),
+        index.total -
+          this.countDroppedRoots(dropped, incomingIds) -
+          offPageDeletedRoots,
       );
       for (const session of published) {
         this.indexCommitByRow.set(session.id, {
@@ -660,18 +686,22 @@ class SessionsStore {
           row: session,
         });
       }
-      // A full publish issued after a read-derived tombstone that excludes
-      // the id is authoritative for the current filters: revival must not
-      // append the row back into a list that no longer contains it.
-      for (const [cid, commit] of this.activeDetailCommitBySession) {
-        if (
-          commit.deleted &&
-          commit.removedRow &&
-          Number.isFinite(commit.issuedAtIndexOrdinal) &&
-          commit.issuedAtIndexOrdinal < requestOrdinal &&
-          !incomingIds.has(cid)
-        ) {
-          commit.removedRow = false;
+      // A COMPLETE publish (no further pages) that excludes the id is
+      // authoritative for sidebar membership under the current filters,
+      // regardless of request issue order — filters do not depend on the
+      // 404's timing. Revival must not append the row back into a list
+      // that no longer contains it. A paginated first page proves nothing:
+      // the session may live on a later page.
+      if ((index.next_cursor ?? null) === null) {
+        for (const [cid, commit] of this.activeDetailCommitBySession) {
+          if (
+            commit.deleted &&
+            commit.removedRow &&
+            Number.isFinite(commit.issuedAtIndexOrdinal) &&
+            !incomingIds.has(cid)
+          ) {
+            commit.removedRow = false;
+          }
         }
       }
       this.syncActiveSessionAfterIndexCommit(detailCommits, requestOrdinal);
@@ -813,8 +843,14 @@ class SessionsStore {
             // session still outranks whatever the re-listed row carries;
             // merge it, or the getter (which prefers a hydrated row over
             // the cache) shows the older data and nothing re-hydrates a
-            // non-index-only row.
-            if (hydrated.id === this.activeSessionId && detailFresh) {
+            // non-index-only row. Epoch-only invalidation is different: a
+            // messages event marked this response stale in place, so it
+            // must not merge back.
+            if (
+              version !== this.sidebarIndexVersion &&
+              hydrated.id === this.activeSessionId &&
+              detailFresh
+            ) {
               this.mergeHydratedSession(hydrated);
             }
             return;
@@ -1101,6 +1137,9 @@ class SessionsStore {
       removedRow: deleted && previous?.deleted === true
         ? previous.removedRow
         : false,
+      removedRootAtDeletion: deleted && previous?.deleted === true
+        ? previous.removedRootAtDeletion
+        : false,
     });
     if (deleted) {
       this.committedDetailByRow.delete(id);
@@ -1293,6 +1332,8 @@ class SessionsStore {
       const commit = this.activeDetailCommitBySession.get(row.id);
       if (commit?.deleted) {
         commit.removedRow = true;
+        commit.removedRootAtDeletion =
+          !row.parent_session_id || !presentIds.has(row.parent_session_id);
       }
     }
     return subtree;
@@ -1323,6 +1364,32 @@ class SessionsStore {
     return rows.filter(
       (row) => !row.parent_session_id || !ids.has(row.parent_session_id),
     ).length;
+  }
+
+  // Restoring a session also restores its subtree server-side; clear any
+  // descendant tombstones so stale filters cannot keep suppressing them.
+  // Parent links come from the retained publish/commit snapshots.
+  private clearSubtreeTombstones(id: string): void {
+    const cleared = new Set([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [cid, commit] of this.activeDetailCommitBySession) {
+        if (!commit.deleted || cleared.has(cid)) continue;
+        const parent =
+          this.indexCommitByRow.get(cid)?.row.parent_session_id ??
+          this.committedDetailByRow.get(cid)?.parent_session_id;
+        if (parent && cleared.has(parent)) {
+          cleared.add(cid);
+          grew = true;
+        }
+      }
+    }
+    for (const cid of cleared) {
+      if (cid !== id) {
+        this.bumpDetailCommit(cid, false, Number.POSITIVE_INFINITY);
+      }
+    }
   }
 
   private snapshotDetailCommits(): ReadonlyMap<string, number> {
@@ -2025,6 +2092,14 @@ class SessionsStore {
       0,
       this.total - this.countDroppedRoots(droppedRows, presentIds),
     );
+    for (const row of droppedRows) {
+      const commit = this.activeDetailCommitBySession.get(row.id);
+      if (commit?.deleted) {
+        commit.removedRow = true;
+        commit.removedRootAtDeletion =
+          !row.parent_session_id || !presentIds.has(row.parent_session_id);
+      }
+    }
     if (this.activeSessionId && subtree.has(this.activeSessionId)) {
       this.setActiveSession(null);
     }
@@ -2038,11 +2113,14 @@ class SessionsStore {
   async restoreSession(id: string) {
     configureGeneratedClient();
     await SessionsService.postApiV1SessionsIdRestore({ id });
-    // Clear the deletion tombstone: the session exists again.
+    // Clear the deletion tombstones — the session and its subtree exist
+    // again — and force a fresh load: a joined pre-restore reload would
+    // publish a list without the restored root.
     this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
+    this.clearSubtreeTombstones(id);
     this.clearRecentlyDeleted(id);
     this.invalidateFilterCaches();
-    await this.load();
+    await this.load({ force: true });
   }
 
   async restoreRecentlyDeleted(deleted: RecentlyDeletedSessions) {
@@ -2055,6 +2133,7 @@ class SessionsStore {
       try {
         await SessionsService.postApiV1SessionsIdRestore({ id });
         this.bumpDetailCommit(id, false, Number.POSITIVE_INFINITY);
+        this.clearSubtreeTombstones(id);
       } catch {
         failed.push(id);
       }
