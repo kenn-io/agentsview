@@ -172,6 +172,39 @@ func (db *DB) UpsertModelPricing(
 	return tx.Commit()
 }
 
+// DeleteModelPricing removes pricing rows by exact model pattern.
+// Used by the version-gated fallback seed to drop stale curated alias
+// rows that a previous binary seeded but the current fallback set no
+// longer carries (an exact-match row would otherwise shadow the
+// date-based pricing path for those names).
+func (db *DB) DeleteModelPricing(patterns []string) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	placeholders := make([]string, len(patterns))
+	args := make([]any, len(patterns))
+	for i, p := range patterns {
+		placeholders[i] = "?"
+		args[i] = p
+	}
+	_, err := db.getWriter().Exec(
+		`DELETE FROM model_pricing
+		 WHERE model_pattern IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("deleting pricing rows: %w", err)
+	}
+	return nil
+}
+
 // GetPricingMeta reads a metadata value stored as a sentinel
 // row in model_pricing. Returns "" if not found.
 func (db *DB) GetPricingMeta(key string) (string, error) {

@@ -1439,6 +1439,22 @@ func clampedUsageTokenCountersWithReasoning(
 		ClampPlausibleTokens(int64(reasoningTok))
 }
 
+// usageLookupModel returns the model name to price a usage row with.
+// Date-ambiguous Kimi aliases (kimi-for-coding, daimon-kimi-code,
+// daimon-kimi-messages) resolve to their canonical model for the row's
+// timestamp (K2.6 before pricing.KimiModelEraCutoff, K3 at/after it);
+// every other model passes through unchanged. Pricing lookups and
+// records both use the returned name, so the pricing block reports the
+// canonical model whose rates actually produced the cost.
+func usageLookupModel(model, ts string) string {
+	if canonical := pricingpkg.CanonicalModelForTimestamp(
+		model, ts,
+	); canonical != "" {
+		return canonical
+	}
+	return model
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
@@ -1454,15 +1470,16 @@ func dailyUsageAmounts(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	lookup := pricing.Lookup(r.model)
+	lookupModel := usageLookupModel(r.model, r.ts)
+	lookup := pricing.Lookup(lookupModel)
 	rates := lookup.Rates
 	if r.costUSD.Valid && r.costSource != CopilotReportedCostSource {
 		cost = r.costUSD.Float64
-		pricing.RecordReported(r.model, lookup)
+		pricing.RecordReported(lookupModel, lookup)
 	} else {
 		cost = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordComputed(lookupModel, lookup)
 	}
 
 	readDelta := float64(cacheRdTok) *
@@ -2625,21 +2642,23 @@ func sessionRowCost(
 	}
 
 	if r.costUSD.Valid {
-		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		lookupModel := usageLookupModel(r.model, r.ts)
+		pricing.RecordReported(lookupModel, pricing.Lookup(lookupModel))
 		return r.costUSD.Float64, true, true
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
-	lookup := pricing.Lookup(r.model)
+	lookupModel := usageLookupModel(r.model, r.ts)
+	lookup := pricing.Lookup(lookupModel)
 	if !lookup.OK {
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordComputed(lookupModel, lookup)
 		return 0, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
-	pricing.RecordComputed(r.model, lookup)
+	pricing.RecordComputed(lookupModel, lookup)
 	return cost, true, true
 }
 

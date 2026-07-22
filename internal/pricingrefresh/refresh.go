@@ -19,20 +19,32 @@ const (
 // Attempts are recorded before fetching, so failures observe the same cooldown.
 const RefreshCooldown = time.Hour
 
-// SeedFallback installs the embedded catalog when its version changed.
+// SeedFallback installs the embedded catalog (snapshot + supplemental
+// aliases) when pricing.SeedVersion differs from the stored meta.
+// On reseed it also deletes flat-rate rows for date-ambiguous Kimi
+// aliases so they cannot shadow the date-based CanonicalModelForDate
+// pricing path.
 func SeedFallback(database *db.DB) error {
 	stored, err := database.GetPricingMeta(fallbackVersionMetaKey)
 	if err != nil {
 		return err
 	}
-	if stored == pricing.FallbackVersion {
+	if stored == pricing.SeedVersion {
 		return nil
 	}
 	if err := upsert(database, pricing.FallbackPricing()); err != nil {
 		return err
 	}
+	// Only delete while reseeding (version mismatch). A later LiteLLM
+	// refresh that legitimately lists one of these names is not
+	// clobbered on every startup.
+	if err := database.DeleteModelPricing(
+		pricing.DateAliasedModels(),
+	); err != nil {
+		return err
+	}
 	return database.SetPricingMeta(
-		fallbackVersionMetaKey, pricing.FallbackVersion,
+		fallbackVersionMetaKey, pricing.SeedVersion,
 	)
 }
 

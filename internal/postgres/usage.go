@@ -12,6 +12,7 @@ import (
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 const pgUsageMessageEligibility = `
@@ -935,6 +936,24 @@ func pgFloorNegativeTokens(v int) int {
 	return v
 }
 
+// pgUsageLookupModel returns the model name to price a usage row
+// with, mirroring usageLookupModel in internal/db: date-ambiguous Kimi
+// aliases resolve to their canonical model for the row's timestamp
+// (K2.6 before pricing.KimiModelEraCutoff, K3 at/after it, K3 when the
+// timestamp is NULL); every other model passes through unchanged.
+func pgUsageLookupModel(model string, ts sql.NullTime) string {
+	var t time.Time
+	if ts.Valid {
+		t = ts.Time
+	}
+	if canonical := pricingpkg.CanonicalModelForDate(
+		model, t,
+	); canonical != "" {
+		return canonical
+	}
+	return model
+}
+
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
@@ -955,15 +974,16 @@ func pgDailyUsageAmounts(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	lookup := pricing.Lookup(r.model)
+	lookupModel := pgUsageLookupModel(r.model, r.ts)
+	lookup := pricing.Lookup(lookupModel)
 	rates := lookup.Rates
 	if r.costUSD.Valid && r.costSource != db.CopilotReportedCostSource {
 		cost = r.costUSD.Float64
-		pricing.RecordReported(r.model, lookup)
+		pricing.RecordReported(lookupModel, lookup)
 	} else {
 		cost = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordComputed(lookupModel, lookup)
 	}
 	readDelta := float64(cacheRdTok) *
 		(rates.InputPerMTok - rates.CacheReadPerMTok) / 1_000_000
@@ -1022,21 +1042,23 @@ func pgSessionRowCost(
 	}
 
 	if r.costUSD.Valid {
-		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		lookupModel := pgUsageLookupModel(r.model, r.ts)
+		pricing.RecordReported(lookupModel, pricing.Lookup(lookupModel))
 		return r.costUSD.Float64, true, true
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
-	lookup := pricing.Lookup(r.model)
+	lookupModel := pgUsageLookupModel(r.model, r.ts)
+	lookup := pricing.Lookup(lookupModel)
 	if !lookup.OK {
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordComputed(lookupModel, lookup)
 		return 0, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
-	pricing.RecordComputed(r.model, lookup)
+	pricing.RecordComputed(lookupModel, lookup)
 	return cost, true, true
 }
 

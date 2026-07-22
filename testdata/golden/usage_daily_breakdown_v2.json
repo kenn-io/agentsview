@@ -5,8 +5,8 @@
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2433,
-    "digest": "sha256:42f7f83d9acad0e9a251cd849027d0cc92008b07c3a20b43c15b82caf58e4578",
+    "effective_row_count": 2432,
+    "digest": "sha256:add60ec3ebdca61275f5c832438fe4bbe9b0c398a4c15907505ea95009ace357",
     "cost_source": "mixed",
     "fallback": {
       "used": false,

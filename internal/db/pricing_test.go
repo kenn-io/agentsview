@@ -265,3 +265,33 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	assert.Equal(t, "custom", block.Source)
 	assert.Equal(t, 1, block.CustomOverrideCount)
 }
+
+func TestDeleteModelPricing(t *testing.T) {
+	d := testDB(t)
+
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "kimi-for-coding", InputPerMTok: 0.95, OutputPerMTok: 4.0},
+		{ModelPattern: "daimon-kimi-code", InputPerMTok: 0.95, OutputPerMTok: 4.0},
+		{ModelPattern: "claude-opus-4-6", InputPerMTok: 5.0, OutputPerMTok: 25.0},
+	}), "UpsertModelPricing")
+
+	err := d.DeleteModelPricing([]string{"kimi-for-coding", "daimon-kimi-code"})
+	require.NoError(t, err, "DeleteModelPricing")
+
+	for _, model := range []string{"kimi-for-coding", "daimon-kimi-code"} {
+		row, err := d.GetModelPricing(model)
+		require.NoError(t, err, "GetModelPricing %s", model)
+		assert.Nil(t, row, "%s must be deleted", model)
+	}
+
+	// Untargeted rows survive.
+	row, err := d.GetModelPricing("claude-opus-4-6")
+	require.NoError(t, err, "GetModelPricing claude-opus-4-6")
+	require.NotNil(t, row)
+	assert.Equal(t, 5.0, row.InputPerMTok)
+
+	// Deleting absent patterns and an empty list are no-ops.
+	require.NoError(t,
+		d.DeleteModelPricing([]string{"kimi-for-coding"}), "re-delete")
+	require.NoError(t, d.DeleteModelPricing(nil), "empty delete")
+}
