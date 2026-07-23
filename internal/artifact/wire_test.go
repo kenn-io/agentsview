@@ -31,6 +31,12 @@ func TestValidateRawSource(t *testing.T) {
 			Path: "s3://bucket/k"}, true},
 		{"backslash path", &rawSourceRef{Hash: validHash, Size: 1,
 			Path: `a\b`}, true},
+		{"windows drive path", &rawSourceRef{Hash: validHash, Size: 1,
+			Path: "C:/Users/example/session.jsonl"}, true},
+		{"windows volume-relative path", &rawSourceRef{Hash: validHash, Size: 1,
+			Path: "C:Users/session.jsonl"}, true},
+		{"ntfs alternate data stream", &rawSourceRef{Hash: validHash, Size: 1,
+			Path: "sess.jsonl:hidden"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

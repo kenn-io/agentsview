@@ -256,7 +256,10 @@ func ValidateRawSource(raw *rawSourceRef) error {
 		if strings.Contains(raw.Path, "\\") || strings.Contains(raw.Path, "..") {
 			return fmt.Errorf("%w: invalid raw source path", ErrArtifactInvalid)
 		}
-		if strings.HasPrefix(raw.Path, "/") || strings.Contains(raw.Path, "://") {
+		// A colon anywhere rejects Windows drive-qualified (C:/...) and
+		// volume-relative (C:...) paths, NTFS alternate data streams, and
+		// URI schemes in one platform-neutral rule.
+		if strings.HasPrefix(raw.Path, "/") || strings.Contains(raw.Path, ":") {
 			return fmt.Errorf("%w: raw source path must be relative",
 				ErrArtifactInvalid)
 		}
