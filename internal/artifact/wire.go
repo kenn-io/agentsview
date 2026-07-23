@@ -126,7 +126,7 @@ type manifest struct {
 	// Carried explicitly so an imported session keeps its tool-call, context,
 	// and quality signal state instead of resetting to false/zero. Secret-scan
 	// state is deliberately not carried: findings live outside the manifest,
-	// so imported sessions are treated as unscanned (see rewriteForImport).
+	// so imported sessions are treated as unscanned.
 	SessionHasToolCalls   bool                    `json:"session_has_tool_calls,omitempty"`
 	SessionHasContextData bool                    `json:"session_has_context_data,omitempty"`
 	SessionQualitySignals *manifestQualitySignals `json:"session_quality_signals,omitempty"`

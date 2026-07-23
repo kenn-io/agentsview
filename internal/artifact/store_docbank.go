@@ -393,30 +393,6 @@ type docbankWalker interface {
 	Close() error
 }
 
-func collectDocbankWalk(
-	ctx context.Context,
-	open func(context.Context) (docbankWalker, error),
-) (entries []docbank.WalkEntry, retErr error) {
-	walker, err := open(ctx)
-	if errors.Is(err, docbank.ErrNotFound) {
-		return []docbank.WalkEntry{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { retErr = errors.Join(retErr, walker.Close()) }()
-	for {
-		page, nextErr := walker.Next(ctx)
-		if errors.Is(nextErr, io.EOF) {
-			return entries, nil
-		}
-		if nextErr != nil {
-			return nil, nextErr
-		}
-		entries = append(entries, page...)
-	}
-}
-
 func (s *docbankStore) ensureQuarantineParent(ctx context.Context, parent string) error {
 	if _, err := s.vault.Stat(ctx, parent); err == nil {
 		return nil

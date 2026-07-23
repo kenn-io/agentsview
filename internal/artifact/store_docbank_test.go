@@ -121,51 +121,6 @@ func TestDocbankStoreDistinctReferencesCountOnePhysicalWrite(t *testing.T) {
 		"the second logical reference must not claim a duplicate physical publication")
 }
 
-func TestCollectDocbankWalkJoinsCleanupErrors(t *testing.T) {
-	nextErr := errors.New("walk page failed")
-	closeErr := errors.New("walk cleanup failed")
-	entry := docbank.WalkEntry{Path: "/v1"}
-	for _, test := range []struct {
-		name       string
-		walker     *docbankWalkerStub
-		want       []docbank.WalkEntry
-		wantErrors []error
-	}{
-		{
-			name:   "EOF remains successful",
-			walker: &docbankWalkerStub{pages: [][]docbank.WalkEntry{{entry}}},
-			want:   []docbank.WalkEntry{entry},
-		},
-		{
-			name:       "EOF exposes cleanup failure",
-			walker:     &docbankWalkerStub{pages: [][]docbank.WalkEntry{{entry}}, closeErr: closeErr},
-			want:       []docbank.WalkEntry{entry},
-			wantErrors: []error{closeErr},
-		},
-		{
-			name:       "page and cleanup failures are joined",
-			walker:     &docbankWalkerStub{nextErr: nextErr, closeErr: closeErr},
-			wantErrors: []error{nextErr, closeErr},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			entries, err := collectDocbankWalk(t.Context(), func(
-				context.Context,
-			) (docbankWalker, error) {
-				return test.walker, nil
-			})
-			assert.Equal(t, test.want, entries)
-			if len(test.wantErrors) == 0 {
-				assert.NoError(t, err)
-			}
-			for _, wantErr := range test.wantErrors {
-				assert.ErrorIs(t, err, wantErr)
-			}
-			assert.Equal(t, 1, test.walker.closeCalls)
-		})
-	}
-}
-
 func TestDocbankIteratorClosesWalkerExactlyOnce(t *testing.T) {
 	t.Run("explicit close", func(t *testing.T) {
 		walker := &docbankWalkerStub{}
