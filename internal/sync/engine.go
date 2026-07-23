@@ -832,14 +832,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	// Capture container states before classifyPaths lists any session rows,
 	// matching the capture-before-discovery ordering of full syncs.
 	preContainerStates := e.captureSQLiteContainerStates(paths)
-	omnigentRetryPending, omnigentRetryAttempt := e.omnigentFullRetry()
 	files, classificationErr := e.classifyPaths(ctx, paths)
-	if omnigentRetryPending &&
-		!slices.ContainsFunc(files, func(file parser.DiscoveredFile) bool {
-			return file.Agent == parser.AgentOmnigent
-		}) {
-		omnigentRetryAttempt = 0
-	}
 	missingPaths = omitMissingPersistentContainerPaths(missingPaths, files)
 	if len(files) == 0 && len(missingPaths) == 0 {
 		return classificationErr
@@ -889,10 +882,6 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 			return fmt.Errorf("watcher source tombstone: %w", err)
 		}
 	}
-	if complete && omnigentRetryAttempt != 0 {
-		e.completeOmnigentFullRetry(omnigentRetryAttempt)
-	}
-
 	e.mu.Lock()
 	e.lastSync = time.Now()
 	e.lastSyncStats = stats
@@ -4621,8 +4610,12 @@ func (e *Engine) syncAllLocked(
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
-	if omnigentRetryAttempt != 0 && !stats.Aborted && ctx.Err() == nil &&
+	if scope == nil && omnigentRetryAttempt != 0 &&
+		!stats.Aborted && ctx.Err() == nil &&
 		stats.Failed == 0 && providerFailures == 0 {
+		// The retry generation is global across configured Omnigent roots.
+		// Only an unscoped pass covers every root that may have advanced its
+		// change cursor before a failed parse.
 		e.completeOmnigentFullRetry(omnigentRetryAttempt)
 	}
 	stats.providerFailures = providerFailures

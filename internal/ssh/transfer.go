@@ -29,15 +29,28 @@ func buildTarCommand(
 	extraFiles []string,
 ) string {
 	hermesStateDBs := hermesSSHStateDBs(dirs, extraFiles)
-	hermesSQLite := make(map[string]struct{}, len(hermesStateDBs)*4)
+	omnigentChatDBs := omnigentSSHChatDBs(files)
+	databases := make([]sqliteArchiveSource, 0,
+		len(hermesStateDBs)+len(omnigentChatDBs))
 	for _, stateDB := range hermesStateDBs {
+		databases = append(databases, sqliteArchiveSource{
+			Path: stateDB, Label: "Hermes state.db",
+		})
+	}
+	for _, chatDB := range omnigentChatDBs {
+		databases = append(databases, sqliteArchiveSource{
+			Path: chatDB, Label: "Omnigent chat.db",
+		})
+	}
+	sqlitePaths := make(map[string]struct{}, len(databases)*4)
+	for _, database := range databases {
 		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-			hermesSQLite[path.Clean(stateDB+suffix)] = struct{}{}
+			sqlitePaths[path.Clean(database.Path+suffix)] = struct{}{}
 		}
 	}
 	paths := make([]string, 0)
 	addPath := func(remotePath string) {
-		if _, isHermesSQLite := hermesSQLite[path.Clean(remotePath)]; isHermesSQLite {
+		if _, isSQLite := sqlitePaths[path.Clean(remotePath)]; isSQLite {
 			return
 		}
 		if archivePath := tarListPath(remotePath); archivePath != "" {
@@ -60,8 +73,8 @@ func buildTarCommand(
 	for _, f := range extraFiles {
 		addPath(f)
 	}
-	if len(hermesStateDBs) > 0 {
-		return buildPythonSnapshotTarCommand(paths, hermesStateDBs)
+	if len(databases) > 0 {
+		return buildPythonSnapshotTarCommand(paths, databases)
 	}
 	return buildPlainTarCommand(paths)
 }
@@ -110,19 +123,45 @@ func hermesSSHStateDBs(
 	return stateDBs
 }
 
-func buildPythonSnapshotTarCommand(paths, stateDBs []string) string {
+func omnigentSSHChatDBs(
+	files map[parser.AgentType][]string,
+) []string {
+	seen := make(map[string]struct{})
+	for _, remotePath := range files[parser.AgentOmnigent] {
+		clean := path.Clean(remotePath)
+		if path.Base(clean) == parser.OmnigentDBName {
+			seen[clean] = struct{}{}
+		}
+	}
+	chatDBs := make([]string, 0, len(seen))
+	for chatDB := range seen {
+		chatDBs = append(chatDBs, chatDB)
+	}
+	sort.Strings(chatDBs)
+	return chatDBs
+}
+
+type sqliteArchiveSource struct {
+	Path  string
+	Label string
+}
+
+func buildPythonSnapshotTarCommand(
+	paths []string, sources []sqliteArchiveSource,
+) string {
 	type sqliteArchivePath struct {
 		Source  string `json:"source"`
 		Archive string `json:"archive"`
+		Label   string `json:"label"`
 	}
-	databases := make([]sqliteArchivePath, 0, len(stateDBs))
-	for _, stateDB := range stateDBs {
-		archivePath := tarListPath(stateDB)
+	databases := make([]sqliteArchivePath, 0, len(sources))
+	for _, source := range sources {
+		archivePath := tarListPath(source.Path)
 		if archivePath == "" {
 			continue
 		}
 		databases = append(databases, sqliteArchivePath{
-			Source: stateDB, Archive: archivePath,
+			Source: source.Path, Archive: archivePath, Label: source.Label,
 		})
 	}
 	pathsJSON, _ := json.Marshal(paths)
@@ -132,7 +171,7 @@ func buildPythonSnapshotTarCommand(paths, stateDBs []string) string {
 	for _, database := range databases {
 		fallbackWarnings.WriteString("  printf '%s\\n' ")
 		fallbackWarnings.WriteString(shellQuote(
-			"warning: skipped Hermes state.db snapshot: " + database.Source +
+			"warning: skipped " + database.Label + " snapshot: " + database.Source +
 				": Python 3 with SQLite backup support is unavailable",
 		))
 		fallbackWarnings.WriteString(" >&2\n")
@@ -153,8 +192,8 @@ import tempfile
 paths = json.loads(%q)
 databases = json.loads(%q)
 
-def warn_skipped(source_path, reason):
-    print("warning: skipped Hermes state.db snapshot: {}: {}".format(source_path, reason), file=sys.stderr)
+def warn_skipped(label, source_path, reason):
+    print("warning: skipped {} snapshot: {}: {}".format(label, source_path, reason), file=sys.stderr)
 
 with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
     for archive_path in paths:
@@ -170,10 +209,10 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
         try:
             source_info = os.lstat(source_path)
         except OSError as exc:
-            warn_skipped(source_path, exc)
+            warn_skipped(item["label"], source_path, exc)
             continue
         if not stat.S_ISREG(source_info.st_mode):
-            warn_skipped(source_path, "not a regular file")
+            warn_skipped(item["label"], source_path, "not a regular file")
             continue
         sidecars = []
         unsafe_sidecar = None
@@ -190,11 +229,11 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
                 break
             sidecars.append((suffix, sidecar_info))
         if unsafe_sidecar:
-            warn_skipped(source_path, unsafe_sidecar)
+            warn_skipped(item["label"], source_path, unsafe_sidecar)
             continue
         try:
-            with tempfile.TemporaryDirectory(prefix="agentsview-hermes-snapshot-") as tmp:
-                snapshot_path = os.path.join(tmp, "state.db")
+            with tempfile.TemporaryDirectory(prefix="agentsview-sqlite-snapshot-") as tmp:
+                snapshot_path = os.path.join(tmp, "snapshot.db")
                 source_uri = pathlib.Path(source_path).as_uri() + "?mode=ro"
                 with sqlite3.connect(source_uri, uri=True) as source_db:
                     with sqlite3.connect(snapshot_path) as snapshot_db:
@@ -207,7 +246,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
                 os.utime(snapshot_path, ns=(mtime_ns, mtime_ns))
                 archive.add(snapshot_path, arcname=item["archive"], recursive=False)
         except (OSError, sqlite3.Error, tarfile.TarError, ValueError) as exc:
-            warn_skipped(source_path, exc)
+            warn_skipped(item["label"], source_path, exc)
             continue
 PY
 else

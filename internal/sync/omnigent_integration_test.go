@@ -564,6 +564,123 @@ func TestSyncAllSinceOmnigentFailedMemberRetrySurvivesFutureCutoff(t *testing.T)
 		"a successful forced retry must acknowledge its generation")
 }
 
+func TestOmnigentFailedRetrySurvivesUnrelatedScopedSync(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	for _, tc := range []struct {
+		name string
+		sync func(*sync.Engine, string) error
+	}{
+		{
+			name: "changed path",
+			sync: func(engine *sync.Engine, dbPath string) error {
+				return engine.SyncPathsContext(t.Context(), []string{dbPath})
+			},
+		},
+		{
+			name: "root scoped",
+			sync: func(engine *sync.Engine, dbPath string) error {
+				stats := engine.SyncRootsSince(
+					t.Context(), []string{filepath.Dir(dbPath)}, time.Time{}, nil,
+				)
+				require.Zero(t, stats.Failed)
+				return nil
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rootA := t.TempDir()
+			rootB := t.TempDir()
+			dbA := writeOmnigentSplitSyncDB(t, rootA, 1)
+			dbB := writeOmnigentSplitSyncDB(t, rootB, 1)
+			setOmnigentSyncWorkspace(t, dbB, 1)
+			archive := dbtest.OpenTestDB(t)
+			var failed atomic.Bool
+			factory := omnigentParseCountingFactory{
+				delegate: omnigentDefaultProviderFactory(t),
+				count:    &atomic.Int64{},
+				failPath: parser.VirtualSourcePath(dbA, "0:conv_0000"),
+				failOnce: &failed,
+			}
+			engine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {rootA, rootB},
+				},
+				Machine:           "local",
+				ProviderFactories: []parser.ProviderFactory{factory},
+			})
+			t.Cleanup(engine.Close)
+			syncOmnigentArchive(t, engine, archive, 2)
+
+			appendOmnigentSyncMessage(t, dbA, "missed")
+			require.Error(t,
+				engine.SyncPathsContext(t.Context(), []string{dbA}))
+			require.True(t, failed.Load())
+
+			require.NoError(t, tc.sync(engine, dbB))
+			stale, err := archive.GetSessionFull(
+				t.Context(), "omnigent:0:conv_0000",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, stale)
+			assert.Equal(t, 1, stale.MessageCount)
+
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			repaired, err := archive.GetSessionFull(
+				t.Context(), "omnigent:0:conv_0000",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, repaired)
+			assert.Equal(t, 2, repaired.MessageCount,
+				"unrelated scoped work must not acknowledge root A's retry")
+		})
+	}
+}
+
+func appendOmnigentSyncMessage(t *testing.T, dbPath, text string) {
+	t.Helper()
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE conversations SET updated_at = ?
+		 WHERE workspace_id = 0 AND id = 'conv_0000'`,
+		time.Now().Unix(),
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(workspace_id, conversation_id, id, position, type, data, search_text)
+		VALUES (0, 'conv_0000', ?, 1, 1, ?, ?)`,
+		"conv_0000_"+text,
+		fmt.Sprintf(
+			`{"role":"assistant","content":[{"type":"output_text","text":%q}]}`,
+			text,
+		),
+		text,
+	)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+}
+
+func setOmnigentSyncWorkspace(t *testing.T, dbPath string, workspaceID int64) {
+	t.Helper()
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	for _, table := range []string{
+		"conversation_items",
+		"omnigent_conversation_metadata",
+		"conversations",
+	} {
+		_, err = writer.Exec(
+			`UPDATE `+table+` SET workspace_id = ? WHERE workspace_id = 0`,
+			workspaceID,
+		)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Close())
+}
+
 func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")

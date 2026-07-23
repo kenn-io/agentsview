@@ -83,6 +83,36 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }
 
+func TestResolveTargetsScopesOmnigentToSQLiteFiles(t *testing.T) {
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	for _, path := range []string{
+		chatDB,
+		chatDB + "-wal",
+		chatDB + "-shm",
+		chatDB + "-journal",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte("sqlite"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+	})
+
+	assert.Equal(t, []string{root}, targets.Dirs[parser.AgentOmnigent])
+	assert.ElementsMatch(t, []string{
+		chatDB,
+		chatDB + "-wal",
+		chatDB + "-shm",
+		chatDB + "-journal",
+	}, targets.Files[parser.AgentOmnigent])
+}
+
 func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	root := t.TempDir()
 	traeRoot := filepath.Join(root, "TRAE", "User")

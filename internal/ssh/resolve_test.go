@@ -186,6 +186,43 @@ func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
 	assert.True(t, hasSuffix(extraFiles, ".hermes/state.db"))
 }
 
+func TestResolveScriptScopesOmnigentToSQLiteFiles(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".omnigent")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	for _, name := range []string{
+		"chat.db",
+		"chat.db-wal",
+		"chat.db-shm",
+		"chat.db-journal",
+	} {
+		require.NoError(t,
+			os.WriteFile(filepath.Join(root, name), []byte("sqlite"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, files, _ := parseResolvedTargets(string(out))
+
+	assert.Truef(t, hasSuffix(dirs[parser.AgentOmnigent], ".omnigent"),
+		"omnigent root should resolve, got %v", dirs[parser.AgentOmnigent])
+	for _, suffix := range []string{
+		".omnigent/chat.db",
+		".omnigent/chat.db-wal",
+		".omnigent/chat.db-shm",
+		".omnigent/chat.db-journal",
+	} {
+		assert.Truef(t, hasSuffix(files[parser.AgentOmnigent], suffix),
+			"omnigent sqlite file %q should resolve, got %v",
+			suffix, files[parser.AgentOmnigent])
+	}
+	assert.False(t, hasSuffix(
+		files[parser.AgentOmnigent], ".omnigent/credentials.json",
+	))
+}
+
 func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {
 	home := filepath.ToSlash(t.TempDir())
 	profileSessions := path.Join(

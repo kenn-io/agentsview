@@ -1636,6 +1636,56 @@ func TestOmnigentUsageEventsTrackCostPresence(t *testing.T) {
 	}
 }
 
+func TestOmnigentUsageEventsAllocateAggregateCostAcrossModels(t *testing.T) {
+	events := omnigentUsageEvents(
+		"omnigent:s1",
+		"fallback",
+		[]byte(`{
+			"total_cost_usd": 4,
+			"by_model": {
+				"large": {"input_tokens": 60, "output_tokens": 15},
+				"small": {"input_tokens": 20, "output_tokens": 5}
+			}
+		}`),
+	)
+
+	require.Len(t, events, 2)
+	assert.Equal(t, "large", events[0].Model)
+	require.NotNil(t, events[0].CostUSD)
+	assert.InDelta(t, 3, *events[0].CostUSD, 0.0001)
+	assert.Equal(t, "small", events[1].Model)
+	require.NotNil(t, events[1].CostUSD)
+	assert.InDelta(t, 1, *events[1].CostUSD, 0.0001)
+	assert.InDelta(t, 4, *events[0].CostUSD+*events[1].CostUSD, 0.0001,
+		"per-model events must retain Omnigent's authoritative aggregate cost")
+}
+
+func TestOmnigentUsageEventsAllocateAggregateRemainder(t *testing.T) {
+	events := omnigentUsageEvents(
+		"omnigent:s1",
+		"fallback",
+		[]byte(`{
+			"total_cost_usd": 3,
+			"by_model": {
+				"priced": {
+					"input_tokens": 10,
+					"output_tokens": 5,
+					"total_cost_usd": 1
+				},
+				"unpriced": {"input_tokens": 10, "output_tokens": 5}
+			}
+		}`),
+	)
+
+	require.Len(t, events, 2)
+	assert.Equal(t, "priced", events[0].Model)
+	require.NotNil(t, events[0].CostUSD)
+	assert.InDelta(t, 1, *events[0].CostUSD, 0.0001)
+	assert.Equal(t, "unpriced", events[1].Model)
+	require.NotNil(t, events[1].CostUSD)
+	assert.InDelta(t, 2, *events[1].CostUSD, 0.0001)
+}
+
 func TestOmnigentShmEventDoesNotResolveToContainer(t *testing.T) {
 	path := writeOmnigentBinaryIDDB(t)
 	root := filepath.Dir(path)

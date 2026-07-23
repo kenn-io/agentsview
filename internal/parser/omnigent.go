@@ -37,8 +37,11 @@ import (
 // resolved by feature detection (omnigentSchema).
 const (
 	omnigentIDPrefix = "omnigent:"
-	omnigentDBName   = "chat.db"
+	omnigentDBName   = OmnigentDBName
 )
+
+// OmnigentDBName is the standalone SQLite database exported by remote sync.
+const OmnigentDBName = "chat.db"
 
 // omnigentAgent is the AgentType for omnigent sessions.
 const omnigentAgent AgentType = "omnigent"
@@ -1150,8 +1153,18 @@ func omnigentUsageEvents(
 	}
 
 	if len(usage.ByModel) > 0 {
-		var events []ParsedUsageEvent
-		for model, m := range usage.ByModel {
+		models := make([]string, 0, len(usage.ByModel))
+		for model := range usage.ByModel {
+			models = append(models, model)
+		}
+		slices.Sort(models)
+
+		events := make([]ParsedUsageEvent, 0, len(models))
+		var explicitCost float64
+		var missingCostIndexes []int
+		var missingCostWeight int
+		for _, model := range models {
+			m := usage.ByModel[model]
 			events = append(events, ParsedUsageEvent{
 				SessionID:    sessionID,
 				Source:       "session",
@@ -1161,6 +1174,40 @@ func omnigentUsageEvents(
 				CostUSD:      m.TotalCostUSD,
 				DedupKey:     sessionID + "|usage|" + model,
 			})
+			if m.TotalCostUSD != nil {
+				explicitCost += *m.TotalCostUSD
+				continue
+			}
+			missingCostIndexes = append(missingCostIndexes, len(events)-1)
+			missingCostWeight += max(0, m.InputTokens+m.OutputTokens)
+		}
+		if usage.TotalCostUSD != nil && len(missingCostIndexes) > 0 {
+			remainingCost := max(0, *usage.TotalCostUSD-explicitCost)
+			remainingWeight := missingCostWeight
+			for i, eventIndex := range missingCostIndexes {
+				cost := remainingCost
+				if i < len(missingCostIndexes)-1 {
+					weight := max(
+						0,
+						events[eventIndex].InputTokens+
+							events[eventIndex].OutputTokens,
+					)
+					if remainingWeight > 0 {
+						cost = remainingCost *
+							float64(weight) / float64(remainingWeight)
+					} else {
+						cost = remainingCost /
+							float64(len(missingCostIndexes)-i)
+					}
+				}
+				events[eventIndex].CostUSD = &cost
+				remainingCost -= cost
+				remainingWeight -= max(
+					0,
+					events[eventIndex].InputTokens+
+						events[eventIndex].OutputTokens,
+				)
+			}
 		}
 		return events
 	}
