@@ -1570,10 +1570,24 @@ func (db *DB) LinkSubagentSessions() error {
 		),
 		relationship_type = 'subagent',
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE relationship_type != 'subagent'
-		AND EXISTS (
+		-- The tool_calls edge (from toolUseResult.agentId) is the record of
+		-- the actual spawn, so it is authoritative over the path-derived
+		-- parent set at parse time. Nested subagents (depth >= 2) all live in
+		-- the same flat <main>/subagents/ dir, so path derivation pins them to
+		-- the main session AND tags them 'subagent'; the previous
+		-- relationship_type != subagent guard then skipped them, leaving
+		-- the hierarchy flat. Re-point whenever the authoritative parent
+		-- differs (IS NOT = null-safe), which also covers the old
+		-- continuation -> subagent upgrade.
+		WHERE EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = sessions.id
+		)
+		AND parent_session_id IS NOT (
+			SELECT tc.session_id
+			FROM tool_calls tc
+			WHERE tc.subagent_session_id = sessions.id
+			LIMIT 1
 		)`)
 	if err != nil {
 		return fmt.Errorf("linking subagent sessions: %w", err)
