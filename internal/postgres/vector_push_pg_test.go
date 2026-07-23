@@ -928,6 +928,90 @@ SELECT COUNT(*) FROM vector_push_state
 		"both beta sessions have state rows under the recreated generation")
 }
 
+// TestVectorPushFullRechecksGenerationBeforeRecordingWitness pins the last
+// incarnation race: a full reconciliation must verify the generation survived
+// intact before it records the durable witness that later scoped pushes trust.
+func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_full_witness_race_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-full-race", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+
+	var gen1 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-full-race",
+	).Scan(&gen1), "gen1 id")
+	witnessKey, err := sync.vectorGenerationWitnessKey()
+	require.NoError(t, err, "vectorGenerationWitnessKey")
+
+	src.genScopes = nil
+	src.hashScopes = nil
+	src.hashes = map[string]string{"A": "a2", "B": "b2"}
+	src.docs = map[string][]VectorPushDoc{
+		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{0, 0, 1, 0})},
+		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 0, 0, 1})},
+	}
+	sync.afterVectorApply = func() {
+		for _, q := range []string{
+			`DROP TABLE IF EXISTS ` + vectorChunkTable(gen1),
+			`DROP TABLE IF EXISTS vector_push_state`,
+			`DROP TABLE IF EXISTS vector_generation_machines`,
+			`DROP TABLE IF EXISTS vector_documents`,
+			`DROP TABLE IF EXISTS vector_generations`,
+		} {
+			_, err := pg.Exec(q)
+			require.NoError(t, err, q)
+		}
+		unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
+		require.NoError(t, err, "recreate vector base schema")
+		require.Empty(t, unavailable, "pgvector must stay available in test")
+		gen2, err := ensureVectorGeneration(
+			ctx, pg, src.gen.Fingerprint, src.gen.Model, src.gen.Dimension,
+		)
+		require.NoError(t, err, "re-register generation")
+		require.Equal(t, gen1, gen2,
+			"recreated tables restart the id sequence, which is the case under test")
+	}
+
+	vres, err := sync.pushVectors(ctx, false, nil, gen1, nil, nil)
+	require.NoError(t, err, "full push across a pre-witness recreation")
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the recreated generation is repopulated generation-wide before success returns")
+	require.Len(t, src.genScopes, 2)
+	assert.Nil(t, src.genScopes[0])
+	assert.Nil(t, src.genScopes[1],
+		"the retry must reopen the full generation after the recreation")
+	require.Len(t, src.hashScopes, 2)
+	assert.Nil(t, src.hashScopes[0])
+	assert.Nil(t, src.hashScopes[1],
+		"both passes are generation-wide reads")
+	assert.Equal(t, gen1, vres.GenerationID,
+		"the full retry reconciles the recreated generation even when the id is reused")
+	assert.Equal(t, 1, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_generation_machines
+ WHERE generation_id = $1 AND machine = $2`, gen1, witnessKey),
+		"the final witness is recorded only after the stable retry")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen1),
+		"both sessions have state rows under the recreated generation")
+}
+
 func TestVectorPushRoundTrip(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(

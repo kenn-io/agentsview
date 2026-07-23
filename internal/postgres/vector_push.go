@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // VectorGenerationInfo identifies the local embedding generation being pushed.
@@ -131,6 +132,7 @@ const vectorProgressStride = 2000
 // reset — is what survives id reuse safely.
 type vectorGeneration struct {
 	id              int64
+	createdAt       time.Time
 	halfvecType     string
 	machineRecorded bool
 }
@@ -403,6 +405,11 @@ func (s *Sync) pushVectors(
 	); err != nil {
 		return res, err
 	}
+	if s.afterVectorApply != nil {
+		hook := s.afterVectorApply
+		s.afterVectorApply = nil
+		hook()
+	}
 	if scope != nil {
 		if s.afterScopedVectorApply != nil {
 			hook := s.afterScopedVectorApply
@@ -439,6 +446,37 @@ func (s *Sync) pushVectors(
 				resolved.id, finalProbe.id,
 			)
 		}
+	} else {
+		retryGenerationWide := func(msg string, args ...any) (VectorPushResult, error) {
+			log.Printf(msg, args...)
+			_ = export.Close()
+			export = nil
+			return s.pushVectors(
+				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
+			)
+		}
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
+		if err != nil {
+			return res, err
+		}
+		if !found {
+			return retryGenerationWide(
+				"vector push: generation %q disappeared before recording the generation-wide witness; retrying generation-wide",
+				gen.Fingerprint,
+			)
+		}
+		if finalProbe.id != resolved.id {
+			return retryGenerationWide(
+				"vector push: active generation id changed from %d to %d before recording the generation-wide witness; retrying generation-wide",
+				resolved.id, finalProbe.id,
+			)
+		}
+		if !finalProbe.createdAt.Equal(resolved.createdAt) {
+			return retryGenerationWide(
+				"vector push: generation %d was recreated before recording the generation-wide witness; retrying generation-wide",
+				resolved.id,
+			)
+		}
 	}
 	if scope == nil && res.SessionsDeferred == 0 {
 		if err := s.recordVectorGenerationMachine(ctx, resolved.id, witnessKey); err != nil {
@@ -454,12 +492,20 @@ func (s *Sync) pushVectors(
 func (s *Sync) lookupVectorGeneration(
 	ctx context.Context, fingerprint, witnessKey string,
 ) (vectorGeneration, bool, error) {
-	genID, _, ok, err := LookupVectorGeneration(ctx, s.pg, fingerprint)
-	if err != nil {
-		return vectorGeneration{}, false, err
-	}
-	if !ok {
+	var genID int64
+	var createdAt time.Time
+	err := s.pg.QueryRowContext(ctx,
+		`SELECT id, created_at FROM vector_generations WHERE fingerprint = $1`,
+		fingerprint,
+	).Scan(&genID, &createdAt)
+	if err == sql.ErrNoRows {
 		return vectorGeneration{}, false, nil
+	}
+	if isUndefinedTable(err) {
+		return vectorGeneration{}, false, nil
+	}
+	if err != nil {
+		return vectorGeneration{}, false, fmt.Errorf("looking up vector generation: %w", err)
 	}
 	extSchema, err := vectorExtensionSchema(ctx, s.pg)
 	if err != nil {
@@ -477,6 +523,7 @@ SELECT EXISTS (
 	}
 	return vectorGeneration{
 		id:              genID,
+		createdAt:       createdAt,
 		halfvecType:     extSchema + ".halfvec",
 		machineRecorded: machineRecorded,
 	}, true, nil
@@ -824,6 +871,12 @@ func (s *Sync) resolveVectorGeneration(
 	if err != nil {
 		return vectorGeneration{}, err
 	}
+	var createdAt time.Time
+	if err := s.pg.QueryRowContext(ctx,
+		`SELECT created_at FROM vector_generations WHERE id = $1`, genID,
+	).Scan(&createdAt); err != nil {
+		return vectorGeneration{}, fmt.Errorf("reading vector generation created_at: %w", err)
+	}
 	var machineRecorded bool
 	if err := s.pg.QueryRowContext(ctx, `
 SELECT EXISTS (
@@ -834,6 +887,7 @@ SELECT EXISTS (
 	}
 	return vectorGeneration{
 		id:              genID,
+		createdAt:       createdAt,
 		halfvecType:     extSchema + ".halfvec",
 		machineRecorded: machineRecorded,
 	}, nil
