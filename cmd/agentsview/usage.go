@@ -378,10 +378,13 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // model_pricing, then kicks off a background LiteLLM refresh.
 //
 // Fallback rates are only upserted when the stored seed
-// version differs from pricing.FallbackVersion (or is
+// version differs from pricing.SeedVersion (or is
 // absent). This avoids overwriting live LiteLLM rates on
 // every restart while still propagating corrected fallback
-// rates when the binary is upgraded.
+// rates when the binary is upgraded. SeedVersion folds in
+// the supplemental alias version, so curated alias additions
+// (see internal/pricing/supplemental.go) also reach existing
+// databases without a resync.
 func seedPricing(database *db.DB) {
 	if err := pricingrefresh.SeedFallback(database); err != nil {
 		log.Printf("pricing seed: %v", err)

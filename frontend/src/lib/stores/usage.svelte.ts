@@ -192,11 +192,14 @@ function samePairwiseSelection(
     left.right.value === right.right.value;
 }
 
+export type UsageMode = "cost" | "token";
+
 class UsageStore {
   from: string = $state(rollingRange(DEFAULT_WINDOW_DAYS).from);
   to: string = $state(today());
   isPinned: boolean = $state(false);
   windowDays: number = $state(DEFAULT_WINDOW_DAYS);
+  mode: UsageMode = $state("cost");
 
   // Excluded project items and included model items
   // (comma-separated strings). Empty models = all models.
@@ -866,9 +869,10 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await callGenerated(() =>
-        UsageService.getApiV1UsageTopSessions(
-          params ?? this.baseParams(),
-        ),
+        UsageService.getApiV1UsageTopSessions({
+          ...(params ?? this.baseParams()),
+          sort: this.mode === "token" ? "tokens" : "cost",
+        }),
         signal,
       ) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {

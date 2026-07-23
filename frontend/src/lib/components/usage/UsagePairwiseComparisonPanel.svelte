@@ -98,6 +98,8 @@
     },
   ]);
 
+  const isTokenMode = $derived(usage.mode === "token");
+
   type MetricRow = {
     label: string;
     left: string;
@@ -114,6 +116,47 @@
   const rows = $derived.by((): MetricRow[] => {
     const comparison = usage.pairwiseComparison;
     if (!comparison) return [];
+
+    if (isTokenMode) {
+      return [
+        {
+          label: m.usage_pairwise_total_tokens(),
+          left: fmtTokens(comparison.left.totalTokens),
+          right: fmtTokens(comparison.right.totalTokens),
+          delta: fmtSignedTokens(comparison.deltas.totalTokensDelta),
+          ratio: fmtRatio(comparison.deltas.totalTokensDeltaRatio),
+        },
+        {
+          label: m.analytics_col_sessions(),
+          left: fmtCount(comparison.left.sessionCount),
+          right: fmtCount(comparison.right.sessionCount),
+          delta: fmtSignedCount(comparison.deltas.sessionCountDelta),
+          ratio: fmtRatio(comparison.deltas.sessionCountDeltaRatio),
+        },
+        {
+          label: m.usage_pairwise_tokens_per_session(),
+          left: fmtMaybeTokens(comparison.left.tokensPerSession),
+          right: fmtMaybeTokens(comparison.right.tokensPerSession),
+          delta: fmtMaybeSignedTokens(comparison.deltas.tokensPerSessionDelta),
+          ratio: fmtRatio(comparison.deltas.tokensPerSessionRatio),
+        },
+        {
+          label: m.usage_input_tokens(),
+          left: fmtTokens(comparison.left.inputTokens),
+          right: fmtTokens(comparison.right.inputTokens),
+          delta: fmtSignedTokens(comparison.deltas.inputTokensDelta),
+          ratio: fmtRatio(comparison.deltas.inputTokensDeltaRatio),
+        },
+        {
+          label: m.analytics_metric_output_tokens(),
+          left: fmtTokens(comparison.left.outputTokens),
+          right: fmtTokens(comparison.right.outputTokens),
+          delta: fmtSignedTokens(comparison.deltas.outputTokensDelta),
+          ratio: fmtRatio(comparison.deltas.outputTokensDeltaRatio),
+        },
+      ];
+    }
+
     return [
       {
         label: m.usage_total_cost(),
@@ -171,8 +214,8 @@
 <section class="pairwise-panel">
   <div class="panel-header">
     <div>
-      <h2>{m.usage_pairwise_title()}</h2>
-      <p>{m.usage_pairwise_subtitle()}</p>
+      <h2>{isTokenMode ? m.usage_pairwise_tokens_title() : m.usage_pairwise_title()}</h2>
+      <p>{isTokenMode ? m.usage_pairwise_tokens_subtitle() : m.usage_pairwise_subtitle()}</p>
     </div>
   </div>
 

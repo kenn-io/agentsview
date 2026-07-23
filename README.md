@@ -336,6 +336,7 @@ thread JSON files.
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                                  |
 | Kilo (legacy)         | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/` (macOS), `~/.config/Code/User/globalStorage/kilocode.kilo-code/` (Linux)                     |
 | Kimi                  | `~/.kimi/sessions/`                                                                                                                                                     |
+| Kimi Work             | `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` (macOS)                                                               |
 | Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                     |
 | Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                           |
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                              |

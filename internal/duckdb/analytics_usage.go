@@ -3369,10 +3369,40 @@ func duckDailyUsageCTE(f db.UsageFilter) (string, []any) {
 	return duckUsageCTEFromRaw(f, rawSQL, args)
 }
 
+// duckPriceModelCaseSQL renders the date-ambiguous Kimi alias mapping
+// (pricing.CanonicalModelForDate) as a SQL CASE over usage_raw's model
+// and ts columns, so aggregate queries can group rows by the canonical
+// model whose rates actually apply before summing tokens. The alias
+// list and UTC cutoff come from the pricing package, keeping the SQL
+// and Go paths on one source of truth. A provider prefix is ignored
+// (kimi-code/kimi-for-coding maps like kimi-for-coding) and a NULL ts
+// falls back to the post-cutoff K3 model, matching the Go fallback for
+// missing timestamps.
+func duckPriceModelCaseSQL() string {
+	aliases := pricingpkg.DateAliasedModels()
+	quoted := make([]string, len(aliases))
+	for i, a := range aliases {
+		quoted[i] = "'" + a + "'"
+	}
+	list := strings.Join(quoted, ", ")
+	cutoff := pricingpkg.KimiModelEraCutoff.UTC().Format(
+		"2006-01-02 15:04:05")
+	return fmt.Sprintf(`CASE
+		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
+			AND (ts IS NULL OR ts >= TIMESTAMP '%[2]s')
+			THEN '%[3]s'
+		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
+			THEN '%[4]s'
+		ELSE model
+	END`, list, cutoff,
+		pricingpkg.KimiK3Canonical, pricingpkg.KimiK26Canonical)
+}
+
 func duckUsageCTEFromRaw(
 	f db.UsageFilter, rawSQL string, args []any,
 ) (string, []any) {
 	localDateSQL, localDateArg := duckUsageLocalDateSQL(f)
+	priceModelSQL := duckPriceModelCaseSQL()
 	// Apply the local-date window BEFORE deduping so an out-of-range
 	// duplicate (pulled in by the padded UTC bounds) cannot win
 	// dedup_rank = 1 and suppress the in-range row. Mirrors the
@@ -3429,7 +3459,8 @@ func duckUsageCTEFromRaw(
 						COALESCE(CAST(message_ordinal AS VARCHAR), '') || ':' ||
 						COALESCE(CAST(ts AS VARCHAR), '') || ':' || model
 				END AS dedup_group,
-				%[2]s AS local_date
+				%[2]s AS local_date,
+				%[5]s AS price_model
 			FROM usage_raw
 		),
 		usage_windowed AS (
@@ -3449,7 +3480,7 @@ func duckUsageCTEFromRaw(
 			SELECT *
 			FROM usage_ranked
 			WHERE dedup_rank = 1
-		)`, rawSQL, localDateSQL, datePred, db.MaxPlausibleTokens)
+		)`, rawSQL, localDateSQL, datePred, db.MaxPlausibleTokens, priceModelSQL)
 	args = append(args, localDateArg)
 	args = append(args, dateArgs...)
 	return query, args
@@ -3471,6 +3502,7 @@ type duckUsageAggregateRow struct {
 	agent         string
 	machine       string
 	model         string
+	priceModel    string
 	displayName   string
 	startedAt     string
 	inputTok      int
@@ -3505,6 +3537,13 @@ type duckSessionUsageRow struct {
 	costSource     string
 }
 
+// duckUsageAggregateCost prices one aggregate row. The model argument
+// is the row's canonical price model (price_model from the usage CTE),
+// which differs from the reported model only for date-ambiguous Kimi
+// aliases: the SQL CASE maps those per row to the K2.6 or K3 canonical
+// model by timestamp before grouping, so a group never mixes eras.
+// Pricing records land under the canonical name, mirroring the SQLite
+// and PostgreSQL paths.
 func duckUsageAggregateCost(
 	model string,
 	inputTok, outputTok, cacheCr, cacheRd int,
@@ -3543,6 +3582,21 @@ func duckUsageAggregateCost(
 	return cost, readDelta + createDelta, priced, true
 }
 
+// duckSessionUsageLookupModel returns the model name to price one
+// session usage row with, mirroring usageLookupModel in internal/db:
+// date-ambiguous Kimi aliases resolve to their canonical model for the
+// row's timestamp (K3 when the timestamp is missing or unparseable);
+// every other model passes through unchanged.
+func duckSessionUsageLookupModel(r duckSessionUsageRow) string {
+	t, _ := parseAnalyticsTime(r.ts)
+	if canonical := pricingpkg.CanonicalModelForDate(
+		r.model, t,
+	); canonical != "" {
+		return canonical
+	}
+	return r.model
+}
+
 func duckSessionUsageRowCost(
 	r duckSessionUsageRow, pricing map[string]duckRates,
 ) (float64, bool, bool) {
@@ -3553,7 +3607,8 @@ func duckSessionUsageRowCost(
 		r.cacheCr == 0 && r.cacheRd == 0 {
 		return 0, true, false
 	}
-	rates, priced := pricingpkg.Resolve(pricing, r.model)
+	rates, priced := pricingpkg.Resolve(
+		pricing, duckSessionUsageLookupModel(r))
 	if !priced {
 		return 0, false, true
 	}
@@ -3623,7 +3678,7 @@ func (s *Store) dailyUsageAggregateRows(
 		machineOrder = ", machine ASC"
 	}
 	query := cte + `
-		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model,
+		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, price_model,
 			SUM(input_tokens_norm) AS input_tokens,
 			SUM(output_tokens_norm) AS output_tokens,
 			SUM(cache_create_norm) AS cache_creation_tokens,
@@ -3642,8 +3697,8 @@ func (s *Store) dailyUsageAggregateRows(
 				COALESCE(SUM(cost_usd) FILTER (WHERE cost_source = 'copilot-reported'), 0) AS authoritative_cost,
 				COUNT(cost_usd) FILTER (WHERE cost_source = 'copilot-reported') AS authoritative_cost_rows
 		FROM usage_localized
-		GROUP BY session_id, local_date, project, agent` + machineGroup + `, model
-		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC`
+		GROUP BY session_id, local_date, project, agent` + machineGroup + `, model, price_model
+		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC, price_model ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -3653,7 +3708,7 @@ func (s *Store) dailyUsageAggregateRows(
 	for rows.Next() {
 		var r duckUsageAggregateRow
 		if err := rows.Scan(
-			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
+			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model, &r.priceModel,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheRd,
@@ -3710,7 +3765,7 @@ func (s *Store) GetDailyUsage(
 			accum[key] = b
 		}
 		cost, savings, _, _ := duckUsageAggregateCost(
-			r.model,
+			r.priceModel,
 			r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 			r.billableInput, r.billableOutput, r.billableReason,
 			r.billableCacheCr, r.billableCacheRd,
@@ -3977,7 +4032,7 @@ func (s *Store) sessionUsageAggregateRows(
 ) ([]duckUsageAggregateRow, error) {
 	cte, args := duckUsageCTE(f, sessionID)
 	query := cte + `
-		SELECT session_id, project, agent, model,
+		SELECT session_id, project, agent, model, price_model,
 			ANY_VALUE(display_name) AS display_name,
 			ANY_VALUE(started_at) AS started_at,
 			SUM(input_tokens_norm) AS input_tokens,
@@ -3998,7 +4053,7 @@ func (s *Store) sessionUsageAggregateRows(
 			COALESCE(SUM(cost_usd) FILTER (WHERE cost_source = 'copilot-reported'), 0) AS authoritative_cost,
 			COUNT(cost_usd) FILTER (WHERE cost_source = 'copilot-reported') AS authoritative_cost_rows
 		FROM usage_localized
-		GROUP BY session_id, project, agent, model
+		GROUP BY session_id, project, agent, model, price_model
 		ORDER BY session_id ASC, model ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
@@ -4010,7 +4065,7 @@ func (s *Store) sessionUsageAggregateRows(
 		var r duckUsageAggregateRow
 		var startedAt any
 		if err := rows.Scan(
-			&r.sessionID, &r.project, &r.agent, &r.model,
+			&r.sessionID, &r.project, &r.agent, &r.model, &r.priceModel,
 			&r.displayName, &startedAt,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
@@ -4091,9 +4146,6 @@ func (s *Store) sessionUsageRows(
 func (s *Store) GetTopSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
-	if limit <= 0 {
-		limit = 20
-	}
 	pricing, err := s.loadPricing(ctx)
 	if err != nil {
 		return nil, err
@@ -4120,7 +4172,7 @@ func (s *Store) GetTopSessionsByCost(
 			bySession[r.sessionID] = a
 		}
 		cost, _, _, _ := duckUsageAggregateCost(
-			r.model,
+			r.priceModel,
 			r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 			r.billableInput, r.billableOutput, r.billableReason,
 			r.billableCacheCr, r.billableCacheRd,
@@ -4146,16 +4198,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		out = append(out, a.row)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
-		}
-		return out[i].SessionID < out[j].SessionID
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return db.SortAndLimitTopSessions(out, limit, f.TopSessionsSort), nil
 }
 
 func (s *Store) GetUsageSessionCounts(
@@ -4317,7 +4360,7 @@ func (s *Store) GetSessionUsage(
 			authoritativeCost = &v
 		}
 		cost, _, priced, contributes := duckUsageAggregateCost(
-			r.model,
+			r.priceModel,
 			r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 			r.billableInput, r.billableOutput, r.billableReason,
 			r.billableCacheCr, r.billableCacheRd,

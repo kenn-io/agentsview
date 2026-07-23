@@ -1194,6 +1194,7 @@ agentsview help
 | `IFLOW_DIR`                       | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
 | `KILO_DIR`                        | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |
 | `KIMI_DIR`                        | `~/.kimi/sessions` and `~/.kimi-code/sessions`       | Kimi sessions directory                                                                             |
+| `KIMI_WORK_DIR`                   | (platform-specific)                                  | Kimi Work (kimi-desktop daimon) sessions directory                                                  |
 | `KIRO_SESSIONS_DIR`               | `~/.kiro/sessions/cli` and `~/.local/share/kiro-cli` | Kiro CLI sessions directory (JSONL and SQLite)                                                      |
 | `KIRO_IDE_DIR`                    | (platform-specific)                                  | Kiro IDE sessions directory                                                                         |
 | `MIMOCODE_DIR`                    | `~/.local/share/mimocode`                            | MiMoCode data directory                                                                             |

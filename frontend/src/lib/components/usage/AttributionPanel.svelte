@@ -13,6 +13,22 @@
     return `$${v.toFixed(2)}`;
   }
 
+  function fmtTokens(v: number): string {
+    if (v >= 1_000_000_000) {
+      const g = Math.floor(v / 100_000_000) / 10;
+      return `${g}B`;
+    }
+    if (v >= 1_000_000) {
+      const m = Math.floor(v / 100_000) / 10;
+      return `${m}M`;
+    }
+    if (v >= 1_000) {
+      const k = Math.floor(v / 100) / 10;
+      return `${k}K`;
+    }
+    return String(v);
+  }
+
   function fmtPct(v: number, total: number): string {
     if (total <= 0) return "";
     return `${((v / total) * 100).toFixed(1)}%`;
@@ -20,11 +36,12 @@
 
   const groupBy = $derived(usage.toggles.attribution.groupBy);
   const view = $derived(usage.toggles.attribution.view);
+  const isTokenMode = $derived(usage.mode === "token");
 
   interface Row {
     id: string;
     label: string;
-    cost: number;
+    value: number;
     color: string;
     pct: number;
   }
@@ -36,30 +53,36 @@
     let items: Array<{
       id: string;
       label: string;
-      cost: number;
+      value: number;
     }> = [];
 
     if (groupBy === "project") {
       items = s.projectTotals.map((p) => ({
         id: p.project_key,
         label: p.project,
-        cost: p.cost,
+        value: isTokenMode
+          ? p.inputTokens + p.outputTokens + p.cacheCreationTokens + p.cacheReadTokens
+          : p.cost,
       }));
     } else if (groupBy === "model") {
       items = s.modelTotals.map((m) => ({
         id: m.model,
         label: m.model,
-        cost: m.cost,
+        value: isTokenMode
+          ? m.inputTokens + m.outputTokens + m.cacheCreationTokens + m.cacheReadTokens
+          : m.cost,
       }));
     } else {
       items = s.agentTotals.map((a) => ({
         id: a.agent,
         label: a.agent,
-        cost: a.cost,
+        value: isTokenMode
+          ? a.inputTokens + a.outputTokens + a.cacheCreationTokens + a.cacheReadTokens
+          : a.cost,
       }));
     }
 
-    items.sort((a, b) => b.cost - a.cost);
+    items.sort((a, b) => b.value - a.value);
     return items;
   });
 
@@ -69,14 +92,14 @@
 
   const rows = $derived.by((): Row[] => {
     const items = rowItems;
-    const total = items.reduce((s, d) => s + d.cost, 0);
+    const total = items.reduce((s, d) => s + d.value, 0);
 
     return items.map((d) => ({
       id: d.id,
       label: d.label,
-      cost: d.cost,
+      value: d.value,
       color: colorMap.get(d.id) ?? "var(--text-muted)",
-      pct: total > 0 ? d.cost / total : 0,
+      pct: total > 0 ? d.value / total : 0,
     }));
   });
 
@@ -84,10 +107,10 @@
     rows.map((r) => ({
       id: r.id,
       label: r.label,
-      value: r.cost,
+      value: r.value,
       color: r.color,
-      meta: fmtPct(r.cost, rows.reduce(
-        (s, d) => s + d.cost, 0,
+      meta: fmtPct(r.value, rows.reduce(
+        (s, d) => s + d.value, 0,
       )),
     })),
   );
@@ -113,7 +136,7 @@
 
 <div class="attribution-panel">
   <div class="panel-header">
-    <h3 class="chart-title">{m.usage_cost_attribution_title()}</h3>
+    <h3 class="chart-title">{isTokenMode ? m.usage_tokens_attribution_title() : m.usage_cost_attribution_title()}</h3>
     <div class="toggles">
       <div class="segment-toggle">
         <button
@@ -185,7 +208,7 @@
                 style="background: {row.color}"
               ></span>
               <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">{fmtCost(row.cost)}</span>
+              <span class="rail-cost">{isTokenMode ? fmtTokens(row.value) : fmtCost(row.value)}</span>
             </div>
           {/each}
         </div>
@@ -218,7 +241,7 @@
             <span class="list-pct">
               {(row.pct * 100).toFixed(1)}%
             </span>
-            <span class="list-cost">{fmtCost(row.cost)}</span>
+            <span class="list-cost">{isTokenMode ? fmtTokens(row.value) : fmtCost(row.value)}</span>
           </div>
         {/each}
       </div>

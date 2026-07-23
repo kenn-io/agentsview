@@ -40,12 +40,21 @@ var (
 // FallbackVersion is derived from the embedded snapshot; regenerate litellm_snapshot.json.gz to change it.
 var FallbackVersion = fallbackVersionUnknown
 
+// SeedVersion identifies the full seeded pricing set: the embedded
+// snapshot version plus the curated supplemental alias version. The
+// version-gated seed compares against this (not FallbackVersion) so
+// existing databases pick up supplemental additions on binary upgrade
+// even when the snapshot itself is unchanged.
+var SeedVersion = fallbackVersionUnknown
+
 func init() {
 	fallbackPricingOnce.Do(initFallbackPricing)
 }
 
-// FallbackPricing returns offline pricing from the embedded LiteLLM snapshot.
-// Data is copied for caller safety and deterministic DB seeding.
+// FallbackPricing returns offline pricing from the embedded LiteLLM
+// snapshot plus the curated supplemental aliases (see supplemental.go),
+// sorted by model pattern. Data is copied for caller safety and
+// deterministic DB seeding.
 func FallbackPricing() []ModelPricing {
 	fallbackPricingOnce.Do(initFallbackPricing)
 	if fallbackPricingErr != nil {
@@ -62,11 +71,17 @@ func initFallbackPricing() {
 	if err != nil {
 		fallbackPricingErr = fmt.Errorf("loading liteLLM snapshot: %w", err)
 		FallbackVersion = fallbackVersionUnknown
+		SeedVersion = fallbackVersionUnknown
 		log.Panicf("pricing: %v", fallbackPricingErr)
 	}
 
-	fallbackPricing = slices.Clone(snapshot.Models)
+	merged := append(slices.Clone(snapshot.Models), supplementalPricing...)
+	slices.SortFunc(merged, func(a, b ModelPricing) int {
+		return strings.Compare(a.ModelPattern, b.ModelPattern)
+	})
+	fallbackPricing = merged
 	FallbackVersion = snapshot.Version
+	SeedVersion = snapshot.Version + "+supplemental-" + supplementalVersion
 }
 
 func decodeFallbackSnapshot() (litellmFallbackSnapshot, error) {

@@ -84,6 +84,7 @@
   const NAV_ROUTES = [
     "sessions",
     "usage",
+    "token-usage",
     "activity",
     "trends",
     "pinned",
@@ -95,6 +96,7 @@
   const tabs: TopBarTab[] = $derived([
     { id: "sessions", label: m.nav_sessions() },
     { id: "usage", label: m.nav_usage() },
+    { id: "token-usage", label: m.nav_token_usage() },
     { id: "activity", label: m.nav_activity() },
     { id: "trends", label: m.nav_trends() },
     { id: "pinned", label: m.nav_pinned() },

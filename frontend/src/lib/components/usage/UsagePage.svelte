@@ -205,7 +205,15 @@
     const route = router.route;
     const params = router.params;
     untrack(() => {
-      if (route !== "usage") return;
+      if (route !== "usage" && route !== "token-usage") return;
+      const nextMode = route === "token-usage" ? "token" : "cost";
+      const modeChanged = usage.mode !== nextMode;
+      usage.mode = nextMode;
+      // Ranking for top-sessions depends on mode (cost vs tokens),
+      // so switch tabs must re-fetch even when filters are unchanged.
+      if (modeChanged && urlInitRan) {
+        void usage.fetchTopSessions();
+      }
       const hasDateParam = !!params["from"] || !!params["to"];
       const parsedWindowDays = parseWindowDays(params["window_days"]);
       const supportedSessionParams =
@@ -346,7 +354,7 @@
     );
     const ready = urlInitRan && urlWritebackReady;
     untrack(() => {
-      if (!ready || router.route !== "usage") return;
+      if (!ready || (router.route !== "usage" && router.route !== "token-usage")) return;
       router.replaceParams(nextParams);
     });
   });
@@ -355,7 +363,7 @@
     const signature = sessionFilterSignature;
     const ready = urlInitRan && urlWritebackReady;
     untrack(() => {
-      if (!ready || !signature || router.route !== "usage" || !mounted) {
+      if (!ready || !signature || (router.route !== "usage" && router.route !== "token-usage") || !mounted) {
         return;
       }
       if (!initialFetchDone) {

@@ -536,7 +536,17 @@ describe("UsageStore session filter params", () => {
         minUserMessages: 5,
         includeOneShot: false,
         includeAutomated: true,
+        sort: "cost",
       }),
+    );
+  });
+
+  it("requests top sessions sorted by tokens in token mode", async () => {
+    const { usage } = await loadStore();
+    usage.mode = "token";
+    await usage.fetchTopSessions();
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: "tokens" }),
     );
   });
 

@@ -654,7 +654,7 @@
 
 <AppHeader />
 
-{#if router.route === "usage"}
+{#if router.route === "usage" || router.route === "token-usage"}
   <div class="page-scroll">
     <UsagePage />
   </div>

@@ -77,6 +77,9 @@ type UsageFilter struct {
 	Termination       string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns        bool   // populate Project/AgentBreakdowns per day
 	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
+	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
+	// (default) or "tokens". Ignored by other usage queries.
+	TopSessionsSort string
 }
 
 // ProjectFilterLabels returns exact include labels when present, otherwise it
@@ -1439,6 +1442,22 @@ func clampedUsageTokenCountersWithReasoning(
 		ClampPlausibleTokens(int64(reasoningTok))
 }
 
+// usageLookupModel returns the model name to price a usage row with.
+// Date-ambiguous Kimi aliases (kimi-for-coding, daimon-kimi-code,
+// daimon-kimi-messages) resolve to their canonical model for the row's
+// timestamp (K2.6 before pricing.KimiModelEraCutoff, K3 at/after it);
+// every other model passes through unchanged. Pricing lookups and
+// records both use the returned name, so the pricing block reports the
+// canonical model whose rates actually produced the cost.
+func usageLookupModel(model, ts string) string {
+	if canonical := pricingpkg.CanonicalModelForTimestamp(
+		model, ts,
+	); canonical != "" {
+		return canonical
+	}
+	return model
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
@@ -1454,15 +1473,16 @@ func dailyUsageAmounts(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	lookup := pricing.Lookup(r.model)
+	lookupModel := usageLookupModel(r.model, r.ts)
+	lookup := pricing.Lookup(lookupModel)
 	rates := lookup.Rates
 	if r.costUSD.Valid && r.costSource != CopilotReportedCostSource {
 		cost = r.costUSD.Float64
-		pricing.RecordReported(r.model, lookup)
+		pricing.RecordReported(lookupModel, lookup)
 	} else {
 		cost = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordComputed(lookupModel, lookup)
 	}
 
 	readDelta := float64(cacheRdTok) *
@@ -2413,18 +2433,47 @@ type TopSessionEntry struct {
 	Cost        float64 `json:"cost"`
 }
 
-// GetTopSessionsByCost returns sessions ranked by total cost
-// over the filter range. Default limit 20, max 100.
-func (db *DB) GetTopSessionsByCost(
-	ctx context.Context, f UsageFilter, limit int,
-) ([]TopSessionEntry, error) {
+// TopSessionsSortCost and TopSessionsSortTokens select ranking for
+// GetTopSessionsByCost. Empty TopSessionsSort is treated as cost.
+const (
+	TopSessionsSortCost   = "cost"
+	TopSessionsSortTokens = "tokens"
+)
+
+// SortAndLimitTopSessions ranks entries by cost (default) or tokens,
+// then applies limit. Ties break by SessionID ascending for stability.
+func SortAndLimitTopSessions(
+	result []TopSessionEntry, limit int, sortBy string,
+) []TopSessionEntry {
 	if limit <= 0 {
 		limit = 20
 	}
 	if limit > 100 {
 		limit = 100
 	}
+	byTokens := strings.EqualFold(sortBy, TopSessionsSortTokens)
+	sort.Slice(result, func(i, j int) bool {
+		if byTokens {
+			if result[i].TotalTokens != result[j].TotalTokens {
+				return result[i].TotalTokens > result[j].TotalTokens
+			}
+		} else if result[i].Cost != result[j].Cost {
+			return result[i].Cost > result[j].Cost
+		}
+		return result[i].SessionID < result[j].SessionID
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result
+}
 
+// GetTopSessionsByCost returns sessions ranked by total cost
+// (or by total tokens when f.TopSessionsSort is "tokens")
+// over the filter range. Default limit 20, max 100.
+func (db *DB) GetTopSessionsByCost(
+	ctx context.Context, f UsageFilter, limit int,
+) ([]TopSessionEntry, error) {
 	pricing, err := db.loadPricingMap(ctx)
 	if err != nil {
 		return nil,
@@ -2536,16 +2585,7 @@ func (db *DB) GetTopSessionsByCost(
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Cost != result[j].Cost {
-			return result[i].Cost > result[j].Cost
-		}
-		return result[i].SessionID < result[j].SessionID
-	})
-
-	if len(result) > limit {
-		result = result[:limit]
-	}
+	result = SortAndLimitTopSessions(result, limit, f.TopSessionsSort)
 
 	sessionIDs := make([]string, len(result))
 	for i := range result {
@@ -2625,21 +2665,23 @@ func sessionRowCost(
 	}
 
 	if r.costUSD.Valid {
-		pricing.RecordReported(r.model, pricing.Lookup(r.model))
+		lookupModel := usageLookupModel(r.model, r.ts)
+		pricing.RecordReported(lookupModel, pricing.Lookup(lookupModel))
 		return r.costUSD.Float64, true, true
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
-	lookup := pricing.Lookup(r.model)
+	lookupModel := usageLookupModel(r.model, r.ts)
+	lookup := pricing.Lookup(lookupModel)
 	if !lookup.OK {
-		pricing.RecordComputed(r.model, lookup)
+		pricing.RecordComputed(lookupModel, lookup)
 		return 0, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
-	pricing.RecordComputed(r.model, lookup)
+	pricing.RecordComputed(lookupModel, lookup)
 	return cost, true, true
 }
 

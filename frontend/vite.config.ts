@@ -79,6 +79,9 @@ export default defineConfig({
     },
   },
   base: "/",
+  optimizeDeps: {
+    exclude: ["@kenn-io/kit-ui"],
+  },
   plugins: [
     svelte(),
     paraglideVitePlugin({

@@ -27,12 +27,26 @@
     return `${(v * 100).toFixed(1)}%`;
   }
 
+  const isTokenMode = $derived(usage.mode === "token");
+
   const inputTokens = $derived(
     usage.summary?.totals.inputTokens ?? 0,
   );
 
   const outputTokens = $derived(
     usage.summary?.totals.outputTokens ?? 0,
+  );
+
+  const cacheCreationTokens = $derived(
+    usage.summary?.totals.cacheCreationTokens ?? 0,
+  );
+
+  const cacheReadTokens = $derived(
+    usage.summary?.totals.cacheReadTokens ?? 0,
+  );
+
+  const totalTokens = $derived(
+    inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens,
   );
 
   // "cached" here means input tokens that were actually
@@ -45,29 +59,66 @@
     usage.summary?.totals.cacheReadTokens ?? 0,
   );
 
-  const dailyBurn = $derived.by(() => {
+  const dailyBurnCost = $derived.by(() => {
     const s = usage.summary;
     if (!s || !s.daily || s.daily.length === 0) return 0;
     return s.totals.totalCost / s.daily.length;
   });
 
-  const peak = $derived.by(() => {
+  const dailyBurnTokens = $derived.by(() => {
+    const s = usage.summary;
+    if (!s || !s.daily || s.daily.length === 0) return 0;
+    let total = 0;
+    for (const d of s.daily) {
+      total += d.inputTokens + d.outputTokens + d.cacheCreationTokens + d.cacheReadTokens;
+    }
+    return total / s.daily.length;
+  });
+
+  const peakCost = $derived.by(() => {
     const s = usage.summary;
     if (!s || !s.daily || s.daily.length === 0) {
-      return { date: "", cost: 0 };
+      return { date: "", value: 0 };
     }
     let best = s.daily[0]!;
     for (const d of s.daily) {
       if (d.totalCost > best.totalCost) best = d;
     }
-    return { date: best.date, cost: best.totalCost };
+    return { date: best.date, value: best.totalCost };
   });
 
-  const activeDays = $derived(
-    usage.summary?.daily?.filter(
-      (d) => d.totalCost > 0,
-    ).length ?? 0,
-  );
+  const peakTokens = $derived.by(() => {
+    const s = usage.summary;
+    if (!s || !s.daily || s.daily.length === 0) {
+      return { date: "", value: 0 };
+    }
+    let best = s.daily[0]!;
+    let bestTokens = best.inputTokens + best.outputTokens + best.cacheCreationTokens + best.cacheReadTokens;
+    for (const d of s.daily) {
+      const dTokens = d.inputTokens + d.outputTokens + d.cacheCreationTokens + d.cacheReadTokens;
+      if (dTokens > bestTokens) {
+        best = d;
+        bestTokens = dTokens;
+      }
+    }
+    return { date: best.date, value: bestTokens };
+  });
+
+  const activeDays = $derived.by(() => {
+    const daily = usage.summary?.daily;
+    if (!daily) return 0;
+    if (isTokenMode) {
+      return daily.filter(
+        (d) =>
+          d.inputTokens +
+            d.outputTokens +
+            d.cacheCreationTokens +
+            d.cacheReadTokens >
+          0,
+      ).length;
+    }
+    return daily.filter((d) => d.totalCost > 0).length;
+  });
 
   const vsPrior = $derived.by(() => {
     const c = usage.summary?.comparison;
@@ -90,6 +141,64 @@
   }
 
   const cards = $derived.by(() => {
+    if (isTokenMode) {
+      const baseCards: Card[] = [
+        {
+          label: () => m.usage_summary_total_tokens(),
+          value: () => fmtTokens(totalTokens),
+          featured: true,
+        },
+        {
+          label: () => m.usage_summary_input_tokens(),
+          value: () => fmtTokens(inputTokens),
+          sub: () =>
+            cachedTokens > 0
+              ? m.usage_summary_cached_tokens({
+                  value: `+${fmtTokens(cachedTokens)}`,
+                })
+              : "",
+        },
+        {
+          label: () => m.analytics_metric_output_tokens(),
+          value: () => fmtTokens(outputTokens),
+        },
+        {
+          label: () => m.usage_summary_daily_burn_tokens(),
+          value: () => fmtTokens(dailyBurnTokens),
+          sub: () => m.usage_summary_avg_day(),
+        },
+        {
+          label: () => m.usage_summary_peak_day_tokens(),
+          value: () => fmtTokens(peakTokens.value),
+          sub: () => peakTokens.date,
+        },
+        {
+          label: () => m.usage_summary_cache_hit(),
+          value: () =>
+            fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
+        },
+        {
+          label: () => m.analytics_summary_projects(),
+          value: () =>
+            String(
+              Object.keys(
+                usage.summary?.sessionCounts.byProject ?? {},
+              ).length,
+            ),
+        },
+        {
+          label: () => m.usage_models(),
+          value: () =>
+            String(usage.summary?.modelTotals.length ?? 0),
+        },
+        {
+          label: () => m.analytics_summary_active_days(),
+          value: () => String(activeDays),
+        },
+      ];
+      return baseCards;
+    }
+
     const baseCards: Card[] = [
       {
         label: () => m.usage_summary_total_cost(),
@@ -121,13 +230,13 @@
       },
       {
         label: () => m.usage_summary_daily_burn(),
-        value: () => fmtCost(dailyBurn),
+        value: () => fmtCost(dailyBurnCost),
         sub: () => m.usage_summary_avg_day(),
       },
       {
         label: () => m.usage_summary_peak_day(),
-        value: () => fmtCost(peak.cost),
-        sub: () => peak.date,
+        value: () => fmtCost(peakCost.value),
+        sub: () => peakCost.date,
       },
       {
         label: () => m.usage_summary_cache_hit(),

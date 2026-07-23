@@ -62,6 +62,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="gptme" href="https://gptme.org" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">gm</span><span class="agent-chip__name">gptme</span></a>
   <a class="agent-chip" data-agent="kilo" href="https://kilocode.ai" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kl</span><span class="agent-chip__name">Kilo</span></a>
   <a class="agent-chip" data-agent="kimi" href="https://www.kimi.com" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Km</span><span class="agent-chip__name">Kimi</span></a>
+  <a class="agent-chip" data-agent="kimi-work" href="https://www.kimi.com" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kw</span><span class="agent-chip__name">Kimi Work</span></a>
   <a class="agent-chip" data-agent="kiro" href="https://kiro.dev" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kr</span><span class="agent-chip__name">Kiro</span></a>
   <a class="agent-chip" data-agent="openhands" href="https://github.com/All-Hands-AI/OpenHands" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">OH</span><span class="agent-chip__name">OpenHands</span></a>
   <a class="agent-chip" data-agent="zcode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Zc</span><span class="agent-chip__name">ZCode</span></a>
