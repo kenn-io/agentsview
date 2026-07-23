@@ -368,7 +368,7 @@ func copyRecallQueryRevisionFromAttachedTx(
 			SELECT revision
 			FROM old_db.recall_query_state
 			WHERE singleton = 1
-		), revision))
+		), revision)) + 1
 		WHERE singleton = 1`); err != nil {
 		return fmt.Errorf("copying recall query revision: %w", err)
 	}
