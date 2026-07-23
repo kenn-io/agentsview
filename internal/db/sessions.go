@@ -1544,11 +1544,15 @@ func (db *DB) GetChildSessions(
 }
 
 // LinkSubagentSessions sets parent_session_id and
-// relationship_type on sessions that are referenced by
-// tool_calls.subagent_session_id. Updates sessions that either
-// have no parent yet or have a non-subagent relationship (e.g.
-// a Zencoder session classified as "continuation" from header
-// parentId that is actually a spawned subagent).
+// relationship_type on sessions referenced by
+// tool_calls.subagent_session_id (the authoritative spawn edge).
+// A session is updated when it is not yet tagged 'subagent' (e.g.
+// a Zencoder session classified as "continuation" from a header
+// parentId that is actually a spawned subagent) OR when its stored
+// parent disagrees with the spawn edge. The latter re-parents
+// nested subagents (depth >= 2), which the parser pins to the main
+// session because Claude Code stores every subagent flat under
+// <main>/subagents/. Already-correct subagents are left untouched.
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1562,18 +1566,50 @@ func (db *DB) LinkSubagentSessions() error {
 	// same pattern).
 	_, err := db.getWriter().Exec(`
 		UPDATE sessions
-		SET parent_session_id = (
-			SELECT tc.session_id
-			FROM tool_calls tc
-			WHERE tc.subagent_session_id = sessions.id
-			LIMIT 1
+		SET parent_session_id = COALESCE(
+			(
+				SELECT tc.session_id
+				FROM tool_calls tc
+				WHERE tc.subagent_session_id = sessions.id
+				GROUP BY tc.subagent_session_id
+				HAVING COUNT(DISTINCT tc.session_id) = 1
+			),
+			parent_session_id
 		),
 		relationship_type = 'subagent',
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE relationship_type != 'subagent'
-		AND EXISTS (
+		-- The tool_calls edge (from toolUseResult.agentId) records the actual
+		-- spawn, authoritative over the path-derived parent set at parse time.
+		-- Nested subagents (depth >= 2) live flat in <main>/subagents/, so path
+		-- derivation pins them to the main session AND tags them 'subagent';
+		-- the old relationship_type != 'subagent' guard skipped them, leaving
+		-- the hierarchy flat.
+		--
+		-- Resolve the parent only from an UNAMBIGUOUS edge: the grouped
+		-- subquery yields a spawner only when exactly one distinct session
+		-- spawned this child (HAVING COUNT(DISTINCT tc.session_id) = 1). With
+		-- conflicting edges from copied/forked history it yields NULL and
+		-- COALESCE keeps the current parent, so a correctly parented subagent
+		-- is never re-parented arbitrarily. Update when EITHER the row is not
+		-- yet 'subagent' (upgrade continuation/fork/empty; parent preserved if
+		-- ambiguous) OR the unambiguous parent differs (null-safe IS NOT).
+		-- Already-correct subagents match neither branch (no churn).
+		WHERE EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = sessions.id
+		)
+		AND (
+			relationship_type != 'subagent'
+			OR parent_session_id IS NOT COALESCE(
+				(
+					SELECT tc.session_id
+					FROM tool_calls tc
+					WHERE tc.subagent_session_id = sessions.id
+					GROUP BY tc.subagent_session_id
+					HAVING COUNT(DISTINCT tc.session_id) = 1
+				),
+				parent_session_id
+			)
 		)`)
 	if err != nil {
 		return fmt.Errorf("linking subagent sessions: %w", err)
