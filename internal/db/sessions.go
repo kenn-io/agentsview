@@ -1576,18 +1576,24 @@ func (db *DB) LinkSubagentSessions() error {
 		-- the same flat <main>/subagents/ dir, so path derivation pins them to
 		-- the main session AND tags them 'subagent'; the previous
 		-- relationship_type != subagent guard then skipped them, leaving
-		-- the hierarchy flat. Re-point whenever the authoritative parent
-		-- differs (IS NOT = null-safe), which also covers the old
-		-- continuation -> subagent upgrade.
+		-- the hierarchy flat. Update the row when EITHER it is not yet tagged
+		-- 'subagent' (upgrades a continuation/fork/empty classification even
+		-- when its parent already matches the spawner) OR the authoritative
+		-- parent differs (the nested depth>=2 re-parent). Null-safe IS NOT.
+		-- Already-correct subagents match neither branch and are left as-is to
+		-- avoid needless local_modified_at churn.
 		WHERE EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = sessions.id
 		)
-		AND parent_session_id IS NOT (
-			SELECT tc.session_id
-			FROM tool_calls tc
-			WHERE tc.subagent_session_id = sessions.id
-			LIMIT 1
+		AND (
+			relationship_type != 'subagent'
+			OR parent_session_id IS NOT (
+				SELECT tc.session_id
+				FROM tool_calls tc
+				WHERE tc.subagent_session_id = sessions.id
+				LIMIT 1
+			)
 		)`)
 	if err != nil {
 		return fmt.Errorf("linking subagent sessions: %w", err)

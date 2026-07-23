@@ -95,3 +95,50 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 				"not the flat main session")
 	}
 }
+
+// TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches guards the
+// regression flagged in review: LinkSubagentSessions sets BOTH parent_session_id
+// and relationship_type='subagent'. A session can already carry the correct
+// (authoritative) parent while still being misclassified as continuation / fork
+// / empty. The type upgrade must run even when the parent does not change, or
+// the session is grouped wrong.
+func TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches(t *testing.T) {
+	d := testDB(t)
+
+	// Parent session with a tool call referencing the child.
+	insertSession(t, d, "parent", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+
+	// Child ALREADY has the correct parent (== the tool-call spawner) but is
+	// misclassified as a continuation (e.g. a header parentId that coincides
+	// with the spawner). parent_session_id won't change; relationship_type
+	// must still be upgraded to 'subagent'.
+	insertSession(t, d, "child", "p", func(s *Session) {
+		s.MessageCount = 1
+		parent := "parent"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "continuation"
+	})
+
+	insertMessages(t, d, Message{
+		SessionID: "parent", Ordinal: 0, Role: "assistant",
+		Content: "spawn child", HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			ToolName: "Agent", Category: "Task",
+			SubagentSessionID: "child",
+		}},
+	})
+
+	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+
+	child, err := d.GetSession(context.Background(), "child")
+	requireNoError(t, err, "GetSession child")
+	assert.Equal(t, "subagent", child.RelationshipType,
+		"relationship_type must upgrade to 'subagent' even when the parent "+
+			"already matches the tool-call spawner")
+	if assert.NotNil(t, child.ParentSessionID, "child parent") {
+		assert.Equal(t, "parent", *child.ParentSessionID,
+			"child.parent_session_id")
+	}
+}
