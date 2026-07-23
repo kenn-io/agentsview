@@ -92,11 +92,11 @@ func TestOpenRepositoryFollowsFinalRootSymlink(t *testing.T) {
 
 func TestOpenRepositoryRetainsAbsoluteCanonicalRoot(t *testing.T) {
 	dataDir := t.TempDir()
-	workingDirectory, err := os.Getwd()
-	require.NoError(t, err)
-	relativeDataDir, err := filepath.Rel(workingDirectory, dataDir)
-	require.NoError(t, err)
-	repository, err := OpenRepository(t.Context(), relativeDataDir)
+	// Chdir to the temp dir's parent so the relative path stays on one
+	// volume; on Windows CI the checkout and temp dirs are on different
+	// drives and filepath.Rel cannot bridge them.
+	t.Chdir(filepath.Dir(dataDir))
+	repository, err := OpenRepository(t.Context(), filepath.Base(dataDir))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repository.Close()) })
 
