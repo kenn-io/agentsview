@@ -17,7 +17,7 @@ func TestOpenReportsUnsupportedPlatform(t *testing.T) {
 }
 
 func TestNewQuackStoreReportsUnsupportedPlatform(t *testing.T) {
-	store, err := NewQuackStore("quack:localhost:8765", "token", false)
+	store, err := NewQuackStore("quack:localhost:8765", "token", false, 0)
 	require.Error(t, err)
 	assert.Nil(t, store)
 	assert.ErrorIs(t, err, errUnsupportedPlatform)

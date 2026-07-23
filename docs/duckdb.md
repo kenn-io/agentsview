@@ -130,6 +130,7 @@ url = "quack:127.0.0.1:9494"
 token = "..."
 machine_name = "my-laptop"
 allow_insecure = false
+attach_timeout = "20s"
 projects = ["alpha", "beta"]
 # or: exclude_projects = ["scratch"]
 ```
@@ -141,17 +142,27 @@ projects = ["alpha", "beta"]
 | `token`            |                                 | Quack authentication token                                                                  |
 | `machine_name`     | OS hostname                     | Identifies the pushing machine                                                              |
 | `allow_insecure`   | `false`                         | Allow plain-HTTP Quack beyond loopback                                                      |
+| `attach_timeout`   | `20s`                           | Bound on a remote Quack `ATTACH` (and its TCP preflight); `0` uses the default, a negative value disables the guard |
 | `projects`         |                                 | Array of project names to include in push                                                   |
 | `exclude_projects` |                                 | Array of project names to exclude from push                                                 |
 
+When a remote Quack `url` is configured, `duckdb status` and `duckdb serve`
+first make a bounded TCP dial to the endpoint and then run the `ATTACH` under a
+watchdog, so an unreachable or unresponsive server fails fast with a clear
+error instead of hanging indefinitely. Because the `ATTACH` executes inside
+the DuckDB extension (CGO, which Go cannot interrupt), a timed-out attach may
+leak the underlying connection until the process exits; the command still
+returns promptly.
+
 Environment variables override the config file:
 
-| Variable                    | Description                   |
-| --------------------------- | ----------------------------- |
-| `AGENTSVIEW_DUCKDB_PATH`    | Local DuckDB mirror file path |
-| `AGENTSVIEW_DUCKDB_URL`     | Remote Quack endpoint URL for status and serve (read side only) |
-| `AGENTSVIEW_DUCKDB_TOKEN`   | Quack authentication token    |
-| `AGENTSVIEW_DUCKDB_MACHINE` | Machine name override         |
+| Variable                           | Description                   |
+| ---------------------------------- | ----------------------------- |
+| `AGENTSVIEW_DUCKDB_PATH`           | Local DuckDB mirror file path |
+| `AGENTSVIEW_DUCKDB_URL`            | Remote Quack endpoint URL for status and serve (read side only) |
+| `AGENTSVIEW_DUCKDB_TOKEN`          | Quack authentication token    |
+| `AGENTSVIEW_DUCKDB_MACHINE`        | Machine name override         |
+| `AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT` | Remote attach timeout (Go duration, e.g. `20s`; `0` default, negative disables) |
 
 ## Limitations
 
