@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -494,7 +495,7 @@ func (m omnigentMeta) fingerprint() string {
 // aggregate fingerprint. The query touches only conversations and
 // conversation_items, which exist in every generation.
 func listOmnigentConversationMetas(
-	conn *sql.DB, schema omnigentSchema,
+	ctx context.Context, conn *sql.DB, schema omnigentSchema,
 ) ([]omnigentMeta, error) {
 	idExpr := omnigentIDExpr(schema, "c.id")
 	query := `
@@ -512,7 +513,7 @@ func listOmnigentConversationMetas(
 			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
 			 GROUP BY c.workspace_id, c.id`
 	}
-	rows, err := conn.Query(query)
+	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("listing omnigent conversation metas: %w", err)
 	}
@@ -601,14 +602,15 @@ func omnigentConvSelect(s omnigentSchema) string {
 }
 
 func loadOmnigentConversation(
-	conn *sql.DB, s omnigentSchema, member omnigentMemberID,
+	ctx context.Context, conn *sql.DB,
+	s omnigentSchema, member omnigentMemberID,
 ) (omnigentConversationRow, error) {
 	row := omnigentConversationRow{}
 	args := []any{omnigentIDArg(s, member.rawID)}
 	if s.splitMetadata {
 		args = []any{member.workspaceID, omnigentIDArg(s, member.rawID)}
 	}
-	err := conn.QueryRow(omnigentConvSelect(s), args...).Scan(
+	err := conn.QueryRowContext(ctx, omnigentConvSelect(s), args...).Scan(
 		&row.workspaceID, &row.id, &row.rootID, &row.createdAt, &row.updatedAt, &row.title,
 		&row.kindRaw, &row.modelOverride, &row.parentID, &row.subAgentName,
 		&row.workspace, &row.gitBranch, &row.sessionUsage,
@@ -654,7 +656,9 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	metas, err := listOmnigentConversationMetas(conn, schema)
+	metas, err := listOmnigentConversationMetas(
+		context.Background(), conn, schema,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +666,9 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 	var results []ParseResult
 	for _, meta := range metas {
 		res, err := parseOmnigentConversationFromDB(
-			conn, schema, dbPath, meta.member(), machine, dbInfo)
+			context.Background(), conn, schema, dbPath,
+			meta.member(), machine, dbInfo,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -678,10 +684,13 @@ func ParseOmnigentDB(dbPath, machine string) ([]ParseResult, error) {
 // connection. The stored fingerprint covers conversation metadata and raw item
 // content; the cheaper omnigentMeta fingerprint is used only for classification.
 func parseOmnigentConversationFromDB(
-	conn *sql.DB, schema omnigentSchema,
+	ctx context.Context, conn *sql.DB, schema omnigentSchema,
 	dbPath string, member omnigentMemberID, machine string, dbInfo os.FileInfo,
 ) (*ParseResult, error) {
-	conv, err := loadOmnigentConversation(conn, schema, member)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	conv, err := loadOmnigentConversation(ctx, conn, schema, member)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -689,12 +698,19 @@ func parseOmnigentConversationFromDB(
 		return nil, err
 	}
 
-	messages, itemFingerprint, err := loadOmnigentMessages(conn, schema, member)
+	messages, itemFingerprint, err := loadOmnigentMessages(
+		ctx, conn, schema, member,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	workspace, gitBranch := omnigentResolveWorkspace(conn, schema, conv)
+	workspace, gitBranch, err := omnigentResolveWorkspace(
+		ctx, conn, schema, conv,
+	)
+	if err != nil {
+		return nil, err
+	}
 	fingerprint := omnigentSemanticFingerprint(
 		conv, workspace, gitBranch, itemFingerprint,
 	)
@@ -800,16 +816,23 @@ func omnigentWriteFingerprintField(h hash.Hash, value string) {
 // omnigentResolveWorkspace inherits cwd/branch from the root conversation when
 // a sub-agent conversation carries none of its own.
 func omnigentResolveWorkspace(
-	conn *sql.DB, schema omnigentSchema, conv omnigentConversationRow,
-) (string, string) {
+	ctx context.Context, conn *sql.DB,
+	schema omnigentSchema, conv omnigentConversationRow,
+) (string, string, error) {
 	if conv.workspace != "" || conv.rootID == "" || conv.rootID == conv.id {
-		return conv.workspace, conv.gitBranch
+		return conv.workspace, conv.gitBranch, nil
 	}
-	root, err := loadOmnigentConversation(conn, schema, omnigentMemberID{
-		workspaceID: conv.workspaceID, rawID: conv.rootID,
-	})
+	root, err := loadOmnigentConversation(
+		ctx, conn, schema,
+		omnigentMemberID{
+			workspaceID: conv.workspaceID, rawID: conv.rootID,
+		},
+	)
 	if err != nil {
-		return conv.workspace, conv.gitBranch
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", "", ctxErr
+		}
+		return conv.workspace, conv.gitBranch, nil
 	}
 	workspace := conv.workspace
 	if workspace == "" {
@@ -819,7 +842,7 @@ func omnigentResolveWorkspace(
 	if branch == "" {
 		branch = root.gitBranch
 	}
-	return workspace, branch
+	return workspace, branch, nil
 }
 
 func omnigentSessionName(c omnigentConversationRow) string {
@@ -882,7 +905,8 @@ type omnigentSlashCommandData struct {
 // fingerprint covers the raw fields so in-place edits to decoded or fallback
 // content remain visible during periodic full sync.
 func loadOmnigentMessages(
-	conn *sql.DB, schema omnigentSchema, member omnigentMemberID,
+	ctx context.Context, conn *sql.DB,
+	schema omnigentSchema, member omnigentMemberID,
 ) ([]ParsedMessage, string, error) {
 	query := `
 		SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
@@ -898,7 +922,7 @@ func loadOmnigentMessages(
 			 ORDER BY position ASC`
 		args = []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
 	}
-	rows, err := conn.Query(query, args...)
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf(
 			"listing omnigent items for %s: %w", member.key(schema), err)

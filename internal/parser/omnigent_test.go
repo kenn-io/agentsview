@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type omnigentParseCancellationContext struct {
+	context.Context
+	firstCheck chan struct{}
+	release    chan struct{}
+	once       sync.Once
+}
+
+func (c *omnigentParseCancellationContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() {
+		close(c.firstCheck)
+		<-c.release
+	})
+	return err
+}
 
 // omnigentSeedItem is one logical conversation_items row, referenced by its
 // testdata payload file. The gen-specific builders translate `typeName` into a
@@ -571,12 +588,12 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 	schema, err := detectOmnigentSchema(conn)
 	require.NoError(t, err)
 
-	before, err := listOmnigentConversationMetas(conn, schema)
+	before, err := listOmnigentConversationMetas(t.Context(), conn, schema)
 	require.NoError(t, err)
 	fpBefore := omnigentMetaByID(before, "conv_root").fingerprint()
 
 	// Stable across repeated reads.
-	again, err := listOmnigentConversationMetas(conn, schema)
+	again, err := listOmnigentConversationMetas(t.Context(), conn, schema)
 	require.NoError(t, err)
 	assert.Equal(t, fpBefore,
 		omnigentMetaByID(again, "conv_root").fingerprint())
@@ -592,7 +609,7 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 			'more')`)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
-	after, err := listOmnigentConversationMetas(conn, schema)
+	after, err := listOmnigentConversationMetas(t.Context(), conn, schema)
 	require.NoError(t, err)
 	assert.NotEqual(t, fpBefore,
 		omnigentMetaByID(after, "conv_root").fingerprint())
@@ -734,6 +751,46 @@ func TestOmnigentChangedPathCancellationDoesNotAdvanceFloor(t *testing.T) {
 		"a failed sweep must not advance past unobserved changes")
 }
 
+func TestOmnigentContainerParseHonorsCancellationAfterStart(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 5)
+	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	base, cancel := context.WithCancel(t.Context())
+	parseContext := &omnigentParseCancellationContext{
+		Context:    base,
+		firstCheck: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	type parseResult struct {
+		outcome ParseOutcome
+		err     error
+	}
+	result := make(chan parseResult, 1)
+	go func() {
+		outcome, parseErr := provider.Parse(
+			parseContext, ParseRequest{Source: sources[0]},
+		)
+		result <- parseResult{outcome: outcome, err: parseErr}
+	}()
+
+	<-parseContext.firstCheck
+	cancel()
+	close(parseContext.release)
+	select {
+	case got := <-result:
+		require.ErrorIs(t, got.err, context.Canceled)
+		assert.Empty(t, got.outcome.Results)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Omnigent container parse did not stop after cancellation")
+	}
+}
+
 func TestOmnigentWarmEventsDeferStoredHintDeletionReconciliation(t *testing.T) {
 	path := writeOmnigentCardinalityDB(t, 65)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
@@ -774,7 +831,7 @@ func TestOmnigentPresentStoredHintsDoNotFanOut(t *testing.T) {
 	require.NoError(t, err)
 	schema, err := detectOmnigentSchema(conn)
 	require.NoError(t, err)
-	metas, err := listOmnigentConversationMetas(conn, schema)
+	metas, err := listOmnigentConversationMetas(t.Context(), conn, schema)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	require.Len(t, metas, 200)
@@ -815,7 +872,7 @@ func TestOmnigentSplitWorkspaceChangedPathClassification(t *testing.T) {
 	require.NoError(t, err)
 	schema, err := detectOmnigentSchema(conn)
 	require.NoError(t, err)
-	metas, err := listOmnigentConversationMetas(conn, schema)
+	metas, err := listOmnigentConversationMetas(t.Context(), conn, schema)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
@@ -1155,7 +1212,7 @@ func omnigentTrackerAtCurrentHighWater(
 	require.NoError(t, err)
 	itemRowID, itemTail, err := omnigentLatestItemRow(t.Context(), conn, schema)
 	require.NoError(t, err)
-	metas, err := listOmnigentConversationMetas(conn, schema)
+	metas, err := listOmnigentConversationMetas(t.Context(), conn, schema)
 	require.NoError(t, err)
 	workspaceID, singleWorkspace := omnigentSingleWorkspace(metas)
 	tracker := newOmnigentChangeTracker()

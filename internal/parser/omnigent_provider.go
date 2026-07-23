@@ -82,8 +82,8 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithChangedPathMembers(tracker.changedMembers),
 				WithMemberLookup(omnigentFindMember),
 				WithFingerprint(omnigentFingerprintSource),
-				WithContainerParse(tracker.parseContainer),
-				WithMemberParse(omnigentParseMember),
+				WithContextContainerParse(tracker.parseContainer),
+				WithContextMemberParse(omnigentParseMember),
 				WithMemberResultHashPreservation(),
 				WithMemberPresence(omnigentMemberPresent),
 				WithUnsupportedSourceError(omnigentSchemaUnsupported),
@@ -1073,13 +1073,13 @@ func omnigentMostRecentMembers(
 }
 
 func (t *omnigentChangeTracker) parseContainer(
-	src multiSessionSource, req ParseRequest,
+	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) ([]ParseResult, error) {
 	// Capture the floor before reading so a commit that lands during the
 	// parse is re-observed by the next changed-member sweep.
 	checkedAt := time.Now().Unix()
 	results, schema, metas, itemRowID, itemTail, err := omnigentParseContainerData(
-		src, req,
+		ctx, src, req,
 	)
 	if err != nil {
 		return nil, err
@@ -1138,8 +1138,11 @@ func omnigentMemberPresent(src multiSessionSource) bool {
 }
 
 func omnigentParseMember(
-	src multiSessionSource, req ParseRequest,
+	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) (*ParseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dbInfo, err := os.Stat(src.Container)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1164,13 +1167,16 @@ func omnigentParseMember(
 		return nil, nil
 	}
 	return parseOmnigentConversationFromDB(
-		conn, schema, src.Container, member, req.Machine, dbInfo,
+		ctx, conn, schema, src.Container, member, req.Machine, dbInfo,
 	)
 }
 
 func omnigentParseContainerData(
-	src multiSessionSource, req ParseRequest,
+	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) ([]ParseResult, omnigentSchema, []omnigentMeta, int64, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, omnigentSchema{}, nil, 0, "", err
+	}
 	dbInfo, err := os.Stat(src.Container)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1189,20 +1195,23 @@ func omnigentParseContainerData(
 	if err != nil {
 		return nil, omnigentSchema{}, nil, 0, "", err
 	}
-	metas, err := listOmnigentConversationMetas(conn, schema)
+	metas, err := listOmnigentConversationMetas(ctx, conn, schema)
 	if err != nil {
 		return nil, omnigentSchema{}, nil, 0, "", err
 	}
 	itemRowID, itemTail, err := omnigentLatestItemRow(
-		context.Background(), conn, schema,
+		ctx, conn, schema,
 	)
 	if err != nil {
 		return nil, omnigentSchema{}, nil, 0, "", err
 	}
 	results := make([]ParseResult, 0, len(metas))
 	for i := range metas {
+		if err := ctx.Err(); err != nil {
+			return nil, omnigentSchema{}, nil, 0, "", err
+		}
 		result, err := parseOmnigentConversationFromDB(
-			conn, schema, src.Container, metas[i].member(),
+			ctx, conn, schema, src.Container, metas[i].member(),
 			req.Machine, dbInfo,
 		)
 		if err != nil {

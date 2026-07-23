@@ -7209,14 +7209,18 @@ func (e *Engine) processProviderFile(
 			owned := e.providerSourceSessionOwnershipsForForceReplace(
 				provider, source,
 			)
+			omnigentContainerExists :=
+				file.Agent == parser.AgentOmnigent &&
+					parser.IsOmnigentContainerSource(source) &&
+					parser.IsRegularFile(providerDiscoveredPath(source))
 			if e.pathRewriter == nil &&
-				providerVirtualSourceContainerExists(file.Path) {
+				(providerVirtualSourceContainerExists(file.Path) ||
+					omnigentContainerExists) {
 				// The provider re-resolved this exact virtual member against a
-				// still-present shared container and it yields no session: the
-				// member was removed from the container, not the container from
-				// disk. Hard-deleting here would destroy rows the reconciliation
-				// audit preserves as revivable source-missing tombstones, so
-				// carry the stored ownership to the tombstone seam instead.
+				// still-present shared container, or authoritatively parsed an
+				// empty Omnigent container. The member was removed from the
+				// container, not the container from disk. Carry the stored
+				// ownership to the revivable tombstone seam.
 				missingMembers = owned
 			} else {
 				for _, member := range owned {

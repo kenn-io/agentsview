@@ -615,6 +615,56 @@ func TestSyncOmnigentCompleteContainerMissingConversationPreservesArchive(
 	assert.Equal(t, 1, archived.MessageCount)
 }
 
+func TestSyncOmnigentCompleteEmptyContainerPreservesFinalConversation(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	syncOmnigentArchive(t, engine, archive, 1)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversation_items`)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DELETE FROM conversations`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	forceEngine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{omnigentForceFullFactory{
+			delegate: omnigentDefaultProviderFactory(t),
+		}},
+	})
+	t.Cleanup(forceEngine.Close)
+	stats := forceEngine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	active, err := archive.GetSession(t.Context(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	assert.Nil(t, active)
+	archived, err := archive.GetSessionFull(t.Context(), "omnigent:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, archived,
+		"deleting the final source conversation must retain its archive row")
+	require.NotNil(t, archived.DeletionCause)
+	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assert.Equal(t, 1, archived.MessageCount)
+}
+
 func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
