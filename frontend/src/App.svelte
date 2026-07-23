@@ -39,6 +39,7 @@
 
 <script lang="ts">
   import { onMount, untrack } from "svelte";
+  import { EmptyState } from "@kenn-io/kit-ui";
   import AppHeader from "./lib/components/layout/AppHeader.svelte";
   import ThreeColumnLayout from "./lib/components/layout/ThreeColumnLayout.svelte";
   import SessionBreadcrumb from "./lib/components/layout/SessionBreadcrumb.svelte";
@@ -60,6 +61,7 @@
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import ActivityPage from "./lib/components/activity/ActivityPage.svelte";
   import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
+  import RecallPage from "./lib/components/recall/RecallPage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
@@ -97,6 +99,13 @@
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
+  const recallModeKnown = $derived(
+    sync.serverVersion !== null ||
+      (settings.loaded && settings.error === null),
+  );
+  const recallUnavailable = $derived(
+    sync.readOnly || settings.readOnly,
+  );
 
   function handleGlobalAuth() {
     const token = globalAuthToken.trim();
@@ -666,6 +675,18 @@
   <div class="page-scroll">
     <TrendsPage />
   </div>
+{:else if router.route === "recall"}
+  <div class="page-scroll">
+    {#if recallUnavailable}
+      <div class="recall-route-state">
+        <EmptyState title={m.recall_page_unavailable_read_only()} />
+      </div>
+    {:else if recallModeKnown}
+      <RecallPage />
+    {:else}
+      <p class="recall-route-state">{m.recall_page_loading()}</p>
+    {/if}
+  </div>
 {:else if router.route === "insights"}
   <div class="page-scroll">
     <InsightsPage />
@@ -780,6 +801,12 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  .recall-route-state {
+    padding: 32px 24px;
+    color: var(--text-muted);
+    font-size: 13px;
   }
 
   /* kit-ui-check-ignore: undo toast carries an inline restore action; kit-ui FlashBanner only supports text+dismiss today, so replacing this would change the delete/undo workflow. */

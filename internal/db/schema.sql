@@ -385,6 +385,16 @@ CREATE TABLE IF NOT EXISTS recall_corpus_state (
 );
 INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
 
+-- Ranked Recall pagination must be invalidated by every entry or evidence
+-- mutation that can change query membership, ordering, or score. This is
+-- deliberately separate from recall_corpus_state: embedding freshness only
+-- tracks the accepted fields sent to the embedding provider.
+CREATE TABLE IF NOT EXISTS recall_query_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    revision  INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO recall_query_state (singleton, revision) VALUES (1, 0);
+
 -- Compact per-entry mutation sequence for bounded Recall vector refreshes.
 -- One row per identity is enough: an incremental reader needs only the latest
 -- state after its completed corpus revision, not every intermediate edit.
@@ -437,6 +447,22 @@ BEGIN
     ON CONFLICT(entry_id) DO UPDATE SET revision = excluded.revision;
 END;
 
+DROP TRIGGER IF EXISTS trg_recall_query_entry_insert;
+DROP TRIGGER IF EXISTS trg_recall_query_entry_update;
+DROP TRIGGER IF EXISTS trg_recall_query_entry_delete;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_entry_insert
+AFTER INSERT ON recall_entries BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_entry_update
+AFTER UPDATE ON recall_entries BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_entry_delete
+AFTER DELETE ON recall_entries BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+
 -- Recall-entry deletion journal: preserves the identity of hard-deleted
 -- entries long enough for an incremental vector refresh to remove their
 -- disposable mirror documents without scanning the complete served corpus.
@@ -487,6 +513,22 @@ CREATE INDEX IF NOT EXISTS idx_recall_evidence_entry
     ON recall_evidence(entry_id);
 CREATE INDEX IF NOT EXISTS idx_recall_evidence_session
     ON recall_evidence(session_id);
+
+DROP TRIGGER IF EXISTS trg_recall_query_evidence_insert;
+DROP TRIGGER IF EXISTS trg_recall_query_evidence_update;
+DROP TRIGGER IF EXISTS trg_recall_query_evidence_delete;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_evidence_insert
+AFTER INSERT ON recall_evidence BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_evidence_update
+AFTER UPDATE ON recall_evidence BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_recall_query_evidence_delete
+AFTER DELETE ON recall_evidence BEGIN
+    UPDATE recall_query_state SET revision = revision + 1 WHERE singleton = 1;
+END;
 
 -- Append-only demand and exposure snapshots. Exposures deliberately do not
 -- reference recall_entries: measurements must survive recall/session deletion

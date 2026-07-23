@@ -65,6 +65,7 @@ describe("parsePath", () => {
     for (const route of [
       "usage",
       "trends",
+      "recall",
       "insights",
       "pinned",
       "trash",

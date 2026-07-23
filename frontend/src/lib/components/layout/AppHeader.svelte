@@ -39,6 +39,7 @@
   } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import { router, type Route } from "../../stores/router.svelte.js";
   import {
     downloadExport,
@@ -86,17 +87,28 @@
     "usage",
     "activity",
     "trends",
+    "recall",
     "pinned",
     "insights",
     "trash",
     "recent-edits",
   ] as const;
 
+  const recallAvailable = $derived(
+    !sync.readOnly &&
+      !settings.readOnly &&
+      (sync.serverVersion !== null ||
+        (settings.loaded && settings.error === null)),
+  );
+
   const tabs: TopBarTab[] = $derived([
     { id: "sessions", label: m.nav_sessions() },
     { id: "usage", label: m.nav_usage() },
     { id: "activity", label: m.nav_activity() },
     { id: "trends", label: m.nav_trends() },
+    ...(recallAvailable
+      ? [{ id: "recall", label: m.nav_recall() }]
+      : []),
     { id: "pinned", label: m.nav_pinned() },
     { id: "insights", label: m.nav_insights() },
     { id: "trash", label: m.nav_trash() },
