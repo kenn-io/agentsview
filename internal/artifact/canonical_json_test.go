@@ -50,6 +50,32 @@ func TestCanonicalJSONRecanonicalizesRawMessage(t *testing.T) {
 	assert.Equal(t, "{\"value\":{\"a\":1,\"b\":2}}\n", string(data))
 }
 
+func TestCanonicalJSONRejectsTrailingRawMessageContent(t *testing.T) {
+	type wrapper struct {
+		Value json.RawMessage `json:"value"`
+	}
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{name: "second value", raw: `{"a":1}{"b":2}`, wantErr: true},
+		{name: "trailing garbage", raw: `{"a":1}garbage`, wantErr: true},
+		{name: "trailing scalar", raw: `1 2`, wantErr: true},
+		{name: "trailing whitespace", raw: "{\"a\":1} \n\t", wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := canonicalJSON(wrapper{Value: json.RawMessage(tt.raw)})
+			if tt.wantErr {
+				assert.ErrorContains(t, err, "content after JSON value")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestCanonicalJSONEmptyRawMessageEncodesAsNull(t *testing.T) {
 	type wrapper struct {
 		Value json.RawMessage `json:"value"`

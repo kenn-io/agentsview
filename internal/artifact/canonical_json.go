@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"sort"
 	"strconv"
@@ -51,6 +53,11 @@ func writeCanonicalJSON(buf *bytes.Buffer, v reflect.Value) error {
 		var decoded any
 		if err := dec.Decode(&decoded); err != nil {
 			return err
+		}
+		// A second value or trailing garbage would be silently dropped from
+		// the canonical bytes, hashing distinct raw content identically.
+		if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+			return fmt.Errorf("unexpected content after JSON value in raw message")
 		}
 		return writeCanonicalJSON(buf, reflect.ValueOf(decoded))
 	}
