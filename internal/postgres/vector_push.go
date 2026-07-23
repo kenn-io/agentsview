@@ -270,14 +270,6 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, unavailable
 		return res, nil
 	}
-	resolved, err := s.resolveVectorGeneration(ctx, gen)
-	if err != nil {
-		if s.skipVectorsOnPrivilegeError(err, &res) {
-			return res, nil
-		}
-		return res, err
-	}
-	res.GenerationID = resolved.id
 	// A scoped push writes only its changed sessions' chunks, which is safe
 	// only within the exact generation instance this process last reconciled
 	// generation-wide. Two signals identify that instance. The PG generation
@@ -295,16 +287,25 @@ func (s *Sync) pushVectors(
 	// to trust yet, so the reconcile bit already forces this push
 	// generation-wide and the id check must not fire.
 	requestedScope := scope
-	if scope != nil && !resolved.machineRecorded {
-		log.Printf("vector push: no prior push record for machine %q against generation %d; promoting scoped push to generation-wide reconciliation",
-			s.machine, resolved.id)
-		scope = nil
-	}
-	if scope != nil && lastReconciledGeneration != 0 &&
-		resolved.id != lastReconciledGeneration {
-		log.Printf("vector push: active generation id %d differs from the last reconciled %d; promoting scoped push to generation-wide reconciliation",
-			resolved.id, lastReconciledGeneration)
-		scope = nil
+	if scope != nil {
+		probe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+		if err != nil {
+			return res, err
+		}
+		if !found {
+			log.Printf("vector push: generation %q is not yet registered in PostgreSQL; promoting scoped push to generation-wide reconciliation",
+				gen.Fingerprint)
+			scope = nil
+		} else if !probe.machineRecorded {
+			log.Printf("vector push: no prior push record for machine %q against generation %d; promoting scoped push to generation-wide reconciliation",
+				s.machine, probe.id)
+			scope = nil
+		} else if lastReconciledGeneration != 0 &&
+			probe.id != lastReconciledGeneration {
+			log.Printf("vector push: active generation id %d differs from the last reconciled %d; promoting scoped push to generation-wide reconciliation",
+				probe.id, lastReconciledGeneration)
+			scope = nil
+		}
 	}
 	if requestedScope != nil && scope == nil {
 		_ = export.Close()
@@ -329,15 +330,15 @@ func (s *Sync) pushVectors(
 			)
 		}
 		gen = export.Generation()
-		resolved, err = s.resolveVectorGeneration(ctx, gen)
-		if err != nil {
-			if s.skipVectorsOnPrivilegeError(err, &res) {
-				return res, nil
-			}
-			return res, err
-		}
-		res.GenerationID = resolved.id
 	}
+	resolved, err := s.resolveVectorGeneration(ctx, gen)
+	if err != nil {
+		if s.skipVectorsOnPrivilegeError(err, &res) {
+			return res, nil
+		}
+		return res, err
+	}
+	res.GenerationID = resolved.id
 	owner, err := s.vectorOwnerIdentity(ctx)
 	if err != nil {
 		return res, err
@@ -379,6 +380,32 @@ func (s *Sync) pushVectors(
 		res.SessionsPushed, res.SessionsUnchanged, res.SessionsDeferred,
 		res.SessionsEvicted, res.ChunksPushed)
 	return res, nil
+}
+
+func (s *Sync) lookupVectorGeneration(
+	ctx context.Context, fingerprint string,
+) (vectorGeneration, bool, error) {
+	genID, _, ok, err := LookupVectorGeneration(ctx, s.pg, fingerprint)
+	if err != nil {
+		return vectorGeneration{}, false, err
+	}
+	if !ok {
+		return vectorGeneration{}, false, nil
+	}
+	var machineRecorded bool
+	if err := s.pg.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM vector_generation_machines
+     WHERE generation_id = $1 AND machine = $2)`,
+		genID, s.machine).Scan(&machineRecorded); err != nil {
+		return vectorGeneration{}, false, fmt.Errorf(
+			"reading vector push machine record: %w", err,
+		)
+	}
+	return vectorGeneration{
+		id:              genID,
+		machineRecorded: machineRecorded,
+	}, true, nil
 }
 
 // skipVectorsOnPrivilegeError reports whether err is an

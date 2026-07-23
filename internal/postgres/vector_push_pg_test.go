@@ -574,6 +574,55 @@ func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
 	assert.Empty(t, src.hashScopes, "skip must happen before the local hash read")
 }
 
+// TestVectorPushPromotionDefersRegistrationUntilReady pins the remaining
+// promotion-order safety check: a scoped push that must promote because the
+// generation is not registered in PostgreSQL must not create that generation
+// before the full export proves ready.
+func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_promotion_registration_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-pr0", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	src.genCalls = 0
+	src.genScopes = nil
+	src.hashScopes = nil
+	src.genOverride = func(call int, sessionIDs []string) (VectorGenerationInfo, bool, error) {
+		if call == 1 {
+			assert.Equal(t, []string{"A"}, sessionIDs)
+			return src.gen, true, nil
+		}
+		assert.Nil(t, sessionIDs, "promotion must re-open the full export")
+		return VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: 1 document(s) pending", ErrVectorSourceNotReady)
+	}
+
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, 99, nil, nil)
+	require.NoError(t, err, "promoted scoped push on an unregistered generation")
+	assert.True(t, vres.Skipped)
+	assert.Contains(t, vres.SkippedReason, "not fully embedded")
+	require.Len(t, src.genScopes, 2)
+	assert.Equal(t, []string{"A"}, src.genScopes[0])
+	assert.Nil(t, src.genScopes[1])
+	assert.Empty(t, src.hashScopes, "skip must happen before any local hash read")
+	assert.Equal(t, 0, countRows(t, pg,
+		`SELECT COUNT(*) FROM vector_generations WHERE fingerprint = $1`, "fp-pr0"),
+		"promotion must not register an unready generation")
+}
+
 // TestVectorPushDeferredFullPassDoesNotRecordMachineWitness pins the remaining
 // roborev finding: a generation-wide pass that leaves deferred work must not
 // write the machine witness, or a later scoped push would trust an incomplete
