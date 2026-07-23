@@ -175,6 +175,8 @@ type Sync struct {
 	vectorSource VectorPushSource
 	// afterVectorGenerationLookup is a scoped-promotion test hook.
 	afterVectorGenerationLookup func()
+	// afterScopedVectorApply is a scoped-retry test hook.
+	afterScopedVectorApply func()
 
 	closeOnce sync.Once
 	closeErr  error

@@ -218,6 +218,43 @@ func TestVectorExportHandleLifecycle(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestVectorExportTreatsParkedStampedDocsAsNotReady(t *testing.T) {
+	ctx := context.Background()
+	ix, _ := newBuiltTestIndex(t)
+
+	exp, ok, err := ix.ActiveExport(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	_, err = ix.db.Exec(`
+UPDATE vector_messages
+   SET ordinal = -1
+ WHERE session_id = ? AND content = ?`, "session-1", "hello")
+	require.NoError(t, err)
+
+	missing, err := ix.MissingEmbeddedDocs(ctx, exp.Ordinal, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, missing)
+
+	scopedMissing, err := ix.MissingEmbeddedDocs(ctx, exp.Ordinal, []string{"session-1"})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, scopedMissing)
+
+	otherMissing, err := ix.MissingEmbeddedDocs(ctx, exp.Ordinal, []string{"session-2"})
+	require.NoError(t, err)
+	assert.Zero(t, otherMissing)
+
+	_, ok, err = ix.BeginExport(ctx, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrExportNotReady)
+	assert.False(t, ok)
+
+	scoped, ok, err := ix.BeginExport(ctx, []string{"session-2"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, scoped.Close())
+}
+
 // TestSessionEmbeddedDocHashesChangesWithContent builds, captures each
 // session's embedded-doc aggregate hash, mutates session-1's user doc
 // content in the fake source and refreshes (without rebuilding), then

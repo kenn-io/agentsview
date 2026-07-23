@@ -648,9 +648,7 @@ func (ix *Index) MissingEmbeddedDocs(
 	if sessionIDs != nil && len(sessionIDs) == 0 {
 		return 0, nil
 	}
-	query := `SELECT COUNT(*) FROM ` + ix.spec.DocsTable + ` d WHERE NOT EXISTS
-           (SELECT 1 FROM ` + ix.spec.stampsTable() + ` s
-            WHERE s.ordinal = ? AND s.doc_key = d.doc_key AND s.revision = d.content_hash)`
+	query := missingEmbeddedDocsQuery(ix.spec)
 	if sessionIDs == nil {
 		var missing int64
 		if err := ix.db.QueryRowContext(ctx, query, genOrdinal).Scan(&missing); err != nil {

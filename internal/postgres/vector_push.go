@@ -399,6 +399,43 @@ func (s *Sync) pushVectors(
 	); err != nil {
 		return res, err
 	}
+	if scope != nil {
+		if s.afterScopedVectorApply != nil {
+			hook := s.afterScopedVectorApply
+			s.afterScopedVectorApply = nil
+			hook()
+		}
+		retryGenerationWide := func(msg string, args ...any) (VectorPushResult, error) {
+			log.Printf(msg, args...)
+			_ = export.Close()
+			export = nil
+			return s.pushVectors(
+				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
+			)
+		}
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+		if err != nil {
+			return res, err
+		}
+		if !found {
+			return retryGenerationWide(
+				"vector push: generation %q disappeared after scoped reconciliation; retrying generation-wide",
+				gen.Fingerprint,
+			)
+		}
+		if !finalProbe.machineRecorded {
+			return retryGenerationWide(
+				"vector push: no prior push record for machine %q against generation %d after scoped reconciliation; retrying generation-wide",
+				s.machine, finalProbe.id,
+			)
+		}
+		if finalProbe.id != resolved.id {
+			return retryGenerationWide(
+				"vector push: active generation id changed from %d to %d after scoped reconciliation; retrying generation-wide",
+				resolved.id, finalProbe.id,
+			)
+		}
+	}
 	if scope == nil && res.SessionsDeferred == 0 {
 		if err := s.recordVectorGenerationMachine(ctx, resolved.id); err != nil {
 			return res, err

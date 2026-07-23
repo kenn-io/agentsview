@@ -276,13 +276,18 @@ func activeFullRebuildPendingTx(ctx context.Context, tx *sql.Tx, spec IndexSpec,
 	return value == fingerprint, nil
 }
 
+func missingEmbeddedDocsQuery(spec IndexSpec) string {
+	return `SELECT COUNT(*) FROM ` + spec.DocsTable + ` d WHERE (
+            d.ordinal < 0 OR NOT EXISTS
+           (SELECT 1 FROM ` + spec.stampsTable() + ` s
+            WHERE s.ordinal = ? AND s.doc_key = d.doc_key AND s.revision = d.content_hash))`
+}
+
 func missingEmbeddedDocsTx(ctx context.Context, tx *sql.Tx, spec IndexSpec, genOrdinal int64, sessionIDs []string) (int64, error) {
 	if sessionIDs != nil && len(sessionIDs) == 0 {
 		return 0, nil
 	}
-	query := `SELECT COUNT(*) FROM ` + spec.DocsTable + ` d WHERE NOT EXISTS
-           (SELECT 1 FROM ` + spec.stampsTable() + ` s
-            WHERE s.ordinal = ? AND s.doc_key = d.doc_key AND s.revision = d.content_hash)`
+	query := missingEmbeddedDocsQuery(spec)
 	count := func(where string, args []any) (int64, error) {
 		var missing int64
 		if err := tx.QueryRowContext(ctx, query+where, args...).Scan(&missing); err != nil {

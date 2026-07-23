@@ -690,6 +690,76 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 		"both sessions have state rows under the recreated generation")
 }
 
+// TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide pins the
+// remaining scoped race: if the vector tables are recreated after the last
+// scoped generation probe but before success returns, the push must discard
+// the scoped result and repopulate the recreated generation generation-wide.
+func TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_post_apply_race_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-post", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+
+	var gen1 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-post",
+	).Scan(&gen1), "gen1 id")
+
+	src.hashScopes = nil
+	sync.afterScopedVectorApply = func() {
+		for _, q := range []string{
+			`DROP TABLE IF EXISTS ` + vectorChunkTable(gen1),
+			`DROP TABLE IF EXISTS vector_push_state`,
+			`DROP TABLE IF EXISTS vector_generation_machines`,
+			`DROP TABLE IF EXISTS vector_documents`,
+			`DROP TABLE IF EXISTS vector_generations`,
+		} {
+			_, err := pg.Exec(q)
+			require.NoError(t, err, q)
+		}
+		unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
+		require.NoError(t, err, "recreate vector base schema")
+		require.Empty(t, unavailable, "pgvector must stay available in test")
+		gen2, err := ensureVectorGeneration(
+			ctx, pg, src.gen.Fingerprint, src.gen.Model, src.gen.Dimension,
+		)
+		require.NoError(t, err, "re-register generation")
+		require.Equal(t, gen1, gen2,
+			"recreated tables restart the id sequence, which is the case under test")
+	}
+
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, gen1, nil, nil)
+	require.NoError(t, err, "scoped push across a post-apply recreation")
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the recreated generation is reconciled generation-wide, not just for A")
+	require.Len(t, src.hashScopes, 2)
+	assert.Equal(t, []string{"A"}, src.hashScopes[0],
+		"the first pass starts scoped")
+	assert.Nil(t, src.hashScopes[1],
+		"the retry must reopen the full generation")
+	assert.Equal(t, gen1, vres.GenerationID,
+		"the full retry reconciles the recreated generation even when the id is reused")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen1),
+		"both sessions have state rows under the recreated generation")
+}
+
 // TestVectorPushDeferredFullPassDoesNotRecordMachineWitness pins the remaining
 // roborev finding: a generation-wide pass that leaves deferred work must not
 // write the machine witness, or a later scoped push would trust an incomplete
