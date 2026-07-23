@@ -1785,6 +1785,86 @@ func TestGetTopSessionsByCost(t *testing.T) {
 		"top[0].Cost should be > top[1].Cost")
 }
 
+// TestGetTopSessionsByTokens ranks by total tokens and applies limit
+// against the token order, not a re-sort of a cost-truncated top-N.
+// A high-token/low-cost session must outrank a low-token/high-cost one.
+func TestGetTopSessionsByTokens(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:  "expensive-model",
+			InputPerMTok:  100.0,
+			OutputPerMTok: 100.0,
+		},
+		{
+			ModelPattern:  "cheap-model",
+			InputPerMTok:  0.01,
+			OutputPerMTok: 0.01,
+		},
+	}), "UpsertModelPricing")
+
+	// High cost, low tokens.
+	insertSession(t, d, "sCostly", "proj-a", func(s *Session) {
+		s.Agent = "claude"
+		s.SessionName = new("Costly")
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "sCostly", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
+		Model: "expensive-model",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":100}`),
+	})
+
+	// Low cost, high tokens.
+	insertSession(t, d, "sTokeny", "proj-b", func(s *Session) {
+		s.Agent = "codex"
+		s.SessionName = new("Tokeny")
+		s.StartedAt = new("2024-06-15T11:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "sTokeny", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T11:30:00Z",
+		Model: "cheap-model",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":50000,"output_tokens":50000}`),
+	})
+
+	filter := UsageFilter{From: "2024-06-01", To: "2024-06-30"}
+
+	byCost, err := d.GetTopSessionsByCost(ctx, filter, 1)
+	requireNoError(t, err, "by cost")
+	require.Len(t, byCost, 1, "by cost limit")
+	assert.Equal(t, "sCostly", byCost[0].SessionID, "cost rank")
+
+	filter.TopSessionsSort = TopSessionsSortTokens
+	byTokens, err := d.GetTopSessionsByCost(ctx, filter, 1)
+	requireNoError(t, err, "by tokens")
+	require.Len(t, byTokens, 1, "by tokens limit")
+	assert.Equal(t, "sTokeny", byTokens[0].SessionID, "token rank")
+	assert.Equal(t, 100000, byTokens[0].TotalTokens, "token total")
+}
+
+func TestSortAndLimitTopSessions(t *testing.T) {
+	in := []TopSessionEntry{
+		{SessionID: "a", TotalTokens: 10, Cost: 5},
+		{SessionID: "b", TotalTokens: 100, Cost: 1},
+		{SessionID: "c", TotalTokens: 50, Cost: 3},
+	}
+	got := SortAndLimitTopSessions(in, 2, TopSessionsSortTokens)
+	require.Len(t, got, 2)
+	assert.Equal(t, "b", got[0].SessionID)
+	assert.Equal(t, "c", got[1].SessionID)
+
+	gotCost := SortAndLimitTopSessions(in, 2, TopSessionsSortCost)
+	require.Len(t, gotCost, 2)
+	assert.Equal(t, "a", gotCost[0].SessionID)
+	assert.Equal(t, "c", gotCost[1].SessionID)
+}
+
 func TestGetTopSessionsByCost_DisplayNameFallback(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

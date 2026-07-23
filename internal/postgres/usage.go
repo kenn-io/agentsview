@@ -1863,17 +1863,11 @@ func (s *Store) GetDailyUsage(
 	}, nil
 }
 
-// GetTopSessionsByCost returns sessions ranked by total cost.
+// GetTopSessionsByCost returns sessions ranked by total cost
+// (or by total tokens when f.TopSessionsSort is "tokens").
 func (s *Store) GetTopSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
@@ -1969,15 +1963,7 @@ func (s *Store) GetTopSessionsByCost(
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Cost != result[j].Cost {
-			return result[i].Cost > result[j].Cost
-		}
-		return result[i].SessionID < result[j].SessionID
-	})
-	if len(result) > limit {
-		result = result[:limit]
-	}
+	result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort)
 
 	sessionIDs := make([]string, len(result))
 	for i := range result {

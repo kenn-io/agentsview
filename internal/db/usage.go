@@ -77,6 +77,9 @@ type UsageFilter struct {
 	Termination       string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns        bool   // populate Project/AgentBreakdowns per day
 	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
+	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
+	// (default) or "tokens". Ignored by other usage queries.
+	TopSessionsSort string
 }
 
 // ProjectFilterLabels returns exact include labels when present, otherwise it
@@ -2430,18 +2433,47 @@ type TopSessionEntry struct {
 	Cost        float64 `json:"cost"`
 }
 
-// GetTopSessionsByCost returns sessions ranked by total cost
-// over the filter range. Default limit 20, max 100.
-func (db *DB) GetTopSessionsByCost(
-	ctx context.Context, f UsageFilter, limit int,
-) ([]TopSessionEntry, error) {
+// TopSessionsSortCost and TopSessionsSortTokens select ranking for
+// GetTopSessionsByCost. Empty TopSessionsSort is treated as cost.
+const (
+	TopSessionsSortCost   = "cost"
+	TopSessionsSortTokens = "tokens"
+)
+
+// SortAndLimitTopSessions ranks entries by cost (default) or tokens,
+// then applies limit. Ties break by SessionID ascending for stability.
+func SortAndLimitTopSessions(
+	result []TopSessionEntry, limit int, sortBy string,
+) []TopSessionEntry {
 	if limit <= 0 {
 		limit = 20
 	}
 	if limit > 100 {
 		limit = 100
 	}
+	byTokens := strings.EqualFold(sortBy, TopSessionsSortTokens)
+	sort.Slice(result, func(i, j int) bool {
+		if byTokens {
+			if result[i].TotalTokens != result[j].TotalTokens {
+				return result[i].TotalTokens > result[j].TotalTokens
+			}
+		} else if result[i].Cost != result[j].Cost {
+			return result[i].Cost > result[j].Cost
+		}
+		return result[i].SessionID < result[j].SessionID
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result
+}
 
+// GetTopSessionsByCost returns sessions ranked by total cost
+// (or by total tokens when f.TopSessionsSort is "tokens")
+// over the filter range. Default limit 20, max 100.
+func (db *DB) GetTopSessionsByCost(
+	ctx context.Context, f UsageFilter, limit int,
+) ([]TopSessionEntry, error) {
 	pricing, err := db.loadPricingMap(ctx)
 	if err != nil {
 		return nil,
@@ -2553,16 +2585,7 @@ func (db *DB) GetTopSessionsByCost(
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Cost != result[j].Cost {
-			return result[i].Cost > result[j].Cost
-		}
-		return result[i].SessionID < result[j].SessionID
-	})
-
-	if len(result) > limit {
-		result = result[:limit]
-	}
+	result = SortAndLimitTopSessions(result, limit, f.TopSessionsSort)
 
 	sessionIDs := make([]string, len(result))
 	for i := range result {

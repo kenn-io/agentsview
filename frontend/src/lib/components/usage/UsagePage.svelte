@@ -206,7 +206,14 @@
     const params = router.params;
     untrack(() => {
       if (route !== "usage" && route !== "token-usage") return;
-      usage.mode = route === "token-usage" ? "token" : "cost";
+      const nextMode = route === "token-usage" ? "token" : "cost";
+      const modeChanged = usage.mode !== nextMode;
+      usage.mode = nextMode;
+      // Ranking for top-sessions depends on mode (cost vs tokens),
+      // so switch tabs must re-fetch even when filters are unchanged.
+      if (modeChanged && urlInitRan) {
+        void usage.fetchTopSessions();
+      }
       const hasDateParam = !!params["from"] || !!params["to"];
       const parsedWindowDays = parseWindowDays(params["window_days"]);
       const supportedSessionParams =

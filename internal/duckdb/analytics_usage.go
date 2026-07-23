@@ -4146,9 +4146,6 @@ func (s *Store) sessionUsageRows(
 func (s *Store) GetTopSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
-	if limit <= 0 {
-		limit = 20
-	}
 	pricing, err := s.loadPricing(ctx)
 	if err != nil {
 		return nil, err
@@ -4201,16 +4198,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		out = append(out, a.row)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
-		}
-		return out[i].SessionID < out[j].SessionID
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return db.SortAndLimitTopSessions(out, limit, f.TopSessionsSort), nil
 }
 
 func (s *Store) GetUsageSessionCounts(

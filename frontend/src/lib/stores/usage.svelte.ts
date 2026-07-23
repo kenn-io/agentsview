@@ -869,9 +869,10 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await callGenerated(() =>
-        UsageService.getApiV1UsageTopSessions(
-          params ?? this.baseParams(),
-        ),
+        UsageService.getApiV1UsageTopSessions({
+          ...(params ?? this.baseParams()),
+          sort: this.mode === "token" ? "tokens" : "cost",
+        }),
         signal,
       ) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {

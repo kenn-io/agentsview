@@ -14,13 +14,7 @@
   }
 
   const isTokenMode = $derived(usage.mode === "token");
-
-  const sortedSessions = $derived.by(() => {
-    const sessions = usage.topSessions ?? [];
-    if (!isTokenMode) return sessions;
-    // In token mode, re-sort by totalTokens descending
-    return [...sessions].sort((a, b) => b.totalTokens - a.totalTokens);
-  });
+  const sessions = $derived(usage.topSessions ?? []);
 </script>
 
 <div class="top-sessions-container">
@@ -36,9 +30,9 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if sortedSessions && sortedSessions.length > 0}
+  {:else if sessions && sessions.length > 0}
     <div class="session-list">
-      {#each sortedSessions as row, i (row.sessionId)}
+      {#each sessions as row, i (row.sessionId)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div

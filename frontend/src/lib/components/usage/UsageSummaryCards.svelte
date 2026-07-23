@@ -104,11 +104,21 @@
     return { date: best.date, value: bestTokens };
   });
 
-  const activeDays = $derived(
-    usage.summary?.daily?.filter(
-      (d) => d.totalCost > 0,
-    ).length ?? 0,
-  );
+  const activeDays = $derived.by(() => {
+    const daily = usage.summary?.daily;
+    if (!daily) return 0;
+    if (isTokenMode) {
+      return daily.filter(
+        (d) =>
+          d.inputTokens +
+            d.outputTokens +
+            d.cacheCreationTokens +
+            d.cacheReadTokens >
+          0,
+      ).length;
+    }
+    return daily.filter((d) => d.totalCost > 0).length;
+  });
 
   const vsPrior = $derived.by(() => {
     const c = usage.summary?.comparison;

@@ -120,9 +120,6 @@ export default defineConfig({
         },
       },
     },
-    // SPA fallback: any unmatched path returns index.html so client-side
-    // routing works on refresh or direct navigation (e.g. /token-usage).
-    historyApiFallback: true,
   },
   build: {
     outDir: "dist",
