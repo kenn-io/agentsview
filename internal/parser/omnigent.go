@@ -111,8 +111,11 @@ type omnigentSchema struct {
 	// lowercase hex, the form omnigent's own app layer presents.
 	binaryIDs bool
 	// changeIndexName identifies the persistent conversations index used for
-	// bounded updated_at discovery in the legacy schema.
+	// bounded updated_at discovery.
 	changeIndexName string
+	// changeIndexArchived is true when archived is between workspace_id and
+	// updated_at in the split-schema change index.
+	changeIndexArchived bool
 }
 
 // omnigentIDExpr yields a SELECT expression reading an id column as text:
@@ -258,22 +261,36 @@ func detectOmnigentSchema(conn *sql.DB) (omnigentSchema, error) {
 		}
 	}
 
-	if !s.splitMetadata {
-		name, indexErr := omnigentIndexWithPrefix(
-			conn, "conversations", []string{"updated_at"},
+	changePrefix := []string{"updated_at"}
+	if s.splitMetadata {
+		hasArchived, columnErr := omnigentColumnExists(
+			conn, "conversations", "archived",
 		)
-		if indexErr != nil {
+		if columnErr != nil {
 			return omnigentSchema{}, fmt.Errorf(
-				"inspect omnigent conversation indexes: %w", indexErr,
+				"inspect omnigent archived column: %w", columnErr,
 			)
 		}
-		if name == "" {
-			return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
-				Reason: "missing bounded conversation change index",
-			}
+		changePrefix = []string{"workspace_id", "updated_at"}
+		if hasArchived {
+			changePrefix = []string{"workspace_id", "archived", "updated_at"}
+			s.changeIndexArchived = true
 		}
-		s.changeIndexName = name
 	}
+	name, indexErr := omnigentIndexWithPrefix(
+		conn, "conversations", changePrefix,
+	)
+	if indexErr != nil {
+		return omnigentSchema{}, fmt.Errorf(
+			"inspect omnigent conversation indexes: %w", indexErr,
+		)
+	}
+	if name == "" {
+		return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
+			Reason: "missing bounded conversation change index",
+		}
+	}
+	s.changeIndexName = name
 	return s, nil
 }
 

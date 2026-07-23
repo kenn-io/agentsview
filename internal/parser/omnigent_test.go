@@ -849,6 +849,90 @@ func TestOmnigentSplitWorkspaceChangedPathClassification(t *testing.T) {
 	assert.Equal(t, "99:conv", changed[0].MemberID)
 }
 
+func TestOmnigentSplitMetadataOnlyChangesAreDiscovered(t *testing.T) {
+	path := writeOmnigentSplitGenDB(t)
+	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	require.True(t, ok)
+	initializeOmnigentProvider(t, provider, 2)
+
+	writer, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE conversations
+		    SET title = 'renamed task', updated_at = ?
+		  WHERE workspace_id = 0 AND id = 'conv_root'`,
+		time.Now().Unix(),
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE omnigent_conversation_metadata
+		    SET workspace = '/work/renamed', git_branch = 'review',
+		        session_usage = '{"input_tokens":7,"output_tokens":3}'
+		  WHERE workspace_id = 0 AND id = 'conv_root'`,
+	)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE agent_configuration
+		    SET model_override = 'metadata-model'
+		  WHERE workspace_id = 0 AND conversation_id = 'conv_root'`,
+	)
+	require.NoError(t, err)
+
+	sources, err := provider.SourcesForChangedPath(
+		t.Context(), ChangedPathRequest{Path: path, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(sources), omnigentRecentMemberLimit,
+		"metadata fallback fan-out must stay capped")
+	sourceIndex := slices.IndexFunc(sources, func(source SourceRef) bool {
+		return strings.HasSuffix(source.Key, "#0:conv_root")
+	})
+	require.NotEqual(t, -1, sourceIndex,
+		"an in-place conversation update must identify its existing member")
+	outcome, err := provider.Parse(
+		t.Context(), ParseRequest{Source: sources[sourceIndex]},
+	)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+	assert.Equal(t, "renamed task", result.Session.SessionName)
+	assert.Equal(t, "/work/renamed", result.Session.Cwd)
+	assert.Equal(t, "review", result.Session.GitBranch)
+	require.Len(t, result.UsageEvents, 1)
+	assert.Equal(t, "metadata-model", result.UsageEvents[0].Model)
+
+	_, err = writer.Exec(
+		`UPDATE omnigent_conversation_metadata
+		    SET session_usage = ?
+		  WHERE workspace_id = 0 AND id = 'conv_root'`,
+		`{"input_tokens":9,"output_tokens":4}`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	sources, err = provider.SourcesForChangedPath(
+		t.Context(), ChangedPathRequest{Path: path, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(sources), omnigentRecentMemberLimit,
+		"metadata fallback fan-out must stay capped")
+	sourceIndex = slices.IndexFunc(sources, func(source SourceRef) bool {
+		return strings.HasSuffix(source.Key, "#0:conv_root")
+	})
+	require.NotEqual(t, -1, sourceIndex,
+		"a recent member must be replayed for metadata commits without a cursor")
+	outcome, err = provider.Parse(
+		t.Context(), ParseRequest{Source: sources[sourceIndex]},
+	)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.UsageEvents, 1)
+	assert.Equal(t, 9, outcome.Results[0].Result.UsageEvents[0].InputTokens)
+	assert.Equal(t, 4, outcome.Results[0].Result.UsageEvents[0].OutputTokens)
+}
+
 func TestOmnigentSplitWorkspaceChangeWorkIsArchiveIndependent(t *testing.T) {
 	for _, archiveSize := range []int{100, 600} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
@@ -888,6 +972,63 @@ func TestOmnigentSplitWorkspaceChangeWorkIsArchiveIndependent(t *testing.T) {
 			require.Len(t, changed, 1,
 				"one appended item must fan out one member at every archive size")
 			assert.Equal(t, fmt.Sprintf("%d:conv", workspaceID), changed[0].MemberID)
+		})
+	}
+}
+
+func TestOmnigentSplitMetadataChangeWorkIsArchiveIndependent(t *testing.T) {
+	for _, archiveSize := range []int{100, 600} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			path := writeOmnigentSplitSingleWorkspaceCardinalityDB(t, archiveSize)
+			conn, err := openOmnigentDB(path)
+			require.NoError(t, err)
+			schema, err := detectOmnigentSchema(conn)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			tracker := omnigentTrackerAtCurrentHighWater(t, path, schema)
+
+			writer, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			target := fmt.Sprintf("conv_%03d", archiveSize/2)
+			_, err = writer.Exec(
+				`UPDATE conversations SET title = 'changed', updated_at = ?
+				  WHERE workspace_id = 0 AND id = ?`,
+				time.Now().Unix(), target,
+			)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			changed, err := tracker.changedMembers(
+				t.Context(), filepath.Dir(path), ChangedPathRequest{
+					Path: path, EventKind: "write",
+				},
+			)
+			require.NoError(t, err)
+			require.Len(t, changed, 1,
+				"one metadata update must fan out one member at every archive size")
+			assert.Equal(t, "0:"+target, changed[0].MemberID)
+		})
+	}
+}
+
+func TestOmnigentSplitRecentMetadataReplayIsCapped(t *testing.T) {
+	for _, archiveSize := range []int{200, 600} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			path := writeOmnigentSplitSingleWorkspaceCardinalityDB(t, archiveSize)
+			provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
+				Roots: []string{filepath.Dir(path)}, Machine: "host",
+			})
+			require.True(t, ok)
+			initializeOmnigentProvider(t, provider, archiveSize)
+
+			sources, err := provider.SourcesForChangedPath(
+				t.Context(), ChangedPathRequest{
+					Path: path, EventKind: "write",
+				},
+			)
+			require.NoError(t, err)
+			assert.Len(t, sources, omnigentRecentMemberLimit,
+				"warm metadata fallback must stay fixed as the archive grows")
 		})
 	}
 }
@@ -1014,10 +1155,15 @@ func omnigentTrackerAtCurrentHighWater(
 	require.NoError(t, err)
 	itemRowID, itemTail, err := omnigentLatestItemRow(t.Context(), conn, schema)
 	require.NoError(t, err)
+	metas, err := listOmnigentConversationMetas(conn, schema)
+	require.NoError(t, err)
+	workspaceID, singleWorkspace := omnigentSingleWorkspace(metas)
 	tracker := newOmnigentChangeTracker()
 	tracker.containers[path] = omnigentTrackedContainer{
 		schema:            schema,
 		checkedAt:         time.Now().Unix(),
+		singleWorkspace:   singleWorkspace,
+		workspaceID:       workspaceID,
 		conversationRowID: conversationRowID,
 		conversationTail:  conversationTail,
 		itemRowID:         itemRowID,
@@ -1051,6 +1197,14 @@ func TestOmnigentIncrementalQueriesUseSeekableIndexes(t *testing.T) {
 			query:      omnigentNewConversationQuery,
 			args:       []any{int64(0), 128},
 			wantDetail: "INTEGER PRIMARY KEY",
+			wantItems:  "ix_conversation_items_conversation_id_position",
+		},
+		{
+			name:       "split schema updated_at range",
+			writeDB:    writeOmnigentSplitSingleWorkspaceCardinalityDB,
+			query:      omnigentSplitChangedMetaQuery,
+			args:       []any{int64(0), int64(1), int64(2)},
+			wantDetail: "ix_conversations_updated_at",
 			wantItems:  "ix_conversation_items_conversation_id_position",
 		},
 		{
@@ -1161,6 +1315,39 @@ func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
 			VALUES (?, 'conv', 'item', 0, 1,
 				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
 				'hi')`, workspaceID)
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.Close())
+	return path
+}
+
+func writeOmnigentSplitSingleWorkspaceCardinalityDB(
+	t *testing.T, count int,
+) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), omnigentDBName)
+	database, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	execOmnigentDDL(t, database, omnigentSplitGenDDL)
+	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('single-workspace-cardinality')`)
+	require.NoError(t, err)
+	for i := range count {
+		id := fmt.Sprintf("conv_%03d", i)
+		updatedAt := int64(1_700_000_000 + i)
+		_, err = database.Exec(`INSERT INTO conversations
+			(workspace_id, id, created_at, updated_at, title, root_conversation_id)
+			VALUES (0, ?, ?, ?, 'conversation', ?)`,
+			id, updatedAt-1, updatedAt, id)
+		require.NoError(t, err)
+		_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
+			(workspace_id, id, kind, workspace)
+			VALUES (0, ?, 1, '/work/project')`, id)
+		require.NoError(t, err)
+		_, err = database.Exec(`INSERT INTO conversation_items
+			(workspace_id, conversation_id, id, position, type, data, search_text)
+			VALUES (0, ?, 'item', 0, 1,
+				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
+				'hi')`, id)
 		require.NoError(t, err)
 	}
 	require.NoError(t, database.Close())

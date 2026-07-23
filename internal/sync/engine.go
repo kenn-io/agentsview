@@ -832,7 +832,14 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	// Capture container states before classifyPaths lists any session rows,
 	// matching the capture-before-discovery ordering of full syncs.
 	preContainerStates := e.captureSQLiteContainerStates(paths)
+	omnigentRetryPending, omnigentRetryAttempt := e.omnigentFullRetry()
 	files, classificationErr := e.classifyPaths(ctx, paths)
+	if omnigentRetryPending &&
+		!slices.ContainsFunc(files, func(file parser.DiscoveredFile) bool {
+			return file.Agent == parser.AgentOmnigent
+		}) {
+		omnigentRetryAttempt = 0
+	}
 	missingPaths = omitMissingPersistentContainerPaths(missingPaths, files)
 	if len(files) == 0 && len(missingPaths) == 0 {
 		return classificationErr
@@ -881,6 +888,9 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 		if err != nil {
 			return fmt.Errorf("watcher source tombstone: %w", err)
 		}
+	}
+	if complete && omnigentRetryAttempt != 0 {
+		e.completeOmnigentFullRetry(omnigentRetryAttempt)
 	}
 
 	e.mu.Lock()
@@ -1025,9 +1035,14 @@ func (e *Engine) classifyProviderChangedPath(
 		if !ok || factory == nil {
 			continue
 		}
+		providerForceFullDiscovery := false
+		if pending, _ := e.omnigentFullRetry(); agentType == parser.AgentOmnigent {
+			providerForceFullDiscovery = pending
+		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:   roots,
-			Machine: e.machine,
+			Roots:              roots,
+			Machine:            e.machine,
+			ForceFullDiscovery: providerForceFullDiscovery,
 		})
 		def := provider.Definition()
 		watchRoots, err := e.providerChangedPathWatchRoots(
@@ -7233,17 +7248,18 @@ func (e *Engine) processProviderFile(
 	parsedResults := parseOutcomeResults(outcome.Results)
 	parsedCount := len(parsedResults)
 	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
+	var missingMembers []sourceMissingMember
 	if file.Agent == parser.AgentOmnigent && outcome.ForceReplace &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
-		excludedSessionIDs = append(excludedSessionIDs,
-			e.providerSourceMissingSessionIDsForCompleteResult(
+		missingMembers =
+			e.providerSourceMissingSessionOwnershipsForCompleteResult(
 				provider, source, parsedResults,
-			)...,
-		)
+			)
 	}
 	res := processResult{
 		results:               e.dropUnchangedSharedSQLiteResults(file, parsedResults),
 		excludedSessionIDs:    excludedSessionIDs,
+		sourceMissingMembers:  missingMembers,
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
@@ -7444,11 +7460,11 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 	return members
 }
 
-func (e *Engine) providerSourceMissingSessionIDsForCompleteResult(
+func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 	provider parser.Provider,
 	source parser.SourceRef,
 	results []parser.ParseResult,
-) []string {
+) []sourceMissingMember {
 	emitted := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
@@ -7456,13 +7472,13 @@ func (e *Engine) providerSourceMissingSessionIDsForCompleteResult(
 			emitted[id] = struct{}{}
 		}
 	}
-	stored := e.providerSourceSessionIDsForForceReplace(provider, source)
-	missing := make([]string, 0, len(stored))
-	for _, id := range stored {
-		if _, present := emitted[id]; present {
+	stored := e.providerSourceSessionOwnershipsForForceReplace(provider, source)
+	missing := make([]sourceMissingMember, 0, len(stored))
+	for _, member := range stored {
+		if _, present := emitted[member.sessionID]; present {
 			continue
 		}
-		missing = append(missing, id)
+		missing = append(missing, member)
 	}
 	return missing
 }
