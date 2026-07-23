@@ -173,7 +173,7 @@ func DecodeWire(
 		label:  "encoded wire input",
 	}
 	decoded := &wireLimitedWriter{
-		writer: &wireContextWriter{ctx: ctx, writer: dst},
+		writer: &wireContextWriter{ctx: ctx, writer: &wireDestinationWriter{writer: dst}},
 		limit:  limits.MaxDecodedBytes,
 		label:  "decoded canonical output",
 	}
@@ -194,6 +194,9 @@ func DecodeWire(
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
+	}
+	if errors.Is(err, errWireDestination) {
+		return fmt.Errorf("writing decoded %s: %w", wireRef.Name, err)
 	}
 	return fmt.Errorf("%w: decoding %s: %w", ErrArtifactCorrupt, wireRef.Name, err)
 }
@@ -290,6 +293,23 @@ func (r *wireContextReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return r.reader.Read(p)
+}
+
+// errWireDestination tags write failures from the caller's decode destination
+// (disk full, permissions) so DecodeWire does not misreport local I/O trouble
+// as wire corruption.
+var errWireDestination = errors.New("wire destination write failed")
+
+type wireDestinationWriter struct {
+	writer io.Writer
+}
+
+func (w *wireDestinationWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("%w: %w", errWireDestination, err)
+	}
+	return n, nil
 }
 
 type wireContextWriter struct {

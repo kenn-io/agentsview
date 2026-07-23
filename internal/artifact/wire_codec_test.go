@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -145,6 +146,50 @@ func TestWireCodecRoundTripsIdentityAndZstd(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tt.body, decoded.Bytes())
+		})
+	}
+}
+
+type failingWireWriter struct {
+	err error
+}
+
+func (w *failingWireWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestWireDecodePreservesDestinationWriteErrors(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	tests := []struct {
+		name string
+		ref  Ref
+	}{
+		{
+			name: "identity",
+			ref:  Ref{Origin: wireCodecTestOrigin, Kind: KindCheckpoints, Name: "cp-0000000001.json"},
+		},
+		{
+			name: "zstd",
+			ref:  Ref{Origin: wireCodecTestOrigin, Kind: KindManifests, Name: hash + ".json"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wireRef, err := ToWireRef(tt.ref)
+			require.NoError(t, err)
+			var encoded bytes.Buffer
+			body := []byte("valid artifact body")
+			require.NoError(t, EncodeWire(t.Context(), tt.ref, bytes.NewReader(body), &encoded))
+
+			diskFull := errors.New("disk full")
+			err = DecodeWire(t.Context(), wireRef, bytes.NewReader(encoded.Bytes()),
+				&failingWireWriter{err: diskFull}, WireLimits{
+					MaxEncodedBytes: int64(encoded.Len()),
+					MaxDecodedBytes: int64(len(body)),
+				})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, diskFull)
+			assert.NotErrorIs(t, err, ErrArtifactCorrupt)
 		})
 	}
 }
