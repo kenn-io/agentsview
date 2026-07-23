@@ -1137,6 +1137,7 @@
   "recall_page_error": "리콜 항목을 불러올 수 없습니다.",
   "recall_page_load_more": "더 보기",
   "recall_page_loading_more": "더 불러오는 중…",
+  "recall_page_ranked_result_cap": "순위 검색은 처음 {countLabel}개의 일치 항목으로 제한됩니다.",
   "recall_page_entries_shown": "표시된 항목: {countLabel}",
   "recall_page_extraction_title": "추출 상태",
   "recall_page_extraction_unconfigured": "리콜 추출이 구성되지 않았습니다.",

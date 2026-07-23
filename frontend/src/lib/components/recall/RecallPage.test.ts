@@ -110,6 +110,7 @@ describe("RecallPage", () => {
           }],
           trusted_only: false,
           next_cursor: "cursor-2",
+          result_cap: url.includes("q=") ? 500 : undefined,
         }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -184,6 +185,32 @@ describe("RecallPage", () => {
       document.querySelectorAll<HTMLButtonElement>("button"),
     ).find((button) => button.textContent?.trim() === "Load more"))
       .toBeUndefined();
+  });
+
+  it("shows the ranked result cap for searched entries", async () => {
+    component = mount(RecallPage, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Keep extraction passes bounded",
+      );
+    });
+    const search = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Search Recall entries…"]',
+    );
+    expect(search).not.toBeNull();
+
+    search!.value = "bounded";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Ranked search is limited to the first 500 matches.",
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("q=bounded"),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("restarts ranked pagination when the corpus changes", async () => {

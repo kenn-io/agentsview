@@ -46,6 +46,7 @@ export async function fetchRecallEntries(
   return {
     entries: data.entries ?? [],
     nextCursor: data.next_cursor || undefined,
+    resultCap: data.result_cap || undefined,
   };
 }
 

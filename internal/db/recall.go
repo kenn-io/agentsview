@@ -249,6 +249,9 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	if err := copyRecallCorpusRevisionFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
+	if err := copyRecallQueryRevisionFromAttachedTx(ctx, tx); err != nil {
+		return err
+	}
 	if err := copyRecallEmbeddingChangesFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
@@ -349,6 +352,25 @@ func copyRecallCorpusRevisionFromAttachedTx(
 		), revision))
 		WHERE singleton = 1`); err != nil {
 		return fmt.Errorf("copying recall corpus revision: %w", err)
+	}
+	return nil
+}
+
+func copyRecallQueryRevisionFromAttachedTx(
+	ctx context.Context, tx *sql.Tx,
+) error {
+	if !oldDBHasTable(ctx, tx, "recall_query_state") {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE main.recall_query_state
+		SET revision = MAX(revision, COALESCE((
+			SELECT revision
+			FROM old_db.recall_query_state
+			WHERE singleton = 1
+		), revision))
+		WHERE singleton = 1`); err != nil {
+		return fmt.Errorf("copying recall query revision: %w", err)
 	}
 	return nil
 }

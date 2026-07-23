@@ -1167,6 +1167,7 @@
   "recall_page_error": "Could not load Recall entries.",
   "recall_page_load_more": "Load more",
   "recall_page_loading_more": "Loading more…",
+  "recall_page_ranked_result_cap": "Ranked search is limited to the first {countLabel} matches.",
   "recall_page_entries_shown": "Entries shown: {countLabel}",
   "recall_page_extraction_title": "Extraction status",
   "recall_page_extraction_unconfigured": "Recall extraction is not configured.",

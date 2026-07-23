@@ -1167,6 +1167,7 @@
   "recall_page_error": "Impossible de charger les entrées de rappel.",
   "recall_page_load_more": "Afficher plus",
   "recall_page_loading_more": "Chargement…",
+  "recall_page_ranked_result_cap": "La recherche classée est limitée aux {countLabel} premiers résultats.",
   "recall_page_entries_shown": "Entrées affichées : {countLabel}",
   "recall_page_extraction_title": "État de l’extraction",
   "recall_page_extraction_unconfigured": "L’extraction du rappel n’est pas configurée.",

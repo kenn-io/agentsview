@@ -37,11 +37,13 @@ export interface RecallEntriesResponse {
   entries: RecallEntry[];
   trusted_only: boolean;
   next_cursor?: string;
+  result_cap?: number;
 }
 
 export interface RecallEntriesPage {
   entries: RecallEntry[];
   nextCursor?: string;
+  resultCap?: number;
 }
 
 export interface RecallExtractGeneration {

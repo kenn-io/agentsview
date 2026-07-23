@@ -41,6 +41,7 @@
 
   let entries = $state<RecallEntry[]>([]);
   let nextCursor = $state("");
+  let resultCap = $state(0);
   let status = $state<RecallExtractionStatus | null>(null);
   let entriesLoading = $state(true);
   let entriesFailed = $state(false);
@@ -129,6 +130,7 @@
         ? [...entries, ...page.entries]
         : page.entries;
       nextCursor = page.nextCursor ?? "";
+      resultCap = page.resultCap ?? 0;
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
@@ -138,6 +140,7 @@
       if (!appending) {
         entries = [];
         nextCursor = "";
+        resultCap = 0;
         entriesFailed = true;
       }
     } finally {
@@ -323,6 +326,14 @@
     />
   </div>
 
+  {#if resultCap > 0}
+    <p class="result-cap">
+      {m.recall_page_ranked_result_cap({
+        countLabel: resultCap.toLocaleString(),
+      })}
+    </p>
+  {/if}
+
   {#if entriesLoading && entries.length === 0}
     <p class="entries-state">{m.recall_page_loading()}</p>
   {:else if entriesFailed}
@@ -493,6 +504,12 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: var(--space-4);
+  }
+
+  .result-cap {
+    margin: calc(-1 * var(--space-3)) 0 var(--space-5);
+    color: var(--text-muted);
+    font-size: 11px;
   }
 
   :global(.recall-card) {

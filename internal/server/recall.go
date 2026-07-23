@@ -45,8 +45,8 @@ func handleInvalidRecallQuery(w http.ResponseWriter, err error) bool {
 
 var errStaleRecallPagination = errors.New("stale recall pagination")
 
-type recallCorpusRevisionProvider interface {
-	RecallCorpusRevision(context.Context) (string, error)
+type recallQueryRevisionProvider interface {
+	RecallQueryRevision(context.Context) (string, error)
 }
 
 func (s *Server) handleListRecallEntries(
@@ -130,11 +130,15 @@ func (s *Server) handleListRecallEntries(
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"entries":      results,
 		"trusted_only": query.TrustedOnly,
 		"next_cursor":  nextCursor,
-	})
+	}
+	if strings.TrimSpace(query.Text) != "" {
+		response["result_cap"] = db.MaxRecallEntryLimit
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 const (
@@ -221,7 +225,7 @@ func (s *Server) listRankedRecallEntriesPage(
 		}
 		offset = cursor.Offset
 	}
-	revisionProvider, ok := s.db.(recallCorpusRevisionProvider)
+	revisionProvider, ok := s.db.(recallQueryRevisionProvider)
 	if !ok {
 		if cursor != nil {
 			return nil, "", db.ErrInvalidRecallQuery
@@ -230,9 +234,17 @@ func (s *Server) listRankedRecallEntriesPage(
 		page, err := s.db.QueryRecallEntries(ctx, query)
 		return page.RecallEntries, "", err
 	}
-	revision, err := revisionProvider.RecallCorpusRevision(ctx)
+	revision, err := revisionProvider.RecallQueryRevision(ctx)
 	if err != nil {
 		return nil, "", err
+	}
+	if revision == "" {
+		if cursor != nil {
+			return nil, "", db.ErrInvalidRecallQuery
+		}
+		query.Limit = pageLimit
+		page, err := s.db.QueryRecallEntries(ctx, query)
+		return page.RecallEntries, "", err
 	}
 	if cursor != nil && cursor.Revision != revision {
 		return nil, "", errStaleRecallPagination
@@ -242,7 +254,7 @@ func (s *Server) listRankedRecallEntriesPage(
 	if err != nil {
 		return nil, "", err
 	}
-	currentRevision, err := revisionProvider.RecallCorpusRevision(ctx)
+	currentRevision, err := revisionProvider.RecallQueryRevision(ctx)
 	if err != nil {
 		return nil, "", err
 	}

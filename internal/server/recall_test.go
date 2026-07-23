@@ -30,6 +30,7 @@ type listRecallEntriesResponse struct {
 	RecallEntries []db.RecallResult `json:"entries"`
 	TrustedOnly   bool              `json:"trusted_only"`
 	NextCursor    string            `json:"next_cursor"`
+	ResultCap     int               `json:"result_cap"`
 }
 
 type queryRecallEntriesResponse struct {
@@ -230,6 +231,7 @@ func TestListRecallEntriesPaginatesRankedSearchResults(t *testing.T) {
 	firstPage := decode[listRecallEntriesResponse](t, first)
 	require.Len(t, firstPage.RecallEntries, 2)
 	require.NotEmpty(t, firstPage.NextCursor)
+	assert.Equal(t, db.MaxRecallEntryLimit, firstPage.ResultCap)
 	direct, err := te.db.QueryRecallEntries(context.Background(), db.RecallQuery{
 		Text:  "heliotrope",
 		Limit: 2,
@@ -293,6 +295,76 @@ func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
 	assertStatus(t, second, http.StatusConflict)
 	assertErrorResponse(t, second,
 		"recall corpus changed; restart pagination")
+}
+
+func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
+	t *testing.T,
+) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *sql.DB)
+	}{
+		{
+			name: "entry metadata",
+			mutate: func(t *testing.T, raw *sql.DB) {
+				_, err := raw.Exec(`
+					UPDATE recall_entries
+					SET project = 'changed-project'
+					WHERE id = 'ranked-a'`)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "evidence",
+			mutate: func(t *testing.T, raw *sql.DB) {
+				_, err := raw.Exec(`
+					UPDATE recall_evidence
+					SET snippet = 'A changed evidence ranking signal.'
+					WHERE entry_id = 'ranked-a'`)
+				require.NoError(t, err)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setup(t)
+			seedRecallEntrySession(t, te)
+			for _, id := range []string{"ranked-a", "ranked-b", "ranked-c"} {
+				seedRecallEntry(t, te, db.RecallEntry{
+					ID:              id,
+					Title:           "Heliotrope entry " + id,
+					Body:            "Use heliotrope recovery.",
+					SourceSessionID: "recall-session",
+					Evidence: []db.RecallEvidence{{
+						SessionID:           "recall-session",
+						MessageStartOrdinal: 1,
+						MessageEndOrdinal:   2,
+						Snippet:             "Heliotrope evidence " + id,
+					}},
+				})
+			}
+			first := te.get(t,
+				"/api/v1/recall/entries?q=heliotrope&limit=2")
+			assertStatus(t, first, http.StatusOK)
+			cursor := decode[listRecallEntriesResponse](t, first).NextCursor
+			require.NotEmpty(t, cursor)
+
+			raw, err := sql.Open(
+				"sqlite3", filepath.Join(te.dataDir, "test.db"),
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
+			tt.mutate(t, raw)
+
+			second := te.get(t,
+				"/api/v1/recall/entries?q=heliotrope&limit=2&cursor="+
+					url.QueryEscape(cursor))
+
+			assertStatus(t, second, http.StatusConflict)
+			assertErrorResponse(t, second,
+				"recall corpus changed; restart pagination")
+		})
+	}
 }
 
 func TestListRecallEntriesQueryMatchesEvidenceAndReturnsScores(t *testing.T) {

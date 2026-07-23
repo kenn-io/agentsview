@@ -18,6 +18,7 @@ describe("fetchRecallEntries", () => {
         entries: [],
         trusted_only: false,
         next_cursor: "cursor-2",
+        result_cap: 500,
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ));
@@ -44,6 +45,10 @@ describe("fetchRecallEntries", () => {
       source_run_id: "generation-a",
       review_state: "human_reviewed",
     });
-    expect(page).toEqual({ entries: [], nextCursor: "cursor-2" });
+    expect(page).toEqual({
+      entries: [],
+      nextCursor: "cursor-2",
+      resultCap: 500,
+    });
   });
 });
