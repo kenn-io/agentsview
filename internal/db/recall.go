@@ -94,6 +94,7 @@ type RecallQuery struct {
 	Type                string
 	Scope               string
 	Status              string
+	ReviewState         string
 	ExtractorMethod     string
 	SourceSessionID     string
 	SourceEpisodeID     string
@@ -1352,6 +1353,7 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.Type = strings.TrimSpace(q.Type)
 	q.Scope = strings.TrimSpace(q.Scope)
 	q.Status = strings.TrimSpace(q.Status)
+	q.ReviewState = strings.TrimSpace(q.ReviewState)
 	q.ExtractorMethod = strings.TrimSpace(q.ExtractorMethod)
 	q.SourceSessionID = strings.TrimSpace(q.SourceSessionID)
 	q.SourceEpisodeID = strings.TrimSpace(q.SourceEpisodeID)
@@ -1387,6 +1389,15 @@ func ValidateRecallQuery(q RecallQuery) error {
 			ErrInvalidRecallQuery,
 			corerecall.StatusAccepted,
 		)
+	}
+	if q.ReviewState != "" {
+		if _, ok := corerecall.NormalizeReviewState(q.ReviewState); !ok {
+			return fmt.Errorf(
+				"%w: unknown recall review state %q",
+				ErrInvalidRecallQuery,
+				q.ReviewState,
+			)
+		}
 	}
 	return nil
 }
@@ -1552,6 +1563,10 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	if q.Scope != "" {
 		preds = append(preds, "scope = ?")
 		args = append(args, q.Scope)
+	}
+	if q.ReviewState != "" {
+		preds = append(preds, "review_state = ?")
+		args = append(args, q.ReviewState)
 	}
 	if q.ExtractorMethod != "" {
 		preds = append(preds, "extractor_method = ?")

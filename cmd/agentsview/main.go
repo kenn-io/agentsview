@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/server"
@@ -481,6 +482,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 		// no sync activity follows. Notify never blocks.
 		srvOpts = append(srvOpts,
 			server.WithSessionMutationNotifier(extractSched.Notify))
+		if manager, ok := extractSched.mgr.(*extract.Manager); ok {
+			srvOpts = append(srvOpts,
+				server.WithRecallExtractionStatusProvider(manager))
+		}
 	}
 	if engine != nil {
 		srvOpts = append(srvOpts, server.WithLocalSyncRunner(

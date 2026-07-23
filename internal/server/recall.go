@@ -63,6 +63,7 @@ func (s *Server) handleListRecallEntries(
 		Type:                q.Get("type"),
 		Scope:               q.Get("scope"),
 		Status:              q.Get("status"),
+		ReviewState:         q.Get("review_state"),
 		ExtractorMethod:     q.Get("extractor_method"),
 		SourceSessionID:     q.Get("source_session_id"),
 		SourceEpisodeID:     q.Get("source_episode_id"),
@@ -100,6 +101,62 @@ func (s *Server) handleListRecallEntries(
 		"entries":      page.RecallEntries,
 		"trusted_only": query.TrustedOnly,
 	})
+}
+
+func (s *Server) handleRecallExtractionStatus(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if s.recallExtractionStatus == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"configured": false,
+		})
+		return
+	}
+	status, err := s.recallExtractionStatus.Status(r.Context())
+	if err != nil {
+		if handleContextError(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	generations := make(
+		[]recallExtractGenerationStatus, 0, len(status.Generations),
+	)
+	for _, generation := range status.Generations {
+		generations = append(generations, recallExtractGenerationStatus{
+			Fingerprint: generation.Fingerprint,
+			State:       generation.State,
+			Model:       generation.Model,
+			Segmenter:   generation.Segmenter,
+			CreatedAt:   generation.CreatedAt,
+			UpdatedAt:   generation.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, recallExtractionStatusResponse{
+		Configured:      true,
+		Fingerprint:     status.Fingerprint,
+		Generations:     generations,
+		Stats:           status.Stats,
+		EligibleBacklog: status.EligibleBacklog,
+	})
+}
+
+type recallExtractGenerationStatus struct {
+	Fingerprint string `json:"fingerprint"`
+	State       string `json:"state"`
+	Model       string `json:"model"`
+	Segmenter   string `json:"segmenter"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type recallExtractionStatusResponse struct {
+	Configured      bool                            `json:"configured"`
+	Fingerprint     string                          `json:"fingerprint,omitempty"`
+	Generations     []recallExtractGenerationStatus `json:"generations,omitempty"`
+	Stats           db.ExtractProgressStats         `json:"stats"`
+	EligibleBacklog int                             `json:"eligible_backlog"`
 }
 
 func (s *Server) handleGetRecallEntry(

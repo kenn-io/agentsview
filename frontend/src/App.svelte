@@ -60,6 +60,7 @@
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import ActivityPage from "./lib/components/activity/ActivityPage.svelte";
   import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
+  import RecallPage from "./lib/components/recall/RecallPage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
@@ -665,6 +666,10 @@
 {:else if router.route === "trends"}
   <div class="page-scroll">
     <TrendsPage />
+  </div>
+{:else if router.route === "recall"}
+  <div class="page-scroll">
+    <RecallPage />
   </div>
 {:else if router.route === "insights"}
   <div class="page-scroll">

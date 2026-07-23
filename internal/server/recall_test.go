@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	corerecall "go.kenn.io/agentsview/internal/recall"
+	recallextract "go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -55,6 +56,17 @@ func (s *readOnlyRecallQueryStore) QueryRecallEntries(
 func (*readOnlyRecallQueryStore) ReadOnly() bool { return true }
 
 type recallErrorSearcher struct{ err error }
+
+type recallExtractionStatusProvider struct {
+	status recallextract.Status
+	err    error
+}
+
+func (p recallExtractionStatusProvider) Status(
+	context.Context,
+) (recallextract.Status, error) {
+	return p.status, p.err
+}
 
 func (s recallErrorSearcher) SearchRecall(
 	context.Context, string, int,
@@ -122,6 +134,99 @@ func TestListRecallEntriesFiltersByProject(t *testing.T) {
 	r := decode[listRecallEntriesResponse](t, w)
 	require.Len(t, r.RecallEntries, 1)
 	assert.Equal(t, "m1", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesFiltersByReviewState(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "reviewed",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
+		Title:           "Reviewed project convention",
+		Body:            "This convention was checked by a person.",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "automatic",
+		ReviewState:     corerecall.ReviewStateUnreviewedAuto,
+		Title:           "Automatic project convention",
+		Body:            "This convention has not been reviewed.",
+		SourceSessionID: "recall-session",
+	})
+
+	w := te.get(t,
+		"/api/v1/recall/entries?review_state=human_reviewed")
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "reviewed", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesRejectsUnknownReviewState(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/recall/entries?review_state=approved")
+
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestRecallExtractionStatusReportsUnconfigured(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/recall/extraction/status")
+	assertStatus(t, w, http.StatusOK)
+
+	status := decode[struct {
+		Configured bool `json:"configured"`
+	}](t, w)
+	assert.False(t, status.Configured)
+}
+
+func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
+	provider := recallExtractionStatusProvider{
+		status: recallextract.Status{
+			Fingerprint: "generation-a",
+			Generations: []db.ExtractGeneration{{
+				Fingerprint: "generation-a",
+				State:       db.ExtractGenerationActive,
+				Model:       "model-a",
+				Segmenter:   "turns-v1",
+				ParamsJSON:  `{"private_request_configuration":true}`,
+			}},
+			Stats: db.ExtractProgressStats{
+				Done:       8,
+				Failed:     1,
+				UnitsDone:  18,
+				UnitsTotal: 20,
+				Entries:    12,
+			},
+			EligibleBacklog: 3,
+		},
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithRecallExtractionStatusProvider(provider),
+	})
+
+	w := te.get(t, "/api/v1/recall/extraction/status")
+	assertStatus(t, w, http.StatusOK)
+
+	status := decode[struct {
+		Configured      bool                    `json:"configured"`
+		Fingerprint     string                  `json:"fingerprint"`
+		Generations     []db.ExtractGeneration  `json:"generations"`
+		Stats           db.ExtractProgressStats `json:"stats"`
+		EligibleBacklog int                     `json:"eligible_backlog"`
+	}](t, w)
+	assert.True(t, status.Configured)
+	assert.Equal(t, "generation-a", status.Fingerprint)
+	require.Len(t, status.Generations, 1)
+	assert.Equal(t, db.ExtractGenerationActive,
+		status.Generations[0].State)
+	assert.Equal(t, 8, status.Stats.Done)
+	assert.Equal(t, 1, status.Stats.Failed)
+	assert.Equal(t, 3, status.EligibleBacklog)
+	assert.NotContains(t, w.Body.String(), "private_request_configuration")
 }
 
 func TestListRecallEntriesFiltersBySourceSessionID(t *testing.T) {
