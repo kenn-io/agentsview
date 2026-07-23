@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -78,14 +79,15 @@ func (s *Server) handleListRecallEntries(
 		Limit:               limit,
 	}
 	query = db.NormalizeRecallQuery(query)
+	var cursor *recallListCursor
 	if rawCursor := q.Get("cursor"); rawCursor != "" {
-		cursor, err := decodeRecallListCursor(rawCursor)
-		if err != nil || cursor.FilterHash != recallListFilterHash(query) {
+		decoded, err := decodeRecallListCursor(rawCursor)
+		if err != nil ||
+			decoded.FilterHash != recallListFilterHash(query) {
 			writeError(w, http.StatusBadRequest, "invalid recall cursor")
 			return
 		}
-		query.CursorUpdatedAt = cursor.UpdatedAt
-		query.CursorID = cursor.ID
+		cursor = &decoded
 	}
 	if err := db.ValidateRecallQuery(query); err != nil {
 		if handleInvalidRecallQuery(w, err) {
@@ -101,8 +103,9 @@ func (s *Server) handleListRecallEntries(
 	if pageLimit > db.MaxRecallEntryLimit {
 		pageLimit = db.MaxRecallEntryLimit
 	}
-	query.ProbeNext = true
-	entries, err := s.db.ListRecallEntries(r.Context(), query)
+	results, nextCursor, err := s.listRecallEntriesPage(
+		r.Context(), query, pageLimit, cursor,
+	)
 	if err != nil {
 		if handleContextError(w, err) {
 			return
@@ -116,6 +119,61 @@ func (s *Server) handleListRecallEntries(
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries":      results,
+		"trusted_only": query.TrustedOnly,
+		"next_cursor":  nextCursor,
+	})
+}
+
+const (
+	recallListCursorRecency = "recency"
+	recallListCursorRanked  = "ranked"
+)
+
+type recallListCursor struct {
+	Kind       string `json:"kind"`
+	UpdatedAt  string `json:"updated_at"`
+	ID         string `json:"id"`
+	Offset     int    `json:"offset,omitempty"`
+	FilterHash string `json:"filter_hash"`
+}
+
+func (s *Server) listRecallEntriesPage(
+	ctx context.Context,
+	query db.RecallQuery,
+	pageLimit int,
+	cursor *recallListCursor,
+) ([]db.RecallResult, string, error) {
+	if strings.TrimSpace(query.Text) != "" {
+		return s.listRankedRecallEntriesPage(
+			ctx, query, pageLimit, cursor,
+		)
+	}
+	return s.listRecentRecallEntriesPage(ctx, query, pageLimit, cursor)
+}
+
+func (s *Server) listRecentRecallEntriesPage(
+	ctx context.Context,
+	query db.RecallQuery,
+	pageLimit int,
+	cursor *recallListCursor,
+) ([]db.RecallResult, string, error) {
+	if cursor != nil {
+		if cursor.Kind != recallListCursorRecency {
+			return nil, "", db.ErrInvalidRecallQuery
+		}
+		query.CursorUpdatedAt = cursor.UpdatedAt
+		query.CursorID = cursor.ID
+	}
+	query.ProbeNext = true
+	entries, err := s.db.ListRecallEntries(ctx, query)
+	if err != nil {
+		return nil, "", err
+	}
+	if entries == nil {
+		entries = []db.RecallEntry{}
+	}
 	hasMore := len(entries) > pageLimit
 	if hasMore {
 		entries = entries[:pageLimit]
@@ -124,26 +182,52 @@ func (s *Server) handleListRecallEntries(
 	for _, entry := range entries {
 		results = append(results, db.RecallResult{RecallEntry: entry})
 	}
-	nextCursor := ""
-	if hasMore {
-		last := entries[len(entries)-1]
-		nextCursor = encodeRecallListCursor(recallListCursor{
-			UpdatedAt:  last.UpdatedAt,
-			ID:         last.ID,
-			FilterHash: recallListFilterHash(query),
-		})
+	if !hasMore {
+		return results, "", nil
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"entries":      results,
-		"trusted_only": query.TrustedOnly,
-		"next_cursor":  nextCursor,
+	last := entries[len(entries)-1]
+	nextCursor := encodeRecallListCursor(recallListCursor{
+		Kind:       recallListCursorRecency,
+		UpdatedAt:  last.UpdatedAt,
+		ID:         last.ID,
+		FilterHash: recallListFilterHash(query),
 	})
+	return results, nextCursor, nil
 }
 
-type recallListCursor struct {
-	UpdatedAt  string `json:"updated_at"`
-	ID         string `json:"id"`
-	FilterHash string `json:"filter_hash"`
+func (s *Server) listRankedRecallEntriesPage(
+	ctx context.Context,
+	query db.RecallQuery,
+	pageLimit int,
+	cursor *recallListCursor,
+) ([]db.RecallResult, string, error) {
+	filterHash := recallListFilterHash(query)
+	offset := 0
+	if cursor != nil {
+		if cursor.Kind != recallListCursorRanked {
+			return nil, "", db.ErrInvalidRecallQuery
+		}
+		offset = cursor.Offset
+	}
+	query.Limit = min(offset+pageLimit+1, db.MaxRecallEntryLimit)
+	page, err := s.db.QueryRecallEntries(ctx, query)
+	if err != nil {
+		return nil, "", err
+	}
+	if offset >= len(page.RecallEntries) {
+		return []db.RecallResult{}, "", nil
+	}
+	end := min(offset+pageLimit, len(page.RecallEntries))
+	results := page.RecallEntries[offset:end]
+	if end == len(page.RecallEntries) {
+		return results, "", nil
+	}
+	nextCursor := encodeRecallListCursor(recallListCursor{
+		Kind:       recallListCursorRanked,
+		Offset:     end,
+		FilterHash: filterHash,
+	})
+	return results, nextCursor, nil
 }
 
 func recallListFilterHash(query db.RecallQuery) string {
@@ -171,8 +255,22 @@ func decodeRecallListCursor(raw string) (recallListCursor, error) {
 	if err := decoder.Decode(&cursor); err != nil {
 		return cursor, err
 	}
-	if cursor.UpdatedAt == "" || cursor.ID == "" ||
-		cursor.FilterHash == "" {
+	if cursor.FilterHash == "" {
+		return recallListCursor{}, db.ErrInvalidRecallQuery
+	}
+	switch cursor.Kind {
+	case recallListCursorRecency:
+		if cursor.UpdatedAt == "" || cursor.ID == "" ||
+			cursor.Offset != 0 {
+			return recallListCursor{}, db.ErrInvalidRecallQuery
+		}
+	case recallListCursorRanked:
+		if cursor.UpdatedAt != "" || cursor.ID != "" ||
+			cursor.Offset <= 0 ||
+			cursor.Offset >= db.MaxRecallEntryLimit {
+			return recallListCursor{}, db.ErrInvalidRecallQuery
+		}
+	default:
 		return recallListCursor{}, db.ErrInvalidRecallQuery
 	}
 	return cursor, nil

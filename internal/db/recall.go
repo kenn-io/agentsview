@@ -684,7 +684,7 @@ func (db *DB) ListRecallEntries(
 		return nil, err
 	}
 	q = NormalizeRecallQuery(q)
-	where, args := buildRecallEntryWhere(q, true)
+	where, args := buildRecallEntryWhere(q, false)
 	limit := recallLimit(q.Limit)
 	if q.ProbeNext {
 		limit++
@@ -1619,13 +1619,10 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		preds = append(preds, "provenance_ok = 1")
 	}
 	if includeText && q.Text != "" {
-		textWhere, textArgs := buildRecallEntryTextWhere(
-			recallQueryTerms(q.Text),
-		)
-		if textWhere != "" {
-			preds = append(preds, "("+textWhere+")")
-			args = append(args, textArgs...)
-		}
+		like := "%" + escapeLike(q.Text) + "%"
+		preds = append(preds,
+			"(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR trigger LIKE ? ESCAPE '\\')")
+		args = append(args, like, like, like)
 	}
 	return strings.Join(preds, " AND "), args
 }
