@@ -436,6 +436,73 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 		"both sessions have state rows under the recreated generation")
 }
 
+// TestVectorPushRecreatedTablesReusedIDPromotesScopedPush pins the promotion
+// when a reset recreates the vector tables themselves, not just their rows:
+// the restarted id sequence hands the recreated generation the memoized id,
+// so the id comparison passes and only the machine push record — wiped in
+// the same reset — reveals the new incarnation.
+func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_tables_recreated_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+
+	var gen1 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
+	).Scan(&gen1), "gen1 id")
+
+	// The vector tables are dropped and recreated (the relational sync
+	// marker is untouched), restarting the id sequence so the unchanged
+	// fingerprint re-registers under the memoized id.
+	for _, q := range []string{
+		`DROP TABLE IF EXISTS ` + vectorChunkTable(gen1),
+		`DROP TABLE IF EXISTS vector_push_state`,
+		`DROP TABLE IF EXISTS vector_generation_machines`,
+		`DROP TABLE IF EXISTS vector_documents`,
+		`DROP TABLE IF EXISTS vector_generations`,
+	} {
+		_, err := pg.Exec(q)
+		require.NoError(t, err, q)
+	}
+	src.hashScopes = nil
+
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, gen1, nil, nil)
+	require.NoError(t, err, "scoped push after table recreation")
+
+	var gen2 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp1",
+	).Scan(&gen2), "recreated generation id")
+	require.Equal(t, gen1, gen2,
+		"the restarted sequence reuses the id, which is the case under test")
+
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the recreated generation is fully populated, not just the changed session")
+	require.Len(t, src.hashScopes, 1)
+	assert.Nil(t, src.hashScopes[0],
+		"promotion reads the whole generation, not the changed subset")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
+		"both sessions have state rows under the recreated generation")
+}
+
 func TestVectorPushRoundTrip(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(

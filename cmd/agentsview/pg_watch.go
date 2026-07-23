@@ -131,8 +131,11 @@ func scopedVectorPush(
 //
 // The phase ran generation-wide when the caller did not scope it, or when it
 // scoped but the active generation id differed from the last reconciled one —
-// pushVectors promotes exactly that case, so the same predicate recovers it
-// here without a separate result flag.
+// pushVectors promotes that case, so the same predicate recovers it here
+// without a separate result flag. pushVectors also promotes when its machine
+// push record is missing (vector tables recreated onto a reused id); that
+// promotion is invisible here, and needs no recovery: the phase reconciled
+// the reused id generation-wide, so the unchanged memo describes it.
 //
 // A generation-wide phase reporting a zero generation id clears nothing: a
 // daemon predating the field omits it, and clearing on such a response

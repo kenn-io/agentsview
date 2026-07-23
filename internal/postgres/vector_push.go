@@ -129,9 +129,15 @@ const vectorProgressStride = 2000
 // the schema-qualified halfvec type. The type must be qualified because the
 // connection's search_path is the target schema only, while pgvector's types
 // live in whichever schema first installed the extension.
+// machineRecorded reports whether this machine's push record already existed
+// for the generation before this push touched it: recreating the vector
+// tables restarts the id sequence, so a reused id can satisfy the memo
+// comparison while the recreated generation is empty, and the machine record
+// — wiped in the same reset — is the witness that survives id reuse.
 type vectorGeneration struct {
-	id          int64
-	halfvecType string
+	id              int64
+	halfvecType     string
+	machineRecorded bool
 }
 
 // vectorPushScope carries the push-wide constants threaded through every
@@ -272,14 +278,25 @@ func (s *Sync) pushVectors(
 	res.GenerationID = resolved.id
 	// A scoped push writes only its changed sessions' chunks, which is safe
 	// only within the exact generation instance this process last reconciled
-	// generation-wide. The immutable PG generation id is that instance's
-	// identity: any re-embed (new fingerprint), reset, or admin drop yields a
-	// new row with a new id, whoever recreates it, so a mismatch means the
-	// prior reconciliation no longer covers this generation and scoping would
-	// leave search reading an incomplete one until the interval floor. Promote
-	// to a generation-wide read. A zero memo means no reconciliation to trust
-	// yet, so the reconcile bit already forces this push generation-wide and
-	// the id check must not fire.
+	// generation-wide. Two signals identify that instance. The PG generation
+	// id catches every recreation that keeps the tables: row deletion never
+	// resets the sequence, so a re-embed (new fingerprint), reset, or admin
+	// drop yields a new id, whoever recreates it. Recreating the tables
+	// themselves restarts the sequence, so a reused id can match a stale
+	// memo; this machine's push record, wiped in the same reset and
+	// re-inserted only by resolveVectorGeneration, is the witness for that
+	// case — a scoped push always follows a generation-wide push in the same
+	// process, which recorded it. Either signal failing means the prior
+	// reconciliation no longer covers this generation and scoping would
+	// leave search reading an incomplete one until the interval floor.
+	// Promote to a generation-wide read. A zero memo means no reconciliation
+	// to trust yet, so the reconcile bit already forces this push
+	// generation-wide and the id check must not fire.
+	if scope != nil && !resolved.machineRecorded {
+		log.Printf("vector push: no prior push record for machine %q against generation %d; promoting scoped push to generation-wide reconciliation",
+			s.machine, resolved.id)
+		scope = nil
+	}
 	if scope != nil && lastReconciledGeneration != 0 &&
 		resolved.id != lastReconciledGeneration {
 		log.Printf("vector push: active generation id %d differs from the last reconciled %d; promoting scoped push to generation-wide reconciliation",
@@ -687,7 +704,10 @@ func vectorOutOfScopeQuery(
 // resolveVectorGeneration registers the generation, creates its chunk table,
 // and records this machine's push against it. Its id is the generation
 // instance's identity, which a scoped push compares against the last one it
-// reconciled generation-wide to decide whether to promote.
+// reconciled generation-wide to decide whether to promote; whether this
+// machine's push record predated this call is captured first, because that
+// record is the incarnation witness the promotion check falls back on when a
+// recreated id sequence hands the new generation the memoized id.
 func (s *Sync) resolveVectorGeneration(
 	ctx context.Context, gen VectorGenerationInfo,
 ) (vectorGeneration, error) {
@@ -704,6 +724,14 @@ func (s *Sync) resolveVectorGeneration(
 	if err != nil {
 		return vectorGeneration{}, err
 	}
+	var machineRecorded bool
+	if err := s.pg.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM vector_generation_machines
+     WHERE generation_id = $1 AND machine = $2)`,
+		genID, s.machine).Scan(&machineRecorded); err != nil {
+		return vectorGeneration{}, fmt.Errorf("reading vector push machine record: %w", err)
+	}
 	if _, err := s.pg.ExecContext(ctx, `
 INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
 VALUES ($1, $2, now())
@@ -711,7 +739,11 @@ ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = now()`,
 		genID, s.machine); err != nil {
 		return vectorGeneration{}, fmt.Errorf("recording vector push machine: %w", err)
 	}
-	return vectorGeneration{id: genID, halfvecType: extSchema + ".halfvec"}, nil
+	return vectorGeneration{
+		id:              genID,
+		halfvecType:     extSchema + ".halfvec",
+		machineRecorded: machineRecorded,
+	}, nil
 }
 
 // readVectorPushState loads the delta state for genID, joined with each
