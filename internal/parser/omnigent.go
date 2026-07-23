@@ -394,7 +394,7 @@ func omnigentIndexWithPrefix(
 		if err != nil {
 			return "", err
 		}
-		var columns []string
+		columns := make([]string, 0, len(prefix))
 		for indexRows.Next() {
 			var seq, cid int
 			var column sql.NullString
