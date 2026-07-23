@@ -139,15 +139,17 @@ func poolsideFindFile(root, rawID string) (singleFileMatch, bool) {
 }
 
 // poolsideFingerprintSource computes a fingerprint for a trajectory file.
+// It performs only a stat for size/mtime — the expensive content hash is
+// deferred to parse time. The engine's skip cache uses MTimeNS for
+// freshness, so an empty Hash is sufficient for the sync hot path.
 func poolsideFingerprintSource(sourcePath string) (SourceFingerprint, error) {
-	hash, size, mtime, err := hashPoolsideSourceFile(sourcePath)
+	info, err := os.Stat(sourcePath)
 	if err != nil {
-		return SourceFingerprint{}, fmt.Errorf("hashing trajectory file: %w", err)
+		return SourceFingerprint{}, fmt.Errorf("stat trajectory file: %w", err)
 	}
 	return SourceFingerprint{
-		Size:    size,
-		MTimeNS: mtime,
-		Hash:    hash,
+		Size:    info.Size(),
+		MTimeNS: info.ModTime().UnixNano(),
 	}, nil
 }
 
@@ -165,7 +167,9 @@ func poolsideParseFile(
 		return nil, nil, nil
 	}
 
-	// Apply fingerprint metadata.
+	// Apply fingerprint metadata. The fingerprint provides size/mtime
+	// from stat; compute the content hash here since the fingerprint
+	// intentionally defers it for sync hot-path performance.
 	if req.Fingerprint.Size > 0 {
 		sess.File.Size = req.Fingerprint.Size
 	}
@@ -174,6 +178,11 @@ func poolsideParseFile(
 	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
+	} else {
+		hash, _, _, err := hashPoolsideSourceFile(src.Path)
+		if err == nil {
+			sess.File.Hash = hash
+		}
 	}
 
 	return []ParseResult{{

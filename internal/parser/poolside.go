@@ -138,7 +138,7 @@ func parsePoolsideSession(
 	var firstEventTime time.Time
 	var lastEventTime time.Time
 
-	// Track tool calls for result pairing by step_id.
+	// Track tool calls for result pairing by call ID.
 	pendingToolCalls := make(map[string]*pendingToolCallInfo)
 	var toolCallOrdinals map[string]int
 
@@ -331,14 +331,14 @@ func parsePoolsideSession(
 				}
 
 				// Track shell tool calls for shell_id extraction.
-				// In real poolside data, tool_call.parsed and tool_call.result
-				// have different event IDs; they are linked by step_id.
+				// Key by call ID to avoid overwriting when multiple
+				// shell calls share a step_id.
 				if name == "shell" {
 					var args struct {
 						Cmd string `json:"cmd"`
 					}
 					if json.Unmarshal(tc.Args, &args) == nil && args.Cmd != "" {
-						pendingShellCmds[event.StepID] = args.Cmd
+						pendingShellCmds[tc.ID] = args.Cmd
 					}
 				}
 
@@ -406,12 +406,12 @@ func parsePoolsideSession(
 				}
 
 				// Extract shell_id from shell tool results for enriching management tools.
-				// In real poolside data, tool_call.result has a different event ID
-				// from tool_call.parsed; they share the same step_id.
+				// Key by call ID to match the parsed-event storage.
 				if tr.ToolName == "shell" && tr.ShellRunResult != nil &&
 					tr.ShellRunResult.ShellID != "" {
-					if cmd, ok := pendingShellCmds[event.StepID]; ok {
+					if cmd, ok := pendingShellCmds[tr.ID]; ok {
 						shellIDToCmd[tr.ShellRunResult.ShellID] = cmd
+						delete(pendingShellCmds, tr.ID)
 					}
 				}
 
