@@ -186,6 +186,75 @@ describe("RecallPage", () => {
       .toBeUndefined();
   });
 
+  it("restarts ranked pagination when the corpus changes", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+    ) => Promise<Response>;
+    let initialPageRequests = 0;
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/recall/entries?") &&
+        url.includes("cursor=cursor-2")) {
+        return new Response(JSON.stringify({
+          error: "recall corpus changed; restart pagination",
+        }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/recall/entries?")) {
+        initialPageRequests++;
+        if (initialPageRequests > 1) {
+          return new Response(JSON.stringify({
+            entries: [{
+              id: "recall-refreshed",
+              type: "decision",
+              scope: "project",
+              status: "accepted",
+              review_state: "unreviewed_auto",
+              title: "Refreshed Recall results",
+              body: "The browser restarted from the changed corpus.",
+              source_session_id: "session-refreshed",
+              transferable: false,
+              provenance_ok: true,
+              created_at: "2026-07-23T12:00:00Z",
+              updated_at: "2026-07-23T12:00:00Z",
+              evidence: [],
+            }],
+            trusted_only: false,
+          }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+      return defaultFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallPage, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Keep extraction passes bounded",
+      );
+    });
+
+    const loadMore = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Load more");
+    expect(loadMore).toBeDefined();
+    loadMore!.click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Refreshed Recall results",
+      );
+    });
+    expect(initialPageRequests).toBe(2);
+    expect(document.body.textContent).not.toContain(
+      "Keep extraction passes bounded",
+    );
+  });
+
   it("offers only the active extraction generation as a served filter", async () => {
     component = mount(RecallPage, { target: document.body });
 

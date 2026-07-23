@@ -264,6 +264,37 @@ func TestListRecallEntriesPaginatesRankedSearchResults(t *testing.T) {
 		[]string{"ranked-title", "ranked-body", "ranked-trigger"}, ids)
 }
 
+func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	for _, id := range []string{"ranked-a", "ranked-b", "ranked-c"} {
+		seedRecallEntry(t, te, db.RecallEntry{
+			ID:              id,
+			Title:           "Heliotrope entry " + id,
+			Body:            "Use heliotrope recovery.",
+			SourceSessionID: "recall-session",
+		})
+	}
+	first := te.get(t, "/api/v1/recall/entries?q=heliotrope&limit=2")
+	assertStatus(t, first, http.StatusOK)
+	cursor := decode[listRecallEntriesResponse](t, first).NextCursor
+	require.NotEmpty(t, cursor)
+
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "ranked-new",
+		Title:           "Heliotrope",
+		Body:            "A newly distilled heliotrope result.",
+		SourceSessionID: "recall-session",
+	})
+
+	second := te.get(t, "/api/v1/recall/entries?q=heliotrope&limit=2&cursor="+
+		url.QueryEscape(cursor))
+
+	assertStatus(t, second, http.StatusConflict)
+	assertErrorResponse(t, second,
+		"recall corpus changed; restart pagination")
+}
+
 func TestListRecallEntriesQueryMatchesEvidenceAndReturnsScores(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)

@@ -43,6 +43,12 @@ func handleInvalidRecallQuery(w http.ResponseWriter, err error) bool {
 	return false
 }
 
+var errStaleRecallPagination = errors.New("stale recall pagination")
+
+type recallCorpusRevisionProvider interface {
+	RecallCorpusRevision(context.Context) (string, error)
+}
+
 func (s *Server) handleListRecallEntries(
 	w http.ResponseWriter, r *http.Request,
 ) {
@@ -116,6 +122,11 @@ func (s *Server) handleListRecallEntries(
 		if handleReadOnly(w, err) {
 			return
 		}
+		if errors.Is(err, errStaleRecallPagination) {
+			writeError(w, http.StatusConflict,
+				"recall corpus changed; restart pagination")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -136,6 +147,7 @@ type recallListCursor struct {
 	UpdatedAt  string `json:"updated_at"`
 	ID         string `json:"id"`
 	Offset     int    `json:"offset,omitempty"`
+	Revision   string `json:"revision,omitempty"`
 	FilterHash string `json:"filter_hash"`
 }
 
@@ -209,10 +221,33 @@ func (s *Server) listRankedRecallEntriesPage(
 		}
 		offset = cursor.Offset
 	}
+	revisionProvider, ok := s.db.(recallCorpusRevisionProvider)
+	if !ok {
+		if cursor != nil {
+			return nil, "", db.ErrInvalidRecallQuery
+		}
+		query.Limit = pageLimit
+		page, err := s.db.QueryRecallEntries(ctx, query)
+		return page.RecallEntries, "", err
+	}
+	revision, err := revisionProvider.RecallCorpusRevision(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if cursor != nil && cursor.Revision != revision {
+		return nil, "", errStaleRecallPagination
+	}
 	query.Limit = min(offset+pageLimit+1, db.MaxRecallEntryLimit)
 	page, err := s.db.QueryRecallEntries(ctx, query)
 	if err != nil {
 		return nil, "", err
+	}
+	currentRevision, err := revisionProvider.RecallCorpusRevision(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if currentRevision != revision {
+		return nil, "", errStaleRecallPagination
 	}
 	if offset >= len(page.RecallEntries) {
 		return []db.RecallResult{}, "", nil
@@ -225,6 +260,7 @@ func (s *Server) listRankedRecallEntriesPage(
 	nextCursor := encodeRecallListCursor(recallListCursor{
 		Kind:       recallListCursorRanked,
 		Offset:     end,
+		Revision:   revision,
 		FilterHash: filterHash,
 	})
 	return results, nextCursor, nil
@@ -261,13 +297,14 @@ func decodeRecallListCursor(raw string) (recallListCursor, error) {
 	switch cursor.Kind {
 	case recallListCursorRecency:
 		if cursor.UpdatedAt == "" || cursor.ID == "" ||
-			cursor.Offset != 0 {
+			cursor.Offset != 0 || cursor.Revision != "" {
 			return recallListCursor{}, db.ErrInvalidRecallQuery
 		}
 	case recallListCursorRanked:
 		if cursor.UpdatedAt != "" || cursor.ID != "" ||
 			cursor.Offset <= 0 ||
-			cursor.Offset >= db.MaxRecallEntryLimit {
+			cursor.Offset >= db.MaxRecallEntryLimit ||
+			cursor.Revision == "" {
 			return recallListCursor{}, db.ErrInvalidRecallQuery
 		}
 	default:

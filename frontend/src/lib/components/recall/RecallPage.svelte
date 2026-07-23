@@ -16,7 +16,7 @@
     RecallEvidence,
     RecallExtractionStatus,
   } from "../../api/types/recall.js";
-  import { isAbortError } from "../../api/runtime.js";
+  import { ApiError, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -131,6 +131,10 @@
       nextCursor = page.nextCursor ?? "";
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
+      if (appending && error instanceof ApiError && error.status === 409) {
+        await loadEntries();
+        return;
+      }
       if (!appending) {
         entries = [];
         nextCursor = "";
