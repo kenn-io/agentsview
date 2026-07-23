@@ -1867,6 +1867,7 @@ func TestQueryRecallEntriesVectorRequiresSemanticIndex(t *testing.T) {
 	})
 
 	assert.ErrorIs(t, err, ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "embeddings build --store recall")
 }
 
 func TestValidateRecallQueryRejectsUnknownMode(t *testing.T) {

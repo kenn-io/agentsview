@@ -421,6 +421,34 @@ func TestEmbedSchedulerRepeatedBackstopFailuresReleaseIdleLease(
 		fake.callsSnapshot(), "one backstop tick should get one bounded retry")
 }
 
+func TestEmbedSchedulerExhaustedBackstopCarriesIntoNextNotification(
+	t *testing.T,
+) {
+	buildErr := errors.New("embedding request rejected")
+	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+		{started: true, err: buildErr},
+		{started: true, err: buildErr},
+		{started: true},
+	}}
+	s := newEmbedScheduler(
+		fake, 20*time.Millisecond, 200*time.Millisecond, false, nil,
+	)
+	go s.Run(t.Context())
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
+		"expected the failed backstop and its bounded retry")
+	s.Notify()
+	waitForSchedulerConditionWithin(t, 100*time.Millisecond,
+		func() bool { return fake.callCount() >= 3 },
+		"a new notification should recover the deferred reconciliation")
+
+	assert.Equal(t, []vector.BuildRequest{
+		{Backstop: true}, {Backstop: true}, {Backstop: true},
+	}, fake.callsSnapshot(),
+		"retry exhaustion must preserve full-reconciliation intent")
+}
+
 // TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild is the fix-4
 // regression test: a backstop tick that collides with a build already
 // running elsewhere must not be silently dropped for a full backstop
@@ -715,6 +743,42 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 		assert.Contains(t, got.Error(), "embeddings build",
 			"the rebuild remediation must survive translation")
 	})
+}
+
+func TestTranslateRecallSearchErrorUsesRecallRemediation(t *testing.T) {
+	t.Run("mirror version mismatch", func(t *testing.T) {
+		err := translateRecallSearchError(vector.ErrMirrorVersionMismatch)
+
+		assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
+		assert.Contains(t, err.Error(), "embeddings build --store recall")
+	})
+	t.Run("building", func(t *testing.T) {
+		err := translateRecallSearchError(&vector.BuildingError{Percent: 37})
+
+		assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
+		assert.Contains(t, err.Error(), "recall index is building: 37% complete")
+		assert.NotContains(t, err.Error(), "agentsview embeddings build",
+			"an in-progress Recall build should not recommend another store build")
+	})
+}
+
+func TestRecallSearcherNoActiveGenerationNamesRecallBuild(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	cfg := vectorTestConfig(dataDir)
+	ix, err := vector.OpenSpec(
+		t.Context(), cfg.Vector.ResolvedDBPath(dataDir),
+		vector.RecallIndexSpec(), false, cfg.Vector.Embeddings.MaxInputChars,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
+	searcher := recallSearcherAdapter{ix: ix, database: database, cfg: cfg}
+
+	_, _, err = searcher.SearchRecall(t.Context(), "database pool", 5)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "embeddings build --store recall")
 }
 
 // TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable is the

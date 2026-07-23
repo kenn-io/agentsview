@@ -213,7 +213,10 @@ func (s *embedScheduler) Run(ctx context.Context) {
 						pendingRelease()
 						pendingRelease = nil
 					}
-					pendingBackstop = false
+					// A failed full reconciliation remains owed. Stop automatic
+					// retries and release the lease, but let the next fresh
+					// notification carry Backstop: true instead of deferring the
+					// full pass until the next periodic tick.
 					buildErrorRetries = 0
 					continue
 				}
@@ -395,7 +398,7 @@ func (a recallSearcherAdapter) SearchRecall(
 		ctx, identity.generationFingerprint, identity.revision,
 	)
 	if err != nil {
-		return nil, false, translateSearchError(err)
+		return nil, false, translateRecallSearchError(err)
 	}
 	if stale {
 		return nil, false, fmt.Errorf(
@@ -405,13 +408,13 @@ func (a recallSearcherAdapter) SearchRecall(
 	}
 	hits, exhausted, err := a.ix.SearchPage(ctx, a.enc, query, limit)
 	if err != nil {
-		return nil, false, translateSearchError(err)
+		return nil, false, translateRecallSearchError(err)
 	}
 	stale, err = a.ix.StaleActive(
 		ctx, identity.generationFingerprint, identity.revision,
 	)
 	if err != nil {
-		return nil, false, translateSearchError(err)
+		return nil, false, translateRecallSearchError(err)
 	}
 	if stale {
 		return nil, false, fmt.Errorf(
@@ -532,6 +535,29 @@ func translateSearchError(err error) error {
 		return fmt.Errorf("%w: %w", db.ErrSemanticTransient, queryEncErr.Err)
 	default:
 		return err
+	}
+}
+
+// translateRecallSearchError preserves the shared semantic error taxonomy but
+// replaces message-store build guidance with Recall's explicit store selector.
+func translateRecallSearchError(err error) error {
+	var buildingErr *vector.BuildingError
+	switch {
+	case errors.As(err, &buildingErr):
+		return db.NewSemanticUnavailableError(fmt.Sprintf(
+			"recall index is building: %d%% complete", buildingErr.Percent,
+		))
+	case errors.Is(err, vector.ErrMirrorVersionMismatch):
+		return db.NewSemanticUnavailableError(fmt.Sprintf(
+			"%v; rebuild the recall index with 'agentsview embeddings build --store recall'",
+			err,
+		))
+	case errors.Is(err, vector.ErrNoActiveGeneration):
+		return db.NewSemanticUnavailableError(
+			"recall index has not been built; run 'agentsview embeddings build --store recall'",
+		)
+	default:
+		return translateSearchError(err)
 	}
 }
 

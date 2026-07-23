@@ -1164,7 +1164,9 @@ func (db *DB) queryRecallEntriesVector(
 ) (RecallPage, error) {
 	searcher := db.getRecallVectorSearcher()
 	if searcher == nil {
-		return RecallPage{}, ErrSemanticUnavailable
+		return RecallPage{}, NewSemanticUnavailableError(
+			"recall index is not available; run 'agentsview embeddings build --store recall'",
+		)
 	}
 	limit := recallLimit(q.Limit)
 	k := max(recallLimit(q.Limit)*4, SemanticOverfetchMin)
