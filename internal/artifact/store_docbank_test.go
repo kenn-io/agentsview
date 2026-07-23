@@ -90,6 +90,24 @@ func TestDocbankStorePreservesTypedDocbankCauses(t *testing.T) {
 	assert.ErrorIs(t, err, ErrArtifactConflict)
 }
 
+func TestDocbankStoreClosedOperationsReturnErrClosed(t *testing.T) {
+	_, store := newTestDocbankStore(t, docbank.Config{})
+	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
+	body := []byte("closed store")
+	createContractArtifact(t, store, ref, body)
+	require.NoError(t, store.Close())
+	require.NoError(t, store.Close())
+
+	_, err := store.Create(t.Context(), ref, identityForBytes(t, body),
+		canonicalArtifactMediaType(ref.Kind), bytes.NewReader(body))
+	assert.ErrorIs(t, err, fs.ErrClosed)
+	_, err = store.Stat(t.Context(), ref)
+	assert.ErrorIs(t, err, fs.ErrClosed)
+	_, reader, err := store.Open(t.Context(), ref)
+	assert.Nil(t, reader)
+	assert.ErrorIs(t, err, fs.ErrClosed)
+}
+
 func TestDocbankStoreIdempotentRetryDoesNotReportPhysicalWrite(t *testing.T) {
 	_, store := newTestDocbankStore(t, docbank.Config{})
 	ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")

@@ -299,6 +299,18 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 		assert.Equal(t, body, readContractArtifact(t, store, ref))
 	})
 
+	t.Run("new artifact rejects noncanonical media type", func(t *testing.T) {
+		store := newContractStore(t, factory)
+		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
+		body := []byte("original checkpoint")
+
+		_, err := store.Create(t.Context(), ref, identityForBytes(t, body),
+			"application/octet-stream", bytes.NewReader(body))
+		assert.ErrorIs(t, err, ErrArtifactInvalid)
+		_, err = store.Stat(t.Context(), ref)
+		assert.ErrorIs(t, err, ErrArtifactNotFound)
+	})
+
 	t.Run("expected identity mismatch creates nothing", func(t *testing.T) {
 		tests := []struct {
 			name     string

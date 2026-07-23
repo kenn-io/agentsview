@@ -65,6 +65,16 @@ func (s *docbankStore) Create(
 		return CreateResult{}, artifactStoreError("create", ref,
 			fmt.Errorf("%w: artifact body is required", ErrArtifactInvalid))
 	}
+	if mediaType != canonicalArtifactMediaType(ref.Kind) {
+		if _, err := s.vault.Stat(ctx, docbankPath(ref)); err == nil {
+			return CreateResult{}, artifactStoreError("create", ref,
+				fmt.Errorf("%w: media type does not match existing artifact", ErrArtifactConflict))
+		} else if !errors.Is(err, docbank.ErrNotFound) {
+			return CreateResult{}, artifactStoreError("create", ref, mapDocbankError(err))
+		}
+		return CreateResult{}, artifactStoreError("create", ref,
+			fmt.Errorf("%w: unsupported media type %q", ErrArtifactInvalid, mediaType))
+	}
 	receipt, err := s.vault.Create(ctx, docbankPath(ref), body, docbank.CreateOptions{
 		MediaType: mediaType,
 		Expected: docbank.ContentIdentity{
@@ -379,13 +389,14 @@ func (s *docbankStore) RepairContent(
 	return nil
 }
 
+// Close is safe to call more than once and may race other store operations:
+// the vault pointer is never mutated, and docbank's own lifecycle lock makes
+// post-close operations return docbank.ErrClosed (mapped to fs.ErrClosed).
 func (s *docbankStore) Close() error {
 	if s == nil || s.vault == nil {
 		return nil
 	}
-	err := s.vault.Close()
-	s.vault = nil
-	return err
+	return s.vault.Close()
 }
 
 type docbankWalker interface {
@@ -569,6 +580,8 @@ func mapDocbankError(err error) error {
 		return nil
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
+	case errors.Is(err, docbank.ErrClosed):
+		return fmt.Errorf("%w: %w", fs.ErrClosed, err)
 	case errors.Is(err, docbank.ErrNotFound):
 		return fmt.Errorf("%w: %w", ErrArtifactNotFound, err)
 	case errors.Is(err, docbank.ErrContentConflict), errors.Is(err, docbank.ErrExists):
