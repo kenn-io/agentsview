@@ -238,8 +238,18 @@ func (s *embedScheduler) Run(ctx context.Context) {
 			pendingBackstop = false
 			buildErrorRetries = 0
 		case <-backstopC:
-			// A periodic reconciliation is a new work item with its own
-			// bounded error retry.
+			if buildErrorRetries > 0 {
+				// A failed work item already owns the retained lease and
+				// retry timer. Fold the periodic reconciliation into it
+				// without restarting its bounded retry; otherwise a backstop
+				// interval shorter than debounce can postpone exhaustion
+				// forever. Healthy pending work may still be satisfied by a
+				// backstop before its ordinary debounce expires.
+				pendingBackstop = true
+				continue
+			}
+			// With no error retry pending, a periodic reconciliation gets a
+			// fresh attempt and bounded retry lifecycle.
 			buildErrorRetries = 0
 			release, ok := s.idle.BeginWork()
 			if !ok {

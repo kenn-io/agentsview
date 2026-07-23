@@ -421,6 +421,37 @@ func TestEmbedSchedulerRepeatedBackstopFailuresReleaseIdleLease(
 		fake.callsSnapshot(), "one backstop tick should get one bounded retry")
 }
 
+func TestEmbedSchedulerBackstopTicksDoNotRestartPendingRetry(t *testing.T) {
+	buildErr := errors.New("embedding request rejected")
+	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+		{started: true, err: buildErr},
+	}}
+	idled := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	tracker := server.NewIdleTracker(5*time.Millisecond, func() {
+		close(idled)
+		cancel()
+	})
+	s := newEmbedScheduler(
+		fake, 70*time.Millisecond, 20*time.Millisecond, false, tracker,
+	)
+	go s.Run(ctx)
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
+		"expected the initial backstop attempt")
+	go tracker.Run(ctx)
+	select {
+	case <-idled:
+	case <-time.After(500 * time.Millisecond):
+		require.Fail(t,
+			"frequent backstop ticks restarted the retry lifecycle and retained the idle lease")
+	}
+	assert.Equal(t, []vector.BuildRequest{
+		{Backstop: true}, {Backstop: true},
+	}, fake.callsSnapshot(), "one backstop work item should get one bounded retry")
+}
+
 func TestEmbedSchedulerExhaustedBackstopCarriesIntoNextNotification(
 	t *testing.T,
 ) {
