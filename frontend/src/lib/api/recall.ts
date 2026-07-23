@@ -2,6 +2,7 @@ import type {
   RecallEntriesResponse,
   RecallEntry,
   RecallEntryFilters,
+  RecallEntriesPage,
   RecallExtractionStatus,
 } from "./types/recall.js";
 import {
@@ -17,7 +18,7 @@ const RECALL_PAGE_LIMIT = 200;
 export async function fetchRecallEntries(
   filters: RecallEntryFilters = {},
   signal?: AbortSignal,
-): Promise<RecallEntry[]> {
+): Promise<RecallEntriesPage> {
   const query = new URLSearchParams({
     limit: String(filters.limit ?? RECALL_PAGE_LIMIT),
   });
@@ -30,6 +31,7 @@ export async function fetchRecallEntries(
   if (filters.reviewState) {
     query.set("review_state", filters.reviewState);
   }
+  if (filters.cursor) query.set("cursor", filters.cursor);
   const response = await fetch(
     `${getBase()}/recall/entries?${query.toString()}`,
     authHeaders({ signal }),
@@ -41,7 +43,10 @@ export async function fetchRecallEntries(
     );
   }
   const data = (await response.json()) as RecallEntriesResponse;
-  return data.entries ?? [];
+  return {
+    entries: data.entries ?? [],
+    nextCursor: data.next_cursor || undefined,
+  };
 }
 
 export async function fetchRecallExtractionStatus(

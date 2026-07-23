@@ -40,6 +40,7 @@
   ];
 
   let entries = $state<RecallEntry[]>([]);
+  let nextCursor = $state("");
   let status = $state<RecallExtractionStatus | null>(null);
   let entriesLoading = $state(true);
   let entriesFailed = $state(false);
@@ -88,11 +89,13 @@
       label: m.recall_page_all_generations(),
       displayLabel: m.recall_page_all_generations(),
     },
-    ...(status?.generations ?? []).map((item) => ({
-      name: item.fingerprint,
-      label: `${item.fingerprint} (${item.state})`,
-      displayLabel: item.fingerprint,
-    })),
+    ...(status?.generations ?? [])
+      .filter((item) => item.state === "active")
+      .map((item) => ({
+        name: item.fingerprint,
+        label: `${item.fingerprint} (${item.state})`,
+        displayLabel: item.fingerprint,
+      })),
   ]);
   const reviewOptions = $derived.by((): TypeaheadOption[] => [
     {
@@ -107,24 +110,32 @@
     })),
   ]);
 
-  async function loadEntries() {
+  async function loadEntries(cursor = "") {
     const signal = entriesRead.begin();
+    const appending = cursor !== "";
     entriesLoading = true;
     entriesFailed = false;
     try {
-      const next = await fetchRecallEntries({
+      const page = await fetchRecallEntries({
         query: query || undefined,
         project: project || undefined,
         type: entryType || undefined,
         sourceRunId: generation || undefined,
         reviewState: reviewState || undefined,
+        cursor: cursor || undefined,
       }, signal);
       if (!entriesRead.isCurrent(signal)) return;
-      entries = next;
+      entries = appending
+        ? [...entries, ...page.entries]
+        : page.entries;
+      nextCursor = page.nextCursor ?? "";
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
-      entries = [];
-      entriesFailed = true;
+      if (!appending) {
+        entries = [];
+        nextCursor = "";
+        entriesFailed = true;
+      }
     } finally {
       if (entriesRead.finish(signal)) entriesLoading = false;
     }
@@ -358,6 +369,20 @@
         </Card>
       {/each}
     </div>
+    {#if nextCursor}
+      <div class="load-more">
+        <Button
+          size="sm"
+          tone="neutral"
+          surface="outline"
+          label={entriesLoading
+            ? m.recall_page_loading_more()
+            : m.recall_page_load_more()}
+          disabled={entriesLoading}
+          onclick={() => loadEntries(nextCursor)}
+        />
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -513,6 +538,12 @@
   :global(.evidence-button) {
     font-family: var(--font-mono);
     font-size: 9px;
+  }
+
+  .load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: var(--space-6);
   }
 
   @media (max-width: 900px) {

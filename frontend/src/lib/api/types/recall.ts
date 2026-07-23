@@ -36,6 +36,12 @@ export interface RecallEntry {
 export interface RecallEntriesResponse {
   entries: RecallEntry[];
   trusted_only: boolean;
+  next_cursor?: string;
+}
+
+export interface RecallEntriesPage {
+  entries: RecallEntry[];
+  nextCursor?: string;
 }
 
 export interface RecallExtractGeneration {
@@ -72,4 +78,5 @@ export interface RecallEntryFilters {
   sourceRunId?: string;
   reviewState?: string;
   limit?: number;
+  cursor?: string;
 }

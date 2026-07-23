@@ -1133,6 +1133,8 @@
   "recall_page_loading": "正在載入召回項目…",
   "recall_page_empty": "沒有符合這些篩選條件的召回項目。",
   "recall_page_error": "無法載入召回項目。",
+  "recall_page_load_more": "載入更多",
+  "recall_page_loading_more": "正在載入更多…",
   "recall_page_entries_shown": "顯示項目：{countLabel}",
   "recall_page_extraction_title": "擷取狀態",
   "recall_page_extraction_unconfigured": "尚未設定召回擷取。",

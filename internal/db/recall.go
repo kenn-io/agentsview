@@ -101,6 +101,9 @@ type RecallQuery struct {
 	SourceRunID         string
 	SupersedesEntryID   string
 	SupersededByEntryID string
+	CursorUpdatedAt     string
+	CursorID            string
+	ProbeNext           bool
 	TrustedOnly         bool
 	Limit               int
 }
@@ -681,8 +684,11 @@ func (db *DB) ListRecallEntries(
 		return nil, err
 	}
 	q = NormalizeRecallQuery(q)
-	where, args := buildRecallEntryWhere(q, false)
+	where, args := buildRecallEntryWhere(q, true)
 	limit := recallLimit(q.Limit)
+	if q.ProbeNext {
+		limit++
+	}
 	query := "SELECT " + recallBaseCols +
 		" FROM recall_entries WHERE " + where +
 		" ORDER BY updated_at DESC, id ASC LIMIT ?"
@@ -1360,6 +1366,8 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.SourceRunID = strings.TrimSpace(q.SourceRunID)
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
+	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
+	q.CursorID = strings.TrimSpace(q.CursorID)
 	return q
 }
 
@@ -1398,6 +1406,12 @@ func ValidateRecallQuery(q RecallQuery) error {
 				q.ReviewState,
 			)
 		}
+	}
+	if (q.CursorUpdatedAt == "") != (q.CursorID == "") {
+		return fmt.Errorf(
+			"%w: recall cursor requires both updated_at and id",
+			ErrInvalidRecallQuery,
+		)
 	}
 	return nil
 }
@@ -1592,6 +1606,12 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		preds = append(preds, "superseded_by_entry_id = ?")
 		args = append(args, q.SupersededByEntryID)
 	}
+	if q.CursorUpdatedAt != "" {
+		preds = append(preds,
+			"(updated_at < ? OR (updated_at = ? AND id > ?))")
+		args = append(args,
+			q.CursorUpdatedAt, q.CursorUpdatedAt, q.CursorID)
+	}
 	if q.TrustedOnly {
 		preds = append(preds, "review_state = ?")
 		args = append(args, corerecall.ReviewStateHumanReviewed)
@@ -1599,10 +1619,13 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		preds = append(preds, "provenance_ok = 1")
 	}
 	if includeText && q.Text != "" {
-		like := "%" + escapeLike(q.Text) + "%"
-		preds = append(preds,
-			"(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR trigger LIKE ? ESCAPE '\\')")
-		args = append(args, like, like, like)
+		textWhere, textArgs := buildRecallEntryTextWhere(
+			recallQueryTerms(q.Text),
+		)
+		if textWhere != "" {
+			preds = append(preds, "("+textWhere+")")
+			args = append(args, textArgs...)
+		}
 	}
 	return strings.Join(preds, " AND "), args
 }

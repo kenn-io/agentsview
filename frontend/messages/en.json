@@ -1165,6 +1165,8 @@
   "recall_page_loading": "Loading Recall entries…",
   "recall_page_empty": "No Recall entries match these filters.",
   "recall_page_error": "Could not load Recall entries.",
+  "recall_page_load_more": "Load more",
+  "recall_page_loading_more": "Loading more…",
   "recall_page_entries_shown": "Entries shown: {countLabel}",
   "recall_page_extraction_title": "Extraction status",
   "recall_page_extraction_unconfigured": "Recall extraction is not configured.",

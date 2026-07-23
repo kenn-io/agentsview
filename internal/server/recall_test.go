@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,7 @@ import (
 type listRecallEntriesResponse struct {
 	RecallEntries []db.RecallResult `json:"entries"`
 	TrustedOnly   bool              `json:"trusted_only"`
+	NextCursor    string            `json:"next_cursor"`
 }
 
 type queryRecallEntriesResponse struct {
@@ -161,6 +163,72 @@ func TestListRecallEntriesFiltersByReviewState(t *testing.T) {
 	r := decode[listRecallEntriesResponse](t, w)
 	require.Len(t, r.RecallEntries, 1)
 	assert.Equal(t, "reviewed", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	for _, id := range []string{"page-a", "page-b", "page-c"} {
+		seedRecallEntry(t, te, db.RecallEntry{
+			ID:              id,
+			Title:           "Paged entry " + id,
+			Body:            "Each entry must appear on exactly one page.",
+			SourceSessionID: "recall-session",
+		})
+	}
+
+	first := te.get(t, "/api/v1/recall/entries?limit=2")
+	assertStatus(t, first, http.StatusOK)
+	firstPage := decode[listRecallEntriesResponse](t, first)
+	require.Len(t, firstPage.RecallEntries, 2)
+	require.NotEmpty(t, firstPage.NextCursor)
+
+	second := te.get(t, "/api/v1/recall/entries?limit=2&cursor="+
+		url.QueryEscape(firstPage.NextCursor))
+	assertStatus(t, second, http.StatusOK)
+	secondPage := decode[listRecallEntriesResponse](t, second)
+	require.Len(t, secondPage.RecallEntries, 1)
+	assert.Empty(t, secondPage.NextCursor)
+
+	ids := []string{
+		firstPage.RecallEntries[0].ID,
+		firstPage.RecallEntries[1].ID,
+		secondPage.RecallEntries[0].ID,
+	}
+	assert.ElementsMatch(t, []string{"page-a", "page-b", "page-c"}, ids)
+}
+
+func TestListRecallEntriesRejectsInvalidCursor(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/recall/entries?cursor=not-a-cursor")
+
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestListRecallEntriesRejectsCursorWithDifferentFilters(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	for _, id := range []string{"filtered-a", "filtered-b"} {
+		seedRecallEntry(t, te, db.RecallEntry{
+			ID:              id,
+			Title:           "Filtered entry " + id,
+			Body:            "Cursor filters must remain stable.",
+			Project:         "project-a",
+			SourceSessionID: "recall-session",
+		})
+	}
+	first := te.get(t,
+		"/api/v1/recall/entries?limit=1&project=project-a")
+	assertStatus(t, first, http.StatusOK)
+	cursor := decode[listRecallEntriesResponse](t, first).NextCursor
+	require.NotEmpty(t, cursor)
+
+	changed := te.get(t,
+		"/api/v1/recall/entries?limit=1&project=project-b&cursor="+
+			url.QueryEscape(cursor))
+
+	assertStatus(t, changed, http.StatusBadRequest)
 }
 
 func TestListRecallEntriesRejectsUnknownReviewState(t *testing.T) {

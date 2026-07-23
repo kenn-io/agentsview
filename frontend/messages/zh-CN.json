@@ -1133,6 +1133,8 @@
   "recall_page_loading": "正在加载召回条目…",
   "recall_page_empty": "没有符合这些筛选条件的召回条目。",
   "recall_page_error": "无法加载召回条目。",
+  "recall_page_load_more": "加载更多",
+  "recall_page_loading_more": "正在加载更多…",
   "recall_page_entries_shown": "显示条目：{countLabel}",
   "recall_page_extraction_title": "提取状态",
   "recall_page_extraction_unconfigured": "尚未配置召回提取。",

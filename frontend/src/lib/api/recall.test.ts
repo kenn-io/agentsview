@@ -14,12 +14,16 @@ afterEach(() => {
 describe("fetchRecallEntries", () => {
   it("sends every corpus-browser filter to the Recall API", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ entries: [], trusted_only: false }),
+      JSON.stringify({
+        entries: [],
+        trusted_only: false,
+        next_cursor: "cursor-2",
+      }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ));
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchRecallEntries({
+    const page = await fetchRecallEntries({
       query: "bounded pass",
       project: "project-a",
       type: "decision",
@@ -40,5 +44,6 @@ describe("fetchRecallEntries", () => {
       source_run_id: "generation-a",
       review_state: "human_reviewed",
     });
+    expect(page).toEqual({ entries: [], nextCursor: "cursor-2" });
   });
 });
