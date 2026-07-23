@@ -761,6 +761,9 @@ func TestResolveScriptPoolsideSkipsRootWithoutTrajectories(t *testing.T) {
 // handles a configured root that IS already the trajectories/ directory,
 // using it as-is without producing trajectories/trajectories/.
 func TestResolveScriptPoolsideTrajectoriesRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("resolve script runs on POSIX remote hosts; local Windows filepaths and MSYS shell parsing are not representative")
+	}
 	home := t.TempDir()
 	// Set POOLSIDE_DIR directly to a trajectories/ directory.
 	trajectoriesDir := filepath.Join(home, "poolside", "trajectories")

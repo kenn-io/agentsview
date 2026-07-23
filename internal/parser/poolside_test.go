@@ -130,7 +130,7 @@ func TestParsePoolsideSessionTermination(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			termination := classifyPoolsideTermination(tt.reason, nil)
+			termination := classifyPoolsideTermination(tt.reason, nil, false)
 			assert.Equal(t, tt.expected, termination)
 		})
 	}
@@ -163,7 +163,7 @@ func TestClassifyPoolsideExitToolNotOrphaned(t *testing.T) {
 
 	// exit_tool_called must be clean, not tool_call_pending, even
 	// though the exit tool has no result event.
-	termination := classifyPoolsideTermination("exit_tool_called", messages)
+	termination := classifyPoolsideTermination("exit_tool_called", messages, false)
 	assert.Equal(t, TerminationClean, termination,
 		"a trailing exit tool must not be classified as orphaned")
 }
@@ -192,9 +192,69 @@ func TestClassifyPoolsideNonExitToolOrphaned(t *testing.T) {
 		},
 	}
 
-	termination := classifyPoolsideTermination("", messages)
+	termination := classifyPoolsideTermination("", messages, false)
 	assert.Equal(t, TerminationToolCallPending, termination,
 		"a non-exit tool without a result must be orphaned")
+}
+
+// TestClassifyPoolsideTruncationPrecedence verifies that truncation
+// (malformed final record) takes precedence over exit_tool_called.
+func TestClassifyPoolsideTruncationPrecedence(t *testing.T) {
+	termination := classifyPoolsideTermination("exit_tool_called", nil, true)
+	assert.Equal(t, TerminationTruncated, termination,
+		"truncation must override exit_tool_called")
+}
+
+// TestParsePoolsideMultipleThoughts verifies that multiple thought.end
+// events in one assistant turn are concatenated, not overwritten.
+func TestParsePoolsideMultipleThoughts(t *testing.T) {
+	tmpDir := t.TempDir()
+	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_multthought.ndjson")
+
+	content := `{"id":"event-1","timestamp":"2026-07-08T07:20:51.000000-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/test"],"prompt":""}}
+{"id":"event-2","timestamp":"2026-07-08T07:20:51.100000-04:00","type":"session.input","session_input":{"id":"","prompt":"think deeply","mode":"build"}}
+{"id":"event-3","timestamp":"2026-07-08T07:20:52.000000-04:00","type":"assistant_message.start","assistant_message_start":{}}
+{"id":"thought-1","timestamp":"2026-07-08T07:20:53.000000-04:00","type":"thought.end","thought_end":{"thought":"First reasoning block."}}
+{"id":"thought-2","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"thought.end","thought_end":{"thought":"Second reasoning block."}}
+{"id":"event-4","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here is my answer."}}
+`
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+
+	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 2)
+	assistant := msgs[1]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.True(t, assistant.HasThinking)
+	assert.Equal(t, "First reasoning block.\nSecond reasoning block.",
+		assistant.ThinkingText,
+		"multiple thought.end events must be concatenated with newline")
+}
+
+// TestParsePoolsideMalformedFinalLineSetsTruncated verifies that a
+// trajectory with a malformed final line sets IsTruncated.
+func TestParsePoolsideMalformedFinalLineSetsTruncated(t *testing.T) {
+	tmpDir := t.TempDir()
+	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_truncated.ndjson")
+
+	// Valid events followed by a malformed final line (simulates a
+	// trajectory cut off mid-write).
+	content := `{"id":"event-1","timestamp":"2026-07-08T07:20:51.000000-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/test"],"prompt":""}}
+{"id":"event-2","timestamp":"2026-07-08T07:20:51.100000-04:00","type":"session.input","session_input":{"id":"","prompt":"hello","mode":"build"}}
+{"id":"event-3","timestamp":"2026-07-08T07:20:52.000000-04:00","type":"assistant_message.start","assistant_message_start":{}}
+{"id":"event-4","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"response"}}
+{"id":"malformed`
+	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+
+	sess, _, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	require.NoError(t, err)
+
+	assert.True(t, sess.IsTruncated,
+		"a malformed final line must set IsTruncated")
+	assert.Equal(t, TerminationTruncated, sess.TerminationStatus,
+		"truncation must take precedence in termination classification")
+	assert.Equal(t, 1, sess.MalformedLines)
 }
 
 func TestPoolsideToolCategory(t *testing.T) {
@@ -665,7 +725,7 @@ func TestPoolsideTrajectoriesDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := poolsideTrajectoriesDir(tt.root)
-			assert.Equal(t, tt.expected, got)
+			assert.Equal(t, filepath.FromSlash(tt.expected), got)
 		})
 	}
 }

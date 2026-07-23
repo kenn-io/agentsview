@@ -195,6 +195,7 @@ func parsePoolsideSession(
 	lr := newLineReader(file, maxLineSize)
 	defer releaseLineReader(lr)
 	var malformedLines int
+	var lastLineWasMalformed bool
 
 	for {
 		line, ok := lr.next()
@@ -205,8 +206,10 @@ func parsePoolsideSession(
 		var event poolsideEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			malformedLines++
+			lastLineWasMalformed = true
 			continue
 		}
+		lastLineWasMalformed = false
 
 		ts := parsePoolsideTimestamp(event.Timestamp)
 		if !ts.IsZero() {
@@ -293,7 +296,11 @@ func parsePoolsideSession(
 				lastMsg := &messages[len(messages)-1]
 				if lastMsg.Role == RoleAssistant {
 					lastMsg.HasThinking = true
-					lastMsg.ThinkingText = event.ThoughtEnd.Thought
+					if lastMsg.ThinkingText == "" {
+						lastMsg.ThinkingText = event.ThoughtEnd.Thought
+					} else {
+						lastMsg.ThinkingText += "\n" + event.ThoughtEnd.Thought
+					}
 				}
 			}
 
@@ -552,8 +559,8 @@ func parsePoolsideSession(
 		fileInfo.Mtime = info.ModTime().UnixNano()
 	}
 
-	// Classify termination from exit reason.
-	termination := classifyPoolsideTermination(exitReason, messages)
+	// Classify termination from exit reason and truncation state.
+	termination := classifyPoolsideTermination(exitReason, messages, lastLineWasMalformed)
 
 	sess := &ParsedSession{
 		ID:                sessionID,
@@ -565,6 +572,7 @@ func parsePoolsideSession(
 		SessionName:       sessionName,
 		StartedAt:         startedAt,
 		EndedAt:           endedAt,
+		IsTruncated:       lastLineWasMalformed,
 		MessageCount:      len(messages),
 		UserMessageCount:  userMsgCount,
 		MalformedLines:    malformedLines,
@@ -622,7 +630,14 @@ func sessionStartCwd(start *poolsideSessionStart) string {
 }
 
 // classifyPoolsideTermination maps poolside exit reasons to termination status.
-func classifyPoolsideTermination(reason string, messages []ParsedMessage) TerminationStatus {
+func classifyPoolsideTermination(reason string, messages []ParsedMessage, isTruncated bool) TerminationStatus {
+	// Truncation (malformed final record) takes precedence over all
+	// other signals — a trajectory cut off mid-write is the stronger
+	// explanation for why the session ended.
+	if isTruncated {
+		return TerminationTruncated
+	}
+
 	// A trailing exit tool call is Poolside's normal session termination
 	// mechanism — the session ends when exit is invoked, so no result
 	// event follows. Treat exit_tool_called as clean before checking
