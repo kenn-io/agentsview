@@ -1409,6 +1409,82 @@ func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 	assert.Equal(t, []string{"filter-b"}, sessionExportRowIDs(second.Rows))
 }
 
+func TestSessionExportCursorPreservesTimezoneFilter(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	for _, row := range []struct {
+		id, started, ended string
+	}{
+		{"new-york-late", "2024-06-17T02:30:00Z", "2024-06-17T03:00:00Z"},
+		{"new-york-earlier", "2024-06-17T01:30:00Z", "2024-06-17T02:00:00Z"},
+		{"utc-only", "2024-06-16T01:30:00Z", "2024-06-16T02:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "timezone-cursor",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr(row.started),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project:  "timezone-cursor",
+			Date:     "2024-06-16",
+			Timezone: " America/New_York ",
+		},
+		Limit: 1,
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"new-york-late"}, sessionExportRowIDs(first.Rows))
+	require.NotEmpty(t, first.NextCursor)
+
+	t.Run("cursor owned filter", func(t *testing.T) {
+		second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+			Cursor:          first.NextCursor,
+			UseCursorFilter: true,
+			Limit:           1,
+		})
+		require.NoError(t, err, "resume with embedded filter")
+		assert.Equal(t,
+			[]string{"new-york-earlier"}, sessionExportRowIDs(second.Rows))
+		assert.Empty(t, second.NextCursor)
+	})
+
+	t.Run("equivalent timezone", func(t *testing.T) {
+		second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+			Filter: SessionFilter{
+				Project:  "timezone-cursor",
+				Date:     "2024-06-16",
+				Timezone: "America/New_York",
+			},
+			Cursor: first.NextCursor,
+			Limit:  1,
+		})
+		require.NoError(t, err, "resume with equivalent timezone")
+		assert.Equal(t,
+			[]string{"new-york-earlier"}, sessionExportRowIDs(second.Rows))
+	})
+
+	t.Run("changed timezone", func(t *testing.T) {
+		_, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+			Filter: SessionFilter{
+				Project:  "timezone-cursor",
+				Date:     "2024-06-16",
+				Timezone: "UTC",
+			},
+			Cursor: first.NextCursor,
+			Limit:  1,
+		})
+		require.Error(t, err, "changed timezone")
+		assert.ErrorIs(t, err, ErrSessionExportCursorConflict)
+	})
+}
+
 func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
 	ctx := context.Background()
 	d := testSessionExportDB(t)
