@@ -118,6 +118,52 @@ CREATE TABLE IF NOT EXISTS messages (
     UNIQUE(session_id, ordinal)
 );
 
+-- Durable, bounded artifact publication state. The export queue intentionally
+-- has no foreign key: a deleted locally-owned session remains pending until a
+-- checkpoint publishes its removal. Acknowledged rows remain as generation
+-- authority, so this table is bounded by historical archive session IDs rather
+-- than only the currently dirty set.
+CREATE TABLE IF NOT EXISTS artifact_export_queue (
+    session_id  TEXT PRIMARY KEY,
+    enqueued_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- Compare-and-ack token. Repeated writes retain their FIFO timestamp but
+    -- advance generation, including multiple writes in one SQLite millisecond.
+    generation INTEGER NOT NULL DEFAULT 1,
+    -- Acknowledgement clears pending but retains the row as durable generation
+    -- authority, preventing an old claim from becoming valid after requeue.
+    pending INTEGER NOT NULL DEFAULT 1 CHECK (pending IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_export_queue_pending
+    ON artifact_export_queue(pending, enqueued_at, session_id);
+
+CREATE TABLE IF NOT EXISTS artifact_publications (
+    origin             TEXT NOT NULL,
+    session_id         TEXT NOT NULL,
+    manifest_hash      TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    PRIMARY KEY(origin, session_id)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_publication_revisions (
+    origin   TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_heads (
+    origin             TEXT PRIMARY KEY,
+    sequence           INTEGER NOT NULL,
+    publication_revision INTEGER NOT NULL,
+    session_map_sha256 TEXT NOT NULL,
+    checkpoint_sha256  TEXT NOT NULL,
+    checkpoint_size    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_floors (
+    origin   TEXT PRIMARY KEY,
+    sequence INTEGER NOT NULL
+);
+
 -- Stats table maintained by triggers
 CREATE TABLE IF NOT EXISTS stats (
     key   TEXT PRIMARY KEY,

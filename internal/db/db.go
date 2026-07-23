@@ -1353,6 +1353,11 @@ var readOnlyRequiredTables = []string{
 	"recall_query_exposures",
 	"recall_extract_generations",
 	"recall_extract_progress",
+	"artifact_export_queue",
+	"artifact_publications",
+	"artifact_publication_revisions",
+	"artifact_checkpoint_heads",
+	"artifact_checkpoint_floors",
 }
 
 var (
@@ -2120,6 +2125,126 @@ func repairLegacySchemaBeforeInit(w *writerHandle) error {
 	return nil
 }
 
+// artifactSessionQueueTriggerDropsSQL and artifactSessionQueueTriggerCreatesSQL
+// together keep the three sessions-table triggers that populate
+// artifact_export_queue upgradable across releases. They are applied here
+// rather than in schema.sql because the CREATE bodies reference columns added
+// by applySchemaColumnMigrations; running them at schema-init time would fire
+// "no such column" errors against a legacy archive before those columns
+// exist.
+//
+// The drops run BEFORE applySchemaColumnMigrations and the creates run AFTER:
+// a trigger left over from a previous release must not still be attached to
+// the sessions table while column migrations run, because a future
+// migration that rebuilds the table (rather than a plain ALTER TABLE ADD
+// COLUMN) would fail against a trigger body referencing columns mid-rebuild.
+// Splitting the DDL this way keeps the table trigger-free for the duration
+// of the migration step regardless of what a later migration needs to do.
+//
+// Every trigger additionally gates on the presence of an artifact origin
+// (pg_sync_state key artifact_origin_id) so that archives which have never
+// created or adopted an artifact origin never populate the export queue.
+const artifactSessionQueueTriggerDropsSQL = `
+DROP TRIGGER IF EXISTS artifact_sessions_insert_queue;
+DROP TRIGGER IF EXISTS artifact_sessions_update_queue;
+DROP TRIGGER IF EXISTS artifact_sessions_delete_queue;
+`
+
+const artifactSessionQueueTriggerCreatesSQL = `
+CREATE TRIGGER IF NOT EXISTS artifact_sessions_insert_queue
+AFTER INSERT ON sessions WHEN NEW.machine = 'local' AND EXISTS (
+    SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
+) BEGIN
+    INSERT INTO artifact_export_queue(session_id) VALUES (NEW.id)
+    ON CONFLICT(session_id) DO UPDATE SET
+        enqueued_at = CASE WHEN pending = 0
+            THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
+        generation = generation + 1,
+        pending = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifact_sessions_update_queue
+AFTER UPDATE ON sessions
+WHEN (OLD.machine = 'local' OR NEW.machine = 'local') AND EXISTS (
+    SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
+) AND (
+    OLD.project IS NOT NEW.project OR
+    OLD.machine IS NOT NEW.machine OR
+    OLD.agent IS NOT NEW.agent OR
+    OLD.agent_label IS NOT NEW.agent_label OR
+    OLD.entrypoint IS NOT NEW.entrypoint OR
+    OLD.first_message IS NOT NEW.first_message OR
+    OLD.display_name IS NOT NEW.display_name OR
+    OLD.session_name IS NOT NEW.session_name OR
+    OLD.started_at IS NOT NEW.started_at OR
+    OLD.ended_at IS NOT NEW.ended_at OR
+    OLD.message_count IS NOT NEW.message_count OR
+    OLD.user_message_count IS NOT NEW.user_message_count OR
+    OLD.transcript_revision IS NOT NEW.transcript_revision OR
+    OLD.parent_session_id IS NOT NEW.parent_session_id OR
+    OLD.relationship_type IS NOT NEW.relationship_type OR
+    OLD.total_output_tokens IS NOT NEW.total_output_tokens OR
+    OLD.peak_context_tokens IS NOT NEW.peak_context_tokens OR
+    OLD.has_total_output_tokens IS NOT NEW.has_total_output_tokens OR
+    OLD.has_peak_context_tokens IS NOT NEW.has_peak_context_tokens OR
+    OLD.is_automated IS NOT NEW.is_automated OR
+    OLD.tool_failure_signal_count IS NOT NEW.tool_failure_signal_count OR
+    OLD.tool_retry_count IS NOT NEW.tool_retry_count OR
+    OLD.edit_churn_count IS NOT NEW.edit_churn_count OR
+    OLD.consecutive_failure_max IS NOT NEW.consecutive_failure_max OR
+    OLD.outcome IS NOT NEW.outcome OR
+    OLD.outcome_confidence IS NOT NEW.outcome_confidence OR
+    OLD.ended_with_role IS NOT NEW.ended_with_role OR
+    OLD.final_failure_streak IS NOT NEW.final_failure_streak OR
+    OLD.signals_pending_since IS NOT NEW.signals_pending_since OR
+    OLD.compaction_count IS NOT NEW.compaction_count OR
+    OLD.mid_task_compaction_count IS NOT NEW.mid_task_compaction_count OR
+    OLD.context_pressure_max IS NOT NEW.context_pressure_max OR
+    OLD.health_score IS NOT NEW.health_score OR
+    OLD.health_grade IS NOT NEW.health_grade OR
+    OLD.has_tool_calls IS NOT NEW.has_tool_calls OR
+    OLD.has_context_data IS NOT NEW.has_context_data OR
+    OLD.quality_signal_version IS NOT NEW.quality_signal_version OR
+    OLD.short_prompt_count IS NOT NEW.short_prompt_count OR
+    OLD.unstructured_start IS NOT NEW.unstructured_start OR
+    OLD.missing_success_criteria_count IS NOT NEW.missing_success_criteria_count OR
+    OLD.missing_verification_count IS NOT NEW.missing_verification_count OR
+    OLD.duplicate_prompt_count IS NOT NEW.duplicate_prompt_count OR
+    OLD.no_code_context_count IS NOT NEW.no_code_context_count OR
+    OLD.runaway_tool_loop_count IS NOT NEW.runaway_tool_loop_count OR
+    OLD.data_version IS NOT NEW.data_version OR
+    OLD.cwd IS NOT NEW.cwd OR
+    OLD.git_branch IS NOT NEW.git_branch OR
+    OLD.source_session_id IS NOT NEW.source_session_id OR
+    OLD.source_version IS NOT NEW.source_version OR
+    OLD.transcript_fidelity IS NOT NEW.transcript_fidelity OR
+    OLD.parser_malformed_lines IS NOT NEW.parser_malformed_lines OR
+    OLD.is_truncated IS NOT NEW.is_truncated OR
+    OLD.deleted_at IS NOT NEW.deleted_at OR
+    OLD.created_at IS NOT NEW.created_at OR
+    OLD.termination_status IS NOT NEW.termination_status
+) BEGIN
+    INSERT INTO artifact_export_queue(session_id) VALUES (NEW.id)
+    ON CONFLICT(session_id) DO UPDATE SET
+        enqueued_at = CASE WHEN pending = 0
+            THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
+        generation = generation + 1,
+        pending = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifact_sessions_delete_queue
+BEFORE DELETE ON sessions WHEN OLD.machine = 'local' AND EXISTS (
+    SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
+) BEGIN
+    INSERT INTO artifact_export_queue(session_id) VALUES (OLD.id)
+    ON CONFLICT(session_id) DO UPDATE SET
+        enqueued_at = CASE WHEN pending = 0
+            THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
+        generation = generation + 1,
+        pending = 1;
+END;
+`
+
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
@@ -2127,8 +2252,14 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+	if _, err := w.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
+		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
+	}
 	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
 		return err
+	}
+	if _, err := w.Exec(artifactSessionQueueTriggerCreatesSQL); err != nil {
+		return fmt.Errorf("installing artifact session queue triggers: %w", err)
 	}
 	if err := installSyncMarkerSchemaLocked(w); err != nil {
 		return err
@@ -2304,6 +2435,23 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
+	}
+	return nil
+}
+
+// BootstrapArtifactExportQueue enqueues every live locally-owned session
+// once. Called when the artifact origin is first created or adopted; the
+// queue triggers and enqueue hooks are origin-gated, so rows written
+// before the origin existed are captured here exactly once.
+func (db *DB) BootstrapArtifactExportQueue() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(`
+		INSERT OR IGNORE INTO artifact_export_queue(session_id)
+		SELECT id FROM sessions
+		WHERE machine = 'local' AND deleted_at IS NULL`)
+	if err != nil {
+		return fmt.Errorf("bootstrapping artifact export queue: %w", err)
 	}
 	return nil
 }
@@ -2860,6 +3008,7 @@ func (db *DB) backfillMessageTokenCoverageLocked(
 	}
 	defer stmt.Close()
 
+	sessions := make(map[string]struct{})
 	for _, candidate := range candidates {
 		if _, err := stmt.Exec(
 			candidate.hasContext, candidate.hasOutput, candidate.id,
@@ -2868,6 +3017,12 @@ func (db *DB) backfillMessageTokenCoverageLocked(
 				"updating message token backfill %d: %w",
 				candidate.id, err,
 			)
+		}
+		sessions[candidate.sessionID] = struct{}{}
+	}
+	for sessionID := range sessions {
+		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
+			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -2883,7 +3038,7 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 	w *writerHandle,
 ) ([]messageTokenCoverageBackfillCandidate, error) {
 	rows, err := w.Query(
-		`SELECT id, token_usage, context_tokens, output_tokens,
+		`SELECT id, session_id, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens
 		 FROM messages
 		 WHERE (has_context_tokens = 0 OR has_output_tokens = 0)
@@ -2901,11 +3056,12 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 	var candidates []messageTokenCoverageBackfillCandidate
 	for rows.Next() {
 		var id int64
+		var sessionID string
 		var tokenUsage string
 		var contextTokens, outputTokens int
 		var hasContextTokens, hasOutputTokens bool
 		if err := rows.Scan(
-			&id, &tokenUsage, &contextTokens,
+			&id, &sessionID, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens,
 			&hasOutputTokens,
 		); err != nil {
@@ -2923,6 +3079,7 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 		}
 		candidates = append(candidates, messageTokenCoverageBackfillCandidate{
 			id:         id,
+			sessionID:  sessionID,
 			hasContext: hasContext,
 			hasOutput:  hasOutput,
 		})
@@ -2935,6 +3092,7 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 
 type messageTokenCoverageBackfillCandidate struct {
 	id         int64
+	sessionID  string
 	hasContext bool
 	hasOutput  bool
 }
