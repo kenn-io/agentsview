@@ -490,6 +490,16 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 	return nil
 }
 
+// metaDelete deletes one key from the spec's metadata table.
+func (ix *Index) metaDelete(ctx context.Context, key string) error {
+	if _, err := ix.db.ExecContext(ctx,
+		`DELETE FROM `+ix.spec.MetaTable+` WHERE key = ?`, key,
+	); err != nil {
+		return fmt.Errorf("deleting %s key %s: %w", ix.spec.MetaTable, key, err)
+	}
+	return nil
+}
+
 // EnsureGeneration registers gen (a model + dimension configuration) with
 // kit's store under its own fingerprint as the gen_key, creating its vec0
 // table on first use, and records the model's display name in the spec's
@@ -623,6 +633,47 @@ func (ix *Index) GenerationByID(ctx context.Context, id int64) (GenerationInfo, 
 		return GenerationInfo{}, err
 	}
 	return info, nil
+}
+
+// MissingEmbeddedDocs returns how many current mirror docs are still missing
+// from genOrdinal's embedded set. A nil sessionIDs slice counts the whole
+// mirror; a non-nil slice limits the count to those sessions, which lets
+// change-scoped PG pushes bound the readiness read to their candidate set.
+func (ix *Index) MissingEmbeddedDocs(
+	ctx context.Context, genOrdinal int64, sessionIDs []string,
+) (int64, error) {
+	if ix.versionMismatch {
+		return 0, ErrMirrorVersionMismatch
+	}
+	if sessionIDs != nil && len(sessionIDs) == 0 {
+		return 0, nil
+	}
+	query := `SELECT COUNT(*) FROM ` + ix.spec.DocsTable + ` d WHERE NOT EXISTS
+           (SELECT 1 FROM ` + ix.spec.stampsTable() + ` s
+            WHERE s.ordinal = ? AND s.doc_key = d.doc_key AND s.revision = d.content_hash)`
+	if sessionIDs == nil {
+		var missing int64
+		if err := ix.db.QueryRowContext(ctx, query, genOrdinal).Scan(&missing); err != nil {
+			return 0, fmt.Errorf("count generation missing docs: %w", err)
+		}
+		return missing, nil
+	}
+	var total int64
+	if err := chunkKeys(sessionIDs, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		var missing int64
+		if err := ix.db.QueryRowContext(ctx,
+			query+` AND d.session_id IN `+placeholders,
+			append([]any{genOrdinal}, args...)...,
+		).Scan(&missing); err != nil {
+			return fmt.Errorf("count scoped generation missing docs: %w", err)
+		}
+		total += missing
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // genInfoScanner is the subset of *sql.Row / *sql.Rows Scan needs, letting

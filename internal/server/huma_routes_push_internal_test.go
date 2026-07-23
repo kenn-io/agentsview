@@ -27,7 +27,7 @@ import (
 type stubVectorPushSource struct{}
 
 func (stubVectorPushSource) Generation(
-	context.Context,
+	context.Context, []string,
 ) (postgres.VectorGenerationInfo, bool, error) {
 	return postgres.VectorGenerationInfo{}, false, nil
 }

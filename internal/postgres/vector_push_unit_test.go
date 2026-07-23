@@ -41,7 +41,7 @@ func TestVectorOwnerIdentityOwns(t *testing.T) {
 type notReadyVectorSource struct{}
 
 func (notReadyVectorSource) Generation(
-	context.Context,
+	context.Context, []string,
 ) (VectorGenerationInfo, bool, error) {
 	return VectorGenerationInfo{}, false, fmt.Errorf(
 		"%w: 7 document(s) pending", ErrVectorSourceNotReady)
@@ -78,7 +78,7 @@ func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 type spyVectorSource struct{ t *testing.T }
 
 func (s spyVectorSource) Generation(
-	context.Context,
+	context.Context, []string,
 ) (VectorGenerationInfo, bool, error) {
 	s.t.Fatal("Generation must not be called for an empty scope")
 	return VectorGenerationInfo{}, false, nil

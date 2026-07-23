@@ -201,6 +201,9 @@ func (ix *Index) Build(
 	if err != nil {
 		return result, err
 	}
+	if err := ix.clearActiveFullRebuildPending(ctx, target); err != nil {
+		return result, err
+	}
 	result.Activated = activated
 	if o.CorpusRevision != "" {
 		if err := ix.metaSet(
@@ -375,7 +378,11 @@ func (ix *Index) resolveBuildTarget(
 
 	if hasActive && active == fp {
 		if fullRebuild {
+			if err := ix.markActiveFullRebuildPending(ctx, fp); err != nil {
+				return "", false, err
+			}
 			if err := ix.resetGenerationForFullRebuild(ctx, fp); err != nil {
+				_ = ix.clearActiveFullRebuildPending(ctx, fp)
 				return "", false, err
 			}
 		}
@@ -611,9 +618,59 @@ func (ix *Index) activateGeneration(ctx context.Context, target string) error {
 	); err != nil {
 		return fmt.Errorf("activate generation: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM `+ix.spec.MetaTable+` WHERE key = ? AND value != ?`,
+		activeFullRebuildKey, target,
+	); err != nil {
+		return fmt.Errorf("clear stale active full rebuild marker: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit activate generation: %w", err)
+	}
+	return nil
+}
+
+// ActiveFullRebuildPending reports whether fingerprint is the active
+// generation of a same-fingerprint full rebuild that cleared stamps in place
+// and has not completed yet.
+func (ix *Index) ActiveFullRebuildPending(
+	ctx context.Context, fingerprint string,
+) (bool, error) {
+	value, ok, err := ix.metaGet(ctx, activeFullRebuildKey)
+	if err != nil {
+		return false, err
+	}
+	return ok && value == fingerprint, nil
+}
+
+func (ix *Index) markActiveFullRebuildPending(
+	ctx context.Context, fingerprint string,
+) error {
+	if err := ix.requireWritable(); err != nil {
+		return err
+	}
+	if err := ix.metaSet(ctx, activeFullRebuildKey, fingerprint); err != nil {
+		return fmt.Errorf("record active full rebuild: %w", err)
+	}
+	return nil
+}
+
+func (ix *Index) clearActiveFullRebuildPending(
+	ctx context.Context, fingerprint string,
+) error {
+	if err := ix.requireWritable(); err != nil {
+		return err
+	}
+	value, ok, err := ix.metaGet(ctx, activeFullRebuildKey)
+	if err != nil {
+		return fmt.Errorf("read active full rebuild marker: %w", err)
+	}
+	if !ok || value != fingerprint {
+		return nil
+	}
+	if err := ix.metaDelete(ctx, activeFullRebuildKey); err != nil {
+		return fmt.Errorf("clear active full rebuild marker: %w", err)
 	}
 	return nil
 }

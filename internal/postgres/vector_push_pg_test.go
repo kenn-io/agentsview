@@ -33,16 +33,18 @@ type fakeVectorSource struct {
 	exportHashes map[string]string
 	docsCalls    map[string]int // per-session SessionDocs invocation count
 	genCalls     int
-	genOverride  func(call int) (VectorGenerationInfo, bool, error)
+	genOverride  func(call int, sessionIDs []string) (VectorGenerationInfo, bool, error)
+	genScopes    [][]string // sessionIDs of each Generation call
 	hashScopes   [][]string // sessionIDs of each SessionDocHashes call
 }
 
 func (f *fakeVectorSource) Generation(
-	ctx context.Context,
+	ctx context.Context, sessionIDs []string,
 ) (VectorGenerationInfo, bool, error) {
 	f.genCalls++
+	f.genScopes = append(f.genScopes, append([]string(nil), sessionIDs...))
 	if f.genOverride != nil {
-		return f.genOverride(f.genCalls)
+		return f.genOverride(f.genCalls, sessionIDs)
 	}
 	return f.gen, f.hasGen, nil
 }
@@ -50,7 +52,7 @@ func (f *fakeVectorSource) Generation(
 func (f *fakeVectorSource) SessionDocHashes(
 	ctx context.Context, sessionIDs []string,
 ) (map[string]string, error) {
-	f.hashScopes = append(f.hashScopes, sessionIDs)
+	f.hashScopes = append(f.hashScopes, append([]string(nil), sessionIDs...))
 	if sessionIDs == nil {
 		return f.hashes, nil
 	}
@@ -501,6 +503,131 @@ func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
 	assert.Equal(t, 2, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 		"both sessions have state rows under the recreated generation")
+}
+
+// TestVectorPushPromotionRechecksFullReadiness pins the scoped-to-full
+// promotion safety check: if a scoped push is promoted to generation-wide, the
+// source must be re-read with full readiness before any hash scan or PG write.
+func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_promotion_recheck_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-pr", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+	genID := res.Vectors.GenerationID
+	require.NotZero(t, genID)
+	_, err = pg.Exec(
+		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
+	)
+	require.NoError(t, err, "drop machine record")
+
+	src.genCalls = 0
+	src.genScopes = nil
+	src.hashScopes = nil
+	src.genOverride = func(call int, sessionIDs []string) (VectorGenerationInfo, bool, error) {
+		if call == 1 {
+			assert.Equal(t, []string{"A"}, sessionIDs)
+			return src.gen, true, nil
+		}
+		assert.Nil(t, sessionIDs, "promoted push must recheck full readiness")
+		return VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: 1 document(s) pending", ErrVectorSourceNotReady)
+	}
+
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, genID, nil, nil)
+	require.NoError(t, err, "promoted scoped push")
+	assert.True(t, vres.Skipped)
+	assert.Contains(t, vres.SkippedReason, "not fully embedded")
+	require.Len(t, src.genScopes, 2)
+	assert.Equal(t, []string{"A"}, src.genScopes[0])
+	assert.Nil(t, src.genScopes[1])
+	assert.Empty(t, src.hashScopes, "skip must happen before the local hash read")
+}
+
+// TestVectorPushDeferredFullPassDoesNotRecordMachineWitness pins the remaining
+// roborev finding: a generation-wide pass that leaves deferred work must not
+// write the machine witness, or a later scoped push would trust an incomplete
+// baseline and skip the required promotion back to generation-wide.
+func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_deferred_witness_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+	genID := res.Vectors.GenerationID
+	require.NotZero(t, genID)
+	_, err = pg.Exec(
+		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
+	)
+	require.NoError(t, err, "drop machine record")
+
+	src.hashes = map[string]string{"A": "a2", "B": "b2"}
+	src.docs = map[string][]VectorPushDoc{
+		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{9, 0, 0, 0})},
+		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 9, 0, 0})},
+	}
+	vres, err := sync.pushVectors(
+		ctx, false, nil, 0, map[string]struct{}{"B": {}}, nil,
+	)
+	require.NoError(t, err, "deferred generation-wide pass")
+	assert.Equal(t, 1, vres.SessionsDeferred)
+	assert.Equal(t, 1, vres.SessionsPushed)
+	assert.Equal(t, 0, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_generation_machines
+ WHERE generation_id = $1 AND machine = $2`, genID, "test-machine"),
+		"deferred generation-wide work must not witness the generation")
+
+	src.genScopes = nil
+	src.hashScopes = nil
+	vres, err = sync.pushVectors(ctx, false, []string{"A"}, genID, nil, nil)
+	require.NoError(t, err, "scoped retry after deferred full pass")
+	require.Len(t, src.genScopes, 2)
+	assert.Equal(t, []string{"A"}, src.genScopes[0])
+	assert.Nil(t, src.genScopes[1],
+		"missing witness must promote the scoped retry to a full read")
+	require.Len(t, src.hashScopes, 1)
+	assert.Nil(t, src.hashScopes[0],
+		"the promoted retry must read the whole generation, not only A")
+	assert.Equal(t, 1, vres.SessionsPushed,
+		"the promoted retry repairs B's deferred vector state")
+	assert.Equal(t, 1, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_generation_machines
+ WHERE generation_id = $1 AND machine = $2`, genID, "test-machine"),
+		"the clean generation-wide retry records the witness")
+	assert.Equal(t, 1, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state
+ WHERE generation_id = $1 AND session_id = 'B' AND doc_agg_hash = 'b2'`, genID),
+		"the promoted retry must repair the deferred out-of-scope session")
 }
 
 func TestVectorPushRoundTrip(t *testing.T) {
@@ -1165,7 +1292,7 @@ func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
 	delete(fake.hashes, "B")
 	delete(fake.docs, "B")
 	fake.genCalls = 0
-	fake.genOverride = func(call int) (VectorGenerationInfo, bool, error) {
+	fake.genOverride = func(call int, _ []string) (VectorGenerationInfo, bool, error) {
 		if call == 1 {
 			return fake.gen, true, nil
 		}

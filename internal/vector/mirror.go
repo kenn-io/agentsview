@@ -27,6 +27,14 @@ const refreshWatermarkKey = "refresh_watermark"
 // sessions an incremental scan's watermark would skip.
 const scopeIncludeAutomatedKey = "scope_include_automated"
 
+// activeFullRebuildKey holds the fingerprint of an active generation whose
+// same-fingerprint full rebuild cleared stamps in place and has not completed
+// yet. Scoped PG pushes may ignore out-of-scope missing docs from an ordinary
+// incremental top-up, but they must still refuse this active-refill case: the
+// changed sessions can look complete while the rest of the active generation is
+// mid-rewrite.
+const activeFullRebuildKey = "active_full_rebuild"
+
 // maxSQLVars caps bind variables per IN (...) clause to stay within
 // SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999), mirroring
 // internal/db's constant of the same purpose: a pathological refresh (a

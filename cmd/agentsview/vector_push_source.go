@@ -127,10 +127,13 @@ func (s *vectorPushSource) snapshot() (vector.ActiveExport, bool) {
 // generation for the rest of the push. Contract: Generation must be called
 // before SessionDocHashes and SessionDocs, which read the snapshotted ordinal;
 // the postgres push (pushVectors) calls Generation once first, then again as
-// the pre-eviction safety re-check. Snapshotting here means a build that
-// activates mid-push cannot mix this generation's fingerprint with a newer
-// generation's docs, while the next Generation call refreshes the snapshot so
-// successive pushes stay current.
+// the pre-eviction safety re-check. sessionIDs is nil for generation-wide
+// reconciliation and non-nil for changed-session pushes; the readiness gate
+// uses that scope to count only the candidate sessions' missing docs while the
+// export itself stays snapshotted generation-wide. Snapshotting here means a
+// build that activates mid-push cannot mix this generation's fingerprint with
+// a newer generation's docs, while the next Generation call refreshes the
+// snapshot so successive pushes stay current.
 //
 // A generation with missing embeddings is refused with an error wrapping
 // postgres.ErrVectorSourceNotReady rather than exported: the mirror only
@@ -140,7 +143,7 @@ func (s *vectorPushSource) snapshot() (vector.ActiveExport, bool) {
 // or overwrite valid PG vectors; the push after the build completes sends
 // everything that changed.
 func (s *vectorPushSource) Generation(
-	ctx context.Context,
+	ctx context.Context, sessionIDs []string,
 ) (postgres.VectorGenerationInfo, bool, error) {
 	ix, err := s.openIndex(ctx)
 	if err != nil || ix == nil {
@@ -157,17 +160,29 @@ func (s *vectorPushSource) Generation(
 		s.setSnapshot(vector.ActiveExport{}, false)
 		return postgres.VectorGenerationInfo{}, false, nil
 	}
-	info, err := ix.GenerationByID(ctx, exp.Ordinal)
+	rebuildPending, err := ix.ActiveFullRebuildPending(ctx, exp.Fingerprint)
+	if err != nil {
+		s.setSnapshot(vector.ActiveExport{}, false)
+		return postgres.VectorGenerationInfo{}, false,
+			fmt.Errorf("reading active full rebuild marker: %w", err)
+	}
+	if rebuildPending {
+		s.setSnapshot(vector.ActiveExport{}, false)
+		return postgres.VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: active generation %q is being rebuilt in place",
+			postgres.ErrVectorSourceNotReady, exp.Fingerprint)
+	}
+	missing, err := ix.MissingEmbeddedDocs(ctx, exp.Ordinal, sessionIDs)
 	if err != nil {
 		s.setSnapshot(vector.ActiveExport{}, false)
 		return postgres.VectorGenerationInfo{}, false,
 			fmt.Errorf("reading active generation coverage: %w", err)
 	}
-	if info.Missing > 0 {
+	if missing > 0 {
 		s.setSnapshot(vector.ActiveExport{}, false)
 		return postgres.VectorGenerationInfo{}, false, fmt.Errorf(
 			"%w: %d document(s) pending",
-			postgres.ErrVectorSourceNotReady, info.Missing)
+			postgres.ErrVectorSourceNotReady, missing)
 	}
 	s.setSnapshot(exp, true)
 	return postgres.VectorGenerationInfo{
