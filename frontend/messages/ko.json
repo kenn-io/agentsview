@@ -1112,6 +1112,14 @@
       }
     }
   ],
+  "session_recall_title": "리콜",
+  "session_recall_loading": "추출된 리콜을 불러오는 중…",
+  "session_recall_empty": "이 세션에 추출된 리콜이 없습니다.",
+  "session_recall_error": "추출된 리콜을 불러올 수 없습니다.",
+  "session_recall_generation": "세대",
+  "session_recall_review_state": "검토 상태",
+  "session_recall_evidence_range": "메시지 {start}–{end}",
+  "session_recall_jump_evidence": "대화 기록 메시지 {start}–{end}(으)로 이동",
   "session_vitals_title": "분석",
   "session_vitals_subtitle": "세션 바이탈 사인",
   "session_vitals_close": "세션 분석 닫기",

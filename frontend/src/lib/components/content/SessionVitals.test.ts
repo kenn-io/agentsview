@@ -64,6 +64,19 @@ describe("SessionVitals", () => {
 
   beforeEach(() => {
     mocks.fetchSessionTiming.mockReset().mockResolvedValue(mocks.timing);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/recall/entries?")) {
+        return new Response(
+          JSON.stringify({ entries: [], trusted_only: false }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: "not mocked" }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      );
+    }));
     sessionTiming.reset();
     ui.vitalsOpen = true;
   });
@@ -179,6 +192,87 @@ describe("SessionVitals", () => {
     worktreeCopy!.click();
     await Promise.resolve();
     expect(writeText).toHaveBeenNthCalledWith(2, traceSession.cwd);
+  });
+
+  it("shows distilled recall and jumps to its transcript evidence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({
+        entries: [{
+          id: "recall-1",
+          type: "fact",
+          scope: "project",
+          status: "accepted",
+          review_state: "unreviewed_auto",
+          title: "Retry bounded background work",
+          body: "Background retries stop after one delayed attempt.",
+          source_session_id: "sess-1",
+          source_run_id: "generation-2026-07-23",
+          extractor_method: "turns-v1",
+          transferable: false,
+          provenance_ok: true,
+          created_at: "2026-07-23T10:00:00Z",
+          updated_at: "2026-07-23T10:00:00Z",
+          evidence: [{
+            id: 1,
+            entry_id: "recall-1",
+            session_id: "sess-1",
+            message_start_ordinal: 12,
+            message_end_ordinal: 14,
+            snippet: "Bound the retry lifecycle.",
+          }],
+        }],
+        trusted_only: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const scroll = vi.spyOn(ui, "scrollToOrdinal");
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/api/v1/recall/entries?source_session_id=sess-1",
+        ),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Retry bounded background work",
+      );
+    });
+    expect(document.body.textContent).toContain(
+      "Background retries stop after one delayed attempt.",
+    );
+    expect(document.body.textContent).toContain("fact");
+    expect(document.body.textContent).toContain("unreviewed_auto");
+    expect(document.body.textContent).toContain("generation-2026-07-23");
+
+    const evidenceButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("12–14"));
+    expect(evidenceButton).toBeDefined();
+    evidenceButton!.click();
+
+    expect(scroll).toHaveBeenCalledWith(12, "sess-1");
+    scroll.mockRestore();
+  });
+
+  it("shows an empty Recall state for a session without distilled entries", async () => {
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        m.session_recall_empty(),
+      );
+    });
   });
 
   it("aborts a pending sub-agent timing read when collapsed", async () => {

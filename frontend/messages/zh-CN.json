@@ -1110,6 +1110,14 @@
       }
     }
   ],
+  "session_recall_title": "记忆",
+  "session_recall_loading": "正在加载提炼记忆…",
+  "session_recall_empty": "此会话没有提炼记忆。",
+  "session_recall_error": "无法加载提炼记忆。",
+  "session_recall_generation": "代次",
+  "session_recall_review_state": "审核状态",
+  "session_recall_evidence_range": "消息 {start}–{end}",
+  "session_recall_jump_evidence": "跳转到转录消息 {start}–{end}",
   "session_vitals_title": "分析",
   "session_vitals_subtitle": "会话指标",
   "session_vitals_close": "关闭会话分析",

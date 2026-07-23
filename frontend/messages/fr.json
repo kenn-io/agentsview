@@ -1142,6 +1142,14 @@
       }
     }
   ],
+  "session_recall_title": "Mémoire",
+  "session_recall_loading": "Chargement des mémoires distillées…",
+  "session_recall_empty": "Aucune mémoire distillée pour cette session.",
+  "session_recall_error": "Impossible de charger les mémoires distillées.",
+  "session_recall_generation": "Génération",
+  "session_recall_review_state": "État de révision",
+  "session_recall_evidence_range": "Messages {start}–{end}",
+  "session_recall_jump_evidence": "Aller aux messages {start}–{end} de la transcription",
   "session_vitals_title": "Analyse",
   "session_vitals_subtitle": "Signes vitaux de la session",
   "session_vitals_close": "Fermer l'analyse de la session",

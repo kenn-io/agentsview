@@ -18,6 +18,7 @@
     TurnTiming,
   } from "../../api/types/timing.js";
   import ActivityLane from "./ActivityLane.svelte";
+  import RecallPanel from "./RecallPanel.svelte";
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
   import SubagentCalls from "./SubagentCalls.svelte";
@@ -397,6 +398,8 @@
       {/if}
     </section>
   {/if}
+
+  <RecallPanel {sessionId} />
 
   {#if timing}
     {#if timing.by_category.length > 0}
