@@ -1741,6 +1741,7 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 		"/api/v1/sessions/sidebar-index?min_user_messages=bad",
 		"/api/v1/sessions/sidebar-index?date=2024-99-99",
 		"/api/v1/sessions/sidebar-index?date_from=2024-06-02&date_to=2024-06-01",
+		"/api/v1/sessions/sidebar-index?timezone=Fake%2FZone",
 		"/api/v1/sessions/sidebar-index?active_since=not-a-timestamp",
 	}
 
@@ -1750,6 +1751,48 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 			assertStatus(t, w, http.StatusBadRequest)
 		})
 	}
+}
+
+func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "utc-only", "my-app", 2, func(s *db.Session) {
+		s.UserMessageCount = 2
+		s.StartedAt = new("2024-06-16T01:00:00Z")
+		s.EndedAt = new("2024-06-16T02:00:00Z")
+	})
+	te.seedSession(t, "new-york-day", "my-app", 2, func(s *db.Session) {
+		s.UserMessageCount = 2
+		s.StartedAt = new("2024-06-16T05:00:00Z")
+		s.EndedAt = new("2024-06-16T06:00:00Z")
+	})
+
+	w := te.get(t, "/api/v1/sessions?date=2024-06-16")
+	assertStatus(t, w, http.StatusOK)
+	list := decode[sessionListResponse](t, w)
+	listIDs := make([]string, len(list.Sessions))
+	for i, session := range list.Sessions {
+		listIDs[i] = session.ID
+	}
+	assert.ElementsMatch(t, []string{"utc-only", "new-york-day"},
+		listIDs)
+
+	w = te.get(t,
+		"/api/v1/sessions?date=2024-06-16&timezone=America%2FNew_York")
+	assertStatus(t, w, http.StatusOK)
+	list = decode[sessionListResponse](t, w)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, "new-york-day", list.Sessions[0].ID)
+
+	w = te.get(t,
+		"/api/v1/sessions/sidebar-index?date=2024-06-16&timezone=America%2FNew_York")
+	assertStatus(t, w, http.StatusOK)
+	index := decode[db.SidebarSessionIndex](t, w)
+	assert.Equal(t, []string{"new-york-day"},
+		sidebarIndexRowIDs(index.Sessions))
+
+	w = te.get(t, "/api/v1/sessions?timezone=Fake%2FZone")
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "invalid timezone: Fake/Zone")
 }
 
 func TestGetSession_Found(t *testing.T) {

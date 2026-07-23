@@ -379,6 +379,7 @@ type ListFilter struct {
 	Date             string `json:"date,omitempty"`
 	DateFrom         string `json:"date_from,omitempty"`
 	DateTo           string `json:"date_to,omitempty"`
+	Timezone         string `json:"timezone,omitempty"`
 	ActiveSince      string `json:"active_since,omitempty"`
 	MinMessages      int    `json:"min_messages,omitempty"`
 	MaxMessages      int    `json:"max_messages,omitempty"`

@@ -381,6 +381,7 @@ class SessionsStore {
       date: f.date || undefined,
       dateFrom: f.dateFrom || undefined,
       dateTo: f.dateTo || undefined,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       activeSince: f.recentlyActive
         ? new Date(
             Date.now() - 24 * 60 * 60 * 1000,

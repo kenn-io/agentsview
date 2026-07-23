@@ -139,6 +139,11 @@ func (b *directBackend) List(
 			"list: invalid active_since %q: use RFC3339", f.ActiveSince,
 		)
 	}
+	timezone, err := db.NormalizeSessionTimezone(f.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
+	f.Timezone = timezone
 	if _, err := db.ParseSortSpec(f.OrderBy); err != nil {
 		return nil, fmt.Errorf(
 			"list: invalid sort %q: %v (valid keys: %s)",
@@ -180,6 +185,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		Date:                 f.Date,
 		DateFrom:             f.DateFrom,
 		DateTo:               f.DateTo,
+		Timezone:             f.Timezone,
 		ActiveSince:          f.ActiveSince,
 		MinMessages:          f.MinMessages,
 		MaxMessages:          f.MaxMessages,

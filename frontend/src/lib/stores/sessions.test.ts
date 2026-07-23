@@ -222,7 +222,13 @@ describe("SessionsStore", () => {
   let sessions: ReturnType<typeof createSessionsStore>;
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    const resolvedOptions = Intl.DateTimeFormat().resolvedOptions();
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
+      ...resolvedOptions,
+      timeZone: "America/New_York",
+    });
     vi.mocked(callGenerated).mockImplementation(
       (request: () => Promise<unknown>) => request(),
     );
@@ -1559,6 +1565,14 @@ describe("SessionsStore", () => {
   });
 
   describe("load serialization", () => {
+    it("should pass the browser timezone", async () => {
+      await sessions.load();
+
+      expectSidebarIndexCalledWith({
+        timezone: "America/New_York",
+      });
+    });
+
     it("should omit min/max_messages when 0", async () => {
       sessions.filters.minMessages = 0;
       sessions.filters.maxMessages = 0;
@@ -1668,6 +1682,17 @@ describe("SessionsStore", () => {
   });
 
   describe("loadMore serialization", () => {
+    it("should pass the browser timezone in loadMore", async () => {
+      sessions.nextCursor = "cur-timezone";
+
+      mockSidebarPage();
+      await sessions.loadMore();
+
+      expectPaginatedSidebarIndexCalledWith({
+        timezone: "America/New_York",
+      });
+    });
+
     it("should load the sidebar index once with consistent filters", async () => {
       mockSidebarIndex([
         makeSkinnyRow({ id: "s1" }),

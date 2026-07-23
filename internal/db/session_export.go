@@ -1108,12 +1108,6 @@ func sessionExportFiltersEqual(
 
 func buildSessionExportFilter(f SessionFilter) (string, []any) {
 	dialect := SQLiteQueryDialect()
-	if f.IncludeChildren {
-		dialect.activityExpr = sessionExportLastActivitySortExprFor("root_session")
-	} else {
-		dialect.activityExpr = sessionExportLastActivitySortExpr()
-	}
-	dialect.activityParam = func(ph string) string { return "julianday(" + ph + ")" }
 	return BuildSessionFilterSQL(f, dialect)
 }
 

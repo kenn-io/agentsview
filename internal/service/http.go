@@ -209,6 +209,7 @@ func filterToQuery(f ListFilter) url.Values {
 	setIfNotEmpty("date", f.Date)
 	setIfNotEmpty("date_from", f.DateFrom)
 	setIfNotEmpty("date_to", f.DateTo)
+	setIfNotEmpty("timezone", f.Timezone)
 	setIfNotEmpty("active_since", f.ActiveSince)
 	if f.MinMessages > 0 {
 		q.Set("min_messages", strconv.Itoa(f.MinMessages))

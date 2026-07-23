@@ -870,23 +870,23 @@ func TestSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	d := testDB(t)
 
 	insertSession(t, d, "before", "proj", func(s *Session) {
-		s.StartedAt = new("2024-06-15T08:00:00Z")
-		s.EndedAt = new("2024-06-15T09:00:00Z")
+		s.StartedAt = new("2024-06-16T02:00:00Z")
+		s.EndedAt = new("2024-06-16T03:59:59Z")
 		s.MessageCount = 2
 	})
 	insertSession(t, d, "spanning", "proj", func(s *Session) {
-		s.StartedAt = new("2024-06-15T23:00:00Z")
+		s.StartedAt = new("2024-06-16T03:00:00Z")
 		s.EndedAt = new("2024-06-16T10:00:00Z")
 		s.MessageCount = 2
 	})
 	insertSession(t, d, "open", "proj", func(s *Session) {
-		s.StartedAt = new("2024-06-15T22:00:00Z")
+		s.StartedAt = new("2024-06-16T02:00:00Z")
 		s.MessageCount = 2
 	})
-	seedMessage(t, d, "open", 1, "user", "2024-06-16T11:00:00Z", "")
+	seedMessage(t, d, "open", 1, "user", "2024-06-17T03:59:59Z", "")
 	insertSession(t, d, "after", "proj", func(s *Session) {
-		s.StartedAt = new("2024-06-17T08:00:00Z")
-		s.EndedAt = new("2024-06-17T09:00:00Z")
+		s.StartedAt = new("2024-06-17T04:00:00Z")
+		s.EndedAt = new("2024-06-17T05:00:00Z")
 		s.MessageCount = 2
 	})
 	insertSession(t, d, "child", "proj", func(s *Session) {
@@ -903,24 +903,33 @@ func TestSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 		want   []string
 	}{
 		{
-			name:   "ExactDate",
-			filter: SessionFilter{Date: "2024-06-16"},
-			want:   []string{"spanning", "open"},
+			name: "ExactDate",
+			filter: SessionFilter{
+				Date: "2024-06-16", Timezone: "America/New_York",
+			},
+			want: []string{"spanning", "open"},
 		},
 		{
-			name:   "DateRange",
-			filter: SessionFilter{DateFrom: "2024-06-16", DateTo: "2024-06-16"},
-			want:   []string{"spanning", "open"},
+			name: "DateRange",
+			filter: SessionFilter{
+				DateFrom: "2024-06-16", DateTo: "2024-06-16",
+				Timezone: "America/New_York",
+			},
+			want: []string{"spanning", "open"},
 		},
 		{
-			name:   "DateFrom",
-			filter: SessionFilter{DateFrom: "2024-06-16"},
-			want:   []string{"spanning", "open", "after"},
+			name: "DateFrom",
+			filter: SessionFilter{
+				DateFrom: "2024-06-16", Timezone: "America/New_York",
+			},
+			want: []string{"spanning", "open", "after"},
 		},
 		{
-			name:   "DateTo",
-			filter: SessionFilter{DateTo: "2024-06-15"},
-			want:   []string{"before", "spanning", "open"},
+			name: "DateTo",
+			filter: SessionFilter{
+				DateTo: "2024-06-15", Timezone: "America/New_York",
+			},
+			want: []string{"before", "spanning", "open"},
 		},
 	}
 
@@ -931,7 +940,7 @@ func TestSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	}
 
 	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
-		Date: "2024-06-16",
+		Date: "2024-06-16", Timezone: "America/New_York",
 	})
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	requireSidebarIndexIDs(t, index.Sessions, []string{

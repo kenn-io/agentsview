@@ -487,6 +487,7 @@ type SessionFilter struct {
 	Date            string // date overlapped by session activity, YYYY-MM-DD
 	DateFrom        string // activity range start (inclusive)
 	DateTo          string // activity range end (inclusive)
+	Timezone        string // IANA timezone for date filters; empty means UTC
 	ActiveSince     string // ISO-8601 timestamp; filters on most recent activity
 	MinMessages     int    // message_count >= N (0 = no filter)
 	MaxMessages     int    // message_count <= N (0 = no filter)

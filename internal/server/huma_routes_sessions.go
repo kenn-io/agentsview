@@ -67,6 +67,7 @@ type sessionFilterInput struct {
 	Date             string            `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
 	DateFrom         string            `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
 	DateTo           string            `query:"date_to" format:"date" doc:"Filter sessions active on or before this date"`
+	Timezone         string            `query:"timezone" doc:"IANA timezone for calendar-date filters; defaults to UTC"`
 	ActiveSince      string            `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
 	MinMessages      int               `query:"min_messages" minimum:"0" doc:"Minimum total message count"`
 	MaxMessages      int               `query:"max_messages" minimum:"0" doc:"Maximum total message count"`
@@ -115,6 +116,10 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return service.ListFilter{}, err
 	}
+	timezone, err := db.NormalizeSessionTimezone(in.Timezone)
+	if err != nil {
+		return service.ListFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
 	if _, err := db.ParseSortSpec(in.OrderBy); err != nil {
 		return service.ListFilter{}, apiError(http.StatusBadRequest, "invalid order_by: "+err.Error())
 	}
@@ -128,6 +133,7 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		Date:             in.Date,
 		DateFrom:         in.DateFrom,
 		DateTo:           in.DateTo,
+		Timezone:         timezone,
 		ActiveSince:      in.ActiveSince,
 		MinMessages:      in.MinMessages,
 		MaxMessages:      in.MaxMessages,
@@ -155,6 +161,10 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return db.SessionFilter{}, err
 	}
+	timezone, err := db.NormalizeSessionTimezone(in.Timezone)
+	if err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
 	// The order_by param is shared with the list route via this struct; reject
 	// malformed specs here too (the dropped enum used to guard every route),
 	// even though the sidebar index applies its own ordering and ignores it.
@@ -174,6 +184,7 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 		Date:             in.Date,
 		DateFrom:         in.DateFrom,
 		DateTo:           in.DateTo,
+		Timezone:         timezone,
 		ActiveSince:      in.ActiveSince,
 		MinMessages:      in.MinMessages,
 		MaxMessages:      in.MaxMessages,

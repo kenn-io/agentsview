@@ -55,17 +55,17 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 			 message_count, user_message_count)
 		VALUES
 			('date-overlap-before', 'm', 'date-overlap', 'claude',
-			 '2024-06-15T08:00:00Z'::timestamptz,
-			 '2024-06-15T09:00:00Z'::timestamptz, 2, 1),
+			 '2024-06-16T02:00:00Z'::timestamptz,
+			 '2024-06-16T03:59:59Z'::timestamptz, 2, 1),
 			('date-overlap-spanning', 'm', 'date-overlap', 'claude',
-			 '2024-06-15T23:00:00Z'::timestamptz,
+			 '2024-06-16T03:00:00Z'::timestamptz,
 			 '2024-06-16T10:00:00Z'::timestamptz, 2, 1),
 			('date-overlap-open', 'm', 'date-overlap', 'claude',
-			 '2024-06-15T22:00:00Z'::timestamptz,
+			 '2024-06-16T02:00:00Z'::timestamptz,
 			 NULL, 2, 1),
 			('date-overlap-after', 'm', 'date-overlap', 'claude',
-			 '2024-06-17T08:00:00Z'::timestamptz,
-			 '2024-06-17T09:00:00Z'::timestamptz, 2, 1),
+			 '2024-06-17T04:00:00Z'::timestamptz,
+			 '2024-06-17T05:00:00Z'::timestamptz, 2, 1),
 			('date-overlap-child', 'm', 'date-overlap', 'claude',
 			 '2024-06-17T08:00:00Z'::timestamptz,
 			 '2024-06-17T09:00:00Z'::timestamptz, 1, 1);
@@ -77,14 +77,15 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
 			('date-overlap-open', 1, 'user', 'x',
-			 '2024-06-16T11:00:00Z'::timestamptz, 1)
+			 '2024-06-17T03:59:59Z'::timestamptz, 1)
 	`)
 	require.NoError(t, err, "seeding date-overlap sessions")
 
 	page, err := store.ListSessions(context.Background(), db.SessionFilter{
-		Project: "date-overlap",
-		Date:    "2024-06-16",
-		Limit:   50,
+		Project:  "date-overlap",
+		Date:     "2024-06-16",
+		Timezone: "America/New_York",
+		Limit:    50,
 	})
 	require.NoError(t, err, "ListSessions")
 	ids := make([]string, len(page.Sessions))
@@ -98,8 +99,9 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	}, ids)
 
 	index, err := store.GetSidebarSessionIndex(context.Background(), db.SessionFilter{
-		Project: "date-overlap",
-		Date:    "2024-06-16",
+		Project:  "date-overlap",
+		Date:     "2024-06-16",
+		Timezone: "America/New_York",
 	})
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	ids = ids[:0]

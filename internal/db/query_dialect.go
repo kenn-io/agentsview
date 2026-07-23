@@ -35,7 +35,6 @@ type QueryDialect struct {
 	dateStartExpr      func(func(string) string) string
 	dateEndExpr        func(func(string) string) string
 	dateParam          func(string) string
-	activityExpr       string
 	activityParam      func(string) string
 	cursorActivityExpr string
 	cursorParam        func(string) string
@@ -71,18 +70,18 @@ func SQLiteQueryDialect() QueryDialect {
 		trueLiteral:      "1",
 		falseLiteral:     "0",
 		dateStartExpr: func(q func(string) string) string {
-			return "date(COALESCE(NULLIF(" + q("started_at") +
+			return "julianday(COALESCE(NULLIF(" + q("started_at") +
 				", ''), " + q("created_at") + "))"
 		},
 		dateEndExpr: func(q func(string) string) string {
-			return "date(COALESCE(NULLIF(" + q("ended_at") +
-				", ''), (SELECT MAX(m.timestamp) FROM messages m" +
+			return "julianday(COALESCE(NULLIF(" + q("ended_at") +
+				", ''), (SELECT m.timestamp FROM messages m" +
 				" WHERE m.session_id = " + outerSessionID(q) +
-				" AND m.timestamp != ''), NULLIF(" + q("started_at") +
+				" AND m.timestamp != '' ORDER BY julianday(m.timestamp)" +
+				" DESC, m.timestamp DESC LIMIT 1), NULLIF(" + q("started_at") +
 				", ''), " + q("created_at") + "))"
 		},
-		dateParam:              func(ph string) string { return ph },
-		activityExpr:           "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
+		dateParam:              func(ph string) string { return "julianday(" + ph + ")" },
 		activityParam:          func(ph string) string { return ph },
 		cursorActivityExpr:     "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
 		cursorParam:            func(ph string) string { return ph },
@@ -109,18 +108,17 @@ func PostgresQueryDialect() QueryDialect {
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
 		dateStartExpr: func(q func(string) string) string {
-			return "DATE(COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ") AT TIME ZONE 'UTC')"
+			return "COALESCE(" + q("started_at") + ", " +
+				q("created_at") + ")"
 		},
 		dateEndExpr: func(q func(string) string) string {
-			return "DATE(COALESCE(" + q("ended_at") +
+			return "COALESCE(" + q("ended_at") +
 				", (SELECT MAX(m.timestamp) FROM messages m" +
 				" WHERE m.session_id = " + outerSessionID(q) +
 				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ") AT TIME ZONE 'UTC')"
+				", " + q("created_at") + ")"
 		},
-		dateParam:    func(ph string) string { return ph + "::date" },
-		activityExpr: "COALESCE(ended_at, started_at, created_at)",
+		dateParam: func(ph string) string { return ph + "::timestamptz" },
 		activityParam: func(ph string) string {
 			return ph + "::timestamptz"
 		},
@@ -152,19 +150,18 @@ func DuckDBQueryDialect() QueryDialect {
 		falseLiteral:     "FALSE",
 		dateStartExpr: func(q func(string) string) string {
 			return "CAST(COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ") AS DATE)"
+				q("created_at") + ") AS TIMESTAMP)"
 		},
 		dateEndExpr: func(q func(string) string) string {
 			return "CAST(COALESCE(" + q("ended_at") +
 				", (SELECT MAX(m.timestamp) FROM messages m" +
 				" WHERE m.session_id = " + outerSessionID(q) +
 				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ") AS DATE)"
+				", " + q("created_at") + ") AS TIMESTAMP)"
 		},
 		dateParam: func(ph string) string {
-			return "CAST(" + ph + " AS DATE)"
+			return "CAST(" + ph + " AS TIMESTAMP)"
 		},
-		activityExpr:       "COALESCE(ended_at, started_at, created_at)",
 		activityParam:      func(ph string) string { return "CAST(" + ph + " AS TIMESTAMP)" },
 		cursorActivityExpr: "COALESCE(ended_at, started_at, created_at)",
 		cursorParam: func(ph string) string {
@@ -209,6 +206,50 @@ func (d QueryDialect) Qualify(parts ...string) string {
 }
 
 var safeIdentifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// NormalizeSessionTimezone validates an IANA timezone name and returns the
+// canonical UTC default used when callers omit it. "Local" is intentionally
+// rejected because it depends on the server environment rather than naming a
+// browser-selected zone.
+func NormalizeSessionTimezone(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "UTC", nil
+	}
+	if name == "Local" {
+		return "", fmt.Errorf("invalid timezone: %s", name)
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return "", fmt.Errorf("invalid timezone: %s", name)
+	}
+	return loc.String(), nil
+}
+
+func sessionDateBoundary(date, timezone string, nextDay bool) string {
+	name, err := NormalizeSessionTimezone(timezone)
+	if err != nil {
+		// Public HTTP and service inputs validate before reaching the store.
+		// Keep internal store callers deterministic if they violate that
+		// contract rather than making SQL construction panic.
+		name = "UTC"
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		loc = time.UTC
+	}
+	boundary, err := time.ParseInLocation(time.DateOnly, date, loc)
+	if err != nil {
+		// Dates are likewise validated at public boundaries. Returning the
+		// original value preserves the historical behavior for invalid
+		// internal filters.
+		return date
+	}
+	if nextDay {
+		boundary = boundary.AddDate(0, 0, 1)
+	}
+	return boundary.UTC().Format(time.RFC3339)
+}
 
 // QueryBuilder allocates dialect placeholders and collects bind parameters.
 type QueryBuilder struct {
@@ -554,21 +595,29 @@ func sessionFilterPredicates(
 	}
 	if f.Date != "" {
 		preds = append(preds, "("+b.dialect.dateEndExpr(q)+" >= "+
-			b.dialect.dateParam(b.Add(f.Date))+" AND "+
-			b.dialect.dateStartExpr(q)+" <= "+
-			b.dialect.dateParam(b.Add(f.Date))+")")
+			b.dialect.dateParam(b.Add(sessionDateBoundary(
+				f.Date, f.Timezone, false,
+			)))+" AND "+
+			b.dialect.dateStartExpr(q)+" < "+
+			b.dialect.dateParam(b.Add(sessionDateBoundary(
+				f.Date, f.Timezone, true,
+			)))+")")
 	}
 	if f.DateFrom != "" {
 		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
-			b.dialect.dateParam(b.Add(f.DateFrom)))
+			b.dialect.dateParam(b.Add(sessionDateBoundary(
+				f.DateFrom, f.Timezone, false,
+			))))
 	}
 	if f.DateTo != "" {
-		preds = append(preds, b.dialect.dateStartExpr(q)+" <= "+
-			b.dialect.dateParam(b.Add(f.DateTo)))
+		preds = append(preds, b.dialect.dateStartExpr(q)+" < "+
+			b.dialect.dateParam(b.Add(sessionDateBoundary(
+				f.DateTo, f.Timezone, true,
+			))))
 	}
 	if f.ActiveSince != "" {
-		preds = append(preds, b.dialect.activityExpr+" >= "+
-			b.dialect.activityParam(b.Add(f.ActiveSince)))
+		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
+			b.dialect.dateParam(b.Add(f.ActiveSince)))
 	}
 	if f.MinMessages > 0 {
 		preds = append(preds,

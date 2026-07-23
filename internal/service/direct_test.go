@@ -600,6 +600,49 @@ func TestDirectBackend_List_ValidDatesAccepted(t *testing.T) {
 	require.NotNil(t, list)
 }
 
+func TestDirectBackend_List_TimezoneValidationAndUTCDefault(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	dbtest.SeedSession(t, env.db, "utc-only", "p1", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+		s.StartedAt = dbtest.Ptr("2024-06-16T01:00:00Z")
+		s.EndedAt = dbtest.Ptr("2024-06-16T02:00:00Z")
+	})
+	dbtest.SeedSession(t, env.db, "new-york-day", "p1", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+		s.StartedAt = dbtest.Ptr("2024-06-16T05:00:00Z")
+		s.EndedAt = dbtest.Ptr("2024-06-16T06:00:00Z")
+	})
+
+	list, err := svc.List(context.Background(), service.ListFilter{
+		Date: "2024-06-16", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	ids := make([]string, len(list.Sessions))
+	for i, session := range list.Sessions {
+		ids[i] = session.ID
+	}
+	assert.ElementsMatch(t, []string{"utc-only", "new-york-day"}, ids)
+
+	list, err = svc.List(context.Background(), service.ListFilter{
+		Date: "2024-06-16", Timezone: "America/New_York", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, "new-york-day", list.Sessions[0].ID)
+
+	list, err = svc.List(context.Background(), service.ListFilter{
+		Timezone: "Fake/Zone",
+	})
+	require.Error(t, err)
+	assert.Nil(t, list)
+	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
+}
+
 // TestDirectBackend_List_ClampsOverMaxLimit verifies that a caller
 // passing a Limit larger than db.MaxSessionLimit is clamped to
 // MaxSessionLimit rather than being reset to DefaultSessionLimit
