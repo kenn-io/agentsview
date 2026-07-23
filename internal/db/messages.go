@@ -399,6 +399,26 @@ func (db *DB) GetResumeModelCounts(
 	return counts, nil
 }
 
+// GetMessageForMetadataPin returns only the stable fields needed to publish a
+// pin metadata event. It deliberately avoids loading message content, tool
+// calls, and tool-result events for an otherwise single-row lookup.
+func (db *DB) GetMessageForMetadataPin(
+	ctx context.Context, sessionID string, messageID int64,
+) (*Message, error) {
+	row := db.getReader().QueryRowContext(ctx, `
+		SELECT id, session_id, ordinal, COALESCE(source_uuid, '')
+		FROM messages
+		WHERE session_id = ? AND id = ?`, sessionID, messageID)
+	var msg Message
+	if err := row.Scan(&msg.ID, &msg.SessionID, &msg.Ordinal, &msg.SourceUUID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying message metadata for pin: %w", err)
+	}
+	return &msg, nil
+}
+
 // EmbeddableUnit is one embedding document: a single embeddable user
 // message, or a run of contiguous embeddable assistant messages.
 type EmbeddableUnit struct {
@@ -2358,6 +2378,40 @@ func (db *DB) ToolResultEventFingerprintWithTimestampNormalizer(
 		r.appendTo(&b, normalizeTimestamp)
 	}
 	return b.String(), rows.Err()
+}
+
+// SessionSubagentSessionIDs returns the distinct non-empty subagent_session_id
+// values referenced by a session's tool calls and tool result events. Used by
+// PG push to decide whether a session whose content otherwise matches PG still
+// needs its message rows replaced so subagent links can be re-resolved.
+func (db *DB) SessionSubagentSessionIDs(sessionID string) ([]string, error) {
+	rows, err := db.getReader().Query(`
+		SELECT DISTINCT subagent_session_id FROM (
+			SELECT subagent_session_id FROM tool_calls
+			WHERE session_id = ?
+			UNION
+			SELECT subagent_session_id FROM tool_result_events
+			WHERE session_id = ?
+		)
+		WHERE subagent_session_id IS NOT NULL AND subagent_session_id != ''`,
+		sessionID, sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"querying subagent session ids for %s: %w", sessionID, err,
+		)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // GetMessageByOrdinal returns a single message by session ID and ordinal.

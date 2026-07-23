@@ -350,7 +350,9 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 			assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
 			assertMirrorTableCountWhere(t, path, "pinned_messages", "session_id = ?", "sess-2", 1)
 
-			require.NoError(t, local.UnstarSession("sess-1"))
+			removed, err := local.UnstarSession("sess-1")
+			require.NoError(t, err)
+			require.True(t, removed)
 			require.NoError(t, local.UnpinMessage("sess-2", msgs[0].ID))
 			// A mutating incremental push (a required precondition for
 			// replaceCuration to be worth asserting on): appending a message

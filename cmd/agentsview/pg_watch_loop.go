@@ -5,6 +5,9 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"go.kenn.io/agentsview/internal/config"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // pushReason labels why a push was triggered, for logging.
@@ -59,14 +62,22 @@ func newPushLoopWithLabel(
 	debounce, interval time.Duration,
 	push func(context.Context, pushReason) error,
 ) (*pushLoop, *time.Ticker) {
+	return newNamedPushLoop(label, debounce, interval, push)
+}
+
+func newNamedPushLoop(
+	label string,
+	debounce, interval time.Duration,
+	push func(context.Context, pushReason) error,
+) (*pushLoop, *time.Ticker) {
 	ticker := time.NewTicker(interval)
 	return &pushLoop{
+		label:        label,
 		debounce:     debounce,
 		dirty:        make(chan struct{}, 1),
 		floor:        ticker.C,
 		after:        time.After,
 		push:         push,
-		label:        label,
 		flushTimeout: defaultFlushTimeout,
 	}, ticker
 }
@@ -168,4 +179,45 @@ func (l *pushLoop) restorePending(waiters []chan error) {
 	}
 	l.pendingMu.Unlock()
 	l.signalDirty()
+}
+
+type watchedSinkConfig struct {
+	AppConfig config.Config
+	Engine    *syncpkg.Engine
+	Debounce  time.Duration
+	Interval  time.Duration
+	LogPrefix string
+	Push      func(context.Context, pushReason) error
+}
+
+func runWatchedSink(ctx context.Context, cfg watchedSinkConfig) {
+	loop, ticker := newNamedPushLoop(
+		cfg.LogPrefix, cfg.Debounce, cfg.Interval, cfg.Push,
+	)
+	defer ticker.Stop()
+
+	stopWatcher, openDispatch, unwatchedDirs, _ := startFileWatcher(
+		cfg.AppConfig, cfg.Engine,
+		func(callbackCtx context.Context, batch syncpkg.WatchBatch) error {
+			scope := func() watchRecoveryScope {
+				return probeWatchRecoveryScope(cfg.AppConfig)
+			}
+			if err := syncWatchBatch(callbackCtx, cfg.Engine, batch, scope); err != nil {
+				return err
+			}
+			loop.NotifyDirty()
+			return nil
+		},
+		syncpkg.WatcherOptions{OnCoverageDegraded: loop.NotifyCoverageDegraded},
+	)
+	defer stopWatcher()
+	openDispatch()
+	if len(unwatchedDirs) > 0 {
+		log.Printf(
+			"%s: %d root(s) not watched; relying on the %s floor for coverage",
+			cfg.LogPrefix, len(unwatchedDirs), cfg.Interval,
+		)
+	}
+
+	loop.Run(ctx)
 }

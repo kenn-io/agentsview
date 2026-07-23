@@ -298,7 +298,7 @@ func newOpenAPICommand() *cobra.Command {
 func newSyncCommand() *cobra.Command {
 	var cfg SyncConfig
 	cmd := &cobra.Command{
-		Use:   "sync",
+		Use:   "sync [artifact-folder]",
 		Short: "Sync session data without serving",
 		Long: "Sync session data into the local database without starting the\n" +
 			"HTTP server.\n\n" +
@@ -309,12 +309,33 @@ func newSyncCommand() *cobra.Command {
 			"exits non-zero if any configured host failed.\n\n" +
 			"With --host, syncs only that host. A running local daemon may use a\n" +
 			"matching configured remote_hosts entry and transport; otherwise,\n" +
-			"ad hoc --host sync uses your existing SSH configuration and requires\n" +
+			"ad hoc --host sync falls back to SSH.\n\n" +
+			"With an artifact-folder argument or --artifact-folder, sync also\n" +
+			"exchanges local-first immutable artifacts with that folder target.\n" +
+			"Artifact sync v1 is for a fully trusted personal fleet. Use a\n" +
+			"dedicated artifact share folder; do not point this at the\n" +
+			"agentsview data directory, raw agent directories, or the live\n" +
+			"SQLite database file and its WAL/SHM files.\n\n" +
+			"Use --init with an artifact folder on first setup to generate and\n" +
+			"persist this machine's artifact origin, backfill existing local\n" +
+			"sessions into the artifact store, exchange with the folder target,\n" +
+			"and import any peer artifacts already present. Two intermittent\n" +
+			"machines only sync while both can reach the same transport; use a\n" +
+			"NAS, cloud folder, object store, or always-on peer as a rendezvous\n" +
+			"when asynchronous convergence matters.\n\n" +
+			"Use --watch with an artifact folder to keep syncing. Watch mode\n" +
+			"runs an initial local sync and artifact exchange, coalesces file\n" +
+			"changes with --debounce, retries failed exchanges on later\n" +
+			"changes or --interval ticks, and performs a final best-effort\n" +
+			"exchange on shutdown. Combining --init with --watch publishes\n" +
+			"the first-run baseline on the first successful exchange, then\n" +
+			"keeps watching.\n\n" +
+			"Remote sync uses your existing SSH configuration and requires\n" +
 			"key-based (passwordless) auth; it never prompts for a password.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		PreRunE: func(cmd *cobra.Command, _ []string) error {
+		Args:         cobra.MaximumNArgs(1),
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if cfg.Host == "" {
 				if cmd.Flags().Changed("user") ||
 					cmd.Flags().Changed("port") {
@@ -323,15 +344,33 @@ func newSyncCommand() *cobra.Command {
 					)
 				}
 			}
+			if err := applySyncArtifactTarget(&cfg, args, cmd.Flags().Changed("artifact-folder")); err != nil {
+				return err
+			}
+			if err := validateSyncConfig(cfg); err != nil {
+				return err
+			}
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
+			if cfg.Watch {
+				runSyncWatch(cfg)
+				return
+			}
+			if cmd.Flags().Changed("debounce") || cmd.Flags().Changed("interval") {
+				fmt.Fprintln(os.Stderr,
+					"warning: --debounce and --interval have no effect without --watch")
+			}
 			runSync(cfg)
 		},
 	}
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.Init, "init", false,
+		"Initialize artifact sync with the folder target",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
@@ -344,6 +383,30 @@ func newSyncCommand() *cobra.Command {
 	cmd.Flags().IntVar(
 		&cfg.Port, "port", 0,
 		"SSH port for deprecated remote sync (default: 22)",
+	)
+	cmd.Flags().StringVar(
+		&cfg.ArtifactFolder, "artifact-folder", "",
+		"Exchange local-first sync artifacts with a folder, http(s) peer, or s3:// target",
+	)
+	cmd.Flags().StringVar(
+		&cfg.Token, "token", "",
+		"Bearer token for an http(s) artifact peer target",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.AllowInsecure, "allow-insecure", false,
+		"Allow plaintext HTTP to a non-loopback artifact peer",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.Watch, "watch", false,
+		"Run artifact folder sync continuously, syncing on change plus a periodic floor",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Debounce, "debounce", defaultWatchDebounce,
+		"Coalesce window after a change before artifact sync (--watch only)",
+	)
+	cmd.Flags().DurationVar(
+		&cfg.Interval, "interval", defaultWatchInterval,
+		"Periodic floor artifact sync interval (--watch only)",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",
@@ -362,6 +425,8 @@ func newSyncCommand() *cobra.Command {
 			panic(err)
 		}
 	}
+	cmd.AddCommand(newSyncGCCommand())
+	cmd.AddCommand(newSyncArtifactResetCommand())
 	return cmd
 }
 

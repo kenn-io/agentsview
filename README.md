@@ -103,6 +103,27 @@ Use `--public-origin` (repeatable or comma-separated) to trust additional
 browser origins. If you expose the UI beyond loopback, also enable
 `--require-auth`.
 
+## Local-First Artifact Sync
+
+Artifact sync is for a fully trusted personal fleet. It exchanges immutable
+artifacts through a dedicated folder, HTTP peer, or S3-compatible target and
+imports them into each machine's local SQLite archive:
+
+```bash
+agentsview sync --init /path/to/agentsview-artifacts
+agentsview sync /path/to/agentsview-artifacts
+agentsview sync --watch /path/to/agentsview-artifacts
+```
+
+Do not sync the live SQLite database, `AGENTSVIEW_DATA_DIR`, or whole raw agent
+directories. SQLite remains the authoritative local archive; the
+`AGENTSVIEW_DATA_DIR/artifacts` directory is a private AgentsView-owned Docbank
+vault, not an external sync target. Two intermittent machines only sync when
+both can reach the same transport unless you provide a rendezvous such as a NAS
+folder, cloud-synced folder, S3-compatible bucket, or always-on peer. See
+[Trusted-Fleet Artifact Sync](docs/artifact-sync.md) for setup and safety
+boundaries.
+
 ## Docker
 
 The container image defaults to local `agentsview serve`. Set `PG_SERVE=1` to
@@ -312,56 +333,56 @@ support is deprecated because current Amp releases may store threads server-side
 and leave only local stubs; agentsview can still parse historical local Amp
 thread JSON files.
 
-| Agent                 | Session Directory                                                                                                                                                       |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `aider_dirs`)                                                                                     |
-| Amp (deprecated)      | `~/.local/share/amp/threads/` (historical local thread JSON only)                                                                                                       |
-| Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                |
-| Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                           |
-| Claude Code           | `~/.claude/projects/`                                                                                                                                                   |
-| OpenClaude            | `~/.openclaude/projects/`                                                                                                                                               |
-| Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                               |
-| Codex                 | `~/.codex/sessions/`                                                                                                                                                    |
-| Copilot CLI           | `~/.copilot/`                                                                                                                                                           |
-| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS); point `DEVIN_DIR` / `devin_dirs` at the root that contains `cli/`                      |
-| Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                                    |
-| Cursor                | `~/.cursor/projects/`                                                                                                                                                   |
-| DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                       |
-| Forge                 | `~/.forge/`                                                                                                                                                             |
-| Gemini CLI            | `~/.gemini/`                                                                                                                                                            |
-| gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                            |
-| Grok                  | `~/.grok/sessions/`                                                                                                                                                     |
-| Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                                   |
-| iFlow                 | `~/.iflow/projects/`                                                                                                                                                    |
-| Kilo                  | `~/.local/share/kilo/`                                                                                                                                                  |
-| Kilo (legacy)         | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/` (macOS), `~/.config/Code/User/globalStorage/kilocode.kilo-code/` (Linux)                     |
-| Kimi                  | `~/.kimi/sessions/`                                                                                                                                                     |
-| Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                     |
-| Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                           |
-| MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                              |
-| Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                                 |
-| OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                   |
-| OpenCode              | `~/.local/share/opencode/`                                                                                                                                              |
-| OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                           |
-| OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                |
-| Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
-| Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
-| Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                        |
-| Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |
-| QClaw                 | `~/.qclaw/agents/`                                                                                                                                                      |
-| Qoder                 | `~/.qoder/projects/`, `~/.qoderwork/projects/`                                                                                                                          |
-| Qwen Code             | `~/.qwen/projects/`                                                                                                                                                     |
-| QwenPaw               | `~/.copaw/workspaces/`, `~/.qwenpaw/workspaces/`                                                                                                                        |
-| Reasonix              | `~/.reasonix/`, `%APPDATA%\\reasonix\\` (Windows)                                                                                                                       |
+| Agent                 | Session Directory                                                                                                                                                                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `aider_dirs`)                                                                                                                                                                  |
+| Amp (deprecated)      | `~/.local/share/amp/threads/` (historical local thread JSON only)                                                                                                                                                                                    |
+| Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                                                                                             |
+| Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                                                                                                        |
+| Claude Code           | `~/.claude/projects/`                                                                                                                                                                                                                                |
+| OpenClaude            | `~/.openclaude/projects/`                                                                                                                                                                                                                            |
+| Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                                                                                                            |
+| Codex                 | `~/.codex/sessions/`                                                                                                                                                                                                                                 |
+| Copilot CLI           | `~/.copilot/`                                                                                                                                                                                                                                        |
+| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS); point `DEVIN_DIR` / `devin_dirs` at the root that contains `cli/`                                                                                                   |
+| Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                                                                                                                 |
+| Cursor                | `~/.cursor/projects/`                                                                                                                                                                                                                                |
+| DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                                                                                                    |
+| Forge                 | `~/.forge/`                                                                                                                                                                                                                                          |
+| Gemini CLI            | `~/.gemini/`                                                                                                                                                                                                                                         |
+| gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                                                                                                         |
+| Grok                  | `~/.grok/sessions/`                                                                                                                                                                                                                                  |
+| Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                                                                                                                |
+| iFlow                 | `~/.iflow/projects/`                                                                                                                                                                                                                                 |
+| Kilo                  | `~/.local/share/kilo/`                                                                                                                                                                                                                               |
+| Kilo (legacy)         | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/` (macOS), `~/.config/Code/User/globalStorage/kilocode.kilo-code/` (Linux)                                                                                                 |
+| Kimi                  | `~/.kimi/sessions/`                                                                                                                                                                                                                                  |
+| Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                                                                                                  |
+| Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                                                                                                        |
+| MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |
+| Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                                                                                                              |
+| OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                                                                                                |
+| OpenCode              | `~/.local/share/opencode/`                                                                                                                                                                                                                           |
+| OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                                                                                                        |
+| OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                                                                                             |
+| Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                                                                                              |
+| Piebald               | `~/.local/share/piebald/`                                                                                                                                                                                                                            |
+| Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                                                                                                     |
+| Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                                                                                               |
+| QClaw                 | `~/.qclaw/agents/`                                                                                                                                                                                                                                   |
+| Qoder                 | `~/.qoder/projects/`, `~/.qoderwork/projects/`                                                                                                                                                                                                       |
+| Qwen Code             | `~/.qwen/projects/`                                                                                                                                                                                                                                  |
+| QwenPaw               | `~/.copaw/workspaces/`, `~/.qwenpaw/workspaces/`                                                                                                                                                                                                     |
+| Reasonix              | `~/.reasonix/`, `%APPDATA%\\reasonix\\` (Windows)                                                                                                                                                                                                    |
 | RooCode               | `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/` (macOS), `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/` (Linux), `%APPDATA%\\Code\\User\\globalStorage\\rooveterinaryinc.roo-cline\\` (Windows) |
-| VSCode Copilot        | `~/Library/Application Support/Code/User/` (macOS)                                                                                                                      |
-| Visual Studio Copilot | `%LOCALAPPDATA%\\Temp\\VSGitHubCopilotLogs\\traces\\` (Windows), `~/Library/Caches/VSGitHubCopilotLogs/traces/` (macOS), `~/.cache/VSGitHubCopilotLogs/traces/` (Linux) |
-| Windsurf              | `~/Library/Application Support/Windsurf/User/` (macOS), `~/.config/Windsurf/User/` (Linux), `%APPDATA%\\Windsurf\\User\\` (Windows)                                     |
-| Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                         |
-| WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                |
-| ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                     |
-| Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                            |
-| Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
+| VSCode Copilot        | `~/Library/Application Support/Code/User/` (macOS)                                                                                                                                                                                                   |
+| Visual Studio Copilot | `%LOCALAPPDATA%\\Temp\\VSGitHubCopilotLogs\\traces\\` (Windows), `~/Library/Caches/VSGitHubCopilotLogs/traces/` (macOS), `~/.cache/VSGitHubCopilotLogs/traces/` (Linux)                                                                              |
+| Windsurf              | `~/Library/Application Support/Windsurf/User/` (macOS), `~/.config/Windsurf/User/` (Linux), `%APPDATA%\\Windsurf\\User\\` (Windows)                                                                                                                  |
+| Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                                                                                                      |
+| WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                                                                                             |
+| ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                                                                                                  |
+| Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                                                                                                         |
+| Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                                                                                              |
 
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
@@ -467,10 +488,11 @@ or read them, and treats sidecars as untrusted structured input -- see
 
 ### Kilo vs Kilo (legacy).
 
-*Kilo* is the OpenCode-based CLI/editor core (`~/.local/share/kilo/kilo.db`); 
-it covers both the Kilo CLI and the rebuilt Kilo Code VS Code extension (after 
-March 2026), which shares that same database. *Kilo (legacy)* is the legacy RooCode-derived
-VS Code extension that wrote per-task JSON under `kilocode.kilo-code/tasks/`.
+*Kilo* is the OpenCode-based CLI/editor core (`~/.local/share/kilo/kilo.db`); it
+covers both the Kilo CLI and the rebuilt Kilo Code VS Code extension (after
+March 2026), which shares that same database. *Kilo (legacy)* is the legacy
+RooCode-derived VS Code extension that wrote per-task JSON under
+`kilocode.kilo-code/tasks/`.
 
 ## PostgreSQL Sync
 

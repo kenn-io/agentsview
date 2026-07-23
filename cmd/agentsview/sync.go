@@ -12,11 +12,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	stdsync "sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -28,10 +30,19 @@ import (
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
-	Full bool
-	Host string
-	User string
-	Port int
+	Full           bool
+	Init           bool
+	Watch          bool
+	Debounce       time.Duration
+	Interval       time.Duration
+	Host           string
+	User           string
+	Port           int
+	ArtifactFolder string
+	// Token is the bearer token used for an http(s):// artifact peer target.
+	Token string
+	// AllowInsecure permits plaintext HTTP to a non-loopback artifact peer.
+	AllowInsecure bool
 	// CPUProfile, MemProfile, and Trace are hidden flags that capture a
 	// pprof CPU profile, allocation snapshot, and runtime trace for the
 	// sync pass. Empty strings disable each independently.
@@ -40,17 +51,54 @@ type SyncConfig struct {
 	Trace      string
 }
 
+func applySyncArtifactTarget(cfg *SyncConfig, args []string, flagChanged bool) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if flagChanged {
+		return errors.New("artifact folder target cannot be provided both as an argument and --artifact-folder")
+	}
+	cfg.ArtifactFolder = args[0]
+	return nil
+}
+
+func validateSyncConfig(cfg SyncConfig) error {
+	if cfg.Init && cfg.Host != "" {
+		return errors.New("--init cannot be combined with --host")
+	}
+	if cfg.Init && cfg.ArtifactFolder == "" {
+		return errors.New(
+			"--init requires an artifact folder target",
+		)
+	}
+	if cfg.Watch && cfg.Host != "" {
+		return errors.New("--watch cannot be combined with --host")
+	}
+	if cfg.Watch && cfg.ArtifactFolder == "" {
+		return errors.New("--watch requires an artifact folder target")
+	}
+	if cfg.Host != "" && cfg.ArtifactFolder != "" {
+		// SSH remote sync (--host) returns before artifact sync runs, so a
+		// combined invocation would silently ignore the artifact target.
+		return errors.New("--host cannot be combined with an artifact target")
+	}
+	return nil
+}
+
 func runSync(cfg SyncConfig) {
-	if doSync(cfg) {
+	hadRemoteFailures, err := doSync(cfg)
+	if err != nil {
+		fatal("sync: %v", err)
+	}
+	if hadRemoteFailures {
 		os.Exit(1)
 	}
 }
 
-// doSync performs the sync run and reports whether any configured
-// remote host failed. It owns the deferred cleanup (profile stop,
-// db close) so runSync can translate the result into a non-zero
-// exit code without skipping that cleanup.
-func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
+// doSync performs the sync run and reports whether any configured remote host
+// failed. It owns the deferred cleanup (profile stop, db close) so runSync can
+// translate the result into a non-zero exit code without skipping that cleanup.
+func doSync(cfg SyncConfig) (hadRemoteFailures bool, err error) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -93,9 +141,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 		// includeLocal is true. A remote-only request still needs a newly
 		// launched daemon to populate its existing local archive at startup.
 		appCfg.SkipInitialSync = includeLocal
-		tr, err := ensureTransport(
-			&appCfg, transportIntentArchiveWrite, 0,
-		)
+		tr, err := syncTransport(&appCfg, cfg)
 		if err != nil {
 			fatal("detecting daemon: %v", err)
 		}
@@ -113,7 +159,14 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 				if err != nil {
 					fatal("daemon remote sync: %v", err)
 				}
-				return len(failures) > 0
+				if cfg.ArtifactFolder != "" {
+					if _, err := runDaemonArtifactExchange(
+						context.Background(), tr, appCfg.AuthToken, cfg,
+					); err != nil {
+						return false, fmt.Errorf("daemon artifact exchange: %w", err)
+					}
+				}
+				return len(failures) > 0, nil
 			}
 			if useDaemon {
 				start := time.Now()
@@ -154,7 +207,14 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 					fatal("daemon sync: %v", err)
 				}
 				printSyncSummary(stats, start)
-				return false
+				if cfg.ArtifactFolder != "" {
+					if _, err := runDaemonArtifactExchange(
+						context.Background(), tr, appCfg.AuthToken, cfg,
+					); err != nil {
+						return false, fmt.Errorf("daemon artifact exchange: %w", err)
+					}
+				}
+				return false, nil
 			}
 			// Read-only mirror daemons do not own the local SQLite
 			// archive. Remote sync can still proceed through the direct
@@ -162,7 +222,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			// writing imported remote sessions.
 		}
 		if tr.DirectReadOnly {
-			fatal(
+			return false, errors.New(
 				"local daemon owns the SQLite archive but is not " +
 					"responding; refusing to sync directly",
 			)
@@ -177,12 +237,15 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 
 	if cfg.Host != "" {
 		runRemoteSync(appCfg, database, cfg)
-		return false
+		return false, nil
 	}
 
 	if len(appCfg.RemoteHosts) == 0 {
 		runLocalSync(context.Background(), appCfg, database, cfg.Full)
-		return false
+		if cfg.ArtifactFolder != "" {
+			runArtifactFolderSync(appCfg, database, cfg.ArtifactFolder, cfg)
+		}
+		return false, nil
 	}
 	progress := newRemoteProgressPrinter(os.Stdout, time.Now)
 	_, failures, blocked := runConfiguredLocalAndRemotesCLI(
@@ -190,6 +253,9 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 		cfg.Full, progress.Print,
 	)
 	progress.Finish()
+	if cfg.ArtifactFolder != "" {
+		runArtifactFolderSync(appCfg, database, cfg.ArtifactFolder, cfg)
+	}
 	reportRemoteFailures(failures)
 	if blocked != nil {
 		var pending *remotesync.PendingCleanupError
@@ -199,11 +265,18 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 				"sync: remote HTTP cleanup remains pending: %s\n",
 				remotesync.FailureSummary(blocked),
 			)
-			return true
+			return true, nil
 		}
 		fatal("local sync: %v", blocked)
 	}
-	return len(failures) > 0
+	return len(failures) > 0, nil
+}
+
+func syncTransport(appCfg *config.Config, cfg SyncConfig) (transport, error) {
+	if cfg.ArtifactFolder != "" {
+		return detectTransport(appCfg.DataDir, appCfg.AuthToken, 0)
+	}
+	return ensureTransport(appCfg, transportIntentArchiveWrite, 0)
 }
 
 func useDaemonForSync(tr transport) bool {
@@ -315,6 +388,106 @@ func (p *remoteProgressPrinter) finishCurrent() {
 	p.label = ""
 	p.started = time.Time{}
 	p.inPlace = false
+}
+
+// resolveArtifactOrigin returns this machine's artifact origin. A config
+// origin wins; otherwise an origin already stored in database sync state --
+// for example one minted by an incoming peer exchange on serve before the
+// config ever initialized an origin -- is promoted into the config; otherwise
+// a new origin is generated and persisted. Without the promotion step, CLI
+// sync would generate a second origin that serve later adopts as
+// authoritative, stranding metadata events published under the DB origin.
+// The resolved config authority is reconciled back into database sync state so
+// DB-only consumers such as direct PG push use the same canonical identity.
+func resolveArtifactOrigin(
+	appCfg config.Config, database *db.DB,
+) (string, error) {
+	var origin string
+	var err error
+	if appCfg.ArtifactOriginID == "" {
+		stored, readErr := artifact.StoredOrigin(database)
+		if readErr != nil {
+			return "", readErr
+		}
+		if stored != "" {
+			origin, err = appCfg.AdoptArtifactOriginID(stored)
+		} else {
+			origin, err = appCfg.EnsureArtifactOriginID()
+		}
+	} else {
+		origin, err = appCfg.EnsureArtifactOriginID()
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := artifact.AdoptOrigin(database, origin); err != nil {
+		return "", fmt.Errorf("reconciling artifact origin in database: %w", err)
+	}
+	return origin, nil
+}
+
+func runArtifactFolderSync(
+	appCfg config.Config, database *db.DB, target string, cfg SyncConfig,
+) {
+	origin, err := resolveArtifactOrigin(appCfg, database)
+	if err != nil {
+		fatal("artifact sync origin: %v", err)
+	}
+	ctx := context.Background()
+	res, err := syncArtifactFolder(
+		ctx, appCfg, database, target, origin, artifactPeerToken(cfg),
+		cfg.AllowInsecure, cfg.Init, nil,
+	)
+	if err != nil {
+		fatal("artifact sync: %v", err)
+	}
+	printArtifactSyncSummary(res, cfg.Init)
+}
+
+// artifactPeerToken resolves the bearer token for an HTTP peer target. Tokens
+// are never inferred from local server auth because an explicit peer URL may
+// point at an untrusted endpoint.
+func artifactPeerToken(cfg SyncConfig) string {
+	return cfg.Token
+}
+
+func syncArtifactFolder(
+	ctx context.Context,
+	appCfg config.Config,
+	database *db.DB,
+	target string,
+	origin string,
+	token string,
+	allowInsecure bool,
+	baselineMetadata bool,
+	onDataChanged func(),
+) (artifact.SyncResult, error) {
+	if !artifact.IsFolderTarget(target) && !artifact.IsHTTPTarget(target) && !artifact.IsObjectTarget(target) {
+		return artifact.SyncResult{}, fmt.Errorf(
+			"artifact sync supports local folder, http(s) peer, or s3:// object-store targets: %s",
+			target,
+		)
+	}
+	return artifact.Sync(ctx, database, artifact.SyncOptions{
+		DataDir:          appCfg.DataDir,
+		Target:           target,
+		Origin:           origin,
+		Token:            token,
+		AllowInsecure:    allowInsecure,
+		BaselineMetadata: baselineMetadata,
+		OnDataChanged:    onDataChanged,
+	})
+}
+
+func printArtifactSyncSummary(res artifact.SyncResult, init bool) {
+	label := "Artifact sync"
+	if init {
+		label = "Artifact sync initialized"
+	}
+	fmt.Printf(
+		"%s (%s): exported %d sessions, imported %d sessions / %d messages / %d metadata events\n",
+		label, res.Origin, res.ExportedSessions, res.ImportedSessions, res.ImportedMessages, res.ImportedMetadata,
+	)
 }
 
 // syncLocalAndRemotes runs the local sync, then the configured
@@ -987,6 +1160,92 @@ func runDaemonSync(
 		return stats, nil
 	}
 	return parseDaemonSyncSSE(resp.Body, onProgress)
+}
+
+func runDaemonArtifactExchange(
+	ctx context.Context,
+	tr transport,
+	authToken string,
+	cfg SyncConfig,
+) (artifact.SyncResult, error) {
+	if err := artifact.ValidateSyncTarget(cfg.ArtifactFolder); err != nil {
+		return artifact.SyncResult{}, errors.New("invalid artifact exchange target")
+	}
+	endpoint, origin, err := daemonArtifactExchangeEndpoint(tr)
+	if err != nil {
+		return artifact.SyncResult{}, err
+	}
+	body, err := json.Marshal(struct {
+		Target           string `json:"target"`
+		Token            string `json:"token,omitempty"`
+		AllowInsecure    bool   `json:"allow_insecure,omitempty"`
+		BaselineMetadata bool   `json:"baseline_metadata,omitempty"`
+	}{
+		Target: cfg.ArtifactFolder, Token: cfg.Token,
+		AllowInsecure: cfg.AllowInsecure, BaselineMetadata: cfg.Init,
+	})
+	if err != nil {
+		return artifact.SyncResult{}, err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, endpoint, bytes.NewReader(body),
+	)
+	if err != nil {
+		return artifact.SyncResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", origin)
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
+	if err != nil {
+		return artifact.SyncResult{}, fmt.Errorf("daemon artifact exchange request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return artifact.SyncResult{}, fmt.Errorf("daemon artifact exchange returned HTTP %d",
+			resp.StatusCode)
+	}
+	var response struct {
+		Origin           string `json:"origin"`
+		ExportedSessions int    `json:"exported_sessions"`
+		ImportedSessions int    `json:"imported_sessions"`
+		ImportedMessages int    `json:"imported_messages"`
+		ImportedMetadata int    `json:"imported_metadata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return artifact.SyncResult{}, errors.New("decoding daemon artifact exchange response")
+	}
+	return artifact.SyncResult{
+		Origin: response.Origin, ExportedSessions: response.ExportedSessions,
+		ImportedSessions: response.ImportedSessions, ImportedMessages: response.ImportedMessages,
+		ImportedMetadata: response.ImportedMetadata,
+	}, nil
+}
+
+func daemonArtifactExchangeEndpoint(tr transport) (endpoint, origin string, err error) {
+	if tr.Runtime != nil && tr.Runtime.Host != "" && !isLoopbackHost(tr.Runtime.Host) {
+		return "", "", errors.New(
+			"artifact exchange requires a loopback-bound writable daemon; restart agentsview on localhost",
+		)
+	}
+	base, err := url.Parse(tr.URL)
+	if err != nil || base == nil || base.Host == "" ||
+		(base.Scheme != "http" && base.Scheme != "https") {
+		return "", "", errors.New("invalid local daemon endpoint")
+	}
+	if base.User != nil || base.RawQuery != "" || base.Fragment != "" ||
+		!isLoopbackHost(base.Hostname()) {
+		return "", "", errors.New("artifact exchange requires a credential-free loopback daemon endpoint")
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + "/api/v1/artifacts/exchange"
+	base.RawPath = ""
+	origin = (&url.URL{Scheme: base.Scheme, Host: base.Host}).String()
+	return base.String(), origin, nil
 }
 
 func runDaemonRemoteSync(

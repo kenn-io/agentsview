@@ -3716,7 +3716,9 @@ func TestSyncEngineHashSkip(t *testing.T) {
 	different := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg2").
 		String()
-	os.WriteFile(path, []byte(different), 0o644)
+	require.NoError(t, os.WriteFile(path, []byte(different), 0o644), "rewrite changed session")
+	future := time.Unix(0, mtime).Add(time.Second)
+	require.NoError(t, os.Chtimes(path, future, future), "advance changed file mtime")
 
 	// Third sync — mtime changed → re-synced
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
@@ -6634,6 +6636,8 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 		`{"id":"part-a1","sessionID":"oc-storage-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
 	), 0o644)
 	require.NoError(t, err, "rewrite part")
+	childMtime := time.Unix(0, initialMtime).Add(time.Second)
+	require.NoError(t, os.Chtimes(partPath, childMtime, childMtime), "advance part mtime")
 	err = os.Chtimes(
 		sessionPath,
 		time.Unix(0, sessionMtime),
@@ -7408,6 +7412,8 @@ func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
 		t, sessionID, "msg-a1", "part-a1",
 		"rewritten mimo reply", 1704067201000,
 	)
+	childMtime := sessionMtime.Add(time.Second)
+	require.NoError(t, os.Chtimes(partPath, childMtime, childMtime), "advance part mtime")
 	require.NoError(t,
 		os.Chtimes(sessionPath, sessionMtime, sessionMtime),
 		"restore session mtime")
@@ -8768,9 +8774,7 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 			t.Fatalf("orphan health score = %v, want 94", sess.HealthScore)
 		}
 		qs := sess.StoredQualitySignals()
-		if qs == nil {
-			t.Fatal("orphan quality signals were not preserved")
-		}
+		require.NotNil(t, qs, "orphan quality signals were not preserved")
 		if qs.Version != db.CurrentQualitySignalVersion ||
 			qs.ShortPromptCount != 1 ||
 			qs.MissingSuccessCriteriaCount != 1 {
@@ -13287,6 +13291,67 @@ func TestResyncAllPreservesPGPushMarkerID(t *testing.T) {
 	got, err := env.db.GetSyncState("pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState pg_push_marker_id after resync")
 	assert.Equal(t, "marker-123", got)
+}
+
+func TestResyncAllPreservesArtifactMetadataState(t *testing.T) {
+	env := setupTestEnv(t)
+	ctx := context.Background()
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+	env.writeClaudeSession(t, "proj", "sess.jsonl", content)
+	env.engine.SyncAll(ctx, nil)
+
+	artifactState := map[string]string{
+		"artifact_origin_id":                             "laptop-a1b2c3",
+		"artifact_metadata_hlc":                          "hlc-42",
+		"artifact_import:peer-b4c5d6:peer-b4c5d6~sess-9": "hash-imp",
+		"artifact_export:laptop-a1b2c3:sess.jsonl":       "hash-exp",
+	}
+	for key, value := range artifactState {
+		require.NoError(t, env.db.SetSyncState(key, value),
+			"SetSyncState %s", key)
+	}
+
+	projection := db.MetadataProjection{
+		EventOrigin:    "peer-b4c5d6",
+		OrderKey:       "0000000001",
+		HLC:            "hlc-1",
+		ArtifactHash:   "hash-1",
+		SessionGID:     "peer-b4c5d6~sess-9",
+		LocalSessionID: "peer-b4c5d6~sess-9",
+		Field:          "display_name",
+		Op:             "rename",
+		Value:          `{"display_name":"peer name"}`,
+	}
+	_, err := env.db.RecordLocalMetadataProjection(ctx, projection)
+	require.NoError(t, err, "RecordLocalMetadataProjection")
+
+	stats := env.engine.ResyncAll(ctx, nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
+
+	for key, want := range artifactState {
+		got, err := env.db.GetSyncState(key)
+		require.NoError(t, err, "GetSyncState %s after resync", key)
+		assert.Equal(t, want, got,
+			"artifact sync state %s must survive resync", key)
+	}
+
+	applied, err := env.db.MetadataEventApplied(
+		ctx, projection.EventOrigin, projection.OrderKey,
+	)
+	require.NoError(t, err, "MetadataEventApplied after resync")
+	assert.True(t, applied,
+		"applied peer metadata event must survive resync")
+
+	op, ok, err := env.db.MetadataReplayStateOp(
+		ctx, projection.SessionGID, projection.Field,
+	)
+	require.NoError(t, err, "MetadataReplayStateOp after resync")
+	require.True(t, ok, "metadata replay state must survive resync")
+	assert.Equal(t, "rename", op)
 }
 
 func TestOpenCodeExcludedSessionsAreSkipped(t *testing.T) {

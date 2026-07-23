@@ -11,6 +11,7 @@
     "build": "vp build",
     "i18n:compile": "paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide --strategy localStorage preferredLanguage baseLocale --emit-ts-declarations --silent",
     "generate:api": "node scripts/generate-api-client.mjs",
+    "test:generate-api": "node --test scripts/generated-file-normalizer.test.mjs",
     "preview": "vp preview",
     "precheck": "npm run i18n:compile",
     "check": "svelte-check --tsconfig ./tsconfig.json",

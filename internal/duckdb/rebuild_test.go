@@ -494,7 +494,9 @@ func TestCurationToggleRevertRaceLeavesMirrorConsistent(t *testing.T) {
 	ok, err := local.StarSession(ids[1])
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, local.UnstarSession(ids[1]))
+	removed, err := local.UnstarSession(ids[1])
+	require.NoError(t, err)
+	require.True(t, removed)
 
 	written, err := s.replaceCuration(ctx, snap)
 	require.NoError(t, err)

@@ -30,6 +30,7 @@ nav = [
   {"Semantic Search Internals" = "semantic-search-internals.md"},
   {"Recall (Experimental)" = "recall.md"},
   {"Remote Access" = "remote-access.md"},
+  {"Artifact Sync" = "artifact-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
   {"Changelog" = "changelog.md"},

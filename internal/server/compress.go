@@ -213,6 +213,8 @@ func isStreamingPath(path string) bool {
 		return true
 	case strings.HasPrefix(path, "/api/v1/import/"):
 		return true
+	case strings.HasPrefix(path, "/api/v1/artifacts/"):
+		return true
 	default:
 		return false
 	}

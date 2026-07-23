@@ -45,6 +45,9 @@ Instructions for autonomous coding agents working in this repository.
   details, and absolute user paths out of code, tests, fixtures, docs, commit
   messages, and pull request text. Run the private-data scrub before
   publishing.
+- Keep agent-authored working specs and implementation plans under the ignored
+  `.superpowers/` directory. Never add them to tracked `docs/superpowers/` or
+  ship them in pull requests.
 - Keep pull request titles and descriptions synchronized with the current diff.
 - Do not post pull request or issue comments unless explicitly requested.
 

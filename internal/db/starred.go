@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -40,18 +41,22 @@ func (db *DB) StarSession(sessionID string) (bool, error) {
 	return true, nil // already starred
 }
 
-// UnstarSession removes a session's star.
-func (db *DB) UnstarSession(sessionID string) error {
+// UnstarSession removes a session's star and reports whether a row was removed.
+func (db *DB) UnstarSession(sessionID string) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	res, err := db.getWriter().Exec(
 		"DELETE FROM starred_sessions WHERE session_id = ?",
 		sessionID,
 	)
 	if err != nil {
-		return fmt.Errorf("unstarring session %s: %w", sessionID, err)
+		return false, fmt.Errorf("unstarring session %s: %w", sessionID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking unstar result for %s: %w", sessionID, err)
+	}
+	return n > 0, nil
 }
 
 // ListStarredSessionIDs returns all starred session IDs.
@@ -142,12 +147,12 @@ func curationScopeWhere(alias string, projects, excludeProjects []string) (strin
 
 // BulkStarSessions stars multiple sessions in a single transaction.
 // Used for migrating localStorage stars to the database.
-func (db *DB) BulkStarSessions(sessionIDs []string) error {
+func (db *DB) BulkStarSessions(sessionIDs []string) ([]string, error) {
 	if err := db.requireWritable(); err != nil {
-		return err
+		return nil, err
 	}
 	if len(sessionIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	db.mu.Lock()
@@ -155,27 +160,50 @@ func (db *DB) BulkStarSessions(sessionIDs []string) error {
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Use INSERT ... SELECT ... WHERE EXISTS so that stale IDs
-	// (sessions pruned or deleted from disk) are silently skipped
-	// instead of causing a foreign key violation that aborts the
-	// entire migration transaction.
-	stmt, err := tx.Prepare(`
-		INSERT OR IGNORE INTO starred_sessions (session_id)
-		SELECT ? WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?)`)
+	// Check existence separately from the insert so stale IDs (sessions pruned
+	// or deleted from disk) are silently skipped instead of aborting the
+	// migration transaction, and so the caller learns which sessions were
+	// actually starred and need a converging metadata event.
+	exists, err := tx.Prepare(`SELECT 1 FROM sessions WHERE id = ?`)
 	if err != nil {
-		return fmt.Errorf("preparing statement: %w", err)
+		return nil, fmt.Errorf("preparing existence statement: %w", err)
 	}
-	defer stmt.Close()
+	defer exists.Close()
+	insert, err := tx.Prepare(
+		`INSERT OR IGNORE INTO starred_sessions (session_id) VALUES (?)`)
+	if err != nil {
+		return nil, fmt.Errorf("preparing statement: %w", err)
+	}
+	defer insert.Close()
 
+	starred := make([]string, 0, len(sessionIDs))
 	for _, id := range sessionIDs {
-		if _, err := stmt.Exec(id, id); err != nil {
-			return fmt.Errorf("starring session %s: %w", id, err)
+		var one int
+		switch err := exists.QueryRow(id).Scan(&one); {
+		case errors.Is(err, sql.ErrNoRows):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("checking session %s: %w", id, err)
+		}
+		res, err := insert.Exec(id)
+		if err != nil {
+			return nil, fmt.Errorf("starring session %s: %w", id, err)
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("checking star insert result for %s: %w", id, err)
+		}
+		if rowsAffected > 0 {
+			starred = append(starred, id)
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing star transaction: %w", err)
+	}
+	return starred, nil
 }

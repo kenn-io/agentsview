@@ -136,7 +136,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    exclude: ["e2e/**", "node_modules/**"],
+    exclude: [
+      "e2e/**",
+      "node_modules/**",
+      "scripts/generated-file-normalizer.test.mjs",
+    ],
     setupFiles: ["./src/vitest-setup.ts"],
     server: {
       deps: {

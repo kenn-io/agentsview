@@ -154,7 +154,7 @@ describe("i18n locale selection", () => {
       count: 2,
       countLabel: "2",
     })).toBe("2 sessions");
-    expect(m.trash_msgs({
+    expect(m.trash_messages({
       count: 1,
       countLabel: "1",
     })).toBe("1 msg");

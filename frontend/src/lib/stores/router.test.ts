@@ -68,6 +68,7 @@ describe("parsePath", () => {
       "insights",
       "pinned",
       "trash",
+      "peers",
       "settings",
     ]) {
       setURL(`/${route}`);

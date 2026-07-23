@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -46,6 +47,35 @@ func TestRuntimeWarningHelper(t *testing.T) {
 	assert.Contains(t, visible.String(), "could not write daemon runtime record")
 	assert.Contains(t, visible.String(), "icacls <dir> /setowner <user>")
 	assert.Contains(t, logOutput.String(), "could not write daemon runtime record")
+}
+
+func TestStartupBacklogServeOpensDocbankRepository(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := openServeArtifactStore(t.Context(), dataDir)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	artifactDir := filepath.Join(dataDir, "artifacts")
+	assert.FileExists(t, filepath.Join(artifactDir, "docbank.db"))
+}
+
+func TestServeStartupRecoversPendingArtifactRepositoryReset(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	origin := "desktop-d4e5f6"
+	require.NoError(t, artifact.AdoptOrigin(database, origin))
+	_, err := artifact.PrepareRepositoryResetRepublish(
+		t.Context(), database, dataDir, origin,
+	)
+	require.NoError(t, err)
+	store, err := openServeArtifactStore(t.Context(), dataDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	require.NoError(t, recoverServeArtifactRepository(t.Context(), database, store))
+	_, pending, err := database.ArtifactResetRepublishPending(t.Context())
+	require.NoError(t, err)
+	assert.False(t, pending)
 }
 
 func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterSlowStartup(t *testing.T) {

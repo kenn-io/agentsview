@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -109,19 +110,20 @@ func (c *schemaProbeConn) Begin() (driver.Tx, error) {
 func (c *schemaProbeConn) ExecContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Result, error) {
+	normalized := strings.ToLower(query)
+	if strings.Contains(normalized, "idx_pinned_source_uuid") &&
+		c.state.hasColumn("pinned_messages", "session_id") &&
+		!c.state.hasColumn("pinned_messages", "source_uuid") {
+		return nil, errors.New(`ERROR: column "source_uuid" does not exist (SQLSTATE 42703)`)
+	}
 	c.state.mu.Lock()
 	c.state.execs = append(c.state.execs, query)
 	c.state.execArgs = append(
 		c.state.execArgs, append([]driver.NamedValue(nil), args...),
 	)
 	c.state.mu.Unlock()
-	normalized := strings.ToLower(query)
 	if strings.Contains(normalized, "alter table") {
-		c.state.mu.Lock()
-		c.state.alterTableExecs = append(
-			c.state.alterTableExecs, query,
-		)
-		c.state.mu.Unlock()
+		c.state.recordAlterTable(query)
 	}
 	if strings.Contains(normalized, "insert into sync_metadata") &&
 		len(args) > 0 {
@@ -134,6 +136,65 @@ func (c *schemaProbeConn) ExecContext(
 		}
 	}
 	return driver.RowsAffected(0), nil
+}
+
+func (s *schemaProbeState) hasColumn(table, column string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.existingColumnNames[table], column)
+}
+
+func (s *schemaProbeState) recordAlterTable(query string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alterTableExecs = append(s.alterTableExecs, query)
+
+	table, ok := alterTableName(query)
+	if !ok {
+		return
+	}
+	if s.existingColumnNames == nil {
+		s.existingColumnNames = map[string][]string{}
+	}
+	for _, column := range alterTableColumns(query) {
+		exists := slices.Contains(s.existingColumnNames[table], column)
+		if !exists {
+			s.existingColumnNames[table] = append(
+				s.existingColumnNames[table], column,
+			)
+		}
+	}
+}
+
+func alterTableName(query string) (string, bool) {
+	const prefix = `ALTER TABLE "`
+	_, after, ok := strings.Cut(query, prefix)
+	if !ok {
+		return "", false
+	}
+	rest := after
+	before0, _, ok0 := strings.Cut(rest, `"`)
+	if !ok0 {
+		return "", false
+	}
+	return before0, true
+}
+
+func alterTableColumns(query string) []string {
+	const marker = "ADD COLUMN IF NOT EXISTS "
+	parts := strings.Split(query, marker)
+	if len(parts) < 2 {
+		return nil
+	}
+	columns := make([]string, 0, len(parts)-1)
+	for _, part := range parts[1:] {
+		fields := strings.Fields(part)
+		if len(fields) == 0 {
+			continue
+		}
+		columns = append(columns, strings.Trim(fields[0], `",`))
+	}
+	return columns
 }
 
 func (c *schemaProbeConn) QueryContext(
@@ -860,6 +921,12 @@ func TestEnsureSchemaCreatesSessionTraversalIndex(t *testing.T) {
 
 	assert.Contains(t, state.executedSQL(),
 		"CREATE INDEX IF NOT EXISTS idx_sessions_parent")
+	assert.Contains(t, state.executedSQL(),
+		"CREATE INDEX IF NOT EXISTS idx_sessions_source_session")
+	assert.Contains(t, state.executedSQL(),
+		"CREATE INDEX IF NOT EXISTS idx_tool_calls_subagent_session")
+	assert.Contains(t, state.executedSQL(),
+		"CREATE INDEX IF NOT EXISTS idx_tool_result_events_subagent_session")
 }
 
 func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
@@ -899,6 +966,9 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 		"tool_calls": {
 			"call_index", "file_path",
 		},
+		"pinned_messages": {
+			"source_uuid",
+		},
 	})
 
 	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
@@ -910,4 +980,26 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	// lists all its migration columns (call_index, file_path) as present, so
 	// it contributes no ALTER.
 	assert.Equal(t, 3, state.alterTableExecCount(), "ALTER TABLE execs")
+}
+
+func TestEnsureSchemaMigratesPinnedMessageSourceUUID(t *testing.T) {
+	db, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+		"pinned_messages": {
+			"id", "session_id", "message_id", "ordinal",
+			"note", "created_at",
+		},
+	})
+
+	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
+
+	assert.Contains(t, state.executedSQL(),
+		"ALTER TABLE \"pinned_messages\" ADD COLUMN IF NOT EXISTS source_uuid TEXT NOT NULL DEFAULT ''")
 }

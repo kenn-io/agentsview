@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -63,9 +66,25 @@ func (s *Server) humaListSessionPins(
 }
 
 func (s *Server) humaPinMessage(
-	_ context.Context,
+	ctx context.Context,
 	in *pinMessageInput,
 ) (*createdOutput[pinMessageResponse], error) {
+	s.lockSessionLifecycle()
+	defer s.sessionLifecycleMu.Unlock()
+
+	var prior *db.PinnedMessage
+	var pin *artifact.MetadataPin
+	if s.metadata != nil {
+		var err error
+		prior, err = s.findPinnedMessage(ctx, in.ID, in.MessageID)
+		if err != nil {
+			return nil, internalError("pin message prior state", err)
+		}
+		pin, err = s.metadataPinForMessage(ctx, in.ID, in.MessageID, in.Body.Note)
+		if err != nil {
+			return nil, internalError("pin message metadata lookup", err)
+		}
+	}
 	id, err := s.db.PinMessage(in.ID, in.MessageID, in.Body.Note)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
@@ -77,6 +96,20 @@ func (s *Server) humaPinMessage(
 		return nil, apiError(http.StatusBadRequest,
 			"message does not belong to this session")
 	}
+	if pin != nil {
+		if err := s.appendMetadataEvent(ctx, artifact.MetadataEventInput{
+			SessionID: in.ID,
+			Op:        artifact.MetadataOpPin,
+			Pin:       pin,
+		}); err != nil {
+			var publishedErr *artifact.MetadataPublishedError
+			if errors.As(err, &publishedErr) {
+				return nil, internalError("pin message metadata event", err)
+			}
+			return nil, internalError("pin message metadata event",
+				s.restorePinState(in.ID, in.MessageID, prior, err))
+		}
+	}
 	return &createdOutput[pinMessageResponse]{
 		Status: http.StatusCreated,
 		Body:   pinMessageResponse{ID: id},
@@ -84,14 +117,82 @@ func (s *Server) humaPinMessage(
 }
 
 func (s *Server) humaUnpinMessage(
-	_ context.Context,
+	ctx context.Context,
 	in *messagePathInput,
 ) (*noContentOutput, error) {
+	s.lockSessionLifecycle()
+	defer s.sessionLifecycleMu.Unlock()
+
+	var prior *db.PinnedMessage
+	var pin *artifact.MetadataPin
+	if s.metadata != nil {
+		var err error
+		prior, err = s.findPinnedMessage(ctx, in.ID, in.MessageID)
+		if err != nil {
+			return nil, internalError("unpin message prior state", err)
+		}
+		pin, err = s.metadataPinForMessage(ctx, in.ID, in.MessageID, nil)
+		if err != nil {
+			return nil, internalError("unpin message metadata lookup", err)
+		}
+	}
 	if err := s.db.UnpinMessage(in.ID, in.MessageID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
 		return nil, internalError("unpin message", err)
 	}
+	if pin != nil {
+		if err := s.appendMetadataEvent(ctx, artifact.MetadataEventInput{
+			SessionID: in.ID,
+			Op:        artifact.MetadataOpUnpin,
+			Pin:       pin,
+		}); err != nil {
+			var publishedErr *artifact.MetadataPublishedError
+			if errors.As(err, &publishedErr) {
+				return nil, internalError("unpin message metadata event", err)
+			}
+			return nil, internalError("unpin message metadata event",
+				s.restorePinState(in.ID, in.MessageID, prior, err))
+		}
+	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
+}
+
+// findPinnedMessage returns the current pinned_messages row for the
+// message, or nil when the message is not pinned.
+func (s *Server) findPinnedMessage(
+	ctx context.Context, sessionID string, messageID int64,
+) (*db.PinnedMessage, error) {
+	pins, err := s.db.ListPinnedMessages(ctx, sessionID, "")
+	if err != nil {
+		return nil, err
+	}
+	for i := range pins {
+		if pins[i].MessageID == messageID {
+			return &pins[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// restorePinState puts the pinned_messages row for the message back to
+// prior after a pre-publish metadata failure, so local pin state never
+// diverges from the durable ledger. It returns baseErr joined with any
+// restore failure.
+func (s *Server) restorePinState(
+	sessionID string, messageID int64, prior *db.PinnedMessage, baseErr error,
+) error {
+	if prior != nil {
+		if _, err := s.db.PinMessage(sessionID, messageID, prior.Note); err != nil {
+			return errors.Join(baseErr,
+				fmt.Errorf("restore pin after metadata failure: %w", err))
+		}
+		return baseErr
+	}
+	if err := s.db.UnpinMessage(sessionID, messageID); err != nil {
+		return errors.Join(baseErr,
+			fmt.Errorf("remove pin after metadata failure: %w", err))
+	}
+	return baseErr
 }

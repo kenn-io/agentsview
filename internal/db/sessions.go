@@ -2844,6 +2844,35 @@ func sqliteLikeEscape(value string) string {
 	return value
 }
 
+// ListOwnedSessionIDsForExport returns the IDs of locally-owned, non-deleted
+// sessions for artifact export, ordered by id. Unlike ListSessions it does not
+// apply the sidebar visibility filter (message_count > 0), so zero-message
+// usage-only sessions are still published.
+func (db *DB) ListOwnedSessionIDsForExport(ctx context.Context) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE machine = 'local' AND deleted_at IS NULL
+		 ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions for artifact export: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning export session ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating export session IDs: %w", err)
+	}
+	return ids, nil
+}
+
 // GetDataVersionByPath returns the minimum data_version for non-source-missing
 // sessions matching a file_path. Returns 0 when no eligible session exists.
 func (db *DB) GetDataVersionByPath(path string) int {
@@ -3271,6 +3300,32 @@ func (db *DB) GetBranches(
 	return branches, rows.Err()
 }
 
+// MachineSessionCounts returns the number of non-deleted sessions per machine,
+// keyed by machine name. Child sessions are included so the count reflects the
+// full corpus owned by or imported from each origin.
+func (db *DB) MachineSessionCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT machine, COUNT(*) FROM sessions
+		 WHERE deleted_at IS NULL
+		 GROUP BY machine`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("counting sessions per machine: %w", err)
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var machine string
+		var count int
+		if err := rows.Scan(&machine, &count); err != nil {
+			return nil, fmt.Errorf("scanning machine session count: %w", err)
+		}
+		counts[machine] = count
+	}
+	return counts, rows.Err()
+}
+
 // scanSessionRows iterates rows and scans each using
 // scanSessionRow.
 func scanSessionRows(rows *sql.Rows) ([]Session, error) {
@@ -3423,8 +3478,16 @@ func (db *DB) SoftDeleteSession(id string) error {
 // tombstones are skipped; recoverable source-missing tombstones are converted.
 // Returns the count of newly deleted or converted rows.
 func (db *DB) SoftDeleteSessions(ids []string) (int, error) {
+	deleted, err := db.SoftDeleteSessionsReturningIDs(ids)
+	return len(deleted), err
+}
+
+// SoftDeleteSessionsReturningIDs marks multiple sessions as deleted by setting
+// deleted_at and returns the IDs that were newly deleted. Sessions that are
+// already soft-deleted are skipped.
+func (db *DB) SoftDeleteSessionsReturningIDs(ids []string) ([]string, error) {
 	if len(ids) == 0 {
-		return 0, nil
+		return []string{}, nil
 	}
 
 	db.mu.Lock()
@@ -3432,11 +3495,11 @@ func (db *DB) SoftDeleteSessions(ids []string) (int, error) {
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
-		return 0, fmt.Errorf("beginning soft-delete tx: %w", err)
+		return nil, fmt.Errorf("beginning soft-delete tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	total := 0
+	deleted := make([]string, 0, len(ids))
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
@@ -3448,7 +3511,38 @@ func (db *DB) SoftDeleteSessions(ids []string) (int, error) {
 		}
 		placeholders := strings.Repeat(",?", len(batch))[1:]
 
-		res, err := tx.Exec(
+		rows, err := tx.Query(
+			`SELECT id FROM sessions
+			 WHERE id IN (`+placeholders+`)
+			   AND (deleted_at IS NULL OR deletion_cause = '`+deletionCauseSourceMissing+`')`,
+			args...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading soft-delete batch ids: %w", err)
+		}
+		batchIDs := map[string]struct{}{}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scanning soft-delete batch id: %w", err)
+			}
+			batchIDs[id] = struct{}{}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("closing soft-delete batch ids: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterating soft-delete batch ids: %w", err)
+		}
+		for _, id := range batch {
+			if _, ok := batchIDs[id]; ok {
+				deleted = append(deleted, id)
+				delete(batchIDs, id)
+			}
+		}
+
+		if _, err := tx.Exec(
 			`UPDATE sessions
 			 SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 			     deletion_cause = NULL,
@@ -3456,18 +3550,64 @@ func (db *DB) SoftDeleteSessions(ids []string) (int, error) {
 			 WHERE id IN (`+placeholders+`)
 			   AND (deleted_at IS NULL OR deletion_cause = '`+deletionCauseSourceMissing+`')`,
 			args...,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("soft-deleting batch: %w", err)
+		); err != nil {
+			return nil, fmt.Errorf("soft-deleting batch: %w", err)
 		}
-		n, _ := res.RowsAffected()
-		total += int(n)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing soft-delete tx: %w", err)
+		return nil, fmt.Errorf("committing soft-delete tx: %w", err)
 	}
-	return total, nil
+	return deleted, nil
+}
+
+// TrashedSessionIDs returns requested sessions that currently exist in the
+// trash. The result preserves first-seen input order and omits duplicates.
+func (db *DB) TrashedSessionIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	trashed := make(map[string]struct{}, len(ids))
+	const batchSize = 500
+	for i := 0; i < len(ids); i += batchSize {
+		end := min(i+batchSize, len(ids))
+		batch := ids[i:end]
+		args := make([]any, len(batch))
+		for j, id := range batch {
+			args[j] = id
+		}
+		placeholders := strings.Repeat(",?", len(batch))[1:]
+		rows, err := db.getReader().Query(
+			`SELECT id FROM sessions
+			 WHERE id IN (`+placeholders+`) AND deleted_at IS NOT NULL`,
+			args...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading trashed session ids: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scanning trashed session id: %w", err)
+			}
+			trashed[id] = struct{}{}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("closing trashed session ids: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterating trashed session ids: %w", err)
+		}
+	}
+	out := make([]string, 0, len(trashed))
+	for _, id := range ids {
+		if _, ok := trashed[id]; ok {
+			out = append(out, id)
+			delete(trashed, id)
+		}
+	}
+	return out, nil
 }
 
 // RestoreSession clears deleted_at, making the session visible again.

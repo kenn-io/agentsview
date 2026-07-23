@@ -8,6 +8,7 @@ import type { DbSessionActivityResponse } from '../models/DbSessionActivityRespo
 import type { DbSessionTiming } from '../models/DbSessionTiming';
 import type { DbSidebarSessionIndex } from '../models/DbSidebarSessionIndex';
 import type { EmptyTrashResponse } from '../models/EmptyTrashResponse';
+import type { MetadataConflictsResponse } from '../models/MetadataConflictsResponse';
 import type { OpenRequest } from '../models/OpenRequest';
 import type { OpenSessionResponse } from '../models/OpenSessionResponse';
 import type { OrdinalsResponse } from '../models/OrdinalsResponse';
@@ -831,6 +832,40 @@ export class SessionsService {
         'before': before,
         'after': after,
         'roles': roles,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * List session metadata conflicts
+   * @returns MetadataConflictsResponse OK
+   * @throws ApiError
+   */
+  public static getApiV1SessionsIdMetadataConflicts({
+    id,
+  }: {
+    /**
+     * Session ID
+     */
+    id: string,
+  }): CancelablePromise<MetadataConflictsResponse> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/sessions/{id}/metadata-conflicts',
+      path: {
+        'id': id,
       },
       errors: {
         400: `Bad Request`,

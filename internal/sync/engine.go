@@ -2109,6 +2109,29 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 
+	// Copy the artifact metadata replay tables so peer metadata
+	// events keep their durable LWW state across the swap. Losing
+	// this state would let already-applied peer events replay and
+	// overwrite newer local curation, so failure aborts the swap
+	// just like the sync state copy above.
+	if err := newDB.CopyMetadataReplayFrom(origPath); err != nil {
+		log.Printf("resync: copy metadata replay state: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"metadata replay copy failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+
 	// Copy insights into newDB from the quiesced old DB file.
 	tInsights := time.Now()
 	reportResyncPhase(

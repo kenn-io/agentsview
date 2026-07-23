@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -455,6 +457,7 @@ type Config struct {
 	GithubToken          string                 `json:"github_token,omitempty" toml:"github_token"`
 	Terminal             TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
 	AuthToken            string                 `json:"auth_token,omitempty" toml:"auth_token"`
+	ArtifactOriginID     string                 `json:"artifact_origin_id,omitempty" toml:"artifact_origin_id"`
 	RequireAuth          bool                   `json:"require_auth" toml:"require_auth"`
 	NoBrowser            bool                   `json:"no_browser" toml:"no_browser"`
 	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
@@ -1016,6 +1019,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		ResultContentBlockedCategories []string                   `toml:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig             `toml:"terminal"`
 		AuthToken                      string                     `toml:"auth_token"`
+		ArtifactOriginID               string                     `toml:"artifact_origin_id"`
 		RequireAuth                    bool                       `toml:"require_auth"`
 		RemoteAccess                   bool                       `toml:"remote_access"`
 		DisableUpdateCheck             bool                       `toml:"disable_update_check"`
@@ -1086,6 +1090,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.AuthToken != "" && c.AuthToken == "" {
 		c.AuthToken = file.AuthToken
+	}
+	if file.ArtifactOriginID != "" {
+		c.ArtifactOriginID = file.ArtifactOriginID
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
 	c.DisableUpdateCheck = file.DisableUpdateCheck
@@ -1705,6 +1712,11 @@ func finalize(cfg *Config) error {
 	}
 	if err := cfg.Recall.Extract.Validate(); err != nil {
 		return err
+	}
+	if cfg.ArtifactOriginID != "" {
+		if err := ValidateArtifactOriginID(cfg.ArtifactOriginID); err != nil {
+			return fmt.Errorf("invalid artifact origin id: %w", err)
+		}
 	}
 	return nil
 }
@@ -2487,6 +2499,11 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 				c.AuthToken = s
 			}
 		}
+		if v, ok := patch["artifact_origin_id"]; ok {
+			if s, ok := v.(string); ok {
+				c.ArtifactOriginID = s
+			}
+		}
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
@@ -2524,6 +2541,176 @@ func (c *Config) EnsureAuthToken() error {
 		c.AuthToken = token
 		return nil
 	})
+}
+
+// EnsureArtifactOriginID generates and persists a stable artifact sync origin
+// ID if one does not already exist.
+func (c *Config) EnsureArtifactOriginID() (string, error) {
+	if c.ArtifactOriginID != "" {
+		if err := ValidateArtifactOriginID(c.ArtifactOriginID); err != nil {
+			return "", fmt.Errorf("stored artifact origin: %w", err)
+		}
+		return c.ArtifactOriginID, nil
+	}
+
+	var origin string
+	if err := c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if stored, ok := existing["artifact_origin_id"].(string); ok && stored != "" {
+			if err := ValidateArtifactOriginID(stored); err != nil {
+				return fmt.Errorf("stored artifact origin: %w", err)
+			}
+			c.ArtifactOriginID = stored
+			origin = stored
+			return nil
+		}
+
+		machineName, err := c.artifactOriginMachineName()
+		if err != nil {
+			return err
+		}
+		generated, err := newArtifactOriginID(machineName)
+		if err != nil {
+			return err
+		}
+		if err := ValidateArtifactOriginID(generated); err != nil {
+			return fmt.Errorf("generated artifact origin: %w", err)
+		}
+
+		existing["artifact_origin_id"] = generated
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.ArtifactOriginID = generated
+		origin = generated
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return origin, nil
+}
+
+// AdoptArtifactOriginID persists origin as this machine's artifact sync
+// origin unless the config file already records one, in which case the
+// recorded origin wins and is returned. Artifact sync uses this to promote an
+// origin that exists only in database sync state -- for example one minted by
+// an incoming peer exchange before the config ever initialized an origin --
+// so the machine keeps publishing under a single origin instead of generating
+// a competing config origin that would strand earlier metadata events.
+func (c *Config) AdoptArtifactOriginID(origin string) (string, error) {
+	if err := ValidateArtifactOriginID(origin); err != nil {
+		return "", fmt.Errorf("adopting artifact origin: %w", err)
+	}
+	if c.ArtifactOriginID != "" {
+		if err := ValidateArtifactOriginID(c.ArtifactOriginID); err != nil {
+			return "", fmt.Errorf("stored artifact origin: %w", err)
+		}
+		return c.ArtifactOriginID, nil
+	}
+
+	adopted := origin
+	if err := c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if stored, ok := existing["artifact_origin_id"].(string); ok && stored != "" {
+			if err := ValidateArtifactOriginID(stored); err != nil {
+				return fmt.Errorf("stored artifact origin: %w", err)
+			}
+			c.ArtifactOriginID = stored
+			adopted = stored
+			return nil
+		}
+
+		existing["artifact_origin_id"] = origin
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.ArtifactOriginID = origin
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return adopted, nil
+}
+
+func (c *Config) artifactOriginMachineName() (string, error) {
+	pgMachine := strings.TrimSpace(c.PG.MachineName)
+	if pgMachine != "" {
+		if pgMachine == "local" {
+			return "", fmt.Errorf(
+				"machine name %q is reserved; choose a different pg.machine_name",
+				pgMachine,
+			)
+		}
+		return c.PG.MachineName, nil
+	}
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "machine", nil
+	}
+	return host, nil
+}
+
+func newArtifactOriginID(machine string) (string, error) {
+	base := sanitizeArtifactOriginPart(machine)
+	if base == "" || base == "local" {
+		base = "machine"
+	}
+	var suffix [3]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("generating artifact origin suffix: %w", err)
+	}
+	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(suffix[:])), nil
+}
+
+func sanitizeArtifactOriginPart(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// ValidateArtifactOriginID checks the persisted single-writer origin prefix.
+func ValidateArtifactOriginID(origin string) error {
+	if origin == "" {
+		return errors.New("artifact origin is required")
+	}
+	if origin != strings.TrimSpace(origin) {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	if origin == "local" {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	if strings.ContainsAny(origin, `/\`) || filepath.Base(origin) != origin {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	if strings.HasPrefix(origin, "-") || strings.HasSuffix(origin, "-") {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	for _, r := range origin {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	return nil
 }
 
 // SaveGithubToken persists the GitHub token to the config file.

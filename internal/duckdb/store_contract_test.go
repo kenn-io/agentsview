@@ -308,6 +308,15 @@ func duckContractSessionsCursorsAndMetadata(
 	machines, err := store.GetMachines(ctx, false, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"test-machine"}, machines)
+
+	counts, err := store.MachineSessionCounts(ctx)
+	require.NoError(t, err)
+	require.Len(t, counts, 1)
+	require.Positive(t, counts["test-machine"])
+
+	conflicts, err := store.CountMetadataConflicts(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, conflicts)
 }
 
 func assertDuckJSONTranscriptRevision(t *testing.T, value any, want string) {
@@ -403,8 +412,10 @@ func duckContractReadOnlyCuration(
 	ok, err := store.StarSession(fixture.betaID)
 	require.ErrorIs(t, err, db.ErrReadOnly)
 	require.False(t, ok)
-	require.ErrorIs(t, store.UnstarSession(fixture.alphaID), db.ErrReadOnly)
-	require.ErrorIs(t, store.BulkStarSessions([]string{fixture.betaID}), db.ErrReadOnly)
+	_, err = store.UnstarSession(fixture.alphaID)
+	require.ErrorIs(t, err, db.ErrReadOnly)
+	_, bulkErr := store.BulkStarSessions([]string{fixture.betaID})
+	require.ErrorIs(t, bulkErr, db.ErrReadOnly)
 
 	pinID, err := store.PinMessage(fixture.alphaID, 1, nil)
 	require.ErrorIs(t, err, db.ErrReadOnly)
