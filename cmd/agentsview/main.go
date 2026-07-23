@@ -296,23 +296,18 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}
 	})
 
+	// Seed fallback pricing synchronously and start the initial network
+	// refresh before scheduling later refreshes. This keeps first-run usage
+	// requests priced even when both upstream catalogs are unavailable.
+	seedPricing(database)
+
 	// After the startup refresh (kicked off inside seedPricing),
 	// keep model_pricing fresh with a 24 h loop so newly-released
 	// models get rates within a day without a restart. custom_model_pricing
 	// is layered in-memory via SetCustomPricing (see applyCustomPricing
 	// below) and is not touched by the refresh, so user overrides for
 	// fork/private models survive every tick.
-	go periodicPricingRefresh(ctx, database, &cfg, 24*time.Hour)
-
-	// Apply the config-driven custom pricing map on top of the
-	// pricing that seedPricing just wrote into model_pricing so
-	// fork-private models (e.g. MiniMax-M3, internal/private
-	// endpoints) carry their owner's authoritative rates into
-	// every GetDailyUsage call. Without this, custom_model_pricing
-	// would only influence the CLI statusline / pg serve paths
-	// where applyCustomPricing runs explicitly, leaving the
-	// embedded server reading rates from model_pricing only.
-	applyCustomPricing(database, cfg)
+	go periodicPricingRefresh(ctx, database, 24*time.Hour)
 
 	// Apply the config-driven custom pricing map on top of the
 	// pricing that seedPricing just wrote into model_pricing so

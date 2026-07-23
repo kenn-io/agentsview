@@ -529,7 +529,7 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 	assert.Contains(t, query,
 		"model_pricing.input_per_mtok IS DISTINCT FROM")
 	assert.Contains(t, query, "EXCLUDED.input_per_mtok")
-	assert.NotContains(t, query,
+	assert.Contains(t, query,
 		"model_pricing.updated_at IS DISTINCT FROM")
 	require.Len(t, args, 12)
 	assert.Equal(t, "model-a", args[0])
@@ -611,6 +611,74 @@ func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
 	require.Len(t, changedRows, 2)
 	assert.Equal(t, "changed-model", changedRows[0].ModelPattern)
 	assert.Equal(t, "missing-model", changedRows[1].ModelPattern)
+}
+
+func TestPricingSyncChangesReconcilesOpenRouterAliases(t *testing.T) {
+	local := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_aliases",
+			UpdatedAt:    `["current-alias"]`,
+		},
+		{
+			ModelPattern: "current-alias",
+			InputPerMTok: 1,
+		},
+	}
+	remote := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_aliases",
+			UpdatedAt:    `["current-alias","stale-alias"]`,
+		},
+		{
+			ModelPattern: "current-alias",
+			InputPerMTok: 1,
+		},
+		{
+			ModelPattern: "stale-alias",
+			InputPerMTok: 2,
+		},
+	}
+
+	changed, remove, err := pricingSyncChanges(remote, local)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"stale-alias"}, remove)
+	require.Len(t, changed, 1,
+		"changed alias metadata must be pushed even though rates are zero")
+	assert.Equal(t, "_openrouter_aliases", changed[0].ModelPattern)
+	assert.Equal(t, `["current-alias"]`, changed[0].UpdatedAt)
+}
+
+func TestPricingSyncChangesReinsertsAliasPublishedByAnotherSource(
+	t *testing.T,
+) {
+	local := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_aliases",
+			UpdatedAt:    `[]`,
+		},
+		{
+			ModelPattern: "shared-alias",
+			InputPerMTok: 5,
+		},
+	}
+	remote := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_aliases",
+			UpdatedAt:    `["shared-alias"]`,
+		},
+		{
+			ModelPattern: "shared-alias",
+			InputPerMTok: 5,
+		},
+	}
+
+	changed, remove, err := pricingSyncChanges(remote, local)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"shared-alias"}, remove)
+	assert.True(t, containsPricingPattern(changed, "shared-alias"),
+		"shared row must be reinserted after retiring OpenRouter provenance")
 }
 
 func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {

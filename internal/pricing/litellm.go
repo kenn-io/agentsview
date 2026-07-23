@@ -2,6 +2,8 @@ package pricing
 
 import (
 	"context"
+	"sort"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
@@ -50,14 +52,17 @@ func ParseOpenRouterPricing(data []byte) ([]ModelPricing, error) {
 
 // PricingSource describes one upstream catalog that the
 // pricing refresh loop tries to fetch in the background.
-// Sources are tried in declaration order; the first to
-// succeed wins for the seed batch, and every successful
-// fetch contributes its rows to the merged result so
-// downstream callers see the union.
+// Sources are tried in declaration order, and every successful
+// fetch contributes its rows to the merged result. That order
+// also defines precedence when catalogs overlap.
 type PricingSource struct {
 	Name  string
 	Fetch func() ([]ModelPricing, error)
 }
+
+// OpenRouterAliasesMetaKey identifies the sentinel model_pricing row that
+// stores the aliases emitted by the most recent OpenRouter refresh.
+const OpenRouterAliasesMetaKey = "_openrouter_aliases"
 
 // DefaultPricingSources returns the built-in pricing sources
 // in priority order. LiteLLM covers most public models; the
@@ -72,20 +77,40 @@ func DefaultPricingSources() []PricingSource {
 	}
 }
 
-// MergePricing combines per-source ModelPricing slices into a
+// OpenRouterAliasPatterns returns the unqualified aliases emitted alongside
+// qualified OpenRouter model IDs. A bare pattern is an alias only when the
+// same catalog also contains a qualified row with that suffix.
+func OpenRouterAliasPatterns(prices []ModelPricing) []string {
+	qualifiedSuffixes := make(map[string]struct{})
+	for _, price := range prices {
+		if i := strings.LastIndex(price.ModelPattern, "/"); i >= 0 &&
+			i < len(price.ModelPattern)-1 {
+			qualifiedSuffixes[price.ModelPattern[i+1:]] = struct{}{}
+		}
+	}
+
+	aliases := make([]string, 0)
+	for _, price := range prices {
+		if strings.Contains(price.ModelPattern, "/") {
+			continue
+		}
+		if _, ok := qualifiedSuffixes[price.ModelPattern]; ok {
+			aliases = append(aliases, price.ModelPattern)
+		}
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+// MergePricing combines an ordered slice of per-source ModelPricing slices into a
 // single map keyed by ModelPattern. When two sources report
 // the same pattern, the first non-zero field wins (so earlier
 // sources in the slice take precedence over later ones).
 // This gives LiteLLM priority over OpenRouter for models both
 // catalogs cover, while still letting OpenRouter fill in
 // models that LiteLLM does not list.
-func MergePricing(sources map[string][]ModelPricing) map[string]ModelPricing {
+func MergePricing(sources [][]ModelPricing) map[string]ModelPricing {
 	out := make(map[string]ModelPricing)
-	// Stable iteration order: callers pass a map but we want
-	// deterministic precedence. The DefaultPricingSources order
-	// is the documented priority; here we just merge whatever
-	// the caller hands us and rely on each source slice being
-	// internally consistent.
 	for _, prices := range sources {
 		for _, p := range prices {
 			existing, ok := out[p.ModelPattern]

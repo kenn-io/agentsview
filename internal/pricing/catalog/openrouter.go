@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -146,26 +148,26 @@ func producesText(modality string) bool {
 	if modality == "" {
 		return true
 	}
-	i := strings.Index(modality, "->")
-	if i < 0 {
+	_, output, ok := strings.Cut(modality, "->")
+	if !ok {
 		return false
 	}
-	return strings.Contains(modality[i+2:], "text")
+	return strings.Contains(output, "text")
 }
 
 // parsePricePerToken turns OpenRouter's quoted string
 // ("0.000003") into a float64 USD-per-token. Empty strings
-// return ok=false so the caller can fall back to the
-// input or output rate if only one of the two is published.
+// and malformed, negative, or non-finite values return
+// ok=false. Zero is valid for free models.
 func parsePricePerToken(s string) (float64, bool) {
 	if s == "" {
 		return 0, false
 	}
-	var f float64
-	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, false
 	}
-	if f <= 0 {
+	if f < 0 {
 		return 0, false
 	}
 	return f, true

@@ -87,19 +87,52 @@ func TestParseOpenRouterPricing_AmbiguousBareSuffixSuppressed(t *testing.T) {
 	}
 }
 
+func TestParseOpenRouterPricing_FreeModel(t *testing.T) {
+	body := []byte(`{
+		"data": [
+			{
+				"id": "provider/free-model",
+				"architecture": {"modality": "text->text"},
+				"pricing": {"prompt": "0", "completion": "0"}
+			},
+			{
+				"id": "provider/negative-model",
+				"architecture": {"modality": "text->text"},
+				"pricing": {"prompt": "-0.1", "completion": "-0.2"}
+			},
+			{
+				"id": "provider/malformed-model",
+				"architecture": {"modality": "text->text"},
+				"pricing": {"prompt": "1 trailing", "completion": "NaN"}
+			}
+		]
+	}`)
+
+	prices, err := ParseOpenRouterPricing(body)
+	require.NoError(t, err)
+	require.Len(t, prices, 2,
+		"free qualified row plus its bare alias")
+	assert.Equal(t, "provider/free-model", prices[0].ModelPattern)
+	assert.Zero(t, prices[0].InputPerMTok)
+	assert.Zero(t, prices[0].OutputPerMTok)
+	assert.Equal(t, "free-model", prices[1].ModelPattern)
+	assert.Zero(t, prices[1].InputPerMTok)
+	assert.Zero(t, prices[1].OutputPerMTok)
+}
+
 // TestMergePricing_FirstNonZeroWins verifies that when two
 // sources both price the same model_pattern, the first source
-// in the iteration order wins for every field, and the second
+// in the ordered slice wins for every field, and the second
 // source only fills in fields the first left at zero. This
 // gives LiteLLM priority over OpenRouter for shared models
 // while still letting OpenRouter contribute new rows.
 func TestMergePricing_FirstNonZeroWins(t *testing.T) {
-	sources := map[string][]ModelPricing{
-		"a": {
+	sources := [][]ModelPricing{
+		{
 			{ModelPattern: "shared", InputPerMTok: 3, OutputPerMTok: 15},
 			{ModelPattern: "only-a", InputPerMTok: 1, OutputPerMTok: 2},
 		},
-		"b": {
+		{
 			{ModelPattern: "shared", InputPerMTok: 99, OutputPerMTok: 99,
 				CacheCreationPerMTok: 4},
 			{ModelPattern: "only-b", InputPerMTok: 7, OutputPerMTok: 8},
