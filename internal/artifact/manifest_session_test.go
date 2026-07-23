@@ -26,12 +26,24 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	var sess db.Session
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
 
-	want, err := canonicalJSON(sess)
+	// Deliberate parity exemption: quality_signals is hoisted to the
+	// manifest-level session_quality_signals field because db.Session's
+	// pointer is load-path-transient (see the manifestSession struct
+	// comment). The reference for parity is the session without it.
+	reference := sess
+	reference.QualitySignals = nil
+
+	want, err := canonicalJSON(reference)
 	require.NoError(t, err)
 	got, err := canonicalJSON(manifestSessionFromDB(sess))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got),
-		"manifestSession must serialize byte-identically to db.Session")
+		"manifestSession must serialize byte-identically to db.Session minus quality_signals")
+
+	withoutPointer, err := canonicalJSON(manifestSessionFromDB(reference))
+	require.NoError(t, err)
+	assert.Equal(t, string(got), string(withoutPointer),
+		"manifest bytes must not depend on the transient quality_signals pointer")
 
 	roundTrip, err := canonicalJSON(manifestSessionFromDB(sess).dbSession())
 	require.NoError(t, err)

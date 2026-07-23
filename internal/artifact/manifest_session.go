@@ -30,22 +30,28 @@ type manifestSession struct {
 	HasPeakContextTokens bool    `json:"has_peak_context_tokens"`
 	IsAutomated          bool    `json:"is_automated"`
 
-	ToolFailureSignalCount int                     `json:"tool_failure_signal_count"`
-	ToolRetryCount         int                     `json:"tool_retry_count"`
-	EditChurnCount         int                     `json:"edit_churn_count"`
-	ConsecutiveFailureMax  int                     `json:"consecutive_failure_max"`
-	Outcome                string                  `json:"outcome"`
-	OutcomeConfidence      string                  `json:"outcome_confidence"`
-	EndedWithRole          string                  `json:"ended_with_role"`
-	FinalFailureStreak     int                     `json:"final_failure_streak"`
-	SignalsPendingSince    *string                 `json:"signals_pending_since,omitempty"`
-	CompactionCount        int                     `json:"compaction_count"`
-	MidTaskCompactionCount int                     `json:"mid_task_compaction_count"`
-	ContextPressureMax     *float64                `json:"context_pressure_max,omitempty"`
-	HealthScore            *int                    `json:"health_score,omitempty"`
-	HealthGrade            *string                 `json:"health_grade,omitempty"`
-	QualitySignals         *manifestQualitySignals `json:"quality_signals,omitempty"`
-	SecretLeakCount        int                     `json:"secret_leak_count"`
+	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
+	ToolRetryCount         int      `json:"tool_retry_count"`
+	EditChurnCount         int      `json:"edit_churn_count"`
+	ConsecutiveFailureMax  int      `json:"consecutive_failure_max"`
+	Outcome                string   `json:"outcome"`
+	OutcomeConfidence      string   `json:"outcome_confidence"`
+	EndedWithRole          string   `json:"ended_with_role"`
+	FinalFailureStreak     int      `json:"final_failure_streak"`
+	SignalsPendingSince    *string  `json:"signals_pending_since,omitempty"`
+	CompactionCount        int      `json:"compaction_count"`
+	MidTaskCompactionCount int      `json:"mid_task_compaction_count"`
+	ContextPressureMax     *float64 `json:"context_pressure_max,omitempty"`
+	HealthScore            *int     `json:"health_score,omitempty"`
+	HealthGrade            *string  `json:"health_grade,omitempty"`
+	SecretLeakCount        int      `json:"secret_leak_count"`
+
+	// Quality signals are deliberately absent from this DTO: db.Session's
+	// quality_signals pointer is load-path-transient (JSON decodes set it,
+	// database scans set only json:"-" scalar columns), so serializing it
+	// would hash the same logical session differently. The manifest-level
+	// session_quality_signals field is the single canonical carrier, built
+	// from StoredQualitySignals and restored with ApplyQualitySignals.
 
 	Cwd                  string `json:"cwd,omitempty"`
 	GitBranch            string `json:"git_branch,omitempty"`
@@ -117,7 +123,6 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 		ContextPressureMax:     s.ContextPressureMax,
 		HealthScore:            s.HealthScore,
 		HealthGrade:            s.HealthGrade,
-		QualitySignals:         manifestQualitySignalsFromDB(s.QualitySignals),
 		SecretLeakCount:        s.SecretLeakCount,
 
 		Cwd:                  s.Cwd,
@@ -178,7 +183,6 @@ func (m manifestSession) dbSession() db.Session {
 		ContextPressureMax:     m.ContextPressureMax,
 		HealthScore:            m.HealthScore,
 		HealthGrade:            m.HealthGrade,
-		QualitySignals:         m.QualitySignals.dbQualitySignals(),
 		SecretLeakCount:        m.SecretLeakCount,
 
 		Cwd:                  m.Cwd,

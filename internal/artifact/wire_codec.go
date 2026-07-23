@@ -168,7 +168,7 @@ func DecodeWire(
 	}
 
 	encoded := &wireLimitedReader{
-		reader: &wireContextReader{ctx: ctx, reader: src},
+		reader: &wireContextReader{ctx: ctx, reader: &wireSourceReader{reader: src}},
 		limit:  limits.MaxEncodedBytes,
 		label:  "encoded wire input",
 	}
@@ -197,6 +197,9 @@ func DecodeWire(
 	}
 	if errors.Is(err, errWireDestination) {
 		return fmt.Errorf("writing decoded %s: %w", wireRef.Name, err)
+	}
+	if errors.Is(err, errWireSource) {
+		return fmt.Errorf("reading wire %s: %w", wireRef.Name, err)
 	}
 	return fmt.Errorf("%w: decoding %s: %w", ErrArtifactCorrupt, wireRef.Name, err)
 }
@@ -299,6 +302,26 @@ func (r *wireContextReader) Read(p []byte) (int, error) {
 // (disk full, permissions) so DecodeWire does not misreport local I/O trouble
 // as wire corruption.
 var errWireDestination = errors.New("wire destination write failed")
+
+// errWireSource tags read failures raised by the caller's wire source
+// (network resets, disk errors) so transient I/O trouble is not classified
+// as corruption. A source that ends cleanly but early still classifies as
+// corrupt: the truncation error then comes from the codec, not the reader.
+var errWireSource = errors.New("wire source read failed")
+
+type wireSourceReader struct {
+	reader io.Reader
+}
+
+func (r *wireSourceReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	// io.EOF passes through untagged: stream loops compare it by identity
+	// to detect normal end of input.
+	if err != nil && err != io.EOF {
+		return n, fmt.Errorf("%w: %w", errWireSource, err)
+	}
+	return n, err
+}
 
 type wireDestinationWriter struct {
 	writer io.Writer

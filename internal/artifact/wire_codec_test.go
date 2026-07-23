@@ -158,6 +158,81 @@ func (w *failingWireWriter) Write([]byte) (int, error) {
 	return 0, w.err
 }
 
+// failingWireReader yields prefix, then fails with err instead of io.EOF.
+type failingWireReader struct {
+	prefix *bytes.Reader
+	err    error
+}
+
+func (r *failingWireReader) Read(p []byte) (int, error) {
+	n, err := r.prefix.Read(p)
+	if n > 0 {
+		return n, nil
+	}
+	if err == io.EOF {
+		return 0, r.err
+	}
+	return n, err
+}
+
+func TestWireDecodePreservesSourceReadErrors(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	tests := []struct {
+		name string
+		ref  Ref
+	}{
+		{
+			name: "identity",
+			ref:  Ref{Origin: wireCodecTestOrigin, Kind: KindCheckpoints, Name: "cp-0000000001.json"},
+		},
+		{
+			name: "zstd",
+			ref:  Ref{Origin: wireCodecTestOrigin, Kind: KindManifests, Name: hash + ".json"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wireRef, err := ToWireRef(tt.ref)
+			require.NoError(t, err)
+			var encoded bytes.Buffer
+			body := []byte("valid artifact body")
+			require.NoError(t, EncodeWire(t.Context(), tt.ref, bytes.NewReader(body), &encoded))
+
+			networkReset := errors.New("connection reset by peer")
+			src := &failingWireReader{
+				prefix: bytes.NewReader(encoded.Bytes()[:encoded.Len()/2]),
+				err:    networkReset,
+			}
+			var decoded bytes.Buffer
+			err = DecodeWire(t.Context(), wireRef, src, &decoded, WireLimits{
+				MaxEncodedBytes: int64(encoded.Len()),
+				MaxDecodedBytes: int64(len(body)),
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, networkReset)
+			assert.NotErrorIs(t, err, ErrArtifactCorrupt)
+		})
+	}
+}
+
+func TestWireDecodeClassifiesCleanTruncationAsCorrupt(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	ref := Ref{Origin: wireCodecTestOrigin, Kind: KindManifests, Name: hash + ".json"}
+	wireRef, err := ToWireRef(ref)
+	require.NoError(t, err)
+	var encoded bytes.Buffer
+	body := []byte("valid artifact body")
+	require.NoError(t, EncodeWire(t.Context(), ref, bytes.NewReader(body), &encoded))
+
+	var decoded bytes.Buffer
+	err = DecodeWire(t.Context(), wireRef,
+		bytes.NewReader(encoded.Bytes()[:encoded.Len()/2]), &decoded, WireLimits{
+			MaxEncodedBytes: int64(encoded.Len()),
+			MaxDecodedBytes: int64(len(body)),
+		})
+	assert.ErrorIs(t, err, ErrArtifactCorrupt)
+}
+
 func TestWireDecodePreservesDestinationWriteErrors(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	tests := []struct {
