@@ -41,16 +41,18 @@ func deleteProjectIdentityDelta(
 	for start := 0; start < len(snapshotKeys); start += projectIdentityDeleteBatchSize {
 		end := min(start+projectIdentityDeleteBatchSize, len(snapshotKeys))
 		args := []any{archiveID, databaseGeneration}
-		placeholders := make([]string, 0, end-start)
+		tuples := make([]string, 0, end-start)
 		for _, key := range snapshotKeys[start:end] {
-			args = append(args, key.SessionID)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+			base := len(args) + 1
+			tuples = append(tuples, fmt.Sprintf("($%d, $%d)", base, base+1))
+			args = append(args, key.SessionID, key.Project)
 		}
 		if _, err := q.ExecContext(ctx, `
 			DELETE FROM source_session_project_identity_snapshots
 			WHERE source_archive_id = $1
 			  AND source_database_generation = $2
-			  AND source_session_id IN (`+strings.Join(placeholders, ", ")+`)`,
+			  AND (source_session_id, project) IN (`+
+			strings.Join(tuples, ", ")+`)`,
 			args...,
 		); err != nil {
 			return fmt.Errorf("deleting pg session identity snapshot delta: %w", err)

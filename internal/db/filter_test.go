@@ -1294,6 +1294,47 @@ func TestSidebarSessionIndexIncludesChildrenForMatchingRoot(t *testing.T) {
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "sub", "fork"})
 }
 
+func TestSidebarSessionIndexTotalCountsCanonicalRoots(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "root", "alpha", func(s *Session) {
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "sub", "child-source", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("root")
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "fork", "child-source", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("sub")
+		s.RelationshipType = "fork"
+	})
+	insertSession(t, d, "orphan", "alpha", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("missing-parent")
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "unrelated", "beta", func(s *Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		Project: "alpha",
+	})
+	require.NoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{
+		"root", "sub", "fork", "orphan",
+	})
+	assert.Equal(t, 2, index.Total,
+		"only the matching root and promoted orphan are canonical roots")
+}
+
 func TestSidebarSessionIndexPagedExcludesAutomatedDescendants(t *testing.T) {
 	d := testDB(t)
 

@@ -4,6 +4,7 @@
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -14,7 +15,7 @@
   import GithubSettings from "./GithubSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
-  import WorktreeMappingSettings from "./WorktreeMappingSettings.svelte";
+  import SettingsSection from "./SettingsSection.svelte";
 
   let authTokenInput: string = $state("");
 
@@ -96,7 +97,15 @@
       <DateRangeSettings />
       <AgentDirSettings />
       <TerminalSettings />
-      <WorktreeMappingSettings readOnly={settings.readOnly} />
+      <SettingsSection
+        title={m.worktree_title()}
+        description={m.settings_worktree_moved()}
+      >
+        <Button
+          label={m.settings_worktree_moved_link()}
+          onclick={() => router.navigate("data", { view: "rules" })}
+        />
+      </SettingsSection>
       <EmbeddingsSettings />
       <GithubSettings />
       <RemoteSettings />

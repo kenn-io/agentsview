@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
     transcript_revision       TEXT NOT NULL DEFAULT '0',
+    source_archive_id  TEXT NOT NULL DEFAULT '',
+    file_path          TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -304,6 +306,18 @@ CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshots_project
     ON source_session_project_identity_snapshots (
         source_archive_id, project
     );
+
+CREATE TABLE IF NOT EXISTS source_worktree_project_mappings (
+    source_archive_id TEXT NOT NULL,
+    machine           TEXT NOT NULL,
+    path_prefix       TEXT NOT NULL,
+    layout            TEXT NOT NULL DEFAULT 'explicit',
+    project           TEXT NOT NULL DEFAULT '',
+    original_project  TEXT NOT NULL DEFAULT '',
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (source_archive_id, machine, path_prefix)
+);
 
 CREATE TABLE IF NOT EXISTS tool_calls (
     id                    BIGSERIAL PRIMARY KEY,
@@ -827,6 +841,16 @@ func EnsureSchema(
 			"source_project_identity_observations", "remote_candidate_count",
 			`remote_candidate_count INT NOT NULL DEFAULT 0`,
 			"adding source_project_identity_observations.remote_candidate_count",
+		},
+		{
+			"sessions", "source_archive_id",
+			`source_archive_id TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.source_archive_id",
+		},
+		{
+			"sessions", "file_path",
+			`file_path TEXT`,
+			"adding sessions.file_path",
 		},
 	}
 	step = time.Now()
@@ -2064,13 +2088,33 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT source_archive_id, file_path FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing provenance columns: %w", err,
+		)
+	}
+	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT source_archive_id, machine, path_prefix, layout, project,
+			original_project, enabled, updated_at
+		 FROM source_worktree_project_mappings LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"source_worktree_project_mappings table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
 	return nil
 }
 
 // checkPushSchemaCompat verifies schema elements that only push needs. PG serve
-// never reads sync_metadata or owner_marker, so they live outside
-// CheckSchemaCompat (which gates read-only serve startup) and are checked only
-// on the push fast path.
+// never reads sync_metadata or sessions.owner_marker, so they live outside
+// CheckSchemaCompat (which gates read-only serve startup and now probes the
+// serve-read sessions.source_archive_id/file_path provenance columns itself)
+// and are checked only on the push fast path.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
@@ -2110,6 +2154,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_archives") ||
 		!pgHasTable(ctx, db, "source_project_identity_observations") ||
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshots") ||
+		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}

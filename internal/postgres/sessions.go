@@ -508,6 +508,21 @@ func (s *Store) GetSidebarSessionIndex(
 	}
 
 	f.Cursor = ""
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(
+		db.PostgresQueryDialect(), "sessions", f.IncludeOrphans,
+	)
+	var total int
+	countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+		rootWhere + " AND " + canonicalRootWhere
+	if err := s.pg.QueryRowContext(
+		ctx, countQuery, rootArgs...,
+	).Scan(&total); err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("counting sidebar roots: %w", err)
+	}
 
 	where, args := buildPGSessionFilter(f)
 	query := `
@@ -549,7 +564,7 @@ func (s *Store) GetSidebarSessionIndex(
 	}
 	index := db.SidebarSessionIndex{
 		Sessions: sessions,
-		Total:    len(sessions),
+		Total:    total,
 	}
 
 	return index, nil

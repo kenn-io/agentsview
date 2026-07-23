@@ -90,6 +90,7 @@
     "insights",
     "trash",
     "recent-edits",
+    "data",
   ] as const;
 
   const tabs: TopBarTab[] = $derived([
@@ -101,6 +102,7 @@
     { id: "insights", label: m.nav_insights() },
     { id: "trash", label: m.nav_trash() },
     { id: "recent-edits", label: m.nav_recent_edits() },
+    { id: "data", label: m.nav_data() },
   ]);
 
   const activeTab = $derived(

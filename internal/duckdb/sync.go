@@ -28,6 +28,11 @@ type Sync struct {
 	excludeProjects []string
 	maintenance     duckDBMaintenance
 
+	// archiveID caches this local archive's stable identifier (see
+	// ensureArchiveID), stamped onto every pushed session's
+	// source_archive_id column and used to scope mapping publications.
+	archiveID string
+
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -170,6 +175,21 @@ func validateSyncInputs(local *db.DB, machine string) error {
 
 // DB returns the underlying DuckDB connection.
 func (s *Sync) DB() *sql.DB { return s.duck }
+
+// ensureArchiveID memoizes the local archive's stable identifier on the
+// Sync. Both push entry points (rebuild and incremental) call it before any
+// session or mapping write so provenance is stamped consistently.
+func (s *Sync) ensureArchiveID(ctx context.Context) error {
+	if s.archiveID != "" {
+		return nil
+	}
+	archiveID, err := s.local.GetArchiveID(ctx)
+	if err != nil {
+		return fmt.Errorf("reading archive id: %w", err)
+	}
+	s.archiveID = archiveID
+	return nil
+}
 
 // Close closes the DuckDB connection.
 func (s *Sync) Close() error {
@@ -338,6 +358,10 @@ func (s *Sync) runIncrementalPush(
 	start := time.Now()
 	var result PushResult
 
+	if err := s.ensureArchiveID(ctx); err != nil {
+		return result, err
+	}
+
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
@@ -372,6 +396,7 @@ func (s *Sync) runIncrementalPush(
 	}
 
 	identityRevision := probe.IdentityRevision
+	mappingRevision := probe.MappingRevision
 	if result.Errors == 0 {
 		refreshed, err := s.refreshCurationIfChanged(ctx)
 		if err != nil {
@@ -384,9 +409,15 @@ func (s *Sync) runIncrementalPush(
 		if err != nil {
 			return result, err
 		}
+		mappingRevision, err = s.syncWorktreeMappings(
+			ctx, probe.MappingRevision, false,
+		)
+		if err != nil {
+			return result, err
+		}
 	} else {
 		log.Printf(
-			"duckdbsync: skipping curation and identity refresh after %d session push errors",
+			"duckdbsync: skipping curation, identity, and mapping refresh after %d session push errors",
 			result.Errors,
 		)
 	}
@@ -399,7 +430,8 @@ func (s *Sync) runIncrementalPush(
 
 	if result.Errors == 0 {
 		if err := s.finalizeIncrementalPush(
-			ctx, opts, result.Diagnostics.Cutoff, through, identityRevision,
+			ctx, opts, result.Diagnostics.Cutoff, through,
+			identityRevision, mappingRevision,
 		); err != nil {
 			return result, err
 		}
@@ -657,7 +689,7 @@ func (s *Sync) readMirrorResidentBatch(
 // failed sessions silently fall out of the next incremental window.
 func (s *Sync) finalizeIncrementalPush(
 	ctx context.Context, opts SyncOptions, cutoff string,
-	deletionRevision, identityRevision int64,
+	deletionRevision, identityRevision, mappingRevision int64,
 ) error {
 	// The source database id is re-read rather than copied from the probe:
 	// an incremental push only runs when the probe's recorded id already
@@ -678,6 +710,7 @@ func (s *Sync) finalizeIncrementalPush(
 		LastPushMachine:  s.machine,
 		DeletionRevision: deletionRevision,
 		IdentityRevision: identityRevision,
+		MappingRevision:  mappingRevision,
 	})
 }
 

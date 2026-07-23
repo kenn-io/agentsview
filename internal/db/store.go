@@ -68,6 +68,13 @@ type Store interface {
 	ListProjectIdentityObservations(ctx context.Context, labels []string) ([]export.ProjectIdentityObservation, error)
 	BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error)
 
+	// Data (archive inventory).
+	GetProjectInventory(ctx context.Context) (ProjectInventory, error)
+	ListProjectRules(ctx context.Context, machine string) (ProjectRules, error)
+	ListArchiveWorktreeCandidates(
+		ctx context.Context, request ArchiveWorktreeCandidateRequest,
+	) ([]WorktreeReclassificationCandidate, error)
+
 	// Analytics.
 	GetAnalyticsSummary(ctx context.Context, f AnalyticsFilter) (AnalyticsSummary, error)
 	GetAnalyticsActivity(ctx context.Context, f AnalyticsFilter, granularity string) (ActivityResponse, error)

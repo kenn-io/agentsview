@@ -22,6 +22,7 @@
 
 <Modal
   ariaLabel="AgentsView"
+  closeLabel={m.about_close()}
   width="320px"
   onclose={() => (ui.activeModal = null)}
 >

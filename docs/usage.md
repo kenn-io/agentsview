@@ -1218,7 +1218,6 @@ Settings are organized into sections:
 | Date ranges | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Insights |
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal | Default terminal emulator for session resume |
-| Worktree Mappings | Map worktree paths back to their main project (see [Worktree Project Mappings](/configuration/#worktree-project-mappings)) |
 | Embeddings | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations |
 | GitHub | Personal access token for Gist publishing |
 | Remote Access | Remote connections toggle, auth token, connect to remote server |
@@ -1230,9 +1229,10 @@ Settings are organized into sections:
 Language, Appearance, and Date ranges preferences are stored in the browser and
 do not write `~/.agentsview/config.toml`. Agent directory overrides, terminal
 settings, the saved GitHub token, and the local server's remote-access
-authentication settings use `~/.agentsview/config.toml`. Worktree Mappings live
-separately in the local archive database. See
-[Remote Access](/remote-access/) for details on the remote access settings.
+authentication settings use `~/.agentsview/config.toml`. Worktree mapping
+rules moved to the [Data page](/data/#rules) and live in the local archive
+database. See [Remote Access](/remote-access/) for details on the remote
+access settings.
 
 ---
 

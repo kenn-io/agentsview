@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 type sessionSpec struct {
@@ -118,6 +119,12 @@ func main() {
 		log.Fatalf("creating recent-edits fixture: %v", err)
 	}
 
+	if err := createProjectReclassificationFixture(
+		database, base.Add(120*time.Hour),
+	); err != nil {
+		log.Fatalf("creating project-reclassification fixture: %v", err)
+	}
+
 	fmt.Printf("Fixture DB written to %s\n", *out)
 	if *duckDBOut != "" {
 		if err := writeDuckDBMirror(database, *duckDBOut); err != nil {
@@ -125,6 +132,80 @@ func main() {
 		}
 		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
 	}
+}
+
+func createProjectReclassificationFixture(
+	database *db.DB, start time.Time,
+) error {
+	const (
+		machine      = "remote-example-host"
+		project      = "wrong_branch_label"
+		worktreeRoot = "/srv/worktrees/github.com/example-org/sample-service/example-worktree"
+		model        = "claude-sonnet-4-20250514"
+	)
+	cwds := []struct {
+		suffix string
+		cwd    string
+	}{
+		{suffix: "root", cwd: worktreeRoot},
+		{suffix: "nested", cwd: worktreeRoot + "/cmd/server"},
+	}
+	ctx := context.Background()
+	for index, item := range cwds {
+		sessionID := "test-session-project-reclassification-" + item.suffix
+		startedAt := start.Add(time.Duration(index) * time.Hour)
+		endedAt := startedAt.Add(12 * time.Minute)
+		firstMessage := "Inspect the sample service worktree."
+		session := db.Session{
+			ID:               sessionID,
+			Project:          project,
+			Machine:          machine,
+			Agent:            "claude",
+			StartedAt:        new(startedAt.Format(time.RFC3339Nano)),
+			EndedAt:          new(endedAt.Format(time.RFC3339Nano)),
+			MessageCount:     2,
+			UserMessageCount: 1,
+			FirstMessage:     new(firstMessage),
+			Cwd:              item.cwd,
+		}
+		if err := database.UpsertSession(session); err != nil {
+			return fmt.Errorf(
+				"upserting project-reclassification session: %w", err,
+			)
+		}
+		if err := database.InsertMessages(generateMessages(
+			sessionID, session.MessageCount, startedAt, model,
+		)); err != nil {
+			return fmt.Errorf(
+				"inserting project-reclassification messages: %w", err,
+			)
+		}
+		if err := database.UpsertProjectIdentityObservation(
+			ctx,
+			export.ProjectIdentityObservation{
+				SessionID:            sessionID,
+				Project:              project,
+				Machine:              machine,
+				RootPath:             worktreeRoot,
+				RepositoryPath:       "/srv/worktrees/github.com/example-org/sample-service",
+				WorktreeName:         "example-worktree",
+				WorktreeRootPath:     worktreeRoot,
+				WorktreeRelationship: export.WorktreeLinked,
+				CheckoutState:        export.CheckoutBranch,
+				GitBranch:            "example-worktree",
+				ObservedAt:           startedAt,
+			},
+		); err != nil {
+			return fmt.Errorf(
+				"upserting project-reclassification identity: %w", err,
+			)
+		}
+		fmt.Printf(
+			"  %s: %d messages (project reclassification)\n",
+			sessionID, session.MessageCount,
+		)
+	}
+	return nil
 }
 
 func writeDuckDBMirror(database *db.DB, path string) error {

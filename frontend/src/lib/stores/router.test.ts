@@ -428,6 +428,20 @@ describe("RouterStore", () => {
     expect(window.location.search).toBe("");
   });
 
+  it("buildHref includes sticky params when active", () => {
+    setURL("/sessions?desktop");
+    store = new RouterStore();
+    const href = store.buildHref("data", { project_key: "pl1:sha256:alpha" });
+    expect(href).toBe("/data?desktop=&project_key=pl1%3Asha256%3Aalpha");
+  });
+
+  it("buildHref omits sticky params when inactive", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    const href = store.buildHref("data", { project_key: "k1" });
+    expect(href).toBe("/data?project_key=k1");
+  });
+
   it("buildSessionHref includes sticky params", () => {
     setURL("/sessions?desktop");
     store = new RouterStore();

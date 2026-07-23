@@ -6,6 +6,7 @@ export type WorktreeMappingRequest = {
   enabled?: boolean;
   layout?: string;
   machine?: string;
+  original_project?: string;
   path_prefix?: string;
   project?: string;
 };

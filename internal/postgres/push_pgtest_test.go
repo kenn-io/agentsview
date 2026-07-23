@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -105,6 +106,105 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	assert.Zero(t, snapshotCount)
 }
 
+func TestFilteredFullSnapshotTombstoneKeepsDifferentProject(t *testing.T) {
+	const (
+		schema          = "agentsview_filtered_snapshot_tombstone_test"
+		keepSessionID   = "snapshot-keep"
+		deleteSessionID = "snapshot-delete"
+		formerProject   = "former_project"
+		currentProject  = "current_project"
+	)
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	for _, sessionID := range []string{keepSessionID, deleteSessionID} {
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: sessionID, Project: formerProject,
+			Machine: "test-machine", Agent: "codex",
+		}))
+	}
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	generation, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+
+	unfiltered, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unfiltered.EnsureSchema(ctx))
+	require.NoError(t, unfiltered.syncProjectIdentityObservations(ctx, false))
+	_, err = unfiltered.pg.ExecContext(ctx, `
+		INSERT INTO source_session_project_identity_snapshots (
+			source_archive_id, source_database_generation, source_session_id,
+			project, machine, observed_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())`,
+		"other-archive", "other-generation", keepSessionID,
+		currentProject, "other-machine",
+	)
+	require.NoError(t, err)
+	require.NoError(t, unfiltered.Close())
+
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: keepSessionID, Project: currentProject,
+			Machine: "test-machine", RootPath: "/workspace/current",
+			GitRemote:        "https://example.com/current.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC),
+		},
+	))
+	require.NoError(t, local.DeleteSession(deleteSessionID))
+
+	currentOnly, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+		Projects: []string{currentProject},
+	})
+	require.NoError(t, err)
+	require.NoError(t, currentOnly.EnsureSchema(ctx))
+	require.NoError(t, currentOnly.syncProjectIdentityObservations(ctx, false))
+	var count int
+	require.NoError(t, currentOnly.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE source_archive_id = $1 AND source_database_generation = $2
+		  AND source_session_id = $3 AND project = $4`,
+		archiveID, generation, keepSessionID, currentProject,
+	).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, currentOnly.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE source_archive_id = $1 AND source_database_generation = $2
+		  AND source_session_id = $3 AND project = $4`,
+		archiveID, generation, deleteSessionID, formerProject,
+	).Scan(&count))
+	assert.Zero(t, count, "matching former-project tombstone must delete its row")
+	require.NoError(t, currentOnly.Close())
+
+	formerOnly, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+		Projects: []string{formerProject},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, formerOnly.Close()) })
+	require.NoError(t, formerOnly.EnsureSchema(ctx))
+	require.NoError(t, formerOnly.syncProjectIdentityObservations(ctx, false))
+	require.NoError(t, formerOnly.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE source_archive_id = $1 AND source_database_generation = $2
+		  AND source_session_id = $3 AND project = $4`,
+		archiveID, generation, keepSessionID, currentProject,
+	).Scan(&count))
+	assert.Equal(t, 1, count,
+		"former-project tombstone must preserve a reclassified snapshot")
+	require.NoError(t, formerOnly.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE source_archive_id = $1 AND source_database_generation = $2
+		  AND source_session_id = $3 AND project = $4`,
+		"other-archive", "other-generation", keepSessionID, currentProject,
+	).Scan(&count))
+	assert.Equal(t, 1, count, "tombstone must preserve another archive owner")
+}
+
 func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	t *testing.T,
 ) {
@@ -174,6 +274,144 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 		SELECT COUNT(*) FROM source_session_project_identity_snapshots
 		WHERE project = $1`, "beta").Scan(&betaSnapshots))
 	assert.Equal(t, 1, betaSnapshots)
+}
+
+func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
+	const (
+		sessionID     = "pg-project-move"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		root          = "/srv/custom-worktrees/sample-branch"
+	)
+	tests := []struct {
+		name            string
+		projects        []string
+		excludeProjects []string
+		seedUnfiltered  bool
+		wantSession     bool
+		wantTargetObs   bool
+		wantSnapshot    bool
+	}{
+		{name: "unfiltered", wantSession: true, wantTargetObs: true, wantSnapshot: true},
+		{name: "include former", projects: []string{sourceProject}, wantSnapshot: true},
+		{name: "include target", projects: []string{targetProject}, seedUnfiltered: true, wantSession: true, wantTargetObs: true, wantSnapshot: true},
+		{name: "exclude former", excludeProjects: []string{sourceProject}, seedUnfiltered: true, wantSession: true, wantTargetObs: true, wantSnapshot: true},
+		{name: "exclude target", excludeProjects: []string{targetProject}, wantSnapshot: true},
+	}
+	pgURL := testPGURL(t)
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := fmt.Sprintf("agentsview_project_move_%d", i)
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			ctx := context.Background()
+			local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, local.Close()) })
+			startedAt := "2026-07-16T12:00:00.000Z"
+			localModifiedAt := startedAt
+			require.NoError(t, local.UpsertSession(db.Session{
+				ID: sessionID, Project: sourceProject, Machine: "local",
+				Agent: "claude", Cwd: root, StartedAt: &startedAt,
+				LocalModifiedAt: &localModifiedAt, MessageCount: 1,
+				UserMessageCount: 1,
+			}))
+			require.NoError(t, local.InsertMessages([]db.Message{{
+				SessionID: sessionID, Ordinal: 0, Role: "user",
+				Content: "project move", ContentLength: len("project move"),
+				Timestamp: startedAt,
+			}}))
+			require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+				export.ProjectIdentityObservation{
+					SessionID: sessionID, Project: sourceProject, Machine: "local",
+					RootPath:   root,
+					ObservedAt: time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+				},
+			))
+			if tc.seedUnfiltered {
+				initial, openErr := New(
+					pgURL, schema, local, "test-machine", true, SyncOptions{},
+				)
+				require.NoError(t, openErr)
+				_, pushErr := initial.Push(ctx, true, nil)
+				require.NoError(t, pushErr)
+				require.NoError(t, initial.Close())
+			}
+			syncer, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+				Projects: tc.projects, ExcludeProjects: tc.excludeProjects,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+			if !tc.seedUnfiltered {
+				_, err = syncer.Push(ctx, true, nil)
+				require.NoError(t, err)
+			}
+			_, err = syncer.pg.ExecContext(ctx, `
+				INSERT INTO sessions (
+					id, machine, owner_marker, project, agent, created_at
+				) VALUES ($1, $2, $3, $4, $5, NOW())`,
+				"other-owner-session", "other-machine", "other-owner-marker",
+				"unrelated_project", "claude",
+			)
+			require.NoError(t, err)
+
+			_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+				Machine: "local", PathPrefix: "/srv/custom-worktrees",
+				Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+				OriginalProject: sourceProject, Enabled: true,
+			})
+			require.NoError(t, err)
+			applied, err := local.ApplyWorktreeProjectMappings(ctx, "local")
+			require.NoError(t, err)
+			require.Equal(t, 1, applied.UpdatedSessions)
+
+			_, err = syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			var count int
+			require.NoError(t, syncer.pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sessions WHERE id = $1`, sessionID,
+			).Scan(&count))
+			if tc.wantSession {
+				assert.Equal(t, 1, count)
+				var project string
+				require.NoError(t, syncer.pg.QueryRowContext(ctx,
+					`SELECT project FROM sessions WHERE id = $1`, sessionID,
+				).Scan(&project))
+				assert.Equal(t, targetProject, project)
+			} else {
+				assert.Zero(t, count)
+			}
+			require.NoError(t, syncer.pg.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sessions WHERE id = $1`, "other-owner-session",
+			).Scan(&count))
+			assert.Equal(t, 1, count, "reconciliation must preserve another archive owner")
+
+			targetObsCount := 0
+			if tc.wantTargetObs {
+				targetObsCount = 1
+			}
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM source_project_identity_observations
+				WHERE project = $1`, targetProject).Scan(&count))
+			assert.Equal(t, targetObsCount, count)
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM source_project_identity_observations
+				WHERE project = $1`, sourceProject).Scan(&count))
+			assert.Zero(t, count, "former aggregate observation must be tombstoned")
+			snapshotCount := 0
+			if tc.wantSnapshot {
+				snapshotCount = 1
+			}
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM source_session_project_identity_snapshots
+				WHERE project = $1`, sourceProject).Scan(&count))
+			assert.Equal(t, snapshotCount, count)
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM source_session_project_identity_snapshots
+				WHERE project = $1`, targetProject).Scan(&count))
+			assert.Zero(t, count, "immutable snapshot must remain source-labelled")
+		})
+	}
 }
 
 func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
@@ -2480,4 +2718,190 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 	assert.Zero(t, res.Errors, "push should not report failed sessions")
 	assert.Zero(t, res.SessionsPushed, "conflicting session should not be counted as pushed")
 	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in PushResult")
+}
+
+// newSessionProvenancePushSync creates a fresh schema and a Sync wired to a
+// local SQLite DB, for tests exercising session provenance push behavior.
+func newSessionProvenancePushSync(
+	t *testing.T, schema string,
+) (*Sync, *db.DB, *sql.DB, context.Context) {
+	t.Helper()
+	pgURL := testPGURL(t)
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	t.Cleanup(func() { _ = pg.Close() })
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	t.Cleanup(func() { _ = localDB.Close() })
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "workstation",
+		schema:     schema,
+		schemaDone: true,
+	}
+	return sync, localDB, pg, ctx
+}
+
+// seedProvenanceSession inserts a minimal session with one message, carrying
+// filePath as its source file path when non-empty.
+func seedProvenanceSession(
+	t *testing.T, localDB *db.DB, id, machine, project, filePath string,
+) {
+	t.Helper()
+	sess := db.Session{
+		ID:           id,
+		Project:      project,
+		Machine:      machine,
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+	if filePath != "" {
+		sess.FilePath = &filePath
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     id,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+}
+
+// TestPushWritesSessionProvenance verifies that a push stamps the local
+// archive id and source file path onto the pushed PG sessions row.
+func TestPushWritesSessionProvenance(t *testing.T) {
+	const schema = "agentsview_push_provenance_test"
+	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
+
+	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj",
+		"/home/user/.claude/projects/sample/sess-1.jsonl")
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+
+	var archiveID, filePath string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT source_archive_id, COALESCE(file_path, '')
+		 FROM sessions WHERE id = $1`, "sess-1",
+	).Scan(&archiveID, &filePath), "read back provenance")
+	localArchiveID, err := localDB.GetArchiveID(ctx)
+	require.NoError(t, err, "GetArchiveID")
+	assert.Equal(t, localArchiveID, archiveID)
+	assert.Equal(t,
+		"/home/user/.claude/projects/sample/sess-1.jsonl", filePath)
+}
+
+// TestSessionProvenanceBackfillForcesOneFullPush verifies that the provenance
+// backfill marker forces exactly one full push, then stays complete: a
+// second push must not re-touch a session whose provenance was cleared
+// out-of-band after the marker was written.
+func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
+	const schema = "agentsview_push_provenance_backfill_test"
+	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
+
+	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
+
+	// First push: marker absent -> full push forced, marker written after.
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	marker, err := localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, "1", marker)
+
+	// Clear provenance to prove the next push does NOT re-run the backfill.
+	_, err = pg.ExecContext(ctx,
+		`UPDATE sessions SET source_archive_id = '' WHERE id = 'sess-1'`)
+	require.NoError(t, err, "clear provenance")
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	var archiveID string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT source_archive_id FROM sessions WHERE id = 'sess-1'`,
+	).Scan(&archiveID), "read back cleared provenance")
+	assert.Equal(t, "", archiveID,
+		"unchanged session must not be re-pushed after backfill completion")
+}
+
+// TestSessionProvenanceBackfillMarkerNotWrittenOnFailure verifies that a
+// failed push leaves the provenance backfill marker unset, so the next push
+// retries the one-time backfill instead of silently skipping it.
+func TestSessionProvenanceBackfillMarkerNotWrittenOnFailure(t *testing.T) {
+	const schema = "agentsview_push_provenance_backfill_fail_test"
+	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
+
+	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
+
+	// Sabotage the push so it fails after the provenance backfill
+	// requirement is applied but before the marker can be written, mirroring
+	// TestPushMarkerNotWrittenWhenResetRecoveryFails' model_pricing sabotage.
+	_, err := pg.Exec(
+		`ALTER TABLE model_pricing DROP COLUMN cache_read_per_mtok`,
+	)
+	require.NoError(t, err, "drop model_pricing column")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.Error(t, err, "push should fail at model pricing sync")
+	marker, err := localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, "", marker,
+		"failed push must not mark the provenance backfill done")
+}
+
+// TestSessionProvenanceBackfillIgnoresFilteredPushes verifies that a
+// project-filtered push, even a successful full one, does not complete the
+// target-wide provenance backfill marker: it only covered its own project
+// subset, so sessions outside the filter would otherwise never receive
+// provenance (incremental pushes skip unchanged sessions). A following
+// unfiltered push completes the marker.
+func TestSessionProvenanceBackfillIgnoresFilteredPushes(t *testing.T) {
+	const schema = "agentsview_push_provenance_filtered_test"
+	unfiltered, localDB, _, ctx := newSessionProvenancePushSync(t, schema)
+
+	seedProvenanceSession(t, localDB, "sess-in", "workstation", "proj", "")
+	seedProvenanceSession(t, localDB, "sess-out", "workstation", "other", "")
+
+	// Mirror New()'s wiring: per-filter watermark scope, but the backfill
+	// marker scoped to the target only ("" here), shared with the
+	// unfiltered sync's unscoped keys.
+	projects := []string{"proj"}
+	filterScope := pushSyncStateScope("", projects, nil)
+	filtered := &Sync{
+		pg:                 unfiltered.pg,
+		local:              localDB,
+		machine:            "workstation",
+		schema:             schema,
+		schemaDone:         true,
+		syncState:          newScopedSyncStateStore(localDB, filterScope, false),
+		aliasBackfillState: newScopedSyncStateStore(localDB, "", false),
+		syncStateTarget:    filterScope,
+		projects:           projects,
+	}
+
+	_, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err, "filtered Push")
+	marker, err := localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	require.NoError(t, err, "GetSyncState after filtered push")
+	assert.Equal(t, "", marker,
+		"filtered push must not complete the target-wide provenance marker")
+	needed, err := sessionProvenanceBackfillNeeded(localDB)
+	require.NoError(t, err, "sessionProvenanceBackfillNeeded")
+	assert.True(t, needed,
+		"provenance backfill must still be needed after a filtered push")
+
+	_, err = unfiltered.Push(ctx, false, nil)
+	require.NoError(t, err, "unfiltered Push")
+	marker, err = localDB.GetSyncState(sessionProvenanceBackfillStateKey)
+	require.NoError(t, err, "GetSyncState after unfiltered push")
+	assert.Equal(t, "1", marker,
+		"unfiltered push must complete the provenance marker")
 }

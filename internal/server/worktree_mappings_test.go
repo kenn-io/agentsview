@@ -16,38 +16,71 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestWorktreeMappingsAPIUsesCurrentMachine(t *testing.T) {
+func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 	te := setup(t)
 	prefix := filepath.Join(t.TempDir(), "app.worktrees")
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "remote-session", Machine: "host-a.example", Agent: "claude",
+		Project: "branch_label", Cwd: filepath.Join(prefix, "feature"),
+	}), "insert remote session")
 
 	created := postWorktreeMapping(t, te, map[string]any{
-		"path_prefix": prefix,
-		"project":     "canonical-app",
-		"machine":     "other-machine",
+		"path_prefix":      prefix,
+		"project":          "canonical-app",
+		"original_project": "branch_label",
+		"machine":          "host-a.example",
 	})
-	require.Equal(t, "test", created.Machine)
+	require.Equal(t, "host-a.example", created.Machine)
 	require.Equal(t, db.WorktreeMappingLayoutExplicit, created.Layout)
 	require.Equal(t, "canonical_app", created.Project)
+	require.Equal(t, "branch_label", created.OriginalProject)
 	require.True(t, created.Enabled, "created mapping should default enabled")
 
 	var list struct {
-		Machine  string                      `json:"machine"`
-		Mappings []db.WorktreeProjectMapping `json:"mappings"`
+		Machine      string                      `json:"machine"`
+		LocalMachine string                      `json:"local_machine"`
+		Machines     []string                    `json:"machines"`
+		Mappings     []db.WorktreeProjectMapping `json:"mappings"`
 	}
-	w := te.get(t, "/api/v1/settings/worktree-mappings")
+	w := te.get(t, "/api/v1/settings/worktree-mappings?machine=host-a.example")
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
-	require.Equal(t, "test", list.Machine)
+	require.Equal(t, "host-a.example", list.Machine)
+	assert.Equal(t, "test", list.LocalMachine)
+	assert.Equal(t, []string{"host-a.example"}, list.Machines)
 	require.Len(t, list.Mappings, 1)
 
 	updated := putWorktreeMapping(t, te, created.ID, map[string]any{
-		"path_prefix": prefix,
-		"project":     "disabled-app",
-		"enabled":     false,
+		"path_prefix":      prefix,
+		"project":          "canonical-app-v2",
+		"original_project": "replacement-label",
+		"machine":          "host-b.example",
+		"enabled":          true,
 	})
-	assert.False(t, updated.Enabled, "updated mapping should be disabled")
+	assert.True(t, updated.Enabled)
+	assert.Equal(t, "host-a.example", updated.Machine,
+		"mapping ID determines the machine on edit")
 	assert.Equal(t, db.WorktreeMappingLayoutExplicit, updated.Layout)
-	assert.Equal(t, "disabled_app", updated.Project)
+	assert.Equal(t, "canonical_app_v2", updated.Project)
+	assert.Equal(t, "branch_label", updated.OriginalProject,
+		"HTTP edits cannot overwrite original project")
+
+	w = te.post(t, "/api/v1/settings/worktree-mappings/apply", `{
+		"machine": "host-a.example"
+	}`)
+	assertStatus(t, w, http.StatusOK)
+	var applied struct {
+		Machine         string `json:"machine"`
+		MatchedSessions int    `json:"matched_sessions"`
+		UpdatedSessions int    `json:"updated_sessions"`
+	}
+	decodeInto(t, w, &applied)
+	assert.Equal(t, "host-a.example", applied.Machine)
+	assert.Equal(t, 1, applied.MatchedSessions)
+	assert.Equal(t, 1, applied.UpdatedSessions)
+	sess, err := te.db.GetSession(context.Background(), "remote-session")
+	require.NoError(t, err)
+	assert.Equal(t, "canonical_app_v2", sess.Project)
 
 	req := httptest.NewRequest(
 		http.MethodDelete,
@@ -60,10 +93,10 @@ func TestWorktreeMappingsAPIUsesCurrentMachine(t *testing.T) {
 	te.handler.ServeHTTP(delW, req)
 	assertStatus(t, delW, http.StatusNoContent)
 
-	w = te.get(t, "/api/v1/settings/worktree-mappings")
+	w = te.get(t, "/api/v1/settings/worktree-mappings?machine=host-a.example")
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
-	assert.Empty(t, list.Mappings, "mappings after delete should be empty")
+	assert.Empty(t, list.Mappings, "remote mappings after delete should be empty")
 }
 
 func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
@@ -172,6 +205,111 @@ func TestWorktreeMappingsAPIMalformedIDIsNotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusNotFound)
+}
+
+func TestWorktreePreviewAPIUsesFullArchiveAndBoundsSamples(t *testing.T) {
+	te := setup(t)
+	for i := range 12 {
+		id := "preview-" + strconv.Itoa(i)
+		require.NoError(t, te.db.UpsertSession(db.Session{
+			ID: id, Machine: "host-a.example", Agent: "codex",
+			Project: "branch-" + strconv.Itoa(i),
+			Cwd:     "/srv/worktrees/example/" + id,
+		}), "seed preview session")
+	}
+
+	w := te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "host-a.example",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label"
+	}`)
+	assertStatus(t, w, http.StatusOK)
+	preview := decode[db.WorktreeReclassificationPreview](t, w)
+	assert.Equal(t, 12, preview.MatchedSessions)
+	assert.Equal(t, 12, preview.UpdatedSessions)
+	assert.Equal(t, 12, preview.DistinctProjects)
+	assert.Len(t, preview.ProjectSamples, 10)
+	assert.Len(t, preview.SessionSamples, 10)
+	assert.NotEmpty(t, preview.MappingToken)
+
+	w = te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "host-a.example",
+		"path_prefix": "",
+		"project": "canonical-example"
+	}`)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestActivityProjectReclassificationAPIRejectsStaleToken(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "stale-session", Machine: "host-a.example", Agent: "codex",
+		Project: "branch-label", Cwd: "/srv/worktrees/example/feature",
+	}))
+
+	previewW := te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "host-a.example",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label"
+	}`)
+	assertStatus(t, previewW, http.StatusOK)
+	preview := decode[db.WorktreeReclassificationPreview](t, previewW)
+	_ = postWorktreeMapping(t, te, map[string]any{
+		"machine": "host-a.example", "path_prefix": "/another/root",
+		"project": "another-project",
+	})
+
+	w := te.post(t, "/api/v1/settings/worktree-mappings/reclassify", `{
+		"machine": "host-a.example",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label",
+		"mapping_token": "`+preview.MappingToken+`"
+	}`)
+	assertStatus(t, w, http.StatusConflict)
+
+	w = te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "host-a.example",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label"
+	}`)
+	assertStatus(t, w, http.StatusOK)
+	preview = decode[db.WorktreeReclassificationPreview](t, w)
+	w = te.post(t, "/api/v1/settings/worktree-mappings/reclassify", `{
+		"machine": "host-a.example",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label",
+		"mapping_token": "`+preview.MappingToken+`"
+	}`)
+	assertStatus(t, w, http.StatusOK)
+	var applied struct {
+		Mapping db.WorktreeProjectMapping          `json:"mapping"`
+		Result  db.WorktreeReclassificationPreview `json:"result"`
+	}
+	decodeInto(t, w, &applied)
+	assert.Equal(t, "canonical_example", applied.Mapping.Project)
+	assert.Equal(t, 1, applied.Result.UpdatedSessions)
+	session, err := te.db.GetSession(context.Background(), "stale-session")
+	require.NoError(t, err)
+	assert.Equal(t, "canonical_example", session.Project)
+}
+
+func TestWorktreePreviewAndReclassificationAPIsRejectRemoteMode(t *testing.T) {
+	te := setupPGMode(t)
+	w := te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "host-a.example", "path_prefix": "/srv/example",
+		"project": "example"
+	}`)
+	assertStatus(t, w, http.StatusNotImplemented)
+	w = te.post(t, "/api/v1/settings/worktree-mappings/reclassify", `{
+		"machine": "host-a.example", "path_prefix": "/srv/example",
+		"project": "example", "mapping_token": "token"
+	}`)
+	assertStatus(t, w, http.StatusNotImplemented)
 }
 
 func postWorktreeMapping(

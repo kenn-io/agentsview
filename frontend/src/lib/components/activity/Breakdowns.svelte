@@ -1,9 +1,14 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
+  import { router } from "../../stores/router.svelte.js";
   import type { Report } from "../../api/types.js";
   import type { ActivityKeyMinutes } from "../../api/generated/index";
 
-  let { report }: { report: Report } = $props();
+  interface Props {
+    report: Report;
+  }
+
+  let { report }: Props = $props();
 
   type Metric = "minutes" | "cost";
   let metric = $state<Metric>("minutes");
@@ -58,6 +63,21 @@
 
   function rowIdentity(row: ActivityKeyMinutes, projectRows: boolean): string {
 	return projectRows ? (row.project_key || row.key) : row.key;
+  }
+
+  function projectKeyOf(row: ActivityKeyMinutes): string {
+    return row.project_key || row.key;
+  }
+
+  function projectHref(row: ActivityKeyMinutes): string {
+    return router.buildHref("data", { project_key: projectKeyOf(row) });
+  }
+
+  function openInData(event: MouseEvent, row: ActivityKeyMinutes) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0)
+      return;
+    event.preventDefault();
+    router.navigate("data", { project_key: projectKeyOf(row) });
   }
 
   function maxValue(rows: ActivityKeyMinutes[]): number {
@@ -168,9 +188,20 @@
                 onmouseenter={(e) => showTip(e, row, total)}
                 onmouseleave={hideTip}
               >
-                <span class="bar-label" title={row.key}>
-                  {truncate(row.key, 22)}
-                </span>
+                {#if panel.projectRows}
+                  <a
+                    class="bar-label"
+                    href={projectHref(row)}
+                    title={m.activity_view_in_data({ project: row.key })}
+                    onclick={(event) => openInData(event, row)}
+                  >
+                    {truncate(row.key, 22)}
+                  </a>
+                {:else}
+                  <span class="bar-label" title={row.key}>
+                    {truncate(row.key, 22)}
+                  </span>
+                {/if}
                 <div class="bar-track">
                   <div
                     class="bar-seg interactive"
@@ -314,6 +345,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    position: relative;
   }
 
   .bar-label {
@@ -324,6 +356,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  a.bar-label {
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+
+  a.bar-label:hover {
+    text-decoration: underline;
   }
 
   .bar-track {

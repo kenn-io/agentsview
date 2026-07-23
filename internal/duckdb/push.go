@@ -350,6 +350,14 @@ func (s *Sync) writeIdentityPublication(
 		); err != nil {
 			return err
 		}
+		if s.isFiltered() {
+			if err := deleteProjectIdentityDelta(
+				execDelta, archiveID, databaseGeneration,
+				delta.ObservationDeletes, delta.SnapshotDeletes,
+			); err != nil {
+				return err
+			}
+		}
 	} else if err := deleteProjectIdentityDelta(
 		execDelta, archiveID, databaseGeneration,
 		delta.ObservationDeletes, delta.SnapshotDeletes,
@@ -823,12 +831,12 @@ func (s *Sync) upsertSession(
 			cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 			parser_malformed_lines, is_truncated, deleted_at, deletion_cause, created_at,
 			termination_status, secret_leak_count, secrets_rules_version,
-			agentsview_push_fingerprint
+			agentsview_push_fingerprint, source_archive_id
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`
 	query += `
 		ON CONFLICT(id) DO UPDATE SET
@@ -897,16 +905,17 @@ func (s *Sync) upsertSession(
 			termination_status = excluded.termination_status,
 			secret_leak_count = excluded.secret_leak_count,
 			secrets_rules_version = excluded.secrets_rules_version,
-			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint`
+			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint,
+			source_archive_id = excluded.source_archive_id`
 
-	args := sessionInsertArgs(sess, s.machine, fingerprint)
+	args := sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint)
 	if err := s.execMutation(ctx, exec, query, args...); err != nil {
 		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
 	}
 	return nil
 }
 
-func sessionInsertArgs(sess db.Session, machine, fingerprint string) []any {
+func sessionInsertArgs(sess db.Session, machine, archiveID, fingerprint string) []any {
 	return []any{
 		sess.ID, sess.Project, machine, sess.Agent,
 		sess.AgentLabel, sess.Entrypoint,
@@ -940,7 +949,7 @@ func sessionInsertArgs(sess db.Session, machine, fingerprint string) []any {
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		nilEmpty(fingerprint),
+		nilEmpty(fingerprint), archiveID,
 	}
 }
 

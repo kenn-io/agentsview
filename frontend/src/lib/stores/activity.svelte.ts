@@ -1,11 +1,7 @@
 import type { AgentInfo, ProjectInfo } from "../api/types.js";
 import type { Report } from "../api/types/activity.js";
 import { ActivityService, MetadataService } from "../api/generated/index";
-import {
-  callGenerated,
-  configureGeneratedClient,
-  isAbortError,
-} from "../api/runtime.js";
+import { callGenerated, configureGeneratedClient, isAbortError } from "../api/runtime.js";
 import { sync } from "./sync.svelte.js";
 import { router } from "./router.svelte.js";
 import { localDateStr, rollingRange } from "../utils/dates.js";
@@ -15,20 +11,11 @@ export { localDateStr };
 
 type Preset = "day" | "week" | "month" | "custom";
 
-const PRESETS: ReadonlySet<string> = new Set<Preset>([
-  "day",
-  "week",
-  "month",
-  "custom",
-]);
+const PRESETS: ReadonlySet<string> = new Set<Preset>(["day", "week", "month", "custom"]);
 
 export type Automation = "all" | "interactive" | "automated";
 
-const AUTOMATIONS: ReadonlySet<string> = new Set<Automation>([
-  "all",
-  "interactive",
-  "automated",
-]);
+const AUTOMATIONS: ReadonlySet<string> = new Set<Automation>(["all", "interactive", "automated"]);
 
 function parseWindowDays(raw: string | undefined): number | null {
   if (!raw) return null;
@@ -49,6 +36,8 @@ function customToInstant(to: string): string {
   end.setDate(end.getDate() + 1);
   return end.toISOString();
 }
+
+export type ActivityQueryParams = Parameters<typeof ActivityService.getApiV1ActivityReport>[0];
 
 class ActivityStore {
   preset = $state<Preset>("day");
@@ -87,7 +76,7 @@ class ActivityStore {
   private reportRead = new LatestRead();
   private filterOptionsRead = new LatestRead();
   #filterOptionsLoaded = false;
-  #filterOptionsPromise: Promise<void> | null = null;
+  #filterOptionsPromise: Promise<boolean> | null = null;
   #filterOptionsVersion = 0;
   #attached = 0;
 
@@ -121,7 +110,28 @@ class ActivityStore {
     return true;
   }
 
-  async load({ background = false }: { background?: boolean } = {}) {
+  /** Build the complete Activity request scope for the report fetch. */
+  queryParams(): ActivityQueryParams {
+    const fromParam =
+      this.preset === "custom" && this.from
+        ? new Date(this.from + "T00:00:00").toISOString()
+        : undefined;
+    const toParam = this.preset === "custom" && this.to ? customToInstant(this.to) : undefined;
+    return {
+      preset: this.preset,
+      date: this.date,
+      from: fromParam,
+      to: toParam,
+      timezone: this.timezone,
+      bucket: (this.bucket || undefined) as "5m" | "15m" | "1h" | "1d" | "1w" | undefined,
+      project: this.project || undefined,
+      agent: this.agent || undefined,
+      machine: this.machine || undefined,
+      automation: this.automation,
+    };
+  }
+
+  async load({ background = false }: { background?: boolean } = {}): Promise<boolean> {
     const v = ++this.loadVersion;
     const signal = this.reportRead.begin();
     if (this.materializeRollingWindow()) {
@@ -133,61 +143,24 @@ class ActivityStore {
     if (this.preset === "custom" && (!this.from || !this.to)) {
       this.reportRead.finish(signal);
       this.loading = false;
-      return;
+      return false;
     }
     this.loading = true;
     this.error = null;
     configureGeneratedClient();
     try {
-      // Custom date-only inputs (YYYY-MM-DD, browser local zone) become
-      // half-open local instants: from = local 00:00 of `from`, to = local
-      // 00:00 of the day after `to`. Non-custom presets rely on preset+date, so
-      // send no range. An empty input maps to undefined so selecting "custom"
-      // before picking dates never builds an Invalid Date. A malformed
-      // hand-edited date throws here, inside the try, so load() still resets
-      // loading rather than leaving it stuck true.
-      const fromParam =
-        this.preset === "custom" && this.from
-          ? new Date(this.from + "T00:00:00").toISOString()
-          : undefined;
-      const toParam =
-        this.preset === "custom" && this.to
-          ? customToInstant(this.to)
-          : undefined;
       const res = await callGenerated(
-        () => ActivityService.getApiV1ActivityReport({
-          preset: this.preset,
-          date: this.date,
-          from: fromParam,
-          to: toParam,
-          timezone: this.timezone,
-          // The store keeps bucket as a free-form override string (populated by
-          // the Task 4 control); the generated client narrows it to the server's
-          // accepted set. An out-of-set value is rejected server-side.
-          bucket: (this.bucket || undefined) as
-            | "5m"
-            | "15m"
-            | "1h"
-            | "1d"
-            | "1w"
-            | undefined,
-          project: this.project || undefined,
-          agent: this.agent || undefined,
-          machine: this.machine || undefined,
-          automation: this.automation,
-        }),
+        () => ActivityService.getApiV1ActivityReport(this.queryParams()),
         signal,
       );
-      if (v !== this.loadVersion || !this.reportRead.isCurrent(signal)) return;
+      if (v !== this.loadVersion || !this.reportRead.isCurrent(signal)) return false;
       this.report = res as unknown as Report;
       this.lastUpdatedAt = Date.now();
       this.hasNewData = false;
+      return true;
     } catch (e) {
-      if (
-        isAbortError(e) ||
-        v !== this.loadVersion ||
-        !this.reportRead.isCurrent(signal)
-      ) return;
+      if (isAbortError(e) || v !== this.loadVersion || !this.reportRead.isCurrent(signal))
+        return false;
       // A failed background refresh keeps the last good report on screen so a
       // transient blip never blanks the report-first dashboard; the growing
       // "Updated Xm ago" label signals the staleness. With no report yet (a
@@ -195,10 +168,10 @@ class ActivityStore {
       // is nothing to preserve, so fall through and surface the error rather
       // than leave a misleading empty state. First loads and range/filter
       // changes are always foreground and clear on error.
-      if (background && this.report !== null) return;
+      if (background && this.report !== null) return false;
       this.report = null;
-      this.error =
-        e instanceof Error ? e.message : "Failed to load activity report";
+      this.error = e instanceof Error ? e.message : "Failed to load activity report";
+      return false;
     } finally {
       if (this.reportRead.finish(signal)) this.loading = false;
     }
@@ -221,13 +194,14 @@ class ActivityStore {
    * request. A transient failure leaves the cache un-loaded so the next call
    * retries; lists that did succeed keep their values in the meantime.
    */
-  async loadFilterOptions() {
-    if (this.#filterOptionsLoaded) return;
+  async loadFilterOptions(): Promise<boolean> {
+    if (this.#filterOptionsLoaded) return true;
     if (this.#filterOptionsPromise) return this.#filterOptionsPromise;
     const ver = this.#filterOptionsVersion;
     const signal = this.filterOptionsRead.begin();
     const opts = { includeOneShot: true, includeAutomated: true };
-    this.#filterOptionsPromise = (async () => {
+    let request!: Promise<boolean>;
+    request = (async () => {
       configureGeneratedClient();
       let ok = true;
       try {
@@ -235,12 +209,10 @@ class ActivityStore {
           () => MetadataService.getApiV1Projects(opts),
           signal,
         )) as unknown as { projects: ProjectInfo[] };
-        if (
-          ver === this.#filterOptionsVersion &&
-          this.filterOptionsRead.isCurrent(signal)
-        ) this.projects = res.projects;
+        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
+          this.projects = res.projects;
       } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false; // keep the current list; retry on the next call
       }
       try {
@@ -248,12 +220,10 @@ class ActivityStore {
           () => MetadataService.getApiV1Agents(opts),
           signal,
         )) as unknown as { agents: AgentInfo[] };
-        if (
-          ver === this.#filterOptionsVersion &&
-          this.filterOptionsRead.isCurrent(signal)
-        ) this.agents = res.agents;
+        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
+          this.agents = res.agents;
       } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
       }
       try {
@@ -261,26 +231,25 @@ class ActivityStore {
           () => MetadataService.getApiV1Machines(opts),
           signal,
         )) as unknown as { machines: string[] };
-        if (
-          ver === this.#filterOptionsVersion &&
-          this.filterOptionsRead.isCurrent(signal)
-        ) this.machines = res.machines;
+        if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
+          this.machines = res.machines;
       } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
       }
-      if (
-        ver === this.#filterOptionsVersion &&
-        this.filterOptionsRead.isCurrent(signal)
-      ) {
+      const current = ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
+      if (current) {
         // Cache only a fully successful load so a transient failure is
         // retried rather than frozen as a permanent empty list.
         this.#filterOptionsLoaded = ok;
-        this.#filterOptionsPromise = null;
       }
+      return current && ok;
+    })().finally(() => {
+      if (this.#filterOptionsPromise === request) this.#filterOptionsPromise = null;
       this.filterOptionsRead.finish(signal);
-    })();
-    return this.#filterOptionsPromise;
+    });
+    this.#filterOptionsPromise = request;
+    return request;
   }
 
   /**
@@ -342,9 +311,7 @@ class ActivityStore {
       this.to = range.to;
       this.rollingWindowDays = windowDays;
     } else {
-      this.preset = PRESETS.has(params.preset ?? "")
-        ? (params.preset as Preset)
-        : "day";
+      this.preset = PRESETS.has(params.preset ?? "") ? (params.preset as Preset) : "day";
       this.date = params.date || localDateStr(new Date());
       this.from = params.from ?? "";
       this.to = params.to ?? "";
@@ -420,11 +387,7 @@ class ActivityStore {
     this.writeUrl();
   }
 
-  setCustomRange(
-    from: string,
-    to: string,
-    rollingWindowDays: number | null = null,
-  ) {
+  setCustomRange(from: string, to: string, rollingWindowDays: number | null = null) {
     this.preset = "custom";
     this.date = from;
     this.from = from;
@@ -447,11 +410,7 @@ class ActivityStore {
       // Advance one calendar month, clamping the day to the target month's last
       // day so e.g. Jan 31 -> Feb 28 instead of overflowing into March.
       const target = new Date(d.getFullYear(), d.getMonth() + direction, 1);
-      const lastDay = new Date(
-        target.getFullYear(),
-        target.getMonth() + 1,
-        0,
-      ).getDate();
+      const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
       target.setDate(Math.min(d.getDate(), lastDay));
       d.setTime(target.getTime());
     } else {

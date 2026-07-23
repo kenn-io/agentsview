@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import { activity } from "../../stores/activity.svelte.js";
@@ -14,6 +8,7 @@ import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import source from "./ActivityPage.svelte?raw";
 // @ts-ignore
 import ActivityPage from "./ActivityPage.svelte";
+import type { Report } from "../../api/types.js";
 
 async function flushEffects() {
   await tick();
@@ -30,13 +25,62 @@ function stubActivityPageCollaborators() {
     },
   );
   vi.spyOn(activity, "attach").mockReturnValue(() => {});
-  vi.spyOn(activity, "loadFilterOptions").mockResolvedValue();
-  vi.spyOn(activity, "load").mockResolvedValue();
+  vi.spyOn(activity, "loadFilterOptions").mockResolvedValue(true);
+  vi.spyOn(activity, "load").mockResolvedValue(true);
 }
 
 async function openCalendar(triggerLabel: string) {
   await fireEvent.click(screen.getByRole("button", { name: triggerLabel }));
   await fireEvent.click(screen.getByRole("radio", { name: "Calendar" }));
+}
+
+function projectReport(): Report {
+  return {
+    timezone: "UTC",
+    range_start: "2026-07-01T00:00:00Z",
+    range_end: "2026-07-02T00:00:00Z",
+    bucket_unit: "hour",
+    bucket_seconds: 3600,
+    bucket_count: 24,
+    partial: false,
+    as_of: null,
+    effective_end: "2026-07-02T00:00:00Z",
+    elapsed_bucket_count: 24,
+    buckets: [],
+    peak: { agents: 0, at: null },
+    totals: {
+      active_minutes: 0,
+      idle_minutes: 0,
+      agent_minutes: 20,
+      sessions: 1,
+      untimed_sessions: 0,
+      distinct_projects: 1,
+      distinct_models: 0,
+      output_tokens: 0,
+      cost: 0,
+      automated_agent_minutes: 0,
+      automated_cost: 0,
+      automated_sessions: 0,
+      interactive_agent_minutes: 20,
+      interactive_cost: 0,
+      interactive_sessions: 1,
+    },
+    by_project: [{
+      key: "wrong-project",
+      project_key: "pl1:sha256:wrong",
+      agent_minutes: 20,
+      cost: 0,
+      interactive_agent_minutes: 20,
+      automated_agent_minutes: 0,
+      interactive_cost: 0,
+      automated_cost: 0,
+    }],
+    by_model: [],
+    by_agent: [],
+    by_session: [],
+    intervals: [],
+    projects: {},
+  } as Report;
 }
 
 function calendarDay(label: string): HTMLButtonElement {
@@ -52,6 +96,37 @@ describe("ActivityPage refresh control layout", () => {
   });
 });
 
+describe("ActivityPage breakdown links", () => {
+  let component: ReturnType<typeof mount> | undefined;
+
+  afterEach(() => {
+    if (component) unmount(component);
+    component = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.report = null;
+  });
+
+  it("renders project rows as Data links with no reclassify controls", async () => {
+    stubActivityPageCollaborators();
+    activity.report = projectReport();
+
+    component = mount(ActivityPage, { target: document.body });
+    await flushEffects();
+
+    expect(
+      document.body.querySelector("button[aria-label^=\"Reclassify\"]"),
+    ).toBeNull();
+    const link = document.body.querySelector("a.bar-label") as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    expect(link.getAttribute("href")).toBe(
+      "/data?project_key=pl1%3Asha256%3Awrong",
+    );
+    expect(link.getAttribute("title")).toBe("View wrong-project in Data");
+  });
+});
+
 describe("ActivityPage date yoke controls", () => {
   it("updates shared yoke state from the unified range picker", () => {
     expect(source).toContain("<RangePicker");
@@ -62,12 +137,8 @@ describe("ActivityPage date yoke controls", () => {
   it("yokes week and month selections using resolved period starts", () => {
     expect(source).toContain("startOfIsoWeek(activity.date)");
     expect(source).toContain("startOfMonth(activity.date)");
-    expect(source).not.toContain(
-      "panelDateState(activity.date, addDays(activity.date, 6)",
-    );
-    expect(source).not.toContain(
-      "panelDateState(activity.date, endOfMonth(activity.date)",
-    );
+    expect(source).not.toContain("panelDateState(activity.date, addDays(activity.date, 6)");
+    expect(source).not.toContain("panelDateState(activity.date, endOfMonth(activity.date)");
   });
 
   it("preserves relative range selections as rolling yoke state", () => {
@@ -127,14 +198,14 @@ describe("ActivityPage date yoke integration", () => {
       },
     );
     vi.spyOn(activity, "attach").mockReturnValue(() => {});
-    vi.spyOn(activity, "loadFilterOptions").mockResolvedValue();
+    vi.spyOn(activity, "loadFilterOptions").mockResolvedValue(true);
     vi.spyOn(activity, "load").mockImplementation(() => {
       loadStates.push({
         preset: activity.preset,
         from: activity.from,
         to: activity.to,
       });
-      return Promise.resolve();
+      return Promise.resolve(true);
     });
     router.route = "activity";
     router.params = {};

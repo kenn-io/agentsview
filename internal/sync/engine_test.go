@@ -4082,6 +4082,362 @@ func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 	assert.Equal(t, "feature/export", observations[0].GitBranch)
 }
 
+func TestProjectIdentityBulkWriteMappingPreservesParserProjectSnapshot(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "feature-login")
+	_, err := database.CreateWorktreeProjectMapping(
+		context.Background(),
+		db.WorktreeProjectMapping{
+			Machine:    "laptop",
+			PathPrefix: root,
+			Project:    "canonical-app",
+			Enabled:    true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID:        "mapped-bulk-identity",
+			Project:   "feature_login",
+			Machine:   "laptop",
+			Agent:     parser.AgentCodex,
+			Cwd:       cwd,
+			StartedAt: time.Now(),
+		},
+	}}, syncWriteBulk, true)
+	require.Equal(t, 0, failed, "no session writes may fail")
+	require.Equal(t, 1, written)
+
+	session, err := database.GetSession(
+		context.Background(), "mapped-bulk-identity",
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, session)
+	assert.Equal(t, "canonical_app", session.Project)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, cwd, observations[0].RootPath)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-bulk-identity", snapshots[0].SessionID)
+	assert.Equal(t, "feature_login", snapshots[0].Project)
+	assert.Equal(t, cwd, snapshots[0].RootPath)
+}
+
+func TestProjectIdentityFullSessionWriteMappingPreservesParserProjectSnapshot(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "feature-login")
+	_, err := database.CreateWorktreeProjectMapping(
+		context.Background(),
+		db.WorktreeProjectMapping{
+			Machine:    "laptop",
+			PathPrefix: root,
+			Project:    "canonical-app",
+			Enabled:    true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	err = e.writeSessionFull(pendingWrite{
+		sess: parser.ParsedSession{
+			ID:        "mapped-full-identity",
+			Project:   "feature_login",
+			Machine:   "laptop",
+			Agent:     parser.AgentCodex,
+			Cwd:       cwd,
+			StartedAt: time.Now(),
+		},
+	})
+	require.NoError(t, err, "writeSessionFull")
+
+	session, err := database.GetSession(
+		context.Background(), "mapped-full-identity",
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, session)
+	assert.Equal(t, "canonical_app", session.Project)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, cwd, observations[0].RootPath)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-full-identity", snapshots[0].SessionID)
+	assert.Equal(t, "feature_login", snapshots[0].Project)
+	assert.Equal(t, cwd, snapshots[0].RootPath)
+}
+
+func TestProjectIdentityMappedWriteWithEmptyParserProjectOmitsSnapshot(
+	t *testing.T,
+) {
+	tests := []struct {
+		name string
+		mode syncWriteMode
+	}{
+		{name: "ordinary", mode: syncWriteDefault},
+		{name: "bulk", mode: syncWriteBulk},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			cwd := filepath.Join(root, "unclassified")
+			_, err := database.CreateWorktreeProjectMapping(
+				context.Background(),
+				db.WorktreeProjectMapping{
+					Machine:    "laptop",
+					PathPrefix: root,
+					Project:    "canonical-app",
+					Enabled:    true,
+				},
+			)
+			require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+			e := NewEngine(database, EngineConfig{Machine: "laptop"})
+			written, _, failed, _ := e.writeBatch([]pendingWrite{{
+				sess: parser.ParsedSession{
+					ID:        "mapped-empty-" + tt.name,
+					Machine:   "laptop",
+					Agent:     parser.AgentCodex,
+					Cwd:       cwd,
+					StartedAt: time.Now(),
+				},
+			}}, tt.mode, true)
+			require.Equal(t, 0, failed, "no session writes may fail")
+			require.Equal(t, 1, written)
+
+			session, err := database.GetSession(
+				context.Background(), "mapped-empty-"+tt.name,
+			)
+			require.NoError(t, err, "GetSession")
+			require.NotNil(t, session)
+			assert.Equal(t, "canonical_app", session.Project)
+
+			observations, err := database.ListProjectIdentityObservations(
+				context.Background(), []string{"canonical_app"},
+			)
+			require.NoError(t, err, "ListProjectIdentityObservations")
+			require.Len(t, observations, 1)
+			assert.Equal(t, "canonical_app", observations[0].Project)
+			assert.Equal(t, cwd, observations[0].RootPath)
+
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(
+				context.Background(),
+			)
+			require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+			assert.Empty(t, snapshots,
+				"empty parser project must not become target-labelled evidence")
+		})
+	}
+}
+
+func TestProjectIdentityEmptySourceReparsePreservesExistingSnapshot(
+	t *testing.T,
+) {
+	tests := []struct {
+		name          string
+		writePath     string
+		sourceProject string
+	}{
+		{name: "ordinary", writePath: "ordinary", sourceProject: "feature_login"},
+		{name: "full_session", writePath: "full", sourceProject: "feature_login"},
+		{name: "bulk", writePath: "bulk", sourceProject: "feature_login"},
+		{
+			name:          "bulk_source_equals_target",
+			writePath:     "bulk",
+			sourceProject: "canonical_app",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			cwd := filepath.Join(root, "feature-login")
+			_, err := database.CreateWorktreeProjectMapping(
+				context.Background(),
+				db.WorktreeProjectMapping{
+					Machine:    "laptop",
+					PathPrefix: root,
+					Project:    "canonical-app",
+					Enabled:    true,
+				},
+			)
+			require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+			e := NewEngine(database, EngineConfig{Machine: "laptop"})
+			write := func(project string) {
+				t.Helper()
+				pw := pendingWrite{sess: parser.ParsedSession{
+					ID:        "mapped-reparse-" + tt.name,
+					Project:   project,
+					Machine:   "laptop",
+					Agent:     parser.AgentCodex,
+					Cwd:       cwd,
+					StartedAt: time.Now(),
+				}}
+				switch tt.writePath {
+				case "ordinary":
+					written, _, failed, _ := e.writeBatch(
+						[]pendingWrite{pw}, syncWriteDefault, true,
+					)
+					require.Equal(t, 0, failed, "ordinary write failures")
+					require.Equal(t, 1, written, "ordinary writes")
+				case "full":
+					require.NoError(t, e.writeSessionFull(pw), "writeSessionFull")
+				case "bulk":
+					written, _, failed, _ := e.writeBatch(
+						[]pendingWrite{pw}, syncWriteBulk, true,
+					)
+					require.Equal(t, 0, failed, "bulk write failures")
+					require.Equal(t, 1, written, "bulk writes")
+				default:
+					require.Fail(t, "unknown write path", tt.writePath)
+				}
+			}
+
+			write(tt.sourceProject)
+			write("")
+
+			session, err := database.GetSession(
+				context.Background(), "mapped-reparse-"+tt.name,
+			)
+			require.NoError(t, err, "GetSession")
+			require.NotNil(t, session)
+			assert.Equal(t, "canonical_app", session.Project)
+
+			observations, err := database.ListProjectIdentityObservations(
+				context.Background(), []string{"canonical_app"},
+			)
+			require.NoError(t, err, "ListProjectIdentityObservations")
+			require.Len(t, observations, 1)
+			assert.Equal(t, "canonical_app", observations[0].Project)
+			assert.Equal(t, cwd, observations[0].RootPath)
+
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(
+				context.Background(),
+			)
+			require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+			require.Len(t, snapshots, 1)
+			assert.Equal(t, "mapped-reparse-"+tt.name, snapshots[0].SessionID)
+			assert.Equal(t, tt.sourceProject, snapshots[0].Project)
+			assert.Equal(t, cwd, snapshots[0].RootPath)
+		})
+	}
+}
+
+func TestProjectIdentityExplicitEmptyDeleteReinsertClearsNewFallback(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cwd := filepath.Join(root, "unclassified")
+	_, err := database.CreateWorktreeProjectMapping(
+		context.Background(),
+		db.WorktreeProjectMapping{
+			Machine:    "laptop",
+			PathPrefix: root,
+			Project:    "canonical-app",
+			Enabled:    true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	pw := pendingWrite{sess: parser.ParsedSession{
+		ID:        "mapped-empty-reinsert",
+		Machine:   "laptop",
+		Agent:     parser.AgentCodex,
+		Cwd:       cwd,
+		StartedAt: time.Now(),
+	}}
+	write := func() {
+		t.Helper()
+		written, _, failed, _ := e.writeBatch(
+			[]pendingWrite{pw}, syncWriteDefault, true,
+		)
+		require.Equal(t, 0, failed, "ordinary write failures")
+		require.Equal(t, 1, written, "ordinary writes")
+	}
+
+	write()
+	deleted, err := database.DeleteParserExcludedSessions(
+		[]string{"mapped-empty-reinsert"},
+	)
+	require.NoError(t, err, "DeleteParserExcludedSessions")
+	require.Equal(t, 1, deleted)
+	write()
+
+	session, err := database.GetSession(
+		context.Background(), "mapped-empty-reinsert",
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, session)
+	assert.Equal(t, "canonical_app", session.Project)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, cwd, observations[0].RootPath)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	assert.Empty(t, snapshots,
+		"reinsertion must remove the newly triggered mapped fallback")
+}
+
+func TestSessionWithoutIdentityStillUsesOrdinaryUpsert(t *testing.T) {
+	database := openTestDB(t)
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	t.Cleanup(e.Close)
+
+	written, _, failed, _ := e.writeBatch(
+		[]pendingWrite{{sess: parser.ParsedSession{
+			ID: "without-project", Machine: "laptop", Agent: parser.AgentCodex,
+			StartedAt: time.Now(),
+		}}},
+		syncWriteDefault,
+		true,
+	)
+	assert.Equal(t, 0, failed)
+	assert.Equal(t, 1, written)
+
+	stored, err := database.GetSession(context.Background(), "without-project")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.Project)
+}
+
 func TestProjectIdentityDiscoversLinkedWorktreeRepositoryContext(t *testing.T) {
 	database := openTestDB(t)
 	mainRoot := filepath.Join(t.TempDir(), "main")
@@ -4530,6 +4886,299 @@ func TestProjectIdentityIncrementalAppendPersistsObservation(t *testing.T) {
 	require.Len(t, observations, 1)
 	assert.Equal(t, "https://github.com/acme/inc.git", observations[0].GitRemote)
 	assert.Equal(t, "github.com/acme/inc", observations[0].NormalizedRemote)
+}
+
+func TestProjectIdentityIncrementalAppendUsesPersistedMappedProject(t *testing.T) {
+	const (
+		sessionID     = "mapped-incremental"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		machine       = "remote-example-host"
+		root          = "/srv/custom-worktrees/sample-branch"
+	)
+	for _, tc := range []struct {
+		name           string
+		removeSnapshot bool
+	}{
+		{name: "absent snapshot", removeSnapshot: true},
+		{name: "weak empty-key snapshot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "incremental-identity.db")
+			database, err := db.Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			recordedAt := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: sessionID, Project: sourceProject, Machine: machine,
+				Agent: "claude", Cwd: root, MessageCount: 1,
+			}))
+			if tc.removeSnapshot {
+				raw, openErr := sql.Open("sqlite3", path)
+				require.NoError(t, openErr)
+				_, deleteErr := raw.ExecContext(ctx,
+					`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`,
+					sessionID,
+				)
+				require.NoError(t, deleteErr)
+				require.NoError(t, raw.Close())
+			}
+			_, err = database.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+				Machine: machine, PathPrefix: "/srv/custom-worktrees",
+				Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+				Enabled: true,
+			})
+			require.NoError(t, err)
+
+			e := NewEngine(database, EngineConfig{Machine: machine})
+			t.Cleanup(e.Close)
+			require.NoError(t, e.writeIncremental(&incrementalUpdate{
+				sessionID: sessionID, project: sourceProject, machine: machine, cwd: root,
+				msgs: []parser.ParsedMessage{{
+					Role: parser.RoleAssistant, Content: "delta", Ordinal: 1,
+				}},
+				msgCount: 2, userMsgCount: 1,
+				fileSize: 100, fileMtime: recordedAt.Add(time.Minute).UnixNano(),
+			}))
+
+			persisted, err := database.GetSession(ctx, sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, persisted)
+			assert.Equal(t, targetProject, persisted.Project)
+			targetObservations, err := database.ListProjectIdentityObservations(
+				ctx, []string{targetProject},
+			)
+			require.NoError(t, err)
+			require.Len(t, targetObservations, 1)
+			assert.Equal(t, root, targetObservations[0].RootPath)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			require.Len(t, snapshots, 1)
+			assert.Equal(t, sourceProject, snapshots[0].Project,
+				"new or upgraded snapshot must retain parser-time project evidence")
+			assert.NotEmpty(t, snapshots[0].Key,
+				"incremental evidence must create or upgrade the weak snapshot")
+		})
+	}
+}
+
+func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
+	t *testing.T,
+) {
+	for _, tc := range []struct {
+		name          string
+		sourceProject string
+	}{
+		{name: "non-empty source", sourceProject: "parser_source"},
+		{name: "explicit empty source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			database := openTestDB(t)
+			root := t.TempDir()
+			path := filepath.Join(root, "session.jsonl")
+			initial := []byte("initial-record\n")
+			require.NoError(t, os.WriteFile(path, initial, 0o600))
+			initialInfo, err := os.Stat(path)
+			require.NoError(t, err)
+			_, err = database.CreateWorktreeProjectMapping(
+				ctx,
+				db.WorktreeProjectMapping{
+					Machine: "laptop", PathPrefix: root,
+					Layout:  db.WorktreeMappingLayoutExplicit,
+					Project: "mapped_target", Enabled: true,
+				},
+			)
+			require.NoError(t, err)
+
+			e := NewEngine(database, EngineConfig{Machine: "laptop"})
+			t.Cleanup(e.Close)
+			written, _, failed, _ := e.writeBatch(
+				[]pendingWrite{{
+					sess: parser.ParsedSession{
+						ID: "incremental-source", Project: tc.sourceProject,
+						Machine: "laptop", Agent: parser.AgentClaude,
+						Cwd: root, StartedAt: initialInfo.ModTime(),
+						FirstMessage: "initial", MessageCount: 1,
+						File: parser.FileInfo{
+							Path: path, Size: int64(len(initial)),
+							Mtime: initialInfo.ModTime().UnixNano(),
+						},
+					},
+					msgs: []parser.ParsedMessage{{
+						Role: parser.RoleUser, Content: "initial", Ordinal: 0,
+					}},
+				}},
+				syncWriteDefault,
+				true,
+			)
+			require.Equal(t, 0, failed)
+			require.Equal(t, 1, written)
+			incrementalInfo, found := database.GetSessionForIncremental(path)
+			require.True(t, found)
+			assert.Equal(t, int64(len(initial)), incrementalInfo.FileSize)
+			assert.Equal(t, 1, incrementalInfo.MsgCount)
+			assert.Equal(t, db.CurrentDataVersion(),
+				database.GetSessionDataVersion("incremental-source"))
+
+			appended := []byte("appended-record\n")
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			require.NoError(t, err)
+			_, err = f.Write(appended)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			appendedInfo, err := os.Stat(path)
+			require.NoError(t, err)
+
+			result, ok := e.tryIncrementalJSONL(
+				ctx,
+				parser.DiscoveredFile{Agent: parser.AgentClaude, Path: path},
+				appendedInfo,
+				parser.AgentClaude,
+				func(
+					_ string,
+					inc *db.IncrementalInfo,
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+					return []parser.ParsedMessage{{
+						Role: parser.RoleAssistant, Content: "appended",
+						Ordinal: inc.NextOrdinal,
+					}}, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
+				},
+			)
+			require.True(t, ok)
+			require.NotNil(t, result.incremental)
+			require.NoError(t, e.writeIncremental(result.incremental))
+
+			persisted, err := database.GetSession(ctx, "incremental-source")
+			require.NoError(t, err)
+			require.NotNil(t, persisted)
+			assert.Equal(t, "mapped_target", persisted.Project)
+			observations, err := database.ListProjectIdentityObservations(
+				ctx, []string{"mapped_target"},
+			)
+			require.NoError(t, err)
+			require.Len(t, observations, 1)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			if tc.sourceProject == "" {
+				assert.Empty(t, snapshots,
+					"incremental append must not fabricate mapped source evidence")
+			} else {
+				require.Len(t, snapshots, 1)
+				assert.Equal(t, tc.sourceProject, snapshots[0].Project)
+			}
+		})
+	}
+}
+
+func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
+	t *testing.T,
+) {
+	const (
+		legacyDataVersion = 67
+		sessionID         = "legacy-mapped-snapshot"
+		sourceProject     = "parser-source"
+		targetProject     = "mapped-target"
+		machine           = "laptop"
+	)
+	ctx := context.Background()
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "session.jsonl")
+	initial := []byte("initial-record\n")
+	require.NoError(t, os.WriteFile(path, initial, 0o600))
+	initialInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	_, err = database.CreateWorktreeProjectMapping(
+		ctx,
+		db.WorktreeProjectMapping{
+			Machine: machine, PathPrefix: root,
+			Layout:  db.WorktreeMappingLayoutExplicit,
+			Project: targetProject, Enabled: true,
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: sessionID, Project: targetProject, Machine: machine,
+		Agent: "claude", Cwd: root, FirstMessage: strPtr("initial"),
+		MessageCount: 1, UserMessageCount: 1,
+		FilePath: strPtr(path), FileSize: int64Ptr(initialInfo.Size()),
+		FileMtime: int64Ptr(initialInfo.ModTime().UnixNano()),
+	}))
+	require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(
+		ctx,
+		export.ProjectIdentityObservation{
+			SessionID: sessionID, Project: targetProject,
+			Machine: machine, RootPath: root,
+		},
+		targetProject,
+	))
+	require.Greater(t, db.CurrentDataVersion(), legacyDataVersion,
+		"legacy target-labelled snapshots need a data-version upgrade")
+	require.NoError(t, database.SetSessionDataVersion(
+		sessionID, legacyDataVersion,
+	))
+
+	appended := []byte("appended-record\n")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.Write(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	appendedInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	e := NewEngine(database, EngineConfig{Machine: machine})
+	t.Cleanup(e.Close)
+	parseCalled := false
+	_, ok := e.tryIncrementalJSONL(
+		ctx,
+		parser.DiscoveredFile{Agent: parser.AgentClaude, Path: path},
+		appendedInfo,
+		parser.AgentClaude,
+		func(
+			_ string,
+			_ *db.IncrementalInfo,
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+			parseCalled = true
+			return nil, nil, time.Time{}, 0, nil, nil
+		},
+	)
+	assert.False(t, ok,
+		"legacy snapshots must fall through to a source-aware full parse")
+	assert.False(t, parseCalled,
+		"stale source evidence must be rejected before incremental parsing")
+
+	written, _, failed, _ := e.writeBatch(
+		[]pendingWrite{{
+			sess: parser.ParsedSession{
+				ID: sessionID, Project: sourceProject,
+				Machine: machine, Agent: parser.AgentClaude,
+				Cwd: root, FirstMessage: "initial", MessageCount: 2,
+				UserMessageCount: 1,
+				File: parser.FileInfo{
+					Path: path, Size: appendedInfo.Size(),
+					Mtime: appendedInfo.ModTime().UnixNano(),
+				},
+			},
+			msgs: []parser.ParsedMessage{
+				{Role: parser.RoleUser, Content: "initial", Ordinal: 0},
+				{Role: parser.RoleAssistant, Content: "appended", Ordinal: 1},
+			},
+		}},
+		syncWriteDefault,
+		true,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+	assert.Equal(t, db.CurrentDataVersion(),
+		database.GetSessionDataVersion(sessionID))
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, sourceProject, snapshots[0].Project,
+		"the required full parse must replace fabricated mapped evidence")
 }
 
 func TestProjectIdentityIncrementalRemoteAppendSkipsLiveDiscovery(t *testing.T) {

@@ -206,13 +206,14 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 			return 0, fmt.Errorf("copying orphaned data: %w", err)
 		}
+		sourceVersion := copiedSourceDataVersion(ctx, tx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
-			ctx, tx, "_orphaned_ids",
+			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
 			return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
 		}
 		if err := sanitizeCopiedSessionContent(
-			ctx, tx, "_orphaned_ids", copiedSourceDataVersion(ctx, tx),
+			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
 			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
@@ -306,13 +307,14 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
 	}
+	sourceVersion := copiedSourceDataVersion(ctx, tx)
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
-		ctx, tx, "_trashed_ids",
+		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return 0, fmt.Errorf("repairing trashed identity snapshots: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
-		ctx, tx, "_trashed_ids", copiedSourceDataVersion(ctx, tx),
+		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
@@ -422,7 +424,8 @@ func (d *DB) CopyExcludedSessionsFrom(
 // source DB into sessions that were re-synced into this DB.
 // This preserves display_name, deleted_at, starred_sessions, pinned_messages,
 // archive metadata, project identity observations, and worktree project
-// mappings across full DB rebuilds.
+// mappings across full DB rebuilds. Immutable project snapshots are restored
+// only from source versions that recorded parser-source labels reliably.
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
 ) error {
@@ -593,7 +596,8 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE key NOT IN (
 				'database_id',
 				'project_identity_publication_revision',
-				'session_deletion_publication_revision'
+				'session_deletion_publication_revision',
+				'worktree_mapping_publication_revision'
 			)
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
@@ -660,7 +664,9 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+	sourceVersion := copiedSourceDataVersion(ctx, tx)
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_identity_snapshots (
 				session_id, project, machine, root_path, git_remote,
@@ -708,6 +714,10 @@ func (d *DB) CopySessionMetadataFrom(
 		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
 			layoutSelect = "layout"
 		}
+		originalProjectSelect := "''"
+		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "original_project") {
+			originalProjectSelect = "original_project"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM main.worktree_project_mappings
 			WHERE NOT EXISTS (
@@ -720,13 +730,20 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.worktree_project_mappings
-				(machine, path_prefix, layout, project, enabled, created_at, updated_at)
-			SELECT machine, path_prefix, `+layoutSelect+`, project, enabled, created_at, updated_at
+				(machine, path_prefix, layout, project, original_project,
+				 enabled, created_at, updated_at)
+			SELECT machine, path_prefix, `+layoutSelect+`, project,
+				`+originalProjectSelect+`, enabled, created_at, updated_at
 			FROM old_db.worktree_project_mappings
 			WHERE true
 			ON CONFLICT(machine, path_prefix) DO UPDATE SET
 				layout = excluded.layout,
 				project = excluded.project,
+				original_project = CASE
+					WHEN worktree_project_mappings.original_project = ''
+						THEN excluded.original_project
+					ELSE worktree_project_mappings.original_project
+				END,
 				enabled = excluded.enabled,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
@@ -1097,18 +1114,22 @@ func copySessionDataForIDs(
 	return nil
 }
 
-// removeGeneratedIdentitySnapshotsWithoutSource removes only placeholder
-// snapshots created by the session-insert trigger for the current copy batch.
-// Real source snapshots are overlaid later by CopySessionMetadataFrom. The
-// temporary ID table and both snapshot primary keys keep the work proportional
-// to copied rows rather than total archive size.
+// removeGeneratedIdentitySnapshotsWithoutSource removes placeholder snapshots
+// created by the session-insert trigger for the current copy batch. Sources
+// predating parser-source snapshots cannot provide trustworthy replacements,
+// so every generated snapshot in that batch is removed. Newer sources retain
+// placeholders only when CopySessionMetadataFrom will overlay real evidence.
+// The temporary ID table and both snapshot primary keys keep the work
+// proportional to copied rows rather than total archive size.
 func removeGeneratedIdentitySnapshotsWithoutSource(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
+	sourceVersion int,
 ) error {
 	missingSourceSnapshot := "true"
-	if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
+		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		missingSourceSnapshot = `NOT EXISTS (
 			SELECT 1 FROM old_db.session_project_identity_snapshots old_snapshot
 			WHERE old_snapshot.session_id =
@@ -1145,6 +1166,11 @@ const (
 	sanitizedSourceDataVersion      = 58
 	sanitizedInputSourceDataVersion = 59
 )
+
+// projectIdentitySourceSnapshotDataVersion is the first archive version whose
+// immutable snapshots reliably contain the parser-source project rather than a
+// worktree mapping target. Older snapshots must not cross a full-resync copy.
+const projectIdentitySourceSnapshotDataVersion = 68
 
 // copiedSourceDataVersion reads the attached old_db's data version.
 // Read errors are logged and returned as 0 so the copy conservatively

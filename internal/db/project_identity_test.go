@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -514,6 +516,43 @@ func TestProjectIdentityNilLabelsListAllButEmptyLabelsMapEmpty(t *testing.T) {
 	assert.Empty(t, empty)
 }
 
+func TestListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Cross the maxSQLVars chunk boundary and include duplicate labels that
+	// straddle it, proving chunked queries return each row exactly once and
+	// preserve the single-query (project, machine, ...) ordering.
+	const labelCount = maxSQLVars + 50
+	labels := make([]string, 0, 2*labelCount)
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO project_identity_observations
+		(project, machine, root_path, observed_at) VALUES `)
+	args := make([]any, 0, labelCount)
+	for i := range labelCount {
+		label := fmt.Sprintf("chunked-project-%04d", i)
+		labels = append(labels, label, label)
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("(?, 'host.example', '/srv/app', '2025-06-02T10:00:00Z')")
+		args = append(args, label)
+	}
+	_, err := d.getWriter().Exec(sb.String(), args...)
+	require.NoError(t, err, "seed chunked observations")
+
+	// Reverse the (duplicated) label list to prove the lookup sorts it
+	// before partitioning into chunks.
+	slices.Reverse(labels)
+	got, err := d.ListProjectIdentityObservations(ctx, labels)
+	require.NoError(t, err)
+	all, err := d.ListProjectIdentityObservations(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, all, labelCount)
+	assert.Equal(t, all, got,
+		"chunked label lookup must match the unfiltered scan, order included")
+}
+
 func TestProjectIdentityGoldenFixtureObservationsAreDeterministic(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -594,10 +633,376 @@ func TestProjectObservationSessionBatchWritePersistsObservation(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "/tmp/worktree", got[0].RootPath)
 	assert.Empty(t, got[0].GitRemote)
+	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-project", snapshots[0].Project,
+		"an omitted snapshot project keeps the legacy same-label default")
 
 	projects := export.BuildProjectsMap([]string{"mapped-project"}, got)
 	require.Equal(t, export.ProjectResolutionUnknown, projects["mapped-project"].Resolution)
 	assert.Nil(t, projects["mapped-project"].Identity)
+}
+
+func TestProjectObservationSessionBatchExplicitEmptyProjectOmitsSnapshot(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	emptySourceProject := ""
+	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID:      "batch-empty-source",
+			Project: "mapped-project",
+			Machine: "laptop",
+			Agent:   "codex",
+		},
+		IdentityObservation: export.ProjectIdentityObservation{
+			SessionID: "batch-empty-source",
+			Project:   "mapped-project",
+			Machine:   "laptop",
+			RootPath:  "/tmp/worktree",
+		},
+		IdentitySnapshotProject: &emptySourceProject,
+		DataVersion:             CurrentDataVersion(),
+		ReplaceMessages:         true,
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+
+	observations, err := d.ListProjectIdentityObservations(
+		ctx, []string{"mapped-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "mapped-project", observations[0].Project)
+
+	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, snapshots,
+		"an explicit empty source must not become mapped snapshot evidence")
+}
+
+func TestSessionBatchWritesRejectMismatchedIdentityOwnership(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		writeBatch func(*DB, []SessionBatchWrite) (SessionBatchResult, error)
+		wantErr    bool
+	}{
+		{
+			name: "savepoint batch",
+			writeBatch: func(
+				d *DB, writes []SessionBatchWrite,
+			) (SessionBatchResult, error) {
+				return d.WriteSessionBatch(writes)
+			},
+		},
+		{
+			name: "atomic batch",
+			writeBatch: func(
+				d *DB, writes []SessionBatchWrite,
+			) (SessionBatchResult, error) {
+				return d.WriteSessionBatchAtomic(writes)
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			recordedAt := time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)
+			require.NoError(t, d.UpsertSession(Session{
+				ID: "unrelated", Project: "unrelated-target",
+				Machine: "laptop", Agent: "codex", Cwd: "/tmp/unrelated",
+			}))
+			require.NoError(t, d.UpsertProjectIdentityObservationWithSnapshotProject(
+				ctx,
+				export.ProjectIdentityObservation{
+					SessionID: "unrelated", Project: "unrelated-target",
+					Machine: "laptop", RootPath: "/tmp/unrelated",
+					ObservedAt: recordedAt,
+				},
+				"unrelated-source",
+			))
+			before, err := d.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+
+			candidateSource := "candidate-source"
+			result, err := tc.writeBatch(d, []SessionBatchWrite{{
+				Session: Session{
+					ID: "candidate", Project: "candidate-target",
+					Machine: "laptop", Agent: "codex", Cwd: "/tmp/candidate",
+				},
+				IdentityObservation: export.ProjectIdentityObservation{
+					SessionID: "unrelated", Project: "candidate-target",
+					Machine: "laptop", RootPath: "/tmp/candidate",
+					ObservedAt: recordedAt.Add(time.Minute),
+				},
+				IdentitySnapshotProject: &candidateSource,
+				DataVersion:             CurrentDataVersion(),
+				ReplaceMessages:         true,
+			}})
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, 1, result.FailedSessions)
+			assert.Equal(t, 0, result.WrittenSessions)
+			require.Len(t, result.Errors, 1)
+			assert.ErrorContains(t, result.Errors[0],
+				"does not match session id")
+
+			candidate, getErr := d.GetSession(ctx, "candidate")
+			require.NoError(t, getErr)
+			assert.Nil(t, candidate,
+				"invalid identity ownership must reject the session write")
+			after, listErr := d.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, listErr)
+			assert.Equal(t, before, after,
+				"invalid identity ownership must not relabel another session")
+		})
+	}
+}
+
+func TestUpsertSessionWithProjectIdentityUsesCurrentTransactionInsertionState(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	session := Session{
+		ID:      "atomic-identity",
+		Project: "mapped-project",
+		Machine: "laptop",
+		Agent:   "codex",
+		Cwd:     "/tmp/worktree",
+	}
+	observation := export.ProjectIdentityObservation{
+		SessionID: "atomic-identity",
+		Project:   "mapped-project",
+		Machine:   "laptop",
+		RootPath:  "/tmp/worktree",
+	}
+
+	require.NoError(t, d.UpsertSessionWithProjectIdentity(
+		session, observation, "",
+	))
+	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, snapshots,
+		"fresh empty source must remove its own trigger fallback")
+
+	require.NoError(t, d.UpsertSessionWithProjectIdentity(
+		session, observation, "source-project",
+	))
+	require.NoError(t, d.UpsertSessionWithProjectIdentity(
+		session, observation, "",
+	))
+
+	stored, err := d.GetSession(ctx, "atomic-identity")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "mapped-project", stored.Project)
+	observations, err := d.ListProjectIdentityObservations(
+		ctx, []string{"mapped-project"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "mapped-project", observations[0].Project)
+	snapshots, err = d.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "source-project", snapshots[0].Project,
+		"existing source evidence must survive an empty reparse")
+}
+
+func TestUpsertSessionWithProjectIdentityRejectsInvalidIdentityBeforeWrite(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		sessionID   string
+		observation export.ProjectIdentityObservation
+	}{
+		{
+			name:      "empty session id",
+			sessionID: "",
+			observation: export.ProjectIdentityObservation{
+				SessionID: "candidate", Project: "candidate-project",
+				Machine: "laptop", RootPath: "/tmp/candidate",
+			},
+		},
+		{
+			name:      "empty observation session id",
+			sessionID: "candidate",
+			observation: export.ProjectIdentityObservation{
+				Project: "candidate-project", Machine: "laptop",
+				RootPath: "/tmp/candidate",
+			},
+		},
+		{
+			name:      "mismatched observation session id",
+			sessionID: "candidate",
+			observation: export.ProjectIdentityObservation{
+				SessionID: "unrelated", Project: "candidate-project",
+				Machine: "laptop", RootPath: "/tmp/candidate",
+			},
+		},
+		{
+			name:      "empty observation project",
+			sessionID: "candidate",
+			observation: export.ProjectIdentityObservation{
+				SessionID: "candidate", Machine: "laptop",
+				RootPath: "/tmp/candidate",
+			},
+		},
+		{
+			name:      "empty observation machine",
+			sessionID: "candidate",
+			observation: export.ProjectIdentityObservation{
+				SessionID: "candidate", Project: "candidate-project",
+				RootPath: "/tmp/candidate",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			recordedAt := time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)
+			require.NoError(t, d.UpsertSession(Session{
+				ID: "unrelated", Project: "unrelated-target",
+				Machine: "laptop", Agent: "codex", Cwd: "/tmp/unrelated",
+			}))
+			require.NoError(t, d.UpsertProjectIdentityObservationWithSnapshotProject(
+				ctx,
+				export.ProjectIdentityObservation{
+					SessionID: "unrelated", Project: "unrelated-target",
+					Machine: "laptop", RootPath: "/tmp/unrelated",
+					GitRemote:  "https://example.com/acme/unrelated.git",
+					ObservedAt: recordedAt,
+				},
+				"unrelated-source",
+			))
+			before, err := d.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+
+			err = d.UpsertSessionWithProjectIdentity(
+				Session{
+					ID: tc.sessionID, Project: "candidate-project",
+					Machine: "laptop", Agent: "codex", Cwd: "/tmp/candidate",
+				},
+				tc.observation,
+				"",
+			)
+			assert.Error(t, err)
+
+			candidate, getErr := d.GetSession(ctx, tc.sessionID)
+			require.NoError(t, getErr)
+			assert.Nil(t, candidate, "invalid input must not persist a session")
+			after, listErr := d.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, listErr)
+			assert.Equal(t, before, after,
+				"invalid input must not alter unrelated immutable evidence")
+		})
+	}
+}
+
+func TestExplicitSnapshotProjectCorrectsOnlyLegacyProjectLabel(t *testing.T) {
+	ctx := context.Background()
+	recordedAt := time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		existing export.ProjectIdentityObservation
+		incoming export.ProjectIdentityObservation
+	}{
+		{
+			name: "resolved",
+			existing: export.ProjectIdentityObservation{
+				RootPath:         "/legacy/resolved",
+				GitRemote:        "https://example.com/acme/legacy.git",
+				RemoteResolution: export.ProjectResolutionResolved,
+			},
+			incoming: export.ProjectIdentityObservation{
+				RootPath:         "/incoming/resolved",
+				GitRemote:        "https://example.com/acme/incoming.git",
+				RemoteResolution: export.ProjectResolutionResolved,
+			},
+		},
+		{
+			name: "ambiguous",
+			existing: export.ProjectIdentityObservation{
+				RootPath: "/legacy/ambiguous", RemoteCandidateCount: 2,
+				RemoteResolution: export.ProjectResolutionAmbiguous,
+			},
+			incoming: export.ProjectIdentityObservation{
+				RootPath: "/incoming/ambiguous", RemoteCandidateCount: 3,
+				RemoteResolution: export.ProjectResolutionAmbiguous,
+			},
+		},
+		{
+			name: "established unknown",
+			existing: export.ProjectIdentityObservation{
+				RootPath:         "/legacy/unknown",
+				RemoteResolution: export.ProjectResolutionUnknown,
+			},
+			incoming: export.ProjectIdentityObservation{
+				RootPath:         "/incoming/unknown",
+				RemoteResolution: export.ProjectResolutionUnknown,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			sessionID := "legacy-" + strings.ReplaceAll(tc.name, " ", "-")
+			require.NoError(t, d.UpsertSession(Session{
+				ID: sessionID, Project: "mapped-target", Machine: "laptop",
+				Agent: "codex", Cwd: "/legacy/worktree",
+			}))
+			existing := tc.existing
+			existing.SessionID = sessionID
+			existing.Project = "mapped-target"
+			existing.Machine = "laptop"
+			existing.ObservedAt = recordedAt
+			require.NoError(t, d.UpsertProjectIdentityObservation(ctx, existing))
+
+			beforeByID, err := d.listSessionProjectIdentitySnapshots(
+				ctx, []string{sessionID},
+			)
+			require.NoError(t, err)
+			before, ok := beforeByID[sessionID]
+			require.True(t, ok)
+
+			incoming := tc.incoming
+			incoming.SessionID = sessionID
+			incoming.Project = "mapped-target"
+			incoming.Machine = "laptop"
+			incoming.ObservedAt = recordedAt.Add(time.Hour)
+			require.NoError(t, d.UpsertProjectIdentityObservationWithSnapshotProject(
+				ctx, incoming, "parser-source",
+			))
+
+			afterByID, err := d.listSessionProjectIdentitySnapshots(
+				ctx, []string{sessionID},
+			)
+			require.NoError(t, err)
+			after, ok := afterByID[sessionID]
+			require.True(t, ok)
+			want := before
+			want.Project = "parser-source"
+			assert.Equal(t, want, after,
+				"explicit correction must preserve all immutable evidence fields")
+
+			require.NoError(t, d.UpsertProjectIdentityObservation(ctx, incoming))
+			legacyByID, err := d.listSessionProjectIdentitySnapshots(
+				ctx, []string{sessionID},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, want, legacyByID[sessionID],
+				"legacy same-label publication must not relabel the snapshot")
+		})
+	}
 }
 
 func seedProjectIdentityObservation(t *testing.T, d *DB, project string) {

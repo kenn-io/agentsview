@@ -1,19 +1,29 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import Breakdowns from "./Breakdowns.svelte";
+import { router } from "../../stores/router.svelte.js";
 import type { Report } from "../../api/types.js";
 
 function makeReport(): Report {
   return {
     peak: { agents: 0, at: null },
     totals: {
-      active_minutes: 0, idle_minutes: 0, agent_minutes: 0, sessions: 0,
-      untimed_sessions: 0, distinct_projects: 0, distinct_models: 0,
-      output_tokens: 0, cost: 0,
-      automated_agent_minutes: 0, interactive_agent_minutes: 0,
-      automated_cost: 0, interactive_cost: 0,
-      automated_sessions: 0, interactive_sessions: 0,
+      active_minutes: 0,
+      idle_minutes: 0,
+      agent_minutes: 0,
+      sessions: 0,
+      untimed_sessions: 0,
+      distinct_projects: 0,
+      distinct_models: 0,
+      output_tokens: 0,
+      cost: 0,
+      automated_agent_minutes: 0,
+      interactive_agent_minutes: 0,
+      automated_cost: 0,
+      interactive_cost: 0,
+      automated_sessions: 0,
+      interactive_sessions: 0,
     },
     partial: false,
     as_of: null,
@@ -28,14 +38,24 @@ function makeReport(): Report {
     buckets: [],
     by_project: [
       {
-        key: "alpha", project_key: "pl1:sha256:alpha", agent_minutes: 30, cost: 0,
-        interactive_agent_minutes: 20, automated_agent_minutes: 10,
-        interactive_cost: 0, automated_cost: 0,
+        key: "alpha",
+        project_key: "pl1:sha256:alpha",
+        agent_minutes: 30,
+        cost: 0,
+        interactive_agent_minutes: 20,
+        automated_agent_minutes: 10,
+        interactive_cost: 0,
+        automated_cost: 0,
       },
       {
-        key: "beta", project_key: "pl1:sha256:beta", agent_minutes: 10, cost: 0,
-        interactive_agent_minutes: 10, automated_agent_minutes: 0,
-        interactive_cost: 0, automated_cost: 0,
+        key: "beta",
+        project_key: "pl1:sha256:beta",
+        agent_minutes: 10,
+        cost: 0,
+        interactive_agent_minutes: 10,
+        automated_agent_minutes: 0,
+        interactive_cost: 0,
+        automated_cost: 0,
       },
     ],
     by_model: [],
@@ -101,14 +121,22 @@ describe("Breakdowns", () => {
     // usage; they must not render as empty "0" bars in the minutes view.
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: 1,
-        interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: 1, automated_cost: 0,
+        key: "timed",
+        agent_minutes: 30,
+        cost: 1,
+        interactive_agent_minutes: 30,
+        automated_agent_minutes: 0,
+        interactive_cost: 1,
+        automated_cost: 0,
       },
       {
-        key: "costonly", agent_minutes: 0, cost: 5,
-        interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: 5, automated_cost: 0,
+        key: "costonly",
+        agent_minutes: 0,
+        cost: 5,
+        interactive_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: 5,
+        automated_cost: 0,
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -128,14 +156,22 @@ describe("Breakdowns", () => {
     const report = makeReport();
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: 1,
-        interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: 1, automated_cost: 0,
+        key: "timed",
+        agent_minutes: 30,
+        cost: 1,
+        interactive_agent_minutes: 30,
+        automated_agent_minutes: 0,
+        interactive_cost: 1,
+        automated_cost: 0,
       },
       {
-        key: "costonly", agent_minutes: 0, cost: 5,
-        interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: 5, automated_cost: 0,
+        key: "costonly",
+        agent_minutes: 0,
+        cost: 5,
+        interactive_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: 5,
+        automated_cost: 0,
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -163,18 +199,120 @@ describe("Breakdowns", () => {
   });
 
   it("renders distinct project identities that share a display label", async () => {
-	const report = makeReport();
-	report.by_project = [
-		{ ...report.by_project![0], key: "same", project_key: "pl1:sha256:a" },
-		{ ...report.by_project![1], key: "same", project_key: "pl1:sha256:b" },
-	] as Report["by_project"];
-	const target = document.createElement("div");
-	document.body.appendChild(target);
-	const component = mount(Breakdowns, { target, props: { report } });
-	await tick();
+    const report = makeReport();
+    report.by_project = [
+      { ...report.by_project![0], key: "same", project_key: "pl1:sha256:a" },
+      { ...report.by_project![1], key: "same", project_key: "pl1:sha256:b" },
+    ] as Report["by_project"];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
 
-	expect(target.querySelectorAll(".bar-row")).toHaveLength(2);
-	unmount(component);
-	target.remove();
+    expect(target.querySelectorAll(".bar-row")).toHaveLength(2);
+    unmount(component);
+    target.remove();
+  });
+
+  it("links project rows to Data and leaves other panels plain", async () => {
+    const report = makeReport();
+    report.by_model = [{ ...report.by_project![0], key: "model-a" }];
+    report.by_agent = [{ ...report.by_project![0], key: "agent-a" }];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const links = target.querySelectorAll("a.bar-label");
+    expect(links).toHaveLength(2);
+    expect(links[0]!.getAttribute("href")).toBe(
+      "/data?project_key=pl1%3Asha256%3Aalpha",
+    );
+    expect(links[0]!.getAttribute("title")).toBe("View alpha in Data");
+    // Model/agent panels render plain spans, and no action buttons remain.
+    expect(target.querySelectorAll("span.bar-label")).toHaveLength(2);
+    expect(target.querySelectorAll(".bar-row button")).toHaveLength(0);
+    unmount(component);
+  });
+
+  it("includes sticky router params in project hrefs", async () => {
+    // The router singleton refreshes its sticky params on popstate.
+    window.history.replaceState(null, "", "/activity?desktop=");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report: makeReport() } });
+    await tick();
+
+    try {
+      const link = target.querySelector("a.bar-label") as HTMLAnchorElement;
+      expect(link.getAttribute("href")).toBe(
+        "/data?desktop=&project_key=pl1%3Asha256%3Aalpha",
+      );
+    } finally {
+      unmount(component);
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  });
+
+  it("falls back to the display key when project_key is absent", async () => {
+    const report = makeReport();
+    report.by_project = [
+      { ...report.by_project![0], key: "legacy", project_key: undefined },
+    ] as Report["by_project"];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
+
+    const link = target.querySelector("a.bar-label") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/data?project_key=legacy");
+    unmount(component);
+  });
+
+  it("navigates via the router on a plain click, preventing the page load", async () => {
+    const navigate = vi.spyOn(router, "navigate").mockReturnValue(true);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report: makeReport() } });
+    await tick();
+
+    const link = target.querySelector("a.bar-label") as HTMLAnchorElement;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("data", {
+      project_key: "pl1:sha256:alpha",
+    });
+    unmount(component);
+    navigate.mockRestore();
+  });
+
+  it("lets modifier-key clicks fall through to the browser", async () => {
+    const navigate = vi.spyOn(router, "navigate").mockReturnValue(true);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report: makeReport() } });
+    await tick();
+
+    const link = target.querySelector("a.bar-label") as HTMLAnchorElement;
+    // Record whether the component let the event through, then cancel it at
+    // the container so jsdom does not attempt a real page navigation.
+    let fellThrough = false;
+    target.addEventListener("click", (e) => {
+      fellThrough = !e.defaultPrevented;
+      e.preventDefault();
+    });
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    });
+    link.dispatchEvent(click);
+    expect(fellThrough).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    unmount(component);
+    navigate.mockRestore();
   });
 });

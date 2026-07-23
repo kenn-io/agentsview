@@ -635,14 +635,15 @@ CREATE TABLE IF NOT EXISTS remote_skipped_files (
 );
 
 CREATE TABLE IF NOT EXISTS worktree_project_mappings (
-    id          INTEGER PRIMARY KEY,
-    machine     TEXT NOT NULL,
-    path_prefix TEXT NOT NULL,
-    layout      TEXT NOT NULL DEFAULT 'explicit',
-    project     TEXT NOT NULL,
-    enabled     INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    id               INTEGER PRIMARY KEY,
+    machine          TEXT NOT NULL,
+    path_prefix      TEXT NOT NULL,
+    layout           TEXT NOT NULL DEFAULT 'explicit',
+    project          TEXT NOT NULL,
+    original_project TEXT NOT NULL DEFAULT '',
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     UNIQUE(machine, path_prefix)
 );
 
@@ -707,6 +708,11 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
     key                TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshots_evidence
+    ON session_project_identity_snapshots(
+        machine, root_path, git_remote, observed_at DESC, session_id
+    );
 
 CREATE TABLE IF NOT EXISTS background_migrations (
     name            TEXT PRIMARY KEY,
@@ -926,6 +932,83 @@ BEGIN
         FROM archive_metadata WHERE key = 'session_deletion_publication_revision'
     ON CONFLICT(session_id) DO UPDATE SET
         project = excluded.project, revision = excluded.revision, deleted = 0;
+END;
+
+-- Compact publication journal for worktree project mappings, mirroring the
+-- project identity publication journal above. It retains the latest change
+-- per (machine, path_prefix) key so mirror pushes can publish bounded deltas
+-- while preserving tombstones for targets that have been offline.
+CREATE TABLE IF NOT EXISTS worktree_project_mapping_changes (
+    machine     TEXT NOT NULL,
+    path_prefix TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    PRIMARY KEY (machine, path_prefix)
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktree_project_mapping_changes_revision
+    ON worktree_project_mapping_changes(revision);
+
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_insert;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_update;
+DROP TRIGGER IF EXISTS trg_worktree_project_mappings_revision_delete;
+
+CREATE TRIGGER IF NOT EXISTS trg_worktree_project_mappings_revision_insert
+AFTER INSERT ON worktree_project_mappings
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (NEW.machine, NEW.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 0)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_worktree_project_mappings_revision_update
+AFTER UPDATE ON worktree_project_mappings
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (OLD.machine, OLD.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 1)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (NEW.machine, NEW.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 0)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_worktree_project_mappings_revision_delete
+AFTER DELETE ON worktree_project_mappings
+BEGIN
+    INSERT INTO archive_metadata (key, value)
+    VALUES ('worktree_mapping_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET
+        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO worktree_project_mapping_changes
+        (machine, path_prefix, revision, deleted)
+    VALUES (OLD.machine, OLD.path_prefix,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'worktree_mapping_publication_revision'), 1)
+    ON CONFLICT(machine, path_prefix) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
 END;
 
 -- PG sync state: stores watermarks for push sync
