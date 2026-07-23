@@ -134,13 +134,13 @@ func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	export, ok, err := src.BeginExport(ctx, nil)
+	_, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "no vectors.db yet -> nothing to push")
 
 	buildTestVectorsDB(t, cfg)
 
-	export, ok, err = src.BeginExport(ctx, nil)
+	export, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok, "same adapter must pick up a later build")
 	defer export.Close()

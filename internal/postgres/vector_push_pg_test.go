@@ -19,11 +19,11 @@ import (
 // fakeVectorSource is an in-memory VectorPushSource whose generation, aggregate
 // hashes, and per-session docs are mutated between pushes to drive the delta,
 // eviction, and cross-generation cases. genOverride, when set, replaces the
-// nth Generation answer (1-based call count) so a test can change the source's
-// state between the push's initial Generation call and its mid-push
-// re-checks. exportHashes, when set, overrides the per-session hash SessionDocs
-// returns (simulating a local index that changed between the delta scan and
-// the export); by default SessionDocs echoes the delta-scan hash so pushes
+// nth BeginExport answer (1-based call count) so a test can change the source
+// between the push's initial scoped export and any promoted full re-export.
+// exportHashes, when set, overrides the per-session hash SessionDocs returns
+// (simulating a local index that changed between the delta scan and the
+// export); by default SessionDocs echoes the delta-scan hash so pushes
 // proceed.
 type fakeVectorSource struct {
 	gen          VectorGenerationInfo
@@ -1276,12 +1276,11 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 		`SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`, "B"))
 }
 
-// TestVectorPushEvictionSkippedWhenSourceTurnsUnready pins the pre-eviction
-// re-check: when the local source becomes unready between the delta scan and
-// the eviction pass (an embeddings rebuild started mid-push), the eviction
-// list — computed from a now-partial local view — must be dropped, and the
-// next healthy push re-derives and applies it.
-func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
+// TestVectorPushEvictionUsesStableExportSnapshot pins the new snapshot
+// contract: once BeginExport succeeds, the phase keeps using that export even
+// if a later BeginExport would report the source as unready. The export still
+// sees B as absent, so the eviction proceeds from the stable snapshot.
+func TestVectorPushEvictionUsesStableExportSnapshot(t *testing.T) {
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(
 		t, pgURL, "agentsview_vector_push_unready_test")
@@ -1303,10 +1302,12 @@ func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
 	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "first Push")
 
-	// B vanishes locally, but the source turns unready before the evict pass.
+	// B vanishes locally. A later BeginExport would now report the source
+	// unready, but this push never re-opens the export.
 	delete(fake.hashes, "B")
 	delete(fake.docs, "B")
 	fake.genCalls = 0
+	fake.genScopes = nil
 	fake.genOverride = func(call int, _ []string) (VectorGenerationInfo, bool, error) {
 		if call == 1 {
 			return fake.gen, true, nil
@@ -1315,15 +1316,61 @@ func TestVectorPushEvictionSkippedWhenSourceTurnsUnready(t *testing.T) {
 			"%w: rebuild started", ErrVectorSourceNotReady)
 	}
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
-	require.NoError(t, err, "push with mid-push rebuild")
-	assert.Equal(t, 0, res.SessionsEvicted, "eviction must be dropped")
-	assert.Equal(t, 1, res.SessionsDeferred,
-		"abandoned evictions must surface as deferred so the watch loop schedules a generation-wide reconciliation")
+	require.NoError(t, err, "push with stable export")
+	assert.Equal(t, 1, res.SessionsEvicted, "stable export still evicts B")
+	assert.Equal(t, 0, res.SessionsDeferred)
+	require.Len(t, fake.genScopes, 1, "push should open one export snapshot")
+	assert.Nil(t, fake.genScopes[0])
+	assert.Equal(t, 0, countRows(t, pg,
+		`SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`, "B"))
+}
+
+// TestVectorPushSkipsWhenSourceUnreadyAtBeginExport pins the unavailable-source
+// path under the snapshot protocol: if the initial BeginExport refuses because
+// a rebuild is in progress, the whole phase skips without applying evictions,
+// and the next healthy push re-derives them from a fresh export.
+func TestVectorPushSkipsWhenSourceUnreadyAtBeginExport(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_begin_unready_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+
+	fake := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-ur", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha", "B": "hb"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "uA0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "uB0", 0, "cb", "hcb", []float32{0, 0, 0, 1})},
+		},
+	}
+	sync.vectorSource = fake
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+
+	delete(fake.hashes, "B")
+	delete(fake.docs, "B")
+	fake.genCalls = 0
+	fake.genScopes = nil
+	fake.genOverride = func(call int, _ []string) (VectorGenerationInfo, bool, error) {
+		return VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: rebuild started", ErrVectorSourceNotReady)
+	}
+
+	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
+	require.NoError(t, err, "push with unavailable export")
+	assert.True(t, res.Skipped)
+	assert.Contains(t, res.SkippedReason, "rebuild started")
+	assert.Equal(t, 0, res.SessionsEvicted)
+	assert.Equal(t, 0, res.SessionsDeferred)
+	require.Len(t, fake.genScopes, 1, "phase should stop at the first export probe")
 	assert.Equal(t, 1, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_documents WHERE session_id = $1`, "B"),
-		"B's docs survive the aborted eviction")
+		"B's docs survive a skipped push")
 
-	// The next healthy push evicts B.
 	fake.genOverride = nil
 	res, err = sync.pushVectors(ctx, false, nil, 0, nil, nil)
 	require.NoError(t, err, "healthy push")
