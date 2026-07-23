@@ -142,8 +142,8 @@ func vectorGenerationMachines(
 }
 
 func vectorGenerationMachineDisplayName(raw string) string {
-	if i := strings.Index(raw, "|"+pushMarkerKeyPrefix); i >= 0 {
-		return raw[:i]
+	if head, _, ok := strings.Cut(raw, "|"+pushMarkerKeyPrefix); ok {
+		return head
 	}
 	return raw
 }

@@ -479,8 +479,25 @@ func (s *Sync) pushVectors(
 		}
 	}
 	if scope == nil && res.SessionsDeferred == 0 {
-		if err := s.recordVectorGenerationMachine(ctx, resolved.id, witnessKey); err != nil {
+		if s.beforeVectorWitnessRecord != nil {
+			hook := s.beforeVectorWitnessRecord
+			s.beforeVectorWitnessRecord = nil
+			hook()
+		}
+		recorded, err := s.recordVectorGenerationMachine(
+			ctx, gen.Fingerprint, resolved, witnessKey,
+		)
+		if err != nil {
 			return res, err
+		}
+		if !recorded {
+			log.Printf("vector push: generation %d changed after verification and before witness insert; retrying generation-wide",
+				resolved.id)
+			_ = export.Close()
+			export = nil
+			return s.pushVectors(
+				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
+			)
 		}
 	}
 	log.Printf("vector push: %d session(s) pushed, %d unchanged, %d deferred, %d evicted, %d chunks",
@@ -902,16 +919,23 @@ func (s *Sync) vectorGenerationWitnessKey() (string, error) {
 }
 
 func (s *Sync) recordVectorGenerationMachine(
-	ctx context.Context, genID int64, witnessKey string,
-) error {
-	if _, err := s.pg.ExecContext(ctx, `
+	ctx context.Context, fingerprint string, gen vectorGeneration, witnessKey string,
+) (bool, error) {
+	res, err := s.pg.ExecContext(ctx, `
 INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
-VALUES ($1, $2, now())
-ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = now()`,
-		genID, witnessKey); err != nil {
-		return fmt.Errorf("recording vector push machine: %w", err)
+SELECT id, $4, now()
+  FROM vector_generations
+ WHERE id = $1 AND fingerprint = $2 AND created_at = $3
+ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at`,
+		gen.id, fingerprint, gen.createdAt, witnessKey)
+	if err != nil {
+		return false, fmt.Errorf("recording vector push machine: %w", err)
 	}
-	return nil
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("confirming vector push machine record: %w", err)
+	}
+	return rows > 0, nil
 }
 
 // readVectorPushState loads the delta state for genID, joined with each

@@ -967,7 +967,7 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{0, 0, 1, 0})},
 		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 0, 0, 1})},
 	}
-	sync.afterVectorApply = func() {
+	sync.beforeVectorWitnessRecord = func() {
 		for _, q := range []string{
 			`DROP TABLE IF EXISTS ` + vectorChunkTable(gen1),
 			`DROP TABLE IF EXISTS vector_push_state`,
