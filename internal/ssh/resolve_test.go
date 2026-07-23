@@ -26,7 +26,7 @@ func TestBuildResolveScript(t *testing.T) {
 		want := def.FileBased &&
 			parser.ProviderMigrationModes()[def.Type] ==
 				parser.ProviderMigrationProviderAuthoritative
-		if def.Type == parser.AgentTrae {
+		if def.Type == parser.AgentTrae || def.Type == parser.AgentOmnigent {
 			want = false
 		}
 		if want {
@@ -186,7 +186,7 @@ func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
 	assert.True(t, hasSuffix(extraFiles, ".hermes/state.db"))
 }
 
-func TestResolveScriptScopesOmnigentToSQLiteFiles(t *testing.T) {
+func TestResolveScriptExcludesOmnigentAuthenticationDatabase(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, ".omnigent")
 	require.NoError(t, os.MkdirAll(root, 0o755))
@@ -206,21 +206,8 @@ func TestResolveScriptScopesOmnigentToSQLiteFiles(t *testing.T) {
 	out := runResolveScriptForTest(t, "HOME="+home)
 	dirs, files, _ := parseResolvedTargets(string(out))
 
-	assert.Truef(t, hasSuffix(dirs[parser.AgentOmnigent], ".omnigent"),
-		"omnigent root should resolve, got %v", dirs[parser.AgentOmnigent])
-	for _, suffix := range []string{
-		".omnigent/chat.db",
-		".omnigent/chat.db-wal",
-		".omnigent/chat.db-shm",
-		".omnigent/chat.db-journal",
-	} {
-		assert.Truef(t, hasSuffix(files[parser.AgentOmnigent], suffix),
-			"omnigent sqlite file %q should resolve, got %v",
-			suffix, files[parser.AgentOmnigent])
-	}
-	assert.False(t, hasSuffix(
-		files[parser.AgentOmnigent], ".omnigent/credentials.json",
-	))
+	assert.NotContains(t, dirs, parser.AgentOmnigent)
+	assert.NotContains(t, files, parser.AgentOmnigent)
 }
 
 func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {

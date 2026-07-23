@@ -33,14 +33,6 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				}
 				continue
 			}
-			if def.Type == parser.AgentOmnigent {
-				root, targetFiles := resolveOmnigentTarget(dir)
-				if root != "" && len(targetFiles) > 0 {
-					dirs[def.Type] = append(dirs[def.Type], root)
-					files[def.Type] = append(files[def.Type], targetFiles...)
-				}
-				continue
-			}
 			if def.Type == parser.AgentAider {
 				targets := resolveAiderTargets(dir)
 				if len(targets) > 0 {
@@ -87,24 +79,6 @@ func ResolveTargets(cfg config.Config) TargetSet {
 		}
 	}
 	return TargetSet{Dirs: dirs, Files: files, ExtraFiles: extra}
-}
-
-func resolveOmnigentTarget(root string) (string, []string) {
-	root = filepath.Clean(root)
-	chatDB := filepath.Join(root, parser.OmnigentDBName)
-	info, err := os.Lstat(chatDB)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", nil
-	}
-	files := []string{chatDB}
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		path := chatDB + suffix
-		info, err := os.Lstat(path)
-		if err == nil && info.Mode().IsRegular() {
-			files = append(files, path)
-		}
-	}
-	return root, files
 }
 
 func resolveHermesTargets(root string) ([]string, []string) {
@@ -199,7 +173,10 @@ func hermesStateFiles(stateDB string, includeDB bool) []string {
 }
 
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
-	if def.Type == parser.AgentTrae {
+	// Omnigent's chat.db co-locates transcripts with authentication secrets.
+	// Remote sync must remain disabled until it has a fresh, allowlisted export
+	// schema; copying or sanitizing the source database can retain deleted pages.
+	if def.Type == parser.AgentTrae || def.Type == parser.AgentOmnigent {
 		return false
 	}
 	if !def.FileBased {

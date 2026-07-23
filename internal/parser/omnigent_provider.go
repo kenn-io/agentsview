@@ -176,6 +176,16 @@ func (s omnigentSourceSet) SourcesForChangedPath(
 	return sources, nil
 }
 
+func (s omnigentSourceSet) RestoreCachedSourceState(
+	ctx context.Context, source SourceRef,
+) (bool, error) {
+	src, ok := source.Opaque.(multiSessionSource)
+	if !ok || src.MemberID != "" || src.Container == "" {
+		return false, nil
+	}
+	return s.tracker.restoreCachedContainer(ctx, src.Container)
+}
+
 func streamOmnigentMemberMatches(
 	ctx context.Context, root string, yield func(multiSessionMatch) error,
 ) error {
@@ -1105,6 +1115,158 @@ func omnigentMostRecentMembers(
 		})
 	}
 	return recent
+}
+
+func (t *omnigentChangeTracker) restoreCachedContainer(
+	ctx context.Context, container string,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	t.mu.Lock()
+	_, warm := t.containers[container]
+	t.mu.Unlock()
+	if warm {
+		return false, nil
+	}
+	// Capture the floor before querying. A fingerprint recheck in the engine
+	// rejects the cache hit if a commit lands while these bounded cursors are
+	// restored.
+	checkedAt := time.Now().Unix()
+	conn, err := openOmnigentDB(container)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	schema, err := detectOmnigentSchema(conn)
+	if err != nil {
+		return false, err
+	}
+	conversationRowID, conversationTail, err :=
+		omnigentLatestConversationRow(ctx, conn, schema)
+	if err != nil {
+		return false, err
+	}
+	itemRowID, itemTail, err := omnigentLatestItemRow(ctx, conn, schema)
+	if err != nil {
+		return false, err
+	}
+	tracked := omnigentTrackedContainer{
+		schema:            schema,
+		checkedAt:         checkedAt,
+		conversationRowID: conversationRowID,
+		conversationTail:  conversationTail,
+		itemRowID:         itemRowID,
+		itemTail:          itemTail,
+	}
+	if schema.splitMetadata {
+		workspaceID, singleWorkspace, boundsErr :=
+			omnigentSingleWorkspaceBounded(ctx, conn)
+		if boundsErr != nil {
+			return false, boundsErr
+		}
+		tracked.workspaceID = workspaceID
+		tracked.singleWorkspace = singleWorkspace
+		if singleWorkspace {
+			metas, recentErr := omnigentRecentWorkspaceMetas(
+				ctx, conn, schema, workspaceID,
+			)
+			if recentErr != nil {
+				return false, recentErr
+			}
+			tracked.recentMembers = omnigentMostRecentMembers(
+				metas, checkedAt,
+			)
+		}
+	}
+	t.mu.Lock()
+	t.containers[container] = tracked
+	t.mu.Unlock()
+	return true, nil
+}
+
+func omnigentSingleWorkspaceBounded(
+	ctx context.Context, conn *sql.DB,
+) (int64, bool, error) {
+	var first int64
+	err := conn.QueryRowContext(ctx, `
+		SELECT workspace_id
+		  FROM conversations
+		 ORDER BY workspace_id
+		 LIMIT 1
+	`).Scan(&first)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf(
+			"reading first omnigent workspace: %w", err,
+		)
+	}
+	var last int64
+	if err := conn.QueryRowContext(ctx, `
+		SELECT workspace_id
+		  FROM conversations
+		 ORDER BY workspace_id DESC
+		 LIMIT 1
+	`).Scan(&last); err != nil {
+		return 0, false, fmt.Errorf(
+			"reading last omnigent workspace: %w", err,
+		)
+	}
+	return first, first == last, nil
+}
+
+func omnigentRecentWorkspaceMetas(
+	ctx context.Context, conn *sql.DB, schema omnigentSchema,
+	workspaceID int64,
+) ([]omnigentMeta, error) {
+	archivedValues := []any{nil}
+	if schema.changeIndexArchived {
+		archivedValues = []any{int64(0), int64(1)}
+	}
+	indexName := fmt.Sprintf("%q", schema.changeIndexName)
+	idExpr := omnigentIDExpr(schema, "id")
+	metas := make([]omnigentMeta, 0, omnigentRecentMemberLimit)
+	for _, archived := range archivedValues {
+		query := `
+			SELECT workspace_id, ` + idExpr + `, COALESCE(updated_at, 0)
+			  FROM conversations INDEXED BY ` + indexName + `
+			 WHERE workspace_id = ?`
+		args := []any{workspaceID}
+		if archived != nil {
+			query += ` AND archived = ?`
+			args = append(args, archived)
+		}
+		query += ` ORDER BY updated_at DESC LIMIT ?`
+		args = append(args, omnigentRecentMemberLimit)
+		rows, err := conn.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"reading recent omnigent conversations: %w", err,
+			)
+		}
+		for rows.Next() {
+			var meta omnigentMeta
+			if err := rows.Scan(
+				&meta.workspaceID, &meta.rawID, &meta.updatedAt,
+			); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf(
+					"scanning recent omnigent conversation: %w", err,
+				)
+			}
+			metas = append(metas, meta)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return metas, nil
 }
 
 func (t *omnigentChangeTracker) parseContainer(

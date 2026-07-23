@@ -124,6 +124,16 @@ func (p *SourceSetProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func (p *SourceSetProvider) RestoreCachedSourceState(
+	ctx context.Context, source SourceRef,
+) (bool, error) {
+	restorer, ok := p.sources.(CachedSourceStateRestorer)
+	if !ok {
+		return false, nil
+	}
+	return restorer.RestoreCachedSourceState(ctx, source)
+}
+
 func (p *SourceSetProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,

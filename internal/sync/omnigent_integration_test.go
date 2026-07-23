@@ -100,6 +100,16 @@ func (p *omnigentParseCountingProvider) WatchRoots(
 	return planner.WatchRoots(ctx)
 }
 
+func (p *omnigentParseCountingProvider) RestoreCachedSourceState(
+	ctx context.Context, source parser.SourceRef,
+) (bool, error) {
+	restorer, ok := p.Provider.(parser.CachedSourceStateRestorer)
+	if !ok {
+		return false, nil
+	}
+	return restorer.RestoreCachedSourceState(ctx, source)
+}
+
 func (p *omnigentParseCountingProvider) Parse(
 	ctx context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
@@ -736,6 +746,66 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 				"periodic work must stay constant as the archive grows")
 		})
 	}
+}
+
+func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	var watcherResultCounts []int64
+	for _, archiveSize := range []int{200, 2000} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
+			archive := dbtest.OpenTestDB(t)
+
+			firstEngine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {root},
+				},
+				Machine: "local",
+			})
+			syncOmnigentArchive(t, firstEngine, archive, archiveSize)
+			firstEngine.Close()
+
+			var parseCount, resultCount atomic.Int64
+			restartedFactory := omnigentParseCountingFactory{
+				delegate: omnigentDefaultProviderFactory(t),
+				count:    &parseCount,
+				results:  &resultCount,
+			}
+			restarted := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {root},
+				},
+				Machine:           "local",
+				ProviderFactories: []parser.ProviderFactory{restartedFactory},
+			})
+			t.Cleanup(restarted.Close)
+
+			restarted.SyncAll(t.Context(), nil)
+			require.Zero(t, restarted.LastSyncStats().Failed)
+			assert.Zero(t, parseCount.Load(),
+				"restart validation should reuse the persisted container cache")
+
+			appendOmnigentSyncMessage(t, dbPath, "after_restart")
+			parseCount.Store(0)
+			resultCount.Store(0)
+			require.NoError(t,
+				restarted.SyncPathsContext(t.Context(), []string{dbPath}))
+			require.Zero(t, restarted.LastSyncStats().Failed)
+			assert.Equal(t, parseCount.Load(), resultCount.Load())
+			assert.LessOrEqual(t, resultCount.Load(), int64(129),
+				"restart replay must stay within the changed member plus "+
+					"the fixed recent-member window")
+			watcherResultCounts = append(
+				watcherResultCounts, resultCount.Load(),
+			)
+		})
+	}
+	require.Len(t, watcherResultCounts, 2)
+	assert.Equal(t, watcherResultCounts[0], watcherResultCounts[1],
+		"first watcher work after restart must not grow with archive size")
 }
 
 func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {

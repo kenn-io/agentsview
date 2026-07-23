@@ -83,7 +83,7 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }
 
-func TestResolveTargetsScopesOmnigentToSQLiteFiles(t *testing.T) {
+func TestResolveTargetsExcludesOmnigentAuthenticationDatabase(t *testing.T) {
 	root := t.TempDir()
 	chatDB := filepath.Join(root, "chat.db")
 	for _, path := range []string{
@@ -104,13 +104,8 @@ func TestResolveTargetsScopesOmnigentToSQLiteFiles(t *testing.T) {
 		},
 	})
 
-	assert.Equal(t, []string{root}, targets.Dirs[parser.AgentOmnigent])
-	assert.ElementsMatch(t, []string{
-		chatDB,
-		chatDB + "-wal",
-		chatDB + "-shm",
-		chatDB + "-journal",
-	}, targets.Files[parser.AgentOmnigent])
+	assert.NotContains(t, targets.Dirs, parser.AgentOmnigent)
+	assert.NotContains(t, targets.Files, parser.AgentOmnigent)
 }
 
 func TestResolveTargetsExcludesTraeProfile(t *testing.T) {

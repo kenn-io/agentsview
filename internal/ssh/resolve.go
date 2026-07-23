@@ -154,16 +154,6 @@ func buildResolveScript() string {
 			"av_emit_agent_file \"" + string(parser.AgentKiloLegacy) + "\" \"$av_kl_task/api_conversation_history.json\"; " +
 			"done; " +
 			"}\n" +
-			"av_emit_omnigent_target() { " +
-			"target=\"$1\"; " +
-			"case \"$target\" in */) target=\"${target%/}\";; esac; " +
-			"av_omnigent_db=\"$target/" + parser.OmnigentDBName + "\"; " +
-			"[ -f \"$av_omnigent_db\" ] || return; " +
-			"printf '%s\\000' \"" + string(parser.AgentOmnigent) + ":$target\"; " +
-			"for av_omnigent_file in \"$av_omnigent_db\" \"$av_omnigent_db-wal\" \"$av_omnigent_db-shm\" \"$av_omnigent_db-journal\"; do " +
-			"av_emit_agent_file \"" + string(parser.AgentOmnigent) + "\" \"$av_omnigent_file\"; " +
-			"done; " +
-			"}\n" +
 			"av_emit_target() { " +
 			"agent=\"$1\"; " +
 			"target=\"$2\"; " +
@@ -177,10 +167,6 @@ func buildResolveScript() string {
 			"fi; " +
 			"if [ \"$agent\" = \"" + string(parser.AgentKiloLegacy) + "\" ]; then " +
 			"av_emit_kilo_legacy_target \"$target\"; " +
-			"return; " +
-			"fi; " +
-			"if [ \"$agent\" = \"" + string(parser.AgentOmnigent) + "\" ]; then " +
-			"av_emit_omnigent_target \"$target\"; " +
 			"return; " +
 			"fi; " +
 			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
@@ -351,7 +337,10 @@ func remoteDefaultRootTail(rel string) string {
 // resolveAgentHasOnDiskSource reports whether a file-backed agent has local
 // sources the resolve script should probe via the provider facade.
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
-	if def.Type == parser.AgentTrae {
+	// Omnigent's chat.db co-locates transcripts with authentication secrets.
+	// Remote sync must remain disabled until it has a fresh, allowlisted export
+	// schema; copying or sanitizing the source database can retain deleted pages.
+	if def.Type == parser.AgentTrae || def.Type == parser.AgentOmnigent {
 		return false
 	}
 	if !def.FileBased {

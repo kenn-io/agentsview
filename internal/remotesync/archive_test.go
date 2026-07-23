@@ -240,75 +240,47 @@ func TestHermesArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 	}
 }
 
-func TestOmnigentArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
+func TestWriteArchiveExcludesOmnigentAuthenticationDatabase(t *testing.T) {
 	root := t.TempDir()
 	chatDB := filepath.Join(root, "chat.db")
-	writeHermesImportStateDB(t, chatDB)
-	writer, err := sql.Open("sqlite3", chatDB)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = writer.Close() })
-	var journalMode string
-	require.NoError(t,
-		writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
-	assert.Equal(t, "wal", journalMode)
-	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
-	require.NoError(t, err)
-	_, err = writer.Exec(`
-		UPDATE sessions
-		SET title = 'Committed in WAL'
-		WHERE id = 'database-only'
-	`)
-	require.NoError(t, err)
-	wal := chatDB + "-wal"
-	require.FileExists(t, wal)
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
 
 	targets := TargetSet{
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
 		Files: map[parser.AgentType][]string{
-			parser.AgentOmnigent: append(
-				[]string{chatDB}, hermesTestSidecars(chatDB)...,
-			),
+			parser.AgentOmnigent: {chatDB},
 		},
 	}
-	databaseInfo, err := os.Stat(chatDB)
-	require.NoError(t, err)
-	archiveWriter := newBlockAfterBytesWriter(512 + databaseInfo.Size())
-	errCh := make(chan error, 1)
-	go func() { errCh <- WriteArchive(archiveWriter, targets) }()
-
-	select {
-	case <-archiveWriter.blocked:
-	case <-time.After(backgroundWaitTimeout):
-		require.FailNow(t, "archive did not finish its first database entry")
+	for _, tt := range []struct {
+		name  string
+		write func(io.Writer) error
+	}{
+		{
+			name: "full",
+			write: func(w io.Writer) error {
+				return WriteArchive(w, targets)
+			},
+		},
+		{
+			name: "delta",
+			write: func(w io.Writer) error {
+				return WriteArchiveFiles(w, targets, []string{chatDB})
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			require.NoError(t, tt.write(&archive))
+			_, err := tar.NewReader(&archive).Next()
+			assert.ErrorIs(t, err, io.EOF,
+				"Omnigent authentication state must never enter a remote archive")
+		})
 	}
-	_, err = writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
-	if removeErr := os.Remove(wal); !os.IsNotExist(removeErr) {
-		require.NoError(t, removeErr)
-	}
-	close(archiveWriter.proceed)
-	require.NoError(t, <-errCh)
-
-	extracted := t.TempDir()
-	_, err = ExtractTarStream(
-		context.Background(), bytes.NewReader(archiveWriter.Bytes()), extracted,
-	)
-	require.NoError(t, err)
-	extractedDB, err := safeRemappedRemotePath(extracted, chatDB)
-	require.NoError(t, err)
-	snapshot, err := sql.Open("sqlite3", extractedDB)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, snapshot.Close()) })
-	var title string
-	require.NoError(t, snapshot.QueryRow(`
-		SELECT title FROM sessions WHERE id = 'database-only'
-	`).Scan(&title))
-	assert.Equal(t, "Committed in WAL", title)
-	assert.NoFileExists(t, extractedDB+"-wal")
-	assert.NoFileExists(t, extractedDB+"-shm")
 }
 
 func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {

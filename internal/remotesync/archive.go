@@ -20,14 +20,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			hermesSQLite[path] = stateDB
 		}
 	}
-	omnigentSQLite := make(map[string]string)
-	for _, chatDB := range omnigentChatDBTargets(targets) {
-		for _, path := range omnigentSQLitePaths(chatDB) {
-			omnigentSQLite[path] = chatDB
-		}
-	}
 	writtenHermesState := make(map[string]struct{})
-	writtenOmnigentChat := make(map[string]struct{})
 	writePath := func(path string, optional bool) error {
 		clean := filepath.Clean(path)
 		if stateDB, ok := hermesSQLite[clean]; ok {
@@ -37,19 +30,15 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			writtenHermesState[stateDB] = struct{}{}
 			return writeHermesStateDBSnapshot(tw, stateDB)
 		}
-		if chatDB, ok := omnigentSQLite[clean]; ok {
-			if _, written := writtenOmnigentChat[chatDB]; written {
-				return nil
-			}
-			writtenOmnigentChat[chatDB] = struct{}{}
-			return writeOmnigentChatDBSnapshot(tw, chatDB)
-		}
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
 		}
 		return writeArchivePath(tw, path)
 	}
 	for agent, dirs := range targets.Dirs {
+		if agent == parser.AgentOmnigent {
+			continue
+		}
 		if _, fileScoped := targets.Files[agent]; fileScoped {
 			continue
 		}
@@ -60,6 +49,9 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 		}
 	}
 	for agent, files := range targets.Files {
+		if agent == parser.AgentOmnigent {
+			continue
+		}
 		if agent == parser.AgentWindsurf {
 			if err := writeWindsurfArchiveFiles(tw, files); err != nil {
 				return err
@@ -112,35 +104,6 @@ func writeHermesStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 }
 
 var writeHermesSnapshotFile = writeSQLiteSnapshot
-
-func writeOmnigentChatDBSnapshot(tw *tar.Writer, chatDB string) error {
-	_, modTime, exists, err := sqliteSnapshotIdentity(chatDB)
-	if err != nil {
-		return fmt.Errorf("inspect omnigent database %q: %w", chatDB, err)
-	}
-	if !exists {
-		return nil
-	}
-	tmpDir, err := os.MkdirTemp("", "agentsview-omnigent-snapshot-*")
-	if err != nil {
-		return fmt.Errorf("create omnigent snapshot dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-	snapshotPath := filepath.Join(tmpDir, parser.OmnigentDBName)
-	if err := writeOmnigentSnapshotFile(snapshotPath, chatDB); err != nil {
-		return fmt.Errorf("snapshot omnigent database %q: %w", chatDB, err)
-	}
-	if err := os.Chtimes(snapshotPath, modTime, modTime); err != nil {
-		return fmt.Errorf("stamp omnigent database snapshot: %w", err)
-	}
-	info, err := os.Stat(snapshotPath)
-	if err != nil {
-		return fmt.Errorf("stat omnigent database snapshot: %w", err)
-	}
-	return writeArchiveFileAs(tw, chatDB, snapshotPath, info)
-}
-
-var writeOmnigentSnapshotFile = writeSQLiteSnapshot
 
 func writeWindsurfArchiveFiles(tw *tar.Writer, files []string) error {
 	seen := make(map[string]struct{}, len(files))

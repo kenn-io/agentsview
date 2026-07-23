@@ -37,11 +37,8 @@ import (
 // resolved by feature detection (omnigentSchema).
 const (
 	omnigentIDPrefix = "omnigent:"
-	omnigentDBName   = OmnigentDBName
+	omnigentDBName   = "chat.db"
 )
-
-// OmnigentDBName is the standalone SQLite database exported by remote sync.
-const OmnigentDBName = "chat.db"
 
 // omnigentAgent is the AgentType for omnigent sessions.
 const omnigentAgent AgentType = "omnigent"

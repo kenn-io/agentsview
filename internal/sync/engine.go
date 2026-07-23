@@ -7074,16 +7074,49 @@ func (e *Engine) processProviderFile(
 				// refresh; non-Codex providers avoid the index lookup entirely.
 				e.clearSkip(cacheKey)
 			} else {
-				if verifiedStateOK &&
-					e.shouldSkipProviderSourceByDB(file, fingerprint) {
-					e.promoteVerifiedSource(verifiedCapture)
+				cacheStillFresh := true
+				if file.Agent == parser.AgentOmnigent {
+					restorer, ok := provider.(parser.CachedSourceStateRestorer)
+					if ok {
+						restored, err := restorer.RestoreCachedSourceState(
+							ctx, source,
+						)
+						if err != nil {
+							return processResult{
+								err: fmt.Errorf(
+									"restore cached %s source state: %w",
+									file.Agent, err,
+								),
+							}, true
+						}
+						if restored {
+							currentFingerprint, err := provider.Fingerprint(
+								ctx, source,
+							)
+							if err != nil {
+								return processResult{err: err}, true
+							}
+							if currentFingerprint != fingerprint {
+								e.clearSkip(cacheKey)
+								cacheStillFresh = false
+							}
+						}
+					}
 				}
-				return processResult{
-					skip:      true,
-					mtime:     fingerprint.MTimeNS,
-					cacheSkip: true,
-					cacheKey:  cacheKey,
-				}, true
+				if cacheStillFresh {
+					if verifiedStateOK &&
+						e.shouldSkipProviderSourceByDB(file, fingerprint) {
+						e.promoteVerifiedSource(verifiedCapture)
+					}
+					return processResult{
+						skip:      true,
+						mtime:     fingerprint.MTimeNS,
+						cacheSkip: true,
+						cacheKey:  cacheKey,
+					}, true
+				}
+				// A commit raced cache validation and tracker restoration.
+				// Fall through to parse the now-current container.
 			}
 		}
 	}

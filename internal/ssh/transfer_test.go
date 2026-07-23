@@ -189,64 +189,27 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 	assert.Equal(t, "Committed in WAL", title)
 }
 
-func TestBuildTarCommandSnapshotsOmnigentChatDBWithoutSidecars(t *testing.T) {
+func TestBuildTarCommandExcludesOmnigentAuthenticationDatabase(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("remote snapshot script uses POSIX paths; local Windows paths are not representative")
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
 	}
 	root := t.TempDir()
 	chatDB := filepath.Join(root, "chat.db")
-	writer, err := sql.Open("sqlite3", chatDB)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = writer.Close() })
-	_, err = writer.Exec(`
-		CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT);
-		INSERT INTO conversations (id, title) VALUES ('session', 'Main database');
-	`)
-	require.NoError(t, err)
-	var journalMode string
-	require.NoError(t,
-		writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
-	assert.Equal(t, "wal", journalMode)
-	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
-	require.NoError(t, err)
-	_, err = writer.Exec(
-		`UPDATE conversations SET title = 'Committed in WAL'`,
-	)
-	require.NoError(t, err)
-	wal := chatDB + "-wal"
-	shm := chatDB + "-shm"
-	require.FileExists(t, wal)
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
 
 	script := buildTarCommand(
 		map[parser.AgentType][]string{parser.AgentOmnigent: {root}},
 		map[parser.AgentType][]string{
-			parser.AgentOmnigent: {
-				chatDB, wal, shm, chatDB + "-journal",
-			},
+			parser.AgentOmnigent: {chatDB},
 		},
 		nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.CombinedOutput()
-	require.NoError(t, err, "snapshot command output: %s", archive)
-	assert.Equal(t, []string{archivePathForTest(chatDB)}, tarNames(t, archive))
-
-	extracted := t.TempDir()
-	_, err = remotesync.ExtractTarStream(
-		context.Background(), bytes.NewReader(archive), extracted,
-	)
-	require.NoError(t, err)
-	extractedDB := filepath.Join(extracted, strings.TrimPrefix(chatDB, "/"))
-	snapshot, err := sql.Open("sqlite3", extractedDB)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, snapshot.Close()) })
-	var title string
-	require.NoError(t,
-		snapshot.QueryRow(
-			`SELECT title FROM conversations WHERE id = 'session'`,
-		).Scan(&title))
-	assert.Equal(t, "Committed in WAL", title)
+	require.NoError(t, err, "archive command output: %s", archive)
+	assert.Empty(t, tarNames(t, archive),
+		"Omnigent authentication state must never enter an SSH archive")
 }
 
 func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {

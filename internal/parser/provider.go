@@ -98,6 +98,14 @@ type Provider interface {
 	) (IncrementalOutcome, IncrementalStatus, error)
 }
 
+// CachedSourceStateRestorer rebuilds bounded in-memory provider state when the
+// engine validates a persisted source cache entry without parsing the source.
+// Shared-container providers use it to avoid treating the first watcher event
+// after restart as a cold whole-container discovery.
+type CachedSourceStateRestorer interface {
+	RestoreCachedSourceState(context.Context, SourceRef) (bool, error)
+}
+
 // ReconciliationSourceResolver rebuilds the exact source emitted by streaming
 // discovery without routing the virtual path back through changed-path
 // classification. Shared-container providers use it to avoid rescanning every
