@@ -33,7 +33,7 @@ type ContentSearchFilter struct {
 	ExcludeSystem bool
 
 	Project, ExcludeProject, Machine, Agent           string
-	Date, DateFrom, DateTo, ActiveSince               string
+	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
@@ -125,6 +125,7 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
+		Timezone:         f.Timezone,
 		ActiveSince:      f.ActiveSince,
 		ExcludeOneShot:   !f.IncludeOneShot,
 		ExcludeAutomated: !f.IncludeAutomated,

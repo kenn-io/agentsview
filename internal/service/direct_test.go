@@ -643,6 +643,17 @@ func TestDirectBackend_List_TimezoneValidationAndUTCDefault(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
 }
 
+func TestDirectSearchContentRejectsInvalidTimezone(t *testing.T) {
+	t.Parallel()
+	svc, _ := newDirectTestSvc(t)
+
+	_, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "test", Timezone: "Fake/Zone",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
+}
+
 // TestDirectBackend_List_ClampsOverMaxLimit verifies that a caller
 // passing a Limit larger than db.MaxSessionLimit is clamped to
 // MaxSessionLimit rather than being reset to DefaultSessionLimit

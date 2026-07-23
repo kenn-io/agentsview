@@ -1485,6 +1485,41 @@ func TestSessionExportCursorPreservesTimezoneFilter(t *testing.T) {
 	})
 }
 
+func TestSessionExportCursorTreatsDefaultAndExplicitUTCAsEquivalent(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	for _, row := range []struct {
+		id, started, ended string
+	}{
+		{"utc-later", "2024-06-16T03:00:00Z", "2024-06-16T04:00:00Z"},
+		{"utc-earlier", "2024-06-16T01:00:00Z", "2024-06-16T02:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID: row.id, Project: "utc-cursor", Machine: "local", Agent: "claude",
+			StartedAt: new(row.started), EndedAt: new(row.ended),
+			MessageCount: 1, UserMessageCount: 1,
+		})
+	}
+
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "utc-cursor", Date: "2024-06-16"},
+		Limit:  1,
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"utc-later"}, sessionExportRowIDs(first.Rows))
+	require.NotEmpty(t, first.NextCursor)
+
+	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project: "utc-cursor", Date: "2024-06-16", Timezone: "UTC",
+		},
+		Cursor: first.NextCursor,
+		Limit:  1,
+	})
+	require.NoError(t, err, "explicit UTC should match the default timezone")
+	assert.Equal(t, []string{"utc-earlier"}, sessionExportRowIDs(second.Rows))
+}
+
 func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
 	ctx := context.Background()
 	d := testSessionExportDB(t)

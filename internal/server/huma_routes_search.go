@@ -47,6 +47,7 @@ type contentSearchInput struct {
 	Date             string             `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
 	DateFrom         string             `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
 	DateTo           string             `query:"date_to" format:"date" doc:"Filter sessions active on or before this date"`
+	Timezone         string             `query:"timezone" doc:"IANA timezone for calendar-date filters; defaults to UTC"`
 	ActiveSince      string             `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
 	IncludeChildren  bool               `query:"include_children" doc:"Include child sessions"`
 	IncludeAutomated bool               `query:"include_automated" doc:"Include automated sessions"`
@@ -114,6 +115,10 @@ func (s *Server) humaSearchContent(
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return nil, err
 	}
+	timezone, err := db.NormalizeSessionTimezone(in.Timezone)
+	if err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
 	res, err := s.sessions.SearchContent(ctx, service.ContentSearchRequest{
 		Pattern:          in.Pattern,
 		Mode:             string(in.Mode),
@@ -128,6 +133,7 @@ func (s *Server) humaSearchContent(
 		Date:             in.Date,
 		DateFrom:         in.DateFrom,
 		DateTo:           in.DateTo,
+		Timezone:         timezone,
 		ActiveSince:      in.ActiveSince,
 		IncludeChildren:  in.IncludeChildren,
 		IncludeAutomated: in.IncludeAutomated,

@@ -87,6 +87,7 @@ export class SearchService {
     date,
     dateFrom,
     dateTo,
+    timezone,
     activeSince,
     includeChildren,
     includeAutomated,
@@ -156,6 +157,10 @@ export class SearchService {
      */
     dateTo?: string,
     /**
+     * IANA timezone for calendar-date filters; defaults to UTC
+     */
+    timezone?: string,
+    /**
      * Filter sessions active since this RFC3339 timestamp
      */
     activeSince?: string,
@@ -205,6 +210,7 @@ export class SearchService {
         'date': date,
         'date_from': dateFrom,
         'date_to': dateTo,
+        'timezone': timezone,
         'active_since': activeSince,
         'include_children': includeChildren,
         'include_automated': includeAutomated,

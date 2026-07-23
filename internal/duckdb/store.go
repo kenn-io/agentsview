@@ -1371,6 +1371,7 @@ func contentSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
+		Timezone:         f.Timezone,
 		ActiveSince:      f.ActiveSince,
 		ExcludeOneShot:   !f.IncludeOneShot,
 		ExcludeAutomated: !f.IncludeAutomated,

@@ -549,6 +549,36 @@ func TestSearchContentMultiSourceWithProjectFilter(t *testing.T) {
 	}
 }
 
+func TestSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
+	d := testDB(t)
+	for _, row := range []struct {
+		id, started, ended string
+	}{
+		{"new-york-previous-day", "2024-06-16T01:00:00Z", "2024-06-16T02:00:00Z"},
+		{"new-york-requested-day", "2024-06-16T05:00:00Z", "2024-06-16T06:00:00Z"},
+	} {
+		insertSession(t, d, row.id, "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = new(row.started)
+			s.EndedAt = new(row.ended)
+			s.UserMessageCount = 2
+		})
+		insertMessages(t, d, Message{
+			SessionID: row.id, Ordinal: 0, Role: "user",
+			Content: "TIMEZONE_NEEDLE", Timestamp: row.started,
+		})
+	}
+
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "TIMEZONE_NEEDLE", Mode: "substring",
+		Sources: []string{"messages"}, Date: "2024-06-16",
+		Timezone: "America/New_York", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "new-york-requested-day", got.Matches[0].SessionID)
+}
+
 func TestSnippetWindowRuneBoundaries(t *testing.T) {
 	// "é" and "ü" are two bytes each, so a byte-radius that lands inside them
 	// would slice mid-rune. The match itself is ASCII; only the padding edges

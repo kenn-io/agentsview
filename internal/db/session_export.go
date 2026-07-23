@@ -1058,7 +1058,17 @@ func canonicalSessionExportFilter(f SessionFilter) SessionFilter {
 	f.Date = strings.TrimSpace(f.Date)
 	f.DateFrom = strings.TrimSpace(f.DateFrom)
 	f.DateTo = strings.TrimSpace(f.DateTo)
-	f.Timezone = strings.TrimSpace(f.Timezone)
+	if timezone, err := NormalizeSessionTimezone(f.Timezone); err == nil {
+		if timezone == "UTC" {
+			// Preserve the existing cursor wire form while treating an
+			// explicit UTC filter as equivalent to the omitted UTC default.
+			f.Timezone = ""
+		} else {
+			f.Timezone = timezone
+		}
+	} else {
+		f.Timezone = strings.TrimSpace(f.Timezone)
+	}
 	f.ActiveSince = strings.TrimSpace(f.ActiveSince)
 	f.AutomatedScope = normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	f.ExcludeAutomated = false

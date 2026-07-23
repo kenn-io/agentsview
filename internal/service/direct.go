@@ -782,6 +782,11 @@ func (b *directBackend) SearchContent(
 	if req.Context > maxContentSearchContext {
 		return nil, &db.SearchInputError{Msg: "context: maximum is 10"}
 	}
+	timezone, err := db.NormalizeSessionTimezone(req.Timezone)
+	if err != nil {
+		return nil, &db.SearchInputError{Msg: "search: " + err.Error()}
+	}
+	req.Timezone = timezone
 	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern:          req.Pattern,
 		Mode:             req.Mode,
@@ -795,6 +800,7 @@ func (b *directBackend) SearchContent(
 		Date:             req.Date,
 		DateFrom:         req.DateFrom,
 		DateTo:           req.DateTo,
+		Timezone:         req.Timezone,
 		ActiveSince:      req.ActiveSince,
 		IncludeChildren:  req.IncludeChildren,
 		IncludeAutomated: req.IncludeAutomated,

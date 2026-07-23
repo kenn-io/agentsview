@@ -1741,6 +1741,44 @@ func TestSearchContentGitBranchFilter(t *testing.T) {
 	assert.Equal(t, alphaMain.ID, got.Matches[0].SessionID)
 }
 
+func TestSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	previousDay := syncSession(
+		"duck-new-york-previous-day", "alpha", "previous", "2024-06-16T01:00:00Z", 1)
+	requestedDay := syncSession(
+		"duck-new-york-requested-day", "alpha", "requested", "2024-06-16T05:00:00Z", 1)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: previousDay,
+			Messages: []db.Message{syncMessage(
+				previousDay.ID, 0, "user", "TIMEZONE_NEEDLE", *previousDay.StartedAt)},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+		{
+			Session: requestedDay,
+			Messages: []db.Message{syncMessage(
+				requestedDay.ID, 0, "user", "TIMEZONE_NEEDLE", *requestedDay.StartedAt)},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "TIMEZONE_NEEDLE", Mode: "substring",
+		Sources: []string{"messages"}, Date: "2024-06-16",
+		Timezone: "America/New_York", IncludeOneShot: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, requestedDay.ID, got.Matches[0].SessionID)
+}
+
 func TestSearchContentSubstringPaginatesAfterGlobalOrdering(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newSyncedStore(t)

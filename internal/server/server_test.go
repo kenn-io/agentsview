@@ -1795,6 +1795,31 @@ func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
 	assertBodyContains(t, w, "invalid timezone: Fake/Zone")
 }
 
+func TestContentSearchDateFilterUsesRequestedTimezone(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "search-new-york-previous-day", "my-app", 2, func(s *db.Session) {
+		s.StartedAt = new("2024-06-16T01:00:00Z")
+		s.EndedAt = new("2024-06-16T02:00:00Z")
+	})
+	te.seedMessages(t, "search-new-york-previous-day", 1, func(_ int, m *db.Message) {
+		m.Content = "TIMEZONE_NEEDLE"
+	})
+	te.seedSession(t, "search-new-york-requested-day", "my-app", 2, func(s *db.Session) {
+		s.StartedAt = new("2024-06-16T05:00:00Z")
+		s.EndedAt = new("2024-06-16T06:00:00Z")
+	})
+	te.seedMessages(t, "search-new-york-requested-day", 1, func(_ int, m *db.Message) {
+		m.Content = "TIMEZONE_NEEDLE"
+	})
+
+	w := te.get(t, "/api/v1/search/content?pattern=TIMEZONE_NEEDLE"+
+		"&date=2024-06-16&timezone=America%2FNew_York")
+	assertStatus(t, w, http.StatusOK)
+	result := decode[service.ContentSearchResult](t, w)
+	require.Len(t, result.Matches, 1)
+	assert.Equal(t, "search-new-york-requested-day", result.Matches[0].SessionID)
+}
+
 func TestGetSession_Found(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 5)

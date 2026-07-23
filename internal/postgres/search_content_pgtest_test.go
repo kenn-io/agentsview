@@ -157,6 +157,29 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 		"match timestamp must equal the inserted instant, want %v got %v", want, parsed)
 }
 
+func TestPGSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
+	store := setupContentSearch(t)
+	for _, row := range []struct {
+		id, started, ended string
+	}{
+		{"cs-new-york-previous-day", "2024-06-16T01:00:00Z", "2024-06-16T02:00:00Z"},
+		{"cs-new-york-requested-day", "2024-06-16T05:00:00Z", "2024-06-16T06:00:00Z"},
+	} {
+		insertCSSession(t, store, row.id, "proj", "claude", row.started, row.ended)
+		insertCSMessage(t, store, row.id, 0, "user",
+			"TIMEZONE_NEEDLE", row.started, false)
+	}
+
+	got, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "TIMEZONE_NEEDLE", Mode: "substring",
+		Sources: []string{"messages"}, Date: "2024-06-16",
+		Timezone: "America/New_York", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "cs-new-york-requested-day", got.Matches[0].SessionID)
+}
+
 // TestPGSearchContentRedactsStraddlingSecret pins the PG default (non-reveal)
 // guarantee: a secret adjacent to the match that extends past the snippet
 // window must not leak; reveal opts out and shows raw bytes.

@@ -951,13 +951,16 @@ func TestHTTPSearchContent(t *testing.T) {
 			if r.URL.Query().Get("pattern") != "needle" {
 				t.Errorf("pattern = %s", r.URL.Query().Get("pattern"))
 			}
+			if r.URL.Query().Get("timezone") != "America/New_York" {
+				t.Errorf("timezone = %s", r.URL.Query().Get("timezone"))
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"s1","location":"message"}],"next_cursor":0}`))
 		}))
 	defer srv.Close()
 	be := service.NewHTTPBackend(srv.URL, "", true)
 	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
-		Pattern: "needle", Limit: 50,
+		Pattern: "needle", Timezone: "America/New_York", Limit: 50,
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)

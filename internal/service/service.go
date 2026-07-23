@@ -166,7 +166,7 @@ type ContentSearchRequest struct {
 	Context int `json:"context,omitempty"`
 
 	Project, ExcludeProject, Machine, Agent           string
-	Date, DateFrom, DateTo, ActiveSince               string
+	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string

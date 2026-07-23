@@ -506,6 +506,7 @@ func (b *httpBackend) SearchContent(
 		"date":            req.Date,
 		"date_from":       req.DateFrom,
 		"date_to":         req.DateTo,
+		"timezone":        req.Timezone,
 		"active_since":    req.ActiveSince,
 		"scope":           req.Scope,
 	} {

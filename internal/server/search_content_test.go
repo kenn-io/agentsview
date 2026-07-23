@@ -26,6 +26,7 @@ func TestHandleSearchContentInvalidParams(t *testing.T) {
 		{"invalid mode", "pattern=x&mode=bad", "127.0.0.1:1234", "", http.StatusBadRequest},
 		{"invalid limit", "pattern=x&limit=abc", "127.0.0.1:1234", "", http.StatusBadRequest},
 		{"invalid cursor", "pattern=x&cursor=abc", "127.0.0.1:1234", "", http.StatusBadRequest},
+		{"invalid timezone", "pattern=x&timezone=Fake%2FZone", "127.0.0.1:1234", "", http.StatusBadRequest},
 		{"reveal from remote", "pattern=x&reveal=true", "203.0.113.5:1234", "", http.StatusForbidden},
 		// A reverse proxy reaches the loopback backend, so RemoteAddr is
 		// loopback; the forwarding header marks it as proxied, so reveal
