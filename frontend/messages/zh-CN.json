@@ -1116,6 +1116,7 @@
   "session_recall_error": "无法加载提炼记忆。",
   "session_recall_generation": "代次",
   "session_recall_review_state": "审核状态",
+  "session_recall_provenance_revoked": "来源已撤销",
   "session_recall_evidence_range": "消息 {start}–{end}",
   "session_recall_jump_evidence": "跳转到转录消息 {start}–{end}",
   "session_vitals_title": "分析",

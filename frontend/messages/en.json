@@ -1148,6 +1148,7 @@
   "session_recall_error": "Could not load distilled recall.",
   "session_recall_generation": "Generation",
   "session_recall_review_state": "Review state",
+  "session_recall_provenance_revoked": "Provenance revoked",
   "session_recall_evidence_range": "Messages {start}–{end}",
   "session_recall_jump_evidence": "Jump to transcript messages {start}–{end}",
   "session_vitals_title": "Analysis",

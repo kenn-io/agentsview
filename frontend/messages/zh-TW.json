@@ -1116,6 +1116,7 @@
   "session_recall_error": "無法載入提煉記憶。",
   "session_recall_generation": "代次",
   "session_recall_review_state": "審核狀態",
+  "session_recall_provenance_revoked": "來源已撤銷",
   "session_recall_evidence_range": "訊息 {start}–{end}",
   "session_recall_jump_evidence": "跳至逐字稿訊息 {start}–{end}",
   "session_vitals_title": "分析",

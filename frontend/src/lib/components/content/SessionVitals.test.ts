@@ -262,6 +262,54 @@ describe("SessionVitals", () => {
     scroll.mockRestore();
   });
 
+  it("labels revoked recall provenance and does not link its evidence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({
+        entries: [{
+          id: "recall-revoked",
+          type: "fact",
+          scope: "project",
+          status: "accepted",
+          review_state: "unreviewed_auto",
+          title: "Outdated transcript claim",
+          body: "This entry no longer has valid source provenance.",
+          source_session_id: "sess-1",
+          source_run_id: "generation-revoked",
+          extractor_method: "turns-v1",
+          transferable: false,
+          provenance_ok: false,
+          created_at: "2026-07-23T10:00:00Z",
+          updated_at: "2026-07-23T10:00:00Z",
+          evidence: [{
+            id: 2,
+            entry_id: "recall-revoked",
+            session_id: "sess-1",
+            message_start_ordinal: 21,
+            message_end_ordinal: 23,
+            snippet: "This source range was revoked.",
+          }],
+        }],
+        trusted_only: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Outdated transcript claim");
+    });
+    expect(document.body.textContent).toContain("Provenance revoked");
+    expect(document.body.textContent).toContain("Messages 21–23");
+    const evidenceButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("21–23"));
+    expect(evidenceButton).toBeUndefined();
+  });
+
   it("shows an empty Recall state for a session without distilled entries", async () => {
     component = mount(SessionVitals, {
       target: document.body,

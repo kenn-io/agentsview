@@ -78,6 +78,11 @@
         <Card level="inset" padding="none" class="recall-entry">
           <div class="recall-entry-head">
             <span class="recall-type">{entry.type}</span>
+            {#if !entry.provenance_ok}
+              <span class="recall-provenance-revoked">
+                {m.session_recall_provenance_revoked()}
+              </span>
+            {/if}
           </div>
           <h3>{entry.title}</h3>
           <p class="recall-body">{entry.body}</p>
@@ -96,18 +101,24 @@
           {#if entry.evidence?.length}
             <div class="recall-evidence">
               {#each entry.evidence as evidence (evidence.id)}
-                <Button
-                  class="recall-evidence-button"
-                  size="sm"
-                  tone="neutral"
-                  surface="outline"
-                  label={evidenceLabel(evidence)}
-                  title={m.session_recall_jump_evidence({
-                    start: evidence.message_start_ordinal,
-                    end: evidence.message_end_ordinal,
-                  })}
-                  onclick={() => jumpToEvidence(evidence)}
-                />
+                {#if entry.provenance_ok}
+                  <Button
+                    class="recall-evidence-button"
+                    size="sm"
+                    tone="neutral"
+                    surface="outline"
+                    label={evidenceLabel(evidence)}
+                    title={m.session_recall_jump_evidence({
+                      start: evidence.message_start_ordinal,
+                      end: evidence.message_end_ordinal,
+                    })}
+                    onclick={() => jumpToEvidence(evidence)}
+                  />
+                {:else}
+                  <span class="recall-evidence-revoked">
+                    {evidenceLabel(evidence)}
+                  </span>
+                {/if}
               {/each}
             </div>
           {/if}
@@ -177,6 +188,10 @@
     text-transform: uppercase;
   }
 
+  .recall-provenance-revoked {
+    color: var(--slow-fg);
+  }
+
   h3 {
     margin: 0;
     color: var(--text-primary);
@@ -230,6 +245,12 @@
   }
 
   :global(.recall-evidence-button) {
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+
+  .recall-evidence-revoked {
+    color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 9px;
   }

@@ -1118,6 +1118,7 @@
   "session_recall_error": "추출된 리콜을 불러올 수 없습니다.",
   "session_recall_generation": "세대",
   "session_recall_review_state": "검토 상태",
+  "session_recall_provenance_revoked": "출처가 취소됨",
   "session_recall_evidence_range": "메시지 {start}–{end}",
   "session_recall_jump_evidence": "대화 기록 메시지 {start}–{end}(으)로 이동",
   "session_vitals_title": "분석",
