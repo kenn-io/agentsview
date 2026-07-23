@@ -93,7 +93,8 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -171,7 +172,8 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
