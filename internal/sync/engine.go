@@ -4621,7 +4621,8 @@ func (e *Engine) syncAllLocked(
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
-	if omnigentRetryAttempt != 0 && !stats.Aborted && ctx.Err() == nil {
+	if omnigentRetryAttempt != 0 && !stats.Aborted && ctx.Err() == nil &&
+		stats.Failed == 0 && providerFailures == 0 {
 		e.completeOmnigentFullRetry(omnigentRetryAttempt)
 	}
 	stats.providerFailures = providerFailures
@@ -4894,6 +4895,14 @@ func (e *Engine) discoverProviderSources(
 				Agent:           agent,
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
+			}
+			if agentType == parser.AgentOmnigent &&
+				omnigentRetryAttempt != 0 {
+				// A pending full retry is correctness work, not ordinary
+				// incremental discovery. Keep it through SyncAllSince's mtime
+				// cutoff and bypass stored freshness gates so the failed member
+				// is actually reparsed before the generation is acknowledged.
+				discovered.ForceParse = true
 			}
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
@@ -6330,6 +6339,7 @@ func (e *Engine) collectAndBatch(
 			r.releaseRetention()
 			continue
 		}
+		e.applyProviderIdentityMigrationPolicies(&r.processResult)
 		excludedSessionIDs := e.applyIDPrefixToSessionIDs(
 			r.excludedSessionIDs,
 		)
@@ -6697,6 +6707,7 @@ type sourceMissingMember struct {
 type processResult struct {
 	results            []parser.ParseResult
 	excludedSessionIDs []string
+	identityMigrations []parser.SessionIdentityMigration
 	// sourceMissingMembers carries stored sessions whose virtual member
 	// source no longer exists inside a still-present shared container
 	// (e.g. a Windsurf conversation deleted from state.vscdb). They must
@@ -7231,6 +7242,7 @@ func (e *Engine) processProviderFile(
 		skipRes := processResult{
 			skip:                  !outcome.ForceReplace,
 			excludedSessionIDs:    excludedSessionIDs,
+			identityMigrations:    outcome.SessionIdentityMigrations,
 			sourceMissingMembers:  missingMembers,
 			mtime:                 fingerprint.MTimeNS,
 			cacheSkip:             cacheSkip,
@@ -7263,6 +7275,7 @@ func (e *Engine) processProviderFile(
 	res := processResult{
 		results:               e.dropUnchangedSharedSQLiteResults(file, parsedResults),
 		excludedSessionIDs:    excludedSessionIDs,
+		identityMigrations:    outcome.SessionIdentityMigrations,
 		sourceMissingMembers:  missingMembers,
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
@@ -7601,6 +7614,72 @@ func (e *Engine) applyProviderFilePathPolicies(
 		kept = append(kept, result)
 	}
 	res.results = kept
+}
+
+// applyProviderIdentityMigrationPolicies preserves explicit user deletion
+// state when one provider identity supersedes another. Parser cleanup still
+// removes ordinary live legacy rows, but a trashed or permanently excluded
+// legacy identity suppresses its replacement. The qualified replacement is
+// also parser-excluded to clean up rows imported by older binaries, while a
+// trashed legacy row is removed from parser cleanup so its recoverable messages
+// stay in the archive.
+func (e *Engine) applyProviderIdentityMigrationPolicies(
+	res *processResult,
+) {
+	if res == nil || len(res.identityMigrations) == 0 {
+		return
+	}
+
+	protectedPrevious := make(map[string]struct{})
+	suppressedCurrent := make(map[string]string)
+	for _, migration := range res.identityMigrations {
+		previousID := applyIDPrefixToID(e.idPrefix, migration.PreviousID)
+		currentID := applyIDPrefixToID(e.idPrefix, migration.CurrentID)
+		if previousID == "" || currentID == "" {
+			continue
+		}
+		if !e.db.IsSessionTrashed(previousID) &&
+			!e.db.IsSessionExcluded(previousID) {
+			continue
+		}
+		protectedPrevious[previousID] = struct{}{}
+		suppressedCurrent[currentID] = migration.CurrentID
+	}
+	if len(suppressedCurrent) == 0 {
+		return
+	}
+
+	kept := res.results[:0]
+	for _, result := range res.results {
+		currentID := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		if _, suppressed := suppressedCurrent[currentID]; suppressed {
+			continue
+		}
+		kept = append(kept, result)
+	}
+	res.results = kept
+
+	exclusions := res.excludedSessionIDs[:0]
+	seen := make(map[string]struct{}, len(res.excludedSessionIDs)+len(suppressedCurrent))
+	for _, id := range res.excludedSessionIDs {
+		fullID := applyIDPrefixToID(e.idPrefix, id)
+		if _, protected := protectedPrevious[fullID]; protected {
+			continue
+		}
+		if _, exists := seen[fullID]; exists {
+			continue
+		}
+		seen[fullID] = struct{}{}
+		exclusions = append(exclusions, id)
+	}
+	for fullID, providerID := range suppressedCurrent {
+		if _, exists := seen[fullID]; exists {
+			continue
+		}
+		seen[fullID] = struct{}{}
+		exclusions = append(exclusions, providerID)
+	}
+	res.excludedSessionIDs = exclusions
 }
 
 func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {

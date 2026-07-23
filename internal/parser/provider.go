@@ -431,12 +431,22 @@ type ParseRequest struct {
 // result must use a session-scoped path when the backing source can produce more
 // than one logical session.
 type ParseOutcome struct {
-	Results            []ParseResultOutcome
-	ExcludedSessionIDs []string
-	SourceErrors       []SourceError
-	ResultSetComplete  bool
-	ForceReplace       bool
-	SkipReason         SkipReason
+	Results                   []ParseResultOutcome
+	ExcludedSessionIDs        []string
+	SessionIdentityMigrations []SessionIdentityMigration
+	SourceErrors              []SourceError
+	ResultSetComplete         bool
+	ForceReplace              bool
+	SkipReason                SkipReason
+}
+
+// SessionIdentityMigration relates a retired persisted identity to the
+// replacement identity emitted by the same authoritative provider parse. The
+// sync engine uses this relationship to carry forward user trash and permanent
+// exclusion state before applying parser cleanup or replacement writes.
+type SessionIdentityMigration struct {
+	PreviousID string
+	CurrentID  string
 }
 
 // ParseResultOutcome pairs a normalized parse result with per-session retry and

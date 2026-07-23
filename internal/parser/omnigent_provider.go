@@ -88,6 +88,9 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithMemberPresence(omnigentMemberPresent),
 				WithUnsupportedSourceError(omnigentSchemaUnsupported),
 				WithExcludedSessionIDs(omnigentLegacySessionIDs),
+				WithSessionIdentityMigrations(
+					omnigentSessionIdentityMigrations,
+				),
 			)
 			return omnigentSourceSet{
 				multiSessionContainerSourceSet: base,
@@ -249,6 +252,38 @@ func omnigentLegacySessionIDs(
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+func omnigentSessionIdentityMigrations(
+	_ multiSessionSource, results []ParseResult,
+) []SessionIdentityMigration {
+	migrations := make([]SessionIdentityMigration, 0, len(results))
+	seen := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		currentID := result.Session.ID
+		memberKey := strings.TrimPrefix(currentID, omnigentIDPrefix)
+		_, rawID, qualified := strings.Cut(memberKey, ":")
+		if !qualified || !IsValidSessionID(rawID) {
+			continue
+		}
+		previousID := omnigentIDPrefix + rawID
+		key := previousID + "\x00" + currentID
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		migrations = append(migrations, SessionIdentityMigration{
+			PreviousID: previousID,
+			CurrentID:  currentID,
+		})
+	}
+	slices.SortFunc(migrations, func(a, b SessionIdentityMigration) int {
+		if cmp := strings.Compare(a.PreviousID, b.PreviousID); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.CurrentID, b.CurrentID)
+	})
+	return migrations
 }
 
 func omnigentProviderCapabilities() Capabilities {

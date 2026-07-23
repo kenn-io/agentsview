@@ -22,21 +22,26 @@ func TestScheduledReconcileTargetsSelectsOnlyOptedInProviders(t *testing.T) {
 	aiderDir := filepath.Join(home, "aider")
 	coworkDir := filepath.Join(home, "cowork")
 	claudeDir := filepath.Join(home, "claude")
+	omnigentDir := filepath.Join(home, "omnigent")
 	require.NoError(t, os.MkdirAll(aiderDir, 0o755))
 	require.NoError(t, os.MkdirAll(coworkDir, 0o755))
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+	require.NoError(t, os.MkdirAll(omnigentDir, 0o755))
 
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentAider:  {aiderDir},
-			parser.AgentCowork: {coworkDir},
-			parser.AgentClaude: {claudeDir},
+			parser.AgentAider:    {aiderDir},
+			parser.AgentCowork:   {coworkDir},
+			parser.AgentClaude:   {claudeDir},
+			parser.AgentOmnigent: {omnigentDir},
 		},
 	}
 	targets := scheduledReconcileTargets(cfg)
-	require.Len(t, targets, 1, "only the opted-in provider is scheduled")
+	require.Len(t, targets, 2, "only opted-in providers are scheduled")
 	assert.Equal(t, parser.AgentAider, targets[0].Agent)
 	assert.Equal(t, []string{aiderDir}, targets[0].Roots)
+	assert.Equal(t, parser.AgentOmnigent, targets[1].Agent)
+	assert.Equal(t, []string{omnigentDir}, targets[1].Roots)
 }
 
 func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {

@@ -675,6 +675,10 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	// subdirectory changes are invisible to their shallow watch coverage.
 	assert.True(t, optedIn[AgentOpenHands])
 	assert.True(t, optedIn[AgentAider])
+	// Omnigent's event tracker deliberately observes only bounded row-ID and
+	// timestamp windows. Scheduled authoritative reconciliation covers
+	// same-fingerprint in-place edits through the streamed provider pass.
+	assert.True(t, optedIn[AgentOmnigent])
 	// Cowork's provider WatchPlan registers its root recursively
 	// (coworkWatchRoots Recursive:true overrides legacy ShallowWatch), so
 	// scheduled reconciliation would redundantly rescan the whole archive.
