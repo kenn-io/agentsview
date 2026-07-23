@@ -287,8 +287,9 @@ func (s *Sync) pushVectors(
 	// to trust yet, so the reconcile bit already forces this push
 	// generation-wide and the id check must not fire.
 	requestedScope := scope
+	var resolved vectorGeneration
 	if scope != nil {
-		probe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
 		if err != nil {
 			return res, err
 		}
@@ -296,15 +297,40 @@ func (s *Sync) pushVectors(
 			log.Printf("vector push: generation %q is not yet registered in PostgreSQL; promoting scoped push to generation-wide reconciliation",
 				gen.Fingerprint)
 			scope = nil
-		} else if !probe.machineRecorded {
+		} else if !initialProbe.machineRecorded {
 			log.Printf("vector push: no prior push record for machine %q against generation %d; promoting scoped push to generation-wide reconciliation",
-				s.machine, probe.id)
+				s.machine, initialProbe.id)
 			scope = nil
 		} else if lastReconciledGeneration != 0 &&
-			probe.id != lastReconciledGeneration {
+			initialProbe.id != lastReconciledGeneration {
 			log.Printf("vector push: active generation id %d differs from the last reconciled %d; promoting scoped push to generation-wide reconciliation",
-				probe.id, lastReconciledGeneration)
+				initialProbe.id, lastReconciledGeneration)
 			scope = nil
+		} else {
+			if s.afterVectorGenerationLookup != nil {
+				hook := s.afterVectorGenerationLookup
+				s.afterVectorGenerationLookup = nil
+				hook()
+			}
+			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+			if err != nil {
+				return res, err
+			}
+			if !found {
+				log.Printf("vector push: generation %q disappeared before scoped reconciliation; promoting scoped push to generation-wide reconciliation",
+					gen.Fingerprint)
+				scope = nil
+			} else if !currentProbe.machineRecorded {
+				log.Printf("vector push: no prior push record for machine %q against generation %d before scoped reconciliation; promoting scoped push to generation-wide reconciliation",
+					s.machine, currentProbe.id)
+				scope = nil
+			} else if currentProbe.id != initialProbe.id {
+				log.Printf("vector push: active generation id changed from %d to %d before scoped reconciliation; promoting scoped push to generation-wide reconciliation",
+					initialProbe.id, currentProbe.id)
+				scope = nil
+			} else {
+				resolved = currentProbe
+			}
 		}
 	}
 	if requestedScope != nil && scope == nil {
@@ -331,12 +357,14 @@ func (s *Sync) pushVectors(
 		}
 		gen = export.Generation()
 	}
-	resolved, err := s.resolveVectorGeneration(ctx, gen)
-	if err != nil {
-		if s.skipVectorsOnPrivilegeError(err, &res) {
-			return res, nil
+	if scope == nil {
+		resolved, err = s.resolveVectorGeneration(ctx, gen)
+		if err != nil {
+			if s.skipVectorsOnPrivilegeError(err, &res) {
+				return res, nil
+			}
+			return res, err
 		}
-		return res, err
 	}
 	res.GenerationID = resolved.id
 	owner, err := s.vectorOwnerIdentity(ctx)
@@ -392,6 +420,10 @@ func (s *Sync) lookupVectorGeneration(
 	if !ok {
 		return vectorGeneration{}, false, nil
 	}
+	extSchema, err := vectorExtensionSchema(ctx, s.pg)
+	if err != nil {
+		return vectorGeneration{}, false, err
+	}
 	var machineRecorded bool
 	if err := s.pg.QueryRowContext(ctx, `
 SELECT EXISTS (
@@ -404,6 +436,7 @@ SELECT EXISTS (
 	}
 	return vectorGeneration{
 		id:              genID,
+		halfvecType:     extSchema + ".halfvec",
 		machineRecorded: machineRecorded,
 	}, true, nil
 }

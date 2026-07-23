@@ -173,6 +173,8 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource VectorPushSource
+	// afterVectorGenerationLookup is a scoped-promotion test hook.
+	afterVectorGenerationLookup func()
 
 	closeOnce sync.Once
 	closeErr  error

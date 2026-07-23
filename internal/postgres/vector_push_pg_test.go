@@ -623,6 +623,73 @@ func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
 		"promotion must not register an unready generation")
 }
 
+// TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide pins
+// the race after the first scoped probe: if another process recreates the
+// generation before scoped deltas are applied, the push must reopen
+// generation-wide and fill the recreated generation instead of scoping into it.
+func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_probe_race_test")
+	ctx := context.Background()
+
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-race", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "a1", "B": "b1"},
+		docs: map[string][]VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline Push")
+
+	var gen1 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-race",
+	).Scan(&gen1), "gen1 id")
+
+	src.hashScopes = nil
+	sync.afterVectorGenerationLookup = func() {
+		for _, q := range []string{
+			`DELETE FROM vector_push_state WHERE generation_id = $1`,
+			`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
+			`DELETE FROM vector_generations WHERE id = $1`,
+		} {
+			_, err := pg.Exec(q, gen1)
+			require.NoError(t, err, q)
+		}
+		gen2, err := ensureVectorGeneration(
+			ctx, pg, src.gen.Fingerprint, src.gen.Model, src.gen.Dimension,
+		)
+		require.NoError(t, err, "re-register generation")
+		require.NotEqual(t, gen1, gen2, "the recreated generation gets a new id")
+	}
+
+	vres, err := sync.pushVectors(ctx, false, []string{"A"}, gen1, nil, nil)
+	require.NoError(t, err, "scoped push across a post-probe recreation")
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"the recreated generation is reconciled generation-wide, not just for A")
+	require.Len(t, src.hashScopes, 1)
+	assert.Nil(t, src.hashScopes[0],
+		"recreated-generation race must reopen the full export")
+
+	var gen2 int64
+	require.NoError(t, pg.QueryRow(
+		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-race",
+	).Scan(&gen2), "recreated generation id")
+	assert.NotEqual(t, gen1, gen2, "the recreated generation replaced the old id")
+	assert.Equal(t, gen2, vres.GenerationID, "the push reconciled the recreated generation")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
+		"both sessions have state rows under the recreated generation")
+}
+
 // TestVectorPushDeferredFullPassDoesNotRecordMachineWitness pins the remaining
 // roborev finding: a generation-wide pass that leaves deferred work must not
 // write the machine witness, or a later scoped push would trust an incomplete
