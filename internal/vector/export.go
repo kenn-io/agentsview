@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ExportChunk is one embedded chunk of a document, decoded from the
@@ -36,6 +38,175 @@ type ActiveExport struct {
 	Fingerprint, Model string
 	Ordinal            int64
 	Dimension          int
+}
+
+// ErrExportNotReady marks a snapshot that contains a rebuild marker or
+// incomplete coverage and therefore must not be exported.
+var ErrExportNotReady = errors.New("vector export snapshot is not ready")
+
+// Export owns the SQLite read transaction for one vector push phase.
+type Export struct {
+	tx   *sql.Tx
+	gen  ActiveExport
+	spec IndexSpec
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// BeginExport opens one transaction-owned snapshot for the requested scope.
+// The generation, rebuild marker, and coverage check all use this transaction.
+func (ix *Index) BeginExport(ctx context.Context, scope []string) (*Export, bool, error) {
+	if ix.versionMismatch {
+		return nil, false, ErrMirrorVersionMismatch
+	}
+	tx, err := ix.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("begin export snapshot: %w", err)
+	}
+	closeOnError := func(err error) (*Export, bool, error) {
+		_ = tx.Rollback()
+		return nil, false, err
+	}
+	gen, ok, err := activeExportTx(ctx, tx, ix.spec)
+	if err != nil {
+		return closeOnError(err)
+	}
+	if !ok {
+		_ = tx.Rollback()
+		return nil, false, nil
+	}
+	pending, err := activeFullRebuildPendingTx(ctx, tx, ix.spec, gen.Fingerprint)
+	if err != nil {
+		return closeOnError(fmt.Errorf("reading active full rebuild marker: %w", err))
+	}
+	if pending {
+		return closeOnError(fmt.Errorf("%w: active generation %q is being rebuilt in place", ErrExportNotReady, gen.Fingerprint))
+	}
+	missing, err := missingEmbeddedDocsTx(ctx, tx, ix.spec, gen.Ordinal, scope)
+	if err != nil {
+		return closeOnError(err)
+	}
+	if missing > 0 {
+		return closeOnError(fmt.Errorf("%w: %d document(s) pending", ErrExportNotReady, missing))
+	}
+	return &Export{tx: tx, gen: gen, spec: ix.spec}, true, nil
+}
+
+func (e *Export) Generation() ActiveExport { return e.gen }
+
+func (e *Export) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return nil
+	}
+	e.closed = true
+	return e.tx.Rollback()
+}
+
+func (e *Export) ensureOpen() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return errors.New("vector export is closed")
+	}
+	return nil
+}
+
+func (e *Export) SessionDocHashes(ctx context.Context, sessionIDs []string) (map[string]string, error) {
+	if err := e.ensureOpen(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string)
+	if sessionIDs != nil && len(sessionIDs) == 0 {
+		return out, nil
+	}
+	scan := func(where string, args []any) error {
+		rows, err := e.tx.QueryContext(ctx, `
+SELECT d.session_id, d.doc_key, d.source_uuid, d.ordinal, d.ordinal_end,
+       d.subordinate, d.offsets, d.content_hash
+  FROM `+e.spec.DocsTable+` d
+  JOIN `+e.spec.stampsTable()+` st ON st.doc_key = d.doc_key
+ WHERE st.ordinal = ? AND st.revision = d.content_hash AND d.ordinal >= 0`+where+`
+ ORDER BY d.session_id, d.doc_key`, args...)
+		if err != nil {
+			return fmt.Errorf("scan embedded doc hashes: %w", err)
+		}
+		defer rows.Close()
+		var cur string
+		h := sha256.New()
+		flush := func() {
+			if cur != "" {
+				out[cur] = hex.EncodeToString(h.Sum(nil))
+				h.Reset()
+			}
+		}
+		for rows.Next() {
+			var sessionID string
+			var d ExportDoc
+			if err := rows.Scan(&sessionID, &d.DocKey, &d.SourceUUID, &d.Ordinal, &d.OrdinalEnd, &d.Subordinate, &d.OffsetsJSON, &d.ContentHash); err != nil {
+				return fmt.Errorf("scan embedded doc hash row: %w", err)
+			}
+			if sessionID != cur {
+				flush()
+				cur = sessionID
+			}
+			writeEmbeddedDocIdentity(h, d)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		flush()
+		return nil
+	}
+	if sessionIDs == nil {
+		return out, scan("", []any{e.gen.Ordinal})
+	}
+	if err := chunkKeys(sessionIDs, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		return scan(" AND d.session_id IN "+placeholders, append([]any{e.gen.Ordinal}, args...))
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (e *Export) SessionDocs(ctx context.Context, sessionID string) ([]ExportDoc, string, error) {
+	if err := e.ensureOpen(); err != nil {
+		return nil, "", err
+	}
+	rows, err := e.tx.QueryContext(ctx, `
+SELECT d.doc_key, d.session_id, d.source_uuid, d.ordinal, d.ordinal_end,
+       d.subordinate, d.offsets, d.content, d.content_hash
+	  FROM `+e.spec.DocsTable+` d
+	 JOIN `+e.spec.stampsTable()+` st ON st.doc_key = d.doc_key
+ WHERE st.ordinal = ? AND st.revision = d.content_hash
+   AND d.session_id = ? AND d.ordinal >= 0
+ ORDER BY d.ordinal`, e.gen.Ordinal, sessionID)
+	if err != nil {
+		return nil, "", fmt.Errorf("export session docs: %w", err)
+	}
+	defer rows.Close()
+	var docs []ExportDoc
+	for rows.Next() {
+		var d ExportDoc
+		if err := rows.Scan(&d.DocKey, &d.SessionID, &d.SourceUUID, &d.Ordinal, &d.OrdinalEnd, &d.Subordinate, &d.OffsetsJSON, &d.Content, &d.ContentHash); err != nil {
+			return nil, "", fmt.Errorf("scan export doc: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	vecTable := fmt.Sprintf("%s_v%d", e.spec.VectorsPrefix, e.gen.Ordinal)
+	for i := range docs {
+		docs[i].Chunks, err = exportDocChunks(ctx, e.tx, e.spec, vecTable, e.gen.Ordinal, docs[i].DocKey)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	return docs, aggregateEmbeddedDocHash(docs), nil
 }
 
 // ActiveExport returns the active generation's identity, or ok=false when
@@ -64,6 +235,77 @@ func (ix *Index) ActiveExport(ctx context.Context) (ActiveExport, bool, error) {
 	}
 	exp.Model = model
 	return exp, true, nil
+}
+
+func activeExportTx(ctx context.Context, tx *sql.Tx, spec IndexSpec) (ActiveExport, bool, error) {
+	var exp ActiveExport
+	err := tx.QueryRowContext(ctx,
+		`SELECT ordinal, gen_key, dimension FROM `+spec.generationsTable()+
+			` WHERE state = 'active' ORDER BY ordinal LIMIT 1`,
+	).Scan(&exp.Ordinal, &exp.Fingerprint, &exp.Dimension)
+	if err == sql.ErrNoRows {
+		return ActiveExport{}, false, nil
+	}
+	if err != nil {
+		return ActiveExport{}, false, fmt.Errorf("lookup active generation: %w", err)
+	}
+	err = tx.QueryRowContext(ctx,
+		`SELECT value FROM `+spec.MetaTable+` WHERE key = ?`,
+		"gen_model:"+exp.Fingerprint,
+	).Scan(&exp.Model)
+	if err == sql.ErrNoRows {
+		return exp, true, nil
+	}
+	if err != nil {
+		return ActiveExport{}, false, fmt.Errorf("lookup generation model: %w", err)
+	}
+	return exp, true, nil
+}
+
+func activeFullRebuildPendingTx(ctx context.Context, tx *sql.Tx, spec IndexSpec, fingerprint string) (bool, error) {
+	var value string
+	err := tx.QueryRowContext(ctx,
+		`SELECT value FROM `+spec.MetaTable+` WHERE key = ?`, activeFullRebuildKey,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading %s key %s: %w", spec.MetaTable, activeFullRebuildKey, err)
+	}
+	return value == fingerprint, nil
+}
+
+func missingEmbeddedDocsTx(ctx context.Context, tx *sql.Tx, spec IndexSpec, genOrdinal int64, sessionIDs []string) (int64, error) {
+	if sessionIDs != nil && len(sessionIDs) == 0 {
+		return 0, nil
+	}
+	query := `SELECT COUNT(*) FROM ` + spec.DocsTable + ` d WHERE NOT EXISTS
+           (SELECT 1 FROM ` + spec.stampsTable() + ` s
+            WHERE s.ordinal = ? AND s.doc_key = d.doc_key AND s.revision = d.content_hash)`
+	count := func(where string, args []any) (int64, error) {
+		var missing int64
+		if err := tx.QueryRowContext(ctx, query+where, args...).Scan(&missing); err != nil {
+			return 0, fmt.Errorf("count generation missing docs: %w", err)
+		}
+		return missing, nil
+	}
+	if sessionIDs == nil {
+		return count("", []any{genOrdinal})
+	}
+	var total int64
+	if err := chunkKeys(sessionIDs, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		missing, err := count(" AND d.session_id IN "+placeholders, append([]any{genOrdinal}, args...))
+		if err != nil {
+			return err
+		}
+		total += missing
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // SessionEmbeddedDocHashes returns, per session, a sha256 aggregate over the

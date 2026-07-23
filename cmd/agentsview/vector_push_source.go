@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,13 +19,9 @@ import (
 // vectorPushSource adapts a read-only vector.Index to
 // postgres.VectorPushSource, opening vectors.db lazily so a pg push whose
 // target has vectors disabled never touches the file. Only a successful open is
-// memoized so the three interface methods of one push share one connection; a
-// missing file or open failure is never cached, so a daemon push that starts
-// before embeddings exist picks up a build that lands afterward. Generation
-// snapshots the active generation and SessionDocHashes/SessionDocs read the
-// snapshotted ordinal, so a build that activates mid-push cannot pair this
-// generation's fingerprint with a newer generation's docs; the next Generation
-// call refreshes the snapshot, keeping successive daemon pushes current. The
+// memoized; a missing file or open failure is never cached, so a daemon push
+// that starts before embeddings exist picks up a build that lands afterward.
+// BeginExport owns one SQLite read transaction for the complete push phase. The
 // read-only handle stays open for the adapter's lifetime; the creator owns
 // that lifetime and must release it via closeVectorPushSource — per push in
 // PGPush, at loop exit in the watch path (which reuses one adapter across
@@ -34,11 +31,6 @@ type vectorPushSource struct {
 
 	mu sync.Mutex
 	ix *vector.Index
-
-	// snap/snapOK hold the active generation captured by the most recent
-	// Generation call; SessionDocHashes and SessionDocs read snap.Ordinal.
-	snap   vector.ActiveExport
-	snapOK bool
 }
 
 // newVectorPushSource returns a lazy vectors.db push adapter, or nil when
@@ -108,131 +100,46 @@ func (s *vectorPushSource) Close() error {
 	return err
 }
 
-// setSnapshot records the active generation captured by Generation.
-func (s *vectorPushSource) setSnapshot(exp vector.ActiveExport, ok bool) {
-	s.mu.Lock()
-	s.snap, s.snapOK = exp, ok
-	s.mu.Unlock()
-}
-
-// snapshot returns the active generation captured by the most recent
-// Generation call, and whether one is set.
-func (s *vectorPushSource) snapshot() (vector.ActiveExport, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.snap, s.snapOK
-}
-
-// Generation implements postgres.VectorPushSource and snapshots the active
-// generation for the rest of the push. Contract: Generation must be called
-// before SessionDocHashes and SessionDocs, which read the snapshotted ordinal;
-// the postgres push (pushVectors) calls Generation once first, then again as
-// the pre-eviction safety re-check. sessionIDs is nil for generation-wide
-// reconciliation and non-nil for changed-session pushes; the readiness gate
-// uses that scope to count only the candidate sessions' missing docs while the
-// export itself stays snapshotted generation-wide. Snapshotting here means a
-// build that activates mid-push cannot mix this generation's fingerprint with
-// a newer generation's docs, while the next Generation call refreshes the
-// snapshot so successive pushes stay current.
-//
-// A generation with missing embeddings is refused with an error wrapping
-// postgres.ErrVectorSourceNotReady rather than exported: the mirror only
-// changes during builds, so missing coverage means a build is rewriting the
-// generation right now (a same-fingerprint full rebuild clears and refills it
-// in place) or one was interrupted. Exporting that partial view would evict
-// or overwrite valid PG vectors; the push after the build completes sends
-// everything that changed.
-func (s *vectorPushSource) Generation(
+func (s *vectorPushSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
-) (postgres.VectorGenerationInfo, bool, error) {
+) (postgres.VectorExport, bool, error) {
 	ix, err := s.openIndex(ctx)
 	if err != nil || ix == nil {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false, err
+		return nil, false, err
 	}
-	exp, ok, err := ix.ActiveExport(ctx)
+	exp, ok, err := ix.BeginExport(ctx, sessionIDs)
 	if err != nil {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false,
-			fmt.Errorf("reading active generation: %w", err)
+		if errors.Is(err, vector.ErrExportNotReady) {
+			return nil, false, fmt.Errorf("%w: %v", postgres.ErrVectorSourceNotReady, err)
+		}
+		return nil, false, fmt.Errorf("beginning vector export: %w", err)
 	}
 	if !ok {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false, nil
+		return nil, false, nil
 	}
-	rebuildPending, err := ix.ActiveFullRebuildPending(ctx, exp.Fingerprint)
-	if err != nil {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false,
-			fmt.Errorf("reading active full rebuild marker: %w", err)
-	}
-	if rebuildPending {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false, fmt.Errorf(
-			"%w: active generation %q is being rebuilt in place",
-			postgres.ErrVectorSourceNotReady, exp.Fingerprint)
-	}
-	missing, err := ix.MissingEmbeddedDocs(ctx, exp.Ordinal, sessionIDs)
-	if err != nil {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false,
-			fmt.Errorf("reading active generation coverage: %w", err)
-	}
-	if missing > 0 {
-		s.setSnapshot(vector.ActiveExport{}, false)
-		return postgres.VectorGenerationInfo{}, false, fmt.Errorf(
-			"%w: %d document(s) pending",
-			postgres.ErrVectorSourceNotReady, missing)
-	}
-	s.setSnapshot(exp, true)
-	return postgres.VectorGenerationInfo{
-		Fingerprint: exp.Fingerprint,
-		Model:       exp.Model,
-		Dimension:   exp.Dimension,
-	}, true, nil
+	return &vectorPushExport{export: exp}, true, nil
 }
 
-// SessionDocHashes implements postgres.VectorPushSource, reading the ordinal
-// snapshotted by Generation. An absent file or no active snapshot yields an
-// empty (non-nil) map: no local sessions, so the push evicts any PG state this
-// pusher previously owned.
-func (s *vectorPushSource) SessionDocHashes(
-	ctx context.Context, sessionIDs []string,
-) (map[string]string, error) {
-	ix, err := s.openIndex(ctx)
-	if err != nil {
-		return nil, err
-	}
-	exp, ok := s.snapshot()
-	if ix == nil || !ok {
-		return map[string]string{}, nil
-	}
-	return ix.SessionEmbeddedDocHashes(ctx, exp.Ordinal, sessionIDs)
+type vectorPushExport struct{ export *vector.Export }
+
+func (e *vectorPushExport) Generation() postgres.VectorGenerationInfo {
+	exp := e.export.Generation()
+	return postgres.VectorGenerationInfo{Fingerprint: exp.Fingerprint, Model: exp.Model, Dimension: exp.Dimension}
 }
 
-// SessionDocs implements postgres.VectorPushSource, exporting one session's
-// docs at the ordinal snapshotted by Generation and mapping each mirror doc and
-// its chunk vectors field-by-field onto the push types. The returned hash is
-// the aggregate of exactly the exported doc set, computed inside the export's
-// own read snapshot; the push defers the session when it no longer matches the
-// delta-scan hash.
-func (s *vectorPushSource) SessionDocs(
-	ctx context.Context, sessionID string,
-) ([]postgres.VectorPushDoc, string, error) {
-	ix, err := s.openIndex(ctx)
+func (e *vectorPushExport) SessionDocHashes(ctx context.Context, ids []string) (map[string]string, error) {
+	return e.export.SessionDocHashes(ctx, ids)
+}
+
+func (e *vectorPushExport) SessionDocs(ctx context.Context, id string) ([]postgres.VectorPushDoc, string, error) {
+	docs, hash, err := e.export.SessionDocs(ctx, id)
 	if err != nil {
 		return nil, "", err
 	}
-	exp, ok := s.snapshot()
-	if ix == nil || !ok {
-		return nil, "", nil
-	}
-	docs, aggHash, err := ix.ExportSessionDocs(ctx, exp.Ordinal, sessionID)
-	if err != nil {
-		return nil, "", err
-	}
-	return convertVectorPushDocs(docs), aggHash, nil
+	return convertVectorPushDocs(docs), hash, nil
 }
+
+func (e *vectorPushExport) Close() error { return e.export.Close() }
 
 // convertVectorPushDocs copies exported mirror docs onto the backend-agnostic
 // push types. It is a mechanical field-by-field copy, isolated here so the

@@ -26,22 +26,10 @@ import (
 // only needs identity, never a method call.
 type stubVectorPushSource struct{}
 
-func (stubVectorPushSource) Generation(
+func (stubVectorPushSource) BeginExport(
 	context.Context, []string,
-) (postgres.VectorGenerationInfo, bool, error) {
-	return postgres.VectorGenerationInfo{}, false, nil
-}
-
-func (stubVectorPushSource) SessionDocHashes(
-	context.Context, []string,
-) (map[string]string, error) {
-	return nil, nil
-}
-
-func (stubVectorPushSource) SessionDocs(
-	context.Context, string,
-) ([]postgres.VectorPushDoc, string, error) {
-	return nil, "", nil
+) (postgres.VectorExport, bool, error) {
+	return nil, false, nil
 }
 
 // TestPGPushProgressLoggerThrottlesAndReportsPhases pins the daemon-side

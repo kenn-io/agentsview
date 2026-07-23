@@ -46,30 +46,22 @@ type VectorPushDoc struct {
 	Chunks      []VectorPushChunk
 }
 
-// VectorPushSource supplies the locally built vectors.db active generation to
-// the PG push phase. Generation reports the active generation (ok=false when
-// none is built, an error wrapping ErrVectorSourceNotReady when one exists but
-// must not be exported right now). SessionDocHashes returns per-session
-// aggregate hashes used for delta detection; SessionDocs returns the full docs
-// for one session only when that session needs a (re)push, together with the
-// aggregate hash of exactly the returned doc set computed in the same read
-// snapshot ("" when no docs are embedded). The push compares that hash against
-// the delta-scan hash and defers the session on any divergence, so a local
-// index rewritten between the scan and the export can never overwrite valid PG
-// vectors with a partial view.
+// VectorPushSource supplies one transaction-owned local export for a PG push
+// phase. The export keeps generation metadata, aggregate hashes, and document
+// and chunk reads on one SQLite snapshot.
 type VectorPushSource interface {
-	Generation(
-		ctx context.Context, sessionIDs []string,
-	) (VectorGenerationInfo, bool, error)
-	// SessionDocHashes returns per-session aggregate hashes. A nil
-	// sessionIDs covers every locally embedded session; non-nil limits
-	// the read to those IDs (empty returns an empty map).
+	BeginExport(ctx context.Context, sessionIDs []string) (VectorExport, bool, error)
+}
+
+type VectorExport interface {
+	Generation() VectorGenerationInfo
 	SessionDocHashes(
 		ctx context.Context, sessionIDs []string,
 	) (map[string]string, error)
 	SessionDocs(
 		ctx context.Context, sessionID string,
 	) ([]VectorPushDoc, string, error)
+	Close() error
 }
 
 // ErrVectorSourceNotReady marks a Generation error meaning the local vector
@@ -150,11 +142,9 @@ type vectorGeneration struct {
 // pusher's owner identity. Bundling them keeps per-session helpers under the
 // positional-parameter limit.
 type vectorPushScope struct {
-	gen         vectorGeneration
-	fingerprint string
-	sourceScope []string
-	genIDs      []int64
-	owner       vectorOwnerIdentity
+	gen    vectorGeneration
+	genIDs []int64
+	owner  vectorOwnerIdentity
 }
 
 // vectorPushStateRow is the PG-side delta state for one owned session in one
@@ -247,7 +237,7 @@ func (s *Sync) pushVectors(
 		log.Printf("vector push: no changed sessions; deferring reconciliation to the next generation-wide push")
 		return res, nil
 	}
-	gen, hasGen, err := s.vectorSource.Generation(ctx, scope)
+	export, hasGen, err := s.vectorSource.BeginExport(ctx, scope)
 	if errors.Is(err, ErrVectorSourceNotReady) {
 		res.Skipped, res.SkippedReason = true, err.Error()
 		log.Printf("vector push: skipped: %v", err)
@@ -260,6 +250,12 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, "no active local generation"
 		return res, nil
 	}
+	defer func() {
+		if export != nil {
+			_ = export.Close()
+		}
+	}()
+	gen := export.Generation()
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, s.pg)
 	if err != nil {
 		if s.skipVectorsOnPrivilegeError(err, &res) {
@@ -308,7 +304,8 @@ func (s *Sync) pushVectors(
 		scope = nil
 	}
 	if requestedScope != nil && scope == nil {
-		gen, hasGen, err = s.vectorSource.Generation(ctx, nil)
+		_ = export.Close()
+		export, hasGen, err = s.vectorSource.BeginExport(ctx, nil)
 		if errors.Is(err, ErrVectorSourceNotReady) {
 			res.Skipped, res.SkippedReason = true, err.Error()
 			log.Printf("vector push: skipped after scoped promotion: %v", err)
@@ -323,6 +320,7 @@ func (s *Sync) pushVectors(
 			res.Skipped, res.SkippedReason = true, "no active local generation"
 			return res, nil
 		}
+		gen = export.Generation()
 		resolved, err = s.resolveVectorGeneration(ctx, gen)
 		if err != nil {
 			if s.skipVectorsOnPrivilegeError(err, &res) {
@@ -336,7 +334,7 @@ func (s *Sync) pushVectors(
 	if err != nil {
 		return res, err
 	}
-	local, err := s.vectorSource.SessionDocHashes(ctx, scope)
+	local, err := export.SessionDocHashes(ctx, scope)
 	if err != nil {
 		return res, fmt.Errorf("reading local vector doc hashes: %w", err)
 	}
@@ -359,7 +357,7 @@ func (s *Sync) pushVectors(
 			len(local), len(pgState), resolved.id)
 	}
 	if err := s.applyVectorDeltas(
-		ctx, resolved, gen.Fingerprint, scope, owner, full, local, pgState,
+		ctx, resolved, owner, full, local, pgState, export,
 		failedSessions, onProgress, &res,
 	); err != nil {
 		return res, err
@@ -417,11 +415,10 @@ func (s *Sync) skipVectorsOnPrivilegeError(err error, res *VectorPushResult) boo
 // vectorProgressStride examined ones, so long delta scans stay visible
 // without a callback per unchanged session.
 func (s *Sync) applyVectorDeltas(
-	ctx context.Context, gen vectorGeneration, fingerprint string,
-	sourceScope []string,
+	ctx context.Context, gen vectorGeneration,
 	owner vectorOwnerIdentity, full bool,
 	local map[string]string, pgState map[string]vectorPushStateRow,
-	failedSessions map[string]struct{}, onProgress func(PushProgress),
+	export VectorExport, failedSessions map[string]struct{}, onProgress func(PushProgress),
 	res *VectorPushResult,
 ) error {
 	allGenIDs, err := s.allVectorGenerationIDs(ctx)
@@ -433,11 +430,9 @@ func (s *Sync) applyVectorDeltas(
 		return err
 	}
 	scope := vectorPushScope{
-		gen:         gen,
-		fingerprint: fingerprint,
-		sourceScope: sourceScope,
-		genIDs:      genIDs,
-		owner:       owner,
+		gen:    gen,
+		genIDs: genIDs,
+		owner:  owner,
 	}
 
 	outOfScope, err := s.vectorSessionsOutOfScope(ctx, local, pgState)
@@ -475,7 +470,7 @@ func (s *Sync) applyVectorDeltas(
 			res.SessionsDeferred++
 			continue
 		}
-		outcome, err := s.pushVectorSession(ctx, scope, sessionID, agg)
+		outcome, err := s.pushVectorSession(ctx, scope, export, sessionID, agg)
 		if err != nil {
 			return err
 		}
@@ -484,19 +479,6 @@ func (s *Sync) applyVectorDeltas(
 		}
 		if outcome.deferred {
 			res.SessionsDeferred++
-			// One diverged session can be a transient local change; a source
-			// that is no longer ready (or swapped generations) means a build
-			// is rewriting the whole index — every remaining session would
-			// diverge too, so stop the phase (evictions included) and let the
-			// next push, run against the completed build, send everything.
-			if !s.vectorSourceStillCurrent(
-				ctx, scope.sourceScope, scope.fingerprint,
-			) {
-				log.Printf(
-					"vector push: stopping after %d pushed session(s): local generation changed or became unready mid-push",
-					res.SessionsPushed)
-				return nil
-			}
 		}
 		if outcome.pushed {
 			res.SessionsPushed++
@@ -529,44 +511,7 @@ func (s *Sync) applyVectorDeltas(
 			res.Conflicts++
 		}
 	}
-	if len(evict) > 0 && !s.vectorSourceStillCurrent(
-		ctx, scope.sourceScope, scope.fingerprint,
-	) {
-		// Count the abandoned evictions as deferred: a change-scoped
-		// push cannot re-derive them (the sessions' fingerprints are
-		// already finalized), so the deferral must surface in the
-		// result to send the next watch push back to a generation-wide
-		// reconciliation.
-		res.SessionsDeferred += len(evict)
-		log.Printf(
-			"vector push: skipping eviction of %d session(s): local generation changed or became unready mid-push",
-			len(evict))
-		return nil
-	}
 	return s.evictVectorSessions(ctx, scope, evict, res)
-}
-
-// vectorSourceStillCurrent re-verifies that the local source still reports the
-// same fully embedded generation the delta scan read its hashes from.
-// sessionIDs matches that earlier hash read: scoped pushes re-check only their
-// candidate set, while promoted/full passes re-check generation-wide. It gates
-// two decisions computed from that earlier read: the eviction list (an
-// embeddings build that starts mid-push collapses the local coverage the list
-// was computed from — evicting on that view would remove valid PG vectors
-// wholesale — and a generation swap invalidates it outright) and whether to
-// keep pushing after a session's export hash diverged from its delta-scan hash
-// (an unready source means every remaining session would diverge too).
-// Deferring is always safe: both the eviction list and per-session deltas are
-// re-derived from scratch on the next push. (A full rebuild that both starts
-// and completes between the hash read and this check is not detectable from
-// the source's state, but the per-session export-hash comparison in
-// pushVectorSession covers the replacement path regardless, and eviction
-// candidates lost to that window are re-pushed by the next push.)
-func (s *Sync) vectorSourceStillCurrent(
-	ctx context.Context, sessionIDs []string, fingerprint string,
-) bool {
-	cur, ok, err := s.vectorSource.Generation(ctx, sessionIDs)
-	return err == nil && ok && cur.Fingerprint == fingerprint
 }
 
 // vectorSessionsOutOfScope computes the set of candidate sessions a filtered
@@ -897,7 +842,7 @@ type vectorSessionOutcome struct {
 // generation's chunks for them (see deleteParkedVectorDocs). This mirrors the
 // local mirror's park-to-sentinel slot replacement (internal/vector/mirror.go).
 func (s *Sync) pushVectorSession(
-	ctx context.Context, scope vectorPushScope, sessionID, aggHash string,
+	ctx context.Context, scope vectorPushScope, export VectorExport, sessionID, aggHash string,
 ) (vectorSessionOutcome, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -933,7 +878,7 @@ func (s *Sync) pushVectorSession(
 	// session passes the existence/ownership probe. A local-only session with no
 	// PG row, or one owned elsewhere, skips forever; fetching docs first would
 	// re-export them on every push for sessions that never land.
-	docs, exportHash, err := s.vectorSource.SessionDocs(ctx, sessionID)
+	docs, exportHash, err := export.SessionDocs(ctx, sessionID)
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf(
 			"reading local docs for session %s: %w", sessionID, err)

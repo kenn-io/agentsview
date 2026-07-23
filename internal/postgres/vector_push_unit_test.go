@@ -40,23 +40,11 @@ func TestVectorOwnerIdentityOwns(t *testing.T) {
 // adapter does while an embeddings build is rewriting the active generation.
 type notReadyVectorSource struct{}
 
-func (notReadyVectorSource) Generation(
+func (notReadyVectorSource) BeginExport(
 	context.Context, []string,
-) (VectorGenerationInfo, bool, error) {
-	return VectorGenerationInfo{}, false, fmt.Errorf(
+) (VectorExport, bool, error) {
+	return nil, false, fmt.Errorf(
 		"%w: 7 document(s) pending", ErrVectorSourceNotReady)
-}
-
-func (notReadyVectorSource) SessionDocHashes(
-	context.Context, []string,
-) (map[string]string, error) {
-	return nil, nil
-}
-
-func (notReadyVectorSource) SessionDocs(
-	context.Context, string,
-) ([]VectorPushDoc, string, error) {
-	return nil, "", nil
 }
 
 // TestPushVectorsSkipsWhenSourceNotReady pins that a not-ready source turns
@@ -77,25 +65,9 @@ func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 // finish the vector phase without touching the source (or PG) at all.
 type spyVectorSource struct{ t *testing.T }
 
-func (s spyVectorSource) Generation(
-	context.Context, []string,
-) (VectorGenerationInfo, bool, error) {
-	s.t.Fatal("Generation must not be called for an empty scope")
-	return VectorGenerationInfo{}, false, nil
-}
-
-func (s spyVectorSource) SessionDocHashes(
-	context.Context, []string,
-) (map[string]string, error) {
-	s.t.Fatal("SessionDocHashes must not be called for an empty scope")
-	return nil, nil
-}
-
-func (s spyVectorSource) SessionDocs(
-	context.Context, string,
-) ([]VectorPushDoc, string, error) {
-	s.t.Fatal("SessionDocs must not be called for an empty scope")
-	return nil, "", nil
+func (s spyVectorSource) BeginExport(context.Context, []string) (VectorExport, bool, error) {
+	s.t.Fatal("BeginExport must not be called for an empty scope")
+	return nil, false, nil
 }
 
 // TestPushVectorsEmptyScopeReadsNothing pins the change-scoped contract for

@@ -38,36 +38,49 @@ type fakeVectorSource struct {
 	hashScopes   [][]string // sessionIDs of each SessionDocHashes call
 }
 
-func (f *fakeVectorSource) Generation(
+func (f *fakeVectorSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
-) (VectorGenerationInfo, bool, error) {
+) (VectorExport, bool, error) {
 	f.genCalls++
 	f.genScopes = append(f.genScopes, append([]string(nil), sessionIDs...))
+	gen, ok, err := f.gen, f.hasGen, error(nil)
 	if f.genOverride != nil {
-		return f.genOverride(f.genCalls, sessionIDs)
+		gen, ok, err = f.genOverride(f.genCalls, sessionIDs)
 	}
-	return f.gen, f.hasGen, nil
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return &fakeVectorExport{source: f, gen: gen}, true, nil
 }
 
-func (f *fakeVectorSource) SessionDocHashes(
+type fakeVectorExport struct {
+	source *fakeVectorSource
+	gen    VectorGenerationInfo
+	closed bool
+}
+
+func (e *fakeVectorExport) Generation() VectorGenerationInfo { return e.gen }
+
+func (e *fakeVectorExport) SessionDocHashes(
 	ctx context.Context, sessionIDs []string,
 ) (map[string]string, error) {
-	f.hashScopes = append(f.hashScopes, append([]string(nil), sessionIDs...))
+	e.source.hashScopes = append(e.source.hashScopes, append([]string(nil), sessionIDs...))
 	if sessionIDs == nil {
-		return f.hashes, nil
+		return e.source.hashes, nil
 	}
 	out := make(map[string]string, len(sessionIDs))
 	for _, id := range sessionIDs {
-		if h, ok := f.hashes[id]; ok {
+		if h, ok := e.source.hashes[id]; ok {
 			out[id] = h
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeVectorSource) SessionDocs(
+func (e *fakeVectorExport) SessionDocs(
 	ctx context.Context, id string,
 ) ([]VectorPushDoc, string, error) {
+	f := e.source
 	if f.docsCalls == nil {
 		f.docsCalls = make(map[string]int)
 	}
@@ -77,6 +90,8 @@ func (f *fakeVectorSource) SessionDocs(
 	}
 	return f.docs[id], f.hashes[id], nil
 }
+
+func (e *fakeVectorExport) Close() error { e.closed = true; return nil }
 
 // newVectorPushTestSync creates a fresh schema with the base + vector tables
 // and returns a Sync wired to a local SQLite DB. It skips the test when the
@@ -1659,10 +1674,9 @@ func TestVectorEvictionRechecksOwnershipInTx(t *testing.T) {
 	genIDs, err := sync.existingChunkGenerations(ctx, allGenIDs)
 	require.NoError(t, err)
 	scope := vectorPushScope{
-		gen:         vectorGeneration{id: genID},
-		fingerprint: "fp-ev",
-		genIDs:      genIDs,
-		owner:       owner,
+		gen:    vectorGeneration{id: genID},
+		genIDs: genIDs,
+		owner:  owner,
 	}
 
 	var res VectorPushResult

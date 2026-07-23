@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -148,6 +149,73 @@ func TestExportNoActiveGeneration(t *testing.T) {
 	_, ok, err := ix.ActiveExport(ctx)
 	require.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func TestVectorExportRebuildSnapshotConsistency(t *testing.T) {
+	ctx := context.Background()
+	ix, gen := newBuiltTestIndex(t)
+	src := exportTestSource()
+
+	old, ok, err := ix.BeginExport(ctx, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer old.Close()
+	oldHashes, err := old.SessionDocHashes(ctx, nil)
+	require.NoError(t, err)
+	oldDocs, oldHash, err := old.SessionDocs(ctx, "session-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, oldDocs)
+
+	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
+		return nil, errors.New("embeddings endpoint down")
+	}
+	_, err = ix.Build(ctx, src, failingEncoder, gen,
+		BuildOptions{FullRebuild: true})
+	require.Error(t, err, "full rebuild must leave a marker-bearing partial generation")
+
+	_, ok, err = ix.BeginExport(ctx, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrExportNotReady)
+	assert.False(t, ok)
+
+	gotHashes, err := old.SessionDocHashes(ctx, nil)
+	require.NoError(t, err)
+	assert.Equal(t, oldHashes, gotHashes)
+	gotDocs, gotHash, err := old.SessionDocs(ctx, "session-1")
+	require.NoError(t, err)
+	assert.Equal(t, oldHash, gotHash)
+	assert.Equal(t, oldDocs, gotDocs)
+
+	_, err = ix.Build(ctx, src, fakeExportEncoder(), gen,
+		BuildOptions{FullRebuild: true})
+	require.NoError(t, err)
+
+	newExport, ok, err := ix.BeginExport(ctx, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer newExport.Close()
+	newHashes, err := newExport.SessionDocHashes(ctx, nil)
+	require.NoError(t, err)
+	assert.Equal(t, oldHashes, newHashes)
+	newDocs, newHash, err := newExport.SessionDocs(ctx, "session-1")
+	require.NoError(t, err)
+	assert.Equal(t, oldHash, newHash)
+	assert.Equal(t, oldDocs, newDocs)
+	assert.Equal(t, gen.Fingerprint(), newExport.Generation().Fingerprint)
+}
+
+func TestVectorExportHandleLifecycle(t *testing.T) {
+	ctx := context.Background()
+	ix, _ := newBuiltTestIndex(t)
+	export, ok, err := ix.BeginExport(ctx, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, export.Close())
+	require.NoError(t, export.Close())
+	_, err = export.SessionDocHashes(ctx, nil)
+	assert.Error(t, err)
+	_, _, err = export.SessionDocs(ctx, "session-1")
+	assert.Error(t, err)
 }
 
 // TestSessionEmbeddedDocHashesChangesWithContent builds, captures each

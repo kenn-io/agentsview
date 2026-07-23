@@ -118,7 +118,7 @@ func TestVectorPushSourceMissingFile(t *testing.T) {
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	_, ok, err := src.Generation(context.Background(), nil)
+	_, ok, err := src.BeginExport(context.Background(), nil)
 	require.NoError(t, err)
 	assert.False(t, ok) // no vectors.db yet -> nothing to push, not an error
 }
@@ -134,18 +134,19 @@ func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	_, ok, err := src.Generation(ctx, nil)
+	export, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "no vectors.db yet -> nothing to push")
 
 	buildTestVectorsDB(t, cfg)
 
-	gen, ok, err := src.Generation(ctx, nil)
+	export, ok, err = src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok, "same adapter must pick up a later build")
-	assert.Equal(t, "fake-model", gen.Model)
+	defer export.Close()
+	assert.Equal(t, "fake-model", export.Generation().Model)
 
-	hashes, err := src.SessionDocHashes(ctx, nil)
+	hashes, err := export.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
 	assert.Len(t, hashes, 2)
 }
@@ -183,7 +184,7 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	_, ok, err := src.Generation(ctx, []string{"session-1"})
+	_, ok, err := src.BeginExport(ctx, []string{"session-1"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
 	assert.False(t, ok)
@@ -221,12 +222,13 @@ func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	gen, ok, err := src.Generation(ctx, []string{"session-1"})
+	export, ok, err := src.BeginExport(ctx, []string{"session-1"})
 	require.NoError(t, err)
 	require.True(t, ok, "out-of-scope pending docs must not block a scoped push")
-	assert.Equal(t, "fake-model", gen.Model)
+	assert.Equal(t, "fake-model", export.Generation().Model)
+	require.NoError(t, export.Close())
 
-	_, ok, err = src.Generation(ctx, nil)
+	_, ok, err = src.BeginExport(ctx, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
 	assert.False(t, ok)
@@ -241,14 +243,15 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	require.NotNil(t, src)
 	closePushSource(t, src)
 
-	gen, ok, err := src.Generation(ctx, nil)
+	export, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.NotEmpty(t, gen.Fingerprint)
-	assert.Equal(t, "fake-model", gen.Model)
-	assert.Equal(t, 4, gen.Dimension)
+	defer export.Close()
+	assert.NotEmpty(t, export.Generation().Fingerprint)
+	assert.Equal(t, "fake-model", export.Generation().Model)
+	assert.Equal(t, 4, export.Generation().Dimension)
 
-	hashes, err := src.SessionDocHashes(ctx, nil)
+	hashes, err := export.SessionDocHashes(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, hashes, 2)
 	assert.Contains(t, hashes, "session-1")
@@ -271,7 +274,7 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	assert.Equal(t, hashes["session-1"], wantHash,
 		"export hash must match the delta-scan aggregate for an unchanged index")
 
-	docs, gotHash, err := src.SessionDocs(ctx, "session-1")
+	docs, gotHash, err := export.SessionDocs(ctx, "session-1")
 	require.NoError(t, err)
 	assert.Equal(t, wantHash, gotHash)
 	require.Len(t, docs, len(want))
@@ -307,9 +310,10 @@ func TestCloseVectorPushSource(t *testing.T) {
 	require.NotNil(t, src)
 
 	ctx := context.Background()
-	_, ok, err := src.Generation(ctx, nil)
+	export, ok, err := src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
+	defer export.Close()
 	adapter := src.(*vectorPushSource)
 	require.NotNil(t, adapter.ix, "Generation memoizes the open handle")
 
@@ -317,8 +321,9 @@ func TestCloseVectorPushSource(t *testing.T) {
 	assert.Nil(t, adapter.ix, "close releases the memoized handle")
 	closeVectorPushSource(src) // idempotent
 
-	_, ok, err = src.Generation(ctx, nil)
+	export, ok, err = src.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	assert.True(t, ok, "a closed adapter reopens lazily")
+	require.NoError(t, export.Close())
 	closePushSource(t, src)
 }
