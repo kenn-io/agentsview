@@ -1566,37 +1566,49 @@ func (db *DB) LinkSubagentSessions() error {
 	// same pattern).
 	_, err := db.getWriter().Exec(`
 		UPDATE sessions
-		SET parent_session_id = (
-			SELECT tc.session_id
-			FROM tool_calls tc
-			WHERE tc.subagent_session_id = sessions.id
-			LIMIT 1
+		SET parent_session_id = COALESCE(
+			(
+				SELECT tc.session_id
+				FROM tool_calls tc
+				WHERE tc.subagent_session_id = sessions.id
+				GROUP BY tc.subagent_session_id
+				HAVING COUNT(DISTINCT tc.session_id) = 1
+			),
+			parent_session_id
 		),
 		relationship_type = 'subagent',
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		-- The tool_calls edge (from toolUseResult.agentId) is the record of
-		-- the actual spawn, so it is authoritative over the path-derived
-		-- parent set at parse time. Nested subagents (depth >= 2) all live in
-		-- the same flat <main>/subagents/ dir, so path derivation pins them to
-		-- the main session AND tags them 'subagent'; the previous
-		-- relationship_type != subagent guard then skipped them, leaving
-		-- the hierarchy flat. Update the row when EITHER it is not yet tagged
-		-- 'subagent' (upgrades a continuation/fork/empty classification even
-		-- when its parent already matches the spawner) OR the authoritative
-		-- parent differs (the nested depth>=2 re-parent). Null-safe IS NOT.
-		-- Already-correct subagents match neither branch and are left as-is to
-		-- avoid needless local_modified_at churn.
+		-- The tool_calls edge (from toolUseResult.agentId) records the actual
+		-- spawn, authoritative over the path-derived parent set at parse time.
+		-- Nested subagents (depth >= 2) live flat in <main>/subagents/, so path
+		-- derivation pins them to the main session AND tags them 'subagent';
+		-- the old relationship_type != 'subagent' guard skipped them, leaving
+		-- the hierarchy flat.
+		--
+		-- Resolve the parent only from an UNAMBIGUOUS edge: the grouped
+		-- subquery yields a spawner only when exactly one distinct session
+		-- spawned this child (HAVING COUNT(DISTINCT tc.session_id) = 1). With
+		-- conflicting edges from copied/forked history it yields NULL and
+		-- COALESCE keeps the current parent, so a correctly parented subagent
+		-- is never re-parented arbitrarily. Update when EITHER the row is not
+		-- yet 'subagent' (upgrade continuation/fork/empty; parent preserved if
+		-- ambiguous) OR the unambiguous parent differs (null-safe IS NOT).
+		-- Already-correct subagents match neither branch (no churn).
 		WHERE EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = sessions.id
 		)
 		AND (
 			relationship_type != 'subagent'
-			OR parent_session_id IS NOT (
-				SELECT tc.session_id
-				FROM tool_calls tc
-				WHERE tc.subagent_session_id = sessions.id
-				LIMIT 1
+			OR parent_session_id IS NOT COALESCE(
+				(
+					SELECT tc.session_id
+					FROM tool_calls tc
+					WHERE tc.subagent_session_id = sessions.id
+					GROUP BY tc.subagent_session_id
+					HAVING COUNT(DISTINCT tc.session_id) = 1
+				),
+				parent_session_id
 			)
 		)`)
 	if err != nil {

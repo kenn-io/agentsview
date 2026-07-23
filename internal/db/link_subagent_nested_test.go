@@ -182,3 +182,60 @@ func TestLinkSubagentSessionsLinksNullParentSubagent(t *testing.T) {
 			"orphan.parent_session_id")
 	}
 }
+
+// TestLinkSubagentSessionsPreservesParentOnConflictingEdges guards against
+// arbitrary re-parenting when a child is referenced by spawn edges from more
+// than one distinct session (reachable via copied/forked history). The parent
+// must be resolved only from an unambiguous edge; with conflicting edges the
+// current parent is preserved rather than picked arbitrarily by a bare LIMIT 1.
+func TestLinkSubagentSessionsPreservesParentOnConflictingEdges(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "p1", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	insertSession(t, d, "p2", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+	// "kid" is already a correctly parented subagent under p2.
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		parent := "p2"
+		s.ParentSessionID = &parent
+		s.RelationshipType = "subagent"
+	})
+
+	// Two DISTINCT sessions both carry a spawn edge to "kid". p1's edge is
+	// inserted first (lower rowid), so a bare `LIMIT 1` would pick p1 and
+	// wrongly re-parent kid away from its current p2. The unambiguous-edge
+	// resolution must instead preserve p2.
+	insertMessages(t, d,
+		Message{
+			SessionID: "p1", Ordinal: 0, Role: "assistant",
+			Content: "spawn kid (copy A)", HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				ToolName: "Agent", Category: "Task",
+				SubagentSessionID: "kid",
+			}},
+		},
+		Message{
+			SessionID: "p2", Ordinal: 0, Role: "assistant",
+			Content: "spawn kid (copy B)", HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				ToolName: "Agent", Category: "Task",
+				SubagentSessionID: "kid",
+			}},
+		},
+	)
+
+	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+
+	kid, err := d.GetSession(context.Background(), "kid")
+	requireNoError(t, err, "GetSession kid")
+	assert.Equal(t, "subagent", kid.RelationshipType, "kid relationship_type")
+	if assert.NotNil(t, kid.ParentSessionID, "kid parent") {
+		assert.Equal(t, "p2", *kid.ParentSessionID,
+			"conflicting edges must preserve the current parent, "+
+				"not pick one arbitrarily")
+	}
+}
