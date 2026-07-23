@@ -133,6 +133,13 @@ func scopedVectorPush(
 // scoped but the active generation id differed from the last reconciled one —
 // pushVectors promotes exactly that case, so the same predicate recovers it
 // here without a separate result flag.
+//
+// A generation-wide phase reporting a zero generation id clears nothing: a
+// daemon predating the field omits it, and clearing on such a response
+// would let the next change push scope with a zero memo, which the vector
+// phase cannot promote if the generation was recreated meanwhile. Current
+// servers report a nonzero id on every clean unskipped phase, so scoping
+// resumes with the first response that carries one.
 func nextVectorReconcile(
 	current bool, lastGeneration int64,
 	scoped bool, res postgres.PushResult,
@@ -141,13 +148,8 @@ func nextVectorReconcile(
 		return true, lastGeneration
 	}
 	generation := res.Vectors.GenerationID
-	generationWide := !scoped ||
-		(generation != 0 && generation != lastGeneration)
-	if generationWide {
-		if generation != 0 {
-			lastGeneration = generation
-		}
-		return false, lastGeneration
+	if generation != 0 && (!scoped || generation != lastGeneration) {
+		return false, generation
 	}
 	return current, lastGeneration
 }

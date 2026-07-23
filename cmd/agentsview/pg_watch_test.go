@@ -239,7 +239,9 @@ func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
 // stay generation-wide, and a deferring vector phase forces the next push
 // back to generation-wide before scoping resumes.
 func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
-	target := &fakeTarget{}
+	target := &fakeTarget{pushResult: postgres.PushResult{
+		Vectors: postgres.VectorPushResult{GenerationID: 1},
+	}}
 	pusher, _ := newTestPgPusher(target)
 	pusher.vectorReconcileNeeded = true
 	ctx := context.Background()
@@ -251,7 +253,9 @@ func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
 		Vectors: postgres.VectorPushResult{SessionsDeferred: 1},
 	}
 	require.NoError(t, pusher.push(ctx, reasonChange, false))
-	target.pushResult = postgres.PushResult{}
+	target.pushResult = postgres.PushResult{
+		Vectors: postgres.VectorPushResult{GenerationID: 1},
+	}
 	require.NoError(t, pusher.push(ctx, reasonChange, false))
 	require.NoError(t, pusher.push(ctx, reasonChange, false))
 
@@ -262,6 +266,37 @@ func TestPGPusherScopesChangeVectorPushes(t *testing.T) {
 	assert.Equal(t,
 		[]bool{false, true, false, true, false, true}, scoped,
 		"startup full-read, scoped change, full interval, scoped change that defers, reconciling change, scoped change")
+}
+
+// TestPGPusherZeroGenerationKeepsReconcile pins that a generation-wide
+// phase reporting no generation id — a daemon predating the field — never
+// clears the reconcile bit. Clearing on it would let the next change push
+// scope with a zero memo, which the vector phase cannot promote if the
+// generation was recreated meanwhile. Scoping resumes with the first
+// response that carries an id.
+func TestPGPusherZeroGenerationKeepsReconcile(t *testing.T) {
+	target := &fakeTarget{}
+	pusher, _ := newTestPgPusher(target)
+	pusher.vectorReconcileNeeded = true
+	ctx := context.Background()
+
+	require.NoError(t, pusher.push(ctx, reasonStartup, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+	target.pushResult = postgres.PushResult{
+		Vectors: postgres.VectorPushResult{GenerationID: 3},
+	}
+	require.NoError(t, pusher.push(ctx, reasonInterval, false))
+	require.NoError(t, pusher.push(ctx, reasonChange, false))
+
+	require.Len(t, target.pushOpts, 4)
+	assert.False(t, target.pushOpts[1].ScopeVectorsToChangedSessions,
+		"a zero-id reconciliation must not enable scoping")
+	assert.Zero(t, target.pushOpts[1].LastReconciledVectorGeneration,
+		"no generation id was ever reported, so none is carried")
+	assert.True(t, target.pushOpts[3].ScopeVectorsToChangedSessions,
+		"scoping resumes once a response reports the reconciled id")
+	assert.Equal(t, int64(3), target.pushOpts[3].LastReconciledVectorGeneration,
+		"the scoped push carries the first reported generation id")
 }
 
 // TestPGPusherPushErrorForcesReconcile pins that any push error sends the
