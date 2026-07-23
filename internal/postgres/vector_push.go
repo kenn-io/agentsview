@@ -250,6 +250,9 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, "no active local generation"
 		return res, nil
 	}
+	if export == nil {
+		return res, fmt.Errorf("resolving local vector generation: BeginExport returned a nil export")
+	}
 	defer func() {
 		if export != nil {
 			_ = export.Close()
@@ -319,6 +322,11 @@ func (s *Sync) pushVectors(
 		if !hasGen {
 			res.Skipped, res.SkippedReason = true, "no active local generation"
 			return res, nil
+		}
+		if export == nil {
+			return res, fmt.Errorf(
+				"rechecking local vector generation after scoped promotion: BeginExport returned a nil export",
+			)
 		}
 		gen = export.Generation()
 		resolved, err = s.resolveVectorGeneration(ctx, gen)
