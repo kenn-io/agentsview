@@ -1947,3 +1947,34 @@ func TestPGConfig_PushVectorsDefaultsTrue(t *testing.T) {
 
 	assert.True(t, cfg.PG.PushVectorsEnabled())
 }
+
+func TestValidateArtifactOriginID(t *testing.T) {
+	cases := []struct {
+		name    string
+		origin  string
+		wantErr bool
+	}{
+		{"valid", "wesm-studio-m4", false},
+		{"valid single word", "origin1", false},
+		{"empty", "", true},
+		{"reserved local", "local", true},
+		{"leading whitespace", " origin", true},
+		{"trailing whitespace", "origin ", true},
+		{"contains slash", "a/b", true},
+		{"contains backslash", `a\b`, true},
+		{"leading dash", "-origin", true},
+		{"trailing dash", "origin-", true},
+		{"uppercase letter", "Origin", true},
+		{"underscore", "origin_1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateArtifactOriginID(tc.origin)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

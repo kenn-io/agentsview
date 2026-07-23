@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -2548,6 +2549,32 @@ func (c *Config) EnsureAuthToken() error {
 		c.AuthToken = token
 		return nil
 	})
+}
+
+// ValidateArtifactOriginID checks the persisted single-writer origin prefix.
+func ValidateArtifactOriginID(origin string) error {
+	if origin == "" {
+		return errors.New("artifact origin is required")
+	}
+	if origin != strings.TrimSpace(origin) {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	if origin == "local" {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	if strings.ContainsAny(origin, `/\`) || filepath.Base(origin) != origin {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	if strings.HasPrefix(origin, "-") || strings.HasSuffix(origin, "-") {
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	for _, r := range origin {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("invalid artifact origin %q", origin)
+	}
+	return nil
 }
 
 // SaveGithubToken persists the GitHub token to the config file.
