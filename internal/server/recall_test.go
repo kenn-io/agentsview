@@ -58,8 +58,14 @@ type recallErrorSearcher struct{ err error }
 
 func (s recallErrorSearcher) SearchRecall(
 	context.Context, string, int,
-) ([]db.RecallVectorHit, bool, error) {
-	return nil, false, s.err
+) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
+	return nil, false, db.RecallVectorSnapshot{}, s.err
+}
+
+func (s recallErrorSearcher) ValidateRecallSnapshot(
+	context.Context, db.RecallVectorSnapshot,
+) error {
+	return s.err
 }
 
 func TestQueryRecallMapsSemanticAvailabilityErrors(t *testing.T) {

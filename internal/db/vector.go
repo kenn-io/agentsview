@@ -103,13 +103,21 @@ type RecallVectorHit struct {
 	Score   float32
 }
 
+// RecallVectorSnapshot identifies the embedding generation and served Recall
+// corpus revision used to rank a set of vector hits.
+type RecallVectorSnapshot struct {
+	GenerationFingerprint string
+	CorpusRevision        string
+}
+
 // RecallVectorSearcher is the seam through which recall querying reaches the
 // recall-entry embedding index without introducing an internal/db ->
 // internal/vector import cycle.
 type RecallVectorSearcher interface {
 	SearchRecall(
 		ctx context.Context, query string, limit int,
-	) (hits []RecallVectorHit, exhausted bool, err error)
+	) (hits []RecallVectorHit, exhausted bool, snapshot RecallVectorSnapshot, err error)
+	ValidateRecallSnapshot(ctx context.Context, snapshot RecallVectorSnapshot) error
 }
 
 // SetVectorSearcher wires (or, with nil, clears) the semantic search

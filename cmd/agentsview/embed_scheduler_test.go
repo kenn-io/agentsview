@@ -774,7 +774,7 @@ func TestRecallSearcherNoActiveGenerationNamesRecallBuild(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, ix.Close()) })
 	searcher := recallSearcherAdapter{ix: ix, database: database, cfg: cfg}
 
-	_, _, err = searcher.SearchRecall(t.Context(), "database pool", 5)
+	_, _, _, err = searcher.SearchRecall(t.Context(), "database pool", 5)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
@@ -1222,7 +1222,7 @@ func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
 	searcher := recallSearcherAdapter{
 		ix: ix, enc: queryEncoder, database: database, cfg: cfg,
 	}
-	_, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
+	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.NoError(t, err)
 
 	searcher.enc = func(
@@ -1240,14 +1240,14 @@ func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
 		}
 		return queryEncoder(ctx, texts)
 	}
-	_, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
+	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "changed during search")
 
 	searcher.enc = queryEncoder
 
-	_, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
+	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build --store recall")
@@ -1255,7 +1255,7 @@ func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
 	started, err = mgr.TryBuild(t.Context(), vector.BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
-	_, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
+	_, _, _, err = searcher.SearchRecall(t.Context(), "connection reuse", 5)
 	require.NoError(t, err)
 }
 

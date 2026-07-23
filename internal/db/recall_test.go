@@ -16,9 +16,11 @@ import (
 )
 
 type fakeRecallVectorSearcher struct {
-	hits  []RecallVectorHit
-	query string
-	limit int
+	hits     []RecallVectorHit
+	query    string
+	limit    int
+	onSearch func()
+	database *DB
 }
 
 type boundedRecallVectorSearcher struct {
@@ -28,18 +30,51 @@ type boundedRecallVectorSearcher struct {
 
 func (f *boundedRecallVectorSearcher) SearchRecall(
 	_ context.Context, _ string, limit int,
-) ([]RecallVectorHit, bool, error) {
+) ([]RecallVectorHit, bool, RecallVectorSnapshot, error) {
 	f.limits = append(f.limits, limit)
 	return append([]RecallVectorHit(nil), f.hits[:min(limit, len(f.hits))]...),
-		len(f.hits) <= limit, nil
+		len(f.hits) <= limit, RecallVectorSnapshot{}, nil
+}
+
+func (f *boundedRecallVectorSearcher) ValidateRecallSnapshot(
+	context.Context, RecallVectorSnapshot,
+) error {
+	return nil
 }
 
 func (f *fakeRecallVectorSearcher) SearchRecall(
-	_ context.Context, query string, limit int,
-) ([]RecallVectorHit, bool, error) {
+	ctx context.Context, query string, limit int,
+) ([]RecallVectorHit, bool, RecallVectorSnapshot, error) {
 	f.query = query
 	f.limit = limit
-	return append([]RecallVectorHit(nil), f.hits...), true, nil
+	var snapshot RecallVectorSnapshot
+	if f.database != nil {
+		revision, err := f.database.RecallCorpusRevision(ctx)
+		if err != nil {
+			return nil, false, RecallVectorSnapshot{}, err
+		}
+		snapshot.CorpusRevision = revision
+	}
+	if f.onSearch != nil {
+		f.onSearch()
+	}
+	return append([]RecallVectorHit(nil), f.hits...), true, snapshot, nil
+}
+
+func (f *fakeRecallVectorSearcher) ValidateRecallSnapshot(
+	ctx context.Context, snapshot RecallVectorSnapshot,
+) error {
+	if f.database == nil {
+		return nil
+	}
+	revision, err := f.database.RecallCorpusRevision(ctx)
+	if err != nil {
+		return err
+	}
+	if revision != snapshot.CorpusRevision {
+		return NewSemanticUnavailableError("recall corpus changed during search")
+	}
+	return nil
 }
 
 func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
@@ -1773,6 +1808,34 @@ func TestQueryRecallEntriesVectorUsesSemanticRankingAndFilters(t *testing.T) {
 	assert.Equal(t, "semantic", page.RecallEntries[0].ID)
 	assert.InDelta(t, 0.75, page.RecallEntries[0].Score, 0.0001)
 	assert.Equal(t, []string{"semantic"}, page.RecallEntries[0].MatchReasons)
+}
+
+func TestQueryRecallEntriesVectorRejectsCorpusMutationAfterSearch(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID: "semantic", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Connection reuse", Body: "Keep idle resources available.",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	d.SetRecallVectorSearcher(&fakeRecallVectorSearcher{
+		hits:     []RecallVectorHit{{EntryID: "semantic", Score: 0.75}},
+		database: d,
+		onSearch: func() {
+			_, updateErr := d.getWriter().ExecContext(ctx,
+				"UPDATE recall_entries SET title = 'Edited after vector search' WHERE id = 'semantic'",
+			)
+			require.NoError(t, updateErr)
+		},
+	})
+
+	_, err = d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "database pool", Mode: RecallQueryModeVector, Limit: 5,
+	})
+
+	assert.ErrorIs(t, err, ErrSemanticUnavailable)
 }
 
 func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {

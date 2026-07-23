@@ -1171,12 +1171,15 @@ func (db *DB) queryRecallEntriesVector(
 	limit := recallLimit(q.Limit)
 	k := max(recallLimit(q.Limit)*4, SemanticOverfetchMin)
 	for {
-		hits, exhausted, err := searcher.SearchRecall(ctx, q.Text, k)
+		hits, exhausted, snapshot, err := searcher.SearchRecall(ctx, q.Text, k)
 		if err != nil {
 			return RecallPage{}, err
 		}
 		page, err := db.recallPageFromVectorHits(ctx, q, hits, limit)
 		if err != nil {
+			return RecallPage{}, err
+		}
+		if err := searcher.ValidateRecallSnapshot(ctx, snapshot); err != nil {
 			return RecallPage{}, err
 		}
 		if len(page.RecallEntries) >= limit || exhausted {

@@ -363,80 +363,84 @@ type recallSearcherAdapter struct {
 	cfg      config.Config
 }
 
-type recallSearchCorpusIdentity struct {
-	generationFingerprint string
-	revision              string
-}
-
 func (a recallSearcherAdapter) corpusIdentity(
 	ctx context.Context,
-) (recallSearchCorpusIdentity, error) {
+) (db.RecallVectorSnapshot, error) {
 	extractionFingerprint, err := recallCorpusFingerprint(ctx, a.database)
 	if err != nil {
-		return recallSearchCorpusIdentity{}, err
+		return db.RecallVectorSnapshot{}, err
 	}
 	revision, err := a.database.RecallCorpusRevision(ctx)
 	if err != nil {
-		return recallSearchCorpusIdentity{}, err
+		return db.RecallVectorSnapshot{}, err
 	}
-	return recallSearchCorpusIdentity{
-		generationFingerprint: recallVectorGeneration(
+	return db.RecallVectorSnapshot{
+		GenerationFingerprint: recallVectorGeneration(
 			a.cfg.Vector.Embeddings, extractionFingerprint,
 		).Fingerprint(),
-		revision: revision,
+		CorpusRevision: revision,
 	}, nil
 }
 
 func (a recallSearcherAdapter) SearchRecall(
 	ctx context.Context, query string, limit int,
-) ([]db.RecallVectorHit, bool, error) {
+) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
 	identity, err := a.corpusIdentity(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
+		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
 	}
 	stale, err := a.ix.StaleActive(
-		ctx, identity.generationFingerprint, identity.revision,
+		ctx, identity.GenerationFingerprint, identity.CorpusRevision,
 	)
 	if err != nil {
-		return nil, false, translateRecallSearchError(err)
+		return nil, false, db.RecallVectorSnapshot{}, translateRecallSearchError(err)
 	}
 	if stale {
-		return nil, false, fmt.Errorf(
+		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf(
 			"%w: recall index is stale: run 'agentsview embeddings build --store recall'",
 			db.ErrSemanticUnavailable,
 		)
 	}
 	hits, exhausted, err := a.ix.SearchPage(ctx, a.enc, query, limit)
 	if err != nil {
-		return nil, false, translateRecallSearchError(err)
+		return nil, false, db.RecallVectorSnapshot{}, translateRecallSearchError(err)
 	}
-	stale, err = a.ix.StaleActive(
-		ctx, identity.generationFingerprint, identity.revision,
+	if err := a.ValidateRecallSnapshot(ctx, identity); err != nil {
+		return nil, false, db.RecallVectorSnapshot{}, err
+	}
+	out := make([]db.RecallVectorHit, len(hits))
+	for i, hit := range hits {
+		out[i] = db.RecallVectorHit{EntryID: hit.SessionID, Score: hit.Score}
+	}
+	return out, exhausted, identity, nil
+}
+
+func (a recallSearcherAdapter) ValidateRecallSnapshot(
+	ctx context.Context, identity db.RecallVectorSnapshot,
+) error {
+	stale, err := a.ix.StaleActive(
+		ctx, identity.GenerationFingerprint, identity.CorpusRevision,
 	)
 	if err != nil {
-		return nil, false, translateRecallSearchError(err)
+		return translateRecallSearchError(err)
 	}
 	if stale {
-		return nil, false, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: recall index changed during search; retry the query",
 			db.ErrSemanticUnavailable,
 		)
 	}
 	currentIdentity, err := a.corpusIdentity(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
+		return fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
 	}
 	if currentIdentity != identity {
-		return nil, false, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: recall corpus changed during search; retry after the recall index refreshes",
 			db.ErrSemanticUnavailable,
 		)
 	}
-	out := make([]db.RecallVectorHit, len(hits))
-	for i, hit := range hits {
-		out[i] = db.RecallVectorHit{EntryID: hit.SessionID, Score: hit.Score}
-	}
-	return out, exhausted, nil
+	return nil
 }
 
 // newSearcherAdapter builds a searcherAdapter for gen's configured

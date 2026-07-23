@@ -25,8 +25,14 @@ type fakeMCPRecallVectorSearcher struct {
 
 func (f *fakeMCPRecallVectorSearcher) SearchRecall(
 	context.Context, string, int,
-) ([]db.RecallVectorHit, bool, error) {
-	return append([]db.RecallVectorHit(nil), f.hits...), true, nil
+) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
+	return append([]db.RecallVectorHit(nil), f.hits...), true, db.RecallVectorSnapshot{}, nil
+}
+
+func (f *fakeMCPRecallVectorSearcher) ValidateRecallSnapshot(
+	context.Context, db.RecallVectorSnapshot,
+) error {
+	return nil
 }
 
 func newTestToolset(t *testing.T) (*toolset, *db.DB) {
