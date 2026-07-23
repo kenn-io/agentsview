@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +113,18 @@ func (readOnlyHTTPStore) ReadOnly() bool { return true }
 
 type recallUnavailableHTTPStore struct {
 	readOnlyHTTPStore
+}
+
+type recallTransientHTTPStore struct {
+	*db.DB
+}
+
+func (recallTransientHTTPStore) QueryRecallEntries(
+	context.Context, db.RecallQuery,
+) (db.RecallPage, error) {
+	return db.RecallPage{}, fmt.Errorf(
+		"%w: embedding endpoint unavailable", db.ErrSemanticTransient,
+	)
 }
 
 func (recallUnavailableHTTPStore) GetRecallEntry(
@@ -840,6 +853,21 @@ func TestHTTPBackend_QueryRecallVector501PreservesSemanticCause(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Equal(t, body, err.Error())
+}
+
+func TestHTTPBackend_QueryRecallVector503PreservesTransientCause(t *testing.T) {
+	env := newHTTPBackendEnv(t, withHTTPStore(func(d *db.DB) db.Store {
+		return recallTransientHTTPStore{DB: d}
+	}))
+
+	_, err := env.Backend("", false).QueryRecallEntries(
+		context.Background(),
+		service.RecallQuery{Query: "retry policy", Mode: db.RecallQueryModeVector},
+	)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrSemanticTransient)
+	assert.Contains(t, err.Error(), "embedding endpoint unavailable")
 }
 
 func TestHTTPBackend_QueryRecallRejectsResponseModeMismatch(t *testing.T) {

@@ -45,6 +45,23 @@ type errNotImplementedBody struct {
 func (e *errNotImplementedBody) Error() string { return errHTTPNotImplemented.Error() }
 func (e *errNotImplementedBody) Unwrap() error { return errHTTPNotImplemented }
 
+type httpStatusError struct {
+	method     string
+	path       string
+	statusCode int
+	body       []byte
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf(
+		"%s %s: HTTP %d: %s", e.method, e.path, e.statusCode, e.body,
+	)
+}
+
+func (e *httpStatusError) message() string {
+	return notImplementedMessage(e.body)
+}
+
 // notImplementedMessage extracts the {"error": "..."} message huma's error
 // responses carry, falling back to the raw (trimmed) body when it isn't in
 // that shape.
@@ -557,6 +574,17 @@ func wrapSemanticUnavailable(message string) error {
 	return db.NewSemanticUnavailableError(message)
 }
 
+func wrapSemanticTransient(message string) error {
+	sentinel := db.ErrSemanticTransient.Error()
+	if message == "" || message == sentinel {
+		return db.ErrSemanticTransient
+	}
+	if cause, ok := strings.CutPrefix(message, sentinel); ok {
+		return fmt.Errorf("%w%s", db.ErrSemanticTransient, cause)
+	}
+	return fmt.Errorf("%w: %s", db.ErrSemanticTransient, message)
+}
+
 func (b *httpBackend) UsageSummary(
 	ctx context.Context, req UsageRequest,
 ) (*UsageSummaryResult, error) {
@@ -760,6 +788,13 @@ func (b *httpBackend) QueryRecallEntries(
 			return nil, fmt.Errorf(
 				"recall query: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
+		}
+		var statusErr *httpStatusError
+		if (mode == db.RecallQueryModeVector ||
+			mode == db.RecallQueryModeHybrid) &&
+			errors.As(err, &statusErr) &&
+			statusErr.statusCode == http.StatusServiceUnavailable {
+			return nil, wrapSemanticTransient(statusErr.message())
 		}
 		return nil, err
 	}
@@ -1064,9 +1099,10 @@ func (b *httpBackend) getJSONWithClient(
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(
-			"GET %s: HTTP %d: %s", path, resp.StatusCode, msg,
-		)
+		return &httpStatusError{
+			method: http.MethodGet, path: path,
+			statusCode: resp.StatusCode, body: msg,
+		}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
@@ -1113,9 +1149,10 @@ func (b *httpBackend) postJSONWithClient(
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(
-			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
-		)
+		return &httpStatusError{
+			method: http.MethodPost, path: path,
+			statusCode: resp.StatusCode, body: msg,
+		}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
