@@ -787,6 +787,8 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 	genID := res.Vectors.GenerationID
 	require.NotZero(t, genID)
+	witnessKey, err := sync.vectorGenerationWitnessKey()
+	require.NoError(t, err, "vectorGenerationWitnessKey")
 	_, err = pg.Exec(
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
 	)
@@ -805,7 +807,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	assert.Equal(t, 1, vres.SessionsPushed)
 	assert.Equal(t, 0, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_generation_machines
- WHERE generation_id = $1 AND machine = $2`, genID, "test-machine"),
+ WHERE generation_id = $1 AND machine = $2`, genID, witnessKey),
 		"deferred generation-wide work must not witness the generation")
 
 	src.genScopes = nil
@@ -823,12 +825,107 @@ SELECT COUNT(*) FROM vector_generation_machines
 		"the promoted retry repairs B's deferred vector state")
 	assert.Equal(t, 1, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_generation_machines
- WHERE generation_id = $1 AND machine = $2`, genID, "test-machine"),
+ WHERE generation_id = $1 AND machine = $2`, genID, witnessKey),
 		"the clean generation-wide retry records the witness")
 	assert.Equal(t, 1, countRows(t, pg, `
 SELECT COUNT(*) FROM vector_push_state
  WHERE generation_id = $1 AND session_id = 'B' AND doc_agg_hash = 'b2'`, genID),
 		"the promoted retry must repair the deferred out-of-scope session")
+}
+
+// TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation pins the
+// filtered-watcher incarnation bug: after vector tables are recreated on the
+// same machine, one filter's generation-wide witness must not let another
+// filter trust a reused generation id for a scoped push.
+func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *testing.T) {
+	pgURL := testPGURL(t)
+	_, localDB, pg := newVectorPushTestSync(
+		t, pgURL, "agentsview_vector_push_filtered_witness_test")
+	ctx := context.Background()
+
+	seedVectorSessionProject(t, localDB, "alpha", "alpha")
+	seedVectorSessionProject(t, localDB, "beta-1", "beta")
+	seedVectorSessionProject(t, localDB, "beta-2", "beta")
+
+	src := &fakeVectorSource{
+		gen:    VectorGenerationInfo{Fingerprint: "fp-filtered", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"alpha": "ha", "beta-1": "hb1", "beta-2": "hb2"},
+		docs: map[string][]VectorPushDoc{
+			"alpha":  {vdoc("alpha", "alpha#0", 0, "a", "ha", []float32{1, 0, 0, 0})},
+			"beta-1": {vdoc("beta-1", "beta-1#0", 0, "b1", "hb1", []float32{0, 1, 0, 0})},
+			"beta-2": {vdoc("beta-2", "beta-2#0", 0, "b2", "hb2", []float32{0, 0, 1, 0})},
+		},
+	}
+	filterScopeAlpha := pushSyncStateScope("work", []string{"alpha"}, nil)
+	filterScopeBeta := pushSyncStateScope("work", []string{"beta"}, nil)
+	targetState := newScopedSyncStateStore(localDB, "work", false)
+	syncAlpha := &Sync{
+		pg:                 pg,
+		local:              localDB,
+		syncState:          newScopedSyncStateStore(localDB, filterScopeAlpha, false),
+		aliasBackfillState: targetState,
+		machine:            "test-machine",
+		schema:             "agentsview_vector_push_filtered_witness_test",
+		targetFingerprint:  "target-fp",
+		syncStateTarget:    filterScopeAlpha,
+		projects:           []string{"alpha"},
+		vectorSource:       src,
+		schemaDone:         true,
+	}
+	syncBeta := &Sync{
+		pg:                 pg,
+		local:              localDB,
+		syncState:          newScopedSyncStateStore(localDB, filterScopeBeta, false),
+		aliasBackfillState: targetState,
+		machine:            "test-machine",
+		schema:             "agentsview_vector_push_filtered_witness_test",
+		targetFingerprint:  "target-fp",
+		syncStateTarget:    filterScopeBeta,
+		projects:           []string{"beta"},
+		vectorSource:       src,
+		schemaDone:         true,
+	}
+
+	base, err := syncBeta.Push(ctx, false, nil)
+	require.NoError(t, err, "baseline beta Push")
+	gen1 := base.Vectors.GenerationID
+	require.NotZero(t, gen1)
+
+	for _, q := range []string{
+		`DROP TABLE IF EXISTS ` + vectorChunkTable(gen1),
+		`DROP TABLE IF EXISTS vector_push_state`,
+		`DROP TABLE IF EXISTS vector_generation_machines`,
+		`DROP TABLE IF EXISTS vector_documents`,
+		`DROP TABLE IF EXISTS vector_generations`,
+	} {
+		_, err := pg.Exec(q)
+		require.NoError(t, err, q)
+	}
+
+	alphaRes, err := syncAlpha.Push(ctx, false, nil)
+	require.NoError(t, err, "alpha Push after table recreation")
+	require.Equal(t, gen1, alphaRes.Vectors.GenerationID,
+		"table recreation reuses the generation id in the case under test")
+
+	src.genScopes = nil
+	src.hashScopes = nil
+	vres, err := syncBeta.pushVectors(ctx, false, []string{"beta-1"}, gen1, nil, nil)
+	require.NoError(t, err, "beta scoped push after alpha witness replay")
+	assert.Equal(t, 2, vres.SessionsPushed,
+		"beta scope must repopulate every in-scope session generation-wide")
+	require.Len(t, src.genScopes, 2)
+	assert.Equal(t, []string{"beta-1"}, src.genScopes[0],
+		"the first pass starts scoped")
+	assert.Nil(t, src.genScopes[1],
+		"the beta watcher must reopen generation-wide instead of trusting alpha's witness")
+	require.Len(t, src.hashScopes, 1)
+	assert.Nil(t, src.hashScopes[0],
+		"the replay must read every beta session, not only beta-1")
+	assert.Equal(t, 2, countRows(t, pg, `
+SELECT COUNT(*) FROM vector_push_state
+ WHERE generation_id = $1 AND session_id IN ('beta-1', 'beta-2')`, gen1),
+		"both beta sessions have state rows under the recreated generation")
 }
 
 func TestVectorPushRoundTrip(t *testing.T) {
@@ -884,6 +981,8 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	require.NoError(t, err, "LookupVectorGeneration")
 	require.True(t, ok, "generation registered")
 	assert.Equal(t, 4, dim)
+	witnessKey, err := sync.vectorGenerationWitnessKey()
+	require.NoError(t, err, "vectorGenerationWitnessKey")
 
 	assert.Equal(t, 3,
 		countRows(t, pg, `SELECT COUNT(*) FROM vector_documents`))
@@ -893,7 +992,7 @@ func TestVectorPushRoundTrip(t *testing.T) {
 		`SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, genID))
 	assert.Equal(t, 1, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_generation_machines
-		 WHERE generation_id = $1 AND machine = $2`, genID, "test-machine"))
+		 WHERE generation_id = $1 AND machine = $2`, genID, witnessKey))
 }
 
 func TestVectorPushDeltaNoop(t *testing.T) {

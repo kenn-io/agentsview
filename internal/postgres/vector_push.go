@@ -123,11 +123,12 @@ const vectorProgressStride = 2000
 // the schema-qualified halfvec type. The type must be qualified because the
 // connection's search_path is the target schema only, while pgvector's types
 // live in whichever schema first installed the extension.
-// machineRecorded reports whether this machine's push record already existed
-// for the generation before this push touched it: recreating the vector
-// tables restarts the id sequence, so a reused id can satisfy the memo
-// comparison while the recreated generation is empty, and the machine record
-// — wiped in the same reset — is the witness that survives id reuse.
+// machineRecorded reports whether this pusher's scoped witness record already
+// existed for the generation before this push touched it: recreating the
+// vector tables restarts the id sequence, so a reused id can satisfy the memo
+// comparison while the recreated generation is empty, and the witness record
+// — keyed by local push marker plus sync/filter scope and wiped in the same
+// reset — is what survives id reuse safely.
 type vectorGeneration struct {
 	id              int64
 	halfvecType     string
@@ -270,6 +271,10 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, unavailable
 		return res, nil
 	}
+	witnessKey, err := s.vectorGenerationWitnessKey()
+	if err != nil {
+		return res, err
+	}
 	// A scoped push writes only its changed sessions' chunks, which is safe
 	// only within the exact generation instance this process last reconciled
 	// generation-wide. Two signals identify that instance. The PG generation
@@ -277,19 +282,18 @@ func (s *Sync) pushVectors(
 	// resets the sequence, so a re-embed (new fingerprint), reset, or admin
 	// drop yields a new id, whoever recreates it. Recreating the tables
 	// themselves restarts the sequence, so a reused id can match a stale
-	// memo; this machine's push record, wiped in the same reset and written
-	// only after a clean generation-wide reconciliation, is the witness for
-	// that case — a scoped push always follows a generation-wide push in the
-	// same process, which recorded it. Either signal failing means the prior
-	// reconciliation no longer covers this generation and scoping would
-	// leave search reading an incomplete one until the interval floor.
+	// memo; this pusher's scoped witness record, wiped in the same reset and
+	// written only after a clean generation-wide reconciliation, is the
+	// witness for that case. Either signal failing means the prior
+	// reconciliation no longer covers this generation and scoping would leave
+	// search reading an incomplete one until the interval floor.
 	// Promote to a generation-wide read. A zero memo means no reconciliation
 	// to trust yet, so the reconcile bit already forces this push
 	// generation-wide and the id check must not fire.
 	requestedScope := scope
 	var resolved vectorGeneration
 	if scope != nil {
-		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+		initialProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
 		if err != nil {
 			return res, err
 		}
@@ -298,8 +302,8 @@ func (s *Sync) pushVectors(
 				gen.Fingerprint)
 			scope = nil
 		} else if !initialProbe.machineRecorded {
-			log.Printf("vector push: no prior push record for machine %q against generation %d; promoting scoped push to generation-wide reconciliation",
-				s.machine, initialProbe.id)
+			log.Printf("vector push: no prior scoped witness against generation %d; promoting scoped push to generation-wide reconciliation",
+				initialProbe.id)
 			scope = nil
 		} else if lastReconciledGeneration != 0 &&
 			initialProbe.id != lastReconciledGeneration {
@@ -312,7 +316,7 @@ func (s *Sync) pushVectors(
 				s.afterVectorGenerationLookup = nil
 				hook()
 			}
-			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+			currentProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
 			if err != nil {
 				return res, err
 			}
@@ -321,8 +325,8 @@ func (s *Sync) pushVectors(
 					gen.Fingerprint)
 				scope = nil
 			} else if !currentProbe.machineRecorded {
-				log.Printf("vector push: no prior push record for machine %q against generation %d before scoped reconciliation; promoting scoped push to generation-wide reconciliation",
-					s.machine, currentProbe.id)
+				log.Printf("vector push: no prior scoped witness against generation %d before scoped reconciliation; promoting scoped push to generation-wide reconciliation",
+					currentProbe.id)
 				scope = nil
 			} else if currentProbe.id != initialProbe.id {
 				log.Printf("vector push: active generation id changed from %d to %d before scoped reconciliation; promoting scoped push to generation-wide reconciliation",
@@ -358,7 +362,7 @@ func (s *Sync) pushVectors(
 		gen = export.Generation()
 	}
 	if scope == nil {
-		resolved, err = s.resolveVectorGeneration(ctx, gen)
+		resolved, err = s.resolveVectorGeneration(ctx, gen, witnessKey)
 		if err != nil {
 			if s.skipVectorsOnPrivilegeError(err, &res) {
 				return res, nil
@@ -413,7 +417,7 @@ func (s *Sync) pushVectors(
 				ctx, full, nil, lastReconciledGeneration, failedSessions, onProgress,
 			)
 		}
-		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint)
+		finalProbe, found, err := s.lookupVectorGeneration(ctx, gen.Fingerprint, witnessKey)
 		if err != nil {
 			return res, err
 		}
@@ -425,8 +429,8 @@ func (s *Sync) pushVectors(
 		}
 		if !finalProbe.machineRecorded {
 			return retryGenerationWide(
-				"vector push: no prior push record for machine %q against generation %d after scoped reconciliation; retrying generation-wide",
-				s.machine, finalProbe.id,
+				"vector push: no prior scoped witness against generation %d after scoped reconciliation; retrying generation-wide",
+				finalProbe.id,
 			)
 		}
 		if finalProbe.id != resolved.id {
@@ -437,7 +441,7 @@ func (s *Sync) pushVectors(
 		}
 	}
 	if scope == nil && res.SessionsDeferred == 0 {
-		if err := s.recordVectorGenerationMachine(ctx, resolved.id); err != nil {
+		if err := s.recordVectorGenerationMachine(ctx, resolved.id, witnessKey); err != nil {
 			return res, err
 		}
 	}
@@ -448,7 +452,7 @@ func (s *Sync) pushVectors(
 }
 
 func (s *Sync) lookupVectorGeneration(
-	ctx context.Context, fingerprint string,
+	ctx context.Context, fingerprint, witnessKey string,
 ) (vectorGeneration, bool, error) {
 	genID, _, ok, err := LookupVectorGeneration(ctx, s.pg, fingerprint)
 	if err != nil {
@@ -466,7 +470,7 @@ func (s *Sync) lookupVectorGeneration(
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines
      WHERE generation_id = $1 AND machine = $2)`,
-		genID, s.machine).Scan(&machineRecorded); err != nil {
+		genID, witnessKey).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, false, fmt.Errorf(
 			"reading vector push machine record: %w", err,
 		)
@@ -801,11 +805,11 @@ func vectorOutOfScopeQuery(
 // against it. Its id is the generation
 // instance's identity, which a scoped push compares against the last one it
 // reconciled generation-wide to decide whether to promote; whether this
-// machine's push record predated this call is captured first, because that
-// record is the incarnation witness the promotion check falls back on when a
-// recreated id sequence hands the new generation the memoized id.
+// scoped witness predated this call is captured first, because that record is
+// the incarnation witness the promotion check falls back on when a recreated
+// id sequence hands the new generation the memoized id.
 func (s *Sync) resolveVectorGeneration(
-	ctx context.Context, gen VectorGenerationInfo,
+	ctx context.Context, gen VectorGenerationInfo, witnessKey string,
 ) (vectorGeneration, error) {
 	genID, err := ensureVectorGeneration(
 		ctx, s.pg, gen.Fingerprint, gen.Model, gen.Dimension,
@@ -825,7 +829,7 @@ func (s *Sync) resolveVectorGeneration(
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines
      WHERE generation_id = $1 AND machine = $2)`,
-		genID, s.machine).Scan(&machineRecorded); err != nil {
+		genID, witnessKey).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, fmt.Errorf("reading vector push machine record: %w", err)
 	}
 	return vectorGeneration{
@@ -835,14 +839,22 @@ SELECT EXISTS (
 	}, nil
 }
 
+func (s *Sync) vectorGenerationWitnessKey() (string, error) {
+	markerID, err := s.pushMarkerID()
+	if err != nil {
+		return "", err
+	}
+	return s.machine + "|" + s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID), nil
+}
+
 func (s *Sync) recordVectorGenerationMachine(
-	ctx context.Context, genID int64,
+	ctx context.Context, genID int64, witnessKey string,
 ) error {
 	if _, err := s.pg.ExecContext(ctx, `
 INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
 VALUES ($1, $2, now())
 ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = now()`,
-		genID, s.machine); err != nil {
+		genID, witnessKey); err != nil {
 		return fmt.Errorf("recording vector push machine: %w", err)
 	}
 	return nil
