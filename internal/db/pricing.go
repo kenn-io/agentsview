@@ -172,6 +172,79 @@ func (db *DB) UpsertModelPricing(
 	return tx.Commit()
 }
 
+// ReconcileModelPricing removes obsolete patterns and upserts the desired
+// rows in one transaction. Desired rows that share a removed pattern are
+// reinserted, allowing one source to retire an alias while another source
+// continues to publish that same unqualified model name.
+func (db *DB) ReconcileModelPricing(
+	prices []ModelPricing, removePatterns []string,
+) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	if len(prices) == 0 && len(removePatterns) == 0 {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	removeSet := make(map[string]struct{}, len(removePatterns))
+	for _, pattern := range removePatterns {
+		removeSet[pattern] = struct{}{}
+	}
+	existing, err := db.listModelPricing(context.Background())
+	if err != nil {
+		return fmt.Errorf(
+			"listing current pricing before reconciliation: %w", err,
+		)
+	}
+	kept := existing[:0]
+	for _, price := range existing {
+		if _, removing := removeSet[price.ModelPattern]; !removing {
+			kept = append(kept, price)
+		}
+	}
+	_, prices = FilterChangedModelPricing(kept, prices)
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning pricing reconciliation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for i := 0; i < len(removePatterns); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(removePatterns))
+		placeholders := make(
+			[]string, end-i,
+		)
+		args := make([]any, end-i)
+		for j, pattern := range removePatterns[i:end] {
+			placeholders[j] = "?"
+			args[j] = pattern
+		}
+		query := `DELETE FROM model_pricing WHERE model_pattern IN (` +
+			strings.Join(placeholders, ", ") + `)`
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf(
+				"removing obsolete pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
+	for i := 0; i < len(prices); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(prices))
+		query, args := sqlitePricingUpsertStatement(prices[i:end])
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf(
+				"upserting pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
+	return tx.Commit()
+}
+
 // GetPricingMeta reads a metadata value stored as a sentinel
 // row in model_pricing. Returns "" if not found.
 func (db *DB) GetPricingMeta(key string) (string, error) {

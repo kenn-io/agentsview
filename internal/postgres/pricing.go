@@ -3,7 +3,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -323,7 +325,10 @@ func pgPricingUpsertStatement(
 		OR model_pricing.cache_creation_per_mtok IS DISTINCT FROM
 			EXCLUDED.cache_creation_per_mtok
 		OR model_pricing.cache_read_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_read_per_mtok`)
+			EXCLUDED.cache_read_per_mtok
+		OR (model_pricing.model_pattern LIKE '\_%' ESCAPE '\'
+			AND model_pricing.updated_at IS DISTINCT FROM
+				EXCLUDED.updated_at)`)
 	return b.String(), args
 }
 
@@ -362,10 +367,11 @@ func listPGModelPricing(
 	return out, nil
 }
 
-func upsertModelPricing(
+func reconcileModelPricing(
 	ctx context.Context, pg *sql.DB, prices []db.ModelPricing,
+	removePatterns []string,
 ) error {
-	if len(prices) == 0 {
+	if len(prices) == 0 && len(removePatterns) == 0 {
 		return nil
 	}
 
@@ -374,6 +380,24 @@ func upsertModelPricing(
 		return fmt.Errorf("beginning pg pricing upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	for i := 0; i < len(removePatterns); i += pricingUpsertBatch {
+		end := min(i+pricingUpsertBatch, len(removePatterns))
+		placeholders := make([]string, end-i)
+		args := make([]any, end-i)
+		for j, pattern := range removePatterns[i:end] {
+			placeholders[j] = fmt.Sprintf("$%d", j+1)
+			args[j] = pattern
+		}
+		query := `DELETE FROM model_pricing WHERE model_pattern IN (` +
+			strings.Join(placeholders, ", ") + `)`
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf(
+				"removing obsolete pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
 
 	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	for i := 0; i < len(prices); i += pricingUpsertBatch {
@@ -395,6 +419,96 @@ func upsertModelPricing(
 	return nil
 }
 
+func pricingSyncChanges(
+	existing, desired []db.ModelPricing,
+) ([]db.ModelPricing, []string, error) {
+	desiredMeta, desiredMetaFound := pricingMetaRow(
+		desired, pricing.OpenRouterAliasesMetaKey,
+	)
+	if !desiredMetaFound {
+		_, changed := db.FilterChangedModelPricing(existing, desired)
+		return changed, nil, nil
+	}
+	currentAliases, err := decodePricingAliases(desiredMeta.UpdatedAt)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"decoding local OpenRouter aliases: %w", err,
+		)
+	}
+	existingMeta, existingMetaFound := pricingMetaRow(
+		existing, pricing.OpenRouterAliasesMetaKey,
+	)
+	if !existingMetaFound {
+		_, changed := db.FilterChangedModelPricing(existing, desired)
+		return changed, nil, nil
+	}
+	previousAliases, err := decodePricingAliases(existingMeta.UpdatedAt)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"decoding PostgreSQL OpenRouter aliases: %w", err,
+		)
+	}
+
+	current := make(map[string]struct{}, len(currentAliases))
+	for _, alias := range currentAliases {
+		current[alias] = struct{}{}
+	}
+	remove := make([]string, 0)
+	removeSet := make(map[string]struct{})
+	for _, alias := range previousAliases {
+		if _, ok := current[alias]; !ok {
+			remove = append(remove, alias)
+			removeSet[alias] = struct{}{}
+		}
+	}
+	sort.Strings(remove)
+
+	kept := existing[:0]
+	for _, row := range existing {
+		if _, removing := removeSet[row.ModelPattern]; !removing {
+			kept = append(kept, row)
+		}
+	}
+	_, changed := db.FilterChangedModelPricing(kept, desired)
+	if desiredMeta.UpdatedAt != existingMeta.UpdatedAt &&
+		!containsPricingPattern(
+			changed, pricing.OpenRouterAliasesMetaKey,
+		) {
+		changed = append(changed, desiredMeta)
+	}
+	return changed, remove, nil
+}
+
+func pricingMetaRow(
+	rows []db.ModelPricing, key string,
+) (db.ModelPricing, bool) {
+	for _, row := range rows {
+		if row.ModelPattern == key {
+			return row, true
+		}
+	}
+	return db.ModelPricing{}, false
+}
+
+func decodePricingAliases(value string) ([]string, error) {
+	var aliases []string
+	if err := json.Unmarshal([]byte(value), &aliases); err != nil {
+		return nil, err
+	}
+	return aliases, nil
+}
+
+func containsPricingPattern(
+	rows []db.ModelPricing, pattern string,
+) bool {
+	for _, row := range rows {
+		if row.ModelPattern == pattern {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
 	if err != nil {
@@ -407,13 +521,18 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing pg model pricing: %w", err)
 	}
-	_, changedPrices := db.FilterChangedModelPricing(
+	changedPrices, removePatterns, err := pricingSyncChanges(
 		existing, prices,
 	)
-	if len(changedPrices) == 0 {
+	if err != nil {
+		return fmt.Errorf("planning model pricing sync: %w", err)
+	}
+	if len(changedPrices) == 0 && len(removePatterns) == 0 {
 		return nil
 	}
-	if err := upsertModelPricing(ctx, s.pg, changedPrices); err != nil {
+	if err := reconcileModelPricing(
+		ctx, s.pg, changedPrices, removePatterns,
+	); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
 	}
 	return nil

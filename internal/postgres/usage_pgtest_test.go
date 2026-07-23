@@ -1125,6 +1125,49 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	assert.Equal(t, 0.5, cacheRead)
 }
 
+func TestPushRemovesObsoleteOpenRouterPricingAlias(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "stale-alias",
+		InputPerMTok: 1,
+	}}), "seed alias")
+	require.NoError(t, local.SetPricingMeta(
+		"_openrouter_aliases", `["stale-alias"]`,
+	), "seed alias metadata")
+
+	ps, err := New(
+		pgURL, "agentsview", local, "test-machine", true, SyncOptions{},
+	)
+	require.NoError(t, err, "New")
+	defer ps.Close()
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "initial Push")
+
+	require.NoError(t, local.ReconcileModelPricing(
+		nil, []string{"stale-alias"},
+	), "remove local alias")
+	require.NoError(t, local.SetPricingMeta(
+		"_openrouter_aliases", `[]`,
+	), "update alias metadata")
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "reconciliation Push")
+
+	store, err := NewStore(pgURL, "agentsview", true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	var count int
+	require.NoError(t, store.DB().QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM model_pricing
+		 WHERE model_pattern = 'stale-alias'`,
+	).Scan(&count))
+	assert.Zero(t, count, "obsolete alias should be removed from PostgreSQL")
+}
+
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
