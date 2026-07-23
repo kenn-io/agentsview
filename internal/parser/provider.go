@@ -47,6 +47,10 @@ type ProviderFactory interface {
 type ProviderConfig struct {
 	Roots   []string
 	Machine string
+	// ForceFullDiscovery requests complete source coverage for archive rebuilds.
+	// Providers with bounded incremental discovery use it to bypass retained
+	// change-tracking state.
+	ForceFullDiscovery bool
 	// PathRewriter maps an on-disk source path to its canonical stored form.
 	// It is non-nil only during remote (SSH) sync, where source files are read
 	// from a temporary extraction directory but must keep a stable identity
@@ -642,6 +646,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQoderProviderFactory(def)
 	case AgentReasonix:
 		return newReasonixProviderFactory(def)
+	case AgentOmnigent:
+		return newOmnigentProviderFactory(def)
 	case AgentShelley:
 		return newShelleyProviderFactory(def)
 	case AgentVSCopilot:

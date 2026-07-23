@@ -59,6 +59,12 @@ type multiSessionConfig struct {
 	// allowMissing relaxes existence checks so a deleted container (or a sibling
 	// such as a SQLite WAL file) still classifies for changed-path tombstones.
 	classifyPath func(root, path string, allowMissing bool) (multiSessionMatch, bool)
+	// classifyChangedPath optionally resolves one filesystem event directly to
+	// the affected members. Providers use this when a shared container can
+	// identify a bounded changed batch without reparsing every member.
+	classifyChangedPath func(
+		context.Context, string, ChangedPathRequest,
+	) ([]multiSessionMatch, error)
 	// findMember resolves a raw session ID to its member match under one root.
 	findMember func(root, rawID string) (multiSessionMatch, bool)
 	// reconciliationIdentity restores the stable SourceRef key for an exact
@@ -103,8 +109,17 @@ type multiSessionConfig struct {
 	freshStoredMember func(src multiSessionSource, rawID string) bool
 	// stampContainerHash stamps the request fingerprint hash onto every fanned
 	// out container result (used when all members share the container's content
-	// hash). Member parses are always stamped.
+	// hash). Member parses are stamped unless preserveMemberHash is set.
 	stampContainerHash bool
+	// preserveMemberHash keeps a semantic hash produced by parseMember instead
+	// of replacing it with the cheaper source-classification fingerprint.
+	preserveMemberHash bool
+	// unsupportedSource identifies typed parse errors that mean the physical
+	// source is valid but its schema is intentionally unsupported.
+	unsupportedSource func(error) bool
+	// excludedSessionIDs reconciles legacy persisted identities replaced by the
+	// current parse result set.
+	excludedSessionIDs func(src multiSessionSource, results []ParseResult) []string
 }
 
 type MultiSessionOption func(*multiSessionConfig)
@@ -154,6 +169,14 @@ func WithChangedPathClassifier(
 	fn func(root, path string, allowMissing bool) (multiSessionMatch, bool),
 ) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.classifyPath = fn }
+}
+
+func WithChangedPathMembers(
+	fn func(
+		context.Context, string, ChangedPathRequest,
+	) ([]multiSessionMatch, error),
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.classifyChangedPath = fn }
 }
 
 func WithMemberLookup(
@@ -232,6 +255,20 @@ func WithFreshStoredMember(
 
 func WithContainerHashStamping() MultiSessionOption {
 	return func(c *multiSessionConfig) { c.stampContainerHash = true }
+}
+
+func WithMemberResultHashPreservation() MultiSessionOption {
+	return func(c *multiSessionConfig) { c.preserveMemberHash = true }
+}
+
+func WithUnsupportedSourceError(fn func(error) bool) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.unsupportedSource = fn }
+}
+
+func WithExcludedSessionIDs(
+	fn func(src multiSessionSource, results []ParseResult) []string,
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.excludedSessionIDs = fn }
 }
 
 func NewMultiSessionContainerSourceSet(
@@ -359,6 +396,20 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
+		if s.cfg.classifyChangedPath != nil {
+			matches, err := s.cfg.classifyChangedPath(ctx, root, req)
+			if err != nil {
+				return nil, err
+			}
+			if len(matches) == 0 {
+				continue
+			}
+			sources := make([]SourceRef, 0, len(matches))
+			for _, match := range matches {
+				sources = append(sources, s.sourceRef(root, match))
+			}
+			return sources, nil
+		}
 		match, ok := s.cfg.classifyPath(root, req.Path, true)
 		if !ok {
 			continue
@@ -639,12 +690,15 @@ func (s multiSessionContainerSourceSet) parse(
 			result, err = s.cfg.parseMember(src, req)
 		}
 		if err != nil {
+			if s.cfg.unsupportedSource != nil && s.cfg.unsupportedSource(err) {
+				return unsupportedMultiSessionOutcome(), nil
+			}
 			return ParseOutcome{}, err
 		}
 		if result == nil {
 			return s.skipOutcome(src), nil
 		}
-		if fingerprintHash != "" {
+		if fingerprintHash != "" && !s.cfg.preserveMemberHash {
 			result.Session.File.Hash = fingerprintHash
 		}
 		return ParseOutcome{
@@ -652,8 +706,9 @@ func (s multiSessionContainerSourceSet) parse(
 				Result:      *result,
 				DataVersion: DataVersionCurrent,
 			}},
-			ResultSetComplete: true,
-			ForceReplace:      true,
+			ExcludedSessionIDs: s.excludedSessionIDs(src, []ParseResult{*result}),
+			ResultSetComplete:  true,
+			ForceReplace:       true,
 		}, nil
 	}
 
@@ -672,6 +727,9 @@ func (s multiSessionContainerSourceSet) parse(
 
 	results, err := s.cfg.parseContainer(src, req)
 	if err != nil {
+		if s.cfg.unsupportedSource != nil && s.cfg.unsupportedSource(err) {
+			return unsupportedMultiSessionOutcome(), nil
+		}
 		return ParseOutcome{}, err
 	}
 	if len(results) == 0 {
@@ -688,10 +746,27 @@ func (s multiSessionContainerSourceSet) parse(
 		})
 	}
 	return ParseOutcome{
-		Results:           out,
-		ResultSetComplete: true,
-		ForceReplace:      true,
+		Results:            out,
+		ExcludedSessionIDs: s.excludedSessionIDs(src, results),
+		ResultSetComplete:  true,
+		ForceReplace:       true,
 	}, nil
+}
+
+func (s multiSessionContainerSourceSet) excludedSessionIDs(
+	src multiSessionSource, results []ParseResult,
+) []string {
+	if s.cfg.excludedSessionIDs == nil {
+		return nil
+	}
+	return s.cfg.excludedSessionIDs(src, results)
+}
+
+func unsupportedMultiSessionOutcome() ParseOutcome {
+	return ParseOutcome{
+		ResultSetComplete: true,
+		SkipReason:        SkipUnsupportedSource,
+	}
 }
 
 // skipOutcome builds the "no session" outcome for a container/member that

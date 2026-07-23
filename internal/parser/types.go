@@ -64,6 +64,7 @@ const (
 	AgentReasonix       AgentType = "reasonix"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
+	AgentOmnigent       AgentType = "omnigent"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -796,6 +797,18 @@ var Registry = []AgentDef{
 		},
 		IDPrefix:  "roocode:",
 		FileBased: true,
+	},
+	{
+		// Omnigent stores every conversation in one shared SQLite database
+		// (chat.db); the provider fans it out into one session per conversation
+		// addressed by a "<db>#<id>" virtual path.
+		Type:        AgentOmnigent,
+		DisplayName: "Omnigent",
+		EnvVar:      "OMNIGENT_DIR",
+		ConfigKey:   "omnigent_dirs",
+		DefaultDirs: []string{".omnigent"},
+		IDPrefix:    "omnigent:",
+		FileBased:   true,
 	},
 }
 

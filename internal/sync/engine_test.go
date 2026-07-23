@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -325,6 +326,29 @@ func TestSyncAllBaselinesSuccessfulSkipDespiteUnrelatedProviderFailure(t *testin
 	require.Len(t, ownership, 1,
 		"a successful skipped source must acquire baseline eligibility independently")
 	assert.Equal(t, path, ownership[0].FilePath)
+}
+
+func TestOmitMissingPersistentContainerPathsSkipsOmnigentDatabase(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "chat.db")
+	factory, ok := parser.ProviderFactoryByType(parser.AgentOmnigent)
+	require.True(t, ok)
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{root}})
+	sources, err := provider.SourcesForChangedPath(t.Context(), parser.ChangedPathRequest{
+		Path: dbPath, EventKind: "remove",
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	unrelated := filepath.Join(root, "other.jsonl")
+	got := omitMissingPersistentContainerPaths(
+		[]string{dbPath, unrelated},
+		[]parser.DiscoveredFile{{
+			Path: dbPath, Agent: parser.AgentOmnigent,
+			ProviderSource: &sources[0],
+		}},
+	)
+	assert.Equal(t, []string{unrelated}, got)
 }
 
 func TestReconcileWatchRootsAfterLostEventsBaselinesParsedSourceOnce(t *testing.T) {
@@ -4033,6 +4057,65 @@ func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
 	assert.Equal(t, 50, events[0].OutputTokens)
 }
 
+func TestWriteBatchBulkDemotesFailedOmnigentSession(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		idPrefix string
+	}{
+		{name: "local"},
+		{name: "remote prefixed", idPrefix: "m2_"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			storedID := tc.idPrefix + "omnigent:failed"
+			// Seed the session at the current data version, then fail its
+			// update: the demotion must mark the stored row stale, not
+			// leave it current.
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: storedID, Agent: string(parser.AgentOmnigent),
+				Project: "project-a", Machine: "local",
+			}))
+			require.NoError(t, database.SetSessionDataVersion(
+				storedID, db.CurrentDataVersion(),
+			))
+			raw, err := sql.Open("sqlite3", database.Path())
+			require.NoError(t, err)
+			defer raw.Close()
+			_, err = raw.Exec(fmt.Sprintf(`CREATE TRIGGER fail_omnigent_bulk_session
+				BEFORE INSERT ON sessions
+				WHEN NEW.id = '%s'
+				BEGIN
+					SELECT RAISE(FAIL, 'injected bulk failure');
+				END`, storedID))
+			require.NoError(t, err)
+
+			e := &Engine{db: database, idPrefix: tc.idPrefix}
+			container := filepath.Join(t.TempDir(), "chat.db")
+			makeWrite := func(rawID string) pendingWrite {
+				return pendingWrite{sess: parser.ParsedSession{
+					ID:        "omnigent:" + rawID,
+					Project:   "project-a",
+					Machine:   "local",
+					Agent:     parser.AgentOmnigent,
+					StartedAt: time.Unix(1_700_000_000, 0),
+					File: parser.FileInfo{
+						Path: parser.VirtualSourcePath(container, rawID),
+					},
+				}}
+			}
+			outcome := e.writeBatchBulkWithOutcome([]pendingWrite{
+				makeWrite("ok"), makeWrite("failed"),
+			}, true)
+			assert.Equal(t, 1, outcome.writtenSessions)
+			assert.Equal(t, 1, outcome.failedSessions)
+			assert.Less(t, database.GetSessionDataVersion(storedID),
+				db.CurrentDataVersion(),
+				"a failed member write must demote stored freshness so the "+
+					"next container parse rewrites it")
+		})
+	}
+}
+
 func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -5814,6 +5897,27 @@ func TestProviderProcessCacheKeyCodexIncludesContentHash(t *testing.T) {
 	assert.Equal(t, path+"?source_hash=second-content-hash", second)
 	assert.NotEqual(t, first, second,
 		"same-stat content rewrites must not reuse a rowless skip entry")
+}
+
+func TestProviderProcessCacheKeyOmnigentContainerIncludesDataVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chat.db")
+	file := parser.DiscoveredFile{Path: path, Agent: parser.AgentOmnigent}
+	source := parser.SourceRef{
+		Provider: parser.AgentOmnigent, Key: path,
+		DisplayPath: path, FingerprintKey: path,
+	}
+	fingerprint := parser.SourceFingerprint{
+		Key: path, Hash: "container-content-hash",
+	}
+
+	key := providerProcessCacheKey(file, source, fingerprint)
+	legacy := path + "?source_hash=container-content-hash"
+	assert.Equal(t, legacy+"&data_version="+strconv.Itoa(db.CurrentDataVersion()), key)
+
+	restarted := &Engine{skipCache: map[string]int64{legacy: 123}}
+	_, staleHit := restarted.skipCache[key]
+	assert.False(t, staleHit,
+		"a persisted whole-container entry from an older parser version must miss")
 }
 
 func (p *incrementalRequestRecorder) Parse(

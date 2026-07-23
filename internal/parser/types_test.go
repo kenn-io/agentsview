@@ -464,6 +464,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentAider,
 		AgentReasonix,
 		AgentRooCode,
+		AgentOmnigent,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
@@ -618,6 +619,16 @@ func TestShelleyRegistryEntry(t *testing.T) {
 	assert.Equal(t, "SHELLEY_DIR", def.EnvVar)
 	assert.Equal(t, "shelley_dirs", def.ConfigKey)
 	assert.Equal(t, "shelley:", def.IDPrefix)
+}
+
+func TestOmnigentRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOmnigent)
+	require.True(t, ok, "AgentOmnigent missing from Registry")
+	require.True(t, def.FileBased, "Omnigent FileBased")
+	assert.Equal(t, "OMNIGENT_DIR", def.EnvVar)
+	assert.Equal(t, "omnigent_dirs", def.ConfigKey)
+	assert.Equal(t, "omnigent:", def.IDPrefix)
+	require.Equal(t, []string{".omnigent"}, def.DefaultDirs)
 }
 
 func TestOpenCodeRegistryEntry(t *testing.T) {
