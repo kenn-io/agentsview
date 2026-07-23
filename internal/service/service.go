@@ -18,6 +18,19 @@ import (
 // regardless of transport (the REST handler maps it back to HTTP 501).
 var ErrSearchUnavailable = errors.New("search not available")
 
+// RecallQueryCapability is implemented by services whose backing store can
+// query Recall entries. Callers should treat services without this capability
+// as unsupported so retrieval surfaces are not advertised optimistically.
+type RecallQueryCapability interface {
+	SupportsRecallQueries() bool
+}
+
+// SupportsRecallQueries reports whether svc can query Recall entries.
+func SupportsRecallQueries(svc SessionService) bool {
+	capability, ok := svc.(RecallQueryCapability)
+	return ok && capability.SupportsRecallQueries()
+}
+
 // ErrAroundMutuallyExclusive is returned by Messages when Around is combined
 // with From or a non-default Direction: the two retrieval modes (symmetric
 // window vs. linear pagination) cannot both be requested. The HTTP handler
@@ -202,6 +215,7 @@ type RecallList struct {
 // RecallQuery mirrors POST /api/v1/recall/query.
 type RecallQuery struct {
 	Query               string `json:"query"`
+	Mode                string `json:"mode,omitempty"`
 	Surface             string `json:"surface,omitempty"`
 	Project             string `json:"project,omitempty"`
 	CWD                 string `json:"cwd,omitempty"`
@@ -220,6 +234,9 @@ type RecallQuery struct {
 	Limit               int    `json:"limit,omitempty"`
 	IncludeContext      bool   `json:"include_context,omitempty"`
 	ContextMaxBytes     int    `json:"context_max_bytes,omitempty"`
+	// SkipRecording keeps retrieval read-only by omitting the query event and
+	// exposure snapshot. MCP sets it because query_recall is declared read-only.
+	SkipRecording bool `json:"skip_recording,omitempty"`
 	// StrictRecording is reserved for local calibration workflows. It is not
 	// transported over JSON; ordinary query paths keep measurement best-effort.
 	StrictRecording bool `json:"-"`
@@ -227,6 +244,7 @@ type RecallQuery struct {
 
 // RecallQueryResult mirrors POST /api/v1/recall/query response.
 type RecallQueryResult struct {
+	Mode           string              `json:"mode"`
 	QueryID        string              `json:"query_id"`
 	MissReason     string              `json:"miss_reason"`
 	RecallEntries  []db.RecallResult   `json:"entries"`

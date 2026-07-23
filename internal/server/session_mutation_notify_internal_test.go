@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -100,6 +101,30 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	require.Equal(t, int32(7), notified.Load(),
 		"a completed daemon scan must notify")
+}
+
+func TestSessionMutationRoutesFanOutToAllNotifiers(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	var extractionNotified, recallNotified atomic.Int32
+	s := New(config.Config{
+		Host: "127.0.0.1", Port: 0, DataDir: dir, DBPath: dbPath,
+	}, database, nil,
+		WithSessionMutationNotifier(func() { extractionNotified.Add(1) }),
+		WithSessionMutationNotifier(func() { recallNotified.Add(1) }),
+	)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
+	}))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/sess-1", nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, int32(1), extractionNotified.Load())
+	assert.Equal(t, int32(1), recallNotified.Load())
 }
 
 // cancelOnProgressWriter cancels the request context as soon as the

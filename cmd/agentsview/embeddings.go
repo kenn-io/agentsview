@@ -11,7 +11,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"os"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -70,6 +70,7 @@ func newEmbeddingsCommand() *cobra.Command {
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
 type EmbeddingsBuildOptions struct {
+	Store         string
 	FullRebuild   bool
 	Backstop      bool
 	RepairInvalid bool
@@ -120,6 +121,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 			"scheduled builds: mixing this flag with a different config "+
 			"default flips the index's scope on every other build, forcing "+
 			"a full mirror reconciliation each time.")
+	cmd.Flags().StringVar(&opts.Store, "store", "",
+		"Embedding store to build (default: messages)")
 	cmd.MarkFlagsMutuallyExclusive("full-rebuild", "repair-invalid")
 	cmd.MarkFlagsMutuallyExclusive("backstop", "repair-invalid")
 	return cmd
@@ -197,10 +200,11 @@ func newEmbeddingsRetireCommand() *cobra.Command {
 // vectorStoreSpec resolves an `--store` name against the registered
 // embedding stores. There is one registry entry per store; a PR adding a
 // new store registers its spec here and extends the daemon embeddings API
-// (which currently serves only the message store) alongside it.
+// alongside it.
 func vectorStoreSpec(name string) (vector.IndexSpec, error) {
 	specs := map[string]vector.IndexSpec{
 		vector.MessageIndexSpec().Name: vector.MessageIndexSpec(),
+		vector.RecallIndexSpec().Name:  vector.RecallIndexSpec(),
 	}
 	if name == "" {
 		name = vector.MessageIndexSpec().Name
@@ -274,6 +278,15 @@ func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 		Dimensions: c.Dimension,
 		Params:     params,
 	}
+}
+
+func recallVectorGeneration(
+	c config.VectorEmbeddingsConfig, extractionFingerprint string,
+) kitvec.Generation {
+	gen := vectorGeneration(c)
+	gen.Params["doc_unit_scheme"] = "recall_entry_v2"
+	gen.Params[vector.CorpusFingerprintParam] = extractionFingerprint
+	return gen
 }
 
 // newVectorEncoder builds the OpenAI-compatible embeddings encoder for one
@@ -358,14 +371,21 @@ func runEmbeddingsBuild(
 	if err := requireVectorEnabled(cfg); err != nil {
 		return err
 	}
+	spec, err := vectorStoreSpec(opts.Store)
+	if err != nil {
+		return err
+	}
 
 	includeAutomated := cfg.Vector.IncludeAutomated
 	if opts.IncludeAutomatedSet {
 		includeAutomated = opts.IncludeAutomated
 	}
+	includeAutomated = spec.NormalizeIncludeAutomated(includeAutomated)
 
 	if opts.FullRebuild && !opts.Yes {
-		proceed, err := confirmFullRebuild(ctx, in, out, cfg, includeAutomated)
+		proceed, err := confirmFullRebuild(
+			ctx, in, out, cfg, includeAutomated, spec.Name,
+		)
 		if err != nil {
 			return err
 		}
@@ -382,6 +402,7 @@ func runEmbeddingsBuild(
 	}
 
 	req := vector.BuildRequest{
+		Store:            strings.TrimSpace(opts.Store),
 		FullRebuild:      opts.FullRebuild,
 		Backstop:         opts.Backstop,
 		RepairInvalid:    opts.RepairInvalid,
@@ -399,9 +420,10 @@ func runEmbeddingsBuild(
 // documents (user messages and assistant runs) in the archive under
 // includeAutomated's scope — the exact set a full rebuild re-embeds.
 func confirmFullRebuild(
-	ctx context.Context, in io.Reader, out io.Writer, cfg config.Config, includeAutomated bool,
+	ctx context.Context, in io.Reader, out io.Writer, cfg config.Config,
+	includeAutomated bool, store string,
 ) (bool, error) {
-	n, err := countEmbeddableUnits(ctx, cfg, includeAutomated)
+	n, err := countEmbeddingStoreUnits(ctx, cfg, includeAutomated, store)
 	if err != nil {
 		return false, fmt.Errorf("counting documents: %w", err)
 	}
@@ -409,18 +431,21 @@ func confirmFullRebuild(
 	return confirm(in, out, msg), nil
 }
 
-// countEmbeddableUnits opens the archive database read-only and counts
-// every unit document eligible for embedding under includeAutomated's
-// scope, for the full-rebuild confirmation prompt.
-func countEmbeddableUnits(ctx context.Context, cfg config.Config, includeAutomated bool) (int, error) {
+func countEmbeddingStoreUnits(
+	ctx context.Context, cfg config.Config, includeAutomated bool, store string,
+) (int, error) {
 	archiveDB, err := openReadOnlyDB(cfg)
 	if err != nil {
 		return 0, err
 	}
 	defer archiveDB.Close()
 
+	source, _, _, err := embeddingBuildTarget(ctx, archiveDB, cfg, store)
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	if _, err := archiveDB.ScanEmbeddableUnits(
+	if _, err := source.ScanEmbeddableUnits(
 		ctx, "", includeAutomated, func(db.EmbeddableUnit) error {
 			n++
 			return nil
@@ -449,8 +474,13 @@ func runEmbeddingsBuildDirect(
 	}
 	defer archiveDB.Close()
 
-	ix, err := vector.Open(
-		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false, cfg.Vector.Embeddings.MaxInputChars,
+	spec, err := vectorStoreSpec(req.Store)
+	if err != nil {
+		return err
+	}
+	ix, err := vector.OpenSpec(
+		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), spec, false,
+		cfg.Vector.Embeddings.MaxInputChars,
 	)
 	if err != nil {
 		return fmt.Errorf("opening vectors.db: %w", err)
@@ -462,8 +492,78 @@ func runEmbeddingsBuildDirect(
 		return err
 	}
 
-	m := vector.NewManager(ix, archiveDB, encoders, vectorGeneration(cfg.Vector.Embeddings))
+	m := embeddingManager(ix, archiveDB, encoders, cfg, spec.Name)
 	return runDirectBuild(ctx, out, m, req)
+}
+
+type recallEmbeddingSource struct {
+	db *db.DB
+}
+
+func (s recallEmbeddingSource) ScanEmbeddableUnits(
+	ctx context.Context, since string, _ bool,
+	fn func(db.EmbeddableUnit) error,
+) (string, error) {
+	return s.db.ScanRecallEmbeddingUnits(
+		ctx, since, fn,
+	)
+}
+
+const importedOnlyRecallCorpusFingerprint = "no-active-extraction-v1"
+
+func recallCorpusFingerprint(ctx context.Context, database *db.DB) (string, error) {
+	generations, err := database.ExtractGenerations(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, generation := range generations {
+		if generation.State == db.ExtractGenerationActive {
+			return generation.Fingerprint, nil
+		}
+	}
+	return importedOnlyRecallCorpusFingerprint, nil
+}
+
+func embeddingBuildTarget(
+	ctx context.Context, database *db.DB, cfg config.Config, store string,
+) (vector.UnitSource, kitvec.Generation, string, error) {
+	if store != vector.RecallIndexSpec().Name {
+		return database, vectorGeneration(cfg.Vector.Embeddings), "", nil
+	}
+	fingerprint, err := recallCorpusFingerprint(ctx, database)
+	if err != nil {
+		return nil, kitvec.Generation{}, "", err
+	}
+	revision, err := database.RecallCorpusRevision(ctx)
+	if err != nil {
+		return nil, kitvec.Generation{}, "", err
+	}
+	return recallEmbeddingSource{db: database},
+		recallVectorGeneration(cfg.Vector.Embeddings, fingerprint), revision, nil
+}
+
+func embeddingManager(
+	ix *vector.Index, database *db.DB, encoders vector.EncoderSet,
+	cfg config.Config, store string,
+) *vector.Manager {
+	if store != vector.RecallIndexSpec().Name {
+		return vector.NewManager(
+			ix, database, encoders, vectorGeneration(cfg.Vector.Embeddings),
+		)
+	}
+	return vector.NewResolvingManager(
+		ix,
+		encoders,
+		recallVectorGeneration(cfg.Vector.Embeddings, ""),
+		func(ctx context.Context) (vector.BuildTarget, error) {
+			source, generation, revision, err := embeddingBuildTarget(
+				ctx, database, cfg, store,
+			)
+			return vector.BuildTarget{
+				Source: source, Generation: generation, CorpusRevision: revision,
+			}, err
+		},
+	)
 }
 
 // runDirectBuild runs m.TryBuild synchronously on a background goroutine
@@ -516,6 +616,7 @@ func runEmbeddingsBuildDaemon(
 	if err != nil {
 		return err
 	}
+	client.store = daemonEmbeddingStore(req.Store)
 	return buildViaDaemon(ctx, out, client, req)
 }
 
@@ -642,7 +743,7 @@ func printBuildSummary(w io.Writer, result vector.BuildResult) {
 // renders it as a table or JSON. Generation IDs are only unique within a
 // store, so every entry is stamped with the resolved store's name before
 // display, including entries fetched from the daemon (which does not send
-// one, since it currently only serves the message store).
+// one because the selected store is already explicit in the request).
 func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, store string) error {
 	cfg, err := config.LoadMinimal()
 	if err != nil {
@@ -662,6 +763,7 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, stor
 		if err != nil {
 			return err
 		}
+		client.store = daemonEmbeddingStore(spec.Name)
 		gens, err = client.generations(ctx)
 		if err != nil {
 			return err
@@ -695,11 +797,12 @@ func directListGenerations(
 	ctx context.Context, cfg config.Config, spec vector.IndexSpec,
 ) ([]vector.GenerationInfo, error) {
 	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	exists, err := vector.StoreExists(ctx, path, spec)
+	if err != nil {
 		return nil, err
+	}
+	if !exists {
+		return nil, nil
 	}
 	ix, err := vector.OpenSpec(ctx, path, spec, true, cfg.Vector.Embeddings.MaxInputChars)
 	if err != nil {
@@ -733,9 +836,7 @@ func truncateFingerprint(fp string) string {
 // `retire <id>`: it loads config, gates on [vector] enabled, resolves the
 // requested store, and dispatches the requested action to the daemon or
 // directly. A 409/refusal error's message is returned verbatim (no extra
-// wrapping) so it displays exactly as the manager phrased it. The daemon
-// only serves the message store, so the daemon path needs no request
-// change beyond resolving (and thereby validating) the --store name.
+// wrapping) so it displays exactly as the manager phrased it.
 func runEmbeddingsGenerationAction(
 	ctx context.Context, out io.Writer, id int64, force, retire bool, store string,
 ) error {
@@ -756,6 +857,7 @@ func runEmbeddingsGenerationAction(
 		if err != nil {
 			return err
 		}
+		client.store = daemonEmbeddingStore(spec.Name)
 		if retire {
 			err = client.retire(ctx, id, force)
 		} else {
@@ -825,6 +927,7 @@ func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, e
 type embeddingsDaemonClient struct {
 	baseURL string
 	token   string
+	store   string
 }
 
 // daemonAPIError carries an embeddings API error response's HTTP status
@@ -844,6 +947,7 @@ func (e *daemonAPIError) Error() string { return e.message }
 // explicit `--include-automated=false` override when the daemon's config
 // says true.
 type daemonBuildRequest struct {
+	Store            string `json:"store,omitempty"`
 	FullRebuild      bool   `json:"full_rebuild,omitempty"`
 	Backstop         bool   `json:"backstop,omitempty"`
 	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
@@ -853,6 +957,7 @@ type daemonBuildRequest struct {
 
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
 	wire := daemonBuildRequest{
+		Store:            req.Store,
 		FullRebuild:      req.FullRebuild,
 		Backstop:         req.Backstop,
 		RepairInvalid:    req.RepairInvalid,
@@ -864,7 +969,7 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {
 	var st vector.BuildStatus
-	err := c.do(ctx, http.MethodGet, "/api/v1/embeddings/status", nil, &st)
+	err := c.do(ctx, http.MethodGet, c.storePath("/api/v1/embeddings/status"), nil, &st)
 	return st, err
 }
 
@@ -872,18 +977,32 @@ func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.Gener
 	var body struct {
 		Generations []vector.GenerationInfo `json:"generations"`
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/embeddings/generations", nil, &body)
+	err := c.do(ctx, http.MethodGet, c.storePath("/api/v1/embeddings/generations"), nil, &body)
 	return body.Generations, err
 }
 
 func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bool) error {
 	path := fmt.Sprintf("/api/v1/embeddings/generations/%d/activate", id)
-	return c.do(ctx, http.MethodPost, path, map[string]bool{"force": force}, nil)
+	return c.do(ctx, http.MethodPost, c.storePath(path), map[string]bool{"force": force}, nil)
 }
 
 func (c embeddingsDaemonClient) retire(ctx context.Context, id int64, force bool) error {
 	path := fmt.Sprintf("/api/v1/embeddings/generations/%d/retire", id)
-	return c.do(ctx, http.MethodPost, path, map[string]bool{"force": force}, nil)
+	return c.do(ctx, http.MethodPost, c.storePath(path), map[string]bool{"force": force}, nil)
+}
+
+func daemonEmbeddingStore(name string) string {
+	if name == vector.MessageIndexSpec().Name {
+		return ""
+	}
+	return name
+}
+
+func (c embeddingsDaemonClient) storePath(path string) string {
+	if c.store == "" {
+		return path
+	}
+	return path + "?store=" + url.QueryEscape(c.store)
 }
 
 // do performs one HTTP call against the daemon's embeddings API,

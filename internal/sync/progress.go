@@ -83,6 +83,12 @@ type SyncStats struct {
 	parserExcludedFiles    int // file-level intentional parser exclusions
 	parserExcludedIDs      []string
 	providerFailures       int // authoritative discoveries that did not complete
+	// ArchiveRebuilt records a completed full-resync database swap. A rebuild
+	// can preserve/copy durable corpus rows while syncing zero session files,
+	// so downstream refresh consumers cannot infer it from Synced. It is not
+	// serialized in sync API responses; parent-side worker coordination sets it
+	// only after the replacement archive has been installed successfully.
+	ArchiveRebuilt bool `json:"-"`
 	// cwdFilteredSessions counts sessions vetoed by the
 	// sync_include_cwd_prefixes allow-list. The resync abort guard uses
 	// it so a run where every discovered session is filtered reads as
@@ -93,6 +99,10 @@ type SyncStats struct {
 	// must account for all of filesOK before the resync abort guard
 	// treats a zero-write run as intentional.
 	cwdFilteredFiles int
+}
+
+func (s SyncStats) shouldEmitSync() bool {
+	return !s.Aborted && (s.Synced > 0 || s.ArchiveRebuilt)
 }
 
 // AnomalyStats aggregates parser-output anomaly signals observed during a

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -147,6 +148,59 @@ func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
 	assert.Equal(t, "custom_schema", stub.PG.Schema)
 }
 
+func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
+	t *testing.T,
+) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("probe-token\n"), 0o600))
+
+	tests := []struct {
+		name                 string
+		readOnly             bool
+		apiVersion           int
+		wantRecallCapability bool
+	}{
+		{
+			name: "writable API v4 server", apiVersion: 4,
+			wantRecallCapability: true,
+		},
+		{name: "writable API v3 server", apiVersion: 3},
+		{name: "read-only API v4 server", readOnly: true, apiVersion: 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var probeCount int
+			srv := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter, r *http.Request,
+			) {
+				probeCount++
+				assert.Equal(t, "/api/v1/version", r.URL.Path)
+				assert.Equal(t, "Bearer probe-token", r.Header.Get("Authorization"))
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"read_only":   tt.readOnly,
+					"api_version": tt.apiVersion,
+				})
+			}))
+			t.Cleanup(srv.Close)
+
+			cmd := newMCPCommand()
+			cmd.SetContext(context.Background())
+			require.NoError(t, cmd.ParseFlags([]string{
+				"--server", srv.URL,
+				"--server-token-file", tokenFile,
+			}))
+
+			svc, cleanup, err := resolveMCPService(cmd)
+			require.NoError(t, err)
+			t.Cleanup(cleanup)
+
+			assert.Equal(t, tt.wantRecallCapability,
+				service.SupportsRecallQueries(svc))
+			assert.Equal(t, 1, probeCount)
+		})
+	}
+}
+
 func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{
@@ -180,6 +234,26 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	}
 	assert.Equal(t, 2, starts)
 	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime(t *testing.T) {
+	tests := []struct {
+		name     string
+		readOnly bool
+		want     bool
+	}{
+		{name: "writable daemon", want: true},
+		{name: "read-only daemon", readOnly: true, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := runtimeTestDir(t)
+			writeLiveRuntime(t, dataDir, tt.readOnly)
+			svc := newMCPDaemonService(config.Config{DataDir: dataDir})
+
+			assert.Equal(t, tt.want, service.SupportsRecallQueries(svc))
+		})
+	}
 }
 
 func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) {

@@ -344,6 +344,9 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 ## Pull Requests
 
+- Do not poll or watch GitHub Actions checks unless the developer explicitly
+  requests it.
+- Do not use `gh api` to watch CI jobs unless the user explicitly requests it.
 - PR descriptions should be summaries only, with no test plans or checklists. Do
   not add a "Tests", "Testing", "Verification", or "Test plan" section. CI
   runs the tests, so the description must not restate the suite, list test

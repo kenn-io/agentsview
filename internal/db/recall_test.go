@@ -15,6 +15,33 @@ import (
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
+type fakeRecallVectorSearcher struct {
+	hits  []RecallVectorHit
+	query string
+	limit int
+}
+
+type boundedRecallVectorSearcher struct {
+	hits   []RecallVectorHit
+	limits []int
+}
+
+func (f *boundedRecallVectorSearcher) SearchRecall(
+	_ context.Context, _ string, limit int,
+) ([]RecallVectorHit, bool, error) {
+	f.limits = append(f.limits, limit)
+	return append([]RecallVectorHit(nil), f.hits[:min(limit, len(f.hits))]...),
+		len(f.hits) <= limit, nil
+}
+
+func (f *fakeRecallVectorSearcher) SearchRecall(
+	_ context.Context, query string, limit int,
+) ([]RecallVectorHit, bool, error) {
+	f.query = query
+	f.limit = limit
+	return append([]RecallVectorHit(nil), f.hits...), true, nil
+}
+
 func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
 	d := testDB(t)
 
@@ -1709,6 +1736,164 @@ func TestQueryRecallEntriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 	assert.Equal(t, 3, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
 }
 
+func TestQueryRecallEntriesVectorUsesSemanticRankingAndFilters(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	for _, entry := range []RecallEntry{
+		{
+			ID: "semantic", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Connection reuse", Body: "Keep idle resources available.",
+			Project: "agentsview", SourceSessionID: "s1",
+		},
+		{
+			ID: "other-project", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Database pool", Body: "An unrelated project entry.",
+			Project: "other", SourceSessionID: "s1",
+		},
+	} {
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err)
+	}
+	searcher := &fakeRecallVectorSearcher{hits: []RecallVectorHit{
+		{EntryID: "other-project", Score: 0.99},
+		{EntryID: "semantic", Score: 0.75},
+	}}
+	d.SetRecallVectorSearcher(searcher)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "database pool", Mode: RecallQueryModeVector,
+		Project: "agentsview", Limit: 5,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "database pool", searcher.query)
+	assert.GreaterOrEqual(t, searcher.limit, 5)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "semantic", page.RecallEntries[0].ID)
+	assert.InDelta(t, 0.75, page.RecallEntries[0].Score, 0.0001)
+	assert.Equal(t, []string{"semantic"}, page.RecallEntries[0].MatchReasons)
+}
+
+func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	hits := make([]RecallVectorHit, 0, SemanticOverfetchMin+1)
+	for i := range SemanticOverfetchMin {
+		id := fmt.Sprintf("excluded-%03d", i)
+		_, err := d.InsertRecallEntry(RecallEntry{
+			ID: id, Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Other project", Body: "Higher semantic score.",
+			Project: "other", SourceSessionID: "s1",
+		})
+		require.NoError(t, err)
+		hits = append(hits, RecallVectorHit{EntryID: id, Score: float32(1 - float64(i)/1000)})
+	}
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID: "matching-project", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Matching project", Body: "Lower-ranked but eligible.",
+		Project: "agentsview", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	hits = append(hits, RecallVectorHit{EntryID: "matching-project", Score: 0.5})
+	searcher := &boundedRecallVectorSearcher{hits: hits}
+	d.SetRecallVectorSearcher(searcher)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "semantic policy", Mode: RecallQueryModeVector,
+		Project: "agentsview", Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "matching-project", page.RecallEntries[0].ID)
+	assert.Equal(t, []int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
+}
+
+func TestQueryRecallEntriesHybridUsesReciprocalRankFusion(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	for _, entry := range []RecallEntry{
+		{
+			ID: "both", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Database pool", Body: "Reuse idle connections.",
+			SourceSessionID: "s1",
+		},
+		{
+			ID: "lexical-only", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Database pool", Body: "Size the pool carefully.",
+			SourceSessionID: "s1",
+		},
+		{
+			ID: "vector-only", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Resource reuse", Body: "Keep spare connections available.",
+			SourceSessionID: "s1",
+		},
+	} {
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err)
+	}
+	d.SetRecallVectorSearcher(&fakeRecallVectorSearcher{hits: []RecallVectorHit{
+		{EntryID: "both", Score: 0.8},
+		{EntryID: "vector-only", Score: 0.7},
+	}})
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "database pool", Mode: RecallQueryModeHybrid, Limit: 3,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 3)
+	assert.Equal(t, "both", page.RecallEntries[0].ID)
+	assert.ElementsMatch(t,
+		[]string{"both", "lexical-only", "vector-only"},
+		[]string{
+			page.RecallEntries[0].ID,
+			page.RecallEntries[1].ID,
+			page.RecallEntries[2].ID,
+		},
+	)
+	assert.Contains(t, page.RecallEntries[0].MatchReasons, "semantic")
+	assert.Greater(t, page.RecallEntries[0].Score, page.RecallEntries[1].Score)
+}
+
+func TestQueryRecallEntriesVectorRequiresSemanticIndex(t *testing.T) {
+	d := testDB(t)
+
+	_, err := d.QueryRecallEntries(context.Background(), RecallQuery{
+		Text: "database pool", Mode: RecallQueryModeVector,
+	})
+
+	assert.ErrorIs(t, err, ErrSemanticUnavailable)
+}
+
+func TestValidateRecallQueryRejectsUnknownMode(t *testing.T) {
+	err := ValidateRecallQuery(RecallQuery{Text: "database", Mode: "fuzzy"})
+
+	require.ErrorIs(t, err, ErrInvalidRecallQuery)
+	assert.Contains(t, err.Error(), "recall query mode")
+}
+
+func TestValidateRecallQueryRejectsNonServedStatusForSemanticModes(t *testing.T) {
+	for _, mode := range []string{RecallQueryModeVector, RecallQueryModeHybrid} {
+		t.Run(mode, func(t *testing.T) {
+			err := ValidateRecallQuery(RecallQuery{
+				Text: "database", Mode: mode, Status: corerecall.StatusArchived,
+			})
+
+			require.ErrorIs(t, err, ErrInvalidRecallQuery)
+			assert.Contains(t, err.Error(), "accepted status")
+		})
+	}
+
+	require.NoError(t, ValidateRecallQuery(RecallQuery{
+		Text: "database", Mode: RecallQueryModeLexical,
+		Status: corerecall.StatusArchived,
+	}))
+}
+
 func TestQueryRecallEntriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -2085,6 +2270,14 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s2",
 	})
 	require.NoError(t, err, "insert m2")
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
+		ID: "m3", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "retracted", Body: "removed before the resync",
+		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
+	})
+	require.NoError(t, err, "insert m3")
+	_, err = srcDB.getWriter().Exec("DELETE FROM recall_entries WHERE id = 'm3'")
+	require.NoError(t, err, "delete m3")
 
 	// Pin known timestamps to verify they survive the copy.
 	_, err = srcDB.getWriter().Exec(
@@ -2092,6 +2285,8 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 		"2024-01-02T03:04:05.678Z", "2024-02-03T04:05:06.789Z",
 	)
 	require.NoError(t, err, "stamp m1")
+	sourceRevision, err := srcDB.RecallCorpusRevision(context.Background())
+	require.NoError(t, err)
 	srcDB.Close()
 
 	// Destination DB has only s1 (s2 was not preserved by the resync).
@@ -2106,6 +2301,14 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath), "CopyRecallEntriesFrom")
 
 	ctx := context.Background()
+	destinationRevision, err := dstDB.RecallCorpusRevision(ctx)
+	require.NoError(t, err)
+	sourceRevisionNumber, ok := parseRecallCorpusRevision(sourceRevision)
+	require.True(t, ok)
+	destinationRevisionNumber, ok := parseRecallCorpusRevision(destinationRevision)
+	require.True(t, ok)
+	assert.Greater(t, destinationRevisionNumber, sourceRevisionNumber,
+		"an archive swap must advance the monotonic Recall revision")
 
 	// m1 copied with evidence and original timestamps preserved.
 	m1, err := dstDB.GetRecallEntry(ctx, "m1")
@@ -2120,6 +2323,25 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 	m2, err := dstDB.GetRecallEntry(ctx, "m2")
 	require.NoError(t, err, "get m2")
 	assert.Nil(t, m2, "m2 skipped: source session not preserved")
+	var embeddingChanges []EmbeddableUnit
+	_, err = dstDB.ScanRecallEmbeddingUnits(
+		ctx, "2000-01-01T00:00:00Z",
+		func(unit EmbeddableUnit) error {
+			embeddingChanges = append(embeddingChanges, unit)
+			return nil
+		},
+	)
+	require.NoError(t, err, "scan copied embedding changes")
+	require.Len(t, embeddingChanges, 3)
+	changesByID := make(map[string]EmbeddableUnit, len(embeddingChanges))
+	for _, unit := range embeddingChanges {
+		changesByID[unit.SessionID] = unit
+	}
+	assert.True(t, changesByID["m2"].Deleted,
+		"an entry skipped during resync must remove its persistent mirror row")
+	assert.True(t, changesByID["m3"].Deleted,
+		"a pre-resync hard deletion must survive the archive swap")
+	assert.False(t, changesByID["m1"].Deleted)
 
 	// Copied recall is searchable via FTS in the destination.
 	cands, err := dstDB.ListRecallEntryTextCandidates(
@@ -2128,6 +2350,55 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 	require.NoError(t, err, "search copied recall")
 	require.Len(t, cands, 1, "fts finds copied recall")
 	assert.Equal(t, "m1", cands[0].ID)
+}
+
+func TestCopyRecallEntriesFromPreservesPendingArchivedEmbeddingChange(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	insertSession(t, srcDB, "s1", "agentsview")
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
+		ID: "archived-after-build", Type: "fact", Scope: "project",
+		Status: "accepted", Title: "Served entry", Body: "Indexed content",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+
+	vectorWatermark, err := srcDB.ScanRecallEmbeddingUnits(
+		ctx, "", func(EmbeddableUnit) error { return nil },
+	)
+	require.NoError(t, err)
+	_, err = srcDB.getWriter().Exec(`
+		UPDATE recall_entries SET status = 'archived'
+		WHERE id = 'archived-after-build'`)
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
+
+	dstDB, err := Open(filepath.Join(dir, "new.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dstDB.Close() })
+	insertSession(t, dstDB, "s1", "agentsview")
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	var changes []EmbeddableUnit
+	nextWatermark, err := dstDB.ScanRecallEmbeddingUnits(
+		ctx, vectorWatermark,
+		func(unit EmbeddableUnit) error {
+			changes = append(changes, unit)
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, "archived-after-build", changes[0].SessionID)
+	assert.True(t, changes[0].Deleted,
+		"the first post-resync incremental build must remove the archived vector")
+	assert.NotEqual(t, vectorWatermark, nextWatermark)
 }
 
 func TestCopyRecallEntriesFromReconcilesShiftedEvidence(t *testing.T) {

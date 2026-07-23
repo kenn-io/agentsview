@@ -41,7 +41,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersSixReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersSevenReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
@@ -52,11 +52,29 @@ func TestNewServer_RegistersSixReadOnlyTools(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(context.Background(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 6)
+	require.Len(t, tools.Tools, 7)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
 			"tool %s should be annotated read-only", tl.Name)
+	}
+	require.NoError(t, ct.Close())
+	require.NoError(t, st.Wait())
+}
+
+func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	srv := newServer(ServeOptions{
+		Service: service.NewReadOnlyBackend(d),
+		Now:     func() time.Time { return fixedNow },
+	})
+
+	st, ct := newInMemoryPair(t, srv)
+	tools, err := ct.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, tools.Tools, 6)
+	for _, tool := range tools.Tools {
+		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())

@@ -378,6 +378,28 @@ func TestHTTPBackend_QueryRecallEntriesIncludesSourceEpisodeID(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestHTTPBackend_QueryRecallEntriesTransportsSkipRecording(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got service.RecallQuery
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		assert.True(t, got.SkipRecording)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			Mode: db.RecallQueryModeLexical, RecallEntries: []db.RecallResult{},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	result, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+		Query: "read only recall", SkipRecording: true,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, result.QueryID)
+}
+
 func TestHTTPBackend_QueryRecallEntriesRejectsNegativeContextMaxBytesLocally(t *testing.T) {
 	t.Parallel()
 	var calls int
@@ -796,6 +818,49 @@ func TestHTTPBackend_RecallReads_RemoteReadOnly(t *testing.T) {
 			assert.Contains(t, err.Error(), env.BaseURL)
 		})
 	}
+}
+
+func TestHTTPBackend_QueryRecallVector501PreservesSemanticCause(t *testing.T) {
+	t.Parallel()
+	body := service.ErrSemanticUnavailable.Error() + ": recall index is stale"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotImplemented)
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{
+			"error": body,
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	be := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := be.QueryRecallEntries(context.Background(), service.RecallQuery{
+		Query: "retry policy",
+		Mode:  "VECTOR",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Equal(t, body, err.Error())
+}
+
+func TestHTTPBackend_QueryRecallRejectsResponseModeMismatch(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			Mode:          db.RecallQueryModeLexical,
+			RecallEntries: []db.RecallResult{},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	be := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := be.QueryRecallEntries(context.Background(), service.RecallQuery{
+		Query: "retry policy", Mode: db.RecallQueryModeHybrid,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requested recall mode hybrid")
+	assert.Contains(t, err.Error(), "returned lexical")
 }
 
 func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {

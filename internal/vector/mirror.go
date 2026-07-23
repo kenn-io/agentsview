@@ -13,9 +13,9 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// refreshWatermarkKey is the metadata-table key holding the RFC3339
-// ended_at high-water mark of the most recent Refresh scan, used to
-// restrict the next incremental (full=false) scan to newer sessions.
+// refreshWatermarkKey is the metadata-table key holding the source-defined
+// high-water mark of the most recent Refresh scan. Session sources use an
+// RFC3339 ended_at value; Recall uses a monotonic corpus revision.
 const refreshWatermarkKey = "refresh_watermark"
 
 // scopeIncludeAutomatedKey is the metadata-table key holding the
@@ -158,7 +158,9 @@ func contentHash(content string) string {
 // slot it no longer occupies is deleted via store.DeleteVectors only if it
 // was not reinserted elsewhere in the same scan, so a row that merely
 // shifted (or was displaced in a shift cascade) keeps its embeddings. The
-// watermark is advanced to the scan's max ended_at afterwards.
+// Incremental sources may also emit tombstones, which delete matching mirror
+// rows and vectors immediately. The watermark advances to the opaque value
+// returned by the source after a successful scan.
 func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
@@ -183,7 +185,7 @@ func (ix *Index) Refresh(
 	if err != nil {
 		return RefreshStats{}, err
 	}
-	maxEnded, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, func(u db.EmbeddableUnit) error {
+	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, func(u db.EmbeddableUnit) error {
 		occurrence := 1
 		if u.SourceUUID != "" {
 			occKey := u.SessionID + "\x00" + u.SourceUUID
@@ -191,6 +193,16 @@ func (ix *Index) Refresh(
 			occurrence = occurrences[occKey]
 		}
 		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
+		if u.Deleted {
+			deleted, err := ix.deleteMirrorDocument(ctx, key)
+			if err != nil {
+				return fmt.Errorf("deleting tombstoned mirror row %s: %w", key, err)
+			}
+			if deleted {
+				stats.Deleted++
+			}
+			return nil
+		}
 		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
@@ -234,13 +246,33 @@ func (ix *Index) Refresh(
 		stats.Deleted += deleted
 	}
 
-	if maxEnded != "" {
-		if err := ix.setRefreshWatermark(ctx, maxEnded); err != nil {
+	if nextWatermark != "" {
+		if err := ix.setRefreshWatermark(ctx, nextWatermark); err != nil {
 			return RefreshStats{}, err
 		}
 	}
 
 	return stats, nil
+}
+
+func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, error) {
+	if err := ix.store.DeleteVectors(ctx, key); err != nil {
+		return false, fmt.Errorf("deleting vectors for %s: %w", key, err)
+	}
+	if err := ix.deleteRepairTargets(ctx, key); err != nil {
+		return false, err
+	}
+	result, err := ix.db.ExecContext(ctx,
+		`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
+	)
+	if err != nil {
+		return false, fmt.Errorf("deleting mirror row %s: %w", key, err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("counting deleted mirror row %s: %w", key, err)
+	}
+	return deleted > 0, nil
 }
 
 // upsertMirrorRow evicts any row occupying the same (session_id, ordinal)

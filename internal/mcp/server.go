@@ -1,5 +1,5 @@
 // ABOUTME: Builds and serves the agentsview MCP server (stdio or
-// ABOUTME: StreamableHTTP) over the six read-only retrieval tools.
+// ABOUTME: StreamableHTTP) over the supported read-only retrieval tools.
 package mcp
 
 import (
@@ -22,6 +22,7 @@ import (
 // to it in tests.
 const (
 	ToolSearchSessions     = "search_sessions"
+	ToolQueryRecall        = "query_recall"
 	ToolListSessions       = "list_sessions"
 	ToolGetSessionOverview = "get_session_overview"
 	ToolGetMessages        = "get_messages"
@@ -44,8 +45,8 @@ type ServeOptions struct {
 	Token string
 }
 
-// newServer builds an MCP server with all six read-only tools
-// registered. Shared by the stdio and StreamableHTTP transports.
+// newServer builds an MCP server with the tools supported by its backing
+// service. Shared by the stdio and StreamableHTTP transports.
 func newServer(opts ServeOptions) *mcp.Server {
 	version := opts.Version
 	if version == "" {
@@ -71,6 +72,17 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"unless include_active is set.",
 		Annotations: readOnly,
 	}, t.searchSessions)
+
+	if service.SupportsRecallQueries(opts.Service) {
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolQueryRecall,
+			Description: "Search distilled knowledge extracted from prior sessions. " +
+				"Use lexical mode for exact terms, vector mode for semantic similarity, " +
+				"or hybrid mode to fuse both rankings. Returns recall entries with their " +
+				"source-session evidence and retrieval scores.",
+			Annotations: readOnly,
+		}, t.queryRecall)
+	}
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolListSessions,

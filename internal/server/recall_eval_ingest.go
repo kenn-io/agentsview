@@ -117,6 +117,9 @@ func (s *Server) handleIngestEvalTrajectory(
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if result.EntriesIndexed > 0 && s.recallCorpusMutationNotify != nil {
+		s.recallCorpusMutationNotify()
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 

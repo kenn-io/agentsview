@@ -45,7 +45,7 @@ type VersionInfo struct {
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
-const APIVersion = 3
+const APIVersion = 4
 
 const daemonService = "agentsview"
 
@@ -107,6 +107,9 @@ type Server struct {
 	// activity would otherwise surface. Called synchronously; it must not
 	// block.
 	sessionMutationNotify func()
+	// recallCorpusMutationNotify, when set, is called after an import adds or
+	// supersedes accepted recall entries so semantic mirrors can refresh.
+	recallCorpusMutationNotify func()
 
 	// pprofEnabled registers net/http/pprof handlers under
 	// /debug/pprof/ so a running daemon can be profiled. Off by
@@ -117,6 +120,7 @@ type Server struct {
 	// build lifecycle routes. Nil (the default) leaves those routes
 	// unregistered, e.g. when semantic search is not configured.
 	embeddingsManager EmbeddingsManager
+	embeddingsStores  map[string]EmbeddingsManager
 
 	// embeddingsUnavailableReason, when non-empty, replaces the generic
 	// "embeddings manager not available" 501 message on the embeddings
@@ -321,11 +325,32 @@ func WithIdleTracker(t *IdleTracker) Option {
 }
 
 // WithSessionMutationNotifier registers fn to run after a route changes a
-// session's lifecycle (trash, restore, permanent delete). fn is called
-// synchronously on the request path and must not block; a non-blocking
-// scheduler signal is the intended shape.
+// session's lifecycle (trash, restore, permanent delete). Multiple options
+// fan out in registration order so independent lifecycle consumers do not
+// suppress one another. Each fn is called synchronously on the request path
+// and must not block; a non-blocking scheduler signal is the intended shape.
 func WithSessionMutationNotifier(fn func()) Option {
-	return func(s *Server) { s.sessionMutationNotify = fn }
+	return func(s *Server) {
+		if fn == nil {
+			return
+		}
+		previous := s.sessionMutationNotify
+		if previous == nil {
+			s.sessionMutationNotify = fn
+			return
+		}
+		s.sessionMutationNotify = func() {
+			previous()
+			fn()
+		}
+	}
+}
+
+// WithRecallCorpusMutationNotifier registers fn to run after a successful
+// import changes the accepted recall corpus. fn must not block; a scheduler's
+// coalescing Notify method is the intended shape.
+func WithRecallCorpusMutationNotifier(fn func()) Option {
+	return func(s *Server) { s.recallCorpusMutationNotify = fn }
 }
 
 // WithPprof enables the net/http/pprof handlers under

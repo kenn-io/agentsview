@@ -659,6 +659,31 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestRefreshIncrementalTombstoneDeletesOnlyChangedDocument(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("entry-1", "entry-1", 0, "first"), endedAt: "2026-01-01T00:00:00Z"},
+		{unit: userDoc("entry-2", "entry-2", 0, "second"), endedAt: "2026-01-01T00:00:00Z"},
+	}}
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), fakeGeneration("model"), BuildOptions{})
+	require.NoError(t, err)
+
+	src.rows = []fakeUnit{{
+		unit: db.EmbeddableUnit{
+			SessionID: "entry-1", SourceUUID: "entry-1", Kind: "user", Deleted: true,
+		},
+		endedAt: "2026-02-01T00:00:00Z",
+	}}
+	result, err := ix.Build(
+		ctx, src, fakeBuildEncoder(), fakeGeneration("model"), BuildOptions{},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Refresh.Deleted)
+	assert.Equal(t, []string{"u:entry-2:entry-2"}, mirrorDocKeys(t, ix))
+}
+
 // TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys asserts that two
 // units in one session sharing a non-empty source_uuid (permitted by the
 // messages schema) collapse into two distinct mirror rows rather than one,

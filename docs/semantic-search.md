@@ -51,6 +51,7 @@ max_retries = 3                   # attempts on 429/5xx/network errors; 4xx fail
 
 [vector.embed]
 run_after_sync = true             # daemon embeds deltas after each sync, debounced ~30s (default true)
+recall = false                    # default; set true to permit automatic Recall embedding
 backstop_interval = "24h"         # periodic full reconciliation scan; negative disables (default "24h")
 ```
 
@@ -58,6 +59,18 @@ backstop_interval = "24h"         # periodic full reconciliation scan; negative 
 entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
 fast with an actionable message if any is missing or a duration field doesn't
 parse. Restart the daemon (or run a CLI command) after editing the file.
+
+Automatic Recall embedding has a separate, default-off consent gate. Setting
+`[vector.embed] recall = true` permits daemon startup, corpus mutations, and
+periodic backstops to send accepted Recall entry titles, bodies, and triggers
+to the configured embeddings endpoint. `run_after_sync` controls only session
+archive sync notifications; it does not suppress Recall startup or Recall
+corpus-mutation refreshes after that consent is enabled. A manual
+`agentsview embeddings build --store recall` remains available without this
+setting because invoking that command is an explicit one-time request.
+Recall vector and hybrid queries also fail closed as unavailable whenever the
+served Recall corpus is newer than the last completed build; lexical queries
+remain available while an automatic or manual refresh catches up.
 
 ### Named embeddings servers
 

@@ -505,7 +505,7 @@ func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
 	_, err = ro.Search(ctx, fakeSearchEncoder(), "alpha", 10)
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
-	_, err = ro.StaleActive(ctx, "any-fingerprint")
+	_, err = ro.StaleActive(ctx, "any-fingerprint", "")
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch,
 		"StaleActive must apply the same version gate Search does")
 }

@@ -2,8 +2,10 @@ package vector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // fakeBuildEncoder returns a deterministic 3-dimensional encoder that never
@@ -46,6 +50,21 @@ func fakeGeneration(model string) kitvec.Generation {
 	return kitvec.Generation{Model: model, Dimensions: 3}
 }
 
+type failingRefreshSource struct {
+	unit db.EmbeddableUnit
+	err  error
+}
+
+func (s failingRefreshSource) ScanEmbeddableUnits(
+	_ context.Context, _ string, _ bool,
+	fn func(db.EmbeddableUnit) error,
+) (string, error) {
+	if err := fn(s.unit); err != nil {
+		return "", err
+	}
+	return "", s.err
+}
+
 func TestBuildFirstBuildEmbedsAllAndActivates(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
@@ -77,6 +96,154 @@ func TestBuildSecondBuildNoChangesFillsZero(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.Fill.Documents)
 	assert.False(t, result.Activated, "already active, no re-activation")
+}
+
+func TestBuildFailureDoesNotAdvanceCompletedCorpusRevision(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+	src := twoDocSource()
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen,
+		BuildOptions{CorpusRevision: "revision-1"})
+	require.NoError(t, err)
+
+	src.rows[0].unit.Content = "changed"
+	src.rows[0].endedAt = "2024-02-01T00:00:00Z"
+	failingEncoder := func(context.Context, []string) ([][]float32, error) {
+		return nil, errors.New("endpoint unavailable")
+	}
+	_, err = ix.Build(ctx, src, failingEncoder, gen,
+		BuildOptions{CorpusRevision: "revision-2"})
+	require.Error(t, err)
+
+	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-2")
+	require.NoError(t, err)
+	assert.True(t, stale, "a failed fill must not mark the new corpus revision complete")
+}
+
+func TestFailedFullRebuildClearsCompletedCorpusRevision(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+	src := twoDocSource()
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen,
+		BuildOptions{CorpusRevision: "revision-1"})
+	require.NoError(t, err)
+
+	failingEncoder := func(context.Context, []string) ([][]float32, error) {
+		return nil, errors.New("endpoint unavailable")
+	}
+	_, err = ix.Build(ctx, src, failingEncoder, gen, BuildOptions{
+		FullRebuild:    true,
+		CorpusRevision: "revision-1",
+	})
+	require.Error(t, err)
+
+	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
+	require.NoError(t, err)
+	assert.True(t, stale,
+		"a failed full rebuild must not leave the reset generation marked complete")
+
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{
+		FullRebuild:    true,
+		CorpusRevision: "revision-1",
+	})
+	require.NoError(t, err)
+	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
+	require.NoError(t, err)
+	assert.False(t, stale, "a successful full rebuild restores the completed revision")
+}
+
+func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+
+	_, err := ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen,
+		BuildOptions{CorpusRevision: "revision-1"})
+	require.NoError(t, err)
+
+	_, err = ix.Build(ctx, failingRefreshSource{
+		unit: userDoc("s1", "u1", 0, "partially refreshed"),
+		err:  errors.New("source scan failed"),
+	}, fakeBuildEncoder(), gen, BuildOptions{
+		Backstop:       true,
+		CorpusRevision: "revision-1",
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "source scan failed")
+
+	row, ok := readMirrorRow(t, ix, DocKey("user", "s1", "u1", 0, 1))
+	require.True(t, ok)
+	assert.Equal(t, "partially refreshed", row.content,
+		"the refresh must mutate the mirror before failing")
+	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
+	require.NoError(t, err)
+	assert.True(t, stale,
+		"a failed full refresh must not leave the partially changed mirror marked complete")
+
+	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{
+		Backstop:       true,
+		CorpusRevision: "revision-1",
+	})
+	require.NoError(t, err)
+	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
+	require.NoError(t, err)
+	assert.False(t, stale,
+		"a successful full refresh and fill restore the completed revision")
+}
+
+func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
+	ctx := context.Background()
+	ix, err := OpenSpec(
+		ctx,
+		filepath.Join(t.TempDir(), "vectors.db"),
+		RecallIndexSpec(),
+		false,
+		4000,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
+
+	oldSource := &fakeUnitSource{rows: []fakeUnit{{
+		unit:    userDoc("old-entry", "old-entry", 0, "old content"),
+		endedAt: "2026-02-01T00:00:00Z",
+	}}}
+	oldGeneration := kitvec.Generation{
+		Model: "fake-model", Dimensions: 3,
+		Params: map[string]string{CorpusFingerprintParam: "extract-old"},
+	}
+	_, err = ix.Build(ctx, oldSource, fakeBuildEncoder(), oldGeneration, BuildOptions{})
+	require.NoError(t, err)
+
+	newSource := &fakeUnitSource{rows: []fakeUnit{{
+		unit:    userDoc("new-entry", "new-entry", 0, "new content"),
+		endedAt: "2026-01-01T00:00:00Z",
+	}}}
+	newGeneration := kitvec.Generation{
+		Model: "fake-model", Dimensions: 3,
+		Params: map[string]string{CorpusFingerprintParam: "extract-new"},
+	}
+	result, err := ix.Build(
+		ctx, newSource, fakeBuildEncoder(), newGeneration, BuildOptions{},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Refresh.Upserted)
+	assert.Equal(t, 1, result.Refresh.Deleted)
+	rows, err := ix.db.Query(`SELECT doc_key FROM vector_recall_entries ORDER BY doc_key`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		require.NoError(t, rows.Scan(&key))
+		keys = append(keys, key)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"u:new-entry:new-entry"}, keys)
 }
 
 func TestBuildContentChangeReembedsExactlyOne(t *testing.T) {

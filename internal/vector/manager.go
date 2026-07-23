@@ -77,10 +77,10 @@ func validateBuildRequest(req BuildRequest) error {
 // their check-then-act refusal invariants (Missing coverage, the
 // active-generation check) hold under concurrent calls.
 type Manager struct {
-	ix       *Index
-	src      UnitSource
-	encoders EncoderSet
-	gen      kitvec.Generation
+	ix            *Index
+	encoders      EncoderSet
+	gen           kitvec.Generation
+	resolveTarget func(context.Context) (BuildTarget, error)
 
 	// opMu serializes lifecycle operations: build starts (begin) and the
 	// whole of Activate/Retire. It is never held across a running build —
@@ -90,10 +90,11 @@ type Manager struct {
 
 	// mu guards running and status; held only for short field updates so
 	// Status() stays responsive during a build.
-	mu      sync.Mutex
-	running bool
-	status  BuildStatus
-	eta     buildETAEstimator
+	mu        sync.Mutex
+	running   bool
+	buildDone chan struct{}
+	status    BuildStatus
+	eta       buildETAEstimator
 
 	// now stamps BuildStatus.StartedAt when a build begins; a test hook
 	// defaulting to time.Now.
@@ -103,8 +104,11 @@ type Manager struct {
 // BuildRequest is the caller-controlled subset of BuildOptions the manager
 // exposes; encode settings and Progress are the manager's own concerns.
 type BuildRequest struct {
-	FullRebuild bool `json:"full_rebuild,omitempty"`
-	Backstop    bool `json:"backstop,omitempty"`
+	// Store selects one embedding store at transport/command boundaries. A
+	// Manager already represents one store and therefore ignores this field.
+	Store       string `json:"store,omitempty"`
+	FullRebuild bool   `json:"full_rebuild,omitempty"`
+	Backstop    bool   `json:"backstop,omitempty"`
 	// RepairInvalid scans only the selected target generation and queues
 	// documents containing unusable stored vectors for regeneration.
 	RepairInvalid bool `json:"repair_invalid,omitempty"`
@@ -176,6 +180,15 @@ type EncoderSet struct {
 	ByName  map[string]ManagedEncoder
 }
 
+// BuildTarget is the source corpus and vector-generation identity for one
+// build pass. Resolving it per pass lets a long-lived manager follow a source
+// corpus whose own active generation can change at runtime.
+type BuildTarget struct {
+	Source         UnitSource
+	Generation     kitvec.Generation
+	CorpusRevision string
+}
+
 // NewManager creates a Manager that builds gen's embedding space over ix,
 // scanning src and encoding with one of encoders' entries per build (the
 // default, or BuildRequest.Using). Each encoder is wrapped so a panic
@@ -184,12 +197,32 @@ type EncoderSet struct {
 func NewManager(
 	ix *Index, src UnitSource, encoders EncoderSet, gen kitvec.Generation,
 ) *Manager {
+	return NewResolvingManager(
+		ix, encoders, gen,
+		func(context.Context) (BuildTarget, error) {
+			return BuildTarget{Source: src, Generation: gen}, nil
+		},
+	)
+}
+
+// NewResolvingManager creates a manager that resolves its source and
+// generation at the start of every build. displayGen supplies the stable model
+// and dimension shown by Status before or between builds.
+func NewResolvingManager(
+	ix *Index,
+	encoders EncoderSet,
+	displayGen kitvec.Generation,
+	resolveTarget func(context.Context) (BuildTarget, error),
+) *Manager {
 	wrapped := EncoderSet{Default: encoders.Default, ByName: make(map[string]ManagedEncoder, len(encoders.ByName))}
 	for name, me := range encoders.ByName {
 		me.Encode = recoveringEncoder(me.Encode)
 		wrapped.ByName[name] = me
 	}
-	return &Manager{ix: ix, src: src, encoders: wrapped, gen: gen, now: time.Now}
+	return &Manager{
+		ix: ix, encoders: wrapped, gen: displayGen,
+		resolveTarget: resolveTarget, now: time.Now,
+	}
 }
 
 // resolveEncoder picks the encoder a build request encodes with: the named
@@ -280,6 +313,21 @@ func (m *Manager) Status() BuildStatus {
 	return status
 }
 
+// Wait blocks until no embedding build is running. It covers both asynchronous
+// StartBuild calls and synchronous TryBuild calls, allowing owners to keep
+// indexes open through detached API work during shutdown.
+func (m *Manager) Wait() {
+	for {
+		m.mu.Lock()
+		done := m.buildDone
+		m.mu.Unlock()
+		if done == nil {
+			return
+		}
+		<-done
+	}
+}
+
 // Generations delegates to the underlying Index, listing every generation
 // with its coverage of the current mirror.
 func (m *Manager) Generations(ctx context.Context) ([]GenerationInfo, error) {
@@ -345,6 +393,7 @@ func (m *Manager) begin() error {
 		return ErrBuildRunning
 	}
 	m.running = true
+	m.buildDone = make(chan struct{})
 	m.status.Running = true
 	m.status.BuildID++
 	m.status.StartedAt = m.now().UTC().Format(time.RFC3339)
@@ -370,13 +419,21 @@ func (m *Manager) runBuild(
 			err = fmt.Errorf("build panicked: %v", r)
 		}
 	}()
-	return m.ix.Build(ctx, m.src, me.Encode, m.gen, BuildOptions{
+	target, err := m.resolveTarget(ctx)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	if target.Source == nil {
+		return BuildResult{}, errors.New("embedding build target has no unit source")
+	}
+	return m.ix.Build(ctx, target.Source, me.Encode, target.Generation, BuildOptions{
 		FullRebuild:      req.FullRebuild,
 		Backstop:         req.Backstop,
 		RepairInvalid:    req.RepairInvalid,
 		IncludeAutomated: req.IncludeAutomated,
 		BatchSize:        me.Settings.BatchSize,
 		Concurrency:      me.Settings.Concurrency,
+		CorpusRevision:   target.CorpusRevision,
 		Progress:         m.reportProgress,
 	})
 }
@@ -403,6 +460,10 @@ func (m *Manager) finish(result BuildResult, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.running = false
+	if m.buildDone != nil {
+		close(m.buildDone)
+		m.buildDone = nil
+	}
 	m.status.Running = false
 	m.clearETA()
 	r := result

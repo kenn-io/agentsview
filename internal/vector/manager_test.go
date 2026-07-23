@@ -103,6 +103,36 @@ func TestManagerBuildUsingSelectsNamedEncoder(t *testing.T) {
 	assert.Positive(t, localCalls.Load(), "a build without Using must encode on the default server")
 }
 
+func TestManagerResolvesBuildTargetForEveryPass(t *testing.T) {
+	ix := openTestIndex(t)
+	oldGeneration := kitvec.Generation{
+		Model: "fake-model", Dimensions: 3,
+		Params: map[string]string{CorpusFingerprintParam: "extract-old"},
+	}
+	newGeneration := kitvec.Generation{
+		Model: "fake-model", Dimensions: 3,
+		Params: map[string]string{CorpusFingerprintParam: "extract-new"},
+	}
+	target := BuildTarget{Source: twoDocSource(), Generation: oldGeneration}
+	m := NewResolvingManager(
+		ix,
+		soloEncoders(fakeBuildEncoder()),
+		oldGeneration,
+		func(context.Context) (BuildTarget, error) { return target, nil },
+	)
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Equal(t, oldGeneration.Fingerprint(), m.Status().LastResult.Fingerprint)
+
+	target = BuildTarget{Source: twoDocSource(), Generation: newGeneration}
+	started, err = m.TryBuild(context.Background(), BuildRequest{})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Equal(t, newGeneration.Fingerprint(), m.Status().LastResult.Fingerprint)
+}
+
 func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
 	ix := openTestIndex(t)
 	src := twoDocSource()
@@ -171,6 +201,34 @@ func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t 
 	close(release)
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
 	assert.Empty(t, m.Status().LastError)
+}
+
+func TestManagerWaitBlocksUntilAsyncBuildCompletes(t *testing.T) {
+	ix := openTestIndex(t)
+	release := make(chan struct{})
+	m := NewManager(
+		ix, twoDocSource(), soloEncoders(blockingEncoder(release)),
+		fakeGeneration("fake-model"),
+	)
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
+
+	waited := make(chan struct{})
+	go func() {
+		m.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+		require.Fail(t, "Wait returned while the asynchronous build was active")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		require.Fail(t, "Wait did not return after the asynchronous build completed")
+	}
 }
 
 func TestManagerTryBuildReturnsFalseWhileRunning(t *testing.T) {

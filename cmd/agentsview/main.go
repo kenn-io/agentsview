@@ -258,7 +258,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
-	vectorServe, err := setupVectorServing(ctx, cfg, database)
+	vectorServe, err := setupVectorServing(ctx, cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up vector index: %v", err)
 	}
@@ -270,20 +270,18 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}()
 	}
 
-	var emitter sync.Emitter = broadcaster
-	if vectorServe.Scheduler != nil {
-		emitter = teeEmitter{
-			primary:      broadcaster,
-			scheduler:    vectorServe.Scheduler,
-			runAfterSync: cfg.Vector.Embed.RunAfterSyncEnabled(),
-		}
-	}
+	emitter := wrapEmbeddingSyncEmitter(
+		broadcaster, vectorServe, cfg.Vector.Embed.RunAfterSyncEnabled(),
+	)
 
 	extractSched, err := setupRecallExtraction(cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up recall extraction: %v", err)
 	}
 	if extractSched != nil {
+		if vectorServe.RecallMutationNotify != nil {
+			extractSched.onPassFinished = vectorServe.RecallMutationNotify
+		}
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
@@ -566,6 +564,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 		// unwind order runs Stop (which waits for any in-flight
 		// TryBuild to return) before vectors.db is closed.
 		defer vectorServe.Scheduler.Stop()
+	}
+	if vectorServe.RecallScheduler != nil {
+		go vectorServe.RecallScheduler.Run(ctx)
+		defer vectorServe.RecallScheduler.Stop()
 	}
 
 	if extractSched != nil {
@@ -1080,6 +1082,7 @@ func runWorkerResyncBuild(
 		// fallback from launching another archive-scale pass. The emit and
 		// startup callback fire after the lock below.
 		doneStats = statsFromWorkerResult(result)
+		doneStats.ArchiveRebuilt = true
 		engine.RecordStartupReconciledExclusive(doneStats, nil)
 		return nil
 	})

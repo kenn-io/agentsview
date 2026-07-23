@@ -154,6 +154,49 @@ func (t *toolset) searchSessions(
 	return nil, out, nil
 }
 
+// --- query_recall ---
+
+type queryRecallIn struct {
+	Query           string `json:"query" jsonschema:"Natural-language query over distilled recall entries."`
+	Mode            string `json:"mode,omitempty" jsonschema:"Retrieval mode: lexical (default), vector, or hybrid."`
+	Project         string `json:"project,omitempty" jsonschema:"Filter by project name."`
+	CWD             string `json:"cwd,omitempty" jsonschema:"Filter by working directory."`
+	GitBranch       string `json:"git_branch,omitempty" jsonschema:"Filter by git branch."`
+	Agent           string `json:"agent,omitempty" jsonschema:"Filter by agent."`
+	Type            string `json:"type,omitempty" jsonschema:"Filter by recall entry type."`
+	Scope           string `json:"scope,omitempty" jsonschema:"Filter by recall scope."`
+	ExtractorMethod string `json:"extractor_method,omitempty" jsonschema:"Filter by extractor method."`
+	TrustedOnly     bool   `json:"trusted_only,omitempty" jsonschema:"Return only human-reviewed, transferable entries with verified provenance."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
+}
+
+type queryRecallOut struct {
+	Mode        string            `json:"mode"`
+	QueryID     string            `json:"query_id,omitempty"`
+	Entries     []db.RecallResult `json:"entries"`
+	TrustedOnly bool              `json:"trusted_only"`
+}
+
+func (t *toolset) queryRecall(
+	ctx context.Context, _ *mcp.CallToolRequest, in queryRecallIn,
+) (*mcp.CallToolResult, queryRecallOut, error) {
+	result, err := t.svc.QueryRecallEntries(ctx, service.RecallQuery{
+		Query: in.Query, Mode: in.Mode,
+		Project: in.Project, CWD: in.CWD, GitBranch: in.GitBranch,
+		Agent: in.Agent, Type: in.Type, Scope: in.Scope,
+		ExtractorMethod: in.ExtractorMethod, TrustedOnly: in.TrustedOnly,
+		Limit:         clampLimit(in.Limit, defaultSearchLimit, maxSearchLimit),
+		SkipRecording: true,
+	})
+	if err != nil {
+		return nil, queryRecallOut{}, err
+	}
+	return nil, queryRecallOut{
+		Mode: result.Mode, QueryID: result.QueryID,
+		Entries: result.RecallEntries, TrustedOnly: result.TrustedOnly,
+	}, nil
+}
+
 // --- list_sessions ---
 
 type listSessionsIn struct {

@@ -159,6 +159,14 @@ func (s *Server) handleQueryRecallEntries(
 		if handleReadOnly(w, err) {
 			return
 		}
+		if errors.Is(err, db.ErrSemanticTransient) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		if errors.Is(err, db.ErrSemanticUnavailable) {
+			writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -201,6 +209,9 @@ func (s *Server) handleImportRecallEntries(
 			AllowProductionImport:   allowProductionImport,
 		},
 	)
+	if result.Imported > 0 && s.recallCorpusMutationNotify != nil {
+		s.recallCorpusMutationNotify()
+	}
 	if err != nil {
 		if handleContextError(w, err) {
 			return

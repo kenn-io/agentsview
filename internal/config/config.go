@@ -274,6 +274,9 @@ type VectorEmbedConfig struct {
 	// RunAfterSync enables debounced embedding of sync deltas.
 	// Defaults to true when unset; read it via RunAfterSyncEnabled.
 	RunAfterSync *bool `toml:"run_after_sync" json:"run_after_sync,omitempty"`
+	// Recall explicitly permits automatic Recall embedding. It defaults to
+	// false because Recall entries may contain distilled private content.
+	Recall bool `toml:"recall" json:"recall"`
 	// BackstopInterval is a parseable duration string for a periodic
 	// full rescan. Default "24h"; a negative duration disables it.
 	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
@@ -1187,6 +1190,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
 		c.Vector.Embed.RunAfterSync = file.Vector.Embed.RunAfterSync
+	}
+	if meta.IsDefined("vector", "embed", "recall") {
+		c.Vector.Embed.Recall = file.Vector.Embed.Recall
 	}
 	if file.Vector.Embed.BackstopInterval != "" {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval

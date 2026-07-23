@@ -15,6 +15,7 @@ import (
 // (Task 16), not part of the HTTP surface.
 type EmbeddingsManager interface {
 	StartBuild(req vector.BuildRequest) error
+	Wait()
 	Status() vector.BuildStatus
 	Generations(ctx context.Context) ([]vector.GenerationInfo, error)
 	Activate(ctx context.Context, id int64, force bool) error
@@ -27,6 +28,16 @@ type EmbeddingsManager interface {
 // API surface; handlers return 501 until vector serving is configured.
 func WithEmbeddingsManager(m EmbeddingsManager) Option {
 	return func(s *Server) { s.embeddingsManager = m }
+}
+
+// WithEmbeddingsStoreManager registers a non-default embedding store manager.
+func WithEmbeddingsStoreManager(name string, m EmbeddingsManager) Option {
+	return func(s *Server) {
+		if s.embeddingsStores == nil {
+			s.embeddingsStores = make(map[string]EmbeddingsManager)
+		}
+		s.embeddingsStores[name] = m
+	}
 }
 
 // WithEmbeddingsUnavailableReason records why the embeddings routes are
@@ -75,6 +86,7 @@ func (s *Server) registerEmbeddingsRoutes() {
 // scheduler and CLI builds resolve it; an explicit value overrides the
 // config for this build only.
 type embeddingsBuildRequest struct {
+	Store            string `json:"store,omitempty"`
 	FullRebuild      bool   `json:"full_rebuild,omitempty"`
 	Backstop         bool   `json:"backstop,omitempty"`
 	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
@@ -99,25 +111,43 @@ type embeddingsGenerationsResponse struct {
 	Generations []vector.GenerationInfo `json:"generations"`
 }
 
+type embeddingsStoreInput struct {
+	Store string `query:"store"`
+}
+
 type embeddingsGenerationActionRequest struct {
 	Force bool `json:"force,omitempty"`
 }
 
 type embeddingsGenerationActionInput struct {
-	ID   int64 `path:"id" required:"true" doc:"Generation ordinal ID"`
-	Body embeddingsGenerationActionRequest
+	ID    int64  `path:"id" required:"true" doc:"Generation ordinal ID"`
+	Store string `query:"store"`
+	Body  embeddingsGenerationActionRequest
+}
+
+func (s *Server) embeddingsManagerFor(store string) EmbeddingsManager {
+	if store == "" || store == vector.MessageIndexSpec().Name {
+		return s.embeddingsManager
+	}
+	return s.embeddingsStores[store]
 }
 
 func (s *Server) humaEmbeddingsBuild(
 	_ context.Context, in *embeddingsBuildInput,
 ) (*embeddingsBuildOutput, error) {
-	if s.embeddingsManager == nil {
+	manager := s.embeddingsManagerFor(in.Body.Store)
+	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
 	includeAutomated := s.embeddingsIncludeAutomatedDefault
 	if in.Body.IncludeAutomated != nil {
 		includeAutomated = *in.Body.IncludeAutomated
 	}
+	spec := vector.MessageIndexSpec()
+	if in.Body.Store == vector.RecallIndexSpec().Name {
+		spec = vector.RecallIndexSpec()
+	}
+	includeAutomated = spec.NormalizeIncludeAutomated(includeAutomated)
 	req := vector.BuildRequest{
 		FullRebuild:      in.Body.FullRebuild,
 		Backstop:         in.Body.Backstop,
@@ -125,7 +155,12 @@ func (s *Server) humaEmbeddingsBuild(
 		IncludeAutomated: includeAutomated,
 		Using:            in.Body.Using,
 	}
-	if err := s.embeddingsManager.StartBuild(req); err != nil {
+	release, ok := s.idle.BeginWork()
+	if !ok {
+		return nil, apiError(http.StatusServiceUnavailable, "server is shutting down")
+	}
+	if err := manager.StartBuild(req); err != nil {
+		release()
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, apiError(http.StatusConflict, err.Error())
 		}
@@ -135,6 +170,10 @@ func (s *Server) humaEmbeddingsBuild(
 		}
 		return nil, internalError("start embeddings build", err)
 	}
+	go func() {
+		manager.Wait()
+		release()
+	}()
 	return &embeddingsBuildOutput{
 		Status: http.StatusAccepted,
 		Body:   embeddingsBuildResponse{Started: true},
@@ -142,21 +181,23 @@ func (s *Server) humaEmbeddingsBuild(
 }
 
 func (s *Server) humaEmbeddingsStatus(
-	_ context.Context, _ *emptyInput,
+	_ context.Context, in *embeddingsStoreInput,
 ) (*jsonOutput[vector.BuildStatus], error) {
-	if s.embeddingsManager == nil {
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	return &jsonOutput[vector.BuildStatus]{Body: s.embeddingsManager.Status()}, nil
+	return &jsonOutput[vector.BuildStatus]{Body: manager.Status()}, nil
 }
 
 func (s *Server) humaEmbeddingsGenerations(
-	ctx context.Context, _ *emptyInput,
+	ctx context.Context, in *embeddingsStoreInput,
 ) (*jsonOutput[embeddingsGenerationsResponse], error) {
-	if s.embeddingsManager == nil {
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	gens, err := s.embeddingsManager.Generations(ctx)
+	gens, err := manager.Generations(ctx)
 	if err != nil {
 		return nil, internalError("list embedding generations", err)
 	}
@@ -171,10 +212,11 @@ func (s *Server) humaEmbeddingsGenerations(
 func (s *Server) humaEmbeddingsActivate(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
-	if s.embeddingsManager == nil {
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	if err := s.embeddingsManager.Activate(ctx, in.ID, in.Body.Force); err != nil {
+	if err := manager.Activate(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
@@ -183,10 +225,11 @@ func (s *Server) humaEmbeddingsActivate(
 func (s *Server) humaEmbeddingsRetire(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
-	if s.embeddingsManager == nil {
+	manager := s.embeddingsManagerFor(in.Store)
+	if manager == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	if err := s.embeddingsManager.Retire(ctx, in.ID, in.Body.Force); err != nil {
+	if err := manager.Retire(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil

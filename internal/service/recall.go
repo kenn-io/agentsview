@@ -55,6 +55,7 @@ func QueryRecallStore(
 	}
 	query := db.RecallQuery{
 		Text:                req.Query,
+		Mode:                req.Mode,
 		Project:             req.Project,
 		CWD:                 req.CWD,
 		GitBranch:           req.GitBranch,
@@ -82,6 +83,7 @@ func QueryRecallStore(
 		page.RecallEntries = []db.RecallResult{}
 	}
 	resp := &RecallQueryResult{
+		Mode:          db.NormalizeRecallQuery(query).Mode,
 		RecallEntries: page.RecallEntries,
 		TrustedOnly:   req.TrustedOnly,
 		Summary:       BuildRecallQuerySummary(page.RecallEntries),
@@ -107,15 +109,18 @@ func QueryRecallStore(
 			resp.MissReason = RecallMissReasonContextEmpty
 		}
 	}
-	if err := recordRecallQueryOutcome(
-		ctx, store, req, surface, resp,
-	); err != nil {
-		return nil, err
+	if !req.SkipRecording {
+		if err := recordRecallQueryOutcome(
+			ctx, store, req, surface, resp,
+		); err != nil {
+			return nil, err
+		}
 	}
 	return resp, nil
 }
 
 type recallQueryEventFilters struct {
+	Mode                string `json:"mode"`
 	Project             string `json:"project"`
 	CWD                 string `json:"cwd"`
 	GitBranch           string `json:"git_branch"`
@@ -150,6 +155,7 @@ func recordRecallQueryOutcome(
 		return nil
 	}
 	filtersJSON, err := json.Marshal(recallQueryEventFilters{
+		Mode:                resp.Mode,
 		Project:             req.Project,
 		CWD:                 req.CWD,
 		GitBranch:           req.GitBranch,
@@ -195,7 +201,7 @@ func recordRecallQueryOutcome(
 		Surface:            surface,
 		FiltersJSON:        string(filtersJSON),
 		TrustedOnly:        req.TrustedOnly,
-		ScorePolicyVersion: db.RecallLexicalScorePolicyVersion,
+		ScorePolicyVersion: recallScorePolicyVersion(resp.Mode),
 		ResultCount:        len(resp.RecallEntries),
 		PackedCount:        len(packedIDs),
 		TopScore:           topScore,
@@ -211,6 +217,17 @@ func recordRecallQueryOutcome(
 	}
 	resp.QueryID = queryID
 	return nil
+}
+
+func recallScorePolicyVersion(mode string) string {
+	switch mode {
+	case db.RecallQueryModeVector:
+		return db.RecallVectorScorePolicyVersion
+	case db.RecallQueryModeHybrid:
+		return db.RecallHybridScorePolicyVersion
+	default:
+		return db.RecallLexicalScorePolicyVersion
+	}
 }
 
 func NormalizeRecallContextMaxBytes(maxBytes int) (int, error) {

@@ -19,6 +19,16 @@ import (
 // self-reference exclusion window is reproducible.
 var fixedNow = time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
 
+type fakeMCPRecallVectorSearcher struct {
+	hits []db.RecallVectorHit
+}
+
+func (f *fakeMCPRecallVectorSearcher) SearchRecall(
+	context.Context, string, int,
+) ([]db.RecallVectorHit, bool, error) {
+	return append([]db.RecallVectorHit(nil), f.hits...), true, nil
+}
+
 func newTestToolset(t *testing.T) (*toolset, *db.DB) {
 	t.Helper()
 	d := dbtest.OpenTestDB(t)
@@ -141,6 +151,36 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 	require.Len(t, out.Sessions, 1)
 	assert.Equal(t, "a-1", out.Sessions[0].SessionID)
 	assert.Equal(t, "proj-a", out.Sessions[0].Project)
+}
+
+func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "agentsview")
+	_, err := d.InsertRecallEntry(db.RecallEntry{
+		ID: "semantic-entry", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Connection reuse", Body: "Keep idle resources available.",
+		Project: "agentsview", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	d.SetRecallVectorSearcher(&fakeMCPRecallVectorSearcher{hits: []db.RecallVectorHit{{
+		EntryID: "semantic-entry", Score: 0.75,
+	}}})
+
+	_, out, err := ts.queryRecall(
+		context.Background(), nil,
+		queryRecallIn{
+			Query: "database pool", Mode: db.RecallQueryModeVector,
+			Project: "agentsview", Limit: 5,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, db.RecallQueryModeVector, out.Mode)
+	assert.Empty(t, out.QueryID,
+		"a read-only MCP query must not append recall measurement rows")
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "semantic-entry", out.Entries[0].ID)
+	assert.Equal(t, []string{"semantic"}, out.Entries[0].MatchReasons)
 }
 
 func TestGetSessionOverview_ChronologicalTail(t *testing.T) {
@@ -903,7 +943,7 @@ func TestServer_EndToEnd(t *testing.T) {
 		names = append(names, tl.Name)
 	}
 	assert.ElementsMatch(t, []string{
-		ToolSearchSessions, ToolListSessions, ToolGetSessionOverview,
+		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolSearchContent, ToolGetUsageSummary,
 	}, names)
 

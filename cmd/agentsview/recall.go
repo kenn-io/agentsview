@@ -1231,6 +1231,12 @@ func currentGitRoot() (string, error) {
 
 func addRecallQueryFlags(cmd *cobra.Command, req *service.RecallQuery) {
 	flags := cmd.Flags()
+	flags.StringVar(
+		&req.Mode,
+		"mode",
+		db.RecallQueryModeLexical,
+		"Retrieval mode: lexical, vector, or hybrid",
+	)
 	flags.StringVar(&req.Project, "project", "", "Filter by project")
 	flags.StringVar(&req.CWD, "cwd", "", "Filter by cwd")
 	flags.StringVar(&req.GitBranch, "git-branch", "", "Filter by git branch")

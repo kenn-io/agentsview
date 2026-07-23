@@ -11,6 +11,8 @@ import (
 
 const (
 	RecallLexicalScorePolicyVersion = corerecall.LexicalScorePolicyVersion
+	RecallVectorScorePolicyVersion  = "recall-vector-cosine-v1"
+	RecallHybridScorePolicyVersion  = "recall-hybrid-rrf-v1"
 	RecallQuerySurfaceQuery         = "query"
 	RecallQuerySurfaceBrief         = "brief"
 	RecallQuerySurfaceCalibration   = "calibration"

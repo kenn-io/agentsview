@@ -38,6 +38,11 @@ type extractScheduler struct {
 	// lease so a detached daemon cannot idle out — cancelling the shared
 	// context — under a long model-backed pass. Nil in foreground mode.
 	idle *server.IdleTracker
+	// onPassFinished is called after every pass that started, even when it
+	// returns an error. Extraction commits per session, so a later failure can
+	// still leave downstream recall embeddings stale. Dropped passes do not
+	// call it because they cannot have changed the corpus.
+	onPassFinished func()
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -216,6 +221,9 @@ func (s *extractScheduler) tryPassWithLease(
 	}
 	defer release()
 	started, _, err = s.mgr.TryPass(ctx, opts)
+	if started && s.onPassFinished != nil {
+		s.onPassFinished()
+	}
 	return started, true, err
 }
 

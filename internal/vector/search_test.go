@@ -93,6 +93,34 @@ func TestSearchLimitCapsResults(t *testing.T) {
 	assert.Len(t, hits, 1)
 }
 
+func TestSearchPageExhaustionUsesChunkCandidatesBeforeDocumentRollup(t *testing.T) {
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 0}
+	ctx := context.Background()
+	src := &fakeUnitSource{rows: []fakeUnit{{
+		unit: userDoc(
+			"s1", "u1", 0,
+			"alpha alpha alpha alpha alpha alpha alpha alpha",
+		),
+		endedAt: "2024-01-01T00:00:00Z",
+	}}}
+	gen := fakeGeneration("fake-model")
+
+	_, err := ix.Build(ctx, src, fakeSearchEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+
+	hits, exhausted, err := ix.SearchPage(ctx, fakeSearchEncoder(), "alpha", 2)
+	require.NoError(t, err)
+	require.Len(t, hits, 1,
+		"two chunk candidates from one document must roll up to one hit")
+	assert.False(t, exhausted,
+		"a short rolled-up page does not prove the vector candidates were exhausted")
+
+	_, exhausted, err = ix.SearchPage(ctx, fakeSearchEncoder(), "alpha", 100)
+	require.NoError(t, err)
+	assert.True(t, exhausted)
+}
+
 func TestSearchNoGenerationsReturnsErrNoActiveGeneration(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
@@ -159,20 +187,40 @@ func TestStaleActiveTrueWhenFingerprintsDiffer(t *testing.T) {
 	_, err := ix.Build(ctx, src, fakeSearchEncoder(), gen, BuildOptions{})
 	require.NoError(t, err)
 
-	stale, err := ix.StaleActive(ctx, "some-other-fingerprint")
+	stale, err := ix.StaleActive(ctx, "some-other-fingerprint", "")
 	require.NoError(t, err)
 	assert.True(t, stale)
 
-	stale, err = ix.StaleActive(ctx, gen.Fingerprint())
+	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "")
 	require.NoError(t, err)
 	assert.False(t, stale, "matching fingerprint is not stale")
+}
+
+func TestStaleActiveRejectsNewerCorpusRevision(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+
+	_, err := ix.Build(
+		ctx, threeDocSearchSource(), fakeSearchEncoder(), gen,
+		BuildOptions{CorpusRevision: "revision-1"},
+	)
+	require.NoError(t, err)
+
+	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
+	require.NoError(t, err)
+	assert.False(t, stale)
+
+	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "revision-2")
+	require.NoError(t, err)
+	assert.True(t, stale)
 }
 
 func TestStaleActiveFalseWhenNoActiveGeneration(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
 
-	stale, err := ix.StaleActive(ctx, "anything")
+	stale, err := ix.StaleActive(ctx, "anything", "")
 	require.NoError(t, err)
 	assert.False(t, stale, "no active generation means nothing to compare")
 }

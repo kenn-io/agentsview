@@ -63,7 +63,17 @@ type httpBackend struct {
 	client            *http.Client
 	longRunningClient *http.Client
 	readOnly          bool
+	recallQueries     bool
 	token             string
+}
+
+const recallNonRecordingAPIVersion = 4
+
+// HTTPServerCapabilities is the subset of version metadata needed to expose
+// client features safely for an explicitly selected daemon.
+type HTTPServerCapabilities struct {
+	ReadOnly   bool `json:"read_only"`
+	APIVersion int  `json:"api_version"`
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -73,14 +83,51 @@ type httpBackend struct {
 // on every request so the backend works against daemons running
 // with require_auth=true.
 func NewHTTPBackend(baseURL, token string, readOnly bool) SessionService {
+	return newHTTPBackend(baseURL, token, readOnly, !readOnly)
+}
+
+// NewHTTPBackendForServer constructs a backend whose advertised capabilities
+// are limited by metadata probed from an explicitly selected daemon.
+func NewHTTPBackendForServer(
+	baseURL, token string, capabilities HTTPServerCapabilities,
+) SessionService {
+	return newHTTPBackend(
+		baseURL,
+		token,
+		capabilities.ReadOnly,
+		!capabilities.ReadOnly &&
+			capabilities.APIVersion >= recallNonRecordingAPIVersion,
+	)
+}
+
+func newHTTPBackend(
+	baseURL, token string, readOnly, recallQueries bool,
+) *httpBackend {
 	return &httpBackend{
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
+		recallQueries:     recallQueries,
 		token:             token,
 	}
 }
+
+// ProbeHTTPServerCapabilities reads the metadata needed to expose tools safely
+// for an explicit daemon URL. Such callers do not have a local runtime record.
+func ProbeHTTPServerCapabilities(
+	ctx context.Context, baseURL, token string,
+) (HTTPServerCapabilities, error) {
+	b := newHTTPBackend(baseURL, token, false, false)
+	var capabilities HTTPServerCapabilities
+	if err := b.getJSON(ctx, "/api/v1/version", &capabilities); err != nil {
+		return HTTPServerCapabilities{},
+			fmt.Errorf("probing server capabilities: %w", err)
+	}
+	return capabilities, nil
+}
+
+func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
 func (b *httpBackend) Get(
 	ctx context.Context, id string,
@@ -695,9 +742,21 @@ func (b *httpBackend) QueryRecallEntries(
 	if req.StrictRecording {
 		return nil, fmt.Errorf("strict recall recording requires a direct backend")
 	}
+	mode := db.NormalizeRecallQuery(db.RecallQuery{Mode: req.Mode}).Mode
+	post := b.postJSON
+	if mode == db.RecallQueryModeVector || mode == db.RecallQueryModeHybrid {
+		post = b.postJSONLong
+	}
 	var out RecallQueryResult
-	if err := b.postJSON(ctx, "/api/v1/recall/query", req, &out); err != nil {
+	if err := post(ctx, "/api/v1/recall/query", req, &out); err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
+			var notImpl *errNotImplementedBody
+			if (mode == db.RecallQueryModeVector ||
+				mode == db.RecallQueryModeHybrid) &&
+				errors.As(err, &notImpl) &&
+				notImpl.message != "not available in remote mode" {
+				return nil, wrapSemanticUnavailable(notImpl.message)
+			}
 			return nil, fmt.Errorf(
 				"recall query: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
@@ -707,6 +766,15 @@ func (b *httpBackend) QueryRecallEntries(
 	if out.RecallEntries == nil {
 		out.RecallEntries = []db.RecallResult{}
 	}
+	requestedMode := mode
+	returnedMode := db.NormalizeRecallQuery(db.RecallQuery{Mode: out.Mode}).Mode
+	if returnedMode != requestedMode {
+		return nil, fmt.Errorf(
+			"recall query: requested recall mode %s but daemon returned %s",
+			requestedMode, returnedMode,
+		)
+	}
+	out.Mode = returnedMode
 	if req.TrustedOnly {
 		out.TrustedOnly = true
 	}
@@ -1006,6 +1074,18 @@ func (b *httpBackend) getJSONWithClient(
 func (b *httpBackend) postJSON(
 	ctx context.Context, path string, in any, out any,
 ) error {
+	return b.postJSONWithClient(ctx, b.client, path, in, out)
+}
+
+func (b *httpBackend) postJSONLong(
+	ctx context.Context, path string, in any, out any,
+) error {
+	return b.postJSONWithClient(ctx, b.longRunningClient, path, in, out)
+}
+
+func (b *httpBackend) postJSONWithClient(
+	ctx context.Context, client *http.Client, path string, in any, out any,
+) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return err
@@ -1019,7 +1099,7 @@ func (b *httpBackend) postJSON(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", b.baseURL)
 	b.addAuth(req)
-	resp, err := b.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

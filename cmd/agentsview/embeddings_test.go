@@ -194,6 +194,27 @@ func TestVectorGenerationParams(t *testing.T) {
 		"enabling request_dimensions cuts a new generation")
 }
 
+func TestRecallVectorGenerationExtendsExtractionFingerprint(t *testing.T) {
+	cfg := config.VectorEmbeddingsConfig{
+		Model: "embed-model", Dimension: 3, MaxInputChars: 4000,
+	}
+
+	oldGeneration := recallVectorGeneration(cfg, "extract-old")
+	newGeneration := recallVectorGeneration(cfg, "extract-new")
+
+	assert.Equal(t, "extract-old",
+		oldGeneration.Params[vector.CorpusFingerprintParam])
+	assert.Equal(t, "recall_entry_v2", oldGeneration.Params["doc_unit_scheme"])
+	assert.NotEqual(t, oldGeneration.Fingerprint(), newGeneration.Fingerprint())
+}
+
+func TestVectorStoreSpecIncludesRecall(t *testing.T) {
+	spec, err := vectorStoreSpec("recall")
+
+	require.NoError(t, err)
+	assert.Equal(t, vector.RecallIndexSpec(), spec)
+}
+
 // TestEmbeddingsDisabledReturnsError asserts every subcommand refuses with
 // the exact "vector search is not enabled" message when [vector] is off
 // (the default), before attempting any daemon detection or I/O.
@@ -353,6 +374,33 @@ func TestEmbeddingsListEmptyIndexReturnsNoRows(t *testing.T) {
 	require.Len(t, lines, 1, "expected only the header line, got: %q", out.String())
 }
 
+func TestDirectListGenerationsReturnsEmptyForUnbuiltSelectedStore(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		built vector.IndexSpec
+		list  vector.IndexSpec
+	}{
+		{name: "message only", built: vector.MessageIndexSpec(), list: vector.RecallIndexSpec()},
+		{name: "recall only", built: vector.RecallIndexSpec(), list: vector.MessageIndexSpec()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			cfg := vectorTestConfig(dataDir)
+			ix, err := vector.OpenSpec(
+				t.Context(), cfg.Vector.ResolvedDBPath(dataDir), tc.built,
+				false, cfg.Vector.Embeddings.MaxInputChars,
+			)
+			require.NoError(t, err)
+			require.NoError(t, ix.Close())
+
+			generations, err := directListGenerations(t.Context(), cfg, tc.list)
+
+			require.NoError(t, err)
+			assert.Empty(t, generations)
+		})
+	}
+}
+
 // TestEmbeddingsBuildDirectEndToEnd seeds a temp archive with one user
 // message and a two-message assistant run (two embeddable units), points
 // [vector.embeddings] at an httptest OpenAI-compatible stub, and asserts the
@@ -373,6 +421,49 @@ func TestEmbeddingsBuildDirectEndToEnd(t *testing.T) {
 
 	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0")
 	assert.Contains(t, out.String(), "Generation activated.")
+}
+
+func TestImportedOnlyRecallEmbeddingsBuildAndVectorQueryEndToEnd(t *testing.T) {
+	dataDir := testDataDir(t)
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
+
+	archivePath := filepath.Join(dataDir, "sessions.db")
+	database, err := db.Open(archivePath)
+	require.NoError(t, err)
+	dbtest.SeedSession(t, database, "s1", "agentsview")
+	_, err = database.InsertRecallEntry(db.RecallEntry{
+		ID: "recall-entry", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Database pool", Body: "Reuse idle connections.",
+		Project: "agentsview", SourceSessionID: "s1",
+		SourceRunID: "import-run", ExtractorMethod: "import-v1",
+	})
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--store", "recall"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "Embedded 1 documents (1 chunks)")
+
+	database, err = db.Open(archivePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	closeVector := installDirectVectorSearcher(cfg, database)
+	require.NotNil(t, closeVector)
+	t.Cleanup(func() { require.NoError(t, closeVector()) })
+
+	page, err := database.QueryRecallEntries(context.Background(), db.RecallQuery{
+		Text: "connection reuse", Mode: db.RecallQueryModeVector, Limit: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "recall-entry", page.RecallEntries[0].ID)
 }
 
 // TestRoleAwarePrefixesReachBuildAndSearch exercises the user-visible role
@@ -905,6 +996,36 @@ func TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest(t *testing.T)
 	require.NoError(t, cmd.Execute())
 
 	assert.True(t, gotIncludeAutomated.Load(), "--include-automated must pass through to the daemon")
+}
+
+func TestRecallEmbeddingsBuildNormalizesIncludeAutomatedForDaemon(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	var gotIncludeAutomated atomic.Bool
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+			var req vector.BuildRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			gotIncludeAutomated.Store(req.IncludeAutomated)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+		},
+	})
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--store", "recall", "--include-automated"})
+	require.NoError(t, cmd.Execute())
+
+	assert.False(t, gotIncludeAutomated.Load(),
+		"Recall has no automated-session scope and must normalize it")
 }
 
 // TestEmbeddingsBuildDaemonRequestDefaultsToConfigScope asserts that without

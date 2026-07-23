@@ -7050,6 +7050,79 @@ func TestEngine_SyncAllDoesNotEmitOnEmptyRun(t *testing.T) {
 	assert.Empty(t, em.got(), "expected no emissions")
 }
 
+func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T, *Engine) (SyncStats, error)
+	}{
+		{
+			name: "direct resync",
+			run: func(_ *testing.T, engine *Engine) (SyncStats, error) {
+				return engine.ResyncAll(context.Background(), nil), nil
+			},
+		},
+		{
+			name: "direct resync with options",
+			run: func(_ *testing.T, engine *Engine) (SyncStats, error) {
+				return engine.ResyncAllWithOptions(
+					context.Background(), nil, RebuildOptions{},
+				)
+			},
+		},
+		{
+			name: "coordinated full sync",
+			run: func(t *testing.T, engine *Engine) (SyncStats, error) {
+				return engine.SyncThenRun(
+					context.Background(), true, nil,
+					func(forceFull bool) error {
+						assert.True(t, forceFull)
+						return nil
+					},
+				)
+			},
+		},
+		{
+			name: "coordinated full rebuild",
+			run: func(t *testing.T, engine *Engine) (SyncStats, error) {
+				return engine.SyncThenRunWithRebuild(
+					context.Background(), true, nil,
+					func() (RebuildOptions, RebuildCleanup, error) {
+						return RebuildOptions{}, nil, nil
+					},
+					func(forceFull, rebuilt bool) error {
+						assert.True(t, forceFull)
+						assert.True(t, rebuilt)
+						return nil
+					},
+				)
+			},
+		},
+		{
+			name: "worker completion tail",
+			run: func(_ *testing.T, engine *Engine) (SyncStats, error) {
+				stats := SyncStats{ArchiveRebuilt: true}
+				engine.FinishStartupReconciled(stats)
+				return stats, nil
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newEngineFixture(t)
+			em := &fakeEmitter{}
+			fx.engineWithEmitter(em)
+
+			stats, err := tt.run(t, fx.engine)
+
+			require.NoError(t, err)
+			require.False(t, stats.Aborted)
+			assert.Zero(t, stats.Synced)
+			assert.Equal(t, []string{"sync"}, em.got(),
+				"a completed database swap must publish corpus changes")
+		})
+	}
+}
+
 func TestEngine_SyncPathsEmitsWhenSessionsChange(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}

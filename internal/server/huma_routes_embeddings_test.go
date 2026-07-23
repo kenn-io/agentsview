@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,8 @@ type fakeEmbeddingsManager struct {
 
 	retireErr   error
 	retireCalls []activateCall
+
+	waitForBuild <-chan struct{}
 }
 
 func (f *fakeEmbeddingsManager) StartBuild(req vector.BuildRequest) error {
@@ -78,6 +81,12 @@ func (f *fakeEmbeddingsManager) Retire(_ context.Context, id int64, force bool) 
 	defer f.mu.Unlock()
 	f.retireCalls = append(f.retireCalls, activateCall{id: id, force: force})
 	return f.retireErr
+}
+
+func (f *fakeEmbeddingsManager) Wait() {
+	if f.waitForBuild != nil {
+		<-f.waitForBuild
+	}
 }
 
 // newEmbeddingsTestServer builds a full Server (via testServer, so the SPA
@@ -158,6 +167,64 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	require.Len(t, fake.startBuildCalls, 1)
 	assert.True(t, fake.startBuildCalls[0].FullRebuild)
 	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
+}
+
+func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
+	buildDone := make(chan struct{})
+	var completeOnce sync.Once
+	complete := func() { completeOnce.Do(func() { close(buildDone) }) }
+	defer complete()
+	fake := &fakeEmbeddingsManager{waitForBuild: buildDone}
+	idled := make(chan struct{}, 1)
+	tracker := NewIdleTracker(20*time.Millisecond, func() { idled <- struct{}{} })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	s := testServer(t, 0, WithEmbeddingsManager(fake), WithIdleTracker(tracker))
+	tracker.Touch()
+	go tracker.Run(ctx)
+
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
+		vector.BuildRequest{})
+	assertRecorderStatus(t, w, http.StatusAccepted)
+
+	select {
+	case <-idled:
+		require.Fail(t, "daemon idled while an API-started embedding build was active")
+	case <-time.After(100 * time.Millisecond):
+	}
+	complete()
+	select {
+	case <-idled:
+	case <-time.After(time.Second):
+		require.Fail(t, "daemon did not idle after the API-started build completed")
+	}
+}
+
+func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {
+	messages := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 1}}
+	recall := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 2}}
+	s := testServer(t, 0,
+		WithEmbeddingsManager(messages),
+		WithEmbeddingsStoreManager(vector.RecallIndexSpec().Name, recall),
+	)
+
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
+		map[string]any{
+			"store": "recall", "full_rebuild": true,
+			"include_automated": true,
+		})
+	assertRecorderStatus(t, w, http.StatusAccepted)
+	assert.Empty(t, messages.startBuildCalls)
+	require.Len(t, recall.startBuildCalls, 1)
+	assert.True(t, recall.startBuildCalls[0].FullRebuild)
+	assert.False(t, recall.startBuildCalls[0].IncludeAutomated,
+		"Recall has no automated-session scope and must normalize it")
+
+	statusResponse := serveGet(t, s, "/api/v1/embeddings/status?store=recall")
+	assertRecorderStatus(t, statusResponse, http.StatusOK)
+	var status vector.BuildStatus
+	require.NoError(t, json.Unmarshal(statusResponse.Body.Bytes(), &status))
+	assert.Equal(t, int64(2), status.Done)
 }
 
 // TestEmbeddingsBuildIncludeAutomatedDefaulting pins the tri-state contract:

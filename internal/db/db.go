@@ -534,6 +534,7 @@ type DB struct {
 
 	vectorMu       sync.RWMutex
 	vectorSearcher VectorSearcher
+	recallSearcher RecallVectorSearcher
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does

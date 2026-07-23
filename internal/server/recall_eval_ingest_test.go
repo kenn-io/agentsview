@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 // evalQueryResponse mirrors the fields of the (unexported) recall query
@@ -90,6 +92,37 @@ func TestIngestEvalTrajectoryIdempotent(t *testing.T) {
 	w2 := te.post(t, "/api/v1/recall/eval/trajectories", body)
 	assertStatus(t, w2, http.StatusOK)
 	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w2).EntriesIndexed)
+}
+
+func TestIngestEvalTrajectoryNotifiesOnlyWhenAcceptedCorpusChanges(t *testing.T) {
+	var notifications atomic.Int32
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithRecallCorpusMutationNotifier(func() {
+			notifications.Add(1)
+		}),
+	})
+	body := `
+{"run_id":"run-notify","trajectory_id":"traj-notify","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"text":"schedule semantic refresh"}}
+`
+
+	w := te.post(t, "/api/v1/recall/eval/trajectories", body)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, 1, decode[db.EvalTrajectoryIngestResult](t, w).EntriesIndexed)
+	assert.Equal(t, int32(1), notifications.Load())
+
+	w = te.post(t, "/api/v1/recall/eval/trajectories", body)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w).EntriesIndexed)
+	assert.Equal(t, int32(1), notifications.Load(),
+		"idempotent ingestion must not schedule an unchanged corpus")
+
+	w = te.post(t, "/api/v1/recall/eval/trajectories", `
+{"run_id":"run-empty","trajectory_id":"traj-empty","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"n":1}}
+`)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w).EntriesIndexed)
+	assert.Equal(t, int32(1), notifications.Load(),
+		"zero-entry ingestion must not schedule an unchanged corpus")
 }
 
 func TestIngestEvalTrajectoryVersionsExposeQueryableCorpusID(t *testing.T) {

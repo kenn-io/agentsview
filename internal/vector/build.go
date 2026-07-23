@@ -22,6 +22,15 @@ var progressInterval = 2 * time.Second
 
 const repairStatusCountTimeout = 2 * time.Second
 
+// CorpusFingerprintParam names the generation parameter whose value identifies
+// the source corpus, independently of the embedding model. A change forces a
+// full mirror reconciliation before the new vector generation is filled.
+const CorpusFingerprintParam = "corpus_fingerprint"
+
+const corpusFingerprintMetaKey = "corpus_fingerprint"
+
+const completedCorpusRevisionMetaKey = "completed_corpus_revision:"
+
 // BuildOptions configures one Build pass.
 type BuildOptions struct {
 	// FullRebuild forces every document to be re-embedded under the target
@@ -48,6 +57,10 @@ type BuildOptions struct {
 	// Concurrency is the number of documents encoded in parallel (config
 	// concurrency). Values <= 0 encode sequentially.
 	Concurrency int
+	// CorpusRevision identifies the source state captured when this build
+	// target was resolved. A successful ordinary build persists it only after
+	// refresh and fill complete, allowing searches to reject newer source data.
+	CorpusRevision string
 	// Progress, if non-nil, is called at most ~every 2s with incremental
 	// embedding progress, plus once more after the run completes.
 	Progress func(BuildProgress)
@@ -119,7 +132,22 @@ func (ix *Index) Build(
 	// then setIncludeAutomatedScope below stamps the key so every later
 	// build compares against a real stored scope again.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
-	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged
+	corpusFingerprint := gen.Params[CorpusFingerprintParam]
+	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
+		ctx, corpusFingerprintMetaKey,
+	)
+	if err != nil {
+		return BuildResult{}, fmt.Errorf("reading corpus fingerprint: %w", err)
+	}
+	corpusChanged := corpusFingerprint != "" &&
+		(!hasCorpusFingerprint || storedCorpusFingerprint != corpusFingerprint)
+	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged
+	fp := gen.Fingerprint()
+	if full {
+		if err := ix.clearCompletedCorpusRevision(ctx, fp); err != nil {
+			return BuildResult{}, err
+		}
+	}
 	// Report the scanning phase before the mirror refresh: on a large archive
 	// the refresh (and the pending count below) can run for a while with no
 	// chunk totals yet, and without a phase report a progress consumer can
@@ -134,8 +162,12 @@ func (ix *Index) Build(
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
 	}
+	if corpusFingerprint != "" {
+		if err := ix.metaSet(ctx, corpusFingerprintMetaKey, corpusFingerprint); err != nil {
+			return BuildResult{}, fmt.Errorf("storing corpus fingerprint: %w", err)
+		}
+	}
 
-	fp := gen.Fingerprint()
 	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, fp, o.FullRebuild)
 	if err != nil {
 		return BuildResult{}, err
@@ -170,6 +202,13 @@ func (ix *Index) Build(
 		return result, err
 	}
 	result.Activated = activated
+	if o.CorpusRevision != "" {
+		if err := ix.metaSet(
+			ctx, completedCorpusRevisionMetaKey+target, o.CorpusRevision,
+		); err != nil {
+			return result, fmt.Errorf("storing completed corpus revision: %w", err)
+		}
+	}
 	return result, nil
 }
 
@@ -336,7 +375,7 @@ func (ix *Index) resolveBuildTarget(
 
 	if hasActive && active == fp {
 		if fullRebuild {
-			if err := ix.resetGeneration(ctx, fp); err != nil {
+			if err := ix.resetGenerationForFullRebuild(ctx, fp); err != nil {
 				return "", false, err
 			}
 		}
@@ -366,11 +405,33 @@ func (ix *Index) resolveBuildTarget(
 		return "", false, err
 	}
 	if fullRebuild && existed {
-		if err := ix.resetGeneration(ctx, target); err != nil {
+		if err := ix.resetGenerationForFullRebuild(ctx, target); err != nil {
 			return "", false, err
 		}
 	}
 	return target, true, nil
+}
+
+// resetGenerationForFullRebuild invalidates the generation's completed corpus
+// revision before removing its vectors and stamps. Clearing first keeps
+// StaleActive fail-closed if either the reset or the subsequent fill fails.
+// Build writes the completed revision again only after fill and activation
+// succeed.
+func (ix *Index) resetGenerationForFullRebuild(ctx context.Context, fp string) error {
+	if err := ix.clearCompletedCorpusRevision(ctx, fp); err != nil {
+		return err
+	}
+	return ix.resetGeneration(ctx, fp)
+}
+
+func (ix *Index) clearCompletedCorpusRevision(ctx context.Context, fp string) error {
+	if _, err := ix.db.ExecContext(ctx,
+		`DELETE FROM `+ix.spec.MetaTable+` WHERE key = ?`,
+		completedCorpusRevisionMetaKey+fp,
+	); err != nil {
+		return fmt.Errorf("clearing completed corpus revision: %w", err)
+	}
+	return nil
 }
 
 // retireAbandonedBuildingGenerations transitions every generation still in

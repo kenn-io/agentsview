@@ -3,11 +3,13 @@ package server_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +53,42 @@ func (s *readOnlyRecallQueryStore) QueryRecallEntries(
 }
 
 func (*readOnlyRecallQueryStore) ReadOnly() bool { return true }
+
+type recallErrorSearcher struct{ err error }
+
+func (s recallErrorSearcher) SearchRecall(
+	context.Context, string, int,
+) ([]db.RecallVectorHit, bool, error) {
+	return nil, false, s.err
+}
+
+func TestQueryRecallMapsSemanticAvailabilityErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		searcher   db.RecallVectorSearcher
+		wantStatus int
+	}{
+		{name: "unavailable", wantStatus: http.StatusNotImplemented},
+		{
+			name: "transient",
+			searcher: recallErrorSearcher{err: fmt.Errorf(
+				"%w: encoder offline", db.ErrSemanticTransient,
+			)},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setup(t)
+			te.db.SetRecallVectorSearcher(tt.searcher)
+			w := te.post(t, "/api/v1/recall/query", `{
+				"query":"semantic query",
+				"mode":"vector"
+			}`)
+			assertStatus(t, w, tt.wantStatus)
+		})
+	}
+}
 
 func TestListRecallEntriesFiltersByProject(t *testing.T) {
 	te := setup(t)
@@ -702,6 +740,44 @@ func TestImportRecallEntriesJSONL(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	recall := decode[db.RecallEntry](t, w)
 	assert.Equal(t, "Check cwd before file reads", recall.Title)
+}
+
+func TestImportRecallEntriesNotifiesOnlyWhenAcceptedCorpusChanges(t *testing.T) {
+	var notifications atomic.Int32
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithRecallCorpusMutationNotifier(func() {
+			notifications.Add(1)
+		}),
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+	input := `
+{"candidate_id":"m-notify","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`
+
+	w := te.post(t, "/api/v1/recall/import", input)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, int32(1), notifications.Load())
+
+	w = te.post(t, "/api/v1/recall/import", input)
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, int32(1), notifications.Load(),
+		"a duplicate-only import must not schedule an unchanged corpus")
+
+	w = te.post(t, "/api/v1/recall/import?dry_run=true", strings.ReplaceAll(
+		input, "m-notify", "m-dry-run",
+	))
+	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, int32(1), notifications.Load(),
+		"a dry run must not schedule embedding work")
+
+	partial := strings.ReplaceAll(input, "m-notify", "m-partial") + "\n{"
+	w = te.post(t, "/api/v1/recall/import", partial)
+	assertStatus(t, w, http.StatusBadRequest)
+	assert.Equal(t, int32(2), notifications.Load(),
+		"entries committed before a later parse error must schedule embedding")
+	w = te.get(t, "/api/v1/recall/entries/m-partial")
+	assertStatus(t, w, http.StatusOK)
 }
 
 func TestImportRecallEntriesRefusesDefaultDataDirWithoutOverride(t *testing.T) {

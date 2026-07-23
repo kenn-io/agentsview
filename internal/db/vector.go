@@ -97,12 +97,34 @@ type VectorSearcher interface {
 	ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error)
 }
 
+// RecallVectorHit is one semantic recall-entry match, ranked best first.
+type RecallVectorHit struct {
+	EntryID string
+	Score   float32
+}
+
+// RecallVectorSearcher is the seam through which recall querying reaches the
+// recall-entry embedding index without introducing an internal/db ->
+// internal/vector import cycle.
+type RecallVectorSearcher interface {
+	SearchRecall(
+		ctx context.Context, query string, limit int,
+	) (hits []RecallVectorHit, exhausted bool, err error)
+}
+
 // SetVectorSearcher wires (or, with nil, clears) the semantic search
 // backend. Safe to call concurrently with SearchContent/HasSemantic.
 func (db *DB) SetVectorSearcher(v VectorSearcher) {
 	db.vectorMu.Lock()
 	defer db.vectorMu.Unlock()
 	db.vectorSearcher = v
+}
+
+// SetRecallVectorSearcher wires (or clears with nil) semantic recall search.
+func (db *DB) SetRecallVectorSearcher(v RecallVectorSearcher) {
+	db.vectorMu.Lock()
+	defer db.vectorMu.Unlock()
+	db.recallSearcher = v
 }
 
 // HasSemantic reports whether a VectorSearcher has been wired in.
@@ -115,4 +137,10 @@ func (db *DB) getVectorSearcher() VectorSearcher {
 	db.vectorMu.RLock()
 	defer db.vectorMu.RUnlock()
 	return db.vectorSearcher
+}
+
+func (db *DB) getRecallVectorSearcher() RecallVectorSearcher {
+	db.vectorMu.RLock()
+	defer db.vectorMu.RUnlock()
+	return db.recallSearcher
 }

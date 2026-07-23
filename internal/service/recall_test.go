@@ -241,7 +241,7 @@ func TestDirectBackend_RecallRecordsEveryRankAndPackedFlag(t *testing.T) {
 	assert.Equal(t, 1, event.PackedCount)
 	assert.Equal(t, db.RecallLexicalScorePolicyVersion, event.ScorePolicyVersion)
 	assert.Equal(t,
-		`{"project":"agentsview","cwd":"","git_branch":"","agent":"codex","type":"","scope":"","status":"","extractor_method":"","source_session_id":"","source_episode_id":"","source_run_id":"","supersedes_entry_id":"","superseded_by_entry_id":"","limit":2,"include_context":true,"context_max_bytes":340}`,
+		`{"mode":"lexical","project":"agentsview","cwd":"","git_branch":"","agent":"codex","type":"","scope":"","status":"","extractor_method":"","source_session_id":"","source_episode_id":"","source_run_id":"","supersedes_entry_id":"","superseded_by_entry_id":"","limit":2,"include_context":true,"context_max_bytes":340}`,
 		event.FiltersJSON,
 	)
 	require.Len(t, event.Exposures, 2)

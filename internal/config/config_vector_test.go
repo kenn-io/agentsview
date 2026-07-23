@@ -237,6 +237,8 @@ func TestVectorConfigDefaults(t *testing.T) {
 	assert.Empty(t, cfg.Vector.Embeddings.Servers)
 	assert.True(t, cfg.Vector.Embed.RunAfterSyncEnabled(),
 		"run_after_sync defaults to true when unset")
+	assert.False(t, cfg.Vector.Embed.Recall,
+		"automatic Recall embedding requires explicit opt-in")
 
 	disabled := false
 	cfg.Vector.Embed.RunAfterSync = &disabled
@@ -396,6 +398,23 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 			},
 		})
 		assert.True(t, cfg.Vector.IncludeAutomated)
+	})
+
+	t.Run("automatic Recall embedding opt-in is loaded", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"model":     "nomic-embed-text",
+					"dimension": 768,
+					"servers":   minimalServers(),
+				},
+				"embed": map[string]any{
+					"recall": true,
+				},
+			},
+		})
+		assert.True(t, cfg.Vector.Embed.Recall)
 	})
 
 	t.Run("enabled without servers fails to load", func(t *testing.T) {

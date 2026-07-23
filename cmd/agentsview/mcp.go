@@ -34,7 +34,7 @@ func newMCPCommand() *cobra.Command {
 StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
 get_session_overview, get_messages, search_content, and
-get_usage_summary.
+get_usage_summary, plus query_recall for distilled session knowledge.
 
 The server reads through the daemon path. By default each tool call talks to
 the local agentsview daemon, starting it when needed so a long-lived MCP server
@@ -150,7 +150,13 @@ func resolveMCPService(
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackend(remote, token, false),
+		capabilities, err := service.ProbeHTTPServerCapabilities(
+			cmd.Context(), remote, token,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		return service.NewHTTPBackendForServer(remote, token, capabilities),
 			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
@@ -174,6 +180,14 @@ type mcpDaemonService struct {
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
 	return &mcpDaemonService{cfg: cfg}
+}
+
+func (s *mcpDaemonService) SupportsRecallQueries() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
+	return runtime == nil || !runtime.ReadOnly
 }
 
 func (s *mcpDaemonService) daemonService(

@@ -232,6 +232,7 @@ func TestRecallQueryUsesExplicitServerURL(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
 			QueryID: "remote-query-id",
+			Mode:    db.RecallQueryModeHybrid,
 			RecallEntries: []db.RecallResult{{
 				RecallEntry: db.RecallEntry{
 					ID:              "m-remote",
@@ -251,11 +252,13 @@ func TestRecallQueryUsesExplicitServerURL(t *testing.T) {
 	out, err := executeCommand(newRootCommand(),
 		"recall", "--server", srv.URL,
 		"query", "remote daemon recall",
+		"--mode", "hybrid",
 		"--format", "json")
 
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/query", gotPath)
 	assert.Equal(t, "remote daemon recall", gotReq.Query)
+	assert.Equal(t, db.RecallQueryModeHybrid, gotReq.Mode)
 	assert.Equal(t, "query", gotReq.Surface)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 	var got service.RecallQueryResult

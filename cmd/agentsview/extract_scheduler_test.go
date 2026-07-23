@@ -25,6 +25,7 @@ type fakePassManager struct {
 
 type fakeTryPassResult struct {
 	started bool
+	result  extract.PassResult
 	err     error
 }
 
@@ -37,11 +38,11 @@ func (f *fakePassManager) TryPass(
 	idx := len(f.calls) - 1
 	if idx < len(f.results) {
 		r := f.results[idx]
-		return r.started, extract.PassResult{}, r.err
+		return r.started, r.result, r.err
 	}
 	if len(f.results) > 0 {
 		r := f.results[len(f.results)-1]
-		return r.started, extract.PassResult{}, r.err
+		return r.started, r.result, r.err
 	}
 	return true, extract.PassResult{}, nil
 }
@@ -82,6 +83,40 @@ func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 	calls = mgr.callsSnapshot()
 	assert.False(t, calls[1].Full,
 		"event-driven passes after the startup pass are incremental")
+}
+
+func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
+	mgr := &fakePassManager{results: []fakeTryPassResult{
+		{started: false},
+		{
+			started: true,
+			result:  extract.PassResult{Sessions: 1, Entries: 2},
+			err:     errors.New("later extraction failed"),
+		},
+		{started: true},
+	}}
+	s := newExtractScheduler(mgr, time.Hour, 0, 0, nil)
+	var notified int
+	s.onPassFinished = func() { notified++ }
+
+	started, ok, err := s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	assert.False(t, started)
+	assert.True(t, ok)
+	require.NoError(t, err)
+	assert.Zero(t, notified)
+
+	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	assert.True(t, started)
+	assert.True(t, ok)
+	require.EqualError(t, err, "later extraction failed")
+	assert.Equal(t, 1, notified,
+		"partial commits must refresh downstream indexes despite a later error")
+
+	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	assert.True(t, started)
+	assert.True(t, ok)
+	require.NoError(t, err)
+	assert.Equal(t, 2, notified)
 }
 
 func TestExtractSchedulerBackstopTickRunsFullPass(t *testing.T) {

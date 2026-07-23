@@ -1553,7 +1553,7 @@ func (e *Engine) ResyncAll(
 	defer e.notifyStartupReconciled()
 	// Defers LIFO: Unlock runs before emit.
 	defer func() {
-		if stats.Synced > 0 {
+		if stats.shouldEmitSync() {
 			e.emit("sync")
 		}
 	}()
@@ -1599,7 +1599,7 @@ func (e *Engine) resyncAllWithOptionsAndOperations(
 	e.syncMu.Lock()
 	defer e.notifyStartupReconciled()
 	defer func() {
-		if stats.Synced > 0 && !stats.Aborted {
+		if stats.shouldEmitSync() {
 			e.emit("sync")
 		}
 	}()
@@ -2405,6 +2405,7 @@ func (e *Engine) swapResyncDatabaseLocked(
 			log.Printf("resync: wal checkpoint: %v", err)
 		}
 	}
+	stats.ArchiveRebuilt = true
 	return true, nil
 }
 
@@ -2609,7 +2610,7 @@ func (e *Engine) SyncThenRun(
 	defer e.notifyStartupReconciled()
 	// Defers run LIFO: Unlock runs before emit.
 	defer func() {
-		if stats.Synced > 0 {
+		if stats.shouldEmitSync() {
 			e.emit("sync")
 		}
 	}()
@@ -2695,7 +2696,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	e.syncMu.Lock()
 	defer e.notifyStartupReconciled()
 	defer func() {
-		if stats.Synced > 0 && !stats.Aborted {
+		if stats.shouldEmitSync() {
 			e.emit("sync")
 		}
 	}()
@@ -2858,7 +2859,7 @@ func (e *Engine) RecordStartupReconciledExclusive(stats SyncStats, err error) {
 // could let an Emitter widen the critical section or deadlock by re-entering
 // sync code, so this must be called after RunExclusive returns.
 func (e *Engine) FinishStartupReconciled(stats SyncStats) {
-	if stats.Synced > 0 {
+	if stats.shouldEmitSync() {
 		e.emit("sync")
 	}
 	e.notifyStartupReconciled()
@@ -2917,7 +2918,7 @@ func (e *Engine) RunStartupSyncFallback(
 	defer e.notifyStartupReconciled()
 	// Defers run LIFO: Unlock runs before emit.
 	defer func() {
-		if stats.Synced > 0 {
+		if stats.shouldEmitSync() {
 			e.emit("sync")
 		}
 	}()

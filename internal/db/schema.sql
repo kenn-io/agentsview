@@ -377,6 +377,97 @@ CREATE INDEX IF NOT EXISTS idx_recall_entries_updated
 CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession
     ON recall_entries(supersedes_entry_id, superseded_by_entry_id);
 
+-- Monotonic source revision for Recall vector freshness. Unlike timestamps,
+-- this cannot collide when several corpus mutations happen in one clock tick.
+CREATE TABLE IF NOT EXISTS recall_corpus_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    revision  INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
+
+-- Compact per-entry mutation sequence for bounded Recall vector refreshes.
+-- One row per identity is enough: an incremental reader needs only the latest
+-- state after its completed corpus revision, not every intermediate edit.
+CREATE TABLE IF NOT EXISTS recall_embedding_changes (
+    entry_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recall_embedding_changes_revision
+    ON recall_embedding_changes(revision, entry_id);
+INSERT OR IGNORE INTO recall_embedding_changes (entry_id, revision)
+SELECT recall_entries.id, recall_corpus_state.revision
+FROM recall_entries CROSS JOIN recall_corpus_state
+WHERE recall_corpus_state.singleton = 1;
+
+DROP TRIGGER IF EXISTS trg_recall_corpus_insert;
+CREATE TRIGGER IF NOT EXISTS trg_recall_corpus_insert
+AFTER INSERT ON recall_entries
+WHEN NEW.status = 'accepted'
+BEGIN
+    UPDATE recall_corpus_state SET revision = revision + 1 WHERE singleton = 1;
+    INSERT INTO recall_embedding_changes (entry_id, revision)
+    SELECT NEW.id, revision FROM recall_corpus_state WHERE singleton = 1
+    ON CONFLICT(entry_id) DO UPDATE SET revision = excluded.revision;
+END;
+
+DROP TRIGGER IF EXISTS trg_recall_corpus_update;
+CREATE TRIGGER IF NOT EXISTS trg_recall_corpus_update
+AFTER UPDATE ON recall_entries
+WHEN (OLD.status = 'accepted') <> (NEW.status = 'accepted')
+  OR (NEW.status = 'accepted' AND (
+      OLD.title IS NOT NEW.title
+      OR OLD.body IS NOT NEW.body
+      OR OLD.trigger IS NOT NEW.trigger
+  ))
+BEGIN
+    UPDATE recall_corpus_state SET revision = revision + 1 WHERE singleton = 1;
+    INSERT INTO recall_embedding_changes (entry_id, revision)
+    SELECT NEW.id, revision FROM recall_corpus_state WHERE singleton = 1
+    ON CONFLICT(entry_id) DO UPDATE SET revision = excluded.revision;
+END;
+
+DROP TRIGGER IF EXISTS trg_recall_corpus_delete;
+CREATE TRIGGER IF NOT EXISTS trg_recall_corpus_delete
+AFTER DELETE ON recall_entries
+WHEN OLD.status = 'accepted'
+BEGIN
+    UPDATE recall_corpus_state SET revision = revision + 1 WHERE singleton = 1;
+    INSERT INTO recall_embedding_changes (entry_id, revision)
+    SELECT OLD.id, revision FROM recall_corpus_state WHERE singleton = 1
+    ON CONFLICT(entry_id) DO UPDATE SET revision = excluded.revision;
+END;
+
+-- Recall-entry deletion journal: preserves the identity of hard-deleted
+-- entries long enough for an incremental vector refresh to remove their
+-- disposable mirror documents without scanning the complete served corpus.
+CREATE TABLE IF NOT EXISTS recall_embedding_deletions (
+    entry_id   TEXT PRIMARY KEY,
+    deleted_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_embedding_deletions_updated
+    ON recall_embedding_deletions(deleted_at DESC, entry_id);
+
+DROP TRIGGER IF EXISTS trg_recall_embedding_deletion;
+CREATE TRIGGER IF NOT EXISTS trg_recall_embedding_deletion
+AFTER DELETE ON recall_entries
+BEGIN
+    INSERT INTO recall_embedding_deletions (entry_id, deleted_at)
+    VALUES (OLD.id, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    ON CONFLICT(entry_id) DO UPDATE SET deleted_at = excluded.deleted_at;
+END;
+
+DROP TRIGGER IF EXISTS trg_recall_embedding_reinsert;
+CREATE TRIGGER IF NOT EXISTS trg_recall_embedding_reinsert
+AFTER INSERT ON recall_entries
+WHEN EXISTS (
+    SELECT 1 FROM recall_embedding_deletions WHERE entry_id = NEW.id
+)
+BEGIN
+    DELETE FROM recall_embedding_deletions WHERE entry_id = NEW.id;
+END;
+
 CREATE TABLE IF NOT EXISTS recall_evidence (
     id                    INTEGER PRIMARY KEY,
     entry_id             TEXT NOT NULL
