@@ -1131,6 +1131,7 @@
   "recall_page_review_filter": "审核状态",
   "recall_page_all_review_states": "所有审核状态",
   "recall_page_loading": "正在加载召回条目…",
+  "recall_page_unavailable_read_only": "只读模式下无法使用召回。",
   "recall_page_empty": "没有符合这些筛选条件的召回条目。",
   "recall_page_error": "无法加载召回条目。",
   "recall_page_load_more": "加载更多",
