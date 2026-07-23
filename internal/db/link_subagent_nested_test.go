@@ -142,3 +142,43 @@ func TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches(t *testing.T) 
 			"child.parent_session_id")
 	}
 }
+
+// TestLinkSubagentSessionsLinksNullParentSubagent guards the null-safe `IS NOT`
+// predicate. A session already tagged 'subagent' but with a NULL parent (and a
+// tool_calls spawn edge) must be linked to its spawner. Replacing `IS NOT` with
+// `!=` would leave the parent NULL (`NULL != 'x'` is NULL, not true), so this
+// test fails under that mutation.
+func TestLinkSubagentSessionsLinksNullParentSubagent(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+	})
+
+	// Already tagged 'subagent' (so the type branch is false) but its parent
+	// was never set. Only the null-safe parent branch can link it.
+	insertSession(t, d, "orphan", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.RelationshipType = "subagent"
+		// ParentSessionID left nil -> NULL in the DB.
+	})
+
+	insertMessages(t, d, Message{
+		SessionID: "spawner", Ordinal: 0, Role: "assistant",
+		Content: "spawn orphan", HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			ToolName: "Agent", Category: "Task",
+			SubagentSessionID: "orphan",
+		}},
+	})
+
+	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+
+	orphan, err := d.GetSession(context.Background(), "orphan")
+	requireNoError(t, err, "GetSession orphan")
+	if assert.NotNil(t, orphan.ParentSessionID,
+		"NULL-parent subagent must be linked to its spawner (null-safe IS NOT)") {
+		assert.Equal(t, "spawner", *orphan.ParentSessionID,
+			"orphan.parent_session_id")
+	}
+}

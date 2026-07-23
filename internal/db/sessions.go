@@ -1544,11 +1544,15 @@ func (db *DB) GetChildSessions(
 }
 
 // LinkSubagentSessions sets parent_session_id and
-// relationship_type on sessions that are referenced by
-// tool_calls.subagent_session_id. Updates sessions that either
-// have no parent yet or have a non-subagent relationship (e.g.
-// a Zencoder session classified as "continuation" from header
-// parentId that is actually a spawned subagent).
+// relationship_type on sessions referenced by
+// tool_calls.subagent_session_id (the authoritative spawn edge).
+// A session is updated when it is not yet tagged 'subagent' (e.g.
+// a Zencoder session classified as "continuation" from a header
+// parentId that is actually a spawned subagent) OR when its stored
+// parent disagrees with the spawn edge. The latter re-parents
+// nested subagents (depth >= 2), which the parser pins to the main
+// session because Claude Code stores every subagent flat under
+// <main>/subagents/. Already-correct subagents are left untouched.
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
