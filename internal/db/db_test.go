@@ -1008,10 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionDevinEpochSecondsReparse(t *testing.T) {
-	assert.Equal(t, 78, CurrentDataVersion(),
-		"version 78 reparses Devin sessions whose timestamps were read as "+
-			"milliseconds and stored as 1970 dates")
+func TestCurrentDataVersionClaudeLaunchProvenance(t *testing.T) {
+	assert.Equal(t, 79, CurrentDataVersion(),
+		"session_kind/prompt_source backfill requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
