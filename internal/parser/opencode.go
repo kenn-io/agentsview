@@ -993,7 +993,10 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		return ParsedToolCall{}
 	}
 
-	var inputJSON string
+	var (
+		inputJSON  string
+		isFailure  bool
+	)
 	if len(d.State) > 0 {
 		var state openCodeToolState
 		if err := json.Unmarshal(d.State, &state); err == nil {
@@ -1001,6 +1004,10 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 				inputJSON = string(state.Input)
 			}
 		}
+	}
+
+	if d.ToolName == "invalid" {
+		isFailure = true
 	}
 
 	var skillName string
@@ -1014,13 +1021,22 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		skillName = inferOpenCodeSkillName(d.ToolName, inputJSON, cwd)
 	}
 
-	return ParsedToolCall{
+	tc := ParsedToolCall{
 		ToolUseID: d.CallID,
 		ToolName:  d.ToolName,
 		Category:  NormalizeToolCategory(d.ToolName),
 		InputJSON: inputJSON,
 		SkillName: skillName,
 	}
+
+	if isFailure {
+		tc.ResultEvents = append(tc.ResultEvents, ParsedToolResultEvent{
+			ToolUseID: d.CallID,
+			Status:    "errored",
+		})
+	}
+
+	return tc
 }
 
 func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
