@@ -15,8 +15,9 @@ import (
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'. v8 adds
 // sessions.source_archive_id and the source_worktree_project_mappings
-// mirror table on top of the schema-v7 mainline shape.
-const SchemaVersion = 8
+// mirror table on top of the schema-v7 mainline shape. v9 adds the
+// sessions.session_kind and messages.prompt_source columns.
+const SchemaVersion = 9
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
