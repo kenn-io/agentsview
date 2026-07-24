@@ -929,6 +929,37 @@ func TestParseOpenCodeDB_InvalidToolCall(t *testing.T) {
 	assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
 }
 
+// TestParseOpenCodeDB_BashExitFailure verifies that a bash tool
+// with metadata.exit > 0 sets ResultEvents[0].Status="errored"
+// even when output lacks "exit status N" text.
+func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/tmp/proj")
+	seeder.AddSession("ses_bexit", "prj_1", "", "", 1700000000000, 1700000030000)
+
+	seeder.AddMessage("msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"type":"text","text":"build"}`)
+
+	seeder.AddMessage("msg_a", "ses_bexit", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+	// bash tool with metadata.exit=1 but no "exit status" in output
+	seeder.AddPart("prt_t", "msg_a", "ses_bexit", 1700000010000, 1700000010000,
+		`{"type":"tool","tool":"bash","callID":"call_exit","state":{"input":{"command":"build"},"output":"error: command failed","metadata":{"exit":1}}}`)
+
+	sessions, err := parseOpenCodeAll(dbPath, "m")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
+
+	msgs := sessions[0].Messages
+	require.Len(t, msgs, 2, "messages len")
+
+	ast := msgs[1]
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
+	assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
+}
+
 // TestParseOpenCodeDB_SkillNameFromReadTool verifies that a
 // "read" tool part whose input points at a real on-disk SKILL.md
 // infers the skill name from the file's frontmatter, matching the

@@ -984,7 +984,13 @@ type openCodeToolData struct {
 
 // openCodeToolState holds the nested state of a tool call.
 type openCodeToolState struct {
-	Input json.RawMessage `json:"input"`
+	Input    json.RawMessage `json:"input"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+// openCodeToolMetadata holds the optional metadata from a tool state.
+type openCodeToolMetadata struct {
+	Exit int `json:"exit"`
 }
 
 func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
@@ -993,12 +999,25 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		return ParsedToolCall{}
 	}
 
-	var inputJSON string
+	var (
+		inputJSON string
+		isFailure bool
+	)
 	if len(d.State) > 0 {
 		var state openCodeToolState
 		if err := json.Unmarshal(d.State, &state); err == nil {
 			if len(state.Input) > 0 {
 				inputJSON = string(state.Input)
+			}
+			// OpenCode records the shell exit code in the tool
+			// state metadata. On Windows the output text carries
+			// no "exit status N" marker, so metadata.exit is the
+			// only reliable failure signal.
+			if len(state.Metadata) > 0 {
+				var m openCodeToolMetadata
+				if err := json.Unmarshal(state.Metadata, &m); err == nil && m.Exit > 0 {
+					isFailure = true
+				}
 			}
 		}
 	}
@@ -1027,6 +1046,10 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 	// is "completed" and carries no error signal. Attach an errored
 	// result event so tool health counts these as failures.
 	if d.ToolName == "invalid" {
+		isFailure = true
+	}
+
+	if isFailure {
 		tc.ResultEvents = append(tc.ResultEvents, ParsedToolResultEvent{
 			ToolUseID: d.CallID,
 			Status:    "errored",
