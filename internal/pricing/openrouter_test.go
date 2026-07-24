@@ -120,31 +120,38 @@ func TestParseOpenRouterPricing_FreeModel(t *testing.T) {
 	assert.Zero(t, prices[1].OutputPerMTok)
 }
 
-// TestMergePricing_FirstNonZeroWins verifies that when two
+// TestMergePricing_FirstSourceOwnsRow verifies that when two
 // sources both price the same model_pattern, the first source
-// in the ordered slice wins for every field, and the second
-// source only fills in fields the first left at zero. This
-// gives LiteLLM priority over OpenRouter for shared models
-// while still letting OpenRouter contribute new rows.
-func TestMergePricing_FirstNonZeroWins(t *testing.T) {
+// in the ordered slice owns the row entirely — later sources
+// never modify it, not even zero-valued fields. Zero is valid
+// pricing (free models), so backfilling it from a
+// lower-priority catalog would misprice free models. Later
+// sources still contribute patterns no earlier source declared.
+func TestMergePricing_FirstSourceOwnsRow(t *testing.T) {
 	sources := [][]ModelPricing{
 		{
 			{ModelPattern: "shared", InputPerMTok: 3, OutputPerMTok: 15},
+			{ModelPattern: "free-model"},
 			{ModelPattern: "only-a", InputPerMTok: 1, OutputPerMTok: 2},
 		},
 		{
 			{ModelPattern: "shared", InputPerMTok: 99, OutputPerMTok: 99,
 				CacheCreationPerMTok: 4},
+			{ModelPattern: "free-model", InputPerMTok: 5, OutputPerMTok: 6},
 			{ModelPattern: "only-b", InputPerMTok: 7, OutputPerMTok: 8},
 		},
 	}
 	merged := MergePricing(sources)
 
-	require.Len(t, merged, 3, "expected 3 distinct patterns")
+	require.Len(t, merged, 4, "expected 4 distinct patterns")
 	assert.Equal(t, 3.0, merged["shared"].InputPerMTok, "a wins input")
 	assert.Equal(t, 15.0, merged["shared"].OutputPerMTok, "a wins output")
-	assert.Equal(t, 4.0, merged["shared"].CacheCreationPerMTok,
-		"b fills the zero field")
+	assert.Zero(t, merged["shared"].CacheCreationPerMTok,
+		"b must not backfill a's zero field")
+	assert.Zero(t, merged["free-model"].InputPerMTok,
+		"explicit $0 from a survives b's nonzero rate")
+	assert.Zero(t, merged["free-model"].OutputPerMTok,
+		"explicit $0 from a survives b's nonzero rate")
 	assert.Equal(t, 1.0, merged["only-a"].InputPerMTok)
 	assert.Equal(t, 7.0, merged["only-b"].InputPerMTok)
 }

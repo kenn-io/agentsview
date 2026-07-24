@@ -103,35 +103,23 @@ func OpenRouterAliasPatterns(prices []ModelPricing) []string {
 }
 
 // MergePricing combines an ordered slice of per-source ModelPricing slices into a
-// single map keyed by ModelPattern. When two sources report
-// the same pattern, the first non-zero field wins (so earlier
-// sources in the slice take precedence over later ones).
-// This gives LiteLLM priority over OpenRouter for models both
-// catalogs cover, while still letting OpenRouter fill in
-// models that LiteLLM does not list.
+// single map keyed by ModelPattern. The first source to report
+// a pattern owns that row entirely; later sources only
+// contribute patterns no earlier source declared. Field-level
+// backfill is deliberately avoided: a zero rate is valid
+// pricing (free models), and ModelPricing cannot distinguish
+// an explicit zero from an absent field, so filling "missing"
+// fields from a lower-priority catalog would silently turn a
+// free model into a paid one. This gives LiteLLM priority over
+// OpenRouter for models both catalogs cover, while still
+// letting OpenRouter contribute models LiteLLM does not list.
 func MergePricing(sources [][]ModelPricing) map[string]ModelPricing {
 	out := make(map[string]ModelPricing)
 	for _, prices := range sources {
 		for _, p := range prices {
-			existing, ok := out[p.ModelPattern]
-			if !ok {
+			if _, ok := out[p.ModelPattern]; !ok {
 				out[p.ModelPattern] = p
-				continue
 			}
-			merged := existing
-			if merged.InputPerMTok == 0 && p.InputPerMTok != 0 {
-				merged.InputPerMTok = p.InputPerMTok
-			}
-			if merged.OutputPerMTok == 0 && p.OutputPerMTok != 0 {
-				merged.OutputPerMTok = p.OutputPerMTok
-			}
-			if merged.CacheCreationPerMTok == 0 && p.CacheCreationPerMTok != 0 {
-				merged.CacheCreationPerMTok = p.CacheCreationPerMTok
-			}
-			if merged.CacheReadPerMTok == 0 && p.CacheReadPerMTok != 0 {
-				merged.CacheReadPerMTok = p.CacheReadPerMTok
-			}
-			out[p.ModelPattern] = merged
 		}
 	}
 	return out

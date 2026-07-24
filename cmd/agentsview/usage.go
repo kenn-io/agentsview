@@ -454,8 +454,8 @@ func upsertPricing(
 // picked up. Each fetch failure is logged but never aborts
 // the loop, so a partial outage of one upstream does not
 // prevent the other from seeding. All successful results are
-// merged (first non-zero field wins per model_pattern) and
-// upserted as a single batch.
+// merged (the first source to declare a model_pattern owns the
+// row) and upserted as a single batch.
 func refreshPricingFromSources(database *db.DB) {
 	if err := refreshPricingFromSourcesWith(
 		database, pricing.DefaultPricingSources(),
