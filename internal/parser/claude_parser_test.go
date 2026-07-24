@@ -285,20 +285,29 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 			// Non-caveat local-command is pure noise and stays skipped.
 			testjsonl.ClaudeUserJSON("<local-command-result>ok</local-command-result>", "2024-01-01T00:00:05Z"),
 			testjsonl.ClaudeUserJSON("Stop hook feedback: rejected", "2024-01-01T00:00:06Z"),
-			testjsonl.ClaudeUserJSON("real user message", "2024-01-01T00:00:07Z"),
+			testjsonl.ClaudeUserJSON(
+				"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+				"2024-01-01T00:00:07Z",
+			),
+			testjsonl.ClaudeUserJSON(
+				"<ide_selection>The user selected package main.</ide_selection>",
+				"2024-01-01T00:00:08Z",
+			),
+			testjsonl.ClaudeUserJSON("real user message", "2024-01-01T00:00:09Z"),
 		)
 		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
-		// 5 promoted system + 1 real user; <local-command-result>
+		// 7 promoted system + 1 real user; <local-command-result>
 		// is still skipped.
-		assert.Equal(t, 6, sess.MessageCount)
+		assert.Equal(t, 8, sess.MessageCount)
 		assert.Equal(t, 1, sess.UserMessageCount)
 		assert.Equal(t, "real user message", sess.FirstMessage)
 
 		wantSubtypes := []string{
 			"continuation", "interrupted", "resume",
 			"task_notification", "stop_hook",
+			"ide_opened_file", "ide_selection",
 		}
-		require.Len(t, msgs, 6)
+		require.Len(t, msgs, 8)
 		for i, want := range wantSubtypes {
 			assert.True(t, msgs[i].IsSystem,
 				"msgs[%d] should be system", i)
@@ -310,9 +319,9 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 			assert.Equal(t, want, msgs[i].SourceSubtype)
 		}
 		// Final message is the real user message.
-		assert.False(t, msgs[5].IsSystem)
-		assert.Equal(t, RoleUser, msgs[5].Role)
-		assert.Equal(t, "real user message", msgs[5].Content)
+		assert.False(t, msgs[7].IsSystem)
+		assert.Equal(t, RoleUser, msgs[7].Role)
+		assert.Equal(t, "real user message", msgs[7].Content)
 	})
 
 	t.Run("skill invocation shown as user message", func(t *testing.T) {
@@ -819,6 +828,45 @@ func TestParseClaudeSessionFrom_QueuedSystemMessage(t *testing.T) {
 	assert.True(t, newMsgs[0].IsSystem)
 	assert.Equal(t, "system", newMsgs[0].SourceType)
 	assert.Equal(t, "system_reminder", newMsgs[0].SourceSubtype)
+}
+
+func TestParseClaudeSessionFrom_IDEContext(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+		testjsonl.ClaudeAssistantJSON("hi", tsEarlyS1),
+	)
+	path := createTestFile(t, "inc-ide-context.jsonl", initial)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+			tsEarlyS5,
+		),
+		testjsonl.ClaudeUserJSON(
+			"<ide_selection>The user selected package main.</ide_selection>",
+			tsLate,
+		),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, info.Size(), 2, "")
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 2)
+	for i, subtype := range []string{"ide_opened_file", "ide_selection"} {
+		assert.Equal(t, RoleUser, newMsgs[i].Role)
+		assert.True(t, newMsgs[i].IsSystem)
+		assert.Equal(t, "system", newMsgs[i].SourceType)
+		assert.Equal(t, subtype, newMsgs[i].SourceSubtype)
+		assert.Equal(t, i+2, newMsgs[i].Ordinal)
+	}
 }
 
 func TestParseClaudeSessionFrom_ReminderPrefixedCommand(t *testing.T) {
@@ -2578,6 +2626,10 @@ func TestClassifyClaudeSystemMessage(t *testing.T) {
 		{"system_reminder", "<system-reminder>remember this</system-reminder>", "system_reminder"},
 		{"system_reminder plus prompt", "<system-reminder>remember this</system-reminder>\n\nreal prompt", ""},
 		{"malformed system_reminder", "<system-reminder>literal tag at the start", ""},
+		{"opened file", "\uFEFF  <ide_opened_file>The user opened README.md.</ide_opened_file>\n", "ide_opened_file"},
+		{"selection", "<ide_selection>The user selected package main.</ide_selection>", "ide_selection"},
+		{"selection plus prompt", "<ide_selection>package main</ide_selection>\n\nexplain this", ""},
+		{"malformed opened file", "<ide_opened_file>The user opened README.md.", ""},
 		{"task-notification-status", "<task-notification-status>ready", ""},
 		{"bom prefix", "\uFEFF  This session is being continued", "continuation"},
 		{"non-caveat local-command", "<local-command-stdout>foo</local-command-stdout>", ""},
