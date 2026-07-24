@@ -666,6 +666,52 @@ func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 	assert.Equal(t, 1, syncer.callCount())
 }
 
+func TestUnwatchedPollReplacementDoesNotRestoreStaleProbeState(t *testing.T) {
+	ticks := make(chan time.Time)
+	syncer := &blockingUnwatchedPollSyncer{
+		started: make(chan []string, 2),
+		release: make(chan struct{}),
+	}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	root := requireExistingPollRoot(t, t.TempDir(), "root")
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key:           "root",
+		Roots:         []string{root},
+		DegradedProbe: &sequenceDegradedPollProbe{states: []string{"stable", "stable"}},
+	}))
+
+	coordinator.requestPoll()
+	select {
+	case got := <-syncer.started:
+		require.Equal(t, []string{root}, got)
+	case <-time.After(time.Second):
+		t.Fatal("initial poll did not start before replacement")
+	}
+
+	replaced := make(chan error, 1)
+	go func() {
+		replaced <- coordinator.AddObligation(pollingObligation{
+			Key:           "root",
+			Roots:         []string{root},
+			DegradedProbe: &sequenceDegradedPollProbe{states: []string{"stable", "stable"}},
+		})
+	}()
+
+	close(syncer.release)
+	require.NoError(t, requireReceivePollResult(t, replaced, time.Second))
+
+	coordinator.requestPoll()
+	select {
+	case got := <-syncer.started:
+		require.Equal(t, []string{root}, got)
+	case <-time.After(time.Second):
+		t.Fatal("replacement obligation did not trigger a fresh poll")
+	}
+}
+
 func TestUnwatchedPollRemoveRootsStopsReconciliationAfterNativeRecovery(t *testing.T) {
 	ticks := make(chan time.Time, 1)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}

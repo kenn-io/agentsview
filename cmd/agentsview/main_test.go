@@ -54,6 +54,29 @@ func TestRuntimeWarningHelper(t *testing.T) {
 	assert.Contains(t, logOutput.String(), "could not write daemon runtime record")
 }
 
+func TestLateBoundDegradedPollProbeActivatesWhenOpenCodeRootBecomesSQLite(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	probe := lateBoundDegradedPollProbe{provider: provider, root: root}
+
+	_, err := probe.DegradedPollingState(t.Context())
+	require.ErrorIs(t, err, parser.ErrUnsupportedProviderFeature)
+
+	db, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Ping())
+	_, err = db.Exec(`CREATE TABLE probe_state (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	state, err := probe.DegradedPollingState(t.Context())
+	require.NoError(t, err)
+	assert.NotEmpty(t, state)
+}
+
 func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterSlowStartup(t *testing.T) {
 	out, err := runServeRuntimeWarningHelper(t, true, 1200*time.Millisecond)
 	require.NoError(t, err, string(out))

@@ -2364,6 +2364,21 @@ type watchScope struct {
 	degradedProbe parser.DegradedPollingStateProbe
 }
 
+type lateBoundDegradedPollProbe struct {
+	provider parser.Provider
+	root     string
+}
+
+func (p lateBoundDegradedPollProbe) DegradedPollingState(
+	ctx context.Context,
+) (string, error) {
+	probe, err := parser.ResolveDegradedPollingProbe(ctx, p.provider, p.root)
+	if err != nil {
+		return "", err
+	}
+	return probe.DegradedPollingState(ctx)
+}
+
 type watchRoot struct {
 	path                  string
 	recursive             bool
@@ -2556,11 +2571,17 @@ func collectProviderWatchRoots(
 			context.Background(), provider, root,
 		)
 		if probeErr != nil {
-			if !errors.Is(probeErr, parser.ErrUnsupportedProviderFeature) {
+			if errors.Is(probeErr, parser.ErrUnsupportedProviderFeature) &&
+				def.Type == parser.AgentOpenCode {
+				degradedProbe = lateBoundDegradedPollProbe{
+					provider: provider,
+					root:     root,
+				}
+			} else if !errors.Is(probeErr, parser.ErrUnsupportedProviderFeature) {
 				log.Printf("%s provider degraded poll probe for %s: %v",
 					def.Type, root, probeErr)
+				degradedProbe = nil
 			}
-			degradedProbe = nil
 		}
 		_, err := os.Stat(root)
 		exists := err == nil

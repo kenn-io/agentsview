@@ -64,6 +64,7 @@ type sharedUnwatchedPollCoordinator struct {
 	// evaluated per obligation at poll time.
 	pollObligations []pollingObligation
 	pollStates      map[string]string
+	pollRevisions   map[string]uint64
 	stop            chan struct{}
 	done            chan struct{}
 	stopOnce        sync.Once
@@ -90,20 +91,21 @@ func newUnwatchedPollCoordinatorWithTicks(
 ) *sharedUnwatchedPollCoordinator {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	coordinator := &sharedUnwatchedPollCoordinator{
-		ctx:          ctx,
-		workerCtx:    workerCtx,
-		workerCancel: workerCancel,
-		engine:       engine,
-		ticks:        ticks,
-		stopTicker:   stopTicker,
-		doWork:       doWork,
-		add:          make(chan unwatchedPollAdd),
-		pollWake:     make(chan struct{}, 1),
-		pollDone:     make(chan struct{}),
-		pollStates:   make(map[string]string),
-		stop:         make(chan struct{}),
-		done:         make(chan struct{}),
-		onRootsOwned: onRootsOwned,
+		ctx:           ctx,
+		workerCtx:     workerCtx,
+		workerCancel:  workerCancel,
+		engine:        engine,
+		ticks:         ticks,
+		stopTicker:    stopTicker,
+		doWork:        doWork,
+		add:           make(chan unwatchedPollAdd),
+		pollWake:      make(chan struct{}, 1),
+		pollDone:      make(chan struct{}),
+		pollStates:    make(map[string]string),
+		pollRevisions: make(map[string]uint64),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+		onRootsOwned:  onRootsOwned,
 	}
 	go coordinator.run()
 	return coordinator
@@ -172,6 +174,7 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 			}
 			c.setPollObligations(obligations)
 			c.pollMu.Lock()
+			c.pollRevisions[request.obligation.Key]++
 			delete(c.pollStates, request.obligation.Key)
 			c.pollMu.Unlock()
 			if c.onRootsOwned != nil {
@@ -227,8 +230,9 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			if c.workerCtx.Err() != nil {
 				return
 			}
+			obligations, priorStates, priorRevisions := c.currentPollSnapshot()
 			roots, nextStates := c.preparePollRun(
-				c.workerCtx, c.currentPollObligations(),
+				c.workerCtx, obligations, priorStates,
 			)
 			if len(roots) == 0 {
 				continue
@@ -241,7 +245,7 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 				if err := pollUnwatchedRootsOnce(c.workerCtx, c.engine, roots); err != nil {
 					return
 				}
-				c.commitPollStates(nextStates)
+				c.commitPollStates(nextStates, priorRevisions)
 			})
 		}
 	}
@@ -305,28 +309,41 @@ func pollUnwatchedRootsOnce(
 	return nil
 }
 
-func (c *sharedUnwatchedPollCoordinator) currentPollStates() map[string]string {
+func (c *sharedUnwatchedPollCoordinator) currentPollSnapshot() (
+	[]pollingObligation,
+	map[string]string,
+	map[string]uint64,
+) {
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
-	return clonePollStates(c.pollStates)
+	return append([]pollingObligation(nil), c.pollObligations...),
+		clonePollStates(c.pollStates),
+		clonePollRevisions(c.pollRevisions)
 }
 
 func (c *sharedUnwatchedPollCoordinator) preparePollRun(
 	ctx context.Context,
 	obligations []pollingObligation,
+	prior map[string]string,
 ) ([]string, map[string]string) {
 	return availableUnwatchedPollRootsWithState(
-		ctx, obligations, c.currentPollStates(),
+		ctx, obligations, prior,
 	)
 }
 
-func (c *sharedUnwatchedPollCoordinator) commitPollStates(states map[string]string) {
+func (c *sharedUnwatchedPollCoordinator) commitPollStates(
+	states map[string]string,
+	revisions map[string]uint64,
+) {
 	if len(states) == 0 {
 		return
 	}
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
 	for key, state := range states {
+		if revision, ok := revisions[key]; ok && c.pollRevisions[key] != revision {
+			continue
+		}
 		c.pollStates[key] = state
 	}
 }
@@ -400,6 +417,17 @@ func clonePollStates(states map[string]string) map[string]string {
 	cloned := make(map[string]string, len(states))
 	for key, value := range states {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func clonePollRevisions(revisions map[string]uint64) map[string]uint64 {
+	if len(revisions) == 0 {
+		return nil
+	}
+	cloned := make(map[string]uint64, len(revisions))
+	for key, revision := range revisions {
+		cloned[key] = revision
 	}
 	return cloned
 }
