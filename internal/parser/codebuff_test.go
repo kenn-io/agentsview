@@ -89,8 +89,8 @@ func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
 	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
 	assert.Equal(t, 2, sess.MessageCount)
 	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.True(t, sess.HasPeakContextTokens)
-	assert.Equal(t, 50000, sess.PeakContextTokens)
+	// PeakContextTokens is not set because contextTokenCount from
+	// run-state.json is the final per-step count, not the peak.
 
 	require.Len(t, msgs, 2)
 	assert.Equal(t, RoleUser, msgs[0].Role)
@@ -121,10 +121,10 @@ func TestParseCodebuffSession_FreebuffClassification(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Freebuff sessions use AgentCodebuff so that lifecycle operations
-	// (reconciliation, deletion, baselines) keyed by agent type work
-	// correctly. The UI distinguishes them via AgentLabel.
-	assert.Equal(t, AgentCodebuff, sess.Agent)
+	// Freebuff sessions use AgentFreebuff for distinct filtering, while
+	// lifecycle operations are handled via the freebuff: prefix alias
+	// in AgentByPrefix.
+	assert.Equal(t, AgentFreebuff, sess.Agent)
 	assert.Equal(t, "Freebuff", sess.AgentLabel)
 }
 
@@ -414,13 +414,9 @@ func TestParseCodebuffSession_UsageEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	require.Len(t, sess.UsageEvents, 1)
-	evt := sess.UsageEvents[0]
-	assert.Equal(t, sess.ID, evt.SessionID)
-	assert.Equal(t, "session", evt.Source)
-	assert.Equal(t, "base2-deepseek", evt.Model)
-	assert.NotEmpty(t, evt.OccurredAt)
-	assert.NotEmpty(t, evt.DedupKey)
+	// No usage event when credits are 0 (no billing data).
+	assert.Empty(t, sess.UsageEvents,
+		"no usage event when credits are 0")
 }
 
 func TestParseCodebuffSession_UsageEventEmptyModel(t *testing.T) {
@@ -1132,10 +1128,9 @@ func TestParseCodebuffSession_CreditsZero(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Freebuff sessions have no credits - CostUSD should be nil.
-	require.Len(t, sess.UsageEvents, 1)
-	assert.Nil(t, sess.UsageEvents[0].CostUSD,
-		"freebuff sessions should have no cost")
+	// Freebuff sessions have no credits - no usage event emitted.
+	assert.Empty(t, sess.UsageEvents,
+		"freebuff sessions should have no usage event")
 }
 
 func TestParseCodebuffSession_PlanBlock(t *testing.T) {

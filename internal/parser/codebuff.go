@@ -43,9 +43,10 @@ func parseCodebuffSession(
 	// Read chat-meta.json for session name and timing hints.
 	meta := readCodebuffChatMeta(chatMetaPath)
 
-	// Model name is the raw agentType from run-state.json
-	// (e.g. "base2-free-deepseek", "base2-free-mimo").
-	model := rs.AgentType
+	// The actual LLM model is selected server-side based on the agentType
+	// template and can change mid-session. The on-disk format does not
+	// persist the actual model, so leave it unknown.
+	model := ""
 
 	// Read and parse the chat messages.
 	data, err := os.ReadFile(chatMessagesPath)
@@ -105,15 +106,14 @@ func parseCodebuffSession(
 		}
 	}
 
-	// Determine agent label from run-state agentType field.
+	// Determine agent type from run-state agentType field.
 	// Sessions with "free" in the agentType are Freebuff, others are Codebuff.
-	// Both share the same on-disk layout and the same agent type (Codebuff)
-	// so that lifecycle operations (reconciliation, deletion, baselines)
-	// keyed by agent type work correctly. The UI distinguishes them via
-	// AgentLabel.
+	// Both share the same on-disk layout; the parser splits them by type
+	// so the UI can filter each agent independently.
 	agent := AgentCodebuff
 	agentLabel := "Codebuff"
 	if strings.Contains(strings.ToLower(rs.AgentType), "free") {
+		agent = AgentFreebuff
 		agentLabel = "Freebuff"
 	}
 
@@ -178,37 +178,31 @@ func parseCodebuffSession(
 		File:             fileInfo,
 	}
 
-	// Token counts from run-state.
-	if rs.ContextTokenCount > 0 {
-		sess.PeakContextTokens = rs.ContextTokenCount
-		sess.HasPeakContextTokens = true
-	}
+	// contextTokenCount from run-state.json is the final per-step context
+	// count, not the peak. Compaction can make the final value lower than
+	// the true peak, so we cannot reliably derive PeakContextTokens from
+	// this value. Leave peak context unavailable.
 
-	sess.aggregateTokenPresenceKnown =
-		sess.HasTotalOutputTokens || sess.HasPeakContextTokens
-
-	// Emit usage event with clean model name for catalog pricing.
-	// Credits are billing units (1 credit = $0.01), mapped to CostUSD.
-	if model != "" {
-		evt := ParsedUsageEvent{
+	// Emit usage event for reported credits. The actual model is unknown
+	// (selected server-side, can change mid-session), so Model is left
+	// empty. Credits are billing units (1 credit = $0.01), mapped to
+	// CostUSD for cost display.
+	if rs.CreditsUsed > 0 {
+		cost := rs.CreditsUsed * 0.01
+		sess.UsageEvents = []ParsedUsageEvent{{
 			SessionID: fullID,
 			Source:    "session",
-			Model:     model,
 			OccurredAt: func() string {
 				if !endedAt.IsZero() {
 					return endedAt.Format(time.RFC3339Nano)
 				}
 				return startedAt.Format(time.RFC3339Nano)
 			}(),
-			DedupKey: "session:" + fullID,
-		}
-		if rs.CreditsUsed > 0 {
-			cost := rs.CreditsUsed * 0.01
-			evt.CostUSD = &cost
-			evt.CostStatus = "reported"
-			evt.CostSource = "session"
-		}
-		sess.UsageEvents = []ParsedUsageEvent{evt}
+			CostUSD:    &cost,
+			CostStatus: "reported",
+			CostSource: "session",
+			DedupKey:   "session:" + fullID,
+		}}
 	}
 
 	return sess, msgs, nil
@@ -440,13 +434,34 @@ func parseCodebuffMessages(
 		startedAt time.Time
 		endedAt   time.Time
 		ordinal   int
+		// Track the current date for cross-midnight sessions. Start with
+		// the session directory date and advance when time-of-day wraps
+		// past midnight.
+		currentDate = sessionDate
+		prevHour    = -1
 	)
 
 	root.ForEach(func(_, msg gjson.Result) bool {
 		variant := msg.Get("variant").Str
 		ts := parseCodebuffTimestamp(
-			msg.Get("timestamp").Str, sessionDate,
+			msg.Get("timestamp").Str, currentDate,
 		)
+
+		// Detect midnight rollover for time-only timestamps: if the
+		// parsed hour is less than the previous hour, we've crossed
+		// midnight and should advance the date.
+		if !ts.IsZero() && prevHour >= 0 {
+			if ts.Hour() < prevHour {
+				currentDate = currentDate.AddDate(0, 0, 1)
+				// Re-parse with the advanced date.
+				ts = parseCodebuffTimestamp(
+					msg.Get("timestamp").Str, currentDate,
+				)
+			}
+		}
+		if !ts.IsZero() {
+			prevHour = ts.Hour()
+		}
 
 		if !ts.IsZero() {
 			if startedAt.IsZero() || ts.Before(startedAt) {
@@ -539,12 +554,11 @@ func parseCodebuffAIMessage(
 	}
 
 	var (
-		out           []ParsedMessage
-		thinkingBuf   []string
-		textBuf       []string
-		toolCalls     []ParsedToolCall
-		toolResults   []ParsedToolResult
-		pendingSys    []string
+		out         []ParsedMessage
+		thinkingBuf []string
+		textBuf     []string
+		toolCalls   []ParsedToolCall
+		toolResults []ParsedToolResult
 	)
 
 	// flushText emits any accumulated thinking and text as assistant messages,
@@ -687,14 +701,18 @@ func parseCodebuffAIMessage(
 			}
 			toolCalls = append(toolCalls, tc)
 
-			// Agent output goes into text buffer for the next flush.
+			// Emit agent output text immediately associated with the
+			// tool call, not deferred to a later flush.
 			if output := block.Get("content"); output.Exists() && output.Str != "" {
 				prefix := agentName
 				if agentType != "" {
 					prefix = agentType + ":" + agentName
 				}
+				// Flush accumulated tool calls first, then emit output.
+				flushTools()
 				textBuf = append(textBuf,
 					"["+prefix+" ("+status+")]\n"+output.Str)
+				flushText()
 			}
 
 		case "mode-divider":
@@ -702,7 +720,14 @@ func parseCodebuffAIMessage(
 			flushTools()
 			mode := block.Get("mode").Str
 			if mode != "" {
-				pendingSys = append(pendingSys, "[Mode: "+mode+"]")
+				// Emit system blocks immediately, not deferred.
+				out = append(out, ParsedMessage{
+					Role:          RoleSystem,
+					Content:       "[Mode: " + mode + "]",
+					Timestamp:     ts,
+					ContentLength: len("[Mode: " + mode + "]"),
+					IsSystem:      true,
+				})
 			}
 
 		case "plan":
@@ -710,7 +735,14 @@ func parseCodebuffAIMessage(
 			flushTools()
 			content := block.Get("content").Str
 			if strings.TrimSpace(content) != "" {
-				pendingSys = append(pendingSys, "[Plan]\n"+content)
+				// Emit system blocks immediately, not deferred.
+				out = append(out, ParsedMessage{
+					Role:          RoleSystem,
+					Content:       "[Plan]\n" + content,
+					Timestamp:     ts,
+					ContentLength: len("[Plan]\n" + content),
+					IsSystem:      true,
+				})
 			}
 
 		case "ask-user":
@@ -718,14 +750,24 @@ func parseCodebuffAIMessage(
 			flushTools()
 			questions := block.Get("questions")
 			if questions.IsArray() {
+				var parts []string
 				questions.ForEach(func(_, q gjson.Result) bool {
 					questionText := q.Get("question").Str
 					if strings.TrimSpace(questionText) != "" {
-						pendingSys = append(pendingSys,
-							"[Agent asked] "+questionText)
+						parts = append(parts, "[Agent asked] "+questionText)
 					}
 					return true
 				})
+				if len(parts) > 0 {
+					content := strings.Join(parts, "\n")
+					out = append(out, ParsedMessage{
+						Role:          RoleSystem,
+						Content:       content,
+						Timestamp:     ts,
+						ContentLength: len(content),
+						IsSystem:      true,
+					})
+				}
 			}
 
 		case "image":
@@ -742,18 +784,6 @@ func parseCodebuffAIMessage(
 	// Flush any remaining accumulated content.
 	flushText()
 	flushTools()
-
-	// Emit system messages after all other content.
-	if len(pendingSys) > 0 {
-		sysContent := strings.Join(pendingSys, "\n")
-		out = append(out, ParsedMessage{
-			Role:          RoleSystem,
-			Content:       sysContent,
-			Timestamp:     ts,
-			ContentLength: len(sysContent),
-			IsSystem:      true,
-		})
-	}
 
 	if len(out) == 0 {
 		return nil
