@@ -35,6 +35,7 @@ func recomputeHeapBytes(
 			len(msg.Timestamp) + len(msg.Model) + len(msg.TokenUsage) +
 			len(msg.ClaudeMessageID) + len(msg.ClaudeRequestID) +
 			len(msg.SourceType) + len(msg.SourceSubtype) +
+			len(msg.PromptSource) +
 			len(msg.SourceUUID) + len(msg.SourceParentUUID)
 		for _, tc := range msg.ToolCalls {
 			total += len(tc.ToolName) + len(tc.Category) +
