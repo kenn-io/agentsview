@@ -30,6 +30,7 @@ type SourceCapabilities struct {
 	StreamingDiscovery   CapabilitySupport
 	WatchSources         CapabilitySupport
 	WatchRoots           CapabilitySupport
+	DegradedPollingProbe CapabilitySupport
 	ClassifyChangedPath  CapabilitySupport
 	StoredSourceHints    CapabilitySupport
 	FindSource           CapabilitySupport

@@ -42,6 +42,26 @@ type cancelBlockingUnwatchedPollSyncer struct {
 	calls    int
 }
 
+type sequenceDegradedPollProbe struct {
+	mu     sync.Mutex
+	states []string
+}
+
+func (p *sequenceDegradedPollProbe) DegradedPollingState(
+	context.Context,
+) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.states) == 0 {
+		return "", nil
+	}
+	state := p.states[0]
+	if len(p.states) > 1 {
+		p.states = p.states[1:]
+	}
+	return state, nil
+}
+
 func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
 	ctx context.Context, _ []string, _ bool,
 ) error {
@@ -171,6 +191,39 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 	assert.Equal(t, [][]string{{initial, runtime}}, syncer.snapshot())
 	assert.Equal(t, []bool{false}, syncer.full,
 		"unwatched polling must reconcile the owned scopes authoritatively")
+}
+
+func TestUnwatchedPollDegradedProbeSkipsUnchangedScope(t *testing.T) {
+	ticks := make(chan time.Time, 4)
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4)}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	root := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	probe := &sequenceDegradedPollProbe{
+		states: []string{"state-1", "state-1", "state-2"},
+	}
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key:           "opencode-root",
+		Roots:         []string{root},
+		DegradedProbe: probe,
+	}))
+
+	ticks <- time.Now()
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{root}}, syncer.snapshot(),
+		"the first degraded poll must establish authoritative state")
+
+	ticks <- time.Now()
+	assert.Never(t, func() bool { return len(syncer.snapshot()) > 1 },
+		100*time.Millisecond, 10*time.Millisecond,
+		"an unchanged degraded probe must suppress the authoritative poll")
+
+	ticks <- time.Now()
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
+		"a changed degraded probe must re-run authoritative reconciliation")
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {

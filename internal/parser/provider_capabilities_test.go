@@ -14,6 +14,10 @@ func TestProviderCapabilitiesWatchRootsDefaultUnsupported(t *testing.T) {
 	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).WatchRoots)
 }
 
+func TestProviderCapabilitiesDegradedPollingProbeDefaultUnsupported(t *testing.T) {
+	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).DegradedPollingProbe)
+}
+
 func TestProviderCapabilitiesStreamingDiscoveryDefaultUnsupported(t *testing.T) {
 	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).StreamingDiscovery)
 }

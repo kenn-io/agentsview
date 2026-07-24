@@ -33,6 +33,12 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+type staticDegradedPollProbe struct{}
+
+func (*staticDegradedPollProbe) DegradedPollingState(context.Context) (string, error) {
+	return "state", nil
+}
+
 func TestRuntimeWarningHelper(t *testing.T) {
 	logOutput := captureLogOutput(t)
 	var visible bytes.Buffer
@@ -1588,9 +1594,11 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing.T) {
 	syncDir := t.TempDir()
 	watchPath := filepath.Join(syncDir, "sessions")
+	probe := &staticDegradedPollProbe{}
 	roots := []watchRoot{{
 		path: watchPath, exists: true, recursive: true,
-		scopes: []watchScope{{agent: parser.AgentClaude, syncDir: syncDir}},
+		scopes:            []watchScope{{agent: parser.AgentClaude, syncDir: syncDir}},
+		degradedPollProbe: probe,
 	}}
 
 	got := watchPollingObligations(
@@ -1599,9 +1607,11 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 		[]string{syncDir},
 	)
 
-	assert.Equal(t, []agentsync.PollingObligation{{
-		Key: watchPath, Roots: []string{syncDir}, Probe: watchPath,
-	}}, got)
+	require.Len(t, got, 1)
+	assert.Equal(t, watchPath, got[0].Key)
+	assert.Equal(t, []string{syncDir}, got[0].Roots)
+	assert.Equal(t, watchPath, got[0].Probe)
+	assert.Same(t, probe, got[0].DegradedProbe)
 }
 
 // A persistent polling obligation probes the configured dir, which can still

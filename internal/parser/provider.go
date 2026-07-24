@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	ProviderFeatureFingerprint = "fingerprint"
-	ProviderFeatureParse       = "parse"
-	ProviderFeatureWatchRoots  = "watch roots"
+	ProviderFeatureFingerprint          = "fingerprint"
+	ProviderFeatureParse                = "parse"
+	ProviderFeatureWatchRoots           = "watch roots"
+	ProviderFeatureDegradedPollingProbe = "degraded polling probe"
 )
 
 // ErrUnsupportedProviderFeature identifies optional provider behavior that is
@@ -196,6 +197,13 @@ func (b ProviderBase) WatchPlan(context.Context) (WatchPlan, error) {
 	return WatchPlan{}, nil
 }
 
+func (b ProviderBase) DegradedPollingProbe(
+	context.Context,
+	string,
+) (DegradedPollingStateProbe, error) {
+	return nil, b.unsupported(ProviderFeatureDegradedPollingProbe)
+}
+
 func (b ProviderBase) SourcesForChangedPath(
 	context.Context,
 	ChangedPathRequest,
@@ -296,6 +304,23 @@ type WatchRootPlanner interface {
 	WatchRoots(context.Context) ([]WatchRoot, error)
 }
 
+// DegradedPollingStateProbe captures one provider-owned freshness token for a
+// degraded polling unit. Equal tokens mean the provider's bounded authoritative
+// reconciliation for that unit would be a no-op.
+type DegradedPollingStateProbe interface {
+	DegradedPollingState(context.Context) (string, error)
+}
+
+// DegradedPollingProbeProvider declares an additive provider-owned degraded
+// polling probe. Providers keep their existing degraded polling behavior until
+// they advertise and implement this capability.
+type DegradedPollingProbeProvider interface {
+	DegradedPollingProbe(
+		context.Context,
+		string,
+	) (DegradedPollingStateProbe, error)
+}
+
 // ResolveWatchRoots returns the bounded root-planning capability when a
 // provider advertises it. Providers that have not migrated yet retain their
 // WatchPlan behavior, but parser-only include/exclude globs are never carried
@@ -323,6 +348,27 @@ func ResolveWatchRoots(
 		return nil, err
 	}
 	return watchRootMetadata(plan.Roots), nil
+}
+
+func ResolveDegradedPollingProbe(
+	ctx context.Context,
+	provider Provider,
+	watchRoot string,
+) (DegradedPollingStateProbe, error) {
+	if provider.Capabilities().Source.DegradedPollingProbe != CapabilitySupported {
+		return nil, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureDegradedPollingProbe,
+		}
+	}
+	prober, ok := provider.(DegradedPollingProbeProvider)
+	if !ok {
+		return nil, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureDegradedPollingProbe,
+		}
+	}
+	return prober.DegradedPollingProbe(ctx, watchRoot)
 }
 
 func watchRootMetadata(roots []WatchRoot) []WatchRoot {

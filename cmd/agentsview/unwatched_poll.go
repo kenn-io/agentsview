@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 )
 
@@ -37,6 +38,10 @@ type pollingObligation struct {
 	// the scope then would tombstone every session under the missing
 	// subtree. Empty means the Roots themselves are probed.
 	Probe string
+	// DegradedProbe carries an additive provider-owned freshness token for
+	// degraded polling. Equal consecutive states suppress authoritative
+	// reconciliation for this obligation's Roots on that tick.
+	DegradedProbe parser.DegradedPollingStateProbe
 }
 
 type sharedUnwatchedPollCoordinator struct {
@@ -58,6 +63,7 @@ type sharedUnwatchedPollCoordinator struct {
 	// coordinator loop; each entry keeps its probe so availability is
 	// evaluated per obligation at poll time.
 	pollObligations []pollingObligation
+	pollStates      map[string]string
 	stop            chan struct{}
 	done            chan struct{}
 	stopOnce        sync.Once
@@ -94,6 +100,7 @@ func newUnwatchedPollCoordinatorWithTicks(
 		add:          make(chan unwatchedPollAdd),
 		pollWake:     make(chan struct{}, 1),
 		pollDone:     make(chan struct{}),
+		pollStates:   make(map[string]string),
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
 		onRootsOwned: onRootsOwned,
@@ -120,9 +127,10 @@ func (c *sharedUnwatchedPollCoordinator) updateRoots(
 ) error {
 	request := unwatchedPollAdd{
 		obligation: pollingObligation{
-			Key:   obligation.Key,
-			Roots: append([]string(nil), obligation.Roots...),
-			Probe: obligation.Probe,
+			Key:           obligation.Key,
+			Roots:         append([]string(nil), obligation.Roots...),
+			Probe:         obligation.Probe,
+			DegradedProbe: obligation.DegradedProbe,
 		},
 		remove: remove,
 		done:   make(chan struct{}),
@@ -163,6 +171,9 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 				obligations[request.obligation.Key] = request.obligation
 			}
 			c.setPollObligations(obligations)
+			c.pollMu.Lock()
+			delete(c.pollStates, request.obligation.Key)
+			c.pollMu.Unlock()
 			if c.onRootsOwned != nil {
 				c.onRootsOwned(unwatchedPollObligationRoots(obligations))
 			}
@@ -216,7 +227,9 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			if c.workerCtx.Err() != nil {
 				return
 			}
-			roots := availableUnwatchedPollRoots(c.currentPollObligations())
+			roots, nextStates := c.preparePollRun(
+				c.workerCtx, c.currentPollObligations(),
+			)
 			if len(roots) == 0 {
 				continue
 			}
@@ -225,7 +238,10 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 				if c.workerCtx.Err() != nil {
 					return
 				}
-				pollUnwatchedRootsOnce(c.workerCtx, c.engine, roots)
+				if err := pollUnwatchedRootsOnce(c.workerCtx, c.engine, roots); err != nil {
+					return
+				}
+				c.commitPollStates(nextStates)
 			})
 		}
 	}
@@ -302,11 +318,112 @@ func unwatchedPollRoots(owned map[string]struct{}) []string {
 
 func pollUnwatchedRootsOnce(
 	ctx context.Context, engine unwatchedPollSyncer, roots []string,
-) {
+) error {
 	if len(roots) == 0 {
-		return
+		return nil
 	}
 	if err := engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
 		log.Printf("polling unwatched roots: %v", err)
+		return err
 	}
+	return nil
+}
+
+func (c *sharedUnwatchedPollCoordinator) currentPollStates() map[string]string {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	return clonePollStates(c.pollStates)
+}
+
+func (c *sharedUnwatchedPollCoordinator) preparePollRun(
+	ctx context.Context,
+	obligations []pollingObligation,
+) ([]string, map[string]string) {
+	return availableUnwatchedPollRootsWithState(
+		ctx, obligations, c.currentPollStates(),
+	)
+}
+
+func (c *sharedUnwatchedPollCoordinator) commitPollStates(states map[string]string) {
+	if len(states) == 0 {
+		return
+	}
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	for key, state := range states {
+		c.pollStates[key] = state
+	}
+}
+
+func availableUnwatchedPollRootsWithState(
+	ctx context.Context,
+	obligations []pollingObligation,
+	prior map[string]string,
+) ([]string, map[string]string) {
+	candidates := make(map[string]struct{})
+	blocked := make(map[string]struct{})
+	candidateOwners := make(map[string][]string)
+	pendingStates := make(map[string]string)
+	for _, obligation := range obligations {
+		probeMissing := false
+		if obligation.Probe != "" {
+			if _, err := os.Stat(obligation.Probe); err != nil {
+				probeMissing = true
+			}
+		}
+		if probeMissing {
+			for _, root := range obligation.Roots {
+				if root != "" {
+					blocked[filepath.Clean(root)] = struct{}{}
+				}
+			}
+			continue
+		}
+		if obligation.DegradedProbe != nil {
+			state, err := obligation.DegradedProbe.DegradedPollingState(ctx)
+			if err == nil {
+				if prior[obligation.Key] == state {
+					continue
+				}
+				pendingStates[obligation.Key] = state
+			}
+		}
+		for _, root := range obligation.Roots {
+			if root == "" {
+				continue
+			}
+			if _, err := os.Stat(root); err == nil {
+				candidates[root] = struct{}{}
+				candidateOwners[root] = append(candidateOwners[root], obligation.Key)
+			}
+		}
+	}
+	for root := range candidates {
+		if overlapsDeferredScope(filepath.Clean(root), blocked) {
+			delete(candidates, root)
+		}
+	}
+	if len(pendingStates) == 0 {
+		return unwatchedPollRoots(candidates), nil
+	}
+	committed := make(map[string]string)
+	for root := range candidates {
+		for _, key := range candidateOwners[root] {
+			if state, ok := pendingStates[key]; ok {
+				committed[key] = state
+			}
+		}
+	}
+	return unwatchedPollRoots(candidates), committed
+}
+
+func clonePollStates(states map[string]string) map[string]string {
+	if len(states) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(states))
+	for key, value := range states {
+		cloned[key] = value
+	}
+	return cloned
 }

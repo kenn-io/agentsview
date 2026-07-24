@@ -156,6 +156,33 @@ func openCodeContainerPathForEvent(
 	return ""
 }
 
+func (e *Engine) unchangedOpenCodeSQLiteWatcherEvent(path string) bool {
+	e.containerMu.Lock()
+	hasTrusted := len(e.trustedSQLiteContainers) > 0
+	e.containerMu.Unlock()
+	if !hasTrusted {
+		return false
+	}
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" || strings.HasPrefix(dir, "s3://") {
+			continue
+		}
+		dbPath := openCodeContainerPathForEvent(parser.AgentOpenCode, dir, path)
+		if dbPath == "" {
+			continue
+		}
+		current, ok := statSQLiteContainerState(dbPath)
+		if !ok {
+			return false
+		}
+		e.containerMu.Lock()
+		trusted, ok := e.trustedSQLiteContainers[dbPath]
+		e.containerMu.Unlock()
+		return ok && current == trusted.state
+	}
+	return false
+}
+
 // beginSQLiteContainerPass starts a pass's gate bookkeeping from the
 // discovered files and the pre-discovery container captures. files must be
 // the pre-filter discovery set: promotion requires seeing a completion for

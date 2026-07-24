@@ -7321,6 +7321,45 @@ func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
 	assert.Equal(t, parser.AgentOpenCode, files[0].Agent)
 }
 
+func TestEngine_ClassifyPathsOpenCodeSQLiteWALSkipsTrustedNoOpEvent(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	dbPath := filepath.Join(opencodeDir, "opencode.db")
+	seedOpenCodeSQLiteWALSession(t, dbPath, "ses_wal")
+	walPath := filepath.Join(opencodeDir, "opencode.db-wal")
+	state, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
+	engine.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+		dbPath: {state: state},
+	}
+
+	assert.Empty(t, requireClassifyPaths(t, engine, []string{walPath}),
+		"an unchanged trusted container must suppress watcher-side SQLite fanout")
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "reopen opencode db")
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Exec(
+		`INSERT INTO session (id, project_id, time_created, time_updated)
+		 VALUES ('ses_next', 'prj_1', 3, 4)`,
+	)
+	require.NoError(t, err, "append changed SQLite session")
+
+	files := requireClassifyPaths(t, engine, []string{walPath})
+	require.Len(t, files, 2)
+	assert.Equal(t, parser.AgentOpenCode, files[0].Agent)
+	assert.Equal(t, parser.AgentOpenCode, files[1].Agent)
+}
+
 // seedOpenCodeSQLiteWALSession creates a minimal OpenCode-shaped SQLite
 // database and keeps its writer open with the session commit held in the WAL.
 // This exercises the same uncheckpointed state produced by a live OpenCode

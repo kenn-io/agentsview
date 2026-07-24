@@ -479,6 +479,53 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	assert.Equal(t, "global", removed[0].ProjectHint)
 }
 
+func TestOpenCodeDegradedPollingProbeIsOpenCodeOnly(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/app")
+	seeder.AddSession(
+		"ses_probe", "prj_1", "", "Probe", 1700000000000, 1700000010000,
+	)
+
+	openCodeProvider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	assert.Equal(t,
+		CapabilitySupported,
+		openCodeProvider.Capabilities().Source.DegradedPollingProbe,
+	)
+	probe, err := ResolveDegradedPollingProbe(
+		t.Context(), openCodeProvider, root,
+	)
+	require.NoError(t, err)
+	state, err := probe.DegradedPollingState(t.Context())
+	require.NoError(t, err)
+	assert.NotEmpty(t, state)
+
+	for _, agent := range []AgentType{
+		AgentKilo,
+		AgentMiMoCode,
+		AgentIcodemate,
+	} {
+		t.Run(string(agent), func(t *testing.T) {
+			provider, ok := NewProvider(agent, ProviderConfig{
+				Roots: []string{t.TempDir()},
+			})
+			require.True(t, ok)
+			assert.Equal(t,
+				CapabilityUnsupported,
+				provider.Capabilities().Source.DegradedPollingProbe,
+			)
+			_, err := ResolveDegradedPollingProbe(
+				t.Context(), provider, t.TempDir(),
+			)
+			require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
+		})
+	}
+}
+
 func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	fixture := openCodeSQLiteProviderReadFixture(t)

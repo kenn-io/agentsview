@@ -59,7 +59,7 @@ func (f openCodeFormatProviderFactory) Definition() AgentDef {
 }
 
 func (f openCodeFormatProviderFactory) Capabilities() Capabilities {
-	return openCodeFormatProviderCapabilities()
+	return openCodeFormatProviderCapabilities(f.spec.agent)
 }
 
 func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -67,7 +67,7 @@ func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 	return &openCodeFormatProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
-			Caps:   openCodeFormatProviderCapabilities(),
+			Caps:   openCodeFormatProviderCapabilities(f.spec.agent),
 			Config: cfg,
 		},
 		sources: newOpenCodeFormatSourceSet(cfg.Roots, f.spec),
@@ -89,6 +89,32 @@ func (p *openCodeFormatProvider) DiscoverEach(ctx context.Context, yield func(So
 
 func (p *openCodeFormatProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
+}
+
+func (p *openCodeFormatProvider) DegradedPollingProbe(
+	ctx context.Context,
+	watchRoot string,
+) (DegradedPollingStateProbe, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if p.Def.Type != AgentOpenCode {
+		return nil, p.unsupported(ProviderFeatureDegradedPollingProbe)
+	}
+	watchRoot = filepath.Clean(watchRoot)
+	for _, root := range p.sources.roots {
+		for _, candidate := range p.sources.spec.watchRoots(root) {
+			if filepath.Clean(candidate) != watchRoot {
+				continue
+			}
+			src := p.sources.spec.resolve(root)
+			if src.DBPath == "" || !IsRegularFile(src.DBPath) {
+				return nil, p.unsupported(ProviderFeatureDegradedPollingProbe)
+			}
+			return openCodeSQLiteDegradedPollProbe{dbPath: src.DBPath}, nil
+		}
+	}
+	return nil, p.unsupported(ProviderFeatureDegradedPollingProbe)
 }
 
 func (p *openCodeFormatProvider) SourcesForChangedPath(
@@ -982,6 +1008,35 @@ func sqliteWALHasFrames(path string) bool {
 	return info.Mode().IsRegular() && info.Size() > sqliteWALHeaderSize
 }
 
+type openCodeSQLiteDegradedPollProbe struct {
+	dbPath string
+}
+
+func (p openCodeSQLiteDegradedPollProbe) DegradedPollingState(
+	ctx context.Context,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	state, ok := StatSQLiteContainerState(p.dbPath)
+	if !ok {
+		return "", fmt.Errorf("stat sqlite container state %s", p.dbPath)
+	}
+	return fmt.Sprintf(
+		"%d:%d:%d:%d:%d:%d:%d:%d:%d:%d",
+		state.DBSize,
+		state.DBMtimeSec,
+		state.DBChangeCounter,
+		state.DBInode,
+		state.DBDevice,
+		state.WALSize,
+		state.WALMtimeSec,
+		state.WALCkptSeq,
+		state.WALSalt1,
+		state.WALSalt2,
+	), nil
+}
+
 func (s openCodeFormatSourceSet) sourceForRawID(root, sessionID string) (SourceRef, bool) {
 	path := s.spec.find(root, sessionID)
 	if path == "" {
@@ -1101,22 +1156,26 @@ func findOpenCodeProviderStorageSessionIDByMessageID(
 	return ""
 }
 
-func openCodeFormatProviderCapabilities() Capabilities {
+func openCodeFormatProviderCapabilities(agent AgentType) Capabilities {
+	source := SourceCapabilities{
+		DiscoverSources:       CapabilitySupported,
+		StreamingDiscovery:    CapabilitySupported,
+		WatchSources:          CapabilitySupported,
+		ClassifyChangedPath:   CapabilitySupported,
+		FindSource:            CapabilitySupported,
+		CompositeFingerprint:  CapabilitySupported,
+		IncrementalAppend:     CapabilityNotApplicable,
+		MultiSessionSource:    CapabilityNotApplicable,
+		SharedContainerSource: CapabilitySupported,
+		PerSessionErrors:      CapabilityNotApplicable,
+		ExcludedSessions:      CapabilityNotApplicable,
+		ForceReplaceOnParse:   CapabilityNotApplicable,
+	}
+	if agent == AgentOpenCode {
+		source.DegradedPollingProbe = CapabilitySupported
+	}
 	return Capabilities{
-		Source: SourceCapabilities{
-			DiscoverSources:       CapabilitySupported,
-			StreamingDiscovery:    CapabilitySupported,
-			WatchSources:          CapabilitySupported,
-			ClassifyChangedPath:   CapabilitySupported,
-			FindSource:            CapabilitySupported,
-			CompositeFingerprint:  CapabilitySupported,
-			IncrementalAppend:     CapabilityNotApplicable,
-			MultiSessionSource:    CapabilityNotApplicable,
-			SharedContainerSource: CapabilitySupported,
-			PerSessionErrors:      CapabilityNotApplicable,
-			ExcludedSessions:      CapabilityNotApplicable,
-			ForceReplaceOnParse:   CapabilityNotApplicable,
-		},
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			Cwd:                  CapabilitySupported,

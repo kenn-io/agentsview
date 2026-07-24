@@ -330,9 +330,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 				},
 				OnPollingRequired: func(obligation sync.PollingObligation) error {
 					return unwatchedPoller.AddObligation(pollingObligation{
-						Key:   obligation.Key,
-						Roots: obligation.Roots,
-						Probe: obligation.Probe,
+						Key:           obligation.Key,
+						Roots:         obligation.Roots,
+						Probe:         obligation.Probe,
+						DegradedProbe: obligation.DegradedProbe,
 					})
 				},
 				OnPollingReleased: unwatchedPoller.RemoveObligation,
@@ -1887,15 +1888,24 @@ func watchPollingObligations(
 ) []sync.PollingObligation {
 	byKey := make(map[string][]string)
 	probes := make(map[string]string)
+	degraded := make(map[string]parser.DegradedPollingStateProbe)
 	represented := make(map[string]struct{})
 	// The probe is the physical path whose availability gates the
 	// obligation's reconciliation roots: the watch root's own path for
 	// root-keyed groups, the dir itself for persistent dirs.
-	add := func(key, probe string, roots ...string) {
+	add := func(
+		key,
+		probe string,
+		degradedProbe parser.DegradedPollingStateProbe,
+		roots ...string,
+	) {
 		if key == "" {
 			return
 		}
 		probes[key] = filepath.Clean(probe)
+		if degradedProbe != nil {
+			degraded[key] = degradedProbe
+		}
 		for _, root := range roots {
 			if root == "" {
 				continue
@@ -1911,10 +1921,10 @@ func watchPollingObligations(
 			result = results[i]
 		}
 		if !result.MissingRootLifecycleOwned {
-			add(root.path, root.path, root.pendingPollingDirs...)
+			add(root.path, root.path, root.degradedPollProbe, root.pendingPollingDirs...)
 		}
 		for _, dir := range root.persistentPollingDirs {
-			add("persistent:"+filepath.Clean(dir), dir, dir)
+			add("persistent:"+filepath.Clean(dir), dir, nil, dir)
 		}
 		if i >= len(results) {
 			// No registration result exists for this root: the watcher was
@@ -1923,25 +1933,25 @@ func watchPollingObligations(
 			// after the obligations are installed leaves its configured dir
 			// pollable and the fallback poll reconciles it as an
 			// authoritative empty discovery.
-			add(root.path, root.path, root.syncDirs()...)
+			add(root.path, root.path, root.degradedPollProbe, root.syncDirs()...)
 			continue
 		}
 		if result.Unwatched > 0 || result.BudgetExhausted ||
 			result.ResourceExhausted || result.Err != nil {
-			add(root.path, root.path, root.syncDirs()...)
+			add(root.path, root.path, root.degradedPollProbe, root.syncDirs()...)
 		}
 	}
 	for _, dir := range unwatchedDirs {
 		dir = filepath.Clean(dir)
 		if _, ok := represented[dir]; !ok {
-			add("persistent:"+dir, dir, dir)
+			add("persistent:"+dir, dir, nil, dir)
 		}
 	}
 	obligations := make([]sync.PollingObligation, 0, len(byKey))
 	for key, roots := range byKey {
 		slices.Sort(roots)
 		obligations = append(obligations, sync.PollingObligation{
-			Key: key, Roots: roots, Probe: probes[key],
+			Key: key, Roots: roots, Probe: probes[key], DegradedProbe: degraded[key],
 		})
 	}
 	slices.SortFunc(obligations, func(a, b sync.PollingObligation) int {
@@ -2300,6 +2310,7 @@ type watchRoot struct {
 	scopes                []watchScope
 	pendingPollingDirs    []string
 	persistentPollingDirs []string
+	degradedPollProbe     parser.DegradedPollingStateProbe
 }
 
 func (r watchRoot) registeredRoot() sync.WatchRoot {
@@ -2338,12 +2349,22 @@ func collectWatchRoots(cfg config.Config) (
 	rootIndexes := make(map[string]int)
 	persistentPollingDirs := make(map[string]struct{})
 	symlinkGatedDirs = make(map[string][]string)
-	addRoot := func(agent parser.AgentType, dir, path string, recursive, exists bool) {
+	addRoot := func(
+		agent parser.AgentType,
+		dir,
+		path string,
+		recursive,
+		exists bool,
+		degradedProbe parser.DegradedPollingStateProbe,
+	) {
 		path = filepath.Clean(path)
 		scope := watchScope{agent: agent, syncDir: dir}
 		if idx, ok := rootIndexes[path]; ok {
 			roots[idx].recursive = roots[idx].recursive || recursive
 			roots[idx].exists = roots[idx].exists || exists
+			if roots[idx].degradedPollProbe == nil {
+				roots[idx].degradedPollProbe = degradedProbe
+			}
 			if !slices.Contains(roots[idx].scopes, scope) {
 				roots[idx].scopes = append(roots[idx].scopes, scope)
 			}
@@ -2351,16 +2372,23 @@ func collectWatchRoots(cfg config.Config) (
 		}
 		rootIndexes[path] = len(roots)
 		roots = append(roots, watchRoot{
-			path:      path,
-			recursive: recursive,
-			exists:    exists,
-			scopes:    []watchScope{scope},
+			path:              path,
+			recursive:         recursive,
+			exists:            exists,
+			scopes:            []watchScope{scope},
+			degradedPollProbe: degradedProbe,
 		})
 	}
 	for _, def := range parser.Registry {
 		for _, d := range cfg.ResolveDirs(def.Type) {
-			addAgentRoot := func(dir, root string, recursive, exists bool) {
-				addRoot(def.Type, dir, root, recursive, exists)
+			addAgentRoot := func(
+				dir,
+				root string,
+				recursive,
+				exists bool,
+				degradedProbe parser.DegradedPollingStateProbe,
+			) {
+				addRoot(def.Type, dir, root, recursive, exists, degradedProbe)
 			}
 			_, hasProvider := parser.ProviderFactoryByType(def.Type)
 			if providerWatched, polling := collectProviderWatchRoots(def, d, addAgentRoot); providerWatched {
@@ -2425,7 +2453,13 @@ type providerPollingReasons struct {
 func collectProviderWatchRoots(
 	def parser.AgentDef,
 	dir string,
-	addRoot func(dir, root string, recursive, exists bool),
+	addRoot func(
+		dir,
+		root string,
+		recursive,
+		exists bool,
+		degradedProbe parser.DegradedPollingStateProbe,
+	),
 ) (bool, providerPollingReasons) {
 	factory, ok := parser.ProviderFactoryByType(def.Type)
 	if !ok {
@@ -2455,9 +2489,19 @@ func collectProviderWatchRoots(
 			polling.symlinkRoots = append(polling.symlinkRoots, root)
 			continue
 		}
+		degradedProbe, probeErr := parser.ResolveDegradedPollingProbe(
+			context.Background(), provider, root,
+		)
+		if probeErr != nil {
+			if !errors.Is(probeErr, parser.ErrUnsupportedProviderFeature) {
+				log.Printf("%s provider degraded poll probe for %s: %v",
+					def.Type, root, probeErr)
+			}
+			degradedProbe = nil
+		}
 		_, err := os.Stat(root)
 		exists := err == nil
-		addRoot(dir, root, providerRoot.Recursive, exists)
+		addRoot(dir, root, providerRoot.Recursive, exists, degradedProbe)
 		if exists {
 			continue
 		}
@@ -2522,13 +2566,19 @@ func pathCoveredByAnyWatchRootCreation(path string, roots []watchRoot) bool {
 func collectLegacyWatchRoots(
 	def parser.AgentDef,
 	dir string,
-	addRoot func(dir, root string, recursive, exists bool),
+	addRoot func(
+		dir,
+		root string,
+		recursive,
+		exists bool,
+		degradedProbe parser.DegradedPollingStateProbe,
+	),
 ) []string {
 	var unwatchedDirs []string
 	if def.ShallowWatchRootsFunc != nil {
 		for _, watchDir := range def.ShallowWatchRootsFunc(dir) {
 			if _, err := os.Stat(watchDir); err == nil {
-				addRoot(dir, watchDir, false, true)
+				addRoot(dir, watchDir, false, true, nil)
 			}
 		}
 	}
@@ -2539,7 +2589,7 @@ func collectLegacyWatchRoots(
 		}
 		for _, watchDir := range watchDirs {
 			if _, err := os.Stat(watchDir); err == nil {
-				addRoot(dir, watchDir, !def.ShallowWatch, true)
+				addRoot(dir, watchDir, !def.ShallowWatch, true, nil)
 				continue
 			}
 			unwatchedDirs = append(unwatchedDirs, dir)
@@ -2548,14 +2598,14 @@ func collectLegacyWatchRoots(
 	}
 	if len(def.WatchSubdirs) == 0 {
 		if _, err := os.Stat(dir); err == nil {
-			addRoot(dir, dir, !def.ShallowWatch, true)
+			addRoot(dir, dir, !def.ShallowWatch, true, nil)
 		}
 		return unwatchedDirs
 	}
 	for _, sub := range def.WatchSubdirs {
 		watchDir := filepath.Join(dir, sub)
 		if _, err := os.Stat(watchDir); err == nil {
-			addRoot(dir, watchDir, !def.ShallowWatch, true)
+			addRoot(dir, watchDir, !def.ShallowWatch, true, nil)
 		}
 	}
 	return unwatchedDirs

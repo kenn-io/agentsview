@@ -1031,6 +1031,10 @@ func (e *Engine) classifyProviderChangedPath(
 			!changedPathWithinAnyRoot(path, watchRoots) {
 			continue
 		}
+		if agentType == parser.AgentOpenCode &&
+			e.unchangedOpenCodeSQLiteWatcherEvent(path) {
+			continue
+		}
 		for _, watchRoot := range watchRoots {
 			request := parser.ChangedPathRequest{
 				Path:      path,
