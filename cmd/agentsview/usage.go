@@ -447,16 +447,17 @@ func upsertPricing(
 }
 
 // refreshPricingFromSources walks the default pricing source
-// list and upserts whichever catalogs respond. LiteLLM is
+// list and refreshes one complete catalog snapshot. LiteLLM is
 // tried first because it is the most complete for the public
 // models agentsview normally parses; OpenRouter is tried next
 // because its public /models endpoint frequently lists
 // fork-tuned and private model prices LiteLLM has not yet
-// picked up. Each fetch failure is logged but never aborts
-// the loop, so a partial outage of one upstream does not
-// prevent the other from seeding. All successful results are
-// merged (the first source to declare a model_pattern owns the
-// row) and upserted as a single batch.
+// picked up. Fetch failures are logged, but any partial result
+// is discarded so a lower-priority source cannot overwrite or
+// become ambiguous with persisted higher-priority rows. When
+// every source succeeds, their results are merged (the first
+// source to declare a model_pattern owns the row) and reconciled
+// as a single batch.
 func refreshPricingFromSources(database *db.DB) {
 	if err := refreshPricingFromSourcesWith(
 		database, pricing.DefaultPricingSources(),
@@ -468,50 +469,51 @@ func refreshPricingFromSources(database *db.DB) {
 func refreshPricingFromSourcesWith(
 	database *db.DB, sources []pricing.PricingSource,
 ) error {
-	fetched := make([][]pricing.ModelPricing, 0, len(sources))
-	var openRouterAliases []string
-	var shadowedRows []string
-	reconcileAliases := false
-	earlierSourceFailed := false
-	for _, src := range sources {
+	fetched := make([][]pricing.ModelPricing, len(sources))
+	sourceFailed := false
+	for i, src := range sources {
 		prices, err := src.Fetch()
 		if err != nil {
 			log.Printf(
 				"pricing refresh: %s fetch failed: %v",
 				src.Name, err,
 			)
-			earlierSourceFailed = true
+			sourceFailed = true
 			continue
 		}
-		if src.Name == "openrouter" {
-			if earlierSourceFailed {
-				// A higher-priority source failed, so its persisted
-				// rows may still be authoritative but are invisible
-				// to suppression. Refresh qualified OpenRouter rows
-				// only and leave the stored alias set and its
-				// metadata untouched until a fully successful
-				// refresh can re-validate alias emission.
-				prices = pricing.DropOpenRouterAliases(prices)
-			} else {
-				prices, shadowedRows = pricing.SuppressShadowedOpenRouterRows(
-					fetched, prices,
-				)
-				reconcileAliases = true
-				openRouterAliases = pricing.OpenRouterAliasPatterns(prices)
-			}
-		}
-		fetched = append(fetched, prices)
+		fetched[i] = prices
 		log.Printf(
 			"pricing refresh: %s returned %d model rows",
 			src.Name, len(prices),
 		)
 	}
+	if sourceFailed {
+		log.Printf(
+			"pricing refresh: source set incomplete; " +
+				"keeping last fully reconciled pricing",
+		)
+		return nil
+	}
 	if len(fetched) == 0 {
 		log.Printf(
-			"pricing refresh: every source failed; " +
+			"pricing refresh: no sources configured; " +
 				"keeping embedded fallback pricing",
 		)
 		return nil
+	}
+
+	var openRouterAliases []string
+	var shadowedRows []string
+	reconcileAliases := false
+	for i, src := range sources {
+		if src.Name != "openrouter" {
+			continue
+		}
+		fetched[i], shadowedRows = pricing.SuppressShadowedOpenRouterRows(
+			fetched[:i], fetched[i],
+		)
+		reconcileAliases = true
+		openRouterAliases = pricing.OpenRouterAliasPatterns(fetched[i])
 	}
 	merged := pricing.MergePricing(fetched)
 	flat := make([]pricing.ModelPricing, 0, len(merged))

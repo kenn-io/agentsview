@@ -1681,76 +1681,114 @@ func TestRefreshPricingFromSourcesRetiresCanonicallyShadowedRows(
 		"and resolves to the higher-priority LiteLLM rate")
 }
 
-// TestRefreshPricingFromSourcesSkipsAliasChangesWhenLiteLLMFails proves a
-// failed higher-priority fetch freezes the stored alias set: no new
-// OpenRouter aliases are written (they cannot be validated against the
-// invisible persisted LiteLLM rows) and previously stored aliases and
-// their metadata survive untouched, while qualified rows still refresh.
-func TestRefreshPricingFromSourcesSkipsAliasChangesWhenLiteLLMFails(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	litellmErr := error(nil)
-	openRouterRows := []pricing.ModelPricing{
-		{ModelPattern: "acme/known", InputPerMTok: 1, OutputPerMTok: 1},
-		{ModelPattern: "known", InputPerMTok: 1, OutputPerMTok: 1},
+// TestRefreshPricingFromSourcesPreservesCatalogWhenSourceFails proves a
+// partial refresh never mutates the last fully reconciled snapshot. In
+// particular, a LiteLLM outage must not restore the qualified OpenRouter row
+// that the healthy refresh suppressed, because it would make a bare model
+// lookup ambiguous and price it at zero.
+func TestRefreshPricingFromSourcesPreservesCatalogWhenSourceFails(
+	t *testing.T,
+) {
+	for _, failedSource := range []string{"litellm", "openrouter"} {
+		t.Run(failedSource, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			sourceErrors := map[string]error{}
+			litellmRows := []pricing.ModelPricing{
+				{
+					ModelPattern:  "minimax/MiniMax-M3",
+					InputPerMTok:  2,
+					OutputPerMTok: 8,
+				},
+				{
+					ModelPattern: "litellm/kept",
+					InputPerMTok: 1,
+				},
+			}
+			openRouterRows := []pricing.ModelPricing{
+				{
+					ModelPattern: "minimax/minimax-m3",
+					InputPerMTok: 9,
+				},
+				{
+					ModelPattern: "minimax-m3",
+					InputPerMTok: 9,
+				},
+				{
+					ModelPattern: "router/kept",
+					InputPerMTok: 3,
+				},
+			}
+			sources := []pricing.PricingSource{
+				{
+					Name: "litellm",
+					Fetch: func() ([]pricing.ModelPricing, error) {
+						return litellmRows, sourceErrors["litellm"]
+					},
+				},
+				{
+					Name: "openrouter",
+					Fetch: func() ([]pricing.ModelPricing, error) {
+						return openRouterRows, sourceErrors["openrouter"]
+					},
+				},
+			}
+
+			require.NoError(t,
+				refreshPricingFromSourcesWith(database, sources))
+
+			// Both sources now advertise changes, but one outage makes the
+			// snapshot incomplete and neither change may land.
+			litellmRows = []pricing.ModelPricing{
+				{
+					ModelPattern:  "minimax/MiniMax-M3",
+					InputPerMTok:  6,
+					OutputPerMTok: 12,
+				},
+				{
+					ModelPattern: "litellm/new-during-outage",
+					InputPerMTok: 4,
+				},
+			}
+			openRouterRows = []pricing.ModelPricing{
+				{
+					ModelPattern: "minimax/minimax-m3",
+					InputPerMTok: 9,
+				},
+				{
+					ModelPattern: "router/new-during-outage",
+					InputPerMTok: 7,
+				},
+			}
+			sourceErrors[failedSource] = assert.AnError
+			require.NoError(t,
+				refreshPricingFromSourcesWith(database, sources))
+
+			shadowed, err := database.GetModelPricing(
+				"minimax/minimax-m3",
+			)
+			require.NoError(t, err)
+			assert.Nil(t, shadowed,
+				"lower-priority canonical collision stays retired")
+
+			higherPriority, err := database.GetModelPricing(
+				"minimax/MiniMax-M3",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, higherPriority)
+			assert.Equal(t, 2.0, higherPriority.InputPerMTok,
+				"persisted higher-priority rate stays unchanged")
+
+			for _, pattern := range []string{
+				"litellm/new-during-outage",
+				"router/new-during-outage",
+			} {
+				row, getErr := database.GetModelPricing(pattern)
+				require.NoError(t, getErr)
+				assert.Nil(t, row,
+					"incomplete snapshot must not add %q", pattern)
+			}
+		})
 	}
-	sources := []pricing.PricingSource{
-		{
-			Name: "litellm",
-			Fetch: func() ([]pricing.ModelPricing, error) {
-				return nil, litellmErr
-			},
-		},
-		{
-			Name: "openrouter",
-			Fetch: func() ([]pricing.ModelPricing, error) {
-				return openRouterRows, nil
-			},
-		},
-	}
-
-	// Healthy refresh stores the alias and its provenance metadata.
-	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
-	stored, err := database.GetModelPricing("known")
-	require.NoError(t, err)
-	require.NotNil(t, stored, "alias stored on healthy refresh")
-
-	// LiteLLM outage: OpenRouter grows a new unique suffix and drops the
-	// old one. Neither alias change may be applied.
-	litellmErr = assert.AnError
-	openRouterRows = []pricing.ModelPricing{
-		{ModelPattern: "acme/brand-new", InputPerMTok: 7, OutputPerMTok: 7},
-		{ModelPattern: "brand-new", InputPerMTok: 7, OutputPerMTok: 7},
-	}
-	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
-
-	newAlias, err := database.GetModelPricing("brand-new")
-	require.NoError(t, err)
-	assert.Nil(t, newAlias,
-		"no new alias while higher-priority coverage is unknown")
-	oldAlias, err := database.GetModelPricing("known")
-	require.NoError(t, err)
-	assert.NotNil(t, oldAlias, "existing alias survives the outage")
-	qualified, err := database.GetModelPricing("acme/brand-new")
-	require.NoError(t, err)
-	require.NotNil(t, qualified, "qualified rows still refresh")
-	meta, err := database.GetPricingMeta(pricing.OpenRouterAliasesMetaKey)
-	require.NoError(t, err)
-	assert.Equal(t, `["known"]`, meta,
-		"alias metadata frozen during the outage")
-
-	// Recovery: the next fully successful refresh applies both changes.
-	litellmErr = nil
-	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
-	oldAlias, err = database.GetModelPricing("known")
-	require.NoError(t, err)
-	assert.Nil(t, oldAlias, "stale alias retired after recovery")
-	newAlias, err = database.GetModelPricing("brand-new")
-	require.NoError(t, err)
-	assert.NotNil(t, newAlias, "new alias stored after recovery")
-	meta, err = database.GetPricingMeta(pricing.OpenRouterAliasesMetaKey)
-	require.NoError(t, err)
-	assert.Equal(t, `["brand-new"]`, meta,
-		"alias metadata reconciled after recovery")
 }
 
 // sampleDailyUsageJSON is a full usage summary body with a single day and

@@ -163,31 +163,6 @@ func SuppressShadowedOpenRouterRows(
 	return kept, slices.Compact(dropped)
 }
 
-// DropOpenRouterAliases returns the OpenRouter rows with every alias row
-// removed, keeping only qualified rows and inherently bare models. Used
-// when a higher-priority source failed to fetch: its persisted rows may
-// still be authoritative, but they are not visible to
-// SuppressShadowedOpenRouterRows, so alias emission cannot be
-// validated and is skipped for the whole refresh.
-func DropOpenRouterAliases(prices []ModelPricing) []ModelPricing {
-	aliases := OpenRouterAliasPatterns(prices)
-	if len(aliases) == 0 {
-		return prices
-	}
-	aliasSet := make(map[string]struct{}, len(aliases))
-	for _, alias := range aliases {
-		aliasSet[alias] = struct{}{}
-	}
-	kept := make([]ModelPricing, 0, len(prices))
-	for _, p := range prices {
-		if _, isAlias := aliasSet[p.ModelPattern]; isAlias {
-			continue
-		}
-		kept = append(kept, p)
-	}
-	return kept
-}
-
 // OpenRouterAliasPatterns returns the unqualified aliases emitted alongside
 // qualified OpenRouter model IDs. A bare pattern is an alias only when the
 // same catalog also contains a qualified row with that suffix.

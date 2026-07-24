@@ -278,26 +278,6 @@ func TestSuppressShadowedOpenRouterRows_NoEarlierSources(t *testing.T) {
 	assert.Empty(t, dropped)
 }
 
-// TestDropOpenRouterAliases verifies every alias row is removed while
-// qualified rows and inherently bare (non-alias) models survive.
-func TestDropOpenRouterAliases(t *testing.T) {
-	prices := []ModelPricing{
-		{ModelPattern: "minimax/minimax-m3", InputPerMTok: 9},
-		{ModelPattern: "minimax-m3", InputPerMTok: 9},
-		{ModelPattern: "acme/other-model", InputPerMTok: 5},
-		// Bare pattern with no qualified counterpart is not an alias.
-		{ModelPattern: "standalone-model", InputPerMTok: 3},
-	}
-	kept := DropOpenRouterAliases(prices)
-	patterns := make([]string, 0, len(kept))
-	for _, p := range kept {
-		patterns = append(patterns, p.ModelPattern)
-	}
-	assert.ElementsMatch(t, []string{
-		"minimax/minimax-m3", "acme/other-model", "standalone-model",
-	}, patterns)
-}
-
 // TestDefaultPricingSources_OrderIsStable makes sure the
 // declared priority (LiteLLM first, OpenRouter second) is
 // preserved so upstream rate precedence stays deterministic
