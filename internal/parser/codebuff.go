@@ -179,12 +179,14 @@ func parseCodebuffSession(
 		sess.PeakContextTokens = rs.ContextTokenCount
 		sess.HasPeakContextTokens = true
 	}
+
 	sess.aggregateTokenPresenceKnown =
 		sess.HasTotalOutputTokens || sess.HasPeakContextTokens
 
 	// Emit usage event with clean model name for catalog pricing.
+	// Credits are billing units (1 credit = $0.01), mapped to CostUSD.
 	if model != "" {
-		sess.UsageEvents = []ParsedUsageEvent{{
+		evt := ParsedUsageEvent{
 			SessionID: fullID,
 			Source:    "session",
 			Model:     model,
@@ -195,7 +197,14 @@ func parseCodebuffSession(
 				return startedAt.Format(time.RFC3339Nano)
 			}(),
 			DedupKey: "session:" + fullID,
-		}}
+		}
+		if rs.CreditsUsed > 0 {
+			cost := rs.CreditsUsed * 0.01
+			evt.CostUSD = &cost
+			evt.CostStatus = "reported"
+			evt.CostSource = "session"
+		}
+		sess.UsageEvents = []ParsedUsageEvent{evt}
 	}
 
 	return sess, msgs, nil
@@ -205,6 +214,8 @@ func parseCodebuffSession(
 type codebuffRunState struct {
 	AgentType         string
 	ContextTokenCount int
+	CreditsUsed       float64
+	DirectCreditsUsed float64
 	Cwd               string
 	Skills            []codebuffSkill
 }
@@ -232,6 +243,8 @@ func readCodebuffRunState(path string) (codebuffRunState, error) {
 	rs := codebuffRunState{
 		AgentType:         mas.Get("agentType").Str,
 		ContextTokenCount: int(mas.Get("contextTokenCount").Int()),
+		CreditsUsed:       mas.Get("creditsUsed").Float(),
+		DirectCreditsUsed: mas.Get("directCreditsUsed").Float(),
 		Cwd: gjson.GetBytes(data,
 			"sessionState.fileContext.cwd").Str,
 	}
@@ -442,6 +455,22 @@ func parseCodebuffMessages(
 		switch variant {
 		case "user":
 			content := strings.TrimSpace(msg.Get("content").Str)
+			// User messages can also carry blocks (e.g. images).
+			// Collect image references from blocks to append to content.
+			if blocks := msg.Get("blocks"); blocks.IsArray() {
+				blocks.ForEach(func(_, block gjson.Result) bool {
+					if block.Get("type").Str == "image" {
+						filename := block.Get("filename").Str
+						if filename != "" {
+							content += "\n[Image: " + filename + "]"
+						} else {
+							content += "\n[Image attached]"
+						}
+					}
+					return true
+				})
+				content = strings.TrimSpace(content)
+			}
 			if content == "" {
 				return true
 			}
@@ -465,6 +494,24 @@ func parseCodebuffMessages(
 				ordinal++
 			}
 			messages = append(messages, parsed...)
+
+		case "error":
+			// Error messages from the upstream CLI (API failures, rate
+			// limits, country blocks). Emit as a system message so the
+			// error is visible in the transcript.
+			content := strings.TrimSpace(msg.Get("content").Str)
+			if content == "" {
+				return true
+			}
+			messages = append(messages, ParsedMessage{
+				Ordinal:       ordinal,
+				Role:          RoleSystem,
+				Content:       content,
+				Timestamp:     ts,
+				ContentLength: len(content),
+				IsSystem:      true,
+			})
+			ordinal++
 		}
 
 		return true
@@ -584,6 +631,40 @@ func parseCodebuffAIMessage(
 			mode := block.Get("mode").Str
 			if mode != "" {
 				systemParts = append(systemParts, "[Mode: "+mode+"]")
+			}
+
+		case "plan":
+			// Planning output from the agent. Emit as a system message
+			// with the plan content.
+			content := block.Get("content").Str
+			if strings.TrimSpace(content) != "" {
+				systemParts = append(systemParts, "[Plan]\n"+content)
+			}
+
+		case "ask-user":
+			// The agent asked the user a clarifying question. Capture
+			// the question text so the transcript shows what was asked.
+			questions := block.Get("questions")
+			if questions.IsArray() {
+				questions.ForEach(func(_, q gjson.Result) bool {
+					questionText := q.Get("question").Str
+					if strings.TrimSpace(questionText) != "" {
+						systemParts = append(systemParts,
+							"[Agent asked] "+questionText)
+					}
+					return true
+				})
+			}
+
+		case "image":
+			// User-uploaded image. Record that an image was attached
+			// without storing the base64 content.
+			filename := block.Get("filename").Str
+			if filename != "" {
+				textParts = append(textParts,
+					"[Image: "+filename+"]")
+			} else {
+				textParts = append(textParts, "[Image attached]")
 			}
 		}
 		return true

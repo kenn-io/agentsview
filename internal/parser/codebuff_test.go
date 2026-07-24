@@ -1034,3 +1034,261 @@ func TestCodebuffToolCategories(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCodebuffSession_ErrorVariant(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Fix the bug",
+			"timestamp": "03:04 PM"
+		},
+		{
+			"id": "err-1",
+			"variant": "error",
+			"content": "Rate limit exceeded. Please try again later.",
+			"timestamp": "03:05 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	// Should have user message + error system message.
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Fix the bug", msgs[0].Content)
+
+	assert.Equal(t, RoleSystem, msgs[1].Role)
+	assert.True(t, msgs[1].IsSystem)
+	assert.Contains(t, msgs[1].Content, "Rate limit exceeded")
+}
+
+func TestParseCodebuffSession_CreditsExtraction(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek",
+				"contextTokenCount": 50000,
+				"creditsUsed": 15.5,
+				"directCreditsUsed": 10.0
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Credits should be mapped to CostUSD in usage events.
+	require.Len(t, sess.UsageEvents, 1)
+	evt := sess.UsageEvents[0]
+	require.NotNil(t, evt.CostUSD)
+	assert.InDelta(t, 0.155, *evt.CostUSD, 0.001,
+		"15.5 credits should map to $0.155")
+	assert.Equal(t, "reported", evt.CostStatus)
+	assert.Equal(t, "session", evt.CostSource)
+}
+
+func TestParseCodebuffSession_CreditsZero(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-free-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Freebuff sessions have no credits - CostUSD should be nil.
+	require.Len(t, sess.UsageEvents, 1)
+	assert.Nil(t, sess.UsageEvents[0].CostUSD,
+		"freebuff sessions should have no cost")
+}
+
+func TestParseCodebuffSession_PlanBlock(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "plan",
+					"content": "1. Fix the auth handler\n2. Add tests\n3. Update docs"
+				},
+				{
+					"type": "text",
+					"textType": "text",
+					"content": "I'll implement the plan."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	// Should have a system message with the plan content.
+	found := false
+	for _, msg := range msgs {
+		if msg.IsSystem && strings.Contains(msg.Content, "[Plan]") {
+			found = true
+			assert.Contains(t, msg.Content, "Fix the auth handler")
+			break
+		}
+	}
+	assert.True(t, found, "expected a system message with plan content")
+}
+
+func TestParseCodebuffSession_AskUserBlock(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "ask-user",
+					"toolCallId": "ask-1",
+					"questions": [
+						{
+							"question": "Which database should I use?",
+							"options": [
+								{"label": "PostgreSQL"},
+								{"label": "SQLite"}
+							]
+						}
+					]
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	// Should have a system message with the question.
+	found := false
+	for _, msg := range msgs {
+		if msg.IsSystem && strings.Contains(msg.Content, "Agent asked") {
+			found = true
+			assert.Contains(t, msg.Content, "Which database should I use?")
+			break
+		}
+	}
+	assert.True(t, found, "expected a system message with the agent's question")
+}
+
+func TestParseCodebuffSession_ImageBlock(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Here's a screenshot",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "image",
+					"image": "base64data...",
+					"mediaType": "image/png",
+					"filename": "screenshot.png"
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	// User message should contain the image filename note.
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Content, "[Image: screenshot.png]")
+}
+
+func TestParseCodebuffSession_ImageBlockNoFilename(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Look at this",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "image",
+					"image": "base64data...",
+					"mediaType": "image/png"
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Content, "[Image attached]")
+}
