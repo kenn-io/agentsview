@@ -1149,10 +1149,8 @@ func TestPushRemovesObsoleteOpenRouterPricingAlias(t *testing.T) {
 
 	require.NoError(t, local.ReconcileModelPricing(
 		nil, []string{"stale-alias"},
-	), "remove local alias")
-	require.NoError(t, local.SetPricingMeta(
 		"_openrouter_aliases", `[]`,
-	), "update alias metadata")
+	), "remove local alias and update metadata atomically")
 	_, err = ps.Push(context.Background(), false, nil)
 	require.NoError(t, err, "reconciliation Push")
 
