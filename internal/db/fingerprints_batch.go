@@ -122,7 +122,7 @@ func (db *DB) MessageTokenFingerprints(
 			SELECT session_id, ordinal, model, token_usage, context_tokens,
 				output_tokens, has_context_tokens, has_output_tokens,
 				claude_message_id, claude_request_id,
-				source_type, source_subtype, source_uuid,
+				source_type, source_subtype, prompt_source, source_uuid,
 				source_parent_uuid, is_sidechain, is_compact_boundary
 			 FROM messages
 			 WHERE session_id IN (`+ph+`)
@@ -142,7 +142,7 @@ func (db *DB) MessageTokenFingerprints(
 				&r.contextTokens, &r.outputTokens,
 				&r.hasContextTokens, &r.hasOutputTokens,
 				&r.claudeMessageID, &r.claudeRequestID,
-				&r.sourceType, &r.sourceSubtype, &r.sourceUUID,
+				&r.sourceType, &r.sourceSubtype, &r.promptSource, &r.sourceUUID,
 				&r.sourceParentUUID, &r.isSidechain, &r.isCompactBoundary,
 			); err != nil {
 				return err
