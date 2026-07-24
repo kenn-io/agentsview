@@ -1597,10 +1597,9 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 	probe := &staticDegradedPollProbe{}
 	roots := []watchRoot{{
 		path: watchPath, exists: true, recursive: true,
-		scopes: []watchScope{{agent: parser.AgentClaude, syncDir: syncDir}},
-		degradedPollProbes: map[string]parser.DegradedPollingStateProbe{
-			filepath.Clean(syncDir): probe,
-		},
+		scopes: []watchScope{{
+			agent: parser.AgentClaude, syncDir: syncDir, degradedProbe: probe,
+		}},
 	}}
 
 	got := watchPollingObligations(
@@ -1627,11 +1626,8 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 		exists:    true,
 		recursive: true,
 		scopes: []watchScope{
-			{agent: parser.AgentOpenCode, syncDir: openCodeDir},
+			{agent: parser.AgentOpenCode, syncDir: openCodeDir, degradedProbe: probe},
 			{agent: parser.AgentKilo, syncDir: unsupportedDir},
-		},
-		degradedPollProbes: map[string]parser.DegradedPollingStateProbe{
-			filepath.Clean(openCodeDir): probe,
 		},
 	}}
 
@@ -1656,6 +1652,34 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 			DegradedProbe: probe,
 		},
 	}, got)
+}
+
+func TestWatchPollingObligationsSharedDirWithUnsupportedScopeDisablesProbe(t *testing.T) {
+	sharedDir := t.TempDir()
+	watchPath := filepath.Join(sharedDir, "shared")
+	probe := &staticDegradedPollProbe{}
+	roots := []watchRoot{{
+		path:      watchPath,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: sharedDir, degradedProbe: probe},
+			{agent: parser.AgentKilo, syncDir: sharedDir},
+		},
+	}}
+
+	got := watchPollingObligations(
+		roots,
+		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
+		[]string{sharedDir},
+	)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, []agentsync.PollingObligation{{
+		Key:   watchPath,
+		Roots: []string{sharedDir},
+		Probe: watchPath,
+	}}, got)
 }
 
 // A persistent polling obligation probes the configured dir, which can still
@@ -1965,10 +1989,7 @@ func TestWatcherUnavailableFallbackDoesNotBypassUnchangedDegradedProbe(t *testin
 		exists:    true,
 		recursive: true,
 		scopes: []watchScope{
-			{agent: parser.AgentOpenCode, syncDir: configured},
-		},
-		degradedPollProbes: map[string]parser.DegradedPollingStateProbe{
-			filepath.Clean(configured): probe,
+			{agent: parser.AgentOpenCode, syncDir: configured, degradedProbe: probe},
 		},
 	}}
 

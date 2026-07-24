@@ -1953,12 +1953,44 @@ func (r watchRoot) pollingObligations(
 	if len(dirs) == 0 {
 		return nil
 	}
+	dirFilter := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		dirFilter[filepath.Clean(dir)] = struct{}{}
+	}
 	byKey := make(map[string][]string)
 	degraded := make(map[string]parser.DegradedPollingStateProbe)
 	for _, dir := range dirs {
 		cleanDir := filepath.Clean(dir)
 		key := rootKey
-		if probe := r.degradedProbeForDir(cleanDir); probe != nil {
+		var (
+			probe      parser.DegradedPollingStateProbe
+			probeAgent parser.AgentType
+			probeOK    = true
+			seen       bool
+		)
+		for _, scope := range r.scopes {
+			if filepath.Clean(scope.syncDir) != cleanDir {
+				continue
+			}
+			if _, ok := dirFilter[filepath.Clean(scope.syncDir)]; !ok {
+				continue
+			}
+			seen = true
+			if scope.degradedProbe == nil {
+				probeOK = false
+				break
+			}
+			if probe == nil {
+				probe = scope.degradedProbe
+				probeAgent = scope.agent
+				continue
+			}
+			if scope.agent != probeAgent {
+				probeOK = false
+				break
+			}
+		}
+		if seen && probeOK && probe != nil {
 			key = rootKey + "|" + cleanDir
 			degraded[key] = probe
 		}
@@ -2327,8 +2359,9 @@ func deduplicateStrings(values []string) []string {
 }
 
 type watchScope struct {
-	agent   parser.AgentType
-	syncDir string
+	agent         parser.AgentType
+	syncDir       string
+	degradedProbe parser.DegradedPollingStateProbe
 }
 
 type watchRoot struct {
@@ -2338,7 +2371,6 @@ type watchRoot struct {
 	scopes                []watchScope
 	pendingPollingDirs    []string
 	persistentPollingDirs []string
-	degradedPollProbes    map[string]parser.DegradedPollingStateProbe
 }
 
 func (r watchRoot) registeredRoot() sync.WatchRoot {
@@ -2347,7 +2379,7 @@ func (r watchRoot) registeredRoot() sync.WatchRoot {
 		scopes = append(scopes, sync.WatchScope{
 			Agent:         string(scope.agent),
 			SyncDir:       scope.syncDir,
-			DegradedProbe: r.degradedProbeForDir(scope.syncDir),
+			DegradedProbe: scope.degradedProbe,
 		})
 	}
 	return sync.WatchRoot{
@@ -2364,13 +2396,6 @@ func (r watchRoot) syncDirs() []string {
 		dirs = appendUniqueString(dirs, scope.syncDir)
 	}
 	return dirs
-}
-
-func (r watchRoot) degradedProbeForDir(dir string) parser.DegradedPollingStateProbe {
-	if r.degradedPollProbes == nil {
-		return nil
-	}
-	return r.degradedPollProbes[filepath.Clean(dir)]
 }
 
 // collectWatchRoots resolves the configured watch plan. symlinkGatedDirs maps
@@ -2394,32 +2419,27 @@ func collectWatchRoots(cfg config.Config) (
 		degradedProbe parser.DegradedPollingStateProbe,
 	) {
 		path = filepath.Clean(path)
-		scope := watchScope{agent: agent, syncDir: dir}
+		scope := watchScope{
+			agent:         agent,
+			syncDir:       filepath.Clean(dir),
+			degradedProbe: degradedProbe,
+		}
 		if idx, ok := rootIndexes[path]; ok {
 			roots[idx].recursive = roots[idx].recursive || recursive
 			roots[idx].exists = roots[idx].exists || exists
-			if degradedProbe != nil {
-				if roots[idx].degradedPollProbes == nil {
-					roots[idx].degradedPollProbes = make(map[string]parser.DegradedPollingStateProbe)
-				}
-				roots[idx].degradedPollProbes[filepath.Clean(dir)] = degradedProbe
-			}
-			if !slices.Contains(roots[idx].scopes, scope) {
+			if !slices.ContainsFunc(roots[idx].scopes, func(existing watchScope) bool {
+				return existing.agent == scope.agent && existing.syncDir == scope.syncDir
+			}) {
 				roots[idx].scopes = append(roots[idx].scopes, scope)
 			}
 			return
 		}
 		rootIndexes[path] = len(roots)
-		degradedPollProbes := make(map[string]parser.DegradedPollingStateProbe)
-		if degradedProbe != nil {
-			degradedPollProbes[filepath.Clean(dir)] = degradedProbe
-		}
 		roots = append(roots, watchRoot{
-			path:               path,
-			recursive:          recursive,
-			exists:             exists,
-			scopes:             []watchScope{scope},
-			degradedPollProbes: degradedPollProbes,
+			path:      path,
+			recursive: recursive,
+			exists:    exists,
+			scopes:    []watchScope{scope},
 		})
 	}
 	for _, def := range parser.Registry {

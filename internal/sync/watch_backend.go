@@ -34,17 +34,41 @@ func pollingObligationsForScopes(
 	if len(scopes) == 0 {
 		return nil
 	}
-	byKey := make(map[string][]string)
-	degraded := make(map[string]parser.DegradedPollingStateProbe)
+	byDir := make(map[string][]WatchScope)
 	for _, scope := range scopes {
 		if scope.SyncDir == "" {
 			continue
 		}
 		cleanDir := filepath.Clean(scope.SyncDir)
+		byDir[cleanDir] = append(byDir[cleanDir], scope)
+	}
+	byKey := make(map[string][]string)
+	degraded := make(map[string]parser.DegradedPollingStateProbe)
+	for cleanDir, dirScopes := range byDir {
 		obligationKey := key
-		if scope.DegradedProbe != nil {
+		var (
+			probe      parser.DegradedPollingStateProbe
+			probeAgent string
+			probeOK    = true
+		)
+		for _, scope := range dirScopes {
+			if scope.DegradedProbe == nil {
+				probeOK = false
+				break
+			}
+			if probe == nil {
+				probe = scope.DegradedProbe
+				probeAgent = scope.Agent
+				continue
+			}
+			if scope.Agent != probeAgent {
+				probeOK = false
+				break
+			}
+		}
+		if probeOK && probe != nil {
 			obligationKey = key + "|" + cleanDir
-			degraded[obligationKey] = scope.DegradedProbe
+			degraded[obligationKey] = probe
 		}
 		byKey[obligationKey] = appendUniqueScopeRoot(byKey[obligationKey], cleanDir)
 	}
