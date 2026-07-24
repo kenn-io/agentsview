@@ -277,6 +277,10 @@ func appendSessionMetadataDiffs(
 		stored.Entrypoint, prepared.Entrypoint,
 	)
 	diffs = appendScalarSessionDiff(
+		diffs, FieldSessionKind, agent,
+		stored.SessionKind, prepared.SessionKind,
+	)
+	diffs = appendScalarSessionDiff(
 		diffs, FieldCwd, agent, stored.Cwd, prepared.Cwd,
 	)
 	diffs = appendScalarSessionDiff(
@@ -514,11 +518,12 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 		claudeReqID := db.SanitizeUTF8(m.ClaudeRequestID)
 		srcType := db.SanitizeUTF8(m.SourceType)
 		srcSubtype := db.SanitizeUTF8(m.SourceSubtype)
+		promptSource := db.SanitizeUTF8(m.PromptSource)
 		srcUUID := db.SanitizeUTF8(m.SourceUUID)
 		srcParentUUID := db.SanitizeUTF8(m.SourceParentUUID)
 		fmt.Fprintf(&b,
 			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
-				"%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
+				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			m.Ordinal,
 			len(model), model,
 			len(tokenUsage), tokenUsage,
@@ -527,6 +532,7 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 			claudeMsgID, claudeReqID,
 			len(srcType), srcType,
 			len(srcSubtype), srcSubtype,
+			len(promptSource), promptSource,
 			len(srcUUID), srcUUID,
 			len(srcParentUUID), srcParentUUID,
 			m.IsSidechain, m.IsCompactBoundary,
@@ -885,6 +891,9 @@ func messageMetadataDiff(stored, parsed db.Message) string {
 	case db.SanitizeUTF8(stored.SourceSubtype) !=
 		db.SanitizeUTF8(parsed.SourceSubtype):
 		return "source_subtype differs"
+	case db.SanitizeUTF8(stored.PromptSource) !=
+		db.SanitizeUTF8(parsed.PromptSource):
+		return "prompt_source differs"
 	case db.SanitizeUTF8(stored.SourceUUID) !=
 		db.SanitizeUTF8(parsed.SourceUUID):
 		return "source_uuid differs"

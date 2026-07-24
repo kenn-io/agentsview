@@ -37,7 +37,7 @@ const deletionCauseSourceMissing = "source_missing"
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
-	agent_label, entrypoint,
+	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -68,7 +68,7 @@ const sessionBaseCols = `id, project, machine, agent,
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
 const sessionPruneCols = `id, project, machine, agent,
-	agent_label, entrypoint,
+	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -99,7 +99,7 @@ const sessionPruneCols = `id, project, machine, agent,
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
-	agent_label, entrypoint,
+	agent_label, entrypoint, session_kind,
 	first_message, display_name, session_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -149,7 +149,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 	var s Session
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint,
+		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
@@ -282,6 +282,7 @@ type Session struct {
 	Agent                string  `json:"agent"`
 	AgentLabel           string  `json:"agent_label,omitempty"`
 	Entrypoint           string  `json:"entrypoint,omitempty"`
+	SessionKind          string  `json:"session_kind,omitempty"`
 	FirstMessage         *string `json:"first_message"`
 	DisplayName          *string `json:"display_name,omitempty"`
 	SessionName          *string `json:"-"`
@@ -1093,7 +1094,7 @@ func (db *DB) GetSessionFull(
 	var s Session
 	err := row.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint,
+		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
@@ -1287,7 +1288,7 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 const insertSessionSQL = `
 		INSERT INTO sessions (
 			id, project, machine, agent, first_message, session_name,
-			agent_label, entrypoint,
+			agent_label, entrypoint, session_kind,
 			started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
 			relationship_type,
@@ -1303,7 +1304,7 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1317,6 +1318,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			agent = excluded.agent,
 			agent_label = excluded.agent_label,
 			entrypoint = excluded.entrypoint,
+			session_kind = excluded.session_kind,
 			first_message = excluded.first_message,
 			-- session_name is always overwritten by re-parse; display_name
 			-- is the user override and is only touched by RenameSession.
@@ -1382,7 +1384,7 @@ func sessionIsAutomated(s Session) bool {
 func upsertSessionArgs(s Session) []any {
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
-		s.AgentLabel, s.Entrypoint,
+		s.AgentLabel, s.Entrypoint, s.SessionKind,
 		s.StartedAt, s.EndedAt, s.MessageCount,
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
@@ -1872,6 +1874,7 @@ type IncrementalInfo struct {
 	Cwd                  string
 	AgentLabel           string
 	Entrypoint           string
+	SessionKind          string
 	FileSize             int64
 	FileMtime            int64
 	NextOrdinal          int
@@ -1939,7 +1942,7 @@ func (db *DB) GetSessionForIncremental(
 	var firstMsg, lastEntryUUID sql.NullString
 	var linearParse sql.NullBool
 	err = db.getReader().QueryRow(
-		`SELECT id, project, machine, cwd, agent_label, entrypoint,
+		`SELECT id, project, machine, cwd, agent_label, entrypoint, session_kind,
 			file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device,
@@ -1953,7 +1956,7 @@ func (db *DB) GetSessionForIncremental(
 		path,
 	).Scan(
 		&info.ID, &info.Project, &info.Machine, &info.Cwd,
-		&info.AgentLabel, &info.Entrypoint,
+		&info.AgentLabel, &info.Entrypoint, &info.SessionKind,
 		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &linearParse,
 		&fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,
@@ -3365,7 +3368,7 @@ func (db *DB) FindPruneCandidates(
 		var s Session
 		err := rows.Scan(
 			&s.ID, &s.Project, &s.Machine, &s.Agent,
-			&s.AgentLabel, &s.Entrypoint,
+			&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 			&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
@@ -3789,7 +3792,7 @@ func (db *DB) ListSessionsModifiedBetween(
 		var s Session
 		err := rows.Scan(
 			&s.ID, &s.Project, &s.Machine, &s.Agent,
-			&s.AgentLabel, &s.Entrypoint,
+			&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
@@ -3898,7 +3901,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 		var s Session
 		err := rows.Scan(
 			&s.ID, &s.Project, &s.Machine, &s.Agent,
-			&s.AgentLabel, &s.Entrypoint,
+			&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,

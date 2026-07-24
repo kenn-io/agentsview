@@ -982,12 +982,16 @@ type FileInfo struct {
 
 // ParsedSession holds session metadata extracted from a JSONL file.
 type ParsedSession struct {
-	ID               string
-	Project          string
-	Machine          string
-	Agent            AgentType
-	AgentLabel       string
-	Entrypoint       string
+	ID         string
+	Project    string
+	Machine    string
+	Agent      AgentType
+	AgentLabel string
+	Entrypoint string
+	// SessionKind is the top-level Claude Code session-kind marker
+	// (e.g. "bg" for background/headless sessions); empty for
+	// interactive sessions and for agents that do not emit it.
+	SessionKind      string
 	ParentSessionID  string
 	RelationshipType RelationshipType
 	Cwd              string
@@ -1111,8 +1115,13 @@ type ParsedMessage struct {
 	ClaudeMessageID string
 	ClaudeRequestID string
 
-	SourceType        string
-	SourceSubtype     string
+	SourceType    string
+	SourceSubtype string
+	// PromptSource is the Claude Code per-entry prompt-origin marker
+	// on user turns (e.g. "typed", "queued", "system", "sdk"); empty
+	// on older transcripts that predate the field and for agents that
+	// do not emit it.
+	PromptSource      string
 	SourceUUID        string
 	SourceParentUUID  string
 	IsSidechain       bool

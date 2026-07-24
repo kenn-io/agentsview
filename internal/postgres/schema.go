@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     agent_label        TEXT NOT NULL DEFAULT '',
     entrypoint         TEXT NOT NULL DEFAULT '',
+    session_kind       TEXT NOT NULL DEFAULT '',
     first_message      TEXT,
     display_name       TEXT,
     source_display_name TEXT,
@@ -121,6 +122,7 @@ CREATE TABLE IF NOT EXISTS messages (
     claude_request_id  TEXT NOT NULL DEFAULT '',
     source_type        TEXT NOT NULL DEFAULT '',
     source_subtype     TEXT NOT NULL DEFAULT '',
+    prompt_source      TEXT NOT NULL DEFAULT '',
     source_uuid        TEXT NOT NULL DEFAULT '',
     source_parent_uuid TEXT NOT NULL DEFAULT '',
     is_sidechain       BOOLEAN NOT NULL DEFAULT FALSE,
@@ -734,6 +736,11 @@ func EnsureSchema(
 			"adding messages.source_subtype",
 		},
 		{
+			"messages", "prompt_source",
+			`prompt_source TEXT NOT NULL DEFAULT ''`,
+			"adding messages.prompt_source",
+		},
+		{
 			"messages", "source_uuid",
 			`source_uuid TEXT NOT NULL DEFAULT ''`,
 			"adding messages.source_uuid",
@@ -787,6 +794,11 @@ func EnsureSchema(
 			"sessions", "entrypoint",
 			`entrypoint TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.entrypoint",
+		},
+		{
+			"sessions", "session_kind",
+			`session_kind TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.session_kind",
 		},
 		{
 			"source_project_identity_observations", "source_archive_id",
@@ -1908,7 +1920,7 @@ func CheckSchemaCompat(
 			context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
-			source_type, source_subtype, source_uuid,
+			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary
 		 FROM messages LIMIT 0`)

@@ -26,7 +26,7 @@ const (
 		model, token_usage, context_tokens, output_tokens,
 		has_context_tokens, has_output_tokens,
 		claude_message_id, claude_request_id,
-		source_type, source_subtype, source_uuid,
+		source_type, source_subtype, prompt_source, source_uuid,
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
 	insertMessageCols = `session_id, ordinal, role, content,
@@ -36,7 +36,7 @@ const (
 		model, token_usage, context_tokens, output_tokens,
 		has_context_tokens, has_output_tokens,
 		claude_message_id, claude_request_id,
-		source_type, source_subtype, source_uuid,
+		source_type, source_subtype, prompt_source, source_uuid,
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
 	// DefaultMessageLimit is the default number of messages returned.
@@ -121,6 +121,7 @@ type Message struct {
 	IsSystem          bool            `json:"is_system"` // persisted, filters search/analytics
 	SourceType        string          `json:"source_type,omitempty"`
 	SourceSubtype     string          `json:"source_subtype,omitempty"`
+	PromptSource      string          `json:"prompt_source,omitempty"`
 	SourceUUID        string          `json:"source_uuid,omitempty"`
 	SourceParentUUID  string          `json:"source_parent_uuid,omitempty"`
 	IsSidechain       bool            `json:"is_sidechain,omitempty"`
@@ -739,7 +740,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*25)
+		args := make([]any, 0, len(batch)*26)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -749,7 +750,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 25),
+			multiRowPlaceholders(len(batch), 26),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -1821,7 +1822,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 			&m.ContextTokens, &m.OutputTokens,
 			&m.HasContextTokens, &m.HasOutputTokens,
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
-			&m.SourceType, &m.SourceSubtype, &m.SourceUUID,
+			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 			&m.SourceParentUUID, &m.IsSidechain, &m.IsCompactBoundary,
 		)
 		if err != nil {
@@ -1913,7 +1914,7 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 		`SELECT ordinal, model, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
-			source_type, source_subtype, source_uuid,
+			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		 FROM messages
 		 WHERE session_id = ?
@@ -1932,7 +1933,7 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 			&r.ordinal, &r.model, &r.tokenUsage, &r.contextTokens,
 			&r.outputTokens, &r.hasContextTokens, &r.hasOutputTokens,
 			&r.claudeMessageID, &r.claudeRequestID,
-			&r.sourceType, &r.sourceSubtype, &r.sourceUUID,
+			&r.sourceType, &r.sourceSubtype, &r.promptSource, &r.sourceUUID,
 			&r.sourceParentUUID, &r.isSidechain, &r.isCompactBoundary,
 		); err != nil {
 			return "", err
@@ -2385,7 +2386,7 @@ func (db *DB) GetMessageByOrdinal(
 		&m.ContextTokens, &m.OutputTokens,
 		&m.HasContextTokens, &m.HasOutputTokens,
 		&m.ClaudeMessageID, &m.ClaudeRequestID,
-		&m.SourceType, &m.SourceSubtype, &m.SourceUUID,
+		&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 		&m.SourceParentUUID, &m.IsSidechain, &m.IsCompactBoundary,
 	)
 	if err == sql.ErrNoRows {

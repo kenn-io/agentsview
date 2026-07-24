@@ -7,4 +7,5 @@ func ApplyParsedSessionIdentity(dst *Session, src parser.ParsedSession) {
 	dst.Agent = string(src.Agent)
 	dst.AgentLabel = src.AgentLabel
 	dst.Entrypoint = src.Entrypoint
+	dst.SessionKind = src.SessionKind
 }

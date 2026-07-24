@@ -277,7 +277,7 @@ func (s *Store) IngestEvalTrajectory(
 }
 
 const duckSessionCols = `id, project, machine, agent,
-	agent_label, entrypoint,
+	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -308,7 +308,7 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	var startedAt, endedAt, deletedAt any
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.AgentLabel, &s.Entrypoint,
+		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
 		&s.MessageCount, &s.UserMessageCount,
