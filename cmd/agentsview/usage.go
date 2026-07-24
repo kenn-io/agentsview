@@ -375,30 +375,187 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 }
 
 // seedPricing ensures fallback rates are present in
-// model_pricing, then kicks off a background LiteLLM refresh.
+// model_pricing, then kicks off a background multi-source
+// pricing refresh.
 //
 // Fallback rates are only upserted when the stored seed
 // version differs from pricing.FallbackVersion (or is
-// absent). This avoids overwriting live LiteLLM rates on
+// absent). This avoids overwriting live upstream rates on
 // every restart while still propagating corrected fallback
 // rates when the binary is upgraded.
 func seedPricing(database *db.DB) {
+	seedPricingWithRefresh(database, refreshPricingFromSources)
+}
+
+func seedPricingWithRefresh(
+	database *db.DB, refresh func(*db.DB),
+) {
 	if err := pricingrefresh.SeedFallback(database); err != nil {
 		log.Printf("pricing seed: %v", err)
 	}
-	go refreshPricingFromLiteLLM(database)
+	go refresh(database)
 }
 
-// refreshPricingFromLiteLLM fetches the upstream LiteLLM
-// catalog and upserts it over whatever is in the table. Called
-// from a goroutine after the synchronous fallback seed so a
-// slow or failing fetch never blocks server startup.
-func refreshPricingFromLiteLLM(database *db.DB) {
-	if err := pricingrefresh.Refresh(
-		database, pricing.FetchLiteLLMPricing,
+// periodicPricingRefresh re-fetches LiteLLM + OpenRouter every
+// `interval` and upserts merged rows into model_pricing. It runs
+// forever until ctx is cancelled. custom_model_pricing rows
+// applied via SetCustomPricing live in-memory and are not
+// touched here, so the startup-installed override continues to
+// shadow newly published upstream rates without concurrent map writes.
+//
+// Failures are logged inside refreshPricingFromSources; a bad
+// tick keeps the previous rows in place and the next tick tries
+// again, so a transient outage never wipes the table.
+func periodicPricingRefresh(
+	ctx context.Context, database *db.DB,
+	interval time.Duration,
+) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			refreshPricingFromSources(database)
+		}
+	}
+}
+
+// upsertPricing converts merged catalog rates to db.ModelPricing
+// rows and upserts them. Used by refreshPricingFromSources, which
+// fans out to multiple upstream catalogs and merges before writing
+// a single batch.
+func upsertPricing(
+	database *db.DB, prices []pricing.ModelPricing,
+) error {
+	dbPrices := make([]db.ModelPricing, len(prices))
+	for i, p := range prices {
+		dbPrices[i] = db.ModelPricing{
+			ModelPattern:         p.ModelPattern,
+			InputPerMTok:         p.InputPerMTok,
+			OutputPerMTok:        p.OutputPerMTok,
+			CacheCreationPerMTok: p.CacheCreationPerMTok,
+			CacheReadPerMTok:     p.CacheReadPerMTok,
+		}
+	}
+	return database.UpsertModelPricing(dbPrices)
+}
+
+// refreshPricingFromSources walks the default pricing source
+// list and upserts whichever catalogs respond. LiteLLM is
+// tried first because it is the most complete for the public
+// models agentsview normally parses; OpenRouter is tried next
+// because its public /models endpoint frequently lists
+// fork-tuned and private model prices LiteLLM has not yet
+// picked up. Each fetch failure is logged but never aborts
+// the loop, so a partial outage of one upstream does not
+// prevent the other from seeding. All successful results are
+// merged (first non-zero field wins per model_pattern) and
+// upserted as a single batch.
+func refreshPricingFromSources(database *db.DB) {
+	if err := refreshPricingFromSourcesWith(
+		database, pricing.DefaultPricingSources(),
 	); err != nil {
 		log.Printf("pricing refresh: %v", err)
 	}
+}
+
+func refreshPricingFromSourcesWith(
+	database *db.DB, sources []pricing.PricingSource,
+) error {
+	fetched := make([][]pricing.ModelPricing, 0, len(sources))
+	var openRouterAliases []string
+	openRouterFetched := false
+	for _, src := range sources {
+		prices, err := src.Fetch()
+		if err != nil {
+			log.Printf(
+				"pricing refresh: %s fetch failed: %v",
+				src.Name, err,
+			)
+			continue
+		}
+		fetched = append(fetched, prices)
+		if src.Name == "openrouter" {
+			openRouterFetched = true
+			openRouterAliases = pricing.OpenRouterAliasPatterns(prices)
+		}
+		log.Printf(
+			"pricing refresh: %s returned %d model rows",
+			src.Name, len(prices),
+		)
+	}
+	if len(fetched) == 0 {
+		log.Printf(
+			"pricing refresh: every source failed; " +
+				"keeping embedded fallback pricing",
+		)
+		return nil
+	}
+	merged := pricing.MergePricing(fetched)
+	flat := make([]pricing.ModelPricing, 0, len(merged))
+	for _, p := range merged {
+		flat = append(flat, p)
+	}
+
+	if !openRouterFetched {
+		if err := upsertPricing(database, flat); err != nil {
+			return fmt.Errorf("upsert failed: %w", err)
+		}
+		return nil
+	}
+
+	storedAliases, err := database.GetPricingMeta(
+		pricing.OpenRouterAliasesMetaKey,
+	)
+	if err != nil {
+		return fmt.Errorf("reading OpenRouter alias metadata: %w", err)
+	}
+	var previousAliases []string
+	if storedAliases != "" {
+		if err := json.Unmarshal(
+			[]byte(storedAliases), &previousAliases,
+		); err != nil {
+			return fmt.Errorf("parsing OpenRouter alias metadata: %w", err)
+		}
+	}
+	current := make(map[string]struct{}, len(openRouterAliases))
+	for _, alias := range openRouterAliases {
+		current[alias] = struct{}{}
+	}
+	stale := make([]string, 0)
+	for _, alias := range previousAliases {
+		if _, ok := current[alias]; !ok {
+			stale = append(stale, alias)
+		}
+	}
+	dbPrices := make([]db.ModelPricing, len(flat))
+	for i, price := range flat {
+		dbPrices[i] = db.ModelPricing{
+			ModelPattern:         price.ModelPattern,
+			InputPerMTok:         price.InputPerMTok,
+			OutputPerMTok:        price.OutputPerMTok,
+			CacheCreationPerMTok: price.CacheCreationPerMTok,
+			CacheReadPerMTok:     price.CacheReadPerMTok,
+		}
+	}
+	if err := database.ReconcileModelPricing(dbPrices, stale); err != nil {
+		return fmt.Errorf("reconciling pricing: %w", err)
+	}
+	encodedAliases, err := json.Marshal(openRouterAliases)
+	if err != nil {
+		return fmt.Errorf("encoding OpenRouter alias metadata: %w", err)
+	}
+	if err := database.SetPricingMeta(
+		pricing.OpenRouterAliasesMetaKey, string(encodedAliases),
+	); err != nil {
+		return fmt.Errorf("recording OpenRouter aliases: %w", err)
+	}
+	return nil
 }
 
 func ensurePricing(database *db.DB, offline bool) {

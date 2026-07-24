@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
+	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 )
 
@@ -1411,6 +1412,121 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 			assert.Equal(t, tc.wantEmail, request["email"])
 			assert.Equal(t, tc.wantUser, request["userId"])
 		})
+	}
+}
+
+// TestPeriodicPricingRefresh_ZeroIntervalReturnsImmediately guards
+// against a bad config value (interval <= 0) turning into a hot
+// spin loop.
+func TestPeriodicPricingRefresh_ZeroIntervalReturnsImmediately(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		periodicPricingRefresh(context.Background(), nil, 0)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodicPricingRefresh did not return on interval<=0")
+	}
+}
+
+// TestPeriodicPricingRefresh_StopsOnContextCancel ensures the
+// goroutine unwinds cleanly when the server is shutting down.
+func TestPeriodicPricingRefresh_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		// Long interval so the ticker never fires during the test.
+		periodicPricingRefresh(ctx, nil, time.Hour)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodicPricingRefresh did not stop after cancel")
+	}
+}
+
+func TestSeedPricingSeedsBeforeStartingRefresh(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	refreshStarted := make(chan struct{})
+
+	seedPricingWithRefresh(database, func(*db.DB) {
+		close(refreshStarted)
+	})
+
+	fallback, err := database.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, fallback,
+		"fallback pricing must be visible when startup seeding returns")
+	select {
+	case <-refreshStarted:
+	case <-time.After(time.Second):
+		t.Fatal("initial background refresh did not start")
+	}
+}
+
+func TestRefreshPricingFromSourcesReconcilesOpenRouterAliases(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	openRouterRows := []pricing.ModelPricing{
+		{
+			ModelPattern:  "provider-a/shared-model",
+			InputPerMTok:  1,
+			OutputPerMTok: 2,
+		},
+		{
+			ModelPattern:  "shared-model",
+			InputPerMTok:  1,
+			OutputPerMTok: 2,
+		},
+	}
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return nil, nil
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return openRouterRows, nil
+			},
+		},
+	}
+
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+	alias, err := database.GetModelPricing("shared-model")
+	require.NoError(t, err)
+	require.NotNil(t, alias, "unique bare alias should be stored")
+
+	openRouterRows = []pricing.ModelPricing{
+		{
+			ModelPattern:  "provider-a/shared-model",
+			InputPerMTok:  1,
+			OutputPerMTok: 2,
+		},
+		{
+			ModelPattern:  "provider-b/shared-model",
+			InputPerMTok:  3,
+			OutputPerMTok: 4,
+		},
+	}
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	alias, err = database.GetModelPricing("shared-model")
+	require.NoError(t, err)
+	assert.Nil(t, alias,
+		"bare alias should be removed after its suffix becomes ambiguous")
+	for _, pattern := range []string{
+		"provider-a/shared-model",
+		"provider-b/shared-model",
+	} {
+		row, getErr := database.GetModelPricing(pattern)
+		require.NoError(t, getErr)
+		assert.NotNil(t, row, "qualified row %q should remain", pattern)
 	}
 }
 
