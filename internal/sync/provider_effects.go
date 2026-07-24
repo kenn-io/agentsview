@@ -20,18 +20,12 @@ func validateProviderOutcome(
 	for _, result := range outcome.Results {
 		session := result.Result.Session
 		if session.Agent != def.Type {
-			// The Codebuff provider may emit Freebuff sessions based on
-			// the agentType field in run-state.json. Both agents share
-			// the same on-disk layout and are discovered by one provider.
-			if def.Type != parser.AgentCodebuff ||
-				session.Agent != parser.AgentFreebuff {
-				return fmt.Errorf(
-					"%s: provider result session agent mismatch for %q: got %s",
-					def.Type,
-					session.ID,
-					session.Agent,
-				)
-			}
+			return fmt.Errorf(
+				"%s: provider result session agent mismatch for %q: got %s",
+				def.Type,
+				session.ID,
+				session.Agent,
+			)
 		}
 		if err := validateProviderParseResultSessionIDs(def, result.Result); err != nil {
 			return err
@@ -108,12 +102,6 @@ func validateProviderSessionID(def parser.AgentDef, sessionID, field string) err
 		return nil
 	}
 	if strings.HasPrefix(sessionID, def.IDPrefix) {
-		return nil
-	}
-	// The Codebuff provider may emit Freebuff sessions whose IDs use
-	// the "freebuff:" prefix rather than the provider's "codebuff:" prefix.
-	if def.Type == parser.AgentCodebuff &&
-		strings.HasPrefix(sessionID, string(parser.AgentFreebuff)+":") {
 		return nil
 	}
 	return fmt.Errorf(

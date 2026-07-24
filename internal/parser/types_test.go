@@ -1297,10 +1297,10 @@ func TestReasonixRegistryEntry(t *testing.T) {
 
 func TestFreebuffNotRegistered(t *testing.T) {
 	// Freebuff intentionally shares the Codebuff provider and is NOT
-	// registered in Registry. Sessions with agentType containing "free"
-	// are classified as Freebuff by the parser, but both agent types
-	// share one provider to avoid double-discovery and skip-cache
-	// contention. See types.go:718-728 for the design rationale.
+	// registered in Registry. Both paid Codebuff and free Freebuff sessions
+	// use agent = AgentCodebuff so that lifecycle operations (reconciliation,
+	// deletion, baselines) keyed by agent type work correctly. The UI
+	// distinguishes them via AgentLabel.
 	for _, def := range Registry {
 		assert.NotEqualf(t, AgentFreebuff, def.Type,
 			"AgentFreebuff must not be registered — it shares the Codebuff provider")

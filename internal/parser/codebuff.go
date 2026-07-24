@@ -60,7 +60,10 @@ func parseCodebuffSession(
 	sessionID := filepath.Base(dir)
 	sessionDate := parseCodebuffSessionDate(sessionID)
 
-	msgs, startedAt, endedAt := parseCodebuffMessages(data, sessionDate, model)
+	msgs, startedAt, endedAt, err := parseCodebuffMessages(data, sessionDate, model)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse chat-messages %s: %w", chatMessagesPath, err)
+	}
 
 	// Enrich tool calls with skill names by matching against the skills
 	// catalog available to this session (run-state.json.fileContext.skills).
@@ -102,14 +105,15 @@ func parseCodebuffSession(
 		}
 	}
 
-	// Determine agent type from run-state agentType field.
+	// Determine agent label from run-state agentType field.
 	// Sessions with "free" in the agentType are Freebuff, others are Codebuff.
-	// Both share the same on-disk layout; the parser splits them by type
-	// so the UI can filter each agent independently.
+	// Both share the same on-disk layout and the same agent type (Codebuff)
+	// so that lifecycle operations (reconciliation, deletion, baselines)
+	// keyed by agent type work correctly. The UI distinguishes them via
+	// AgentLabel.
 	agent := AgentCodebuff
 	agentLabel := "Codebuff"
 	if strings.Contains(strings.ToLower(rs.AgentType), "free") {
-		agent = AgentFreebuff
 		agentLabel = "Freebuff"
 	}
 
@@ -424,10 +428,11 @@ func parseCodebuffSessionDate(sessionID string) time.Time {
 // model is set on every ParsedMessage so the UI can identify the model used.
 func parseCodebuffMessages(
 	data []byte, sessionDate time.Time, model string,
-) ([]ParsedMessage, time.Time, time.Time) {
+) ([]ParsedMessage, time.Time, time.Time, error) {
 	root := gjson.ParseBytes(data)
 	if !root.IsArray() {
-		return nil, time.Time{}, time.Time{}
+		return nil, time.Time{}, time.Time{},
+			fmt.Errorf("chat-messages.json root is not an array")
 	}
 
 	var (
@@ -517,12 +522,13 @@ func parseCodebuffMessages(
 		return true
 	})
 
-	return messages, startedAt, endedAt
+	return messages, startedAt, endedAt, nil
 }
 
 // parseCodebuffAIMessage parses an AI-variant message into one or more
 // ParsedMessages. AI messages contain blocks: text (reasoning or regular),
-// tool calls, and subagent invocations.
+// tool calls, and subagent invocations. Blocks are processed sequentially
+// to preserve the interleaving order of text, tools, and results.
 func parseCodebuffAIMessage(
 	msg gjson.Result,
 	ts time.Time,
@@ -534,36 +540,103 @@ func parseCodebuffAIMessage(
 
 	var (
 		out           []ParsedMessage
-		thinkingParts []string
-		textParts     []string
+		thinkingBuf   []string
+		textBuf       []string
 		toolCalls     []ParsedToolCall
 		toolResults   []ParsedToolResult
-		systemParts   []string
+		pendingSys    []string
 	)
+
+	// flushText emits any accumulated thinking and text as assistant messages,
+	// preserving their interleaving order within the AI turn.
+	flushText := func() {
+		// Emit accumulated thinking.
+		if len(thinkingBuf) > 0 {
+			thinkingText := strings.Join(thinkingBuf, "\n\n")
+			out = append(out, ParsedMessage{
+				Role:          RoleAssistant,
+				Content:       "[Thinking]\n" + thinkingText + "\n[/Thinking]",
+				ThinkingText:  thinkingText,
+				HasThinking:   true,
+				Timestamp:     ts,
+				ContentLength: len(thinkingText),
+			})
+			thinkingBuf = nil
+		}
+		// Emit accumulated text.
+		if len(textBuf) > 0 {
+			textContent := strings.Join(textBuf, "\n\n")
+			out = append(out, ParsedMessage{
+				Role:          RoleAssistant,
+				Content:       textContent,
+				Timestamp:     ts,
+				ContentLength: len(textContent),
+			})
+			textBuf = nil
+		}
+	}
+
+	// flushTools emits accumulated tool calls as a single assistant message,
+	// then emits each tool result as a user message.
+	flushTools := func() {
+		if len(toolCalls) > 0 {
+			out = append(out, ParsedMessage{
+				Role:          RoleAssistant,
+				Timestamp:     ts,
+				HasToolUse:    true,
+				ToolCalls:     toolCalls,
+			})
+			toolCalls = nil
+		}
+		for _, tr := range toolResults {
+			out = append(out, ParsedMessage{
+				Role:          RoleUser,
+				Timestamp:     ts,
+				ToolResults:   []ParsedToolResult{tr},
+				ContentLength: tr.ContentLength,
+			})
+		}
+		toolResults = nil
+	}
+
+	// Track whether we're currently accumulating tool calls to batch
+	// consecutive tool blocks together.
+	inToolRun := false
 
 	blocks.ForEach(func(_, block gjson.Result) bool {
 		blockType := block.Get("type").Str
+		isTool := blockType == "tool" || blockType == "agent"
+
+		// Flush on transition away from a tool run.
+		if inToolRun && !isTool {
+			flushText()
+			flushTools()
+			inToolRun = false
+		}
 
 		switch blockType {
 		case "text":
+			// Flush accumulated tools before text to preserve ordering.
+			if len(toolCalls) > 0 {
+				flushTools()
+			}
 			textType := block.Get("textType").Str
 			content := block.Get("content").Str
+			if strings.TrimSpace(content) == "" {
+				return true
+			}
 			switch textType {
 			case "reasoning":
-				if strings.TrimSpace(content) != "" {
-					thinkingParts = append(thinkingParts, content)
-				}
-			case "text":
-				if strings.TrimSpace(content) != "" {
-					textParts = append(textParts, content)
-				}
+				thinkingBuf = append(thinkingBuf, content)
 			default:
-				if strings.TrimSpace(content) != "" {
-					textParts = append(textParts, content)
-				}
+				textBuf = append(textBuf, content)
 			}
 
 		case "tool":
+			if !inToolRun {
+				flushText()
+				inToolRun = true
+			}
 			tc := parseCodebuffToolCall(block)
 			if tc != nil {
 				toolCalls = append(toolCalls, *tc)
@@ -577,14 +650,16 @@ func parseCodebuffAIMessage(
 			}
 
 		case "agent":
-			// Subagent invocations: capture agent type, name, and
-			// spawn params as a tool call for UI display.
+			if !inToolRun {
+				flushText()
+				inToolRun = true
+			}
+
 			agentType := block.Get("agentType").Str
 			agentName := block.Get("agentName").Str
 			agentID := block.Get("agentId").Str
 			agentStatus := block.Get("status").Str
 
-			// Capture spawn params as input JSON.
 			inputParts := map[string]any{
 				"agentType": agentType,
 				"agentName": agentName,
@@ -608,47 +683,45 @@ func parseCodebuffAIMessage(
 				ToolUseID: agentID,
 				ToolName:  agentType,
 				Category:  "Task",
-				// SubagentSessionID is intentionally unset: codebuff/freebuff
-				// subagent invocations (basher, code-searcher, etc.) are not
-				// standalone agentsview-tracked sessions.
 				InputJSON: string(inputJSON),
 			}
 			toolCalls = append(toolCalls, tc)
 
-			// Collect subagent output text for inline display.
+			// Agent output goes into text buffer for the next flush.
 			if output := block.Get("content"); output.Exists() && output.Str != "" {
 				prefix := agentName
 				if agentType != "" {
 					prefix = agentType + ":" + agentName
 				}
-				textParts = append(textParts,
-					"["+prefix+" ("+status+")]\n"+output.Str,
-				)
+				textBuf = append(textBuf,
+					"["+prefix+" ("+status+")]\n"+output.Str)
 			}
 
 		case "mode-divider":
+			flushText()
+			flushTools()
 			mode := block.Get("mode").Str
 			if mode != "" {
-				systemParts = append(systemParts, "[Mode: "+mode+"]")
+				pendingSys = append(pendingSys, "[Mode: "+mode+"]")
 			}
 
 		case "plan":
-			// Planning output from the agent. Emit as a system message
-			// with the plan content.
+			flushText()
+			flushTools()
 			content := block.Get("content").Str
 			if strings.TrimSpace(content) != "" {
-				systemParts = append(systemParts, "[Plan]\n"+content)
+				pendingSys = append(pendingSys, "[Plan]\n"+content)
 			}
 
 		case "ask-user":
-			// The agent asked the user a clarifying question. Capture
-			// the question text so the transcript shows what was asked.
+			flushText()
+			flushTools()
 			questions := block.Get("questions")
 			if questions.IsArray() {
 				questions.ForEach(func(_, q gjson.Result) bool {
 					questionText := q.Get("question").Str
 					if strings.TrimSpace(questionText) != "" {
-						systemParts = append(systemParts,
+						pendingSys = append(pendingSys,
 							"[Agent asked] "+questionText)
 					}
 					return true
@@ -656,22 +729,23 @@ func parseCodebuffAIMessage(
 			}
 
 		case "image":
-			// User-uploaded image. Record that an image was attached
-			// without storing the base64 content.
-			filename := block.Get("filename").Str
-			if filename != "" {
-				textParts = append(textParts,
-					"[Image: "+filename+"]")
+			if block.Get("filename").Str != "" {
+				textBuf = append(textBuf,
+					"[Image: "+block.Get("filename").Str+"]")
 			} else {
-				textParts = append(textParts, "[Image attached]")
+				textBuf = append(textBuf, "[Image attached]")
 			}
 		}
 		return true
 	})
 
-	// 1. System notes.
-	if len(systemParts) > 0 {
-		sysContent := strings.Join(systemParts, "\n")
+	// Flush any remaining accumulated content.
+	flushText()
+	flushTools()
+
+	// Emit system messages after all other content.
+	if len(pendingSys) > 0 {
+		sysContent := strings.Join(pendingSys, "\n")
 		out = append(out, ParsedMessage{
 			Role:          RoleSystem,
 			Content:       sysContent,
@@ -681,46 +755,9 @@ func parseCodebuffAIMessage(
 		})
 	}
 
-	// 2. Thinking as a separate message.
-	if len(thinkingParts) > 0 {
-		thinkingText := strings.Join(thinkingParts, "\n\n")
-		out = append(out, ParsedMessage{
-			Role:          RoleAssistant,
-			Content:       "[Thinking]\n" + thinkingText + "\n[/Thinking]",
-			ThinkingText:  thinkingText,
-			HasThinking:   true,
-			Timestamp:     ts,
-			ContentLength: len(thinkingText),
-		})
-	}
-
-	// 3. Text + tool calls.
-	textContent := strings.Join(textParts, "\n\n")
-	hasToolUse := len(toolCalls) > 0
-
-	if textContent != "" || hasToolUse {
-		out = append(out, ParsedMessage{
-			Role:          RoleAssistant,
-			Content:       textContent,
-			Timestamp:     ts,
-			HasToolUse:    hasToolUse,
-			ToolCalls:     toolCalls,
-			ContentLength: len(textContent),
-		})
-	} else if !hasToolUse && len(thinkingParts) == 0 && len(systemParts) == 0 {
+	if len(out) == 0 {
 		return nil
 	}
-
-	// 4. Tool results.
-	for _, tr := range toolResults {
-		out = append(out, ParsedMessage{
-			Role:          RoleUser,
-			Timestamp:     ts,
-			ToolResults:   []ParsedToolResult{tr},
-			ContentLength: tr.ContentLength,
-		})
-	}
-
 	return out
 }
 

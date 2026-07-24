@@ -121,7 +121,10 @@ func TestParseCodebuffSession_FreebuffClassification(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	assert.Equal(t, AgentFreebuff, sess.Agent)
+	// Freebuff sessions use AgentCodebuff so that lifecycle operations
+	// (reconciliation, deletion, baselines) keyed by agent type work
+	// correctly. The UI distinguishes them via AgentLabel.
+	assert.Equal(t, AgentCodebuff, sess.Agent)
 	assert.Equal(t, "Freebuff", sess.AgentLabel)
 }
 
