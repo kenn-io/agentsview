@@ -156,31 +156,26 @@ func TestMergePricing_FirstSourceOwnsRow(t *testing.T) {
 	assert.Equal(t, 7.0, merged["only-b"].InputPerMTok)
 }
 
-// TestSuppressShadowedOpenRouterAliases verifies alias rows are
+// TestSuppressShadowedOpenRouterRowsAliases verifies alias rows are
 // dropped when a higher-priority source already covers the same
 // canonical model name — via a provider-qualified row or an exact
-// bare row — while unshadowed aliases and all qualified OpenRouter
-// rows survive. An unqualified alias would otherwise outrank the
-// earlier source's qualified key at resolution time, inverting
-// source precedence for bare session model names.
-func TestSuppressShadowedOpenRouterAliases(t *testing.T) {
+// bare row — while unshadowed aliases survive. An unqualified alias
+// would otherwise outrank the earlier source's qualified key at
+// resolution time, inverting source precedence for bare session model
+// names.
+func TestSuppressShadowedOpenRouterRowsAliases(t *testing.T) {
 	openrouter := []ModelPricing{
-		{ModelPattern: "minimax/minimax-m3", InputPerMTok: 9},
-		{ModelPattern: "minimax-m3", InputPerMTok: 9},
 		{ModelPattern: "moonshotai/kimi-k2.5", InputPerMTok: 5},
 		{ModelPattern: "kimi-k2.5", InputPerMTok: 5},
 		{ModelPattern: "acme/bare-owned", InputPerMTok: 7},
 		{ModelPattern: "bare-owned", InputPerMTok: 7},
 	}
 	litellm := []ModelPricing{
-		// Qualified row whose canonical suffix collides with the
-		// minimax-m3 alias (case and punctuation differ on purpose).
-		{ModelPattern: "minimax/MiniMax-M3", InputPerMTok: 2},
 		// Exact bare row owning the bare-owned pattern outright.
 		{ModelPattern: "bare-owned", InputPerMTok: 3},
 	}
 
-	kept := SuppressShadowedOpenRouterAliases(
+	kept, dropped := SuppressShadowedOpenRouterRows(
 		[][]ModelPricing{litellm}, openrouter,
 	)
 
@@ -188,36 +183,99 @@ func TestSuppressShadowedOpenRouterAliases(t *testing.T) {
 	for _, p := range kept {
 		patterns = append(patterns, p.ModelPattern)
 	}
-	assert.NotContains(t, patterns, "minimax-m3",
-		"alias shadowed by litellm qualified row must be dropped")
 	assert.NotContains(t, patterns, "bare-owned",
 		"alias owned outright by litellm must be dropped")
 	assert.Contains(t, patterns, "kimi-k2.5",
 		"unshadowed alias survives")
-	assert.Contains(t, patterns, "minimax/minimax-m3",
-		"qualified rows are never dropped")
 	assert.Contains(t, patterns, "acme/bare-owned",
-		"qualified rows are never dropped")
+		"qualified row under a different provider survives")
+	assert.Equal(t, []string{"bare-owned"}, dropped,
+		"dropped patterns are reported for retirement")
 
 	aliases := OpenRouterAliasPatterns(kept)
 	assert.Equal(t, []string{"kimi-k2.5"}, aliases,
 		"alias metadata must reflect the suppressed set")
 }
 
-// TestSuppressShadowedOpenRouterAliases_NoEarlierSources verifies
+// TestSuppressShadowedOpenRouterRowsCanonicalCollisions verifies a
+// qualified OpenRouter row is dropped when a higher-priority source
+// already lists the same model under the same provider with a
+// different spelling. Both rows canonicalize alike and rank equally,
+// so keeping both would make a bare lookup ambiguous and price the
+// model at zero. Collisions across different providers are kept: they
+// are distinct vendor listings, and dropping one would leave its own
+// qualified id unpriced.
+func TestSuppressShadowedOpenRouterRowsCanonicalCollisions(t *testing.T) {
+	openrouter := []ModelPricing{
+		{ModelPattern: "minimax/minimax-m3", InputPerMTok: 9},
+		{ModelPattern: "minimax-m3", InputPerMTok: 9},
+		{ModelPattern: "azure/gpt-x", InputPerMTok: 4},
+		{ModelPattern: "bare-dupe", InputPerMTok: 6},
+		// Bare row with no qualified counterpart, so not an alias.
+		{ModelPattern: "solo-model", InputPerMTok: 8},
+	}
+	litellm := []ModelPricing{
+		// Same provider, same canonical name, different spelling.
+		{ModelPattern: "minimax/MiniMax-M3", InputPerMTok: 2},
+		// Different provider, same canonical name.
+		{ModelPattern: "openai/gpt-x", InputPerMTok: 1},
+		// Bare row colliding with a bare non-alias OpenRouter row.
+		{ModelPattern: "Bare-Dupe", InputPerMTok: 3},
+		// Qualified row a bare OpenRouter row would outrank.
+		{ModelPattern: "acme/Solo-Model", InputPerMTok: 5},
+	}
+
+	kept, dropped := SuppressShadowedOpenRouterRows(
+		[][]ModelPricing{litellm}, openrouter,
+	)
+
+	patterns := make([]string, 0, len(kept))
+	for _, p := range kept {
+		patterns = append(patterns, p.ModelPattern)
+	}
+	assert.NotContains(t, patterns, "minimax/minimax-m3",
+		"qualified row duplicating litellm's spelling must be dropped")
+	assert.NotContains(t, patterns, "minimax-m3",
+		"its alias is shadowed as well")
+	assert.NotContains(t, patterns, "bare-dupe",
+		"bare row duplicating a litellm bare row must be dropped")
+	assert.NotContains(t, patterns, "solo-model",
+		"bare row outranking a litellm qualified row must be dropped")
+	assert.Contains(t, patterns, "azure/gpt-x",
+		"cross-provider canonical collision survives")
+	assert.Equal(t, []string{
+		"bare-dupe", "minimax-m3", "minimax/minimax-m3", "solo-model",
+	}, dropped, "dropped patterns are reported for retirement")
+
+	merged := MergePricing([][]ModelPricing{litellm, kept})
+	price, ok := Resolve(merged, "MiniMax-M3")
+	require.True(t, ok,
+		"bare lookup stays resolvable after suppression")
+	assert.Equal(t, 2.0, price.InputPerMTok,
+		"higher-priority litellm rate wins")
+	price, ok = Resolve(merged, "minimax/minimax-m3")
+	require.True(t, ok,
+		"the dropped OpenRouter id still resolves")
+	assert.Equal(t, 2.0, price.InputPerMTok,
+		"and resolves to the higher-priority rate")
+}
+
+// TestSuppressShadowedOpenRouterRows_NoEarlierSources verifies
 // the OpenRouter slice passes through untouched when no
 // higher-priority source responded.
-func TestSuppressShadowedOpenRouterAliases_NoEarlierSources(t *testing.T) {
+func TestSuppressShadowedOpenRouterRows_NoEarlierSources(t *testing.T) {
 	openrouter := []ModelPricing{
 		{ModelPattern: "minimax/minimax-m3", InputPerMTok: 9},
 		{ModelPattern: "minimax-m3", InputPerMTok: 9},
 	}
-	assert.Equal(t, openrouter, SuppressShadowedOpenRouterAliases(
-		nil, openrouter,
-	))
-	assert.Equal(t, openrouter, SuppressShadowedOpenRouterAliases(
+	kept, dropped := SuppressShadowedOpenRouterRows(nil, openrouter)
+	assert.Equal(t, openrouter, kept)
+	assert.Empty(t, dropped)
+	kept, dropped = SuppressShadowedOpenRouterRows(
 		[][]ModelPricing{}, openrouter,
-	))
+	)
+	assert.Equal(t, openrouter, kept)
+	assert.Empty(t, dropped)
 }
 
 // TestDropOpenRouterAliases verifies every alias row is removed while

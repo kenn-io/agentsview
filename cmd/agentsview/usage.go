@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -469,6 +470,7 @@ func refreshPricingFromSourcesWith(
 ) error {
 	fetched := make([][]pricing.ModelPricing, 0, len(sources))
 	var openRouterAliases []string
+	var shadowedRows []string
 	reconcileAliases := false
 	earlierSourceFailed := false
 	for _, src := range sources {
@@ -491,7 +493,7 @@ func refreshPricingFromSourcesWith(
 				// refresh can re-validate alias emission.
 				prices = pricing.DropOpenRouterAliases(prices)
 			} else {
-				prices = pricing.SuppressShadowedOpenRouterAliases(
+				prices, shadowedRows = pricing.SuppressShadowedOpenRouterRows(
 					fetched, prices,
 				)
 				reconcileAliases = true
@@ -542,12 +544,25 @@ func refreshPricingFromSourcesWith(
 	for _, alias := range openRouterAliases {
 		current[alias] = struct{}{}
 	}
-	stale := make([]string, 0)
+	staleSet := make(map[string]struct{})
 	for _, alias := range previousAliases {
 		if _, ok := current[alias]; !ok {
-			stale = append(stale, alias)
+			staleSet[alias] = struct{}{}
 		}
 	}
+	// Rows suppressed this refresh are retired outright rather than
+	// merely skipped: an earlier refresh may have stored them while the
+	// higher-priority source still lacked the model, and a leftover copy
+	// would keep the canonical lookup ambiguous. Any pattern a surviving
+	// source still declares is reinserted by ReconcileModelPricing.
+	for _, pattern := range shadowedRows {
+		staleSet[pattern] = struct{}{}
+	}
+	stale := make([]string, 0, len(staleSet))
+	for pattern := range staleSet {
+		stale = append(stale, pattern)
+	}
+	sort.Strings(stale)
 	dbPrices := make([]db.ModelPricing, len(flat))
 	for i, price := range flat {
 		dbPrices[i] = db.ModelPricing{

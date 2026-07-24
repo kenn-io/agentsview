@@ -1599,6 +1599,79 @@ func TestRefreshPricingFromSourcesSuppressesLiteLLMShadowedAliases(t *testing.T)
 		"alias metadata reflects only stored aliases")
 }
 
+// TestRefreshPricingFromSourcesRetiresCanonicallyShadowedRows proves an
+// OpenRouter row stored while LiteLLM still lacked the model is deleted
+// once LiteLLM publishes the same model under the same provider with a
+// different spelling. Both spellings canonicalize alike and rank
+// equally, so a leftover row would make the bare session model name
+// ambiguous and price it at zero.
+func TestRefreshPricingFromSourcesRetiresCanonicallyShadowedRows(
+	t *testing.T,
+) {
+	database := dbtest.OpenTestDB(t)
+	litellmRows := []pricing.ModelPricing{
+		{ModelPattern: "acme/other", InputPerMTok: 1, OutputPerMTok: 1},
+	}
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return litellmRows, nil
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return []pricing.ModelPricing{
+					{
+						ModelPattern:  "minimax/minimax-m3",
+						InputPerMTok:  9,
+						OutputPerMTok: 9,
+					},
+				}, nil
+			},
+		},
+	}
+
+	// LiteLLM does not list the model yet, so OpenRouter owns the row.
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+	stored, err := database.GetModelPricing("minimax/minimax-m3")
+	require.NoError(t, err)
+	require.NotNil(t, stored, "OpenRouter row stored while unshadowed")
+
+	// LiteLLM picks the model up under a different spelling.
+	litellmRows = append(litellmRows, pricing.ModelPricing{
+		ModelPattern:  "minimax/MiniMax-M3",
+		InputPerMTok:  2,
+		OutputPerMTok: 8,
+	})
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	shadowed, err := database.GetModelPricing("minimax/minimax-m3")
+	require.NoError(t, err)
+	assert.Nil(t, shadowed,
+		"the canonically duplicate OpenRouter row must be retired")
+	litellmRow, err := database.GetModelPricing("minimax/MiniMax-M3")
+	require.NoError(t, err)
+	require.NotNil(t, litellmRow, "LiteLLM row owns the model")
+	assert.Equal(t, 2.0, litellmRow.InputPerMTok)
+
+	rates, err := database.ListModelPricing(context.Background())
+	require.NoError(t, err)
+	lookup := make(map[string]pricing.ModelPricing, len(rates))
+	for _, rate := range rates {
+		lookup[rate.ModelPattern] = pricing.ModelPricing{
+			ModelPattern:  rate.ModelPattern,
+			InputPerMTok:  rate.InputPerMTok,
+			OutputPerMTok: rate.OutputPerMTok,
+		}
+	}
+	resolved, ok := pricing.Resolve(lookup, "MiniMax-M3")
+	require.True(t, ok, "bare session model name resolves again")
+	assert.Equal(t, 2.0, resolved.InputPerMTok,
+		"and resolves to the higher-priority LiteLLM rate")
+}
+
 // TestRefreshPricingFromSourcesSkipsAliasChangesWhenLiteLLMFails proves a
 // failed higher-priority fetch freezes the stored alias set: no new
 // OpenRouter aliases are written (they cannot be validated against the

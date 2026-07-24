@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 
@@ -77,55 +78,88 @@ func DefaultPricingSources() []PricingSource {
 	}
 }
 
-// SuppressShadowedOpenRouterAliases drops OpenRouter alias rows whose
-// canonical model name is already covered by a higher-priority source.
-// Aliases are generated from uniqueness within the OpenRouter catalog
-// alone, but an unqualified pricing key outranks a provider-qualified
-// one during resolution, so an unsuppressed alias would let OpenRouter
-// rates shadow an earlier source's qualified row (e.g. LiteLLM's
-// minimax/MiniMax-M3) for bare session model names. Coverage is
-// compared on canonicalized names — the same normalization the
-// resolver uses — so a qualified earlier row suppresses the alias its
-// suffix would collide with. Non-alias rows are never dropped.
-func SuppressShadowedOpenRouterAliases(
+// SuppressShadowedOpenRouterRows drops OpenRouter rows that a
+// higher-priority source already covers and reports the dropped
+// patterns, so a caller can also retire copies persisted by an earlier
+// refresh. Coverage is compared on canonicalized names — the same
+// normalization the resolver uses.
+//
+// A row is shadowed when an earlier row already occupies the rank the
+// row would resolve at, so the two rows are indistinguishable:
+//
+//   - An unqualified OpenRouter row (an alias emitted alongside a
+//     qualified id, or an id that carries no provider prefix at all) is
+//     shadowed by any earlier row with the same canonical name.
+//     Unqualified keys outrank provider-qualified ones during
+//     resolution, so an unsuppressed bare row would let an OpenRouter
+//     rate shadow an earlier source's qualified row (LiteLLM's
+//     minimax/MiniMax-M3) for bare session model names.
+//
+//   - A provider-qualified OpenRouter row is shadowed by an earlier row
+//     with the same canonical provider and name — LiteLLM's
+//     minimax/MiniMax-M3 against OpenRouter's minimax/minimax-m3. Both
+//     spellings canonicalize alike and rank equally, so a bare
+//     MiniMax-M3 lookup would find two tied keys, be rejected as
+//     ambiguous, and price at zero. Keeping one row per canonical model
+//     preserves that lookup; the dropped id still resolves
+//     case-insensitively to the earlier source's row, which is the rate
+//     precedence already demands.
+//
+// Rows that canonically collide across different providers
+// (openai/gpt-x against azure/gpt-x) are kept. They are distinct vendor
+// listings with independently valid rates, they never tie with each
+// other for a qualified lookup, and dropping one would leave its own
+// qualified id unpriced, because canonical resolution never matches a
+// key whose provider conflicts with the model's.
+func SuppressShadowedOpenRouterRows(
 	earlier [][]ModelPricing, openrouter []ModelPricing,
-) []ModelPricing {
-	aliases := OpenRouterAliasPatterns(openrouter)
-	if len(aliases) == 0 {
-		return openrouter
-	}
-	aliasSet := make(map[string]struct{}, len(aliases))
-	for _, alias := range aliases {
-		aliasSet[alias] = struct{}{}
-	}
-	covered := make(map[string]struct{})
+) (kept []ModelPricing, dropped []string) {
+	// coveredNames is keyed by canonical model name alone; coveredIDs
+	// additionally keys on the canonical provider prefix.
+	coveredNames := make(map[string]struct{})
+	coveredIDs := make(map[[2]string]struct{})
 	for _, prices := range earlier {
 		for _, p := range prices {
-			if c := canonicalize(p.ModelPattern); c != "" {
-				covered[c] = struct{}{}
-			}
-		}
-	}
-	if len(covered) == 0 {
-		return openrouter
-	}
-	kept := make([]ModelPricing, 0, len(openrouter))
-	for _, p := range openrouter {
-		if _, isAlias := aliasSet[p.ModelPattern]; isAlias {
-			if _, shadowed := covered[canonicalize(p.ModelPattern)]; shadowed {
+			c := canonicalize(p.ModelPattern)
+			if c == "" {
 				continue
 			}
+			coveredNames[c] = struct{}{}
+			coveredIDs[[2]string{canonicalProvider(p.ModelPattern), c}] =
+				struct{}{}
+		}
+	}
+	if len(coveredNames) == 0 {
+		return openrouter, nil
+	}
+	kept = make([]ModelPricing, 0, len(openrouter))
+	for _, p := range openrouter {
+		c := canonicalize(p.ModelPattern)
+		if c == "" {
+			kept = append(kept, p)
+			continue
+		}
+		var shadowed bool
+		if provider := canonicalProvider(p.ModelPattern); provider == "" {
+			_, shadowed = coveredNames[c]
+		} else {
+			_, shadowed = coveredIDs[[2]string{provider, c}]
+		}
+		if shadowed {
+			dropped = append(dropped, p.ModelPattern)
+			continue
 		}
 		kept = append(kept, p)
 	}
-	return kept
+	sort.Strings(dropped)
+	return kept, slices.Compact(dropped)
 }
 
 // DropOpenRouterAliases returns the OpenRouter rows with every alias row
 // removed, keeping only qualified rows and inherently bare models. Used
 // when a higher-priority source failed to fetch: its persisted rows may
 // still be authoritative, but they are not visible to
-// SuppressShadowedOpenRouterAliases, so alias emission cannot be
+// SuppressShadowedOpenRouterRows, so alias emission cannot be
 // validated and is skipped for the whole refresh.
 func DropOpenRouterAliases(prices []ModelPricing) []ModelPricing {
 	aliases := OpenRouterAliasPatterns(prices)
