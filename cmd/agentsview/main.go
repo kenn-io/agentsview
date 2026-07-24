@@ -2345,8 +2345,9 @@ func (r watchRoot) registeredRoot() sync.WatchRoot {
 	scopes := make([]sync.WatchScope, 0, len(r.scopes))
 	for _, scope := range r.scopes {
 		scopes = append(scopes, sync.WatchScope{
-			Agent:   string(scope.agent),
-			SyncDir: scope.syncDir,
+			Agent:         string(scope.agent),
+			SyncDir:       scope.syncDir,
+			DegradedProbe: r.degradedProbeForDir(scope.syncDir),
 		})
 	}
 	return sync.WatchRoot{

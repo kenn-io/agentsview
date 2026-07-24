@@ -1,13 +1,19 @@
 package sync
 
-import "slices"
+import (
+	"path/filepath"
+	"slices"
+
+	"go.kenn.io/agentsview/internal/parser"
+)
 
 // WatchScope identifies one configured provider root whose changes are covered
 // by a logical watcher root. A physical root may cover multiple configured
 // directories or providers, so registration must preserve every exact scope.
 type WatchScope struct {
-	Agent   string
-	SyncDir string
+	Agent         string
+	SyncDir       string
+	DegradedProbe parser.DegradedPollingStateProbe
 }
 
 // WatchRoot is one desired logical watcher root. Exists describes startup
@@ -18,6 +24,56 @@ type WatchRoot struct {
 	Recursive bool
 	Exists    bool
 	Scopes    []WatchScope
+}
+
+func pollingObligationsForScopes(
+	key string,
+	probe string,
+	scopes []WatchScope,
+) []PollingObligation {
+	if len(scopes) == 0 {
+		return nil
+	}
+	byKey := make(map[string][]string)
+	degraded := make(map[string]parser.DegradedPollingStateProbe)
+	for _, scope := range scopes {
+		if scope.SyncDir == "" {
+			continue
+		}
+		cleanDir := filepath.Clean(scope.SyncDir)
+		obligationKey := key
+		if scope.DegradedProbe != nil {
+			obligationKey = key + "|" + cleanDir
+			degraded[obligationKey] = scope.DegradedProbe
+		}
+		byKey[obligationKey] = appendUniqueScopeRoot(byKey[obligationKey], cleanDir)
+	}
+	keys := make([]string, 0, len(byKey))
+	for obligationKey := range byKey {
+		keys = append(keys, obligationKey)
+	}
+	slices.Sort(keys)
+	obligations := make([]PollingObligation, 0, len(keys))
+	for _, obligationKey := range keys {
+		roots := byKey[obligationKey]
+		slices.Sort(roots)
+		obligations = append(obligations, PollingObligation{
+			Key:           obligationKey,
+			Roots:         roots,
+			Probe:         filepath.Clean(probe),
+			DegradedProbe: degraded[obligationKey],
+		})
+	}
+	return obligations
+}
+
+func appendUniqueScopeRoot(roots []string, root string) []string {
+	for _, existing := range roots {
+		if existing == root {
+			return roots
+		}
+	}
+	return append(roots, root)
 }
 
 // RegisterRoots passes the complete desired root plan to the watcher before

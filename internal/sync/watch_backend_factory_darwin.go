@@ -48,8 +48,8 @@ const (
 // probe on the collapsed scope roots would let authoritative reconciliation
 // tombstone every session under the absent subtree.
 type darwinFallbackPollPlan struct {
-	path  string
-	roots []string
+	path   string
+	scopes []WatchScope
 }
 
 // darwinFallbackPollingObligationKey names the per-plan fallback obligation so
@@ -63,24 +63,36 @@ func darwinFallbackPollingObligationKey(path string) string {
 func appendFallbackPollPlan(
 	plans []darwinFallbackPollPlan, path string, scopes []WatchScope,
 ) []darwinFallbackPollPlan {
-	roots := appendWatchScopeRoots(nil, scopes)
-	if len(roots) == 0 {
+	if len(scopes) == 0 {
 		return plans
 	}
 	for i := range plans {
 		if plans[i].path == path {
-			merged := plans[i].roots
-			for _, root := range roots {
-				if !slices.Contains(merged, root) {
-					merged = append(merged, root)
+			merged := plans[i].scopes
+			for _, scope := range scopes {
+				duplicate := false
+				for _, existing := range merged {
+					if existing.SyncDir == scope.SyncDir &&
+						existing.DegradedProbe == scope.DegradedProbe {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					merged = append(merged, scope)
 				}
 			}
-			slices.Sort(merged)
-			plans[i].roots = merged
+			slices.SortFunc(merged, func(a, b WatchScope) int {
+				return strings.Compare(a.SyncDir, b.SyncDir)
+			})
+			plans[i].scopes = merged
 			return plans
 		}
 	}
-	plans = append(plans, darwinFallbackPollPlan{path: path, roots: roots})
+	plans = append(plans, darwinFallbackPollPlan{
+		path:   path,
+		scopes: append([]WatchScope(nil), scopes...),
+	})
 	slices.SortFunc(plans, func(a, b darwinFallbackPollPlan) int {
 		return strings.Compare(a.path, b.path)
 	})
@@ -1052,12 +1064,17 @@ func (b *darwinWatchBackend) requireRootPollingLocked(
 func (b *darwinWatchBackend) installRootPollingLocked(
 	state *darwinLogicalRoot,
 ) error {
-	roots := appendWatchScopeRoots(nil, state.plan.Scopes)
 	if b.onPollingRequired != nil {
-		return b.onPollingRequired(PollingObligation{
-			Key: state.plan.Path, Roots: roots, Probe: state.plan.Path,
-		})
+		for _, obligation := range pollingObligationsForScopes(
+			state.plan.Path, state.plan.Path, state.plan.Scopes,
+		) {
+			if err := b.onPollingRequired(obligation); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
+	roots := appendWatchScopeRoots(nil, state.plan.Scopes)
 	if b.onCoverageDegraded != nil {
 		return b.onCoverageDegraded(roots)
 	}
@@ -1250,12 +1267,14 @@ func (b *darwinWatchBackend) requireFallbackPolling(
 	b.mu.Unlock()
 	if required != nil {
 		for _, plan := range plans {
-			if err := required(PollingObligation{
-				Key:   darwinFallbackPollingObligationKey(plan.path),
-				Roots: plan.roots,
-				Probe: plan.path,
-			}); err != nil {
-				return err
+			for _, obligation := range pollingObligationsForScopes(
+				darwinFallbackPollingObligationKey(plan.path),
+				plan.path,
+				plan.scopes,
+			) {
+				if err := required(obligation); err != nil {
+					return err
+				}
 			}
 		}
 		b.mu.Lock()
@@ -1273,7 +1292,7 @@ func (b *darwinWatchBackend) requireFallbackPolling(
 		// absent.
 		var roots []string
 		for _, plan := range plans {
-			for _, root := range plan.roots {
+			for _, root := range appendWatchScopeRoots(nil, plan.scopes) {
 				if !slices.Contains(roots, root) {
 					roots = append(roots, root)
 				}

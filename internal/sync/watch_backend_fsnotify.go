@@ -30,7 +30,7 @@ type fsnotifyBackend struct {
 	watchOwners       map[string]map[string]struct{}
 	watchBudgetCost   map[string]int
 	runtimeBudget     int
-	rootScopes        map[string][]string
+	rootScopes        map[string][]WatchScope
 	degradedRoots     map[string]struct{}
 	onPollingRequired func(PollingObligation) error
 	lifecycleMu       sync.Mutex
@@ -67,7 +67,7 @@ func newFSNotifyBackend(excludes []string) (*fsnotifyBackend, error) {
 		excludes:        normalizeExcludePatterns(excludes),
 		watchOwners:     make(map[string]map[string]struct{}),
 		watchBudgetCost: make(map[string]int),
-		rootScopes:      make(map[string][]string),
+		rootScopes:      make(map[string][]WatchScope),
 		degradedRoots:   make(map[string]struct{}),
 		stop:            make(chan struct{}),
 		done:            make(chan struct{}),
@@ -134,16 +134,10 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 func (b *fsnotifyBackend) setWatchRootPlan(roots []WatchRoot) {
 	b.watchMu.Lock()
 	defer b.watchMu.Unlock()
-	b.rootScopes = make(map[string][]string, len(roots))
+	b.rootScopes = make(map[string][]WatchScope, len(roots))
 	for _, root := range roots {
 		path := filepath.Clean(root.Path)
-		for _, scope := range root.Scopes {
-			if scope.SyncDir != "" {
-				b.rootScopes[path] = append(b.rootScopes[path], scope.SyncDir)
-			}
-		}
-		slices.Sort(b.rootScopes[path])
-		b.rootScopes[path] = slices.Compact(b.rootScopes[path])
+		b.rootScopes[path] = append([]WatchScope(nil), root.Scopes...)
 	}
 }
 
@@ -493,10 +487,10 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 			continue
 		}
 		required := b.onPollingRequired
-		scopes := append([]string(nil), b.rootScopes[root]...)
+		scopes := append([]WatchScope(nil), b.rootScopes[root]...)
 		b.watchMu.Unlock()
 		if len(scopes) == 0 {
-			scopes = []string{root}
+			scopes = []WatchScope{{SyncDir: root}}
 		}
 		if required == nil {
 			b.reportError(fmt.Errorf(
@@ -504,17 +498,20 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 			))
 			continue
 		}
-		if err := required(PollingObligation{
-			Key: "fsnotify-runtime:" + root, Roots: scopes, Probe: root,
-		}); err != nil {
-			b.reportError(fmt.Errorf(
-				"transfer fsnotify coverage for %s to polling: %w", root, err,
-			))
-			continue
+		for _, obligation := range pollingObligationsForScopes(
+			"fsnotify-runtime:"+root, root, scopes,
+		) {
+			if err := required(obligation); err != nil {
+				b.reportError(fmt.Errorf(
+					"transfer fsnotify coverage for %s to polling: %w", root, err,
+				))
+				goto nextRoot
+			}
 		}
 		b.watchMu.Lock()
 		b.degradedRoots[root] = struct{}{}
 		b.watchMu.Unlock()
+	nextRoot:
 	}
 }
 

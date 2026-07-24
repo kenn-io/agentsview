@@ -18,6 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testDegradedProbe struct{}
+
+func (testDegradedProbe) DegradedPollingState(context.Context) (string, error) {
+	return "stable", nil
+}
+
 func testFSNotifyBackend(t *testing.T) *fsnotifyBackend {
 	t.Helper()
 	backend, err := newFSNotifyBackend(nil)
@@ -291,6 +297,52 @@ func TestFSNotifyBackendRootLossTransfersExactScopeToPolling(t *testing.T) {
 	assert.Equal(t, "fsnotify-runtime:"+root, obligation.Key)
 	assert.Equal(t, []string{syncDir}, obligation.Roots)
 	assert.Empty(t, backend.watcher.WatchList())
+}
+
+func TestFSNotifyBackendRootLossPreservesDegradedProbePerScope(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	root := t.TempDir()
+	openCodeDir := filepath.Join(root, "opencode")
+	unsupportedDir := filepath.Join(root, "kilo")
+	polling := make(chan PollingObligation, 2)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(context.Context, WatchBatch) error { return nil },
+		backend, 8, 1_000,
+		WatcherOptions{OnPollingRequired: func(obligation PollingObligation) error {
+			polling <- obligation
+			return nil
+		}},
+	)
+	require.NoError(t, err)
+	results := watcher.RegisterRoots([]WatchRoot{{
+		Path: root, Recursive: true, Exists: true,
+		Scopes: []WatchScope{
+			{Agent: "opencode", SyncDir: openCodeDir, DegradedProbe: testDegradedProbe{}},
+			{Agent: "kilo", SyncDir: unsupportedDir},
+		},
+	}}, 2)
+	require.Len(t, results, 1)
+	require.Equal(t, 1, results[0].Watched)
+
+	_, relevant := backend.translateEvent(fsnotify.Event{
+		Name: root, Op: fsnotify.Remove,
+	})
+	require.True(t, relevant)
+	first := requireReceiveWithin(t, polling, time.Second)
+	second := requireReceiveWithin(t, polling, time.Second)
+	obligations := map[string]PollingObligation{
+		first.Key:  first,
+		second.Key: second,
+	}
+	require.Contains(t, obligations, "fsnotify-runtime:"+root)
+	require.Contains(t, obligations, "fsnotify-runtime:"+root+"|"+openCodeDir)
+	assert.Equal(t, []string{unsupportedDir},
+		obligations["fsnotify-runtime:"+root].Roots)
+	assert.Nil(t, obligations["fsnotify-runtime:"+root].DegradedProbe)
+	assert.Equal(t, []string{openCodeDir},
+		obligations["fsnotify-runtime:"+root+"|"+openCodeDir].Roots)
+	assert.NotNil(t,
+		obligations["fsnotify-runtime:"+root+"|"+openCodeDir].DegradedProbe)
 }
 
 func waitForBackendEvent(

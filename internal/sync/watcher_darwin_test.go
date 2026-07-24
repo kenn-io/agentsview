@@ -1571,6 +1571,54 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 	assert.Equal(t, int32(3), attempts.Load())
 }
 
+func TestDarwinWatcherFallbackPreservesDegradedProbePerScope(t *testing.T) {
+	root := t.TempDir()
+	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
+	require.NoError(t, err)
+	polling := make(chan PollingObligation, 2)
+	watcher, err := newWatcherWithBackendOptions(
+		0, 0, func(context.Context, WatchBatch) error { return nil }, backend,
+		defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
+		WatcherOptions{
+			OnPollingRequired: func(obligation PollingObligation) error {
+				polling <- obligation
+				return nil
+			},
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(watcher.Stop)
+	openCodeDir := filepath.Join(root, "opencode")
+	unsupportedDir := filepath.Join(root, "kilo")
+	results := watcher.RegisterRoots([]WatchRoot{{
+		Path: root, Recursive: true, Exists: true,
+		Scopes: []WatchScope{
+			{Agent: "opencode", SyncDir: openCodeDir, DegradedProbe: testDegradedProbe{}},
+			{Agent: "kilo", SyncDir: unsupportedDir},
+		},
+	}}, 10)
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(t, watcher.Start())
+
+	backend.requestFallback(darwinFallbackNativeDrop)
+	first := requireReceiveWithin(t, polling, time.Second)
+	second := requireReceiveWithin(t, polling, time.Second)
+	obligations := map[string]PollingObligation{
+		first.Key:  first,
+		second.Key: second,
+	}
+	require.Contains(t, obligations, darwinFallbackPollingObligationKey(root))
+	require.Contains(t,
+		obligations, darwinFallbackPollingObligationKey(root)+"|"+openCodeDir)
+	assert.Equal(t, []string{unsupportedDir},
+		obligations[darwinFallbackPollingObligationKey(root)].Roots)
+	assert.Nil(t, obligations[darwinFallbackPollingObligationKey(root)].DegradedProbe)
+	assert.Equal(t, []string{openCodeDir},
+		obligations[darwinFallbackPollingObligationKey(root)+"|"+openCodeDir].Roots)
+	assert.NotNil(t,
+		obligations[darwinFallbackPollingObligationKey(root)+"|"+openCodeDir].DegradedProbe)
+}
+
 // TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic stops the watcher
 // while the recovery handoff is inside its polling-release callback, which
 // runs with the backend mutex released. The lifecycle goroutine reports the
