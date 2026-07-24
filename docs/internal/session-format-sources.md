@@ -103,6 +103,13 @@ Grok section and remove the explicit registry exception in the coverage test.
   in [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code
   for VS Code writes standalone `user` records wrapped in `ide_opened_file` or
   `ide_selection` tags for editor context rather than operator prompts.
+  Reverified 2026-07-24 against local CLI transcripts: current
+  transcripts carry two top-level launch/prompt-provenance keys that the
+  parser now captures — `sessionKind` (session-level, e.g. `"bg"`; present on
+  background/headless sessions and absent on interactive ones) and
+  `promptSource` (per user turn, e.g. `"typed"`, `"queued"`, `"system"`,
+  `"sdk"`). Neither key is documented upstream or covered by the codeburn
+  notes; the evidence remains local observation under `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 
