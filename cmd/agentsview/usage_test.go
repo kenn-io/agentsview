@@ -1530,6 +1530,75 @@ func TestRefreshPricingFromSourcesReconcilesOpenRouterAliases(t *testing.T) {
 	}
 }
 
+// TestRefreshPricingFromSourcesSuppressesLiteLLMShadowedAliases proves an
+// OpenRouter bare alias is not stored (and not recorded as alias
+// provenance) when LiteLLM already covers the same canonical model via a
+// provider-qualified row, so OpenRouter rates cannot shadow LiteLLM's for
+// bare session model names.
+func TestRefreshPricingFromSourcesSuppressesLiteLLMShadowedAliases(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return []pricing.ModelPricing{
+					{
+						ModelPattern:  "minimax/MiniMax-M3",
+						InputPerMTok:  2,
+						OutputPerMTok: 8,
+					},
+				}, nil
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return []pricing.ModelPricing{
+					{
+						ModelPattern:  "minimax/minimax-m3",
+						InputPerMTok:  9,
+						OutputPerMTok: 9,
+					},
+					{
+						ModelPattern:  "minimax-m3",
+						InputPerMTok:  9,
+						OutputPerMTok: 9,
+					},
+					{
+						ModelPattern:  "acme/unshadowed",
+						InputPerMTok:  1,
+						OutputPerMTok: 1,
+					},
+					{
+						ModelPattern:  "unshadowed",
+						InputPerMTok:  1,
+						OutputPerMTok: 1,
+					},
+				}, nil
+			},
+		},
+	}
+
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	shadowed, err := database.GetModelPricing("minimax-m3")
+	require.NoError(t, err)
+	assert.Nil(t, shadowed,
+		"alias shadowed by LiteLLM's qualified row must not be stored")
+	litellmRow, err := database.GetModelPricing("minimax/MiniMax-M3")
+	require.NoError(t, err)
+	require.NotNil(t, litellmRow, "LiteLLM row survives")
+	assert.Equal(t, 2.0, litellmRow.InputPerMTok)
+	surviving, err := database.GetModelPricing("unshadowed")
+	require.NoError(t, err)
+	require.NotNil(t, surviving, "unshadowed alias is stored")
+
+	meta, err := database.GetPricingMeta(pricing.OpenRouterAliasesMetaKey)
+	require.NoError(t, err)
+	assert.Equal(t, `["unshadowed"]`, meta,
+		"alias metadata reflects only stored aliases")
+}
+
 // sampleDailyUsageJSON is a full usage summary body with a single day and
 // non-zero totals, shared by the HTTP and daemon usage tests.
 const sampleDailyUsageJSON = `{

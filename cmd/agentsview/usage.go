@@ -479,11 +479,14 @@ func refreshPricingFromSourcesWith(
 			)
 			continue
 		}
-		fetched = append(fetched, prices)
 		if src.Name == "openrouter" {
+			prices = pricing.SuppressShadowedOpenRouterAliases(
+				fetched, prices,
+			)
 			openRouterFetched = true
 			openRouterAliases = pricing.OpenRouterAliasPatterns(prices)
 		}
+		fetched = append(fetched, prices)
 		log.Printf(
 			"pricing refresh: %s returned %d model rows",
 			src.Name, len(prices),

@@ -156,6 +156,70 @@ func TestMergePricing_FirstSourceOwnsRow(t *testing.T) {
 	assert.Equal(t, 7.0, merged["only-b"].InputPerMTok)
 }
 
+// TestSuppressShadowedOpenRouterAliases verifies alias rows are
+// dropped when a higher-priority source already covers the same
+// canonical model name — via a provider-qualified row or an exact
+// bare row — while unshadowed aliases and all qualified OpenRouter
+// rows survive. An unqualified alias would otherwise outrank the
+// earlier source's qualified key at resolution time, inverting
+// source precedence for bare session model names.
+func TestSuppressShadowedOpenRouterAliases(t *testing.T) {
+	openrouter := []ModelPricing{
+		{ModelPattern: "minimax/minimax-m3", InputPerMTok: 9},
+		{ModelPattern: "minimax-m3", InputPerMTok: 9},
+		{ModelPattern: "moonshotai/kimi-k2.5", InputPerMTok: 5},
+		{ModelPattern: "kimi-k2.5", InputPerMTok: 5},
+		{ModelPattern: "acme/bare-owned", InputPerMTok: 7},
+		{ModelPattern: "bare-owned", InputPerMTok: 7},
+	}
+	litellm := []ModelPricing{
+		// Qualified row whose canonical suffix collides with the
+		// minimax-m3 alias (case and punctuation differ on purpose).
+		{ModelPattern: "minimax/MiniMax-M3", InputPerMTok: 2},
+		// Exact bare row owning the bare-owned pattern outright.
+		{ModelPattern: "bare-owned", InputPerMTok: 3},
+	}
+
+	kept := SuppressShadowedOpenRouterAliases(
+		[][]ModelPricing{litellm}, openrouter,
+	)
+
+	patterns := make([]string, 0, len(kept))
+	for _, p := range kept {
+		patterns = append(patterns, p.ModelPattern)
+	}
+	assert.NotContains(t, patterns, "minimax-m3",
+		"alias shadowed by litellm qualified row must be dropped")
+	assert.NotContains(t, patterns, "bare-owned",
+		"alias owned outright by litellm must be dropped")
+	assert.Contains(t, patterns, "kimi-k2.5",
+		"unshadowed alias survives")
+	assert.Contains(t, patterns, "minimax/minimax-m3",
+		"qualified rows are never dropped")
+	assert.Contains(t, patterns, "acme/bare-owned",
+		"qualified rows are never dropped")
+
+	aliases := OpenRouterAliasPatterns(kept)
+	assert.Equal(t, []string{"kimi-k2.5"}, aliases,
+		"alias metadata must reflect the suppressed set")
+}
+
+// TestSuppressShadowedOpenRouterAliases_NoEarlierSources verifies
+// the OpenRouter slice passes through untouched when no
+// higher-priority source responded.
+func TestSuppressShadowedOpenRouterAliases_NoEarlierSources(t *testing.T) {
+	openrouter := []ModelPricing{
+		{ModelPattern: "minimax/minimax-m3", InputPerMTok: 9},
+		{ModelPattern: "minimax-m3", InputPerMTok: 9},
+	}
+	assert.Equal(t, openrouter, SuppressShadowedOpenRouterAliases(
+		nil, openrouter,
+	))
+	assert.Equal(t, openrouter, SuppressShadowedOpenRouterAliases(
+		[][]ModelPricing{}, openrouter,
+	))
+}
+
 // TestDefaultPricingSources_OrderIsStable makes sure the
 // declared priority (LiteLLM first, OpenRouter second) is
 // preserved so upstream rate precedence stays deterministic

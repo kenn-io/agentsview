@@ -77,6 +77,50 @@ func DefaultPricingSources() []PricingSource {
 	}
 }
 
+// SuppressShadowedOpenRouterAliases drops OpenRouter alias rows whose
+// canonical model name is already covered by a higher-priority source.
+// Aliases are generated from uniqueness within the OpenRouter catalog
+// alone, but an unqualified pricing key outranks a provider-qualified
+// one during resolution, so an unsuppressed alias would let OpenRouter
+// rates shadow an earlier source's qualified row (e.g. LiteLLM's
+// minimax/MiniMax-M3) for bare session model names. Coverage is
+// compared on canonicalized names — the same normalization the
+// resolver uses — so a qualified earlier row suppresses the alias its
+// suffix would collide with. Non-alias rows are never dropped.
+func SuppressShadowedOpenRouterAliases(
+	earlier [][]ModelPricing, openrouter []ModelPricing,
+) []ModelPricing {
+	aliases := OpenRouterAliasPatterns(openrouter)
+	if len(aliases) == 0 {
+		return openrouter
+	}
+	aliasSet := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		aliasSet[alias] = struct{}{}
+	}
+	covered := make(map[string]struct{})
+	for _, prices := range earlier {
+		for _, p := range prices {
+			if c := canonicalize(p.ModelPattern); c != "" {
+				covered[c] = struct{}{}
+			}
+		}
+	}
+	if len(covered) == 0 {
+		return openrouter
+	}
+	kept := make([]ModelPricing, 0, len(openrouter))
+	for _, p := range openrouter {
+		if _, isAlias := aliasSet[p.ModelPattern]; isAlias {
+			if _, shadowed := covered[canonicalize(p.ModelPattern)]; shadowed {
+				continue
+			}
+		}
+		kept = append(kept, p)
+	}
+	return kept
+}
+
 // OpenRouterAliasPatterns returns the unqualified aliases emitted alongside
 // qualified OpenRouter model IDs. A bare pattern is an alias only when the
 // same catalog also contains a qualified row with that suffix.
