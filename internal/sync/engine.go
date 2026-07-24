@@ -8212,7 +8212,7 @@ func (e *Engine) providerIncrementalContentChanged(
 	if !ok || storedHash == "" {
 		return false, false
 	}
-	curHash, err := ComputeFileHashPrefix(hashPath, info.Size())
+	curHash, err := computeFileHashPrefix(hashPath, info.Size())
 	if err != nil {
 		return false, false
 	}

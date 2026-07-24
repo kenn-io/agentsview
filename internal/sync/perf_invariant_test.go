@@ -385,3 +385,83 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 	assert.Equal(t, large.localWrites, large.remoteWrites,
 		"large equivalent contributors must retain equal work counts")
 }
+
+// TestWarmFullSyncDoesNotRehashClaudeArchive pins the "background sync work is
+// bounded by the changed batch, not total archive size" rule against the Claude
+// DB-freshness gate.
+//
+// providerSingleSessionFresh runs at the top of every provider process pass. Its
+// last guard, providerIncrementalContentChanged, defends against a same-size,
+// same-mtime, same-inode in-place rewrite by content-hashing the source, and
+// that guard reads the whole stored prefix. Today the verified-source gate
+// (verifiedProviderSourceState) absorbs it: a signature is content-verified once
+// to earn trust, and every later pass over an unchanged source rides the trusted
+// skip without reading bytes.
+//
+// Nothing else pins that. Losing the trusted skip — by dropping Claude's
+// VerifiedLocalStat capability, widening the signature so it never repeats, or
+// pruning trust between passes — would silently turn every watcher-triggered
+// pass into a full re-read of the entire Claude archive, which is invisible in
+// correctness tests and only shows up as daemon CPU on a large archive. Assert
+// the steady-state pass reads no content and does not scale with archive size.
+func TestWarmFullSyncDoesNotRehashClaudeArchive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	observed := make(map[int]int)
+	for _, claudeCount := range []int{5, 50} {
+		t.Run(fmt.Sprintf("claude_%d", claudeCount), func(t *testing.T) {
+			claudeDir := filepath.Join(t.TempDir(), "claude")
+			require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+			writeClaudeCorpus(t, claudeDir, claudeCount)
+
+			database := openTestDB(t)
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {claudeDir},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			// Cold pass: populates the archive and earns verified-source trust.
+			require.Equal(t, claudeCount,
+				engine.SyncAll(context.Background(), nil).Synced)
+
+			var mu gosync.Mutex
+			reads := 0
+			restore := computeFileHashPrefix
+			computeFileHashPrefix = func(path string, size int64) (string, error) {
+				mu.Lock()
+				reads++
+				mu.Unlock()
+				return restore(path, size)
+			}
+			t.Cleanup(func() { computeFileHashPrefix = restore })
+
+			// Each pass leaves the archive untouched on disk. The first warm
+			// pass may content-verify once to earn verified-source trust; every
+			// pass after that must ride the trusted-signature skip.
+			pass := func() int {
+				mu.Lock()
+				reads = 0
+				mu.Unlock()
+				engine.SyncAll(context.Background(), nil)
+				mu.Lock()
+				defer mu.Unlock()
+				return reads
+			}
+			trustEarning := pass()
+			steady := pass()
+			t.Logf("source content reads: trust-earning pass=%d steady pass=%d",
+				trustEarning, steady)
+			observed[claudeCount] = steady
+		})
+	}
+
+	assert.Equal(t, observed[5], observed[50],
+		"warm-pass source reads must not grow with archive size")
+	assert.Zero(t, observed[50],
+		"a warm pass over an unchanged archive must not re-read source content")
+}

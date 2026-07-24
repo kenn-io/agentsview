@@ -30,6 +30,12 @@ func ComputeFileHash(path string) (string, error) {
 	return hash, nil
 }
 
+// computeFileHashPrefix indirects ComputeFileHashPrefix so cardinality-scaling
+// tests can count how many source-content reads one sync pass performs. Every
+// freshness-gate caller must go through this var rather than calling
+// ComputeFileHashPrefix directly, or the scaling regression test goes blind.
+var computeFileHashPrefix = ComputeFileHashPrefix
+
 // ComputeFileHashPrefix returns the SHA-256 hex digest of the first size bytes
 // of the file at path. It returns an error if the file is shorter than size.
 func ComputeFileHashPrefix(path string, size int64) (string, error) {
