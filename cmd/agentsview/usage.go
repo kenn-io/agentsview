@@ -543,17 +543,18 @@ func refreshPricingFromSourcesWith(
 			CacheReadPerMTok:     price.CacheReadPerMTok,
 		}
 	}
-	if err := database.ReconcileModelPricing(dbPrices, stale); err != nil {
-		return fmt.Errorf("reconciling pricing: %w", err)
-	}
 	encodedAliases, err := json.Marshal(openRouterAliases)
 	if err != nil {
 		return fmt.Errorf("encoding OpenRouter alias metadata: %w", err)
 	}
-	if err := database.SetPricingMeta(
+	// Alias provenance metadata commits in the same transaction as the
+	// rows so a crash or concurrent pg push can never observe alias rows
+	// without the metadata that allows retiring them later.
+	if err := database.ReconcileModelPricing(
+		dbPrices, stale,
 		pricing.OpenRouterAliasesMetaKey, string(encodedAliases),
 	); err != nil {
-		return fmt.Errorf("recording OpenRouter aliases: %w", err)
+		return fmt.Errorf("reconciling pricing: %w", err)
 	}
 	return nil
 }

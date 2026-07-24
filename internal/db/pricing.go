@@ -175,14 +175,18 @@ func (db *DB) UpsertModelPricing(
 // ReconcileModelPricing removes obsolete patterns and upserts the desired
 // rows in one transaction. Desired rows that share a removed pattern are
 // reinserted, allowing one source to retire an alias while another source
-// continues to publish that same unqualified model name.
+// continues to publish that same unqualified model name. When metaKey is
+// non-empty the metadata sentinel row is written in the same transaction,
+// so readers can never observe reconciled rows without the provenance
+// metadata that allows retiring them later.
 func (db *DB) ReconcileModelPricing(
 	prices []ModelPricing, removePatterns []string,
+	metaKey, metaValue string,
 ) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
+	if len(prices) == 0 && len(removePatterns) == 0 && metaKey == "" {
 		return nil
 	}
 
@@ -242,6 +246,15 @@ func (db *DB) ReconcileModelPricing(
 			)
 		}
 	}
+	if metaKey != "" {
+		if _, err := tx.Exec(
+			setPricingMetaSQL, metaKey, metaValue,
+		); err != nil {
+			return fmt.Errorf(
+				"setting pricing meta %q: %w", metaKey, err,
+			)
+		}
+	}
 	return tx.Commit()
 }
 
@@ -264,19 +277,21 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 	return val, nil
 }
 
+// setPricingMetaSQL upserts a metadata sentinel row; shared by
+// SetPricingMeta and the in-transaction write in
+// ReconcileModelPricing.
+const setPricingMetaSQL = `INSERT INTO model_pricing
+		(model_pattern, input_per_mtok, output_per_mtok,
+		 cache_creation_per_mtok, cache_read_per_mtok,
+		 updated_at)
+	 VALUES (?, 0, 0, 0, 0, ?)
+	 ON CONFLICT(model_pattern) DO UPDATE SET
+		updated_at = excluded.updated_at`
+
 // SetPricingMeta stores a metadata value as a sentinel row
 // in model_pricing with zero pricing fields.
 func (db *DB) SetPricingMeta(key, value string) error {
-	_, err := db.getWriter().Exec(
-		`INSERT INTO model_pricing
-			(model_pattern, input_per_mtok, output_per_mtok,
-			 cache_creation_per_mtok, cache_read_per_mtok,
-			 updated_at)
-		 VALUES (?, 0, 0, 0, 0, ?)
-		 ON CONFLICT(model_pattern) DO UPDATE SET
-			updated_at = excluded.updated_at`,
-		key, value,
-	)
+	_, err := db.getWriter().Exec(setPricingMetaSQL, key, value)
 	if err != nil {
 		return fmt.Errorf(
 			"setting pricing meta %q: %w", key, err,
