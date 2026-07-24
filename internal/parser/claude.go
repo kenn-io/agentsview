@@ -99,6 +99,7 @@ func claudeParseWithExclusions(
 		displayName     string
 		agentLabel      string
 		entrypoint      string
+		sessionKind     string
 		foundParentSID  bool
 		lineIndex       int
 		malformedLines  int
@@ -137,6 +138,11 @@ func claudeParseWithExclusions(
 		if entrypoint == "" {
 			if value := gjson.GetBytes(lineBytes, "entrypoint").Str; strings.TrimSpace(value) != "" {
 				entrypoint = strings.Clone(value)
+			}
+		}
+		if sessionKind == "" {
+			if value := gjson.GetBytes(lineBytes, "sessionKind").Str; strings.TrimSpace(value) != "" {
+				sessionKind = strings.Clone(value)
 			}
 		}
 
@@ -303,6 +309,7 @@ func claudeParseWithExclusions(
 		displayName:     displayName,
 		agentLabel:      agentLabel,
 		entrypoint:      entrypoint,
+		sessionKind:     sessionKind,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -377,7 +384,7 @@ func compactClaudeEntry(line []byte) string {
 	topFields := []claudeCompactField{
 		{name: "uuid"}, {name: "parentUuid"}, {name: "timestamp"},
 		{name: "isCompactSummary"}, {name: "isSidechain"},
-		{name: "isMeta"}, {name: "requestId"},
+		{name: "isMeta"}, {name: "requestId"}, {name: "promptSource"},
 	}
 	messageFields := []claudeCompactField{
 		{name: "content"}, {name: "id"}, {name: "stop_reason"},
@@ -566,8 +573,9 @@ type ClaudeSubagentLink struct {
 // only change the stored session when the corresponding stored value is
 // still empty.
 type claudeStoredIdentity struct {
-	agentLabel string
-	entrypoint string
+	agentLabel  string
+	entrypoint  string
+	sessionKind string
 }
 
 // claudeIncrementalScan carries the per-session stored state an
@@ -816,8 +824,12 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 		strings.TrimSpace(gjson.Get(line, "agentSetting").Str) != "" {
 		return true
 	}
-	return stored.entrypoint == "" &&
-		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != ""
+	if stored.entrypoint == "" &&
+		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != "" {
+		return true
+	}
+	return stored.sessionKind == "" &&
+		strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != ""
 }
 
 // collectClaudeUnmatchedToolResults returns result links for appended
@@ -1037,6 +1049,7 @@ func extractMessagesFrom(
 				SourceUUID:        e.uuid,
 				SourceParentUUID:  e.parentUuid,
 				IsSidechain:       gjson.Get(e.line, "isSidechain").Bool(),
+				PromptSource:      gjson.Get(e.line, "promptSource").Str,
 				IsCompactBoundary: true,
 			})
 			ordinal++
@@ -1089,6 +1102,7 @@ func extractMessagesFrom(
 					SourceUUID:       e.uuid,
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
+					PromptSource:     gjson.Get(e.line, "promptSource").Str,
 				})
 				ordinal++
 				continue
@@ -1115,6 +1129,7 @@ func extractMessagesFrom(
 			SourceUUID:         e.uuid,
 			SourceParentUUID:   e.parentUuid,
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
+			PromptSource:       gjson.Get(e.line, "promptSource").Str,
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
@@ -1140,6 +1155,7 @@ type claudeSessionMeta struct {
 	displayName     string
 	agentLabel      string
 	entrypoint      string
+	sessionKind     string
 	malformedLines  int
 	isTruncated     bool
 }
@@ -1153,6 +1169,7 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.SessionName = m.displayName
 	sess.AgentLabel = m.agentLabel
 	sess.Entrypoint = m.entrypoint
+	sess.SessionKind = m.sessionKind
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -2068,6 +2085,7 @@ func extractMessages(entries []dagEntry) (
 				SourceUUID:        e.uuid,
 				SourceParentUUID:  e.parentUuid,
 				IsSidechain:       gjson.Get(e.line, "isSidechain").Bool(),
+				PromptSource:      gjson.Get(e.line, "promptSource").Str,
 				IsCompactBoundary: true,
 			})
 			ordinal++
@@ -2121,6 +2139,7 @@ func extractMessages(entries []dagEntry) (
 					SourceUUID:       e.uuid,
 					SourceParentUUID: e.parentUuid,
 					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
+					PromptSource:     gjson.Get(e.line, "promptSource").Str,
 				})
 				ordinal++
 				continue
@@ -2145,6 +2164,7 @@ func extractMessages(entries []dagEntry) (
 			SourceUUID:         e.uuid,
 			SourceParentUUID:   e.parentUuid,
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
+			PromptSource:       gjson.Get(e.line, "promptSource").Str,
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 

@@ -608,6 +608,7 @@ type tokenFingerprintRow struct {
 	claudeRequestID   string
 	sourceType        string
 	sourceSubtype     string
+	promptSource      string
 	sourceUUID        string
 	sourceParentUUID  string
 	isSidechain       bool
@@ -625,11 +626,12 @@ func (r tokenFingerprintRow) appendTo(b *strings.Builder) {
 	claudeReqID := SanitizeUTF8(r.claudeRequestID)
 	srcType := SanitizeUTF8(r.sourceType)
 	srcSubtype := SanitizeUTF8(r.sourceSubtype)
+	promptSource := SanitizeUTF8(r.promptSource)
 	srcUUID := SanitizeUTF8(r.sourceUUID)
 	srcParentUUID := SanitizeUTF8(r.sourceParentUUID)
 	fmt.Fprintf(b,
 		"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
-			"%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
+			"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 		r.ordinal,
 		len(model), model,
 		len(tokenUsage), tokenUsage,
@@ -638,6 +640,7 @@ func (r tokenFingerprintRow) appendTo(b *strings.Builder) {
 		claudeMsgID, claudeReqID,
 		len(srcType), srcType,
 		len(srcSubtype), srcSubtype,
+		len(promptSource), promptSource,
 		len(srcUUID), srcUUID,
 		len(srcParentUUID), srcParentUUID,
 		r.isSidechain, r.isCompactBoundary,

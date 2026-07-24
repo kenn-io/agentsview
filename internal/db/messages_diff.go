@@ -26,7 +26,7 @@ func messageInsertArgs(m Message) []any {
 		m.ContextTokens, m.OutputTokens,
 		m.HasContextTokens, m.HasOutputTokens,
 		m.ClaudeMessageID, m.ClaudeRequestID,
-		m.SourceType, m.SourceSubtype, m.SourceUUID,
+		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 		m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
 	}
 }

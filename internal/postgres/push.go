@@ -2029,6 +2029,7 @@ func sessionPushFingerprint(
 		sess.Agent,
 		sess.AgentLabel,
 		sess.Entrypoint,
+		sess.SessionKind,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
 		stringValue(sess.SessionName),
@@ -2247,7 +2248,7 @@ func (s *Sync) pushSession(
 			missing_verification_count, duplicate_prompt_count,
 			no_code_context_count, runaway_tool_loop_count,
 			transcript_fidelity, transcript_revision,
-			agent_label, entrypoint,
+			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
 			updated_at
 			)
@@ -2266,7 +2267,7 @@ func (s *Sync) pushSession(
 				$45, $46, $47, $48,
 				$49, $50,
 				$51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
-				$61, $62, $63, $64, $65,
+				$61, $62, $63, $64, $65, $66,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -2278,6 +2279,7 @@ func (s *Sync) pushSession(
 			agent = EXCLUDED.agent,
 			agent_label = EXCLUDED.agent_label,
 			entrypoint = EXCLUDED.entrypoint,
+			session_kind = EXCLUDED.session_kind,
 			source_archive_id = EXCLUDED.source_archive_id,
 			source_database_generation = EXCLUDED.source_database_generation,
 			file_path = EXCLUDED.file_path,
@@ -2355,7 +2357,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($66::jsonb)
+						SELECT jsonb_array_elements_text($67::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -2370,6 +2372,7 @@ func (s *Sync) pushSession(
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.agent_label IS DISTINCT FROM EXCLUDED.agent_label
 			OR sessions.entrypoint IS DISTINCT FROM EXCLUDED.entrypoint
+			OR sessions.session_kind IS DISTINCT FROM EXCLUDED.session_kind
 			OR sessions.source_archive_id IS DISTINCT FROM EXCLUDED.source_archive_id
 			OR sessions.source_database_generation IS DISTINCT FROM
 				EXCLUDED.source_database_generation
@@ -2470,6 +2473,7 @@ func (s *Sync) pushSession(
 		transcriptRevisionValue(sess.TranscriptRevision),
 		sanitizePG(sess.AgentLabel),
 		sanitizePG(sess.Entrypoint),
+		sanitizePG(sess.SessionKind),
 		s.archiveID,
 		s.databaseGeneration,
 		sess.FilePath,
@@ -3081,7 +3085,7 @@ func pgMessageTokenFingerprint(
 		`SELECT ordinal, model, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
-			source_type, source_subtype, source_uuid,
+			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		 FROM messages
 		 WHERE session_id = $1
@@ -3099,20 +3103,20 @@ func pgMessageTokenFingerprint(
 		var model, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
 		var claudeMsgID, claudeReqID string
-		var srcType, srcSubtype, srcUUID, srcParentUUID string
+		var srcType, srcSubtype, promptSource, srcUUID, srcParentUUID string
 		var isSidechain, isCompactBoundary bool
 		if err := rows.Scan(
 			&ordinal, &model, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
 			&claudeMsgID, &claudeReqID,
-			&srcType, &srcSubtype, &srcUUID, &srcParentUUID,
+			&srcType, &srcSubtype, &promptSource, &srcUUID, &srcParentUUID,
 			&isSidechain, &isCompactBoundary,
 		); err != nil {
 			return "", err
 		}
 		fmt.Fprintf(&b,
 			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
-				"%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
+				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			ordinal,
 			len(model), model,
 			len(tokenUsage), tokenUsage,
@@ -3121,6 +3125,7 @@ func pgMessageTokenFingerprint(
 			claudeMsgID, claudeReqID,
 			len(srcType), srcType,
 			len(srcSubtype), srcSubtype,
+			len(promptSource), promptSource,
 			len(srcUUID), srcUUID,
 			len(srcParentUUID), srcParentUUID,
 			isSidechain, isCompactBoundary,
@@ -3380,22 +3385,22 @@ func bulkInsertMessages(
 			context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
-			source_type, source_subtype, source_uuid,
+			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*24)
+		args := make([]any, 0, len(batch)*25)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*24 + 1
+			p := j*25 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4,
 				p+5, p+6, p+7, p+8, p+9,
 				p+10, p+11, p+12, p+13, p+14, p+15,
 				p+16, p+17, p+18, p+19, p+20,
-				p+21, p+22, p+23,
+				p+21, p+22, p+23, p+24,
 			)
 			var ts any
 			if m.Timestamp != "" {
@@ -3424,6 +3429,7 @@ func bulkInsertMessages(
 				sanitizePG(m.ClaudeRequestID),
 				sanitizePG(m.SourceType),
 				sanitizePG(m.SourceSubtype),
+				sanitizePG(m.PromptSource),
 				sanitizePG(m.SourceUUID),
 				sanitizePG(m.SourceParentUUID),
 				m.IsSidechain,

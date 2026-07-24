@@ -672,11 +672,14 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 66)
+	require.Len(t, state.upsertArgs, 67)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
-	assert.Equal(t, "[]", state.upsertArgs[65].Value)
+	// session_kind sits between entrypoint and the archive-provenance
+	// parameters; it is empty when the session carries no kind marker.
+	assert.Equal(t, "", state.upsertArgs[62].Value)
+	assert.Equal(t, "[]", state.upsertArgs[66].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,

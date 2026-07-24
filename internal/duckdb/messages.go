@@ -28,7 +28,7 @@ func (s *Store) GetMessages(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal `+op+` ?
@@ -91,7 +91,7 @@ func (s *Store) getMessagesLinearRoleFiltered(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal ` + op + ` ?` + roleClause + `
@@ -128,7 +128,7 @@ func (s *Store) getMessagesAroundAnchor(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal < ?` + roleClause + `
@@ -146,7 +146,7 @@ func (s *Store) getMessagesAroundAnchor(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages WHERE session_id = ? AND ordinal = ?`
 	anchorMsgs, err := s.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
@@ -159,7 +159,7 @@ func (s *Store) getMessagesAroundAnchor(
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ? AND ordinal > ?` + roleClause + `
@@ -215,7 +215,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
-			claude_request_id, source_type, source_subtype, source_uuid,
+			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
 		FROM messages
 		WHERE session_id = ?
@@ -280,7 +280,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			&m.ContextTokens, &m.OutputTokens,
 			&m.HasContextTokens, &m.HasOutputTokens,
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
-			&m.SourceType, &m.SourceSubtype, &m.SourceUUID,
+			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,
 			&m.SourceParentUUID, &m.IsSidechain, &m.IsCompactBoundary,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb message: %w", err)

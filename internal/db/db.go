@@ -1817,6 +1817,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE messages ADD COLUMN source_subtype TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"messages", "prompt_source",
+			"ALTER TABLE messages ADD COLUMN prompt_source TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"messages", "source_uuid",
 			"ALTER TABLE messages ADD COLUMN source_uuid TEXT NOT NULL DEFAULT ''",
 		},
@@ -1983,6 +1987,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "entrypoint",
 			"ALTER TABLE sessions ADD COLUMN entrypoint TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "session_kind",
+			"ALTER TABLE sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"sessions", "transcript_fidelity",
