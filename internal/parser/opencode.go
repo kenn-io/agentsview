@@ -993,10 +993,7 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		return ParsedToolCall{}
 	}
 
-	var (
-		inputJSON  string
-		isFailure  bool
-	)
+	var inputJSON string
 	if len(d.State) > 0 {
 		var state openCodeToolState
 		if err := json.Unmarshal(d.State, &state); err == nil {
@@ -1004,10 +1001,6 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 				inputJSON = string(state.Input)
 			}
 		}
-	}
-
-	if d.ToolName == "invalid" {
-		isFailure = true
 	}
 
 	var skillName string
@@ -1029,7 +1022,11 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		SkillName: skillName,
 	}
 
-	if isFailure {
+	// OpenCode records model calls to unknown or malformed tools as a
+	// synthetic "invalid" tool whose execute succeeds, so state.status
+	// is "completed" and carries no error signal. Attach an errored
+	// result event so tool health counts these as failures.
+	if d.ToolName == "invalid" {
 		tc.ResultEvents = append(tc.ResultEvents, ParsedToolResultEvent{
 			ToolUseID: d.CallID,
 			Status:    "errored",
