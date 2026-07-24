@@ -372,9 +372,9 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 	}
 }
 
-// parseResolvedTargets parses script output into agent root paths,
-// agent-scoped files, and a deduplicated list of extra files (records
-// tagged with resolveFilePrefix). Generated resolver output is
+// parseResolvedTargets parses script output into deduplicated agent root paths,
+// agent-scoped files, and extra files (records tagged with resolveFilePrefix).
+// Generated resolver output is
 // NUL-delimited so remote paths containing newlines cannot inject extra
 // records; newline-delimited input is accepted only for older tests and
 // defensive compatibility. Most agent targets are directories; Aider
@@ -386,6 +386,7 @@ func parseResolvedTargets(
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	var extraFiles []string
+	seenDir := make(map[parser.AgentType]map[string]struct{})
 	seenFile := make(map[string]struct{})
 	seenAgentFile := make(map[parser.AgentType]map[string]struct{})
 	for _, record := range resolveOutputRecords(output) {
@@ -431,6 +432,15 @@ func parseResolvedTargets(
 			path.Base(value) != parser.AiderHistoryFileName() {
 			continue
 		}
+		seen, ok := seenDir[at]
+		if !ok {
+			seen = make(map[string]struct{})
+			seenDir[at] = seen
+		}
+		if _, dup := seen[value]; dup {
+			continue
+		}
+		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
 	}
 	return dirs, files, extraFiles

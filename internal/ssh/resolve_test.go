@@ -774,6 +774,10 @@ func TestResolveScriptPoolsideTrajectoriesRoot(t *testing.T) {
 
 	out := runResolveScriptForTest(t, "HOME="+home, "POOLSIDE_DIR="+trajectoriesDir)
 
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.Equal(t, []string{trajectoriesDir}, dirs[parser.AgentPoolside],
+		"the environment override must produce one transfer target")
+
 	records := resolveOutputRecords(string(out))
 	agentSuffix := filepath.ToSlash(filepath.Join("poolside", "trajectories"))
 	assert.True(t, hasRecordWithPathSuffix(records,
