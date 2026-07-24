@@ -19,9 +19,7 @@ func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				def.Type,
 				cfg.Roots,
-				WithFileDiscovery(func(root string) []singleFileMatch {
-					return codebuffDiscoverFiles(root)
-				}),
+				WithStreamingFileDiscovery(codebuffDiscoverEach),
 				WithFileWatchRoots(func(roots []string) []WatchRoot {
 					return codebuffWatchRoots(roots)
 				}),
@@ -42,24 +40,6 @@ func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
 			)
 		},
 	)
-}
-
-// codebuffDiscoverFiles finds all session directories under a root.
-// root is the parent projects directory (~/.config/manicode/projects).
-// Sessions live under <root>/<project>/chats/<timestamp>/.
-func codebuffDiscoverFiles(root string) []singleFileMatch {
-	dirs := discoverCodebuffSessions(root)
-	matches := make([]singleFileMatch, 0, len(dirs))
-	for _, d := range dirs {
-		chatPath := filepath.Join(d.Path, "chat-messages.json")
-		if IsRegularFile(chatPath) {
-			matches = append(matches, singleFileMatch{
-				Path:        chatPath,
-				ProjectHint: d.ProjectHint,
-			})
-		}
-	}
-	return matches
 }
 
 // codebuffWatchRoots creates watch plans for recursive watching of

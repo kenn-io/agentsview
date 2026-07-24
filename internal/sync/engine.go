@@ -3173,6 +3173,11 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	baselineEligibleProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
 		baselineEligibleProviders[completed.agent] = struct{}{}
+		// Freebuff shares the Codebuff provider. When Codebuff is
+		// eligible, also mark Freebuff as eligible for baselines.
+		if completed.agent == parser.AgentCodebuff {
+			baselineEligibleProviders[parser.AgentFreebuff] = struct{}{}
+		}
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	e.finishStreamingSQLiteContainerDiscovery()
@@ -3863,7 +3868,11 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		return 0, nil
 	}
 	for agent, dirs := range e.agentDirs {
-		if agentFilter != "" && agent != agentFilter {
+		// Freebuff shares the Codebuff provider. When filtering for
+		// AgentFreebuff, also process AgentCodebuff's directories so
+		// Freebuff sessions can be tombstoned.
+		if agentFilter != "" && agent != agentFilter &&
+			!(agentFilter == parser.AgentFreebuff && agent == parser.AgentCodebuff) {
 			continue
 		}
 		var provider parser.Provider
@@ -3889,24 +3898,32 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 					ownershipScopes = resolved
 				}
 			}
-			var cursor db.SessionSourceCursor
-			for {
-				if err := ctx.Err(); err != nil {
-					return deleted, err
-				}
-				page, err := e.db.ListActiveSessionSourceOwnershipScopesPage(
-					ctx, e.machine, string(agent),
-					storedSourceDBHintScopes(ownershipScopes), cursor,
-				)
-				if err != nil {
-					return deleted, fmt.Errorf(
-						"list %s watch source ownership: %w", agent, err,
+			// Freebuff shares the Codebuff provider. When processing
+			// Codebuff, also query for Freebuff sessions so they can
+			// be tombstoned.
+			agentStrs := []string{string(agent)}
+			if agent == parser.AgentCodebuff {
+				agentStrs = append(agentStrs, string(parser.AgentFreebuff))
+			}
+			for _, agentStr := range agentStrs {
+				var cursor db.SessionSourceCursor
+				for {
+					if err := ctx.Err(); err != nil {
+						return deleted, err
+					}
+					page, err := e.db.ListActiveSessionSourceOwnershipScopesPage(
+						ctx, e.machine, agentStr,
+						storedSourceDBHintScopes(ownershipScopes), cursor,
 					)
-				}
-				if len(page) == 0 {
-					break
-				}
-				missingByPath := make(map[string]bool, len(page))
+					if err != nil {
+						return deleted, fmt.Errorf(
+							"list %s watch source ownership: %w", agent, err,
+						)
+					}
+					if len(page) == 0 {
+						break
+					}
+					missingByPath := make(map[string]bool, len(page))
 				for _, ownership := range page {
 					statPath := ownership.FilePath
 					persistentMemberContainerExists := false
@@ -4114,6 +4131,7 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 				if len(page) < db.WatchReconcileSourcePageSize {
 					break
 				}
+				}
 			}
 		}
 	}
@@ -4233,6 +4251,12 @@ func (e *Engine) logicalRootsForAgentWatchRoots(
 	agent parser.AgentType, roots []string,
 ) []string {
 	dirs := e.agentDirs[agent]
+	// Freebuff shares the Codebuff provider. When looking up roots for
+	// AgentFreebuff, also include Codebuff's configured directories so
+	// reconciliation can find and tombstone Freebuff sessions.
+	if len(dirs) == 0 && agent == parser.AgentFreebuff {
+		dirs = e.agentDirs[parser.AgentCodebuff]
+	}
 	var logical []string
 	for _, root := range roots {
 		cleanedRoot := cleanRootPath(root)
@@ -7516,8 +7540,8 @@ func providerProcessCacheKeyWithHash(
 // which compares the fingerprint hash against the stored row.
 func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin,
-		parser.AgentQoder, parser.AgentWindsurf:
+	case parser.AgentClaude, parser.AgentCodebuff, parser.AgentCodex,
+		parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
 		return false
@@ -7529,7 +7553,8 @@ func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 // older hash siblings so hot append-only files retain only one content version.
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentHermes,
+	case parser.AgentClaude, parser.AgentCodebuff, parser.AgentCodex,
+		parser.AgentDevin, parser.AgentHermes,
 		parser.AgentQoder, parser.AgentWindsurf, parser.AgentGemini:
 		return true
 	default:

@@ -6,6 +6,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -553,20 +554,60 @@ func parseCodebuffAIMessage(
 		return nil
 	}
 
+	// textEntry tracks a text block with its type to preserve interleaving.
+	type textEntry struct {
+		content   string
+		isReason  bool
+	}
 	var (
 		out         []ParsedMessage
-		thinkingBuf []string
-		textBuf     []string
+		textBuf     []textEntry
 		toolCalls   []ParsedToolCall
 		toolResults []ParsedToolResult
 	)
 
-	// flushText emits any accumulated thinking and text as assistant messages,
-	// preserving their interleaving order within the AI turn.
+	// flushText emits accumulated text entries in order, grouping
+	// consecutive entries of the same type.
 	flushText := func() {
-		// Emit accumulated thinking.
-		if len(thinkingBuf) > 0 {
-			thinkingText := strings.Join(thinkingBuf, "\n\n")
+		if len(textBuf) == 0 {
+			return
+		}
+		// Group consecutive entries of the same type.
+		var thinkingParts, regularParts []string
+		for _, entry := range textBuf {
+			if entry.isReason {
+				// Flush regular text before starting a thinking block.
+				if len(regularParts) > 0 {
+					text := strings.Join(regularParts, "\n\n")
+					out = append(out, ParsedMessage{
+						Role:          RoleAssistant,
+						Content:       text,
+						Timestamp:     ts,
+						ContentLength: len(text),
+					})
+					regularParts = nil
+				}
+				thinkingParts = append(thinkingParts, entry.content)
+			} else {
+				// Flush thinking before starting regular text.
+				if len(thinkingParts) > 0 {
+					thinkingText := strings.Join(thinkingParts, "\n\n")
+					out = append(out, ParsedMessage{
+						Role:          RoleAssistant,
+						Content:       "[Thinking]\n" + thinkingText + "\n[/Thinking]",
+						ThinkingText:  thinkingText,
+						HasThinking:   true,
+						Timestamp:     ts,
+						ContentLength: len(thinkingText),
+					})
+					thinkingParts = nil
+				}
+				regularParts = append(regularParts, entry.content)
+			}
+		}
+		// Flush any remaining.
+		if len(thinkingParts) > 0 {
+			thinkingText := strings.Join(thinkingParts, "\n\n")
 			out = append(out, ParsedMessage{
 				Role:          RoleAssistant,
 				Content:       "[Thinking]\n" + thinkingText + "\n[/Thinking]",
@@ -575,19 +616,17 @@ func parseCodebuffAIMessage(
 				Timestamp:     ts,
 				ContentLength: len(thinkingText),
 			})
-			thinkingBuf = nil
 		}
-		// Emit accumulated text.
-		if len(textBuf) > 0 {
-			textContent := strings.Join(textBuf, "\n\n")
+		if len(regularParts) > 0 {
+			text := strings.Join(regularParts, "\n\n")
 			out = append(out, ParsedMessage{
 				Role:          RoleAssistant,
-				Content:       textContent,
+				Content:       text,
 				Timestamp:     ts,
-				ContentLength: len(textContent),
+				ContentLength: len(text),
 			})
-			textBuf = nil
 		}
+		textBuf = nil
 	}
 
 	// flushTools emits accumulated tool calls as a single assistant message,
@@ -639,12 +678,8 @@ func parseCodebuffAIMessage(
 			if strings.TrimSpace(content) == "" {
 				return true
 			}
-			switch textType {
-			case "reasoning":
-				thinkingBuf = append(thinkingBuf, content)
-			default:
-				textBuf = append(textBuf, content)
-			}
+			isReason := textType == "reasoning"
+			textBuf = append(textBuf, textEntry{content: content, isReason: isReason})
 
 		case "tool":
 			if !inToolRun {
@@ -710,8 +745,10 @@ func parseCodebuffAIMessage(
 				}
 				// Flush accumulated tool calls first, then emit output.
 				flushTools()
-				textBuf = append(textBuf,
-					"["+prefix+" ("+status+")]\n"+output.Str)
+				textBuf = append(textBuf, textEntry{
+					content:  "[" + prefix + " (" + status + ")]\n" + output.Str,
+					isReason: false,
+				})
 				flushText()
 			}
 
@@ -772,10 +809,15 @@ func parseCodebuffAIMessage(
 
 		case "image":
 			if block.Get("filename").Str != "" {
-				textBuf = append(textBuf,
-					"[Image: "+block.Get("filename").Str+"]")
+				textBuf = append(textBuf, textEntry{
+					content:  "[Image: " + block.Get("filename").Str + "]",
+					isReason: false,
+				})
 			} else {
-				textBuf = append(textBuf, "[Image attached]")
+				textBuf = append(textBuf, textEntry{
+					content:  "[Image attached]",
+					isReason: false,
+				})
 			}
 		}
 		return true
@@ -854,37 +896,45 @@ func parseCodebuffTimestamp(s string, sessionDate time.Time) time.Time {
 // root is the parent projects directory (~/.config/manicode/projects).
 // Sessions live under <root>/<project>/chats/<timestamp>/.
 func discoverCodebuffSessions(root string) []codebuffSessionDir {
-	projects, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-
 	var dirs []codebuffSessionDir
-	for _, project := range projects {
-		if !project.IsDir() {
-			continue
+	_ = codebuffDiscoverEach(context.Background(), root, func(match singleFileMatch) error {
+		dirs = append(dirs, codebuffSessionDir{
+			Path:        filepath.Dir(match.Path),
+			ProjectHint: match.ProjectHint,
+		})
+		return nil
+	})
+	return dirs
+}
+
+// codebuffDiscoverEach streams session discoveries, yielding each match
+// as it is found. This avoids materializing the entire archive in memory.
+func codebuffDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
+	// Stream project directories.
+	return streamDirectoryEntries(ctx, root, func(projectEntry os.DirEntry) error {
+		if !projectEntry.IsDir() {
+			return nil
 		}
-		projectName := project.Name()
+		projectName := projectEntry.Name()
 		chatsDir := filepath.Join(root, projectName, "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
+		// Stream session directories within each project.
+		return streamDirectoryEntries(ctx, chatsDir, func(sessionEntry os.DirEntry) error {
+			if !sessionEntry.IsDir() {
+				return nil
 			}
-			dir := filepath.Join(chatsDir, entry.Name())
-			if !IsRegularFile(filepath.Join(dir, "chat-messages.json")) {
-				continue
+			dir := filepath.Join(chatsDir, sessionEntry.Name())
+			chatPath := filepath.Join(dir, "chat-messages.json")
+			if !IsRegularFile(chatPath) {
+				return nil
 			}
-			dirs = append(dirs, codebuffSessionDir{
-				Path:        dir,
+			return yield(singleFileMatch{
+				Path:        chatPath,
 				ProjectHint: projectName,
 			})
-		}
-	}
-	return dirs
+		})
+	})
 }
 
 // codebuffProjectFromPath extracts the project name from a session
