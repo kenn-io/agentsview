@@ -936,32 +936,44 @@ func TestParseOpenCodeDB_InvalidToolCall(t *testing.T) {
 func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
 	tests := []struct {
 		name        string
+		tool        string
 		state       string
 		wantErrored bool
 	}{
 		{
 			name:        "non-zero exit without exit-status text",
+			tool:        "bash",
 			state:       `{"input":{"command":"build"},"output":"error: command failed","metadata":{"exit":1}}`,
 			wantErrored: true,
 		},
 		{
 			name:        "non-zero exit with empty output",
+			tool:        "bash",
 			state:       `{"input":{"command":"build"},"output":"","metadata":{"exit":127}}`,
 			wantErrored: true,
 		},
 		{
 			name:        "zero exit is not a failure",
+			tool:        "bash",
 			state:       `{"input":{"command":"build"},"output":"ok","metadata":{"exit":0}}`,
 			wantErrored: false,
 		},
 		{
 			name:        "metadata without an exit key is not a failure",
+			tool:        "bash",
 			state:       `{"input":{"command":"build"},"output":"ok","metadata":{"truncated":false}}`,
 			wantErrored: false,
 		},
 		{
 			name:        "no metadata is not a failure",
+			tool:        "bash",
 			state:       `{"input":{"command":"build"},"output":"ok"}`,
+			wantErrored: false,
+		},
+		{
+			name:        "non-bash metadata exit is not a failure",
+			tool:        "mcp_lookup",
+			state:       `{"input":{"query":"exit routes"},"output":"route 1","metadata":{"exit":1}}`,
 			wantErrored: false,
 		},
 	}
@@ -979,7 +991,7 @@ func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
 
 			seeder.AddMessage("msg_a", "ses_bexit", 1700000010000, 1700000010000, `{"role":"assistant"}`)
 			seeder.AddPart("prt_t", "msg_a", "ses_bexit", 1700000010000, 1700000010000,
-				`{"type":"tool","tool":"bash","callID":"call_exit","state":`+tt.state+`}`)
+				`{"type":"tool","tool":"`+tt.tool+`","callID":"call_exit","state":`+tt.state+`}`)
 
 			sessions, err := parseOpenCodeAll(dbPath, "m")
 			require.NoError(t, err, "ParseOpenCodeDB")

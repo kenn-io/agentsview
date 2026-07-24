@@ -1013,7 +1013,7 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 			// state metadata. On Windows the output text carries
 			// no "exit status N" marker, so metadata.exit is the
 			// only reliable failure signal.
-			if len(state.Metadata) > 0 {
+			if d.ToolName == "bash" && len(state.Metadata) > 0 {
 				var m openCodeToolMetadata
 				if err := json.Unmarshal(state.Metadata, &m); err == nil && m.Exit > 0 {
 					isFailure = true
