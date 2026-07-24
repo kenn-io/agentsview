@@ -92,10 +92,8 @@ func pollingObligationsForScopes(
 }
 
 func appendUniqueScopeRoot(roots []string, root string) []string {
-	for _, existing := range roots {
-		if existing == root {
-			return roots
-		}
+	if slices.Contains(roots, root) {
+		return roots
 	}
 	return append(roots, root)
 }

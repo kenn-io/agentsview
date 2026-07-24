@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -415,9 +416,7 @@ func clonePollStates(states map[string]string) map[string]string {
 		return nil
 	}
 	cloned := make(map[string]string, len(states))
-	for key, value := range states {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, states)
 	return cloned
 }
 
@@ -426,8 +425,6 @@ func clonePollRevisions(revisions map[string]uint64) map[string]uint64 {
 		return nil
 	}
 	cloned := make(map[string]uint64, len(revisions))
-	for key, revision := range revisions {
-		cloned[key] = revision
-	}
+	maps.Copy(cloned, revisions)
 	return cloned
 }
