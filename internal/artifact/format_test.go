@@ -186,6 +186,28 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	assert.Equal(t, "f46c1edbc77dab4eb15f43bcb3ce196243c784445b07e9135c223b5d58c6dea5", hashHex(data))
 }
 
+func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
+	msgs := []db.Message{
+		{
+			ID:            1,
+			SessionID:     "sess-1",
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "hello",
+			SourceType:    "jsonl",
+			SourceSubtype: "user",
+			PromptSource:  "typed",
+		},
+	}
+
+	data, err := encodeSegment(msgs)
+	require.NoError(t, err)
+
+	var decoded segmentMessage
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.Equal(t, "typed", decoded.PromptSource)
+}
+
 func TestCanonicalMetadataEventGolden(t *testing.T) {
 	value := json.RawMessage(`{"display_name":"Renamed session"}`)
 	note := "remember this"

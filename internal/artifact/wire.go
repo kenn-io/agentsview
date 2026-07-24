@@ -193,6 +193,7 @@ type segmentMessage struct {
 	IsSystem          bool              `json:"is_system,omitempty"`
 	SourceType        string            `json:"source_type,omitempty"`
 	SourceSubtype     string            `json:"source_subtype,omitempty"`
+	PromptSource      string            `json:"prompt_source,omitempty"`
 	SourceUUID        string            `json:"source_uuid,omitempty"`
 	SourceParentUUID  string            `json:"source_parent_uuid,omitempty"`
 	IsSidechain       bool              `json:"is_sidechain,omitempty"`
@@ -300,6 +301,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		IsSystem:          msg.IsSystem,
 		SourceType:        msg.SourceType,
 		SourceSubtype:     msg.SourceSubtype,
+		PromptSource:      msg.PromptSource,
 		SourceUUID:        msg.SourceUUID,
 		SourceParentUUID:  msg.SourceParentUUID,
 		IsSidechain:       msg.IsSidechain,
