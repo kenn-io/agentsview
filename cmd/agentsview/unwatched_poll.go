@@ -265,34 +265,10 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 // deferred scope as an authoritative empty discovery and tombstone its
 // sessions.
 func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
-	candidates := make(map[string]struct{})
-	blocked := make(map[string]struct{})
-	for _, obligation := range obligations {
-		probeMissing := false
-		if obligation.Probe != "" {
-			if _, err := os.Stat(obligation.Probe); err != nil {
-				probeMissing = true
-			}
-		}
-		for _, root := range obligation.Roots {
-			if root == "" {
-				continue
-			}
-			if probeMissing {
-				blocked[filepath.Clean(root)] = struct{}{}
-				continue
-			}
-			if _, err := os.Stat(root); err == nil {
-				candidates[root] = struct{}{}
-			}
-		}
-	}
-	for root := range candidates {
-		if overlapsDeferredScope(filepath.Clean(root), blocked) {
-			delete(candidates, root)
-		}
-	}
-	return unwatchedPollRoots(candidates)
+	roots, _ := availableUnwatchedPollRootsWithState(
+		context.Background(), obligations, nil,
+	)
+	return roots
 }
 
 func unwatchedPollObligationRoots(obligations map[string]pollingObligation) []string {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,6 +61,14 @@ func (p *sequenceDegradedPollProbe) DegradedPollingState(
 		p.states = p.states[1:]
 	}
 	return state, nil
+}
+
+type errorDegradedPollProbe struct {
+	err error
+}
+
+func (p errorDegradedPollProbe) DegradedPollingState(context.Context) (string, error) {
+	return "", p.err
 }
 
 func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
@@ -224,6 +233,29 @@ func TestUnwatchedPollDegradedProbeSkipsUnchangedScope(t *testing.T) {
 	requirePollWithin(t, syncer.wake, time.Second)
 	assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
 		"a changed degraded probe must re-run authoritative reconciliation")
+}
+
+func TestUnwatchedPollDegradedProbeErrorFallsBackToAuthoritativePoll(t *testing.T) {
+	ticks := make(chan time.Time, 3)
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	root := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
+		Key:           "opencode-root",
+		Roots:         []string{root},
+		DegradedProbe: errorDegradedPollProbe{err: errors.New("probe failed")},
+	}))
+
+	ticks <- time.Now()
+	requirePollWithin(t, syncer.wake, time.Second)
+	ticks <- time.Now()
+	requirePollWithin(t, syncer.wake, time.Second)
+
+	assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
+		"a degraded probe error must fall back to authoritative polling without caching state")
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
