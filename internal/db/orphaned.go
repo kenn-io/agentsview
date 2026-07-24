@@ -323,9 +323,12 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	return count, nil
 }
 
-// CopySyncStateFrom copies pg_sync_state rows from the source database into the
-// current database. ResyncAll uses this to preserve durable local sync metadata
-// such as the PG push owner marker across the temp-DB swap.
+// CopySyncStateFrom copies durable synchronization authority from the source
+// database into the current database. Alongside selected pg_sync_state rows it
+// preserves artifact publication work, publications, checkpoint heads, and
+// floors across the temp-database resync swap. Transient bookkeeping such as
+// last_sync_* timestamps is deliberately left behind so the rebuilt DB reports
+// its own sync times.
 func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -346,24 +349,97 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 
-	// Older databases may have no pg_sync_state table.
-	var tableExists int
-	err = conn.QueryRowContext(
-		ctx, "SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='pg_sync_state'",
-	).Scan(&tableExists)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+		return fmt.Errorf("beginning sync state copy: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if oldDBHasTable(ctx, tx, "pg_sync_state") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR REPLACE INTO main.pg_sync_state (key, value)
+			SELECT key, value FROM old_db.pg_sync_state
+			WHERE key = 'pg_push_marker_id'
+			   OR key LIKE 'artifact\_%' ESCAPE '\'`); err != nil {
+			return fmt.Errorf("copying sync state: %w", err)
 		}
-		return fmt.Errorf("probing pg_sync_state table: %w", err)
 	}
 
-	_, err = conn.ExecContext(ctx, `
-		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
-		SELECT key, value FROM old_db.pg_sync_state
-		WHERE key = 'pg_push_marker_id'`)
-	if err != nil {
-		return fmt.Errorf("copying sync state: %w", err)
+	headRevisionExpr := "0"
+	if oldDBHasColumn(ctx, tx, "artifact_checkpoint_heads", "publication_revision") {
+		headRevisionExpr = "publication_revision"
+	}
+	headSizeExpr := "0"
+	if oldDBHasColumn(ctx, tx, "artifact_checkpoint_heads", "checkpoint_size") {
+		headSizeExpr = "checkpoint_size"
+	}
+	artifactCopies := []struct {
+		table string
+		sql   string
+	}{
+		{
+			// A resync rebuilds the archive, so every copied session must be
+			// re-verified by the exporter: copied rows are forced pending=1 on
+			// both the fresh-insert and merge branches. Unchanged content is
+			// cheap to skip because artifacts are content-addressed. Generation
+			// still advances and never regresses so a stale source claim cannot
+			// become valid in the rebuilt archive.
+			"artifact_export_queue",
+			`INSERT INTO main.artifact_export_queue(session_id, enqueued_at, generation, pending)
+			 SELECT session_id, enqueued_at, generation + 1, 1
+			 FROM old_db.artifact_export_queue WHERE true
+			 ON CONFLICT(session_id) DO UPDATE SET
+				enqueued_at = CASE
+					WHEN artifact_export_queue.pending = 1 AND excluded.pending = 1
+						THEN min(artifact_export_queue.enqueued_at, excluded.enqueued_at)
+					WHEN artifact_export_queue.pending = 1
+						THEN artifact_export_queue.enqueued_at
+					ELSE excluded.enqueued_at
+				END,
+				generation = max(artifact_export_queue.generation, excluded.generation) + 1,
+				pending = 1`,
+		},
+		{
+			"artifact_publications",
+			`INSERT OR REPLACE INTO main.artifact_publications(
+				origin, session_id, manifest_hash, source_fingerprint)
+			 SELECT origin, session_id, manifest_hash, source_fingerprint
+			 FROM old_db.artifact_publications`,
+		},
+		{
+			"artifact_publication_revisions",
+			`INSERT INTO main.artifact_publication_revisions(origin, revision)
+			 SELECT origin, revision FROM old_db.artifact_publication_revisions WHERE true
+			 ON CONFLICT(origin) DO UPDATE SET
+				revision = max(artifact_publication_revisions.revision, excluded.revision)`,
+		},
+		{
+			"artifact_checkpoint_heads",
+			`INSERT OR REPLACE INTO main.artifact_checkpoint_heads(
+				origin, sequence, publication_revision, session_map_sha256,
+				checkpoint_sha256, checkpoint_size)
+			 SELECT origin, sequence, ` + headRevisionExpr + `, session_map_sha256,
+				checkpoint_sha256, ` + headSizeExpr + `
+			 FROM old_db.artifact_checkpoint_heads`,
+		},
+		{
+			"artifact_checkpoint_floors",
+			`INSERT INTO main.artifact_checkpoint_floors(origin, sequence)
+			 SELECT origin, sequence FROM old_db.artifact_checkpoint_floors WHERE true
+			 ON CONFLICT(origin) DO UPDATE SET
+				sequence = max(artifact_checkpoint_floors.sequence, excluded.sequence)`,
+		},
+	}
+	for _, copy := range artifactCopies {
+		if !oldDBHasTable(ctx, tx, copy.table) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, copy.sql); err != nil {
+			return fmt.Errorf("copying %s: %w", copy.table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing sync state copy: %w", err)
 	}
 	return nil
 }

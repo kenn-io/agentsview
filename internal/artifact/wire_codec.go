@@ -15,6 +15,9 @@ const (
 	manifestExtension = ".json.zst"
 	segmentExtension  = ".ndjson.zst"
 
+	manifestDecodedLimit = int64(16 << 20)
+	segmentDecodedLimit  = int64(64 << 20)
+
 	// zstd.NewWriter documents an 8 MiB maximum default window. Pinning that
 	// size keeps existing package-written artifacts readable without accepting
 	// attacker-selected large decoder windows.

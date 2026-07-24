@@ -5560,10 +5560,15 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.SetSyncState("pg_push_marker_id", "marker-123"),
 		"seed source marker")
+	require.NoError(t, srcDB.SetSyncState("artifact_origin_id", "laptop-a1b2c3"),
+		"seed source artifact origin")
 	require.NoError(t, srcDB.SetSyncState("last_sync_started_at", "old-start"),
 		"seed source started")
 	require.NoError(t, srcDB.SetSyncState("last_sync_finished_at", "old-finish"),
 		"seed source finished")
+	require.NoError(t, srcDB.UpsertSession(Session{
+		ID: "queued-session", Project: "p", Machine: "local", Agent: "claude",
+	}), "seed source queued session")
 	require.NoError(t, srcDB.Close(), "Close src")
 
 	dstPath := filepath.Join(dir, "dst.db")
@@ -5580,6 +5585,14 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState pg_push_marker_id")
 	assert.Equal(t, "marker-123", gotMarker)
+
+	gotOrigin, err := dstDB.GetSyncState("artifact_origin_id")
+	require.NoError(t, err, "GetSyncState artifact_origin_id")
+	assert.Equal(t, "laptop-a1b2c3", gotOrigin,
+		"artifact_% sync-state keys must survive the copy")
+
+	assert.Contains(t, artifactExportQueueIDs(t, dstDB), "queued-session",
+		"artifact export queue rows must survive the copy")
 
 	gotStarted, err := dstDB.GetSyncState("last_sync_started_at")
 	require.NoError(t, err, "GetSyncState last_sync_started_at")
@@ -7376,10 +7389,13 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	requireNoError(t, err, "raw open")
 
 	// SQLite supports DROP COLUMN as of 3.35; the in-tree driver is
-	// recent enough. Drop the index first since SQLite blocks
-	// dropping a column referenced by an index.
+	// recent enough. Drop the index and the trigger that references the
+	// column first since SQLite blocks dropping a column referenced by an
+	// index or a trigger.
 	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_sessions_termination_status`)
 	requireNoError(t, err, "drop termination_status index")
+	_, err = conn.Exec(`DROP TRIGGER IF EXISTS artifact_sessions_update_queue`)
+	requireNoError(t, err, "drop artifact_sessions_update_queue trigger")
 	_, err = conn.Exec(`ALTER TABLE sessions DROP COLUMN termination_status`)
 	requireNoError(t, err, "drop termination_status column")
 
