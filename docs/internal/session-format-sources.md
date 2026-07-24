@@ -235,6 +235,24 @@ Grok section and remove the explicit registry exception in the coverage test.
   `state.status` is `completed` with the error text in the output. Agentsview
   attaches an errored result event to `tool:"invalid"` parts so tool health
   counts them as failures (verified 2026-07-24; see #1254).
+- **Bash exit codes:** The `bash` tool declares a structured output of
+  `{exit, truncated, timeout}` and returns the child process exit code as
+  `exit`
+  ([bash.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/tool/bash.ts)
+  at the pinned commit). That structured output is persisted as the tool
+  part's `state.metadata`, so `state.metadata.exit` is the authoritative
+  failure signal. The tool's own output text carries no `exit status N`
+  marker, and the shell is `COMSPEC`/`cmd.exe` on Windows, so text-pattern
+  matching alone misses these failures on every platform. Agentsview treats a
+  non-zero `state.metadata.exit` on any tool part as a failure and attaches an
+  errored result event. Only `bash` parts record `exit`; other tools omit the
+  key. Verified 2026-07-24 against a live `opencode.db` where all 24 bash
+  parts with `exit` in `{1, 127, 128}` had output text without an
+  `exit status` marker, and the 81 successful parts recorded `exit=0`. Known
+  gaps: a command that legitimately exits non-zero (`grep` with no match)
+  counts as a failure, matching the existing `exit status N` heuristic, and a
+  timed-out command records `timeout: true` with no `exit` key, so it is not
+  detected here. See #1256.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are

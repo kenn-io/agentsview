@@ -929,35 +929,75 @@ func TestParseOpenCodeDB_InvalidToolCall(t *testing.T) {
 	assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
 }
 
-// TestParseOpenCodeDB_BashExitFailure verifies that a bash tool
-// with metadata.exit > 0 sets ResultEvents[0].Status="errored"
-// even when output lacks "exit status N" text.
+// TestParseOpenCodeDB_BashExitFailure verifies that a bash tool whose
+// state metadata records a non-zero exit is reported as a failure even
+// when the output text lacks an "exit status N" marker, and that a
+// successful or exit-less part stays clean.
 func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
-	dbPath, seeder, db := newTestDB(t)
-	defer db.Close()
+	tests := []struct {
+		name        string
+		state       string
+		wantErrored bool
+	}{
+		{
+			name:        "non-zero exit without exit-status text",
+			state:       `{"input":{"command":"build"},"output":"error: command failed","metadata":{"exit":1}}`,
+			wantErrored: true,
+		},
+		{
+			name:        "non-zero exit with empty output",
+			state:       `{"input":{"command":"build"},"output":"","metadata":{"exit":127}}`,
+			wantErrored: true,
+		},
+		{
+			name:        "zero exit is not a failure",
+			state:       `{"input":{"command":"build"},"output":"ok","metadata":{"exit":0}}`,
+			wantErrored: false,
+		},
+		{
+			name:        "metadata without an exit key is not a failure",
+			state:       `{"input":{"command":"build"},"output":"ok","metadata":{"truncated":false}}`,
+			wantErrored: false,
+		},
+		{
+			name:        "no metadata is not a failure",
+			state:       `{"input":{"command":"build"},"output":"ok"}`,
+			wantErrored: false,
+		},
+	}
 
-	seeder.AddProject("prj_1", "/tmp/proj")
-	seeder.AddSession("ses_bexit", "prj_1", "", "", 1700000000000, 1700000030000)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath, seeder, db := newTestDB(t)
+			defer db.Close()
 
-	seeder.AddMessage("msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"role":"user"}`)
-	seeder.AddPart("prt_u", "msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"type":"text","text":"build"}`)
+			seeder.AddProject("prj_1", "/tmp/proj")
+			seeder.AddSession("ses_bexit", "prj_1", "", "", 1700000000000, 1700000030000)
 
-	seeder.AddMessage("msg_a", "ses_bexit", 1700000010000, 1700000010000, `{"role":"assistant"}`)
-	// bash tool with metadata.exit=1 but no "exit status" in output
-	seeder.AddPart("prt_t", "msg_a", "ses_bexit", 1700000010000, 1700000010000,
-		`{"type":"tool","tool":"bash","callID":"call_exit","state":{"input":{"command":"build"},"output":"error: command failed","metadata":{"exit":1}}}`)
+			seeder.AddMessage("msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"role":"user"}`)
+			seeder.AddPart("prt_u", "msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"type":"text","text":"build"}`)
 
-	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(t, err, "ParseOpenCodeDB")
-	require.Len(t, sessions, 1, "sessions len")
+			seeder.AddMessage("msg_a", "ses_bexit", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+			seeder.AddPart("prt_t", "msg_a", "ses_bexit", 1700000010000, 1700000010000,
+				`{"type":"tool","tool":"bash","callID":"call_exit","state":`+tt.state+`}`)
 
-	msgs := sessions[0].Messages
-	require.Len(t, msgs, 2, "messages len")
+			sessions, err := parseOpenCodeAll(dbPath, "m")
+			require.NoError(t, err, "ParseOpenCodeDB")
+			require.Len(t, sessions, 1, "sessions len")
 
-	ast := msgs[1]
-	require.Len(t, ast.ToolCalls, 1, "tool calls len")
-	require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
-	assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
+			msgs := sessions[0].Messages
+			require.Len(t, msgs, 2, "messages len")
+
+			ast := msgs[1]
+			require.Len(t, ast.ToolCalls, 1, "tool calls len")
+			if !tt.wantErrored {
+				assert.Empty(t, ast.ToolCalls[0].ResultEvents, "result events")
+				return
+			}
+			require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
+			assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
+		})
+	}
 }
 
 // TestParseOpenCodeDB_SkillNameFromReadTool verifies that a

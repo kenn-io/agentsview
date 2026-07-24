@@ -325,7 +325,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // records unknown-tool calls as a synthetic "invalid" tool that completes
 // successfully, so existing rows carry no failure signal. Re-parsing attaches
 // the errored event so tool-health failure counts cover historical sessions.)
-const dataVersion = 72
+// (73: OpenCode bash tool calls emit an errored result event when the tool
+// state records a non-zero metadata.exit. Windows shells produce no "exit
+// status N" output text, so existing rows carry no failure signal. Re-parsing
+// attaches the errored event so tool-health failure counts cover historical
+// OpenCode sessions on every platform.)
+const dataVersion = 73
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
