@@ -624,6 +624,28 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			want:   "middleman",
 		},
 		{
+			name: "GenericGitHubWorktreeNested",
+			cwd: filepath.FromSlash(
+				"/srv/worktrees/github.com/example-org/sample-service/fix-123/cmd/server",
+			),
+			branch: "fix-123",
+			want:   "sample_service",
+		},
+		{
+			name: "GenericGitHubRepositoryRootUsesFallback",
+			cwd: filepath.FromSlash(
+				"/srv/worktrees/github.com/example-org/sample-service",
+			),
+			want: "sample_service",
+		},
+		{
+			name: "AdjacentGitHubWorktreesNameDoesNotMatch",
+			cwd: filepath.FromSlash(
+				"/srv/not-worktrees/github.com/example-org/sample-service/fix-123",
+			),
+			want: "fix_123",
+		},
+		{
 			name: "CodexAppWorktree",
 			cwd: filepath.FromSlash(
 				"/Users/wesm/.codex/worktrees/44be/middleman/internal/parser",

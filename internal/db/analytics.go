@@ -14,8 +14,8 @@ import (
 	"go.kenn.io/agentsview/internal/signals"
 )
 
-// maxSQLVars is the maximum bind variables per IN clause to stay
-// within SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999).
+// maxSQLVars is the conservative bind-variable budget used by chunked
+// queries across SQLite builds with different configured limits.
 const maxSQLVars = 500
 
 var ErrUnsupportedAnalyticsSignal = errors.New(

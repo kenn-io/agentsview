@@ -54,6 +54,7 @@ type MirrorProbe struct {
 	LastPushMachine  string
 	DeletionRevision int64
 	IdentityRevision int64
+	MappingRevision  int64
 }
 
 // ProbeMirror inspects the mirror file at path without creating or mutating
@@ -165,6 +166,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.LastPushMachine = meta.LastPushMachine
 	probe.DeletionRevision = meta.DeletionRevision
 	probe.IdentityRevision = meta.IdentityRevision
+	probe.MappingRevision = meta.MappingRevision
 	return probe
 }
 

@@ -90,6 +90,7 @@
 
 <Modal
   title={m.resync_title()}
+  closeLabel={m.resync_close()}
   width="400px"
   closable={view !== "progress"}
   closeOnOverlayClick={view !== "progress"}

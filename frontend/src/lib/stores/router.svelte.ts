@@ -7,6 +7,7 @@ export type Route =
   | "pinned"
   | "trash"
   | "recent-edits"
+  | "data"
   | "settings";
 
 const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
@@ -18,6 +19,7 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   "pinned",
   "trash",
   "recent-edits",
+  "data",
   "settings",
 ]);
 
@@ -178,6 +180,14 @@ export class RouterStore {
       ...current,
       ...(params ?? {}),
     };
+  }
+
+  /** Build an href for a route link (includes sticky params). */
+  buildHref(
+    route: Route,
+    params: Record<string, string> = {},
+  ): string {
+    return this.#buildUrl(`/${route}`, params);
   }
 
   /** Build an href for a session link (includes sticky params). */

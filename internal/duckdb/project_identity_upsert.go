@@ -37,16 +37,17 @@ func deleteProjectIdentityDelta(
 	for start := 0; start < len(snapshotKeys); start += projectIdentityDeleteBatchSize {
 		end := min(start+projectIdentityDeleteBatchSize, len(snapshotKeys))
 		args := []any{archiveID, databaseGeneration}
-		placeholders := make([]string, 0, end-start)
+		tuples := make([]string, 0, end-start)
 		for _, key := range snapshotKeys[start:end] {
-			args = append(args, key.SessionID)
-			placeholders = append(placeholders, "?")
+			args = append(args, key.SessionID, key.Project)
+			tuples = append(tuples, "(?, ?)")
 		}
 		if err := exec(`
 			DELETE FROM source_session_project_identity_snapshots
 			WHERE source_archive_id = ?
 			  AND source_database_generation = ?
-			  AND source_session_id IN (`+strings.Join(placeholders, ", ")+`)`,
+			  AND (source_session_id, project) IN (`+
+			strings.Join(tuples, ", ")+`)`,
 			args...,
 		); err != nil {
 			return fmt.Errorf("deleting duckdb session identity snapshot delta: %w", err)

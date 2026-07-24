@@ -19,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -2529,7 +2530,30 @@ func TestSyncEngineWorktreeProjectWhenPathMissing(t *testing.T) {
 	assertSessionProject(t, env.db, "offline-worktree", "agentsview")
 }
 
-func TestSyncEngineAppliesWorktreeProjectMapping(t *testing.T) {
+func TestRemoteGitHubWorktreeProjectWhenPathMissing(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	sessionCwd := filepath.Join(
+		t.TempDir(), "missing", "worktrees", "github.com", "example-org",
+		"sample-service", "fix-123", "cmd", "server",
+	)
+	require.NoDirExists(t, sessionCwd, "fixture cwd must remain unavailable locally")
+
+	content := testjsonl.NewSessionBuilder().
+		AddRaw(fmt.Sprintf(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":%q,"gitBranch":"fix-123","message":{"content":"hello"}}`, sessionCwd)).
+		AddClaudeAssistant(tsEarlyS5, "ok").
+		String()
+
+	env.writeClaudeSessionForProject(
+		t, "/remote/sessions/sample-service",
+		"remote-github-worktree.jsonl", content,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+
+	assertSessionProject(t, env.db, "remote-github-worktree", "sample_service")
+}
+
+func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	assert.Equal(t, "local", env.engine.Machine())
@@ -2567,6 +2591,112 @@ func TestSyncEngineAppliesWorktreeProjectMapping(t *testing.T) {
 	assertSessionProject(
 		t, env.db, "mapped-worktree", "canonical_app",
 	)
+
+	observations, err := env.db.ListProjectIdentityObservations(
+		context.Background(), []string{"canonical_app"},
+	)
+	require.NoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "canonical_app", observations[0].Project)
+	assert.Equal(t, filepath.ToSlash(sessionCwd), observations[0].RootPath)
+
+	snapshots, err := env.db.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
+	require.Len(t, snapshots, 1)
+	assert.Equal(t, "mapped-worktree", snapshots[0].SessionID)
+	assert.Equal(t, "feature_login", snapshots[0].Project)
+	assert.Equal(t, filepath.ToSlash(sessionCwd), snapshots[0].RootPath)
+}
+
+func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(
+	t *testing.T,
+) {
+	const (
+		legacyDataVersion = 67
+		liveSessionID     = "mapped-worktree-upgrade"
+		orphanSessionID   = "mapped-orphan-upgrade"
+		targetProject     = "canonical_app"
+		sourceProject     = "feature_login"
+	)
+	ctx := context.Background()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+
+	root := t.TempDir()
+	worktreePrefix := filepath.Join(root, "my-app.worktrees")
+	sessionCwd := filepath.Join(worktreePrefix, "feature-login")
+	_, err := env.db.CreateWorktreeProjectMapping(
+		ctx,
+		db.WorktreeProjectMapping{
+			Machine: "local", PathPrefix: worktreePrefix,
+			Project: targetProject, Enabled: true,
+		},
+	)
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Upgrade mapped worktree", sessionCwd).
+		AddClaudeAssistant(tsEarlyS5, "ok").
+		String()
+	env.writeClaudeSessionForProject(
+		t, sessionCwd, liveSessionID+".jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	require.NoError(t, env.db.UpsertSessionWithProjectIdentity(
+		db.Session{
+			ID: orphanSessionID, Project: targetProject,
+			Machine: "local", Agent: "claude", Cwd: "/archived/worktree",
+		},
+		export.ProjectIdentityObservation{
+			SessionID: orphanSessionID, Project: targetProject,
+			Machine: "local", RootPath: "/archived/worktree",
+		},
+		targetProject,
+	))
+
+	dbPath := env.db.Path()
+	require.NoError(t, env.db.CloseConnections(), "CloseConnections")
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "open legacy archive")
+	require.Less(t, legacyDataVersion, db.CurrentDataVersion(),
+		"fixture must predate the current data version to trigger an upgrade")
+	_, err = raw.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE session_project_identity_snapshots
+		SET project = ?
+		WHERE session_id = ?;
+		PRAGMA user_version = %d`, legacyDataVersion),
+		targetProject, liveSessionID,
+	)
+	require.NoError(t, err, "simulate legacy mapped snapshots")
+	require.NoError(t, raw.Close(), "close legacy archive")
+	require.NoError(t, env.db.Reopen(), "Reopen")
+
+	before, err := env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err, "list legacy snapshots")
+	require.Len(t, before, 2)
+	for _, snapshot := range before {
+		assert.Equal(t, targetProject, snapshot.Project,
+			"fixture must represent target-labelled legacy evidence")
+	}
+
+	stats := env.engine.ResyncAll(ctx, nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
+	require.Equal(t, 1, stats.Synced)
+	require.Equal(t, 1, stats.OrphanedCopied)
+	assertSessionProject(t, env.db, liveSessionID, targetProject)
+	assertSessionProject(t, env.db, orphanSessionID, targetProject)
+
+	after, err := env.db.ListSessionProjectIdentitySnapshots(ctx)
+	require.NoError(t, err, "list upgraded snapshots")
+	require.Len(t, after, 1,
+		"unreconstructable orphan evidence must be discarded")
+	assert.Equal(t, liveSessionID, after[0].SessionID)
+	assert.Equal(t, sourceProject, after[0].Project,
+		"metadata copy must retain the freshly parsed source label")
 }
 
 func TestSyncSingleSessionAppliesWorktreeProjectMapping(t *testing.T) {
@@ -2775,6 +2905,60 @@ func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 		after.LocalModifiedAt,
 		beforeFull.LocalModifiedAt,
 	)
+}
+
+func TestRunExclusiveSerializesWorktreeReclassification(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	ctx := context.Background()
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "session", Machine: "archive.example", Agent: "claude",
+		Project: "branch", Cwd: "/worktrees/service/branch",
+	}))
+	draft := db.WorktreeReclassificationDraft{
+		Machine: "archive.example", PathPrefix: "/worktrees/service",
+		Project: "service", Enabled: true,
+	}
+	preview, err := database.PreviewWorktreeReclassification(ctx, draft)
+	require.NoError(t, err)
+	engine := sync.NewEngine(database, sync.EngineConfig{Machine: "archive.example"})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- engine.RunExclusive(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	applyAttempted := make(chan struct{})
+	applyDone := make(chan error, 1)
+	go func() {
+		close(applyAttempted)
+		_, _, applyErr := engine.ApplyWorktreeReclassification(
+			ctx, draft, preview.MappingToken, preview.ExistingMappingID,
+		)
+		applyDone <- applyErr
+	}()
+	<-applyAttempted
+	select {
+	case applyErr := <-applyDone:
+		require.Failf(t, "apply overlapped exclusive work", "error: %v", applyErr)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-applyDone)
+
+	session, err := database.GetSession(ctx, "session")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "service", session.Project)
 }
 
 func TestSyncSingleSessionIncrementalAppliesWorktreeProjectMapping(
@@ -3271,6 +3455,185 @@ func (f usageParityFactory) Capabilities() parser.Capabilities {
 
 func (f usageParityFactory) NewProvider(parser.ProviderConfig) parser.Provider {
 	return f.provider
+}
+
+type mappingLifecycleProvider struct {
+	parser.ProviderBase
+	source  parser.SourceRef
+	results []parser.ParseResult
+}
+
+func (p *mappingLifecycleProvider) Discover(context.Context) ([]parser.SourceRef, error) {
+	return []parser.SourceRef{p.source}, nil
+}
+
+func (p *mappingLifecycleProvider) Fingerprint(
+	context.Context, parser.SourceRef,
+) (parser.SourceFingerprint, error) {
+	return parser.SourceFingerprint{
+		Key: p.source.FingerprintKey, Size: 256,
+		MTimeNS: 1_700_000_000_000_000_000,
+	}, nil
+}
+
+func (p *mappingLifecycleProvider) Parse(
+	context.Context, parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	outcomes := make([]parser.ParseResultOutcome, 0, len(p.results))
+	for _, result := range p.results {
+		outcomes = append(outcomes, parser.ParseResultOutcome{Result: result})
+	}
+	return parser.ParseOutcome{Results: outcomes, ResultSetComplete: true}, nil
+}
+
+type mappingLifecycleFactory struct{ provider *mappingLifecycleProvider }
+
+func (f mappingLifecycleFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f mappingLifecycleFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f mappingLifecycleFactory) NewProvider(parser.ProviderConfig) parser.Provider {
+	return f.provider
+}
+
+func TestReclassificationSurvivesRemoteResyncLifecycle(t *testing.T) {
+	const (
+		machine       = "remote-example-host"
+		sourceProject = "source_project"
+		targetProject = "target_project"
+		root          = "/srv/custom-worktrees/sample-branch"
+	)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name          string
+		mappingAction string
+		wantLive      string
+	}{
+		{name: "enabled mapping reclassifies reparsed live session", wantLive: targetProject},
+		{name: "disabled mapping lets live session revert", mappingAction: "disable", wantLive: sourceProject},
+		{name: "deleted mapping lets live session revert", mappingAction: "delete", wantLive: sourceProject},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sourcePath := filepath.Join(t.TempDir(), "mapping-lifecycle.fixture")
+			dbtest.WriteTestFile(t, sourcePath, []byte("fixture"))
+			newResult := func(id, cwd string) parser.ParseResult {
+				return parser.ParseResult{Session: parser.ParsedSession{
+					ID: id, Project: sourceProject, Machine: machine,
+					Agent: parser.AgentCowork, Cwd: cwd,
+					StartedAt:    time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+					FirstMessage: "lifecycle fixture", MessageCount: 1,
+					UserMessageCount: 1,
+					File: parser.FileInfo{
+						Path: sourcePath, Size: 256,
+						Mtime: 1_700_000_000_000_000_000,
+					},
+				}, Messages: []parser.ParsedMessage{{
+					Ordinal: 0, Role: parser.RoleUser, Content: "lifecycle fixture",
+					Timestamp: time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
+				}}}
+			}
+			provider := &mappingLifecycleProvider{
+				ProviderBase: parser.ProviderBase{
+					Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+						DiscoverSources:      parser.CapabilitySupported,
+						CompositeFingerprint: parser.CapabilitySupported,
+					}},
+				},
+				source: parser.SourceRef{
+					Provider: parser.AgentCowork, Key: sourcePath,
+					DisplayPath: sourcePath, FingerprintKey: sourcePath,
+				},
+				results: []parser.ParseResult{
+					newResult("live-empty-cwd", ""),
+					newResult("live-evidence", root),
+					newResult("orphaned", root),
+				},
+			}
+			database := dbtest.OpenTestDB(t)
+			remoteConfig := sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {filepath.Dir(sourcePath)}},
+				Machine:   machine, IDPrefix: machine + "~", Ephemeral: true,
+				ProviderFactories: []parser.ProviderFactory{
+					mappingLifecycleFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+				},
+			}
+			remoteEngine := sync.NewEngine(database, remoteConfig)
+			require.Equal(t, 3, remoteEngine.SyncAll(ctx, nil).Synced)
+			remoteEngine.Close()
+
+			mapping, err := database.CreateWorktreeProjectMapping(
+				ctx, db.WorktreeProjectMapping{
+					Machine: machine, PathPrefix: "/srv/custom-worktrees",
+					Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
+					OriginalProject: sourceProject, Enabled: true,
+				},
+			)
+			require.NoError(t, err)
+			applied, err := database.ApplyWorktreeProjectMappings(ctx, machine)
+			require.NoError(t, err)
+			require.Equal(t, 3, applied.UpdatedSessions)
+			switch tc.mappingAction {
+			case "disable":
+				mapping.Enabled = false
+				_, err = database.UpdateWorktreeProjectMapping(ctx, machine, mapping.ID, mapping)
+				require.NoError(t, err)
+			case "delete":
+				require.NoError(t, database.DeleteWorktreeProjectMapping(
+					ctx, machine, mapping.ID,
+				))
+			}
+
+			provider.results = []parser.ParseResult{
+				newResult("live-empty-cwd", ""),
+				newResult("live-evidence", root),
+			}
+			engine := sync.NewEngine(database, sync.EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
+			stats, err := engine.ResyncAllWithOptions(ctx, nil,
+				sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+					Name: "remote-example", Config: remoteConfig,
+				}}},
+			)
+			require.NoError(t, err)
+			require.False(t, stats.Aborted, "resync aborted: %+v", stats)
+			assert.Equal(t, 1, stats.OrphanedCopied)
+			for id, wantProject := range map[string]string{
+				machine + "~live-empty-cwd": tc.wantLive,
+				machine + "~orphaned":       targetProject,
+			} {
+				session, getErr := database.GetSession(ctx, id)
+				require.NoError(t, getErr)
+				require.NotNil(t, session, id)
+				assert.Equal(t, wantProject, session.Project, id)
+			}
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			for _, snapshot := range snapshots {
+				assert.Equal(t, sourceProject, snapshot.Project, snapshot.SessionID)
+			}
+			if tc.mappingAction == "" {
+				targetObservations, listErr := database.ListProjectIdentityObservations(
+					ctx, []string{targetProject},
+				)
+				require.NoError(t, listErr)
+				assert.NotEmpty(t, targetObservations)
+				sourceObservations, listErr := database.ListProjectIdentityObservations(
+					ctx, []string{sourceProject},
+				)
+				require.NoError(t, listErr)
+				assert.Empty(t, sourceObservations,
+					"former aggregate evidence must be tombstoned after every live row moves")
+			}
+		})
+	}
 }
 
 func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {

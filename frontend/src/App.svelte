@@ -64,6 +64,7 @@
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
   import RecentEditsPage from "./lib/components/recentedits/RecentEditsPage.svelte";
+  import DataPage from "./lib/components/data/DataPage.svelte";
   import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
   import { sessions, filtersToParams } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
@@ -681,6 +682,10 @@
 {:else if router.route === "recent-edits"}
   <div class="page-scroll">
     <RecentEditsPage />
+  </div>
+{:else if router.route === "data"}
+  <div class="page-scroll">
+    <DataPage />
   </div>
 {:else if router.route === "settings"}
   <div class="page-scroll">

@@ -24,6 +24,7 @@ const approvedIconNames = [
   "CloudUploadIcon",
   "CopyIcon",
   "DatabaseBackupIcon",
+  "DatabaseIcon",
   "DownloadIcon",
   "EllipsisIcon",
   "EllipsisVerticalIcon",

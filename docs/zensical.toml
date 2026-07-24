@@ -16,6 +16,7 @@ nav = [
   {"Configuration" = "configuration.md"},
   {"Usage Guide" = "usage.md"},
   {"Activity" = "activity.md"},
+  {"Data" = "data.md"},
   {"Recent Edits" = "recent-edits.md"},
   {"Session Intelligence" = "session-intelligence.md"},
   {"MCP Server" = "mcp.md"},

@@ -1116,24 +1116,20 @@ test.describe('Settings', () => {
   });
 
   test('worktree project mappings section', async ({ page }) => {
-    await openSettings(page);
+    // Mapping rules moved from Settings to the Data page's Rules view.
+    await page.goto('/data?view=rules');
 
-    // SettingsSection renders a heading with the title prop;
-    // match the section that contains the "Worktree mappings"
-    // header text, the same pattern used for Remote Access above.
-    const worktreeSection = page.locator(
-      '.settings-section:has-text("Worktree mappings")'
-    );
-    await expect(worktreeSection.first()).toBeVisible({
-      timeout: 5_000,
+    const rulesView = page.locator('section.rules-view');
+    await expect(rulesView).toBeVisible({ timeout: 5_000 });
+    await rulesView.scrollIntoViewIfNeeded();
+    const mappingPath = rulesView.getByRole('textbox', {
+      name: 'Path prefix',
     });
-    await worktreeSection.first().scrollIntoViewIfNeeded();
-    const mappingPath = worktreeSection.first().getByRole('textbox').first();
     await mappingPath.fill('~/code/project.worktrees');
     await expect(mappingPath).toHaveValue('~/code/project.worktrees');
     await page.waitForTimeout(500);
 
-    await snapEl(worktreeSection.first(), 'worktree-mappings');
+    await snapEl(rulesView, 'worktree-mappings');
   });
 });
 

@@ -186,6 +186,7 @@
 
 <Modal
   title={publishSecret ? m.publish_title_secret() : m.publish_title_public()}
+  closeLabel={m.publish_close()}
   width="440px"
   onclose={closeModal}
   footer={view === "progress" ? undefined : actions}

@@ -11,11 +11,12 @@ import (
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
-// createSchema. Mirror schema v4 is create-only: there are no in-place
+// createSchema. The mirror schema is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
-// must be rebuilt with 'agentsview duckdb push --full'. v5 adds the
-// sessions.deletion_cause column on top of the v4 shape.
-const SchemaVersion = 5
+// must be rebuilt with 'agentsview duckdb push --full'. v6 adds
+// sessions.source_archive_id and the source_worktree_project_mappings
+// mirror table on top of the v5 deletion-cause shape.
+const SchemaVersion = 6
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -30,6 +31,7 @@ const (
 	lastPushCutoffMetadataKey   = "agentsview_last_push_cutoff"
 	deletionRevisionMetadataKey = "agentsview_session_deletion_revision"
 	identityRevisionMetadataKey = "agentsview_project_identity_revision"
+	mappingRevisionMetadataKey  = "agentsview_worktree_mapping_revision"
 )
 
 // curationFingerprintMetadataKey stores a hash of the local in-scope
@@ -170,7 +172,8 @@ var mirrorTables = []tableSpec{
 			termination_status TEXT,
 			secret_leak_count INTEGER NOT NULL DEFAULT 0,
 			secrets_rules_version TEXT NOT NULL DEFAULT '',
-			agentsview_push_fingerprint TEXT
+			agentsview_push_fingerprint TEXT,
+			source_archive_id TEXT NOT NULL DEFAULT ''
 		)`,
 		columns: []columnSpec{
 			{"id", "id TEXT"},
@@ -240,6 +243,7 @@ var mirrorTables = []tableSpec{
 			{"secret_leak_count", "secret_leak_count INTEGER NOT NULL DEFAULT 0"},
 			{"secrets_rules_version", "secrets_rules_version TEXT NOT NULL DEFAULT ''"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
+			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at, id)",
@@ -518,6 +522,30 @@ var mirrorTables = []tableSpec{
 		},
 	},
 	{
+		name: "source_worktree_project_mappings",
+		create: `CREATE TABLE IF NOT EXISTS source_worktree_project_mappings (
+			source_archive_id TEXT NOT NULL,
+			machine TEXT NOT NULL,
+			path_prefix TEXT NOT NULL,
+			layout TEXT NOT NULL DEFAULT 'explicit',
+			project TEXT NOT NULL DEFAULT '',
+			original_project TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT TRUE,
+			updated_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (source_archive_id, machine, path_prefix)
+		)`,
+		columns: []columnSpec{
+			{"source_archive_id", "source_archive_id TEXT NOT NULL"},
+			{"machine", "machine TEXT NOT NULL"},
+			{"path_prefix", "path_prefix TEXT NOT NULL"},
+			{"layout", "layout TEXT NOT NULL DEFAULT 'explicit'"},
+			{"project", "project TEXT NOT NULL DEFAULT ''"},
+			{"original_project", "original_project TEXT NOT NULL DEFAULT ''"},
+			{"enabled", "enabled BOOLEAN NOT NULL DEFAULT TRUE"},
+			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+		},
+	},
+	{
 		name: "tool_calls",
 		create: `CREATE TABLE IF NOT EXISTS tool_calls (
 			id BIGINT,
@@ -761,6 +789,7 @@ type mirrorMetadata struct {
 	LastPushMachine  string
 	DeletionRevision int64
 	IdentityRevision int64
+	MappingRevision  int64
 }
 
 // writeMirrorMetadata upserts every mirrorMetadata field into sync_metadata.
@@ -778,6 +807,7 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		{lastPushMachineMetadataKey, meta.LastPushMachine},
 		{deletionRevisionMetadataKey, strconv.FormatInt(meta.DeletionRevision, 10)},
 		{identityRevisionMetadataKey, strconv.FormatInt(meta.IdentityRevision, 10)},
+		{mappingRevisionMetadataKey, strconv.FormatInt(meta.MappingRevision, 10)},
 	}
 	for _, field := range fields {
 		if err := recordMetadataKey(ctx, db, field.key, field.value); err != nil {
@@ -798,6 +828,7 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 		sourceDatabaseIDMetadataKey, pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
 		deletionRevisionMetadataKey, identityRevisionMetadataKey,
+		mappingRevisionMetadataKey,
 	} {
 		value, err := readMetadataKey(ctx, db, key)
 		if err != nil {
@@ -830,6 +861,11 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	}
 	if meta.IdentityRevision, err = parseMirrorMetadataInt64(
 		identityRevisionMetadataKey, raw[identityRevisionMetadataKey],
+	); err != nil {
+		return mirrorMetadata{}, err
+	}
+	if meta.MappingRevision, err = parseMirrorMetadataInt64(
+		mappingRevisionMetadataKey, raw[mappingRevisionMetadataKey],
 	); err != nil {
 		return mirrorMetadata{}, err
 	}

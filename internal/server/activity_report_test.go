@@ -14,6 +14,26 @@ import (
 	"go.kenn.io/agentsview/internal/pricing"
 )
 
+// TestActivityProjectReclassificationCandidatesRouteRemoved confirms the
+// legacy candidates route is no longer part of the API surface. A plain GET
+// against the removed path cannot assert 404: any unregistered /api/ path
+// falls through the stdlib ServeMux to the SPA catch-all handler and
+// returns 200 with index.html (see server.go's handleSPA), which is true of
+// every never-registered path and would not distinguish a removed route
+// from a typo'd one. Asserting against the OpenAPI document instead proves
+// the operation itself is gone.
+func TestActivityProjectReclassificationCandidatesRouteRemoved(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var spec struct {
+		Paths map[string]map[string]any `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	assert.NotContains(t, spec.Paths,
+		"/api/v1/activity/project-reclassification/candidates")
+}
+
 // activityDate is a fixed past calendar day so the activity report is
 // deterministic and complete (non-partial) regardless of wall clock.
 const activityDate = "2025-06-02"

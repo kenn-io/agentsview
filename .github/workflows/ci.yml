@@ -118,6 +118,7 @@ jobs:
         run: |
           bash scripts/install_test.sh
           bash scripts/retry_test.sh
+          bash scripts/e2e-server_test.sh
           bash scripts/check_desktop_release_health_test.sh
           bash scripts/check_desktop_release_health_from_event_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
@@ -359,6 +360,12 @@ jobs:
       - name: Run E2E tests
         run: npx playwright test --reporter=list
         working-directory: frontend
+        env:
+          E2E_PREBUILT_FIXTURE: /tmp/testfixture
+          E2E_PREBUILT_SERVER: /tmp/agentsview
+
+      - name: Run DuckDB E2E tests
+        run: make e2e-duckdb
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
           E2E_PREBUILT_SERVER: /tmp/agentsview

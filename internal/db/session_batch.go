@@ -18,10 +18,13 @@ type SessionBatchWrite struct {
 	Messages            []Message
 	UsageEvents         []UsageEvent
 	IdentityObservation export.ProjectIdentityObservation
-	Signals             SessionSignalUpdate
-	Findings            []SecretFinding
-	DataVersion         int
-	ReplaceMessages     bool
+	// IdentitySnapshotProject distinguishes legacy omission (nil, use the
+	// aggregate project) from an explicit empty parser source (omit snapshot).
+	IdentitySnapshotProject *string
+	Signals                 SessionSignalUpdate
+	Findings                []SecretFinding
+	DataVersion             int
+	ReplaceMessages         bool
 }
 
 // SessionBatchResult summarizes a WriteSessionBatch call.
@@ -293,38 +296,37 @@ func writeOneSessionBatchTx(
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 ) (int, error) {
-	var excluded int
-	err := tx.QueryRow(
-		"SELECT 1 FROM excluded_sessions WHERE id = ?",
-		write.Session.ID,
-	).Scan(&excluded)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf(
-			"checking exclusion for %s: %w",
-			write.Session.ID, err,
+	if write.IdentityObservation.Project != "" {
+		normalized, err := normalizeProjectIdentityObservation(
+			write.IdentityObservation,
 		)
+		if err != nil {
+			return 0, err
+		}
+		if normalized.SessionID == "" {
+			normalized.SessionID = write.Session.ID
+		}
+		if normalized.SessionID != write.Session.ID {
+			return 0, fmt.Errorf(
+				"identity observation session id %q does not match session id %q",
+				normalized.SessionID, write.Session.ID,
+			)
+		}
+		write.IdentityObservation = normalized
 	}
-	if excluded == 1 {
-		return 0, ErrSessionExcluded
+	sessionInserted, sourceMissing, err := upsertSessionExec(
+		tx.Exec,
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		write.Session,
+		true,
+	)
+	if err != nil {
+		return 0, err
 	}
-	var deletedAt, deletionCause sql.NullString
-	err = tx.QueryRow(
-		"SELECT deleted_at, deletion_cause FROM sessions WHERE id = ?",
-		write.Session.ID,
-	).Scan(&deletedAt, &deletionCause)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf(
-			"checking trash for %s: %w",
-			write.Session.ID, err,
-		)
-	}
-	sessionExists := err == nil
-	if deletedAt.Valid &&
-		(!deletionCause.Valid || deletionCause.String != deletionCauseSourceMissing) {
-		return 0, ErrSessionTrashed
-	}
-	replaceMessages := write.ReplaceMessages ||
-		(deletionCause.Valid && deletionCause.String == deletionCauseSourceMissing)
+	sessionExists := !sessionInserted
+	replaceMessages := write.ReplaceMessages || sourceMissing
 	replacementTranscriptChanged := false
 	if replaceMessages && sessionExists {
 		stored, err := sessionMessagesTx(
@@ -338,19 +340,20 @@ func writeOneSessionBatchTx(
 		)
 	}
 
-	if _, err := tx.Exec(
-		upsertSessionSQL,
-		upsertSessionArgs(write.Session)...,
-	); err != nil {
-		return 0, fmt.Errorf(
-			"upserting session %s: %w",
-			write.Session.ID, err,
-		)
-	}
 	if write.IdentityObservation.Project != "" {
-		if err := upsertProjectIdentityObservationTx(
-			tx, write.IdentityObservation,
-		); err != nil {
+		var err error
+		if write.IdentitySnapshotProject == nil {
+			err = upsertProjectIdentityObservationTx(
+				tx, write.IdentityObservation,
+			)
+		} else {
+			err = upsertProjectIdentityObservationWithSnapshotProjectTx(
+				tx, write.IdentityObservation,
+				*write.IdentitySnapshotProject,
+				sessionInserted, true,
+			)
+		}
+		if err != nil {
 			return 0, err
 		}
 	}

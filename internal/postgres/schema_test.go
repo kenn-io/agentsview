@@ -533,6 +533,7 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 		"source_archives":                           true,
 		"source_project_identity_observations":      true,
 		"source_session_project_identity_snapshots": true,
+		"source_worktree_project_mappings":          true,
 		"cursor_usage_events":                       true,
 	}
 	state.existingIndexes = map[string]bool{
@@ -562,6 +563,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"source_archives":                           true,
 		"source_project_identity_observations":      true,
 		"source_session_project_identity_snapshots": true,
+		"source_worktree_project_mappings":          true,
 		"cursor_usage_events":                       true,
 	}
 	state.existingIndexes = map[string]bool{
@@ -697,6 +699,36 @@ func TestCheckSchemaCompatRequiresSourceArchives(t *testing.T) {
 		"source_archives table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresSessionProvenanceColumns(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "source_archive_id, file_path",
+		err: errors.New(
+			`ERROR: column "source_archive_id" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"sessions table missing provenance columns")
+}
+
+func TestCheckSchemaCompatRequiresWorktreeProjectMappings(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from source_worktree_project_mappings",
+		err: errors.New(
+			`ERROR: relation "source_worktree_project_mappings" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"source_worktree_project_mappings table missing required columns")
+}
+
 func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
@@ -757,6 +789,42 @@ func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 	assert.Contains(t, strings.ToLower(state.executedSQL()),
 		"create table",
 		"fallback must create missing push tables")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	// Read-compatible with every other push table and the dedup index
+	// present, but source_worktree_project_mappings is absent: the push
+	// fast path must fall back to EnsureSchema so mapping publication has
+	// a table to write into.
+	state.existingTables = map[string]bool{
+		"model_pricing":                             true,
+		"source_archives":                           true,
+		"source_project_identity_observations":      true,
+		"source_session_project_identity_snapshots": true,
+		"cursor_usage_events":                       true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup": true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing mapping table must fall back to migration DDL")
+	assert.Contains(t, strings.ToLower(state.executedSQL()),
+		"create table",
+		"fallback must create the missing mapping table")
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {

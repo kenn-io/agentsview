@@ -689,27 +689,43 @@ manual sync, and the periodic directory scan.
 
 ### Worktree Project Mappings
 
-The parser infers a session's project from its `cwd`, which works for standard
-layouts but not custom worktree conventions like
-`~/code/{project}.worktrees/feat/<branch>/` — those sessions otherwise group
-under `<branch>` rather than `{project}`. As of 0.29.0, you can register manual
-**path-prefix → project** rules from the **Worktree Project Mappings** section
-in Settings:
+The parser infers a session's project from its `cwd`. It recognizes common
+worktree manager layouts, including the generic
+`worktrees/github.com/<owner>/<repository>/<worktree>` convention, where the
+repository segment becomes the project. Layouts it does not recognize — such
+as `~/code/{project}.worktrees/feat/<branch>/` — otherwise group sessions
+under `<branch>` rather than `{project}`. For those, register manual
+**path-prefix → project** rules from the **Rules** view on the
+[Data page](/data/#rules), or let the
+[reclassification editor](/data/#reclassify-a-project) create one from a
+project's worktree evidence:
 
-![Worktree Project Mappings settings section](/assets/generated/screenshots/worktree-mappings.png)
+![Worktree mapping rules on the Data page](/assets/generated/screenshots/worktree-mappings.png)
 
 - Mappings are explicit; there is no auto-discovery.
+- Each rule is scoped to one machine. The machine selector manages rules for
+  the local machine and for any remotely synced machine. Rules live in the
+  writable archive that ingests that machine's sessions, which may be the
+  source machine's local SQLite archive or a separate collector archive.
 - Each rule applies whenever a session's `cwd` falls under the configured
   prefix, on both new sessions as they sync and (via the **Apply** button)
-  already-imported sessions.
+  already-imported sessions. Prefixes match on directory boundaries, so
+  `/worktrees/service` does not match `/worktrees/service-old`.
+- Enabled mappings run after parser inference, so an explicit rule always wins
+  when the two disagree.
 - The default `explicit` layout maps every matching path to the project name
   stored on the rule. The `repo_dot_worktrees` layout derives the project from
   the first path segment under the prefix when it is named `<repo>.worktrees`,
   so a path like `/code/agentsview.worktrees/feature/frontend` resolves to
   project `agentsview`.
-- Rules are stored in a `worktree_project_mappings` SQLite table scoped to the
-  host machine, so a mapping created on one machine does not leak into another
-  machine's view of synced sessions.
+- Rules created from the Data reclassification editor record the mislabeled
+  project they corrected, shown as the rule's **original label**. The value is
+  informational and set once; to manually revert a reclassification, edit the
+  rule's target back to that original label and apply again.
+- Disabling or deleting a rule does not rewrite sessions by itself. Sessions
+  whose source files still exist revert to parser-derived names on a later
+  reparse or full resync, while orphaned sessions keep their stored
+  classification.
 - Excluded, trashed, and skipped session files are left alone.
 
 Mappings only mutate the session's `project` field; the rest of the session

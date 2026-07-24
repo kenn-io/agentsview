@@ -7,9 +7,27 @@
     projects: ProjectInfo[];
     value: string;
     onselect: (value: string) => void;
+    onquery?: (query: string) => void;
+    includeAll?: boolean;
+    allowCustom?: boolean;
+    customLabel?: string;
+    placeholder?: string;
+    title?: string;
+    emptyLabel?: string;
   }
 
-  let { projects, value, onselect }: Props = $props();
+  let {
+    projects,
+    value,
+    onselect,
+    onquery = undefined,
+    includeAll = true,
+    allowCustom = false,
+    customLabel = m.data_reclassify_use_custom_project({ query: "{query}" }),
+    placeholder = m.shared_project_filter_placeholder(),
+    title = m.shared_select_project(),
+    emptyLabel = m.shared_no_matching_projects(),
+  }: Props = $props();
 
   const allOption = {
     name: "",
@@ -28,11 +46,15 @@
         displayLabel: p.name,
         count: p.session_count,
       }));
-    return [allOption, ...items];
+    return includeAll ? [allOption, ...items] : items;
   });
 
   const displayValue = $derived(
-    value ? projects.find((p) => p.name === value)?.name ?? value : m.shared_all_projects(),
+    value
+      ? projects.find((p) => p.name === value)?.name ?? value
+      : includeAll
+        ? m.shared_all_projects()
+        : placeholder,
   );
 </script>
 
@@ -40,8 +62,11 @@
   {options}
   {value}
   fallbackLabel={displayValue}
-  placeholder={m.shared_project_filter_placeholder()}
-  title={m.shared_select_project()}
-  emptyLabel={m.shared_no_matching_projects()}
+  {placeholder}
+  {title}
+  {emptyLabel}
+  {allowCustom}
+  {customLabel}
+  {onquery}
   {onselect}
 />

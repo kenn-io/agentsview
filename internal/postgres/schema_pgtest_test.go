@@ -130,6 +130,49 @@ func TestSecretFindingsSchema(t *testing.T) {
 	}
 }
 
+// TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance verifies that
+// EnsureSchema creates the source_worktree_project_mappings mirror table
+// with all required columns, and that sessions gains the
+// source_archive_id and file_path provenance columns. Also asserts
+// idempotency across two EnsureSchema runs.
+func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+
+	ctx := context.Background()
+
+	// Run EnsureSchema twice to verify idempotency.
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
+		"EnsureSchema (first)")
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
+		"EnsureSchema (second, idempotency check)")
+
+	var count int
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = $1
+		  AND table_name = 'source_worktree_project_mappings'
+		  AND column_name IN ('source_archive_id','machine','path_prefix',
+		      'layout','project','original_project','enabled','updated_at')`,
+		schemaTestSchema,
+	).Scan(&count))
+	assert.Equal(t, 8, count)
+
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = $1
+		  AND table_name = 'sessions'
+		  AND column_name IN ('source_archive_id','file_path')`,
+		schemaTestSchema,
+	).Scan(&count))
+	assert.Equal(t, 2, count)
+}
+
 // TestToolCallsFilePathIndex verifies EnsureSchema creates the partial
 // idx_tool_calls_file_path index that backs the cross-session Recent Edits
 // feed, mirroring SQLite's index so the query surface has parity on PG.

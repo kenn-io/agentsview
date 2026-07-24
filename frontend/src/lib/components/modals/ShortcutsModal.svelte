@@ -43,6 +43,7 @@
 
 <Modal
   title={m.shortcuts_title()}
+  closeLabel={m.shortcuts_close()}
   width="360px"
   onclose={() => (ui.activeModal = null)}
 >

@@ -32,16 +32,54 @@ type activityReportInput struct {
 	Automation string `query:"automation" default:"all" doc:"Automation class: all, interactive, or automated"`
 }
 
+type activitySelectionInput struct {
+	Preset, Date, From, To, Timezone, Bucket string
+	Project, GitBranch, Agent, Machine       string
+	Automation                               string
+}
+
+type resolvedActivitySelection struct {
+	query  activity.Query
+	filter db.AnalyticsFilter
+}
+
 func (s *Server) humaActivityReport(
 	ctx context.Context, in *activityReportInput,
 ) (*jsonOutput[activity.Report], error) {
+	selection, err := resolveActivitySelection(activitySelectionInput{
+		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
+		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
+		GitBranch: in.GitBranch, Agent: in.Agent, Machine: in.Machine,
+		Automation: in.Automation,
+	}, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	r, err := s.db.GetActivityReport(ctx, selection.filter, selection.query)
+	if err != nil {
+		if handled := handleHumaContextError(err); handled != nil {
+			return nil, handled
+		}
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("activity report error", err)
+	}
+	return &jsonOutput[activity.Report]{Body: r}, nil
+}
+
+func resolveActivitySelection(
+	in activitySelectionInput,
+	now time.Time,
+) (resolvedActivitySelection, error) {
 	tz := in.Timezone
 	if tz == "" {
 		tz = "UTC"
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return nil, apiError(http.StatusBadRequest, "invalid timezone: "+tz)
+		return resolvedActivitySelection{},
+			apiError(http.StatusBadRequest, "invalid timezone: "+tz)
 	}
 	input := activity.QueryInput{
 		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
@@ -50,15 +88,15 @@ func (s *Server) humaActivityReport(
 	// Presets need an anchor date; default to today in the requested
 	// timezone, matching the prior day-only handler's behavior.
 	if input.Date == "" && input.From == "" {
-		input.Date = time.Now().In(loc).Format("2006-01-02")
+		input.Date = now.In(loc).Format("2006-01-02")
 	}
-	q, err := activity.ResolveQuery(input, time.Now())
+	q, err := activity.ResolveQuery(input, now)
 	if err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
+		return resolvedActivitySelection{}, apiError(http.StatusBadRequest, err.Error())
 	}
 	excludeAutomated, excludeInteractive, err := activityAutomationFilter(in.Automation)
 	if err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
+		return resolvedActivitySelection{}, apiError(http.StatusBadRequest, err.Error())
 	}
 	// The activity report intentionally includes one-shot sessions, unlike
 	// analytics which excludes them by default. The automation class is the
@@ -70,17 +108,7 @@ func (s *Server) humaActivityReport(
 		ExcludeAutomated:   excludeAutomated,
 		ExcludeInteractive: excludeInteractive,
 	}
-	r, err := s.db.GetActivityReport(ctx, f, q)
-	if err != nil {
-		if handled := handleHumaContextError(err); handled != nil {
-			return nil, handled
-		}
-		if handled := handleHumaReadOnly(err); handled != nil {
-			return nil, handled
-		}
-		return nil, internalError("activity report error", err)
-	}
-	return &jsonOutput[activity.Report]{Body: r}, nil
+	return resolvedActivitySelection{query: q, filter: f}, nil
 }
 
 // activityAutomationFilter maps the activity report's automation query value to

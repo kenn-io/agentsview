@@ -171,6 +171,8 @@ func init() {
 		{marker: sep + "conductor" + sep + "workspaces" + sep, projectPart: 0, minParts: 2},
 		// ~/.config/middleman/worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
 		{marker: sep + ".config" + sep + "middleman" + sep + "worktrees" + sep + "github.com" + sep, projectPart: 1, minParts: 3},
+		// worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
+		{marker: sep + "worktrees" + sep + "github.com" + sep, projectPart: 1, minParts: 3},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
 		// roborev CI: ~/.roborev/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].

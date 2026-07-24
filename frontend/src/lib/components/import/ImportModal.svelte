@@ -233,6 +233,7 @@
 {#if open}
   <Modal
     title={m.import_title()}
+    closeLabel={m.import_close()}
     width="460px"
     maxWidth="min(460px, 92vw)"
     closable={!importing}

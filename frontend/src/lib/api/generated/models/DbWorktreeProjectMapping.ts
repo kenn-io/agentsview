@@ -8,6 +8,7 @@ export type DbWorktreeProjectMapping = {
   id: number;
   layout: string;
   machine: string;
+  original_project: string;
   path_prefix: string;
   project: string;
   updated_at: string;

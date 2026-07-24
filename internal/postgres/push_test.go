@@ -672,11 +672,11 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 63)
+	require.Len(t, state.upsertArgs, 65)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
-	assert.Equal(t, "[]", state.upsertArgs[62].Value)
+	assert.Equal(t, "[]", state.upsertArgs[64].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,

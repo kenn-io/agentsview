@@ -557,6 +557,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		"project_identity_observation_changes",
 		"session_project_identity_snapshot_changes",
 		"worktree_project_mappings",
+		"worktree_project_mapping_changes",
 	} {
 		var count int
 		require.NoError(t, outConn.QueryRow(

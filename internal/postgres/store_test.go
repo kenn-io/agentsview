@@ -497,6 +497,59 @@ func TestStoreGetSidebarSessionIndexIncludesChildrenForMatchingRoot(
 	)
 }
 
+func TestStoreGetSidebarSessionIndexTotalCountsCanonicalRoots(t *testing.T) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	rootID := "root"
+	subID := "sub"
+	missingParentID := "missing-parent"
+	insertSidebarIndexSession(t, store, rootID, func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.project = "alpha"
+		s.userMessageCount = 5
+	})
+	insertSidebarIndexSession(t, store, subID, func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.project = "child-source"
+		s.parentSessionID = &rootID
+		s.relationshipType = "subagent"
+	})
+	insertSidebarIndexSession(t, store, "fork", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.project = "child-source"
+		s.parentSessionID = &subID
+		s.relationshipType = "fork"
+	})
+	insertSidebarIndexSession(t, store, "orphan", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.project = "alpha"
+		s.parentSessionID = &missingParentID
+		s.relationshipType = "subagent"
+	})
+	insertSidebarIndexSession(t, store, "unrelated", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.project = "beta"
+		s.userMessageCount = 5
+	})
+
+	index, err := store.GetSidebarSessionIndex(
+		context.Background(), db.SessionFilter{Project: "alpha"},
+	)
+	require.NoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{
+		"root", "sub", "fork", "orphan",
+	})
+	assert.Equal(t, 2, index.Total,
+		"only the matching root and promoted orphan are canonical roots")
+}
+
 func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
 	t *testing.T,
 ) {

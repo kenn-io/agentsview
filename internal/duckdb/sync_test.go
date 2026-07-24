@@ -1077,7 +1077,7 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(s, "m", "fp"))
+		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp"))
 		require.NoError(t, err)
 		return string(data)
 	}
@@ -1381,7 +1381,6 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 		"source_archive_id = ?", archiveID, 0,
 	)
 }
-
 func TestSyncPreservesAmbiguousIdentityAlongsideResolvedRemote(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -2208,4 +2207,52 @@ func TestSyncResultDurationIsSet(t *testing.T) {
 	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 	assert.Greater(t, result.Duration, time.Duration(0))
+}
+
+// TestDuckPushWritesSessionProvenance verifies that every pushed session row
+// carries the local archive's stable id in source_archive_id: stamped by the
+// rebuild path on the first push, and restored by the incremental
+// session-replace path when a changed session is re-pushed.
+func TestDuckPushWritesSessionProvenance(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, archiveID)
+
+	readProvenance := func() string {
+		t.Helper()
+		conn, err := Open(path)
+		require.NoError(t, err)
+		defer conn.Close()
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			`SELECT source_archive_id FROM sessions WHERE id = ?`, "sess-1",
+		).Scan(&got))
+		return got
+	}
+	assert.Equal(t, archiveID, readProvenance(),
+		"rebuild push must stamp source_archive_id")
+
+	probe, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_archive_id = '', agentsview_push_fingerprint = NULL
+		 WHERE id = ?`, "sess-1")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full,
+		"second push must be incremental to exercise the session-replace path")
+	assert.Equal(t, archiveID, readProvenance(),
+		"incremental re-push must restore source_archive_id")
 }

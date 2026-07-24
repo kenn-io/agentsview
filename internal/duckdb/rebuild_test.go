@@ -370,7 +370,10 @@ func TestRebuildMirrorSnapshotsStateBeforeSessionEnumeration(t *testing.T) {
 	require.Equal(t, 0, result.Errors)
 	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
 	require.NoError(t, err)
-	require.NoError(t, s.writeRebuildMetadata(ctx, "", snapshot, identityRevision))
+	mappingRevision, err := s.syncWorktreeMappings(ctx, 0, true)
+	require.NoError(t, err)
+	require.NoError(t, s.writeRebuildMetadata(
+		ctx, "", snapshot, identityRevision, mappingRevision))
 	require.NoError(t, s.Close())
 
 	// A further content-only change to mutatedID, applied after the
@@ -424,7 +427,10 @@ func finishCurationSnapshotRebuild(t *testing.T, s *Sync, local *db.DB) {
 	require.NoError(t, err)
 	identityRevision, err := s.syncProjectIdentityObservations(ctx, 0, true)
 	require.NoError(t, err)
-	require.NoError(t, s.writeRebuildMetadata(ctx, "", snapshot, identityRevision))
+	mappingRevision, err := s.syncWorktreeMappings(ctx, 0, true)
+	require.NoError(t, err)
+	require.NoError(t, s.writeRebuildMetadata(
+		ctx, "", snapshot, identityRevision, mappingRevision))
 	require.NoError(t, s.Close())
 }
 

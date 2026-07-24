@@ -106,6 +106,17 @@ allocates that total across usage rows in proportion to their catalog-price
 estimates. The per-model costs are therefore estimated attributions, not
 provider-reported model charges, but they still sum to the displayed total.
 
+## Reclassify A Project
+
+Worktree layouts the parser does not recognize can surface a branch or
+worktree directory name as a project. Each row in the **Project** breakdown
+links to that project on the [Data page](/data/), where the reclassification
+editor suggests a path prefix from the project's worktree evidence, previews
+the full-archive impact, and applies a
+[worktree project mapping](/configuration/#worktree-project-mappings) rule in
+one atomic step. Cleaning always evaluates the complete archive; the current
+Activity range and filters do not carry over.
+
 ## Activity Insight
 
 At the bottom of the page, **Activity Insight** shows an existing global

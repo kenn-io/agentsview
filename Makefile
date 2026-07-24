@@ -378,7 +378,8 @@ e2e:
 # Run focused Playwright smoke tests against duckdb serve.
 e2e-duckdb:
 	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb npx playwright test \
-		e2e/duckdb-backend.spec.ts e2e/session-list.spec.ts --project=chromium
+		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
+		e2e/session-list.spec.ts --project=chromium
 
 # Vet
 vet: pricing-snapshot ensure-embed-dir

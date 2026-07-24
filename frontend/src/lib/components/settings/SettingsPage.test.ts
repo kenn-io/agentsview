@@ -5,6 +5,7 @@ import { mount, tick, unmount } from "svelte";
 import SettingsPage from "./SettingsPage.svelte";
 import { SettingsService } from "../../api/generated/index";
 import { settings } from "../../stores/settings.svelte.js";
+import { router } from "../../stores/router.svelte.js";
 import { initI18n, LOCALE_STORAGE_KEY } from "../../i18n/index.js";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
@@ -27,14 +28,12 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
     ...orig,
     SettingsService: {
       getApiV1Settings: vi.fn(),
-      getApiV1SettingsWorktreeMappings: vi.fn(),
     },
   };
 });
 
 const settingsService = SettingsService as unknown as {
   getApiV1Settings: ReturnType<typeof vi.fn>;
-  getApiV1SettingsWorktreeMappings: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -53,13 +52,14 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
-  it("renders browser-local settings with the read-only worktree status", async () => {
+  it("renders browser-local settings with the Data-mode worktree pointer", async () => {
     let resolveSettings!: (value: unknown) => void;
     settingsService.getApiV1Settings.mockReturnValue(
       new Promise((resolve) => {
         resolveSettings = resolve;
       }),
     );
+    const navigate = vi.spyOn(router, "navigate").mockReturnValue(true);
 
     const component = mount(SettingsPage, {
       target: document.body,
@@ -68,9 +68,6 @@ describe("SettingsPage", () => {
 
     expect(document.body.textContent).toContain("Loading settings");
     expect(document.body.textContent).not.toContain("Date ranges");
-    expect(
-      settingsService.getApiV1SettingsWorktreeMappings,
-    ).not.toHaveBeenCalled();
 
     resolveSettings({
       agent_dirs: {},
@@ -88,15 +85,25 @@ describe("SettingsPage", () => {
     expect(document.body.textContent).toContain(
       "Link date ranges across pages",
     );
+    // The mapping manager moved to Data; Settings keeps only a pointer.
     expect(document.body.textContent).toContain("Worktree mappings");
     expect(document.body.textContent).toContain(
-      "Worktree mappings are available in local mode only.",
+      "Project classification rules have moved to Data.",
     );
-    expect(
-      settingsService.getApiV1SettingsWorktreeMappings,
-    ).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain(
+      "available in local mode only",
+    );
+
+    const pointer = Array.from(
+      document.body.querySelectorAll("button"),
+    ).find((b) => b.textContent?.includes("Open Data › Rules"));
+    expect(pointer).toBeTruthy();
+    pointer!.click();
+    await tick();
+    expect(navigate).toHaveBeenCalledWith("data", { view: "rules" });
 
     unmount(component);
+    navigate.mockRestore();
   });
 
   it("persists the selected interface language for reload", async () => {
@@ -108,9 +115,6 @@ describe("SettingsPage", () => {
       read_only: false,
       require_auth: false,
       terminal: { mode: "auto" },
-    });
-    settingsService.getApiV1SettingsWorktreeMappings.mockResolvedValue({
-      mappings: [],
     });
 
     const component = mount(SettingsPage, {

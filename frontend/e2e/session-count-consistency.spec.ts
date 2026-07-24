@@ -1,15 +1,15 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
-// The test fixture seeds 10 root sessions with messages (including the
-// duration UX showcase and recent-edits fixture), plus 3 subagent
+// The test fixture seeds 12 root sessions with messages (including the
+// duration, recent-edits, and project-reclassification fixtures), plus 3 subagent
 // sessions, 1 fork, and 1 empty session. Navigation surfaces (session
-// list, status bar) show only the 10 root sessions. The analytics
+// list, status bar) show only the 12 root sessions. The analytics
 // summary additionally counts the 3 subagents, whose messages and
 // tokens are real spend, so it shows 13. Forks and empty sessions are
 // excluded everywhere.
-const EXPECTED_ROOT_SESSIONS = 10;
-const EXPECTED_ANALYTICS_SESSIONS = 13; // 10 root + 3 subagents
+const EXPECTED_ROOT_SESSIONS = 12;
+const EXPECTED_ANALYTICS_SESSIONS = 15; // 12 root + 3 subagents
 
 test.describe("Session count consistency", () => {
   let sp: SessionsPage;

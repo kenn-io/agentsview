@@ -1007,9 +1007,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionGrokPerTurnUsage(t *testing.T) {
-	assert.Equal(t, 70, CurrentDataVersion(),
-		"Grok per-turn usage parsing requires a data version bump")
+func TestCurrentDataVersionParserMetadata(t *testing.T) {
+	assert.Equal(t, 71, CurrentDataVersion(),
+		"generic worktrees/github.com layout marker requires a reparse bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -5751,8 +5751,10 @@ func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
 	for _, m := range got {
 		projects[m.PathPrefix] = m.Project
 	}
-	require.Equal(t, "src_repo", projects[srcPrefix], "source mapping project")
-	require.Equal(t, "src_conflict", projects[dstPrefix], "destination mapping project")
+	require.Equal(t, "src_repo", projects[normalizedMappingPath(srcPrefix)],
+		"source mapping project")
+	require.Equal(t, "src_conflict", projects[normalizedMappingPath(dstPrefix)],
+		"destination mapping project")
 }
 
 func TestCopySessionMetadataPreservesClears(t *testing.T) {
@@ -6562,6 +6564,48 @@ func TestFileIdentityChanged(t *testing.T) {
 		FilePath: new(legacyPath),
 	}), "upsert legacy")
 	assert.False(t, d.FileIdentityChanged(legacyPath, 1, 1), "missing stored identity changed")
+}
+
+func TestGetSessionForIncrementalReturnsImmutableSourceProject(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		name          string
+		sessionID     string
+		filePath      string
+		sourceProject string
+	}{
+		{
+			name:          "snapshot present",
+			sessionID:     "incremental-source-present",
+			filePath:      "/tmp/incremental-source-present.jsonl",
+			sourceProject: "parser-source",
+		},
+		{
+			name:      "snapshot absent",
+			sessionID: "incremental-source-absent",
+			filePath:  "/tmp/incremental-source-absent.jsonl",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, d.UpsertSessionWithProjectIdentity(
+				Session{
+					ID: tc.sessionID, Project: "mapped-target", Machine: "laptop",
+					Agent: "claude", Cwd: "/tmp/worktree",
+					FilePath: new(tc.filePath), FileSize: new(int64(128)),
+				},
+				export.ProjectIdentityObservation{
+					SessionID: tc.sessionID, Project: "mapped-target",
+					Machine: "laptop", RootPath: "/tmp/worktree",
+				},
+				tc.sourceProject,
+			))
+
+			info, ok := d.GetSessionForIncremental(tc.filePath)
+			require.True(t, ok)
+			assert.Equal(t, "mapped-target", info.Project)
+			assert.Equal(t, tc.sourceProject, info.SourceProject)
+		})
+	}
 }
 
 func TestUpdateSessionIncremental(t *testing.T) {
@@ -7711,6 +7755,40 @@ func TestCopySessionMetadataKeepsIdentityRevisionMonotonic(t *testing.T) {
 	assert.GreaterOrEqual(t, after, before)
 }
 
+func TestCopySessionMetadataKeepsWorktreeMappingRevisionMonotonic(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	_, err = oldDB.rawWriter().Exec(`
+		INSERT INTO archive_metadata (key, value)
+		VALUES (?, '1')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		archiveMetadataWorktreeMappingRevisionKey,
+	)
+	requireNoError(t, err, "set old revision")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	_, err = fresh.rawWriter().Exec(`
+		INSERT INTO archive_metadata (key, value)
+		VALUES (?, '5')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		archiveMetadataWorktreeMappingRevisionKey,
+	)
+	requireNoError(t, err, "set fresh revision")
+	before, err := fresh.WorktreeMappingPublicationRevision(ctx)
+	requireNoError(t, err, "revision before copy")
+	require.Equal(t, int64(5), before)
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+	after, err := fresh.WorktreeMappingPublicationRevision(ctx)
+	requireNoError(t, err, "revision after copy")
+	assert.GreaterOrEqual(t, after, before,
+		"resync copy must not regress the worktree mapping publication revision")
+}
+
 func TestCopySessionMetadataPreservesFirstConclusiveSessionSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -7746,6 +7824,45 @@ func TestCopySessionMetadataPreservesFirstConclusiveSessionSnapshot(t *testing.T
 	requireNoError(t, err, "list snapshots")
 	assert.Equal(t, "https://github.com/acme/app.git",
 		snapshots["session-a"].GitRemote)
+}
+
+func TestCopySessionMetadataRejectsMappedSnapshotFromDataVersion70(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "session-a", Project: "mapped-target", Machine: "host", Agent: "codex",
+	}), "insert old mapped session")
+	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "mapped-target", Machine: "host",
+			RootPath: "/repo/app", GitRemote: "https://example.com/acme/app.git",
+			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert stale mapped snapshot")
+	_, err = oldDB.rawWriter().Exec("PRAGMA user_version = 70")
+	requireNoError(t, err, "set source data version")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "session-a", Project: "mapped-target", Machine: "host", Agent: "codex",
+	}), "insert fresh session")
+	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "parser-source", Machine: "host",
+			RootPath: "/repo/app", GitRemote: "https://example.com/acme/app.git",
+			ObservedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert fresh parser snapshot")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+	snapshots, err := fresh.listSessionProjectIdentitySnapshots(
+		ctx, []string{"session-a"},
+	)
+	requireNoError(t, err, "list snapshots")
+	require.Contains(t, snapshots, "session-a")
+	assert.Equal(t, "parser-source", snapshots["session-a"].Project)
 }
 
 func TestCopySessionMetadataPreservesHistoricalUnknownSessionSnapshot(t *testing.T) {

@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 type storeContractBackend struct {
@@ -129,6 +131,7 @@ func TestStoreContract(t *testing.T) {
 		{"stars_and_pins", contractStarsAndPins},
 		{"analytics_trends_and_usage", contractAnalyticsTrendsAndUsage},
 		{"local_only_methods", contractLocalOnlyMethods},
+		{"data_inventory_rules_candidates", contractDataInventoryRulesCandidates},
 	}
 
 	for _, backend := range storeContractBackends() {
@@ -659,6 +662,64 @@ func contractLocalOnlyMethods(
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, queryID)
+}
+
+// contractDataInventoryRulesCandidates exercises the three Data reads
+// (GetProjectInventory, ListProjectRules, ListArchiveWorktreeCandidates)
+// through the Store interface against the shared contract fixture, which has
+// no worktree mapping rules and no session cwds. That keeps rules and
+// candidates at their baseline: zero rules, and archive-wide candidates that
+// fall back to "unavailable" evidence, grouped only by machine.
+func contractDataInventoryRulesCandidates(
+	t *testing.T,
+	store Store,
+	_ storeContractFixture,
+	_ storeContractBackend,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	inventory, err := store.GetProjectInventory(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, inventory.TotalProjects)
+	assert.Equal(t, 6, inventory.TotalSessions,
+		"visible sessions include the alpha subagent child, excluding the trashed one")
+	assert.Equal(t, 0, inventory.GovernedSessions, "no worktree mapping rules seeded")
+
+	var alphaRow *ProjectInventoryRow
+	for i := range inventory.Projects {
+		if inventory.Projects[i].Label == "alpha" {
+			alphaRow = &inventory.Projects[i]
+		}
+	}
+	require.NotNil(t, alphaRow, "alpha project row present")
+	assert.Equal(t, 4, alphaRow.Sessions,
+		"alpha, gamma, old, and the alpha subagent child")
+	assert.Equal(t, 0, alphaRow.EnabledRulesTargeting)
+
+	rules, err := store.ListProjectRules(ctx, "mac")
+	require.NoError(t, err)
+	assert.Equal(t, "mac", rules.Machine)
+	assert.Empty(t, rules.Rules, "no worktree mapping rules seeded")
+	assert.Contains(t, rules.Machines, "mac")
+	assert.Contains(t, rules.Machines, "linux")
+
+	projects, err := store.BuildProjectIdentityMap(ctx, []string{"alpha"})
+	require.NoError(t, err)
+	candidates, err := store.ListArchiveWorktreeCandidates(ctx, ArchiveWorktreeCandidateRequest{
+		ProjectLabel: export.SafeProjectDisplayLabel("alpha"),
+		ProjectKey:   projects["alpha"].ProjectKey,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates, "cwd-less alpha sessions still form fallback groups")
+	totalContributing := 0
+	for _, c := range candidates {
+		assert.Equal(t, "unavailable", c.EvidenceKind, "no cwd or identity evidence seeded")
+		assert.False(t, c.Available)
+		totalContributing += c.ContributingSessions
+	}
+	assert.Equal(t, alphaRow.Sessions, totalContributing,
+		"every alpha session lands in exactly one archive-wide candidate group")
 }
 
 func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
