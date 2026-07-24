@@ -174,6 +174,18 @@ describe("DataPage", () => {
     expect(document.body.textContent).toContain(m.data_summary_projects({ count: 1 }));
   });
 
+  it("shows a foreground reload error above the retained inventory", async () => {
+    data.inventory = makeInventory([makeRow({ project_key: "k1" })]);
+    api.getApiV1DataProjects.mockRejectedValueOnce(new Error("server unavailable"));
+
+    component = mount(DataPage, { target: document.body });
+    await flush();
+
+    expect(document.body.textContent).toContain("server unavailable");
+    expect(document.body.textContent).toContain(m.data_summary_projects({ count: 1 }));
+    expect(document.querySelector<HTMLButtonElement>(".retry-btn")).not.toBeNull();
+  });
+
   it("shows the empty message and no table when there are no projects", async () => {
     const inventory = makeInventory([]);
     api.getApiV1DataProjects.mockResolvedValueOnce(inventory);

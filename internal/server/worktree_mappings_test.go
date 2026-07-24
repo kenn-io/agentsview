@@ -99,6 +99,21 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 	assert.Empty(t, list.Mappings, "remote mappings after delete should be empty")
 }
 
+func TestWorktreeReclassificationPreviewReturns503WhileWriterClosed(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.CloseWriter())
+	t.Cleanup(func() { require.NoError(t, te.db.ReopenWriter()) })
+
+	w := te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "host-a.example",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example"
+	}`)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"body: %s", w.Body.String())
+	assert.Equal(t, "5", w.Header().Get("Retry-After"))
+}
+
 func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
 	te := setup(t)
 	root := t.TempDir()

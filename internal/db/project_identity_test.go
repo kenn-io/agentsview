@@ -57,6 +57,21 @@ func TestProjectObservationArchiveIDIsCreatedAndStable(t *testing.T) {
 	assert.Equal(t, first, second)
 }
 
+func TestRebuildProjectIdentityAggregatesChunksLargeProjectSet(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	projects := make([]string, 33000)
+	for i := range projects {
+		projects[i] = fmt.Sprintf("project-%05d", i)
+	}
+
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t,
+		rebuildProjectIdentityAggregatesTx(ctx, tx, "machine", projects))
+}
+
 func TestProjectIdentityPublicationRevisionTracksSnapshotChanges(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

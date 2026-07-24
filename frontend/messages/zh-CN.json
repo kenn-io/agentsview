@@ -890,7 +890,7 @@
   "data_reclassify_original": "原显示名称：{project}",
   "data_reclassify_candidates_loading": "正在查找工作树…",
   "data_reclassify_candidates_failed": "无法查找工作树",
-  "data_reclassify_no_candidates": "在所选活动视图中未找到此项目的工作树路径。",
+  "data_reclassify_no_candidates": "在存档中未找到此项目的工作树路径。",
   "data_reclassify_choose_worktree": "选择工作树",
   "data_reclassify_candidate_sessions": [
     { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 个会话" } }

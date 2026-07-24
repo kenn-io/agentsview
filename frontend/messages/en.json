@@ -917,7 +917,7 @@
   "data_reclassify_original": "Originally shown as {project}",
   "data_reclassify_candidates_loading": "Finding worktrees…",
   "data_reclassify_candidates_failed": "Failed to find worktrees",
-  "data_reclassify_no_candidates": "No worktree paths were found for this project in the selected Activity view.",
+  "data_reclassify_no_candidates": "No worktree paths were found for this project in the archive.",
   "data_reclassify_choose_worktree": "Choose a worktree",
   "data_reclassify_candidate_sessions": [
     { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=one": "{countNumber} session", "countPlural=other": "{countNumber} sessions" } }

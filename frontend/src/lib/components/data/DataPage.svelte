@@ -43,7 +43,7 @@
   }
 
   function closeWorkspace() {
-    const key = data.selectedProjectKey;
+    const key = data.selectedRow?.project_key ?? data.selectedProjectKey;
     data.clearSelection();
     requestAnimationFrame(() => {
       // Match on dataset instead of an attribute selector so arbitrary
@@ -95,9 +95,15 @@
       />
     {/key}
   {:else if data.inventory}
-    <!-- Inventory-first ordering: once inventory has loaded once it keeps
-         rendering through background reloads; loading/error below only
-         apply before that first successful load. -->
+    <!-- Keep the last successful inventory visible during reloads, while
+         surfacing foreground failures so stale data is never silent. -->
+    {#if data.error}
+      <div class="status error">
+        <span>{data.error}</span>
+        <button class="retry-btn" onclick={() => data.load()}>{m.shared_retry()}</button>
+      </div>
+    {/if}
+
     <div class="summary-strip">
       <span>{m.data_summary_projects({ count: data.inventory.total_projects })}</span>
       <span>{m.data_summary_sessions({ count: data.inventory.total_sessions })}</span>

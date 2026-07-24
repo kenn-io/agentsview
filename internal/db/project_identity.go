@@ -906,6 +906,17 @@ func rebuildProjectIdentityAggregatesTx(
 	if len(projects) == 0 {
 		return nil
 	}
+	return queryChunked(projects, func(chunk []string) error {
+		return rebuildProjectIdentityAggregatesChunkTx(ctx, tx, machine, chunk)
+	})
+}
+
+func rebuildProjectIdentityAggregatesChunkTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	machine string,
+	projects []string,
+) error {
 	placeholders := make([]string, len(projects))
 	args := make([]any, 0, len(projects)+1)
 	args = append(args, machine)

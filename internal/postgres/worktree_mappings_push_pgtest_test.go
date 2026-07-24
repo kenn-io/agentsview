@@ -42,6 +42,29 @@ func TestPushReplicatesWorktreeMappings(t *testing.T) {
 	assert.True(t, enabled)
 }
 
+func TestFilteredPushDoesNotPublishArchiveWideWorktreeMappings(t *testing.T) {
+	const schema = "agentsview_push_mapping_filtered_test"
+	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
+	sync.projects = []string{"included-project"}
+
+	_, err := localDB.CreateWorktreeProjectMapping(ctx,
+		db.WorktreeProjectMapping{
+			Machine: "workstation", PathPrefix: "/private/unrelated",
+			Layout: db.WorktreeMappingLayoutExplicit, Project: "unrelated-project",
+			Enabled: true,
+		})
+	require.NoError(t, err, "CreateWorktreeProjectMapping")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "filtered Push")
+
+	var count int
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM source_worktree_project_mappings`,
+	).Scan(&count), "count mirrored mappings")
+	assert.Zero(t, count)
+}
+
 // TestPushMappingDeleteTombstones verifies that deleting a local mapping and
 // pushing again removes the corresponding mirror row.
 func TestPushMappingDeleteTombstones(t *testing.T) {

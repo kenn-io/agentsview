@@ -85,12 +85,21 @@ func (db *DB) ListArchiveWorktreeCandidates(
 		return nil, err
 	}
 
+	validKey := false
+	for project := range labels {
+		if projects[project].ProjectKey == request.ProjectKey {
+			validKey = true
+			break
+		}
+	}
+	if !validKey {
+		return []WorktreeReclassificationCandidate{}, nil
+	}
+
 	selectedIDs := make([]string, 0, len(sessions))
 	selectedProjects := make(map[string]struct{})
 	for _, session := range sessions {
-		entry := projects[session.project]
-		if export.SafeProjectDisplayLabel(session.project) != request.ProjectLabel ||
-			entry.ProjectKey != request.ProjectKey {
+		if export.SafeProjectDisplayLabel(session.project) != request.ProjectLabel {
 			continue
 		}
 		selectedIDs = append(selectedIDs, session.id)
@@ -110,17 +119,13 @@ type archiveCandidateSessionRef struct {
 }
 
 // archiveWorktreeCandidateSessions returns every archive-wide visible
-// session (deleted_at IS NULL, message_count > 0, no relationship-type
-// exclusion) with no date bound, reproducing activityReportSessions's
-// non-date predicates via the same AnalyticsFilter builder so the two
-// selection paths never drift apart.
+// session with no date, message-count, or relationship-type restriction.
+// This matches project inventory and the reclassification evaluator.
 func (db *DB) archiveWorktreeCandidateSessions(
 	ctx context.Context,
 ) ([]archiveCandidateSessionRef, error) {
-	filter := AnalyticsFilter{IncludeSubagents: true, IncludeForks: true}
-	where, args := filter.buildWhereWithDate("", false, "id")
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id, project FROM sessions WHERE `+where, args...)
+		`SELECT id, project FROM sessions WHERE deleted_at IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("querying archive worktree candidate sessions: %w", err)
 	}

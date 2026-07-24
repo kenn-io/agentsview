@@ -16,6 +16,7 @@ import (
 type ProjectInventoryRow struct {
 	Label                 string     `json:"label"`
 	ProjectKey            string     `json:"project_key"`
+	ProjectKeys           []string   `json:"project_keys,omitempty"`
 	Sessions              int        `json:"sessions"`
 	Machines              int        `json:"machines"`
 	Agents                int        `json:"agents"`
@@ -110,14 +111,20 @@ func (db *DB) projectInventoryAggregate(
 			return nil, fmt.Errorf("scanning project inventory row: %w", err)
 		}
 		if first.Valid && first.String != "" {
-			if t, err := parseTimestamp(first.String); err == nil {
-				agg.first = &t
+			t, err := parseTimestamp(first.String)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"parsing project inventory first activity: %w", err)
 			}
+			agg.first = &t
 		}
 		if last.Valid && last.String != "" {
-			if t, err := parseTimestamp(last.String); err == nil {
-				agg.last = &t
+			t, err := parseTimestamp(last.String)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"parsing project inventory last activity: %w", err)
 			}
+			agg.last = &t
 		}
 		out[project] = agg
 	}
@@ -176,9 +183,17 @@ func buildProjectInventoryRows(
 			row = &ProjectInventoryRow{
 				Label:      label,
 				ProjectKey: export.ProjectKeyForEntry(projects[project]),
+				ProjectKeys: []string{
+					export.ProjectKeyForEntry(projects[project]),
+				},
 			}
 			byLabel[label] = row
 			order = append(order, label)
+		} else {
+			row.ProjectKeys = append(
+				row.ProjectKeys,
+				export.ProjectKeyForEntry(projects[project]),
+			)
 		}
 		row.Sessions += a.sessions
 		row.Machines += a.machines
@@ -256,30 +271,36 @@ func (db *DB) projectInventoryCandidateRows(
 		return nil, nil
 	}
 	machineList := sortedSetKeys(machines)
-	query, args := projectInventoryCandidateQuery(machineList)
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"querying project inventory candidate sessions: %w", err)
-	}
-	defer rows.Close()
-
 	var out []MappingEvaluationRow
-	for rows.Next() {
-		var row MappingEvaluationRow
-		if err := rows.Scan(
-			&row.SessionID, &row.Machine, &row.Project, &row.Cwd, &row.FilePath,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"scanning project inventory candidate session: %w", err)
+	err := queryChunked(machineList, func(chunk []string) error {
+		query, args := projectInventoryCandidateQuery(chunk)
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf(
+				"querying project inventory candidate sessions: %w", err)
 		}
-		row.SourceArchiveID = archiveID
-		out = append(out, row)
+		defer rows.Close()
+		for rows.Next() {
+			var row MappingEvaluationRow
+			if err := rows.Scan(
+				&row.SessionID, &row.Machine, &row.Project, &row.Cwd, &row.FilePath,
+			); err != nil {
+				return fmt.Errorf(
+					"scanning project inventory candidate session: %w", err)
+			}
+			row.SourceArchiveID = archiveID
+			out = append(out, row)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf(
+				"iterating project inventory candidate sessions: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"iterating project inventory candidate sessions: %w", err)
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SessionID < out[j].SessionID })
 	return out, nil
 }
 

@@ -917,7 +917,7 @@
   "data_reclassify_original": "Initialement affiché comme {project}",
   "data_reclassify_candidates_loading": "Recherche des arbres de travail…",
   "data_reclassify_candidates_failed": "Impossible de trouver les arbres de travail",
-  "data_reclassify_no_candidates": "Aucun chemin d’arbre de travail trouvé pour ce projet dans la vue Activité sélectionnée.",
+  "data_reclassify_no_candidates": "Aucun chemin d’arbre de travail trouvé pour ce projet dans l’archive.",
   "data_reclassify_choose_worktree": "Choisir un arbre de travail",
   "data_reclassify_candidate_sessions": [
     { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=one": "{countNumber} session", "countPlural=other": "{countNumber} sessions" } }

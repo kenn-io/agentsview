@@ -1170,7 +1170,7 @@ const (
 // projectIdentitySourceSnapshotDataVersion is the first archive version whose
 // immutable snapshots reliably contain the parser-source project rather than a
 // worktree mapping target. Older snapshots must not cross a full-resync copy.
-const projectIdentitySourceSnapshotDataVersion = 68
+const projectIdentitySourceSnapshotDataVersion = dataVersion
 
 // copiedSourceDataVersion reads the attached old_db's data version.
 // Read errors are logged and returned as 0 so the copy conservatively

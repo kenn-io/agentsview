@@ -350,6 +350,8 @@ func (s *Server) humaReclassifyWorktreeProject(
 
 func humaWorktreeReclassificationError(err error) error {
 	switch {
+	case errors.Is(err, db.ErrWriterClosed):
+		return writerClosedError()
 	case errors.Is(err, db.ErrWorktreeMappingSetChanged):
 		return apiError(http.StatusConflict, err.Error())
 	case errors.Is(err, db.ErrWorktreeMappingInvalid):

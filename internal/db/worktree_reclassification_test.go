@@ -38,6 +38,47 @@ func TestWorktreeReclassificationPreviewUsesBoundaryAndPortablePaths(t *testing.
 	assert.Equal(t, 1, windowsPreview.UpdatedSessions)
 }
 
+func TestWorktreeMappingSetTokenIncludesOriginalProject(t *testing.T) {
+	base := WorktreeProjectMapping{
+		ID: 1, Machine: "machine", PathPrefix: "/work/repo",
+		Project: "target", Enabled: true, UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	withOriginal := base
+	withOriginal.OriginalProject = "source"
+	assert.NotEqual(t,
+		worktreeMappingSetToken([]WorktreeProjectMapping{base}),
+		worktreeMappingSetToken([]WorktreeProjectMapping{withOriginal}),
+	)
+}
+
+func TestReclassificationLegacyUpdateMapsDuplicateConstraint(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	first, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "machine", PathPrefix: "/work/first",
+		Project: "first", Enabled: true,
+	})
+	require.NoError(t, err)
+	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "machine", PathPrefix: "/work/second",
+		Project: "second", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = upsertWorktreeReclassificationMappingTx(
+		ctx, tx,
+		WorktreeProjectMapping{
+			Machine: "machine", PathPrefix: "/work/second",
+			Project: "replacement", Enabled: true,
+		},
+		&first,
+	)
+	require.ErrorIs(t, err, ErrWorktreeMappingDuplicate)
+}
+
 func TestWorktreeReclassificationPreviewHonorsSpecificRuleAndBoundsSamples(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

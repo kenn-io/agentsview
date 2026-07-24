@@ -892,7 +892,7 @@
   "data_reclassify_original": "원래 표시 이름: {project}",
   "data_reclassify_candidates_loading": "워크트리 찾는 중…",
   "data_reclassify_candidates_failed": "워크트리를 찾지 못했습니다",
-  "data_reclassify_no_candidates": "선택한 활동 보기에서 이 프로젝트의 워크트리 경로를 찾지 못했습니다.",
+  "data_reclassify_no_candidates": "아카이브에서 이 프로젝트의 워크트리 경로를 찾지 못했습니다.",
   "data_reclassify_choose_worktree": "워크트리 선택",
   "data_reclassify_candidate_sessions": [
     { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "세션 {countNumber}개" } }

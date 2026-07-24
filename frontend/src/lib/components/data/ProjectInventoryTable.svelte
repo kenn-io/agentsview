@@ -25,6 +25,10 @@
     return row.label || m.shared_unknown();
   }
 
+  function isSelected(row: DbProjectInventoryRow): boolean {
+    return row.project_key === selectedKey || (row.project_keys ?? []).includes(selectedKey);
+  }
+
   type SortKey =
     | "label"
     | "sessions"
@@ -158,8 +162,8 @@
             <tr
               tabindex="0"
               class="project-row"
-              class:selected={row.project_key === selectedKey}
-              aria-selected={row.project_key === selectedKey}
+              class:selected={isSelected(row)}
+              aria-selected={isSelected(row)}
               data-project-key={row.project_key}
               onclick={() => selectRow(row.project_key)}
               onkeydown={(e) => onRowKeydown(e, row.project_key)}

@@ -2598,7 +2598,7 @@ func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	require.NoError(t, err, "ListProjectIdentityObservations")
 	require.Len(t, observations, 1)
 	assert.Equal(t, "canonical_app", observations[0].Project)
-	assert.Equal(t, sessionCwd, observations[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(sessionCwd), observations[0].RootPath)
 
 	snapshots, err := env.db.ListSessionProjectIdentitySnapshots(
 		context.Background(),
@@ -2607,7 +2607,7 @@ func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	require.Len(t, snapshots, 1)
 	assert.Equal(t, "mapped-worktree", snapshots[0].SessionID)
 	assert.Equal(t, "feature_login", snapshots[0].Project)
-	assert.Equal(t, sessionCwd, snapshots[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(sessionCwd), snapshots[0].RootPath)
 }
 
 func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(

@@ -27,7 +27,7 @@ func TestWorktreeProjectMappingsCRUDNormalizesAndScopesByMachine(t *testing.T) {
 	})
 	require.NoError(t, err, "create mapping")
 	assert.Equal(t, "laptop", m.Machine, "machine")
-	assert.Equal(t, prefix, m.PathPrefix, "path_prefix")
+	assert.Equal(t, normalizedMappingPath(prefix), m.PathPrefix, "path_prefix")
 	assert.Equal(t, WorktreeMappingLayoutExplicit, m.Layout, "layout")
 	assert.Equal(t, "my_app", m.Project, "project")
 
@@ -1557,7 +1557,7 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 			assert.Equal(t, tt.wantOriginal, mappings[0].OriginalProject)
 			assert.Equal(t, owned.ID, mappings[0].ID, "destination owns the row")
 			assert.Equal(t, "host-a.example", mappings[0].Machine)
-			assert.Equal(t, prefix, mappings[0].PathPrefix)
+			assert.Equal(t, normalizedMappingPath(prefix), mappings[0].PathPrefix)
 			assert.Equal(t, WorktreeMappingLayoutExplicit, mappings[0].Layout)
 			assert.Equal(t, "destination_service", mappings[0].Project)
 			assert.False(t, mappings[0].Enabled)
@@ -1661,7 +1661,7 @@ func createWorktreeMappingDBWithoutOriginalProject(
 			machine, path_prefix, layout, project, enabled
 		) VALUES (
 			'host-a.example', ?, 'explicit', 'service', 1
-		);`, prefix)
+		);`, normalizedMappingPath(prefix))
 	require.NoError(t, err, "seed legacy worktree mapping")
 }
 
@@ -1686,7 +1686,7 @@ func createOldWorktreeMappingDB(t *testing.T, path string, prefix string) {
 		) VALUES (
 			'laptop', ?, 'old_project', 1
 		);`,
-		prefix,
+		normalizedMappingPath(prefix),
 	)
 	require.NoError(t, err, "seed old worktree mapping db")
 }

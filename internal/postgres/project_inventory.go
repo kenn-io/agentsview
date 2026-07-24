@@ -132,9 +132,17 @@ func buildProjectInventoryRows(
 			row = &db.ProjectInventoryRow{
 				Label:      label,
 				ProjectKey: export.ProjectKeyForEntry(projects[project]),
+				ProjectKeys: []string{
+					export.ProjectKeyForEntry(projects[project]),
+				},
 			}
 			byLabel[label] = row
 			order = append(order, label)
+		} else {
+			row.ProjectKeys = append(
+				row.ProjectKeys,
+				export.ProjectKeyForEntry(projects[project]),
+			)
 		}
 		row.Sessions += a.sessions
 		row.Machines += a.machines
@@ -246,14 +254,16 @@ func (s *Store) projectInventoryMappings(
 			SELECT source_archive_id, machine, path_prefix, layout, project,
 			       original_project, enabled, updated_at
 			FROM source_worktree_project_mappings
-			ORDER BY source_archive_id, machine, path_prefix`)
+			ORDER BY source_archive_id COLLATE "C",
+				machine COLLATE "C", path_prefix COLLATE "C"`)
 	} else {
 		rows, err = s.pg.QueryContext(ctx, `
 			SELECT source_archive_id, machine, path_prefix, layout, project,
 			       original_project, enabled, updated_at
 			FROM source_worktree_project_mappings
 			WHERE machine = $1
-			ORDER BY path_prefix, source_archive_id`, *machine)
+			ORDER BY path_prefix COLLATE "C",
+				source_archive_id COLLATE "C"`, *machine)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing pg worktree mappings: %w", err)

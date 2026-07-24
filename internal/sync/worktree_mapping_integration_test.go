@@ -36,7 +36,8 @@ func TestApplyWorktreeMappingToSingleSessionUsesSameFileSiblingForEmptyCwd(
 	require.NoError(t, err)
 
 	engine := NewEngine(database, EngineConfig{Machine: "archive.example"})
-	require.NoError(t, engine.applyWorktreeMappingToSingleSession("target"))
+	_, err = engine.applyWorktreeMappingToSingleSession("target")
+	require.NoError(t, err)
 
 	target, err := database.GetSession(ctx, "target")
 	require.NoError(t, err)

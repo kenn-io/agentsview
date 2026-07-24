@@ -105,6 +105,15 @@ describe("hydrateFromUrl", () => {
 });
 
 describe("view/selection transitions", () => {
+  it("resolves a merged inventory row through any underlying project key", () => {
+    const row = makeRow({ project_key: "canonical", project_keys: ["canonical", "secondary"] });
+    data.inventory = makeInventory([row]);
+    data.selectedProjectKey = "secondary";
+
+    expect(data.selectedRow).toEqual(row);
+    expect(data.unknownProjectKey).toBe(false);
+  });
+
   it("showRules clears project_key from the written params", () => {
     data.selectProject("k1");
     const spy = routerMod.router.replaceParams as ReturnType<typeof vi.fn>;

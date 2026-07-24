@@ -152,9 +152,17 @@ func buildProjectInventoryRows(
 			row = &db.ProjectInventoryRow{
 				Label:      label,
 				ProjectKey: export.ProjectKeyForEntry(projects[project]),
+				ProjectKeys: []string{
+					export.ProjectKeyForEntry(projects[project]),
+				},
 			}
 			byLabel[label] = row
 			order = append(order, label)
+		} else {
+			row.ProjectKeys = append(
+				row.ProjectKeys,
+				export.ProjectKeyForEntry(projects[project]),
+			)
 		}
 		row.Sessions += a.sessions
 		row.Machines += a.machines

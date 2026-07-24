@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -91,8 +92,33 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, alpha.ProjectKey)
 	assert.Equal(t, export.ProjectKeyForEntry(projects["alpha"]), alpha.ProjectKey)
+	assert.Equal(t, []string{alpha.ProjectKey}, alpha.ProjectKeys)
 	assert.NotEmpty(t, beta.ProjectKey)
 	assert.Equal(t, export.ProjectKeyForEntry(projects["beta"]), beta.ProjectKey)
+	assert.Equal(t, []string{beta.ProjectKey}, beta.ProjectKeys)
+}
+
+func TestGetProjectInventoryRetainsEveryKeyForMergedDisplayLabel(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	rawProjects := []string{"/private/alpha", "/private/beta"}
+	for i, project := range rawProjects {
+		insertSession(t, d, fmt.Sprintf("session-%d", i), project)
+	}
+
+	inv, err := d.GetProjectInventory(ctx)
+	require.NoError(t, err)
+	require.Len(t, inv.Projects, 1)
+	row := inv.Projects[0]
+	require.Len(t, row.ProjectKeys, 2)
+	assert.Equal(t, row.ProjectKeys[0], row.ProjectKey)
+
+	projects, err := d.BuildProjectIdentityMap(ctx, rawProjects)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		export.ProjectKeyForEntry(projects[rawProjects[0]]),
+		export.ProjectKeyForEntry(projects[rawProjects[1]]),
+	}, row.ProjectKeys)
 }
 
 func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
@@ -122,6 +148,18 @@ func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 	require.NotNil(t, row.LastActivity)
 	assert.Equal(t, "2024-01-05T00:00:00Z",
 		row.LastActivity.UTC().Format(time.RFC3339))
+}
+
+func TestGetProjectInventoryRejectsMalformedTimestamp(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "malformed", "alpha")
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions SET started_at = 'not-a-time' WHERE id = 'malformed'`)
+	require.NoError(t, err)
+
+	_, err = d.GetProjectInventory(ctx)
+	require.ErrorContains(t, err, "parsing project inventory first activity")
 }
 
 func TestGetProjectInventoryCwdNormalization(t *testing.T) {
@@ -247,6 +285,23 @@ func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 	assert.Equal(t, projectCount, inv.TotalProjects)
 	assert.Equal(t, projectCount, inv.TotalSessions)
 	assert.Len(t, inv.Projects, projectCount)
+}
+
+func TestProjectInventoryCandidateRowsChunksMachineList(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "visible", "alpha", func(s *Session) {
+		s.Machine = "machine-0500"
+	})
+	machines := make(map[string]struct{}, maxSQLVars+1)
+	for i := 0; i <= maxSQLVars; i++ {
+		machines[fmt.Sprintf("machine-%04d", i)] = struct{}{}
+	}
+
+	rows, err := d.projectInventoryCandidateRows(ctx, "archive", machines)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "visible", rows[0].SessionID)
 }
 
 func TestProjectInventorySingleAggregationPass(t *testing.T) {

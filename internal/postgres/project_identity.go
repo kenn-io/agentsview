@@ -20,8 +20,7 @@ import (
 // 65,535 bind-parameter protocol limit. source_archive_id leads the ORDER
 // BY, so per-chunk (label-range) results do not concatenate into the
 // global order; when more than one chunk runs, the combined rows are
-// re-sorted in Go on the same key columns (byte-wise, matching the C
-// collation).
+// re-sorted in Go on the same key columns for deterministic API ordering.
 func (s *Store) ListProjectIdentityObservations(
 	ctx context.Context,
 	labels []string,

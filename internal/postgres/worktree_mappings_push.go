@@ -15,6 +15,14 @@ const worktreeMappingPublicationStateKey = "worktree_mapping_publication_revisio
 // syncProjectIdentityObservations: one transaction, archive-scoped full
 // rebuilds, tombstoned deltas, and a cursor that advances only after commit.
 func (s *Sync) syncWorktreeMappings(ctx context.Context, force bool) error {
+	// Worktree mappings are archive-scoped configuration, not project-scoped
+	// data. Dynamic rules do not name a project, and filtered pushes share the
+	// same archive key in PostgreSQL, so a partial publication could either
+	// disclose out-of-scope paths or clobber another filter's rules.
+	if s.isFiltered() {
+		return nil
+	}
+
 	revision, err := s.local.WorktreeMappingPublicationRevision(ctx)
 	if err != nil {
 		return err

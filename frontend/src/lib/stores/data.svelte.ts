@@ -10,6 +10,10 @@ import { LatestRead } from "../utils/latest-read.js";
 
 export type DataView = "inventory" | "rules";
 
+function rowHasProjectKey(row: DbProjectInventoryRow, key: string): boolean {
+  return row.project_key === key || (row.project_keys ?? []).includes(key);
+}
+
 class DataStore {
   inventory: DbProjectInventory | null = $state(null);
   loading: boolean = $state(false);
@@ -28,7 +32,7 @@ class DataStore {
   get selectedRow(): DbProjectInventoryRow | null {
     if (!this.selectedProjectKey || !this.inventory) return null;
     const rows = (this.inventory.projects ?? []) as DbProjectInventoryRow[];
-    return rows.find((row) => row.project_key === this.selectedProjectKey) ?? null;
+    return rows.find((row) => rowHasProjectKey(row, this.selectedProjectKey)) ?? null;
   }
 
   /** True once the inventory has loaded, a key is selected, but no row matches it. */
@@ -175,7 +179,7 @@ class DataStore {
     if (!ok) return false;
     if (this.selectedProjectKey !== originalKey) return true;
     const rows = (this.inventory?.projects ?? []) as DbProjectInventoryRow[];
-    if (rows.some((row) => row.project_key === originalKey)) return true;
+    if (rows.some((row) => rowHasProjectKey(row, originalKey))) return true;
     const target = rows.find((row) => row.label === appliedTargetLabel);
     this.selectedProjectKey = target ? target.project_key : "";
     this.writeUrl();

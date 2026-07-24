@@ -4126,7 +4126,7 @@ func TestProjectIdentityBulkWriteMappingPreservesParserProjectSnapshot(
 	require.NoError(t, err, "ListProjectIdentityObservations")
 	require.Len(t, observations, 1)
 	assert.Equal(t, "canonical_app", observations[0].Project)
-	assert.Equal(t, cwd, observations[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
 
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(
 		context.Background(),
@@ -4135,7 +4135,7 @@ func TestProjectIdentityBulkWriteMappingPreservesParserProjectSnapshot(
 	require.Len(t, snapshots, 1)
 	assert.Equal(t, "mapped-bulk-identity", snapshots[0].SessionID)
 	assert.Equal(t, "feature_login", snapshots[0].Project)
-	assert.Equal(t, cwd, snapshots[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(cwd), snapshots[0].RootPath)
 }
 
 func TestProjectIdentityFullSessionWriteMappingPreservesParserProjectSnapshot(
@@ -4181,7 +4181,7 @@ func TestProjectIdentityFullSessionWriteMappingPreservesParserProjectSnapshot(
 	require.NoError(t, err, "ListProjectIdentityObservations")
 	require.Len(t, observations, 1)
 	assert.Equal(t, "canonical_app", observations[0].Project)
-	assert.Equal(t, cwd, observations[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
 
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(
 		context.Background(),
@@ -4190,7 +4190,7 @@ func TestProjectIdentityFullSessionWriteMappingPreservesParserProjectSnapshot(
 	require.Len(t, snapshots, 1)
 	assert.Equal(t, "mapped-full-identity", snapshots[0].SessionID)
 	assert.Equal(t, "feature_login", snapshots[0].Project)
-	assert.Equal(t, cwd, snapshots[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(cwd), snapshots[0].RootPath)
 }
 
 func TestProjectIdentityMappedWriteWithEmptyParserProjectOmitsSnapshot(
@@ -4245,7 +4245,7 @@ func TestProjectIdentityMappedWriteWithEmptyParserProjectOmitsSnapshot(
 			require.NoError(t, err, "ListProjectIdentityObservations")
 			require.Len(t, observations, 1)
 			assert.Equal(t, "canonical_app", observations[0].Project)
-			assert.Equal(t, cwd, observations[0].RootPath)
+			assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
 
 			snapshots, err := database.ListSessionProjectIdentitySnapshots(
 				context.Background(),
@@ -4337,7 +4337,7 @@ func TestProjectIdentityEmptySourceReparsePreservesExistingSnapshot(
 			require.NoError(t, err, "ListProjectIdentityObservations")
 			require.Len(t, observations, 1)
 			assert.Equal(t, "canonical_app", observations[0].Project)
-			assert.Equal(t, cwd, observations[0].RootPath)
+			assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
 
 			snapshots, err := database.ListSessionProjectIdentitySnapshots(
 				context.Background(),
@@ -4346,7 +4346,7 @@ func TestProjectIdentityEmptySourceReparsePreservesExistingSnapshot(
 			require.Len(t, snapshots, 1)
 			assert.Equal(t, "mapped-reparse-"+tt.name, snapshots[0].SessionID)
 			assert.Equal(t, tt.sourceProject, snapshots[0].Project)
-			assert.Equal(t, cwd, snapshots[0].RootPath)
+			assert.Equal(t, filepath.ToSlash(cwd), snapshots[0].RootPath)
 		})
 	}
 }
@@ -4406,7 +4406,7 @@ func TestProjectIdentityExplicitEmptyDeleteReinsertClearsNewFallback(
 	require.NoError(t, err, "ListProjectIdentityObservations")
 	require.Len(t, observations, 1)
 	assert.Equal(t, "canonical_app", observations[0].Project)
-	assert.Equal(t, cwd, observations[0].RootPath)
+	assert.Equal(t, filepath.ToSlash(cwd), observations[0].RootPath)
 
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(
 		context.Background(),

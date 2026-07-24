@@ -42,12 +42,21 @@ func (s *Store) ListArchiveWorktreeCandidates(
 		return nil, err
 	}
 
+	validKey := false
+	for project := range labels {
+		if projects[project].ProjectKey == request.ProjectKey {
+			validKey = true
+			break
+		}
+	}
+	if !validKey {
+		return []db.WorktreeReclassificationCandidate{}, nil
+	}
+
 	selectedIDs := make([]string, 0, len(sessions))
 	selectedProjects := make(map[string]struct{})
 	for _, session := range sessions {
-		entry := projects[session.project]
-		if export.SafeProjectDisplayLabel(session.project) != request.ProjectLabel ||
-			entry.ProjectKey != request.ProjectKey {
+		if export.SafeProjectDisplayLabel(session.project) != request.ProjectLabel {
 			continue
 		}
 		selectedIDs = append(selectedIDs, session.id)
@@ -66,18 +75,13 @@ type archiveCandidateSessionRef struct {
 	id, project string
 }
 
-// archiveWorktreeCandidateSessions returns every visible session (deleted_at
-// IS NULL, message_count > 0) across every source archive mirrored into
-// this store, with no date bound and no relationship-type exclusion --
-// reproducing internal/db.archiveWorktreeCandidateSessions's SQLite
-// predicate, which is what AnalyticsFilter{IncludeSubagents: true,
-// IncludeForks: true}.buildWhereWithDate("", false, "id") reduces to once
-// its relationship-type clause becomes the no-op "1=1".
+// archiveWorktreeCandidateSessions returns every visible session across every
+// source archive, with no date, message-count, or relationship restriction.
 func (s *Store) archiveWorktreeCandidateSessions(
 	ctx context.Context,
 ) ([]archiveCandidateSessionRef, error) {
 	rows, err := s.queryContext(ctx,
-		`SELECT id, project FROM sessions WHERE deleted_at IS NULL AND message_count > 0`)
+		`SELECT id, project FROM sessions WHERE deleted_at IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb archive worktree candidate sessions: %w", err)
 	}

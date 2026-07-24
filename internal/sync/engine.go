@@ -11126,17 +11126,9 @@ func (e *Engine) writeIncremental(
 		)
 	}
 
-	if err := e.applyWorktreeMappingToSingleSession(
-		inc.sessionID,
-	); err != nil {
-		return err
-	}
-	persisted, err := e.db.GetSession(context.Background(), inc.sessionID)
+	persisted, err := e.applyWorktreeMappingToSingleSession(inc.sessionID)
 	if err != nil {
-		return fmt.Errorf(
-			"reload incrementally written session %s: %w",
-			inc.sessionID, err,
-		)
+		return err
 	}
 	identitySession := db.Session{
 		ID:      inc.sessionID,
@@ -12575,27 +12567,36 @@ func (e *Engine) SyncSingleSessionContext(
 
 func (e *Engine) applyWorktreeMappingToSingleSession(
 	sessionID string,
-) error {
+) (*db.Session, error) {
 	ctx := context.Background()
 	sess, err := e.db.GetSession(ctx, sessionID)
 	if err != nil || sess == nil {
-		return err
+		return sess, err
 	}
 
 	machine := sess.Machine
 	if machine == "" {
 		machine = e.machine
 	}
-	_, err = e.db.ApplyWorktreeProjectMappingToSessionFromSync(
+	updated, err := e.db.ApplyWorktreeProjectMappingToSessionFromSync(
 		ctx, machine, sess.ID, sess.Cwd, sess.Project,
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"apply worktree mapping to session %s: %w",
 			sessionID, err,
 		)
 	}
-	return nil
+	if !updated {
+		return sess, nil
+	}
+	sess, err = e.db.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"reload mapped session %s: %w", sessionID, err,
+		)
+	}
+	return sess, nil
 }
 
 // filterShadowedLegacyKiroFiles drops discovered legacy Kiro JSONL sources

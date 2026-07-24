@@ -1993,8 +1993,7 @@ func (s *Sync) pushSession(
 				$49, $50,
 				$51, $52, $53, $54, $55, $56, $57, $58, $59, $60,
 				$61, $62,
-				$62, $63,
-				$64,
+				$63, $64,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1

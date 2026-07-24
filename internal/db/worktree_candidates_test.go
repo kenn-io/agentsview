@@ -82,15 +82,12 @@ func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 		ProjectKey:   projects[clickedRaw].ProjectKey,
 	})
 	require.NoError(t, err)
-	require.Len(t, candidates, 1)
-	// A single-session snapshot group has no sibling cwd to intersect
-	// against, so the longest-common-directory-prefix logic in
-	// candidateFromGroup returns the session's own cwd unchanged rather than
-	// the snapshot's resolved worktree root.
-	assert.Equal(t, "/srv/worktrees/repository/feature/cmd", candidates[0].SuggestedPrefix)
+	require.Len(t, candidates, 2)
+	assert.Equal(t, "/srv/worktrees/other/main", candidates[0].SuggestedPrefix)
+	assert.Equal(t, "/srv/worktrees/repository/feature/cmd",
+		candidates[1].SuggestedPrefix)
 	assert.Equal(t, 1, candidates[0].ContributingSessions)
-	require.Len(t, candidates[0].Examples, 1)
-	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
+	assert.Equal(t, 1, candidates[1].ContributingSessions)
 }
 
 func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
@@ -180,6 +177,28 @@ func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *test
 	assert.Equal(t, 2, candidates[0].ContributingSessions)
 }
 
+func TestListArchiveWorktreeCandidatesIncludesZeroMessageSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	const raw = "empty-project"
+	seedCandidateSession(t, d, "empty", raw, "host-a.example",
+		"/srv/worktrees/empty", "2025-06-02T10:00:00Z")
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions SET message_count = 0 WHERE id = 'empty'`)
+	require.NoError(t, err)
+	projects, err := d.BuildProjectIdentityMap(ctx, []string{raw})
+	require.NoError(t, err)
+
+	candidates, err := d.ListArchiveWorktreeCandidates(ctx,
+		ArchiveWorktreeCandidateRequest{
+			ProjectLabel: raw,
+			ProjectKey:   projects[raw].ProjectKey,
+		})
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
+}
+
 func TestListArchiveWorktreeCandidatesManyCollidingRawLabels(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -205,12 +224,12 @@ func TestListArchiveWorktreeCandidatesManyCollidingRawLabels(t *testing.T) {
 	})
 	require.NoError(t, err,
 		"colliding raw labels must not exhaust SQLite bind variables")
-	require.Len(t, candidates, 1)
+	require.Len(t, candidates, 2)
 	assert.Equal(t, 1, candidates[0].ContributingSessions)
-	require.Len(t, candidates[0].Examples, 1)
-	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
 	assert.Equal(t, "/srv/worktrees/repository/feature/cmd",
 		candidates[0].SuggestedPrefix)
+	assert.Equal(t, 33000, candidates[1].ContributingSessions)
+	assert.Equal(t, "unavailable", candidates[1].EvidenceKind)
 }
 
 // seedDistinctProjectSessions batch-inserts n visible sessions, each under

@@ -5751,8 +5751,10 @@ func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
 	for _, m := range got {
 		projects[m.PathPrefix] = m.Project
 	}
-	require.Equal(t, "src_repo", projects[srcPrefix], "source mapping project")
-	require.Equal(t, "src_conflict", projects[dstPrefix], "destination mapping project")
+	require.Equal(t, "src_repo", projects[normalizedMappingPath(srcPrefix)],
+		"source mapping project")
+	require.Equal(t, "src_conflict", projects[normalizedMappingPath(dstPrefix)],
+		"destination mapping project")
 }
 
 func TestCopySessionMetadataPreservesClears(t *testing.T) {
@@ -7822,6 +7824,45 @@ func TestCopySessionMetadataPreservesFirstConclusiveSessionSnapshot(t *testing.T
 	requireNoError(t, err, "list snapshots")
 	assert.Equal(t, "https://github.com/acme/app.git",
 		snapshots["session-a"].GitRemote)
+}
+
+func TestCopySessionMetadataRejectsMappedSnapshotFromDataVersion70(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "session-a", Project: "mapped-target", Machine: "host", Agent: "codex",
+	}), "insert old mapped session")
+	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "mapped-target", Machine: "host",
+			RootPath: "/repo/app", GitRemote: "https://example.com/acme/app.git",
+			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert stale mapped snapshot")
+	_, err = oldDB.rawWriter().Exec("PRAGMA user_version = 70")
+	requireNoError(t, err, "set source data version")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "session-a", Project: "mapped-target", Machine: "host", Agent: "codex",
+	}), "insert fresh session")
+	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "parser-source", Machine: "host",
+			RootPath: "/repo/app", GitRemote: "https://example.com/acme/app.git",
+			ObservedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert fresh parser snapshot")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+	snapshots, err := fresh.listSessionProjectIdentitySnapshots(
+		ctx, []string{"session-a"},
+	)
+	requireNoError(t, err, "list snapshots")
+	require.Contains(t, snapshots, "session-a")
+	assert.Equal(t, "parser-source", snapshots["session-a"].Project)
 }
 
 func TestCopySessionMetadataPreservesHistoricalUnknownSessionSnapshot(t *testing.T) {

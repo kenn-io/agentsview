@@ -11,6 +11,7 @@ export type DbProjectInventoryRow = {
   last_activity?: string;
   machines: number;
   project_key: string;
+  project_keys?: any[] | null;
   recorded_as_original: boolean;
   sessions: number;
 };

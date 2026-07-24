@@ -287,59 +287,9 @@ func evaluateWorktreeMappingsTx(
 	scope *WorktreeProjectMapping,
 	sessionID string,
 ) (worktreeReclassificationEvaluation, error) {
-	query := `
-		SELECT id, project, cwd, file_path
-		FROM sessions
-		WHERE machine = ? AND deleted_at IS NULL
-		ORDER BY id`
-	args := []any{machine}
-	if sessionID != "" {
-		query = `
-			SELECT id, project, cwd, file_path
-			FROM sessions
-			WHERE machine = ? AND deleted_at IS NULL
-				AND (id = ? OR (
-					file_path IS NOT NULL AND file_path != ''
-					AND file_path = (
-						SELECT file_path FROM sessions
-						WHERE machine = ? AND id = ? AND deleted_at IS NULL
-					)
-				))
-			ORDER BY id`
-		args = []any{machine, sessionID, machine, sessionID}
-	}
-	rows, err := tx.QueryContext(ctx, query, args...)
+	sessions, err := loadWorktreeMappingSessionsTx(ctx, tx, machine, sessionID)
 	if err != nil {
-		return worktreeReclassificationEvaluation{}, fmt.Errorf(
-			"querying sessions for worktree mapping evaluation: %w", err,
-		)
-	}
-	var sessions []worktreeMappingSessionRow
-	for rows.Next() {
-		var row worktreeMappingSessionRow
-		var filePath sql.NullString
-		row.machine = machine
-		if err := rows.Scan(&row.id, &row.project, &row.cwd, &filePath); err != nil {
-			rows.Close()
-			return worktreeReclassificationEvaluation{}, fmt.Errorf(
-				"scanning session for worktree mapping evaluation: %w", err,
-			)
-		}
-		if filePath.Valid {
-			row.filePath = filePath.String
-		}
-		sessions = append(sessions, row)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return worktreeReclassificationEvaluation{}, fmt.Errorf(
-			"iterating sessions for worktree mapping evaluation: %w", err,
-		)
-	}
-	if err := rows.Close(); err != nil {
-		return worktreeReclassificationEvaluation{}, fmt.Errorf(
-			"closing worktree mapping evaluation rows: %w", err,
-		)
+		return worktreeReclassificationEvaluation{}, err
 	}
 
 	applyWorktreeMappingMatchCwdFromSiblings(sessions,
@@ -389,6 +339,69 @@ func evaluateWorktreeMappingsTx(
 	return evaluation, nil
 }
 
+func loadWorktreeMappingSessionsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	machine string,
+	sessionID string,
+) ([]worktreeMappingSessionRow, error) {
+	query := `
+		SELECT id, project, cwd, file_path
+		FROM sessions
+		WHERE machine = ? AND deleted_at IS NULL
+		ORDER BY id`
+	args := []any{machine}
+	if sessionID != "" {
+		query = `
+			SELECT id, project, cwd, file_path
+			FROM sessions
+			WHERE machine = ? AND deleted_at IS NULL
+				AND (id = ? OR (
+					file_path IS NOT NULL AND file_path != ''
+					AND file_path = (
+						SELECT file_path FROM sessions
+						WHERE machine = ? AND id = ? AND deleted_at IS NULL
+					)
+				))
+			ORDER BY id`
+		args = []any{machine, sessionID, machine, sessionID}
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"querying sessions for worktree mapping evaluation: %w", err,
+		)
+	}
+	var sessions []worktreeMappingSessionRow
+	for rows.Next() {
+		var row worktreeMappingSessionRow
+		var filePath sql.NullString
+		row.machine = machine
+		if err := rows.Scan(&row.id, &row.project, &row.cwd, &filePath); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf(
+				"scanning session for worktree mapping evaluation: %w", err,
+			)
+		}
+		if filePath.Valid {
+			row.filePath = filePath.String
+		}
+		sessions = append(sessions, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf(
+			"iterating sessions for worktree mapping evaluation: %w", err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf(
+			"closing worktree mapping evaluation rows: %w", err,
+		)
+	}
+	return sessions, nil
+}
+
 func worktreeReclassificationPreviewFromEvaluation(
 	token string,
 	normalizedProject string,
@@ -428,7 +441,8 @@ func worktreeMappingSetToken(mappings []WorktreeProjectMapping) string {
 		fields := []string{
 			strconv.FormatInt(mapping.ID, 10), mapping.Machine,
 			normalizedMappingPath(mapping.PathPrefix), mapping.Layout,
-			mapping.Project, strconv.FormatBool(mapping.Enabled), mapping.UpdatedAt,
+			mapping.Project, mapping.OriginalProject,
+			strconv.FormatBool(mapping.Enabled), mapping.UpdatedAt,
 		}
 		for _, field := range fields {
 			_, _ = fmt.Fprintf(hash, "%d:%s", len(field), field)
@@ -499,6 +513,9 @@ func upsertWorktreeReclassificationMappingTx(
 			draft.OriginalProject, enabled, draft.ID, draft.Machine,
 		)
 		if err != nil {
+			if isSQLiteUniqueConstraint(err) {
+				return WorktreeProjectMapping{}, ErrWorktreeMappingDuplicate
+			}
 			return WorktreeProjectMapping{}, fmt.Errorf(
 				"updating worktree reclassification mapping: %w", err,
 			)

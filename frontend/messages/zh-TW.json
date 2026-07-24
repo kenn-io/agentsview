@@ -890,7 +890,7 @@
   "data_reclassify_original": "原顯示名稱：{project}",
   "data_reclassify_candidates_loading": "正在尋找工作樹…",
   "data_reclassify_candidates_failed": "無法尋找工作樹",
-  "data_reclassify_no_candidates": "在所選活動檢視中找不到此項目的工作樹路徑。",
+  "data_reclassify_no_candidates": "在封存中找不到此專案的工作樹路徑。",
   "data_reclassify_choose_worktree": "選擇工作樹",
   "data_reclassify_candidate_sessions": [
     { "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"], "selectors": ["countPlural"], "match": { "countPlural=other": "{countNumber} 個工作階段" } }
