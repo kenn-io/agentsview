@@ -386,6 +386,23 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 }
 
 func TestParseClaudeSession_QueuedCommand(t *testing.T) {
+	t.Run("carries top-level promptSource when present", func(t *testing.T) {
+		queued := `{"type":"attachment","timestamp":"` + tsZeroS2 + `",` +
+			`"promptSource":"queued","attachment":{"type":"queued_command",` +
+			`"commandMode":"prompt","prompt":"also do X"}}`
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("first request", tsZero),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "starting work"},
+			}, tsZeroS1),
+			queued,
+		)
+		_, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 3)
+		assert.Equal(t, "queued_command", msgs[2].SourceSubtype)
+		assert.Equal(t, "queued", msgs[2].PromptSource)
+	})
+
 	t.Run("surfaces as user message between turns", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeUserJSON("first request", tsZero),

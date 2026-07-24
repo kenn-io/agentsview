@@ -55,8 +55,9 @@ type dagEntry struct {
 // of band and splice them into the message stream by timestamp
 // after DAG processing completes.
 type claudeQueuedCommand struct {
-	prompt    string
-	timestamp time.Time
+	prompt       string
+	promptSource string
+	timestamp    time.Time
 }
 
 // claudeParseWithExclusions parses a Claude Code JSONL session file
@@ -1460,8 +1461,9 @@ func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
 		return claudeQueuedCommand{}, false
 	}
 	return claudeQueuedCommand{
-		prompt:    prompt,
-		timestamp: extractTimestamp(line),
+		prompt:       prompt,
+		promptSource: gjson.Get(line, "promptSource").Str,
+		timestamp:    extractTimestamp(line),
 	}, true
 }
 
@@ -1597,6 +1599,7 @@ func queuedCommandMessage(
 			ContentLength: len(q.prompt),
 			SourceType:    "system",
 			SourceSubtype: subtype,
+			PromptSource:  q.promptSource,
 		}
 	}
 	return ParsedMessage{
@@ -1606,6 +1609,7 @@ func queuedCommandMessage(
 		ContentLength: len(q.prompt),
 		SourceType:    "user",
 		SourceSubtype: "queued_command",
+		PromptSource:  q.promptSource,
 	}
 }
 
