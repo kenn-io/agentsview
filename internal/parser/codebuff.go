@@ -568,10 +568,9 @@ func parseCodebuffAIMessage(
 			if tc != nil {
 				toolCalls = append(toolCalls, *tc)
 				if output := block.Get("output"); output.Exists() {
-					quoted, _ := json.Marshal(output.Raw)
 					toolResults = append(toolResults, ParsedToolResult{
 						ToolUseID:     tc.ToolUseID,
-						ContentRaw:    string(quoted),
+						ContentRaw:    output.Raw,
 						ContentLength: len(output.Raw),
 					})
 				}

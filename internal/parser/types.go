@@ -832,6 +832,10 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".config/manicode/projects"},
 		IDPrefix:    "codebuff:",
 		FileBased:   true,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
+		},
 	},
 }
 
@@ -941,6 +945,14 @@ func StripHostPrefix(id string) (host, rawID string) {
 // stripped before matching.
 func AgentByPrefix(sessionID string) (AgentDef, bool) {
 	_, rawID := StripHostPrefix(sessionID)
+	// Freebuff shares the Codebuff provider but emits sessions with the
+	// "freebuff:" prefix. Map it to the Codebuff definition so prefix
+	// lookup, single-session resync, and reconciliation work correctly.
+	if strings.HasPrefix(rawID, string(AgentFreebuff)+":") {
+		if def, ok := AgentByType(AgentCodebuff); ok {
+			return def, true
+		}
+	}
 	for _, def := range Registry {
 		if def.IDPrefix != "" &&
 			strings.HasPrefix(rawID, def.IDPrefix) {
