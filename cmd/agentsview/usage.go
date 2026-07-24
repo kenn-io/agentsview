@@ -469,7 +469,8 @@ func refreshPricingFromSourcesWith(
 ) error {
 	fetched := make([][]pricing.ModelPricing, 0, len(sources))
 	var openRouterAliases []string
-	openRouterFetched := false
+	reconcileAliases := false
+	earlierSourceFailed := false
 	for _, src := range sources {
 		prices, err := src.Fetch()
 		if err != nil {
@@ -477,14 +478,25 @@ func refreshPricingFromSourcesWith(
 				"pricing refresh: %s fetch failed: %v",
 				src.Name, err,
 			)
+			earlierSourceFailed = true
 			continue
 		}
 		if src.Name == "openrouter" {
-			prices = pricing.SuppressShadowedOpenRouterAliases(
-				fetched, prices,
-			)
-			openRouterFetched = true
-			openRouterAliases = pricing.OpenRouterAliasPatterns(prices)
+			if earlierSourceFailed {
+				// A higher-priority source failed, so its persisted
+				// rows may still be authoritative but are invisible
+				// to suppression. Refresh qualified OpenRouter rows
+				// only and leave the stored alias set and its
+				// metadata untouched until a fully successful
+				// refresh can re-validate alias emission.
+				prices = pricing.DropOpenRouterAliases(prices)
+			} else {
+				prices = pricing.SuppressShadowedOpenRouterAliases(
+					fetched, prices,
+				)
+				reconcileAliases = true
+				openRouterAliases = pricing.OpenRouterAliasPatterns(prices)
+			}
 		}
 		fetched = append(fetched, prices)
 		log.Printf(
@@ -505,7 +517,7 @@ func refreshPricingFromSourcesWith(
 		flat = append(flat, p)
 	}
 
-	if !openRouterFetched {
+	if !reconcileAliases {
 		if err := upsertPricing(database, flat); err != nil {
 			return fmt.Errorf("upsert failed: %w", err)
 		}

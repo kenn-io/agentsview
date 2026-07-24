@@ -1599,6 +1599,78 @@ func TestRefreshPricingFromSourcesSuppressesLiteLLMShadowedAliases(t *testing.T)
 		"alias metadata reflects only stored aliases")
 }
 
+// TestRefreshPricingFromSourcesSkipsAliasChangesWhenLiteLLMFails proves a
+// failed higher-priority fetch freezes the stored alias set: no new
+// OpenRouter aliases are written (they cannot be validated against the
+// invisible persisted LiteLLM rows) and previously stored aliases and
+// their metadata survive untouched, while qualified rows still refresh.
+func TestRefreshPricingFromSourcesSkipsAliasChangesWhenLiteLLMFails(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	litellmErr := error(nil)
+	openRouterRows := []pricing.ModelPricing{
+		{ModelPattern: "acme/known", InputPerMTok: 1, OutputPerMTok: 1},
+		{ModelPattern: "known", InputPerMTok: 1, OutputPerMTok: 1},
+	}
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return nil, litellmErr
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return openRouterRows, nil
+			},
+		},
+	}
+
+	// Healthy refresh stores the alias and its provenance metadata.
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+	stored, err := database.GetModelPricing("known")
+	require.NoError(t, err)
+	require.NotNil(t, stored, "alias stored on healthy refresh")
+
+	// LiteLLM outage: OpenRouter grows a new unique suffix and drops the
+	// old one. Neither alias change may be applied.
+	litellmErr = assert.AnError
+	openRouterRows = []pricing.ModelPricing{
+		{ModelPattern: "acme/brand-new", InputPerMTok: 7, OutputPerMTok: 7},
+		{ModelPattern: "brand-new", InputPerMTok: 7, OutputPerMTok: 7},
+	}
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	newAlias, err := database.GetModelPricing("brand-new")
+	require.NoError(t, err)
+	assert.Nil(t, newAlias,
+		"no new alias while higher-priority coverage is unknown")
+	oldAlias, err := database.GetModelPricing("known")
+	require.NoError(t, err)
+	assert.NotNil(t, oldAlias, "existing alias survives the outage")
+	qualified, err := database.GetModelPricing("acme/brand-new")
+	require.NoError(t, err)
+	require.NotNil(t, qualified, "qualified rows still refresh")
+	meta, err := database.GetPricingMeta(pricing.OpenRouterAliasesMetaKey)
+	require.NoError(t, err)
+	assert.Equal(t, `["known"]`, meta,
+		"alias metadata frozen during the outage")
+
+	// Recovery: the next fully successful refresh applies both changes.
+	litellmErr = nil
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+	oldAlias, err = database.GetModelPricing("known")
+	require.NoError(t, err)
+	assert.Nil(t, oldAlias, "stale alias retired after recovery")
+	newAlias, err = database.GetModelPricing("brand-new")
+	require.NoError(t, err)
+	assert.NotNil(t, newAlias, "new alias stored after recovery")
+	meta, err = database.GetPricingMeta(pricing.OpenRouterAliasesMetaKey)
+	require.NoError(t, err)
+	assert.Equal(t, `["brand-new"]`, meta,
+		"alias metadata reconciled after recovery")
+}
+
 // sampleDailyUsageJSON is a full usage summary body with a single day and
 // non-zero totals, shared by the HTTP and daemon usage tests.
 const sampleDailyUsageJSON = `{
