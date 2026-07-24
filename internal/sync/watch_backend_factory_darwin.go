@@ -960,7 +960,11 @@ func (b *darwinWatchBackend) processLifecycle(checkPending bool) {
 			b.rootTransitions.Inc()
 			state.open.Store(true)
 			b.resetRetryLocked(state)
-			releasedPolling = append(releasedPolling, state.plan.Path)
+			for _, obligation := range pollingObligationsForScopes(
+				state.plan.Path, state.plan.Path, state.plan.Scopes,
+			) {
+				releasedPolling = append(releasedPolling, obligation.Key)
+			}
 		}
 		if state.phase == darwinRootActivationCollecting {
 			if b.retryDueLocked(state, now) {
@@ -1515,13 +1519,18 @@ func (b *darwinWatchBackend) processNativeRecoveryHandoff() {
 
 	if pollingOwned && pollingKeyed && release != nil {
 		for _, plan := range releasePlans {
-			key := darwinFallbackPollingObligationKey(plan.path)
-			if err := release(key); err != nil {
-				b.mu.Lock()
-				b.reportErrorLocked(fmt.Errorf("release fallback polling: %w", err))
-				b.scheduleFallbackRetryLocked(time.Now())
-				b.mu.Unlock()
-				return
+			for _, obligation := range pollingObligationsForScopes(
+				darwinFallbackPollingObligationKey(plan.path),
+				plan.path,
+				plan.scopes,
+			) {
+				if err := release(obligation.Key); err != nil {
+					b.mu.Lock()
+					b.reportErrorLocked(fmt.Errorf("release fallback polling: %w", err))
+					b.scheduleFallbackRetryLocked(time.Now())
+					b.mu.Unlock()
+					return
+				}
 			}
 		}
 	}
