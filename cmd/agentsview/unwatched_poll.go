@@ -343,7 +343,9 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 // expands each requested root to the configured dirs above and below it, so a
 // pollable ancestor or descendant of a blocked root would reconcile the
 // deferred scope as an authoritative empty discovery and tombstone its
-// sessions.
+// sessions. Provider-owned candidates only honor blockers from the same
+// provider plus unscoped blockers, because ReconcileProviderRoots cannot
+// expand into another provider's unavailable scope.
 func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
 	selected, _, err := availableUnwatchedPollObligations(
 		context.Background(), obligations, nil,
@@ -409,10 +411,11 @@ func pollUnwatchedRootsOnce(
 			}
 		}
 	}
+	var pollErr error
 	if roots := unwatchedPollRoots(watchRoots); len(roots) > 0 {
 		if err := engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
 			log.Printf("polling unwatched roots: %v", err)
-			return err
+			pollErr = errors.Join(pollErr, err)
 		}
 	}
 	agents := make([]parser.AgentType, 0, len(byAgent))
@@ -427,10 +430,10 @@ func pollUnwatchedRootsOnce(
 		}
 		if err := engine.ReconcileProviderRoots(ctx, agent, roots); err != nil {
 			log.Printf("polling unwatched %s roots: %v", agent, err)
-			return err
+			pollErr = errors.Join(pollErr, err)
 		}
 	}
-	return nil
+	return pollErr
 }
 
 func (c *sharedUnwatchedPollCoordinator) currentPollSnapshot() []pollingObligation {
@@ -464,7 +467,8 @@ func availableUnwatchedPollObligations(
 	obligations []pollingObligation,
 	degradedPoll degradedPollingResolver,
 ) ([]pollingObligation, []pollingObligation, error) {
-	blocked := make(map[string]struct{})
+	blockedGlobal := make(map[string]struct{})
+	blockedByAgent := make(map[parser.AgentType]map[string]struct{})
 	trackedByKey := make(map[string]pollingObligation)
 	selected := make([]pollingObligation, 0, len(obligations))
 	for _, obligation := range obligations {
@@ -475,9 +479,16 @@ func availableUnwatchedPollObligations(
 			}
 		}
 		if probeMissing {
+			target := blockedGlobal
+			if obligation.Agent != "" {
+				if blockedByAgent[obligation.Agent] == nil {
+					blockedByAgent[obligation.Agent] = make(map[string]struct{})
+				}
+				target = blockedByAgent[obligation.Agent]
+			}
 			for _, root := range obligation.Roots {
 				if root != "" {
-					blocked[filepath.Clean(root)] = struct{}{}
+					target[filepath.Clean(root)] = struct{}{}
 				}
 			}
 			continue
@@ -521,7 +532,9 @@ func availableUnwatchedPollObligations(
 	for _, obligation := range selected {
 		roots := make([]string, 0, len(obligation.Roots))
 		for _, root := range obligation.Roots {
-			if !overlapsDeferredScope(filepath.Clean(root), blocked) {
+			if !rootBlockedForObligation(
+				filepath.Clean(root), obligation.Agent, blockedGlobal, blockedByAgent,
+			) {
 				roots = append(roots, root)
 			}
 		}
@@ -548,4 +561,24 @@ func availableUnwatchedPollObligations(
 		}
 	}
 	return filtered, tracked, nil
+}
+
+func rootBlockedForObligation(
+	root string,
+	agent parser.AgentType,
+	blockedGlobal map[string]struct{},
+	blockedByAgent map[parser.AgentType]map[string]struct{},
+) bool {
+	if overlapsDeferredScope(root, blockedGlobal) {
+		return true
+	}
+	if agent == "" {
+		for _, blocked := range blockedByAgent {
+			if overlapsDeferredScope(root, blocked) {
+				return true
+			}
+		}
+		return false
+	}
+	return overlapsDeferredScope(root, blockedByAgent[agent])
 }

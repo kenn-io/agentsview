@@ -86,6 +86,7 @@ func TestPendingOpenCodeRootPreservesProviderOwnershipWhenItBecomesSQLite(t *tes
 		}},
 		[]agentsync.RecursiveWatchResult{{Watched: 1}},
 		[]string{root},
+		nil,
 	)
 	require.Len(t, got, 1)
 	assert.Equal(t, agentsync.PollingObligation{
@@ -1424,6 +1425,7 @@ func TestStartFileWatcherSuppressesPendingPollingWhenLifecycleIsOwned(t *testing
 			MissingRootLifecycleOwned: true,
 		}},
 		got,
+		nil,
 	), "owned missing roots must not schedule authoritative polling")
 }
 
@@ -1636,9 +1638,9 @@ func TestWatchPollingObligationsMissingRootLifecycleCardinality(t *testing.T) {
 				unwatched = append(unwatched, syncDir)
 			}
 
-			assert.Empty(t, watchPollingObligations(roots, owned, nil),
+			assert.Empty(t, watchPollingObligations(roots, owned, nil, nil),
 				"native lifecycle work must remain independent of configured archive cardinality")
-			assert.Len(t, watchPollingObligations(roots, portable, unwatched), rootCount,
+			assert.Len(t, watchPollingObligations(roots, portable, unwatched, nil), rootCount,
 				"portable backends retain one obligation per uncovered missing root")
 		})
 	}
@@ -1667,7 +1669,7 @@ func TestOpenCodeFormatMissingRootsUseNativeLifecycleWithoutPolling(t *testing.T
 			}
 			unwatched = accountRegisteredWatchRoots(unwatched, roots, results)
 
-			assert.Empty(t, watchPollingObligations(roots, results, unwatched),
+			assert.Empty(t, watchPollingObligations(roots, results, unwatched, nil),
 				"absent OpenCode-format providers must not add archive-scale polling")
 		})
 	}
@@ -1693,6 +1695,7 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 		roots,
 		[]agentsync.RecursiveWatchResult{{Watched: 1}, {Watched: 1}},
 		[]string{shared},
+		nil,
 	)
 
 	assert.Equal(t, []agentsync.PollingObligation{
@@ -1700,7 +1703,10 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 			Key: pendingPath, Agent: parser.AgentDevin,
 			Roots: []string{shared}, Probe: pendingPath,
 		},
-		{Key: "persistent:" + shared, Roots: []string{shared}, Probe: shared},
+		{
+			Key: "persistent:" + shared, Agent: parser.AgentDevin,
+			Roots: []string{shared}, Probe: shared,
+		},
 	}, got)
 }
 
@@ -1718,6 +1724,7 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 		roots,
 		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
 		[]string{syncDir},
+		nil,
 	)
 
 	require.Len(t, got, 1)
@@ -1746,6 +1753,7 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 		roots,
 		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
 		[]string{openCodeDir, unsupportedDir},
+		nil,
 	)
 
 	require.Len(t, got, 2)
@@ -1782,6 +1790,7 @@ func TestWatchPollingObligationsSharedDirWithUnsupportedScopeDisablesProbe(t *te
 		roots,
 		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
 		[]string{sharedDir},
+		nil,
 	)
 
 	require.Len(t, got, 1)
@@ -1804,11 +1813,12 @@ func TestSymlinkPollingObligationsGateDirsOnTargetAvailability(t *testing.T) {
 	symRoot := filepath.Join(parent, "sessions")
 	requireSymlinkOrSkip(t, target, symRoot)
 
-	obligations := symlinkPollingObligations(map[string][]string{
-		symRoot: {parent},
+	obligations := symlinkPollingObligations(map[string][]watchScope{
+		symRoot: {{agent: parser.AgentOpenCode, syncDir: parent}},
 	})
 	require.Equal(t, []agentsync.PollingObligation{{
-		Key: "symlink:" + symRoot, Roots: []string{parent}, Probe: symRoot,
+		Key: "symlink:" + symRoot, Agent: parser.AgentOpenCode,
+		Roots: []string{parent}, Probe: symRoot,
 	}}, obligations)
 
 	combined := []pollingObligation{
@@ -1821,6 +1831,22 @@ func TestSymlinkPollingObligationsGateDirsOnTargetAvailability(t *testing.T) {
 	require.NoError(t, os.RemoveAll(target))
 	assert.Empty(t, availableUnwatchedPollRoots(combined),
 		"a broken symlink target must defer the dir even though the dir itself exists")
+}
+
+func TestWatchPollingObligationsSkipGenericPersistentForSymlinkGatedDir(t *testing.T) {
+	parent := t.TempDir()
+	symRoot := filepath.Join(parent, "sessions")
+
+	got := watchPollingObligations(
+		nil,
+		nil,
+		[]string{parent},
+		map[string][]watchScope{symRoot: {{
+			agent: parser.AgentOpenCode, syncDir: parent,
+		}}},
+	)
+
+	assert.Empty(t, got)
 }
 
 // TestWatcherUnavailableFallbackDefersBrokenSymlinkScope guards the
@@ -1864,7 +1890,9 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 		options,
 		nil,
 		[]string{parent, other},
-		map[string][]string{symRoot: {parent}},
+		map[string][]watchScope{symRoot: {{
+			agent: parser.AgentOpenCode, syncDir: parent,
+		}}},
 	))
 
 	bothDirs := []string{parent, other}
@@ -2123,6 +2151,138 @@ func TestWatcherUnavailableFallbackDoesNotBypassUnchangedDegradedProbe(t *testin
 	assert.Never(t, func() bool { return len(syncer.snapshot()) > 1 },
 		200*time.Millisecond, 10*time.Millisecond,
 		"unchanged degraded-probe state must suppress the construction-failure fallback too")
+}
+
+func TestRegisterWatcherUnavailableObligationsRetainsCoverageOnScopedRegistrationError(t *testing.T) {
+	parent := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	other := requireExistingPollRoot(t, t.TempDir(), "other")
+	var coverageRoots []string
+	options := agentsync.WatcherOptions{
+		OnCoverageDegraded: func(roots []string) error {
+			coverageRoots = append([]string(nil), roots...)
+			return nil
+		},
+		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
+			return errors.New("register failed")
+		},
+	}
+	roots := []watchRoot{{
+		path:      parent,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: parent,
+		}},
+	}}
+
+	err := registerWatcherUnavailableObligations(
+		options, roots, []string{parent, other}, nil,
+	)
+
+	require.ErrorContains(t, err, "register failed")
+	assert.Nil(t, coverageRoots)
+}
+
+func TestRegisterWatcherUnavailableObligationsDoesNotFallbackAcrossFailedSymlinkGate(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(t.TempDir(), "sessions-target")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	symRoot := filepath.Join(parent, "sessions")
+	requireSymlinkOrSkip(t, target, symRoot)
+	other := requireExistingPollRoot(t, t.TempDir(), "other")
+
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	options := agentsync.WatcherOptions{
+		OnCoverageDegraded: func(roots []string) error {
+			if len(roots) == 0 {
+				return nil
+			}
+			return coordinator.AddObligation(pollingObligation{
+				Key: "watcher-fallback", Roots: roots,
+			})
+		},
+		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
+			if strings.HasPrefix(obligation.Key, "symlink:") {
+				return errors.New("register failed")
+			}
+			return coordinator.AddObligation(pollingObligation{
+				Key:   obligation.Key,
+				Agent: obligation.Agent,
+				Roots: obligation.Roots,
+				Probe: obligation.Probe,
+			})
+		},
+	}
+
+	require.ErrorContains(t, registerWatcherUnavailableObligations(
+		options,
+		nil,
+		[]string{parent, other},
+		map[string][]watchScope{symRoot: {{
+			agent: parser.AgentOpenCode, syncDir: parent,
+		}}},
+	), "register failed")
+
+	coordinator.requestPoll()
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{other}}, syncer.snapshot(),
+		"a failed symlink gate must not reintroduce the gated dir through generic fallback")
+}
+
+func TestRegisterWatcherUnavailableObligationsDoesNotDuplicateSuccessfulOwnedRootsAfterPartialFailure(t *testing.T) {
+	parent := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	other := requireExistingPollRoot(t, t.TempDir(), "other")
+
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	options := agentsync.WatcherOptions{
+		OnCoverageDegraded: func(roots []string) error {
+			if len(roots) == 0 {
+				return nil
+			}
+			return coordinator.AddObligation(pollingObligation{
+				Key: "watcher-fallback", Roots: roots,
+			})
+		},
+		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
+			if obligation.Key == "persistent:"+other {
+				return errors.New("register failed")
+			}
+			return coordinator.AddObligation(pollingObligation{
+				Key:   obligation.Key,
+				Agent: obligation.Agent,
+				Roots: obligation.Roots,
+				Probe: obligation.Probe,
+			})
+		},
+	}
+	roots := []watchRoot{{
+		path:      parent,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{{
+			agent: parser.AgentOpenCode, syncDir: parent,
+		}},
+	}}
+
+	require.ErrorContains(t, registerWatcherUnavailableObligations(
+		options, roots, []string{parent, other}, nil,
+	), "register failed")
+
+	coordinator.requestPoll()
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{parent}}, syncer.snapshot(),
+		"a partial failure must not add a generic fallback that duplicates the successful provider-owned root")
+	assert.Equal(t, []parser.AgentType{parser.AgentOpenCode}, syncer.agentSnapshot())
 }
 
 func findCollectedWatchRoot(roots []watchRoot, path string) (watchRoot, bool) {

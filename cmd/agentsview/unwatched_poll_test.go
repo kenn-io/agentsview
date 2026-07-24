@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ type recordingUnwatchedPollSyncer struct {
 	agents       []parser.AgentType
 	wake         chan struct{}
 	reconcileErr error
+	errs         []error
 }
 
 type blockingUnwatchedPollSyncer struct {
@@ -151,7 +153,7 @@ func (s *recordingUnwatchedPollSyncer) ReconcileWatchRoots(
 	case s.wake <- struct{}{}:
 	default:
 	}
-	return s.reconcileErr
+	return s.nextErr()
 }
 
 func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
@@ -165,6 +167,20 @@ func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
 	select {
 	case s.wake <- struct{}{}:
 	default:
+	}
+	return s.nextErr()
+}
+
+func (s *recordingUnwatchedPollSyncer) nextErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.errs) == 0 {
+		return s.reconcileErr
+	}
+	err := s.errs[0]
+	s.errs = s.errs[1:]
+	if err != nil {
+		return err
 	}
 	return s.reconcileErr
 }
@@ -353,6 +369,27 @@ func TestUnwatchedPollUsesProviderScopedReconciliationForOwnedRoots(t *testing.T
 		"provider-owned polling must preserve agent scope instead of using generic root expansion")
 }
 
+func TestUnwatchedPollContinuesAfterEarlierProviderFailure(t *testing.T) {
+	claudeRoot := requireExistingPollRoot(t, t.TempDir(), "claude")
+	openCodeRoot := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	syncer := &recordingUnwatchedPollSyncer{
+		wake: make(chan struct{}, 2),
+		errs: []error{errors.New("claude failed"), nil},
+	}
+
+	err := pollUnwatchedRootsOnce(t.Context(), syncer, []pollingObligation{
+		{Key: "claude-root", Agent: parser.AgentClaude, Roots: []string{claudeRoot}},
+		{Key: "opencode-root", Agent: parser.AgentOpenCode, Roots: []string{openCodeRoot}},
+	})
+
+	require.ErrorContains(t, err, "claude failed")
+	assert.Equal(t, [][]string{{claudeRoot}, {openCodeRoot}}, syncer.snapshot())
+	assert.Equal(t,
+		[]parser.AgentType{parser.AgentClaude, parser.AgentOpenCode},
+		syncer.agentSnapshot(),
+		"a later provider-owned group must still poll after an earlier provider group fails")
+}
+
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "provider")
@@ -517,6 +554,44 @@ func TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes(t *testi
 			assert.Equal(t, tc.want, availableUnwatchedPollRoots(tc.obligations))
 		})
 	}
+}
+
+func TestAvailableUnwatchedPollObligationsKeepsDifferentAgentOverlapPollable(t *testing.T) {
+	base := t.TempDir()
+	nested := requireExistingPollRoot(t, base, "nested")
+	selected, tracked, err := availableUnwatchedPollObligations(
+		t.Context(),
+		[]pollingObligation{
+			{
+				Key:   "opencode-root",
+				Agent: parser.AgentOpenCode,
+				Roots: []string{base},
+				Probe: base,
+			},
+			{
+				Key:   "claude-root",
+				Agent: parser.AgentClaude,
+				Roots: []string{nested},
+				Probe: filepath.Join(nested, "missing-probe"),
+			},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Empty(t, tracked)
+	require.Equal(t, []pollingObligation{{
+		Key:   "opencode-root",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{base},
+		Probe: base,
+	}}, selected)
+
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
+	require.NoError(t, pollUnwatchedRootsOnce(t.Context(), syncer, selected))
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{base}}, syncer.snapshot())
+	assert.Equal(t, []parser.AgentType{parser.AgentOpenCode}, syncer.agentSnapshot(),
+		"a missing probe for one provider must not block an overlapping root owned by another provider")
 }
 
 // TestAvailableUnwatchedPollRootsBlocksMixedRelativeAndAbsoluteScopes pins the
