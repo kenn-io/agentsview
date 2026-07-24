@@ -13598,6 +13598,154 @@ func TestIncrementalSync_ClaudeIDEContextOnlyRepairedOnAppend(t *testing.T) {
 		updated.UserMessageCount)
 }
 
+// A Claude session can hold an empty preview for a long time — after
+// an auto-compact the new file starts with a promoted continuation
+// record and can stream assistant work for hours before the next real
+// prompt. Appends without a real prompt must stay on the incremental
+// path so per-event work is bounded by the appended bytes, not the
+// transcript size. The already-consumed prefix is overwritten with
+// garbage after the first sync as a tripwire: the incremental path
+// never re-reads it, while a fall-through to a full parse would parse
+// the garbage, drop the stored continuation row, and change the
+// session counts.
+func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"This session is being continued from a previous "+
+				"conversation that ran out of context.",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "continuation-only.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "continuation-only",
+	)
+	require.NoError(t, err, "GetSessionFull after initial sync")
+	require.Equal(t, 1, full.MessageCount,
+		"initial MessageCount = %d, want 1", full.MessageCount)
+	require.Zero(t, full.UserMessageCount,
+		"initial UserMessageCount = %d, want 0", full.UserMessageCount)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat before corrupting prefix")
+	garbage := strings.Repeat("x", int(info.Size())-1) + "\n"
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for prefix rewrite")
+	_, err = f.WriteAt([]byte(garbage), 0)
+	require.NoError(t, err, "rewrite consumed prefix")
+	require.NoError(t, f.Close(), "close after prefix rewrite")
+
+	// None of these qualify as a first real prompt: injected IDE
+	// context is promoted to a system row, /clear is a
+	// preview-skipped command that cannot become first_message,
+	// and assistant output is not a user turn.
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+			tsZeroS1,
+		),
+		testjsonl.ClaudeUserJSON(
+			"<command-name>/clear</command-name>",
+			"2024-01-01T00:00:02Z",
+		),
+		testjsonl.ClaudeAssistantJSON("still working", tsZeroS5),
+	)
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close(), "close after append")
+
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "continuation-only",
+	)
+	require.NoError(t, err, "GetSessionFull after append")
+	assert.Equal(t, 4, updated.MessageCount,
+		"MessageCount after append = %d, want 4 (a full parse "+
+			"would have re-read the corrupted prefix)",
+		updated.MessageCount)
+	assert.Equal(t, 1, updated.UserMessageCount,
+		"UserMessageCount after append = %d, want 1 (the /clear "+
+			"turn only)",
+		updated.UserMessageCount)
+	if updated.FirstMessage != nil {
+		assert.Equal(t, "", *updated.FirstMessage,
+			"FirstMessage after append = %q, want empty",
+			*updated.FirstMessage)
+	}
+}
+
+// The empty-preview repair must still fire when the first real prompt
+// arrives only after earlier promptless appends were consumed
+// incrementally.
+func TestIncrementalSync_ClaudeEmptyPreviewRepairedOnLaterPrompt(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"This session is being continued from a previous "+
+				"conversation that ran out of context.",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "continuation-late-prompt.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appendLine := func(line string) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err, "open for append")
+		_, err = f.WriteString(line + "\n")
+		require.NoError(t, err, "append")
+		require.NoError(t, f.Close(), "close after append")
+	}
+
+	appendLine(testjsonl.ClaudeUserJSON(
+		"<ide_selection>The user selected package main.</ide_selection>",
+		tsZeroS1,
+	))
+	env.engine.SyncPaths([]string{path})
+
+	mid, err := env.db.GetSessionFull(
+		context.Background(), "continuation-late-prompt",
+	)
+	require.NoError(t, err, "GetSessionFull after IDE append")
+	require.Equal(t, 2, mid.MessageCount,
+		"MessageCount after IDE append = %d, want 2", mid.MessageCount)
+	require.Zero(t, mid.UserMessageCount,
+		"UserMessageCount after IDE append = %d, want 0",
+		mid.UserMessageCount)
+
+	appendLine(testjsonl.ClaudeUserJSON("Explain this code", tsZeroS5))
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "continuation-late-prompt",
+	)
+	require.NoError(t, err, "GetSessionFull after prompt append")
+	require.NotNil(t, updated.FirstMessage,
+		"FirstMessage after prompt append = nil, want %q",
+		"Explain this code")
+	assert.Equal(t, "Explain this code", *updated.FirstMessage,
+		"FirstMessage after prompt append = %q, want %q",
+		*updated.FirstMessage, "Explain this code")
+	assert.Equal(t, 1, updated.UserMessageCount,
+		"UserMessageCount after prompt append = %d, want 1",
+		updated.UserMessageCount)
+	assert.Equal(t, 3, updated.MessageCount,
+		"MessageCount after prompt append = %d, want 3",
+		updated.MessageCount)
+}
+
 // TestIncrementalSync_CodexReemittedPromptDedupedOnAppend covers
 // the case where Codex re-emits the initial prompt verbatim on a
 // continued turn. The duplicate is appended after the first sync,

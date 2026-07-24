@@ -2723,7 +2723,7 @@ func TestIsSkippablePreviewCommand(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := isSkippablePreviewCommand(tc.content)
+			got := IsSkippablePreviewCommand(tc.content)
 			assert.Equal(t, tc.want, got,
 				"content=%q", tc.content)
 		})

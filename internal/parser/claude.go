@@ -2431,7 +2431,7 @@ func isCommandEnvelope(content string) bool {
 	return strings.TrimSpace(stripped) == ""
 }
 
-// isSkippablePreviewCommand returns true when content is a Claude
+// IsSkippablePreviewCommand returns true when content is a Claude
 // Code slash command (e.g. /login, /plan, /roborev-fix). Detection
 // is generic: the trimmed content must start with "/" followed by one
 // or more letters, digits, hyphens, or underscores, then either end
@@ -2439,7 +2439,7 @@ func isCommandEnvelope(content string) bool {
 // because command envelopes normalise to names like /skill-name.
 // File-path references like "/usr/local/bin gives an error" are not
 // skipped because the embedded "/" terminates the match.
-func isSkippablePreviewCommand(content string) bool {
+func IsSkippablePreviewCommand(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if !strings.HasPrefix(trimmed, "/") {
 		return false
@@ -2481,7 +2481,7 @@ func firstMessageAndUserCount(
 		}
 		userCount++
 		if firstMsg == "" &&
-			!isSkippablePreviewCommand(m.Content) {
+			!IsSkippablePreviewCommand(m.Content) {
 			firstMsg = truncate(
 				strings.ReplaceAll(m.Content, "\n", " "), 300,
 			)

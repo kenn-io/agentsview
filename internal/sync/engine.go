@@ -8507,21 +8507,6 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
-	// Claude-only: if the stored preview is empty, the parser has
-	// not seen a real user prompt yet (e.g. a session that opens
-	// with IDE context, /clear, or /effort). Fall back to a full
-	// parse so any real user message appended this sync becomes
-	// first_message.
-	//
-	// Other agents can legitimately have UserMsgCount > 0 with
-	// an empty first_message — for example Codex inserts orphan
-	// subagent notifications as Role=user messages that bypass
-	// firstMessage — so this fall-through is gated on Claude.
-	if agent == parser.AgentClaude &&
-		inc.FirstMessage == "" {
-		return processResult{}, false
-	}
-
 	currentSize := info.Size()
 
 	// A prior sync that stored no message rows has no safe append
@@ -8706,6 +8691,31 @@ func (e *Engine) tryIncrementalJSONL(
 				return processResult{forceReplace: true}, false
 			}
 		}
+	}
+
+	// Claude-only: an empty stored preview means no real user prompt
+	// has been parsed yet (a session that starts with injected IDE
+	// context, a continuation record, /clear, or /effort). When this
+	// chunk carries the first real prompt, fall back to a full parse
+	// so first_message is re-derived from the whole file. Chunks
+	// without one — streamed assistant work after an auto-compact
+	// continuation, or more injected IDE context — stay incremental
+	// so per-event work is bounded by the appended bytes rather than
+	// the transcript size.
+	//
+	// Other agents can legitimately have an empty first_message
+	// alongside real user rows — for example Codex inserts orphan
+	// subagent notifications as Role=user messages that bypass
+	// firstMessage — so this fall-through is gated on Claude.
+	if agent == parser.AgentClaude && inc.FirstMessage == "" &&
+		chunkHasRealUserPrompt(newMsgs) {
+		log.Printf(
+			"incremental %s %s: first real user prompt after "+
+				"empty preview, full parse",
+			agent, file.Path,
+		)
+		lease.Release()
+		return processResult{}, false
 	}
 
 	newUserCount := countUserMsgs(newMsgs)
@@ -11695,6 +11705,25 @@ func postFilterCounts(msgs []db.Message) (total, user int) {
 		}
 	}
 	return len(msgs), user
+}
+
+// chunkHasRealUserPrompt reports whether msgs contains a message the
+// Claude parser would use as first_message (mirroring the firstMsg
+// rule in firstMessageAndUserCount): role user, not system-injected,
+// non-empty content, and not a bare slash command. Promoted system
+// records (IDE context, continuation, stop-hook), tool-result-only
+// rows, and preview-skipped commands like /clear do not qualify —
+// a full parse triggered by those would leave first_message empty
+// and the next append would full-parse again.
+func chunkHasRealUserPrompt(msgs []parser.ParsedMessage) bool {
+	for _, m := range msgs {
+		if m.Role == parser.RoleUser && !m.IsSystem &&
+			m.Content != "" &&
+			!parser.IsSkippablePreviewCommand(m.Content) {
+			return true
+		}
+	}
+	return false
 }
 
 // countUserMsgs counts user messages in parsed messages.
