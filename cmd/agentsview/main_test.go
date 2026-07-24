@@ -1597,8 +1597,10 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 	probe := &staticDegradedPollProbe{}
 	roots := []watchRoot{{
 		path: watchPath, exists: true, recursive: true,
-		scopes:            []watchScope{{agent: parser.AgentClaude, syncDir: syncDir}},
-		degradedPollProbe: probe,
+		scopes: []watchScope{{agent: parser.AgentClaude, syncDir: syncDir}},
+		degradedPollProbes: map[string]parser.DegradedPollingStateProbe{
+			filepath.Clean(syncDir): probe,
+		},
 	}}
 
 	got := watchPollingObligations(
@@ -1608,10 +1610,52 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 	)
 
 	require.Len(t, got, 1)
-	assert.Equal(t, watchPath, got[0].Key)
+	assert.Equal(t, watchPath+"|"+filepath.Clean(syncDir), got[0].Key)
 	assert.Equal(t, []string{syncDir}, got[0].Roots)
 	assert.Equal(t, watchPath, got[0].Probe)
 	assert.Same(t, probe, got[0].DegradedProbe)
+}
+
+func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.T) {
+	base := t.TempDir()
+	openCodeDir := filepath.Join(base, "opencode")
+	unsupportedDir := filepath.Join(base, "kilo")
+	watchPath := filepath.Join(base, "shared")
+	probe := &staticDegradedPollProbe{}
+	roots := []watchRoot{{
+		path:      watchPath,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: openCodeDir},
+			{agent: parser.AgentKilo, syncDir: unsupportedDir},
+		},
+		degradedPollProbes: map[string]parser.DegradedPollingStateProbe{
+			filepath.Clean(openCodeDir): probe,
+		},
+	}}
+
+	got := watchPollingObligations(
+		roots,
+		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
+		[]string{openCodeDir, unsupportedDir},
+	)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, []agentsync.PollingObligation{
+		{
+			Key:           watchPath,
+			Roots:         []string{unsupportedDir},
+			Probe:         watchPath,
+			DegradedProbe: nil,
+		},
+		{
+			Key:           watchPath + "|" + filepath.Clean(openCodeDir),
+			Roots:         []string{openCodeDir},
+			Probe:         watchPath,
+			DegradedProbe: probe,
+		},
+	}, got)
 }
 
 // A persistent polling obligation probes the configured dir, which can still

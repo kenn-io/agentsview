@@ -108,7 +108,9 @@ func (p *openCodeFormatProvider) DegradedPollingProbe(
 				continue
 			}
 			src := p.sources.spec.resolve(root)
-			if src.DBPath == "" || !IsRegularFile(src.DBPath) {
+			if src.Mode != OpenCodeSourceSQLite ||
+				src.DBPath == "" ||
+				!IsRegularFile(src.DBPath) {
 				return nil, p.unsupported(ProviderFeatureDegradedPollingProbe)
 			}
 			return openCodeSQLiteDegradedPollProbe{dbPath: src.DBPath}, nil

@@ -526,6 +526,28 @@ func TestOpenCodeDegradedPollingProbeIsOpenCodeOnly(t *testing.T) {
 	}
 }
 
+func TestOpenCodeDegradedPollingProbeRejectsHybridStorageRoots(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/app")
+	seeder.AddSession(
+		"ses_probe", "prj_1", "", "Probe", 1700000000000, 1700000010000,
+	)
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(root, "storage", "session", "global"),
+		0o755,
+	))
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	_, err := ResolveDegradedPollingProbe(t.Context(), provider, root)
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
+}
+
 func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	fixture := openCodeSQLiteProviderReadFixture(t)

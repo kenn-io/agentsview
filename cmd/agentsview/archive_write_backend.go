@@ -924,9 +924,10 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			},
 			OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
 				return poller.AddObligation(pollingObligation{
-					Key:   obligation.Key,
-					Roots: obligation.Roots,
-					Probe: obligation.Probe,
+					Key:           obligation.Key,
+					Roots:         obligation.Roots,
+					Probe:         obligation.Probe,
+					DegradedProbe: obligation.DegradedProbe,
 				})
 			},
 			OnPollingReleased: poller.RemoveObligation,

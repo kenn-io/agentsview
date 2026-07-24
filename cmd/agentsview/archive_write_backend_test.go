@@ -806,6 +806,89 @@ func (noopPGTarget) PushWithOptions(
 }
 func (noopPGTarget) Close() error { return nil }
 
+type recordingUnwatchedRootPoller struct {
+	added chan pollingObligation
+}
+
+func (p *recordingUnwatchedRootPoller) AddObligation(obligation pollingObligation) error {
+	p.added <- obligation
+	return nil
+}
+
+func (*recordingUnwatchedRootPoller) RemoveObligation(string) error { return nil }
+func (*recordingUnwatchedRootPoller) Stop()                         {}
+
+func TestLocalPGPushWatchPropagatesDegradedProbeToArchivePoller(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	backend := &localArchiveWriteBackend{
+		appCfg: config.Config{
+			DataDir: dataDir,
+			DBPath:  dbPath,
+		},
+		database: database,
+	}
+	probe := &staticDegradedPollProbe{}
+	poller := &recordingUnwatchedRootPoller{
+		added: make(chan pollingObligation, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	backend.watchHooks = &archivePushWatchHooks{
+		startWatcher: func(
+			_ config.Config,
+			_ *syncpkg.Engine,
+			_ syncpkg.WatchCallback,
+			options syncpkg.WatcherOptions,
+		) (func(), func(), []string) {
+			require.NoError(t, options.OnPollingRequired(syncpkg.PollingObligation{
+				Key:           "watch-root|scope",
+				Roots:         []string{filepath.Join(dataDir, "scope")},
+				Probe:         filepath.Join(dataDir, "watch-root"),
+				DegradedProbe: probe,
+			}))
+			return func() {}, func() {}, nil
+		},
+		newLoop: func(
+			_ string, _ time.Duration, _ time.Duration,
+			_ func(context.Context, pushReason) error,
+		) (*pushLoop, func()) {
+			return &pushLoop{}, func() {}
+		},
+		newPGPusher: func(*syncpkg.Engine) *pgPusher {
+			return &pgPusher{
+				localSync: func(context.Context) error { return nil },
+				connect:   func() (pgTarget, error) { return noopPGTarget{}, nil },
+			}
+		},
+		pgStartupSync: func(_ context.Context, _ *syncpkg.Engine, _ bool) (bool, error) {
+			cancel()
+			return false, context.Canceled
+		},
+		newUnwatchedPoller: func(
+			context.Context, unwatchedPollSyncer,
+		) unwatchedRootPoller {
+			return poller
+		},
+	}
+
+	require.NoError(t, backend.PGPushWatch(
+		ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		time.Hour, time.Hour,
+	))
+
+	select {
+	case obligation := <-poller.added:
+		assert.Equal(t, "watch-root|scope", obligation.Key)
+		assert.Equal(t, []string{filepath.Join(dataDir, "scope")}, obligation.Roots)
+		assert.Equal(t, filepath.Join(dataDir, "watch-root"), obligation.Probe)
+		assert.Same(t, probe, obligation.DegradedProbe)
+	default:
+		t.Fatal("expected polling obligation to reach archive poller")
+	}
+}
+
 // The watcher's full recovery and rename promotion defer unavailable scopes
 // to their polling probes, and pg watch's interval push is a plain SyncAll
 // that never tombstones missed deletions. Local pg watch must therefore own
