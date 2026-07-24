@@ -14,8 +14,9 @@ import (
 // createSchema. Mirror schema v4 is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'. v5 adds the
-// sessions.deletion_cause column on top of the v4 shape.
-const SchemaVersion = 5
+// sessions.deletion_cause column on top of the v4 shape. v6 rebuilds
+// mirrors after the Claude IDE context source data-version change.
+const SchemaVersion = 6
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

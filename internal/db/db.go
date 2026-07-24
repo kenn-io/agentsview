@@ -318,7 +318,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // and model replaces the single last-payload event per session, with
 // occurred_at from each turn's timestamp. Existing Grok rows undercount
 // multi-turn sessions and need re-parsing.)
-const dataVersion = 70
+// (72: Claude Code IDE context reparse. Standalone ide_opened_file and
+// ide_selection wrappers are promoted to system metadata so existing
+// VS Code sessions no longer use them as titles or user turns.)
+const dataVersion = 72
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

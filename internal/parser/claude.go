@@ -1169,9 +1169,8 @@ func parseLinear(
 	endedAt = laterTime(globalEnd, endedAt)
 	annotateSubagentSessions(messages, subagentMap)
 
-	// Promoted system messages (continuation/resume/interrupted/
-	// task_notification/stop_hook) carry Role=user so role-keyed
-	// analytics ignore them, but they are not real user turns;
+	// Promoted system messages carry Role=user so role-keyed analytics
+	// ignore them, but they are not real user turns;
 	// firstMessageAndUserCount skips them when computing
 	// user_message_count / first_message. It also skips leading
 	// /clear and /effort command envelopes so the sidebar shows
@@ -2565,8 +2564,26 @@ func classifyClaudeSystemMessage(content string) string {
 			return ""
 		}
 		return "system_reminder"
+	case isStandaloneClaudeTaggedMessage(trimmed, "ide_opened_file"):
+		return "ide_opened_file"
+	case isStandaloneClaudeTaggedMessage(trimmed, "ide_selection"):
+		return "ide_selection"
 	}
 	return ""
+}
+
+func isStandaloneClaudeTaggedMessage(content, tag string) bool {
+	trimmed := strings.TrimSpace(content)
+	openTag := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
+	if !strings.HasPrefix(trimmed, openTag) ||
+		!strings.HasSuffix(trimmed, closeTag) {
+		return false
+	}
+
+	afterOpen := trimmed[len(openTag):]
+	return strings.Index(afterOpen, closeTag) ==
+		len(afterOpen)-len(closeTag)
 }
 
 func stripLeadingClaudeSystemReminderContent(content string) string {
