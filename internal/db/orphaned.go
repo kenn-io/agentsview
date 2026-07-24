@@ -1537,7 +1537,7 @@ func reconcileTranscriptRevisionsTx(
 			"thinking_text", "is_system", "model",
 			"context_tokens", "output_tokens",
 			"has_context_tokens", "has_output_tokens",
-			"source_subtype", "is_compact_boundary",
+			"source_subtype", "prompt_source", "is_compact_boundary",
 		},
 		"tool_calls": {
 			"call_index", "result_content", "file_path",
@@ -1564,26 +1564,30 @@ func reconcileTranscriptRevisionsTx(
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
-						has_output_tokens, source_subtype, is_compact_boundary
+						has_output_tokens, source_subtype, prompt_source,
+						is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
@@ -1684,7 +1688,7 @@ func copySessionDataForIDs(
 		"output_tokens", "has_context_tokens",
 		"has_output_tokens",
 		"claude_message_id", "claude_request_id",
-		"source_type", "source_subtype",
+		"source_type", "source_subtype", "prompt_source",
 		"source_uuid", "source_parent_uuid",
 		"is_sidechain", "is_compact_boundary",
 		"thinking_text",
