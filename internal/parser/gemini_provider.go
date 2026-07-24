@@ -66,6 +66,13 @@ func (p *geminiProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+func (p *geminiProvider) SourceForReconciliation(
+	ctx context.Context,
+	path, project string,
+) (SourceRef, bool, error) {
+	return p.sources.SourceForReconciliation(ctx, path, project)
+}
+
 func (p *geminiProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
@@ -496,6 +503,30 @@ func (s geminiSourceSet) rootPathFromSource(source SourceRef) (string, string, b
 
 func (s geminiSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 	return s.sourceRefForPath(root, path, true)
+}
+
+// SourceForReconciliation rebuilds an exact source already admitted by
+// streaming discovery. The discovered project hint is authoritative here, so
+// rehydration must not rebuild root-wide Gemini project metadata per source.
+func (s geminiSourceSet) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (SourceRef, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, root := range s.roots {
+		source, ok := s.sourceRefForPathWithProjectMap(
+			root, path, true, map[string]string{},
+		)
+		if !ok {
+			continue
+		}
+		if project != "" {
+			source.ProjectHint = project
+		}
+		return source, true, nil
+	}
+	return SourceRef{}, false, nil
 }
 
 func (s geminiSourceSet) sourceRefForPath(
