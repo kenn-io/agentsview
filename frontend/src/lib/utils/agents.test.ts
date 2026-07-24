@@ -49,6 +49,8 @@ describe("KNOWN_AGENTS", () => {
       "posit-assistant",
       "roocode",
       "poolside",
+      "codebuff",
+      "freebuff",
     ]);
   });
 
