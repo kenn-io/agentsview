@@ -1995,18 +1995,22 @@ func (r watchRoot) pollingObligations(
 // nil results because no watcher registered any roots: no per-root
 // registration outcome exists, no missing-root lifecycle can be natively
 // owned, and every root therefore gates its sync scopes on its own path.
-// The probe gates are registered before the ungated coverage fallback: the
-// poll coordinator's ticker is already live, so a tick landing between two
-// synchronous registrations polls whatever is installed at that instant, and
-// a fallback installed first would reconcile a scope whose gate has not
-// landed yet. Returns the coverage callback's error so the caller can join
-// it with the construction failure.
+// When polling ownership is available, coverage degradation becomes
+// notification-only here: the poll owner already has every configured dir
+// through probe-gated or persistent obligations, so re-registering the same
+// dirs as an unprobed watcher-fallback would bypass unchanged degraded-probe
+// suppression on later ticks. The probe gates still register before the
+// notification callback runs, because the poll coordinator's ticker is
+// already live and a tick landing between two synchronous registrations polls
+// whatever is installed at that instant. Returns the coverage callback's
+// error so the caller can join it with the construction failure.
 func registerWatcherUnavailableObligations(
 	options sync.WatcherOptions,
 	roots []watchRoot,
 	unwatchedDirs []string,
 	symlinkGatedDirs map[string][]string,
 ) error {
+	coverageRoots := unwatchedDirs
 	if options.OnPollingRequired != nil {
 		obligations := watchPollingObligations(roots, nil, unwatchedDirs)
 		obligations = append(
@@ -2019,11 +2023,12 @@ func registerWatcherUnavailableObligations(
 				)
 			}
 		}
+		coverageRoots = nil
 	}
 	if options.OnCoverageDegraded == nil {
 		return nil
 	}
-	return options.OnCoverageDegraded(unwatchedDirs)
+	return options.OnCoverageDegraded(coverageRoots)
 }
 
 // symlinkPollingObligations gates persistent polling of dirs whose recursive

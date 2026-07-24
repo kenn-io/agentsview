@@ -1933,6 +1933,60 @@ func TestWatcherUnavailableObligationsGateBeforeFallback(t *testing.T) {
 		"the completed registration keeps unaffected dirs pollable")
 }
 
+func TestWatcherUnavailableFallbackDoesNotBypassUnchangedDegradedProbe(t *testing.T) {
+	configured := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	watchPath := filepath.Join(configured, "sessions")
+	require.NoError(t, os.MkdirAll(watchPath, 0o755))
+	probe := &sequenceDegradedPollProbe{states: []string{"stable", "stable"}}
+
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, make(chan time.Time), func() {},
+		func(run func()) { run() }, nil,
+	)
+	t.Cleanup(coordinator.Stop)
+	options := agentsync.WatcherOptions{
+		OnCoverageDegraded: func(roots []string) error {
+			return coordinator.AddObligation(pollingObligation{
+				Key: "watcher-fallback", Roots: roots,
+			})
+		},
+		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
+			return coordinator.AddObligation(pollingObligation{
+				Key:           obligation.Key,
+				Roots:         obligation.Roots,
+				Probe:         obligation.Probe,
+				DegradedProbe: obligation.DegradedProbe,
+			})
+		},
+	}
+	roots := []watchRoot{{
+		path:      watchPath,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: configured},
+		},
+		degradedPollProbes: map[string]parser.DegradedPollingStateProbe{
+			filepath.Clean(configured): probe,
+		},
+	}}
+
+	require.NoError(t, registerWatcherUnavailableObligations(
+		options, roots, []string{configured}, nil,
+	))
+
+	coordinator.requestPoll()
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
+		"the first degraded poll must still reconcile the configured dir")
+
+	coordinator.requestPoll()
+	assert.Never(t, func() bool { return len(syncer.snapshot()) > 1 },
+		200*time.Millisecond, 10*time.Millisecond,
+		"unchanged degraded-probe state must suppress the construction-failure fallback too")
+}
+
 func findCollectedWatchRoot(roots []watchRoot, path string) (watchRoot, bool) {
 	path = filepath.Clean(path)
 	for _, root := range roots {
