@@ -172,21 +172,28 @@ func (db *DB) UpsertModelPricing(
 	return tx.Commit()
 }
 
+// PricingMeta is one provenance sentinel row written alongside a
+// pricing reconciliation.
+type PricingMeta struct {
+	Key   string
+	Value string
+}
+
 // ReconcileModelPricing removes obsolete patterns and upserts the desired
 // rows in one transaction. Desired rows that share a removed pattern are
 // reinserted, allowing one source to retire an alias while another source
-// continues to publish that same unqualified model name. When metaKey is
-// non-empty the metadata sentinel row is written in the same transaction,
-// so readers can never observe reconciled rows without the provenance
-// metadata that allows retiring them later.
+// continues to publish that same unqualified model name. Every metadata
+// sentinel row in meta is written in the same transaction, so readers can
+// never observe reconciled rows without the provenance metadata that
+// allows retiring them later.
 func (db *DB) ReconcileModelPricing(
 	prices []ModelPricing, removePatterns []string,
-	metaKey, metaValue string,
+	meta ...PricingMeta,
 ) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 && metaKey == "" {
+	if len(prices) == 0 && len(removePatterns) == 0 && len(meta) == 0 {
 		return nil
 	}
 
@@ -246,12 +253,15 @@ func (db *DB) ReconcileModelPricing(
 			)
 		}
 	}
-	if metaKey != "" {
+	for _, entry := range meta {
+		if entry.Key == "" {
+			continue
+		}
 		if _, err := tx.Exec(
-			setPricingMetaSQL, metaKey, metaValue,
+			setPricingMetaSQL, entry.Key, entry.Value,
 		); err != nil {
 			return fmt.Errorf(
-				"setting pricing meta %q: %w", metaKey, err,
+				"setting pricing meta %q: %w", entry.Key, err,
 			)
 		}
 	}

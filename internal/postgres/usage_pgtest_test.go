@@ -1149,7 +1149,7 @@ func TestPushRemovesObsoleteOpenRouterPricingAlias(t *testing.T) {
 
 	require.NoError(t, local.ReconcileModelPricing(
 		nil, []string{"stale-alias"},
-		"_openrouter_aliases", `[]`,
+		db.PricingMeta{Key: "_openrouter_aliases", Value: `[]`},
 	), "remove local alias and update metadata atomically")
 	_, err = ps.Push(context.Background(), false, nil)
 	require.NoError(t, err, "reconciliation Push")
@@ -1164,6 +1164,75 @@ func TestPushRemovesObsoleteOpenRouterPricingAlias(t *testing.T) {
 		 WHERE model_pattern = 'stale-alias'`,
 	).Scan(&count))
 	assert.Zero(t, count, "obsolete alias should be removed from PostgreSQL")
+}
+
+// TestPushRemovesShadowedOpenRouterPricingRow covers the qualified row
+// that a later refresh suppresses because a higher-priority source
+// publishes the same model under a different spelling. Unlike a retired
+// alias, the row is not tracked in the alias list, so only the shadowed
+// sentinel can tell PostgreSQL it is obsolete. A leftover copy would
+// leave two canonically identical rows in PostgreSQL and make the bare
+// model name resolve as ambiguous under pg serve.
+func TestPushRemovesShadowedOpenRouterPricingRow(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "minimax/minimax-m3",
+		InputPerMTok: 9,
+	}}), "seed OpenRouter row")
+	require.NoError(t, local.SetPricingMeta(
+		"_openrouter_aliases", `[]`,
+	), "seed alias metadata")
+	require.NoError(t, local.SetPricingMeta(
+		"_openrouter_shadowed", `[]`,
+	), "seed shadowed metadata")
+
+	ps, err := New(
+		pgURL, "agentsview", local, "test-machine", true, SyncOptions{},
+	)
+	require.NoError(t, err, "New")
+	defer ps.Close()
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "initial Push")
+
+	// The higher-priority source picks the model up under a different
+	// spelling, so the OpenRouter row is suppressed locally.
+	require.NoError(t, local.ReconcileModelPricing(
+		[]db.ModelPricing{{
+			ModelPattern: "minimax/MiniMax-M3",
+			InputPerMTok: 2,
+		}},
+		[]string{"minimax/minimax-m3"},
+		db.PricingMeta{Key: "_openrouter_aliases", Value: `[]`},
+		db.PricingMeta{
+			Key:   "_openrouter_shadowed",
+			Value: `["minimax/minimax-m3"]`,
+		},
+	), "suppress the duplicate row and record its provenance")
+	_, err = ps.Push(context.Background(), false, nil)
+	require.NoError(t, err, "reconciliation Push")
+
+	store, err := NewStore(pgURL, "agentsview", true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	var count int
+	require.NoError(t, store.DB().QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM model_pricing
+		 WHERE model_pattern = 'minimax/minimax-m3'`,
+	).Scan(&count))
+	assert.Zero(t, count,
+		"shadowed row should be removed from PostgreSQL")
+	require.NoError(t, store.DB().QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM model_pricing
+		 WHERE model_pattern = 'minimax/MiniMax-M3'`,
+	).Scan(&count))
+	assert.Equal(t, 1, count,
+		"the surviving higher-priority row is pushed")
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {

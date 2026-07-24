@@ -681,6 +681,118 @@ func TestPricingSyncChangesReinsertsAliasPublishedByAnotherSource(
 		"shared row must be reinserted after retiring OpenRouter provenance")
 }
 
+// TestPricingSyncChangesRetiresShadowedOpenRouterRows proves a
+// provider-qualified OpenRouter row pushed before the higher-priority
+// source listed the model is deleted from PostgreSQL once the local
+// refresh suppresses it. The row is absent from the local desired set,
+// so nothing but the shadowed sentinel can identify it as obsolete, and
+// leaving it behind would keep pg serve resolving the bare model name
+// against two tied keys and pricing it at zero.
+func TestPricingSyncChangesRetiresShadowedOpenRouterRows(t *testing.T) {
+	local := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_aliases",
+			UpdatedAt:    `[]`,
+		},
+		{
+			ModelPattern: "_openrouter_shadowed",
+			UpdatedAt:    `["minimax/minimax-m3"]`,
+		},
+		{
+			ModelPattern: "minimax/MiniMax-M3",
+			InputPerMTok: 2,
+		},
+	}
+	remote := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_aliases",
+			UpdatedAt:    `[]`,
+		},
+		{
+			ModelPattern: "_openrouter_shadowed",
+			UpdatedAt:    `[]`,
+		},
+		{
+			ModelPattern: "minimax/minimax-m3",
+			InputPerMTok: 9,
+		},
+	}
+
+	changed, remove, err := pricingSyncChanges(remote, local)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"minimax/minimax-m3"}, remove,
+		"shadowed qualified row must be deleted from PostgreSQL")
+	assert.True(t, containsPricingPattern(changed, "minimax/MiniMax-M3"),
+		"the surviving higher-priority row is pushed")
+	assert.True(t, containsPricingPattern(changed, "_openrouter_shadowed"),
+		"changed shadowed metadata must be pushed despite zero rates")
+	assert.False(t, containsPricingPattern(changed, "_openrouter_aliases"),
+		"unchanged alias metadata is not rewritten")
+}
+
+// TestPricingSyncChangesShadowedListIsAbsolute proves the shadowed
+// sentinel is applied on its own terms rather than as a diff against
+// PostgreSQL's copy: a pattern stays retired across pushes even when
+// both sides already record the same shadowed list, and a pattern a
+// surviving source still publishes is reinserted after the delete.
+func TestPricingSyncChangesShadowedListIsAbsolute(t *testing.T) {
+	local := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_shadowed",
+			UpdatedAt:    `["shadowed-model","republished"]`,
+		},
+		{
+			ModelPattern: "republished",
+			InputPerMTok: 4,
+		},
+	}
+	remote := []db.ModelPricing{
+		{
+			ModelPattern: "_openrouter_shadowed",
+			UpdatedAt:    `["shadowed-model","republished"]`,
+		},
+		{
+			ModelPattern: "shadowed-model",
+			InputPerMTok: 9,
+		},
+		{
+			ModelPattern: "republished",
+			InputPerMTok: 4,
+		},
+	}
+
+	changed, remove, err := pricingSyncChanges(remote, local)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"republished", "shadowed-model"}, remove,
+		"an unchanged shadowed list still retires its patterns")
+	assert.True(t, containsPricingPattern(changed, "republished"),
+		"a pattern another source publishes is reinserted after the delete")
+	assert.False(t, containsPricingPattern(changed, "shadowed-model"),
+		"the suppressed row is not pushed back")
+}
+
+// TestPricingSyncChangesWithoutProvenanceRemovesNothing pins the
+// conservative default: with no sentinels to prove a pattern obsolete,
+// rows PostgreSQL holds and the local archive lacks are left alone,
+// because another machine may have pushed them.
+func TestPricingSyncChangesWithoutProvenanceRemovesNothing(t *testing.T) {
+	local := []db.ModelPricing{
+		{ModelPattern: "kept-model", InputPerMTok: 1},
+	}
+	remote := []db.ModelPricing{
+		{ModelPattern: "kept-model", InputPerMTok: 1},
+		{ModelPattern: "other-machine-model", InputPerMTok: 3},
+	}
+
+	changed, remove, err := pricingSyncChanges(remote, local)
+
+	require.NoError(t, err)
+	assert.Empty(t, remove)
+	assert.Empty(t, changed)
+}
+
 func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 	ctx := context.Background()
 	local, err := db.Open(t.TempDir() + "/local.db")

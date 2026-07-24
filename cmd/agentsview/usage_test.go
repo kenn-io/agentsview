@@ -1656,6 +1656,15 @@ func TestRefreshPricingFromSourcesRetiresCanonicallyShadowedRows(
 	require.NotNil(t, litellmRow, "LiteLLM row owns the model")
 	assert.Equal(t, 2.0, litellmRow.InputPerMTok)
 
+	// The suppressed pattern is recorded so pg push can retire its own
+	// copy; nothing else identifies the row as obsolete downstream.
+	shadowedMeta, err := database.GetPricingMeta(
+		pricing.OpenRouterShadowedMetaKey,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, `["minimax/minimax-m3"]`, shadowedMeta,
+		"shadowed patterns are published as provenance metadata")
+
 	rates, err := database.ListModelPricing(context.Background())
 	require.NoError(t, err)
 	lookup := make(map[string]pricing.ModelPricing, len(rates))

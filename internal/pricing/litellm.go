@@ -65,6 +65,14 @@ type PricingSource struct {
 // stores the aliases emitted by the most recent OpenRouter refresh.
 const OpenRouterAliasesMetaKey = "_openrouter_aliases"
 
+// OpenRouterShadowedMetaKey identifies the sentinel model_pricing row that
+// stores the patterns the most recent OpenRouter refresh suppressed
+// because a higher-priority source already covered them. Unlike the alias
+// list, which downstream stores diff against their previous copy to find
+// retired aliases, this list is absolute: every pattern in it must not
+// exist, so a push target can retire it without tracking history.
+const OpenRouterShadowedMetaKey = "_openrouter_shadowed"
+
 // DefaultPricingSources returns the built-in pricing sources
 // in priority order. LiteLLM covers most public models; the
 // OpenRouter catalog frequently lists fork-tuned and private

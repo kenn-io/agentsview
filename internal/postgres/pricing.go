@@ -419,64 +419,120 @@ func reconcileModelPricing(
 	return nil
 }
 
+// pricingSyncChanges plans one push of the local pricing table onto
+// PostgreSQL: the rows to upsert and the patterns to delete.
+//
+// Deletions are driven by provenance sentinels rather than by set
+// difference, because a pattern PostgreSQL holds and the local archive
+// lacks is indistinguishable from one another machine pushed:
+//
+//   - _openrouter_aliases lists the bare aliases the local refresh
+//     currently emits. Aliases in PostgreSQL's copy of that list but not
+//     in the local one were retired, so they are removed.
+//   - _openrouter_shadowed lists the patterns the local refresh
+//     suppressed because a higher-priority source already covers them.
+//     That list is absolute, not a diff: every pattern on it must not
+//     exist, so it is removed without consulting PostgreSQL's copy.
+//
+// Without the second sentinel a qualified OpenRouter row pushed before
+// LiteLLM listed the model (minimax/minimax-m3 against a later
+// minimax/MiniMax-M3) would survive in PostgreSQL after the local
+// reconciliation dropped it, and pg serve would keep resolving the bare
+// model name against two tied keys, treat it as ambiguous, and price it
+// at zero.
 func pricingSyncChanges(
 	existing, desired []db.ModelPricing,
 ) ([]db.ModelPricing, []string, error) {
-	desiredMeta, desiredMetaFound := pricingMetaRow(
-		desired, pricing.OpenRouterAliasesMetaKey,
+	removeSet := make(map[string]struct{})
+
+	shadowedMeta, shadowedFound := pricingMetaRow(
+		desired, pricing.OpenRouterShadowedMetaKey,
 	)
-	if !desiredMetaFound {
-		_, changed := db.FilterChangedModelPricing(existing, desired)
-		return changed, nil, nil
-	}
-	currentAliases, err := decodePricingAliases(desiredMeta.UpdatedAt)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"decoding local OpenRouter aliases: %w", err,
-		)
-	}
-	existingMeta, existingMetaFound := pricingMetaRow(
-		existing, pricing.OpenRouterAliasesMetaKey,
-	)
-	if !existingMetaFound {
-		_, changed := db.FilterChangedModelPricing(existing, desired)
-		return changed, nil, nil
-	}
-	previousAliases, err := decodePricingAliases(existingMeta.UpdatedAt)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"decoding PostgreSQL OpenRouter aliases: %w", err,
-		)
+	if shadowedFound {
+		shadowed, err := decodePricingAliases(shadowedMeta.UpdatedAt)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"decoding local OpenRouter shadowed patterns: %w", err,
+			)
+		}
+		for _, pattern := range shadowed {
+			removeSet[pattern] = struct{}{}
+		}
 	}
 
-	current := make(map[string]struct{}, len(currentAliases))
-	for _, alias := range currentAliases {
-		current[alias] = struct{}{}
-	}
-	remove := make([]string, 0)
-	removeSet := make(map[string]struct{})
-	for _, alias := range previousAliases {
-		if _, ok := current[alias]; !ok {
-			remove = append(remove, alias)
-			removeSet[alias] = struct{}{}
+	aliasMeta, aliasFound := pricingMetaRow(
+		desired, pricing.OpenRouterAliasesMetaKey,
+	)
+	existingAliasMeta, existingAliasFound := pricingMetaRow(
+		existing, pricing.OpenRouterAliasesMetaKey,
+	)
+	if aliasFound && existingAliasFound {
+		currentAliases, err := decodePricingAliases(aliasMeta.UpdatedAt)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"decoding local OpenRouter aliases: %w", err,
+			)
 		}
+		previousAliases, err := decodePricingAliases(
+			existingAliasMeta.UpdatedAt,
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"decoding PostgreSQL OpenRouter aliases: %w", err,
+			)
+		}
+		current := make(map[string]struct{}, len(currentAliases))
+		for _, alias := range currentAliases {
+			current[alias] = struct{}{}
+		}
+		for _, alias := range previousAliases {
+			if _, ok := current[alias]; !ok {
+				removeSet[alias] = struct{}{}
+			}
+		}
+	}
+
+	remove := make([]string, 0, len(removeSet))
+	for pattern := range removeSet {
+		remove = append(remove, pattern)
 	}
 	sort.Strings(remove)
 
-	kept := existing[:0]
+	// Removed patterns are dropped from the comparison baseline so a
+	// pattern a surviving source still publishes is re-upserted after the
+	// delete instead of being left missing.
+	kept := make([]db.ModelPricing, 0, len(existing))
 	for _, row := range existing {
 		if _, removing := removeSet[row.ModelPattern]; !removing {
 			kept = append(kept, row)
 		}
 	}
 	_, changed := db.FilterChangedModelPricing(kept, desired)
-	if desiredMeta.UpdatedAt != existingMeta.UpdatedAt &&
-		!containsPricingPattern(
-			changed, pricing.OpenRouterAliasesMetaKey,
-		) {
-		changed = append(changed, desiredMeta)
+	if aliasFound {
+		changed = appendChangedPricingMeta(changed, existing, aliasMeta)
+	}
+	if shadowedFound {
+		changed = appendChangedPricingMeta(changed, existing, shadowedMeta)
 	}
 	return changed, remove, nil
+}
+
+// appendChangedPricingMeta re-adds a provenance sentinel whose payload
+// changed. FilterChangedModelPricing compares only rate fields and
+// sentinels carry all zeros, so a new payload alone never marks the row
+// changed. A sentinel PostgreSQL does not hold yet is already reported as
+// missing, so only the both-present case needs the extra push.
+func appendChangedPricingMeta(
+	changed, existing []db.ModelPricing, meta db.ModelPricing,
+) []db.ModelPricing {
+	previous, found := pricingMetaRow(existing, meta.ModelPattern)
+	if !found || previous.UpdatedAt == meta.UpdatedAt {
+		return changed
+	}
+	if containsPricingPattern(changed, meta.ModelPattern) {
+		return changed
+	}
+	return append(changed, meta)
 }
 
 func pricingMetaRow(

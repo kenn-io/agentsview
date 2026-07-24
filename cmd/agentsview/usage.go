@@ -577,12 +577,28 @@ func refreshPricingFromSourcesWith(
 	if err != nil {
 		return fmt.Errorf("encoding OpenRouter alias metadata: %w", err)
 	}
-	// Alias provenance metadata commits in the same transaction as the
-	// rows so a crash or concurrent pg push can never observe alias rows
-	// without the metadata that allows retiring them later.
+	if shadowedRows == nil {
+		shadowedRows = []string{}
+	}
+	encodedShadowed, err := json.Marshal(shadowedRows)
+	if err != nil {
+		return fmt.Errorf("encoding OpenRouter shadowed metadata: %w", err)
+	}
+	// Provenance metadata commits in the same transaction as the rows so a
+	// crash or concurrent pg push can never observe alias rows without the
+	// metadata that allows retiring them later. The shadowed list travels
+	// the same way: a push target has no other way to learn that a
+	// qualified OpenRouter row it already holds has become obsolete.
 	if err := database.ReconcileModelPricing(
 		dbPrices, stale,
-		pricing.OpenRouterAliasesMetaKey, string(encodedAliases),
+		db.PricingMeta{
+			Key:   pricing.OpenRouterAliasesMetaKey,
+			Value: string(encodedAliases),
+		},
+		db.PricingMeta{
+			Key:   pricing.OpenRouterShadowedMetaKey,
+			Value: string(encodedShadowed),
+		},
 	); err != nil {
 		return fmt.Errorf("reconciling pricing: %w", err)
 	}
