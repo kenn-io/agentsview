@@ -34,8 +34,11 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, prices = db.FilterChangedModelPricing(existing, prices)
-	if len(prices) == 0 {
+	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	if err != nil {
+		return fmt.Errorf("planning duckdb pricing sync: %w", err)
+	}
+	if len(prices) == 0 && len(removePatterns) == 0 {
 		return nil
 	}
 
@@ -46,6 +49,24 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	for i := 0; i < len(removePatterns); i += duckPricingUpsertBatch {
+		end := min(i+duckPricingUpsertBatch, len(removePatterns))
+		placeholders := make([]string, end-i)
+		args := make([]any, end-i)
+		for j, pattern := range removePatterns[i:end] {
+			placeholders[j] = "?"
+			args[j] = pattern
+		}
+		query := `DELETE FROM model_pricing WHERE model_pattern IN (` +
+			strings.Join(placeholders, ", ") + `)`
+		if err := s.execMutation(ctx, tx, query, args...); err != nil {
+			return fmt.Errorf(
+				"removing obsolete duckdb pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
 
 	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
 		end := min(i+duckPricingUpsertBatch, len(prices))

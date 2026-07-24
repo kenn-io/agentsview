@@ -3,9 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -443,115 +441,7 @@ func reconcileModelPricing(
 func pricingSyncChanges(
 	existing, desired []db.ModelPricing,
 ) ([]db.ModelPricing, []string, error) {
-	removeSet := make(map[string]struct{})
-
-	shadowedMeta, shadowedFound := pricingMetaRow(
-		desired, pricing.OpenRouterShadowedMetaKey,
-	)
-	if shadowedFound {
-		shadowed, err := decodePricingAliases(shadowedMeta.UpdatedAt)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"decoding local OpenRouter shadowed patterns: %w", err,
-			)
-		}
-		for _, pattern := range shadowed {
-			removeSet[pattern] = struct{}{}
-		}
-	}
-
-	aliasMeta, aliasFound := pricingMetaRow(
-		desired, pricing.OpenRouterAliasesMetaKey,
-	)
-	existingAliasMeta, existingAliasFound := pricingMetaRow(
-		existing, pricing.OpenRouterAliasesMetaKey,
-	)
-	if aliasFound && existingAliasFound {
-		currentAliases, err := decodePricingAliases(aliasMeta.UpdatedAt)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"decoding local OpenRouter aliases: %w", err,
-			)
-		}
-		previousAliases, err := decodePricingAliases(
-			existingAliasMeta.UpdatedAt,
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"decoding PostgreSQL OpenRouter aliases: %w", err,
-			)
-		}
-		current := make(map[string]struct{}, len(currentAliases))
-		for _, alias := range currentAliases {
-			current[alias] = struct{}{}
-		}
-		for _, alias := range previousAliases {
-			if _, ok := current[alias]; !ok {
-				removeSet[alias] = struct{}{}
-			}
-		}
-	}
-
-	remove := make([]string, 0, len(removeSet))
-	for pattern := range removeSet {
-		remove = append(remove, pattern)
-	}
-	sort.Strings(remove)
-
-	// Removed patterns are dropped from the comparison baseline so a
-	// pattern a surviving source still publishes is re-upserted after the
-	// delete instead of being left missing.
-	kept := make([]db.ModelPricing, 0, len(existing))
-	for _, row := range existing {
-		if _, removing := removeSet[row.ModelPattern]; !removing {
-			kept = append(kept, row)
-		}
-	}
-	_, changed := db.FilterChangedModelPricing(kept, desired)
-	if aliasFound {
-		changed = appendChangedPricingMeta(changed, existing, aliasMeta)
-	}
-	if shadowedFound {
-		changed = appendChangedPricingMeta(changed, existing, shadowedMeta)
-	}
-	return changed, remove, nil
-}
-
-// appendChangedPricingMeta re-adds a provenance sentinel whose payload
-// changed. FilterChangedModelPricing compares only rate fields and
-// sentinels carry all zeros, so a new payload alone never marks the row
-// changed. A sentinel PostgreSQL does not hold yet is already reported as
-// missing, so only the both-present case needs the extra push.
-func appendChangedPricingMeta(
-	changed, existing []db.ModelPricing, meta db.ModelPricing,
-) []db.ModelPricing {
-	previous, found := pricingMetaRow(existing, meta.ModelPattern)
-	if !found || previous.UpdatedAt == meta.UpdatedAt {
-		return changed
-	}
-	if containsPricingPattern(changed, meta.ModelPattern) {
-		return changed
-	}
-	return append(changed, meta)
-}
-
-func pricingMetaRow(
-	rows []db.ModelPricing, key string,
-) (db.ModelPricing, bool) {
-	for _, row := range rows {
-		if row.ModelPattern == key {
-			return row, true
-		}
-	}
-	return db.ModelPricing{}, false
-}
-
-func decodePricingAliases(value string) ([]string, error) {
-	var aliases []string
-	if err := json.Unmarshal([]byte(value), &aliases); err != nil {
-		return nil, err
-	}
-	return aliases, nil
+	return db.PlanModelPricingSync(existing, desired)
 }
 
 func containsPricingPattern(
