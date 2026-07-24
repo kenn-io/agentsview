@@ -330,7 +330,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // status N" output text, so existing rows carry no failure signal. Re-parsing
 // attaches the errored event so tool-health failure counts cover historical
 // OpenCode sessions on every platform.)
-const dataVersion = 73
+// (74: Claude Code IDE context reparse. Standalone ide_opened_file and
+// ide_selection wrappers are promoted to system metadata so existing
+// VS Code sessions no longer use them as titles or user turns.)
+const dataVersion = 74
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

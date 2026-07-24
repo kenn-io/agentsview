@@ -75,7 +75,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   `attachment.type=queued_command` are written mid-stream, in file order
   between consecutive `assistant` records that share one `message.id`, so a
   queued command can fall inside a streaming run that straddles an incremental
-  sync boundary.
+  sync boundary. Reverified 2026-07-23 against the transcript shape reported in
+  [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code for
+  VS Code writes standalone `user` records wrapped in `ide_opened_file` or
+  `ide_selection` tags for editor context rather than operator prompts.
 
 ## OpenClaude (`openclaude`)
 

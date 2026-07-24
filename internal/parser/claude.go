@@ -1169,9 +1169,8 @@ func parseLinear(
 	endedAt = laterTime(globalEnd, endedAt)
 	annotateSubagentSessions(messages, subagentMap)
 
-	// Promoted system messages (continuation/resume/interrupted/
-	// task_notification/stop_hook) carry Role=user so role-keyed
-	// analytics ignore them, but they are not real user turns;
+	// Promoted system messages carry Role=user so role-keyed analytics
+	// ignore them, but they are not real user turns;
 	// firstMessageAndUserCount skips them when computing
 	// user_message_count / first_message. It also skips leading
 	// /clear and /effort command envelopes so the sidebar shows
@@ -1982,11 +1981,10 @@ func pathWithinDir(path, dir string) bool {
 		rel != ".."
 }
 
-// countUserTurns counts all user entries reachable from a
-// starting index by traversing the entire subtree. Earlier
-// versions followed only the first child at each node, which
-// undercounted in sessions with many nested forks and caused
-// the fork heuristic to discard the main conversation branch.
+// countUserTurns counts real user entries reachable from a starting index
+// by traversing the entire subtree. System-injected user records must not
+// influence branch selection because they are promoted to system metadata
+// when messages are extracted.
 func countUserTurns(
 	entries []dagEntry,
 	children map[string][]int,
@@ -1997,12 +1995,23 @@ func countUserTurns(
 	for len(stack) > 0 {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if entries[current].entryType == "user" {
+		if isCountedClaudeUserTurn(entries[current]) {
 			count++
 		}
 		stack = append(stack, children[entries[current].uuid]...)
 	}
 	return count
+}
+
+func isCountedClaudeUserTurn(entry dagEntry) bool {
+	if entry.entryType != "user" ||
+		gjson.Get(entry.line, "isMeta").Bool() ||
+		gjson.Get(entry.line, "isCompactSummary").Bool() {
+		return false
+	}
+	content := gjson.Get(entry.line, "message.content")
+	text, _, _, _, _, _ := ExtractTextContent(content)
+	return classifyClaudeSystemMessage(text) == ""
 }
 
 // extractMessages converts dagEntries into ParsedMessages, applying
@@ -2565,8 +2574,26 @@ func classifyClaudeSystemMessage(content string) string {
 			return ""
 		}
 		return "system_reminder"
+	case isStandaloneClaudeTaggedMessage(trimmed, "ide_opened_file"):
+		return "ide_opened_file"
+	case isStandaloneClaudeTaggedMessage(trimmed, "ide_selection"):
+		return "ide_selection"
 	}
 	return ""
+}
+
+func isStandaloneClaudeTaggedMessage(content, tag string) bool {
+	trimmed := strings.TrimSpace(content)
+	openTag := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
+	if !strings.HasPrefix(trimmed, openTag) ||
+		!strings.HasSuffix(trimmed, closeTag) {
+		return false
+	}
+
+	afterOpen := trimmed[len(openTag):]
+	return strings.Index(afterOpen, closeTag) ==
+		len(afterOpen)-len(closeTag)
 }
 
 func stripLeadingClaudeSystemReminderContent(content string) string {
