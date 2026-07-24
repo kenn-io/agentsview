@@ -802,7 +802,7 @@ func (s *Sync) upsertSession(
 	query := `
 		INSERT INTO sessions (
 			id, project, machine, agent,
-			agent_label, entrypoint,
+			agent_label, entrypoint, session_kind,
 			first_message, display_name, session_name, started_at, ended_at,
 			message_count, user_message_count,
 			file_path, file_size, file_mtime, file_inode, file_device,
@@ -825,7 +825,7 @@ func (s *Sync) upsertSession(
 			termination_status, secret_leak_count, secrets_rules_version,
 			agentsview_push_fingerprint
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -837,6 +837,7 @@ func (s *Sync) upsertSession(
 			agent = excluded.agent,
 			agent_label = excluded.agent_label,
 			entrypoint = excluded.entrypoint,
+			session_kind = excluded.session_kind,
 			first_message = excluded.first_message,
 			display_name = excluded.display_name,
 			session_name = excluded.session_name,
@@ -909,7 +910,7 @@ func (s *Sync) upsertSession(
 func sessionInsertArgs(sess db.Session, machine, fingerprint string) []any {
 	return []any{
 		sess.ID, sess.Project, machine, sess.Agent,
-		sess.AgentLabel, sess.Entrypoint,
+		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
 		nilString(sess.SessionName),
 		nilTime(sess.StartedAt), nilTime(sess.EndedAt),
@@ -954,9 +955,9 @@ func insertMessages(
 				timestamp, has_thinking, has_tool_use, content_length,
 				is_system, model, token_usage, context_tokens, output_tokens,
 				has_context_tokens, has_output_tokens, claude_message_id,
-				claude_request_id, source_type, source_subtype, source_uuid,
+				claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 				source_parent_uuid, is_sidechain, is_compact_boundary
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.ThinkingText, timeValue(m.Timestamp),
 			m.HasThinking, m.HasToolUse, m.ContentLength,
@@ -964,7 +965,7 @@ func insertMessages(
 			m.ContextTokens, m.OutputTokens,
 			m.HasContextTokens, m.HasOutputTokens,
 			m.ClaudeMessageID, m.ClaudeRequestID,
-			m.SourceType, m.SourceSubtype, m.SourceUUID,
+			m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 			m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
 		); err != nil {
 			return fmt.Errorf("inserting duckdb message %s/%d: %w", m.SessionID, m.Ordinal, err)

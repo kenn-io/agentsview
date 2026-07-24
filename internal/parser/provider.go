@@ -493,14 +493,15 @@ type IncrementalRequest struct {
 	// appended tail forks away from the stored tip and must trigger a
 	// full reparse instead of a naive append.
 	LastEntryUUID string
-	// StoredAgentLabel and StoredEntrypoint are the session identity
-	// values already persisted for this session. Claude identity is
-	// first-non-empty-wins across the file, and real CLI transcripts
-	// carry a top-level entrypoint on most lines, so the incremental
-	// parser escalates to a full parse only when an appended non-empty
-	// value could fill a still-empty stored field.
-	StoredAgentLabel string
-	StoredEntrypoint string
+	// StoredAgentLabel, StoredEntrypoint and StoredSessionKind are the
+	// session identity values already persisted for this session. Claude
+	// identity is first-non-empty-wins across the file, and real CLI
+	// transcripts carry a top-level entrypoint on most lines, so the
+	// incremental parser escalates to a full parse only when an appended
+	// non-empty value could fill a still-empty stored field.
+	StoredAgentLabel  string
+	StoredEntrypoint  string
+	StoredSessionKind string
 	// StoredClaudeLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing. Linearity is monotonic across appends, so

@@ -129,6 +129,7 @@ const (
 	// (cwd) is compared instead.
 	FieldAgentLabel           = "agent_label"
 	FieldEntrypoint           = "entrypoint"
+	FieldSessionKind          = "session_kind"
 	FieldCwd                  = "cwd"
 	FieldGitBranch            = "git_branch"
 	FieldParentSessionID      = "parent_session_id"
