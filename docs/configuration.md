@@ -239,6 +239,7 @@ can still be parsed.
 | Claude Code           | `~/.claude/projects/`                                                            | JSONL per session                                                                                                               |
 | OpenClaude            | `~/.openclaude/projects/`                                                        | JSONL per session                                                                                                               |
 | Claude Cowork         | (platform-specific, see below)                                                   | Claude Desktop cowork sessions                                                                                                  |
+| Codebuff / Freebuff   | `~/.config/manicode/projects/`                                                   | Per-session `chat-messages.json` + `run-state.json` with subagent transcripts                                                  |
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                           | JSONL per session                                                                                                               |
 | Command Code          | `~/.commandcode/projects/`                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                |
 | Copilot CLI           | `~/.copilot/`                                                                    | JSONL per session under `session-state/`                                                                                        |
@@ -370,6 +371,31 @@ location:
 
 Set `COWORK_DIR` or `cowork_dirs` when Claude Desktop stores local-agent-mode
 sessions somewhere else.
+
+**Codebuff / Freebuff sessions:** Codebuff and Freebuff share the same on-disk
+layout under `~/.config/manicode/projects/`. Each session is a timestamped
+directory containing `chat-messages.json` (the full transcript with subagent
+invocations), `run-state.json` (metadata including the agent type and model),
+and optional `chat-meta.json`.
+
+AgentsView auto-classifies each session as **Codebuff** (paid) or **Freebuff**
+(free tier) based on the `agentType` field in `run-state.json`: sessions whose
+`agentType` contains `"free"` are filed under Freebuff. Both agent types appear
+as separate filters in the session list so you can view paid and free sessions
+independently.
+
+Subagent tool calls (basher, code-searcher, file-picker, code-reviewer, etc.)
+are parsed from the AI message blocks and displayed inline in the transcript
+view. The session model (e.g. `base2-free-deepseek`, `base2-free-mimo`) is
+extracted from the `agentType` field and shown in the session detail header.
+Project names are derived from the session's working directory via git-root
+detection.
+
+Freebuff does not have its own environment variable or config key — it shares
+the Codebuff provider for discovery and the parser auto-classifies sessions.
+Set `CODEBUFF_DIR` or `codebuff_dirs` when manicode stores its projects
+directory somewhere other than `~/.config/manicode/projects`; this covers both
+Codebuff and Freebuff sessions.
 
 **OpenHands CLI shallow watch:** OpenHands stores each conversation in its own
 subdirectory, which would consume one recursive file watch per session and can
@@ -547,6 +573,7 @@ export CLAUDE_PROJECTS_DIR=~/custom/claude
 export OPENCLAUDE_PROJECTS_DIR=~/custom/openclaude/projects
 export OPENCLAUDE_CONFIG_DIR=~/custom/openclaude
 export COWORK_DIR=~/custom/cowork
+export CODEBUFF_DIR=~/custom/manicode/projects
 export CODEX_SESSIONS_DIR=~/custom/codex
 export COMMANDCODE_PROJECTS_DIR=~/custom/commandcode
 export COPILOT_DIR=~/custom/copilot
@@ -610,7 +637,7 @@ codex_sessions_dirs = [
 
 The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `antigravity_cli_dirs`, `claude_project_dirs`, `openclaude_project_dirs`,
-`cowork_dirs`, `devin_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
+`cowork_dirs`, `devin_dirs`, `codebuff_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
 `copilot_dirs`, `cortex_dirs`, `cursor_project_dirs`,
 `deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `gptme_dirs`,
 `grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`, `kilo_legacy_dirs`, `kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`, `vibe_session_dirs`,

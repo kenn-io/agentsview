@@ -668,6 +668,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newZedProviderFactory(def)
 	case AgentRooCode:
 		return newRooCodeProviderFactory(def)
+	case AgentCodebuff:
+		return newCodebuffProviderFactory(def)
 	default:
 		panic("missing provider factory for " + string(def.Type))
 	}

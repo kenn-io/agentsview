@@ -1,0 +1,1036 @@
+package parser
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// codebuffWriteFile writes body to path, creating parent dirs.
+func codebuffWriteFile(t *testing.T, path, body string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+}
+
+// codebuffTestSession creates a minimal codebuff session directory with
+// chat-messages.json, run-state.json, and chat-meta.json. Returns the
+// session directory path.
+func codebuffTestSession(
+	t *testing.T,
+	chatMessages string,
+	runState string,
+	chatMeta string,
+) string {
+	t.Helper()
+	dir := t.TempDir()
+	codebuffWriteFile(t, filepath.Join(dir, "chat-messages.json"), chatMessages)
+	if runState != "" {
+		codebuffWriteFile(t, filepath.Join(dir, "run-state.json"), runState)
+	}
+	if chatMeta != "" {
+		codebuffWriteFile(t, filepath.Join(dir, "chat-meta.json"), chatMeta)
+	}
+	return dir
+}
+
+func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Fix the login bug",
+			"timestamp": "2026-07-15T15:04:00Z"
+		},
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "2026-07-15T15:05:00Z",
+			"blocks": [
+				{
+					"type": "text",
+					"textType": "text",
+					"content": "I'll fix the login bug by updating the auth handler."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek",
+				"contextTokenCount": 50000
+			},
+			"fileContext": {
+				"cwd": "/Users/dev/myproject"
+			}
+		}
+	}`
+	chatMeta := `{"messageCount": 2, "firstPrompt": "Fix the login bug", "messagesSize": 1024}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
+	sess, msgs, err := parseCodebuffSession(dir, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, AgentCodebuff, sess.Agent)
+	assert.Equal(t, "Codebuff", sess.AgentLabel)
+	assert.Contains(t, sess.ID, "codebuff:")
+	assert.Equal(t, "myproject", sess.Project)
+	assert.Equal(t, "/Users/dev/myproject", sess.Cwd)
+	assert.Equal(t, "codebuff-chat-v1", sess.SourceVersion)
+	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, 50000, sess.PeakContextTokens)
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Fix the login bug", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Contains(t, msgs[1].Content, "I'll fix the login bug")
+}
+
+func TestParseCodebuffSession_FreebuffClassification(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "10:00 AM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-free-minimax-m3"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "testproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, AgentFreebuff, sess.Agent)
+	assert.Equal(t, "Freebuff", sess.AgentLabel)
+}
+
+func TestParseCodebuffSession_Timestamps(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "first",
+			"timestamp": "2026-07-15T15:04:00Z"
+		},
+		{
+			"id": "user-2",
+			"variant": "user",
+			"content": "second",
+			"timestamp": "2026-07-15T15:10:00Z"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.False(t, sess.StartedAt.IsZero())
+	assert.False(t, sess.EndedAt.IsZero())
+	assert.True(t, sess.EndedAt.After(sess.StartedAt) || sess.EndedAt.Equal(sess.StartedAt))
+}
+
+func TestParseCodebuffSession_ToolCalls(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "read_files",
+					"toolCallId": "tc-1",
+					"input": {"paths": ["src/main.go"]},
+					"output": "package main"
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	// AI message with tool call + tool result = 2 messages.
+	require.GreaterOrEqual(t, len(msgs), 1)
+
+	var toolCallMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolCallMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolCallMsg, "expected a message with tool use")
+	assert.Equal(t, RoleAssistant, toolCallMsg.Role)
+	require.Len(t, toolCallMsg.ToolCalls, 1)
+	assert.Equal(t, "read_files", toolCallMsg.ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", toolCallMsg.ToolCalls[0].Category)
+	assert.Equal(t, "tc-1", toolCallMsg.ToolCalls[0].ToolUseID)
+	assert.Contains(t, toolCallMsg.ToolCalls[0].InputJSON, "src/main.go")
+}
+
+func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "agent",
+					"agentId": "agent-1",
+					"agentName": "basher",
+					"agentType": "basher",
+					"status": "complete",
+					"initialPrompt": "run tests",
+					"content": "All tests passed."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var toolCallMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolCallMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolCallMsg, "expected a message with tool use")
+	require.Len(t, toolCallMsg.ToolCalls, 1)
+
+	tc := toolCallMsg.ToolCalls[0]
+	assert.Equal(t, "Task", tc.Category, "subagent calls should use Task category")
+	assert.Equal(t, "basher", tc.ToolName)
+	assert.Equal(t, "agent-1", tc.ToolUseID)
+	assert.Contains(t, tc.InputJSON, "basher")
+	assert.Contains(t, tc.InputJSON, "run tests")
+	// SubagentSessionID intentionally unset.
+	assert.Empty(t, tc.SubagentSessionID)
+}
+
+func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "text",
+					"textType": "reasoning",
+					"content": "Let me think about this approach."
+				},
+				{
+					"type": "text",
+					"textType": "text",
+					"content": "Here is my answer."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var thinkingMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasThinking {
+			thinkingMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, thinkingMsg, "expected a thinking message")
+	assert.Equal(t, RoleAssistant, thinkingMsg.Role)
+	assert.Contains(t, thinkingMsg.Content, "[Thinking]")
+	assert.Contains(t, thinkingMsg.Content, "Let me think about this approach.")
+	assert.Contains(t, thinkingMsg.ThinkingText, "Let me think about this approach.")
+}
+
+func TestParseCodebuffSession_ModeDivider(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "mode-divider",
+					"mode": "LITE"
+				},
+				{
+					"type": "text",
+					"textType": "text",
+					"content": "Working in LITE mode."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var sysMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].IsSystem {
+			sysMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, sysMsg, "expected a system message from mode divider")
+	assert.Equal(t, RoleSystem, sysMsg.Role)
+	assert.Contains(t, sysMsg.Content, "[Mode: LITE]")
+}
+
+func TestParseCodebuffSession_EmptyMessages(t *testing.T) {
+	chatMessages := `[]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, 0, len(msgs))
+	assert.Equal(t, 0, sess.MessageCount)
+}
+
+func TestParseCodebuffSession_MissingRunState(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+
+	dir := codebuffTestSession(t, chatMessages, "", "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, AgentCodebuff, sess.Agent)
+	assert.Empty(t, sess.Cwd)
+	assert.False(t, sess.HasPeakContextTokens)
+}
+
+func TestParseCodebuffSession_UsageEvent(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	require.Len(t, sess.UsageEvents, 1)
+	evt := sess.UsageEvents[0]
+	assert.Equal(t, sess.ID, evt.SessionID)
+	assert.Equal(t, "session", evt.Source)
+	assert.Equal(t, "base2-deepseek", evt.Model)
+	assert.NotEmpty(t, evt.OccurredAt)
+	assert.NotEmpty(t, evt.DedupKey)
+}
+
+func TestParseCodebuffSession_UsageEventEmptyModel(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": ""
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Empty(t, sess.UsageEvents, "no usage event when model is empty")
+}
+
+func TestParseCodebuffSessionFromChatMeta(t *testing.T) {
+	chatMessages := `[]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+	chatMeta := `{
+		"messageCount": 5,
+		"firstPrompt": "Fix the login bug",
+		"messagesSize": 2048
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// When transcript is empty, chat-meta counts are used as fallback.
+	assert.Equal(t, 5, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+}
+
+func TestParseCodebuffSession_ProjectFromCwd(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			},
+			"fileContext": {
+				"cwd": "/Users/dev/projects/myproject"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "fallback", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Cwd-based project extraction takes precedence over hint.
+	assert.NotEmpty(t, sess.Project)
+}
+
+func TestParseCodebuffSession_FileInfo(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "user-1",
+			"variant": "user",
+			"content": "Hello",
+			"timestamp": "03:04 PM"
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.NotEmpty(t, sess.File.Path)
+	assert.True(t, sess.File.Size > 0)
+	assert.NotZero(t, sess.File.Mtime)
+}
+
+func TestParseCodebuffSession_JoinedTextContent(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "text",
+					"textType": "text",
+					"content": "First paragraph."
+				},
+				{
+					"type": "text",
+					"textType": "text",
+					"content": "Second paragraph."
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Content, "First paragraph.")
+	assert.Contains(t, msgs[0].Content, "Second paragraph.")
+}
+
+func TestParseCodebuffSession_TimestampVariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		ts       string
+		wantZero bool
+	}{
+		{"HH:MM PM format", "03:04 PM", false},
+		{"RFC3339", "2026-07-15T20:01:32Z", false},
+		{"RFC3339Nano", "2026-07-15T20:01:32.065Z", false},
+		{"empty string", "", true},
+		{"garbage", "not-a-timestamp", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessionDate := time.Date(2026, 7, 15, 0, 0, 0, 0, time.Local)
+			ts := parseCodebuffTimestamp(tc.ts, sessionDate)
+			if tc.wantZero {
+				assert.True(t, ts.IsZero(), "expected zero time for %q", tc.ts)
+			} else {
+				assert.False(t, ts.IsZero(), "expected non-zero time for %q", tc.ts)
+			}
+		})
+	}
+}
+
+func TestParseCodebuffSessionDate_Formats(t *testing.T) {
+	tests := []struct {
+		name    string
+		session string
+		wantNil bool
+	}{
+		{"Z suffix with millis", "2026-07-15T20-01-32.065Z", false},
+		{"Z suffix without millis", "2026-07-15T20-01-32Z", false},
+		{"no Z with millis", "2026-07-15T20-01-32.065", false},
+		{"date only", "2026-07-15", false},
+		{"garbage", "not-a-date", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := parseCodebuffSessionDate(tc.session)
+			if tc.wantNil {
+				assert.True(t, ts.IsZero())
+			} else {
+				assert.False(t, ts.IsZero())
+			}
+		})
+	}
+}
+
+func TestParseCodebuffToolCall_UnknownName(t *testing.T) {
+	// A tool block with empty toolName should return nil.
+	raw := `{"type":"tool","toolName":"","toolCallId":"x","input":{}}`
+	var block struct {
+		Type       string          `json:"type"`
+		ToolName   string          `json:"toolName"`
+		ToolCallID string          `json:"toolCallId"`
+		Input      json.RawMessage `json:"input"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(raw), &block))
+
+	// parseCodebuffToolCall works on gjson.Result, so use the real path.
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "",
+					"toolCallId": "x"
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	// Empty toolName -> no tool call produced, so no HasToolUse message.
+	for _, msg := range msgs {
+		assert.False(t, msg.HasToolUse,
+			"empty toolName should not produce a tool use message")
+	}
+}
+
+func TestDiscoverCodebuffSessions(t *testing.T) {
+	root := t.TempDir()
+
+	// Create two projects with sessions.
+	for _, proj := range []string{"proj-a", "proj-b"} {
+		chatsDir := filepath.Join(root, proj, "chats")
+		sessionDir := filepath.Join(chatsDir, "2026-07-15T20-01-32.065Z")
+		require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+		codebuffWriteFile(t, filepath.Join(sessionDir, "chat-messages.json"), `[]`)
+	}
+
+	dirs := discoverCodebuffSessions(root)
+	assert.Len(t, dirs, 2)
+
+	projects := make(map[string]bool)
+	for _, d := range dirs {
+		projects[d.ProjectHint] = true
+	}
+	assert.True(t, projects["proj-a"])
+	assert.True(t, projects["proj-b"])
+}
+
+func TestDiscoverCodebuffSessions_SkipsNonDirs(t *testing.T) {
+	root := t.TempDir()
+	// Create a file directly in root (not a directory).
+	codebuffWriteFile(t, filepath.Join(root, "not-a-dir.txt"), "skip me")
+
+	dirs := discoverCodebuffSessions(root)
+	assert.Empty(t, dirs)
+}
+
+func TestCodebuffProjectFromPath(t *testing.T) {
+	path := "/root/myproject/chats/2026-07-15T20-01-32.065Z/chat-messages.json"
+	assert.Equal(t, "myproject", codebuffProjectFromPath(path))
+}
+
+func TestCodebuffProviderCapabilities(t *testing.T) {
+	caps := codebuffProviderCapabilities()
+	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
+	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
+	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
+	assert.Equal(t, CapabilitySupported, caps.Content.Model)
+	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.Relationships)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.TerminationStatus)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.MalformedLineCount)
+}
+
+func TestCodebuffSessionName_Truncation(t *testing.T) {
+	var longPrompt strings.Builder
+	for range 200 {
+		longPrompt.WriteString("x")
+	}
+	chatMessages, err := json.Marshal([]map[string]any{
+		{
+			"id":        "user-1",
+			"variant":   "user",
+			"content":   longPrompt.String(),
+			"timestamp": "03:04 PM",
+		},
+	})
+	require.NoError(t, err)
+
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, string(chatMessages), runState, "")
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Session name should be truncated to 80 chars with ellipsis.
+	assert.LessOrEqual(t, len(sess.SessionName), 80)
+	assert.Contains(t, sess.SessionName, "...")
+}
+
+func TestCodebuffSessionName_FallbackToProjectHint(t *testing.T) {
+	chatMessages := `[]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek"
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	sess, _, err := parseCodebuffSession(dir, "my-hint", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// No messages, no firstPrompt -> falls back to project hint.
+	assert.Equal(t, "my-hint", sess.SessionName)
+}
+
+func TestParseCodebuffSkills_Catalog(t *testing.T) {
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-free-minimax-m3"},
+			"fileContext": {
+				"skills": {
+					"handoff": {
+						"name": "handoff",
+						"description": "Compact the conversation into a handoff doc.",
+						"filePath": "/Users/dev/.skills/handoff/SKILL.md",
+						"content": "---\nname: handoff\n---\nWrite a handoff."
+					},
+					"ponytail": {
+						"name": "ponytail",
+						"description": "Laziest solution that works."
+					}
+				}
+			}
+		}
+	}`
+	dir := codebuffTestSession(t, `[]`, runState, "")
+	rs, err := readCodebuffRunState(filepath.Join(dir, "run-state.json"))
+	require.NoError(t, err)
+	require.Len(t, rs.Skills, 2)
+
+	byName := map[string]codebuffSkill{}
+	for _, s := range rs.Skills {
+		byName[s.Name] = s
+	}
+	assert.Equal(t, "Compact the conversation into a handoff doc.",
+		byName["handoff"].Description)
+	assert.Equal(t, "/Users/dev/.skills/handoff/SKILL.md",
+		byName["handoff"].FilePath)
+	assert.Contains(t, byName["handoff"].Content, "Write a handoff.")
+	assert.Equal(t, "Laziest solution that works.",
+		byName["ponytail"].Description)
+}
+
+func TestParseCodebuffSkills_Empty(t *testing.T) {
+	require.Empty(t, parseCodebuffSkills([]byte(`{"sessionState":{}}`)))
+	require.Empty(t, parseCodebuffSkills([]byte(`not json`)))
+}
+
+func TestCodebuffAttachSkillNames_FromInput(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "run_terminal_command",
+					"toolCallId": "tc-1",
+					"input": {"command": "ponytail refactor parser.go"}
+				},
+				{
+					"type": "tool",
+					"toolName": "read_files",
+					"toolCallId": "tc-2",
+					"input": {"paths": ["src/main.go"]}
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-free-minimax-m3"},
+			"fileContext": {
+				"skills": {
+					"ponytail": {"name": "ponytail", "description": "Lazy mode."}
+				}
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var toolMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 2)
+
+	assert.Equal(t, "ponytail", toolMsg.ToolCalls[0].SkillName,
+		"tool call referencing a skill name should be attributed")
+	assert.Empty(t, toolMsg.ToolCalls[1].SkillName,
+		"unrelated tool call should not be attributed to a skill")
+}
+
+func TestCodebuffAttachSkillNames_ExplicitSkillTool(t *testing.T) {
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "Skill",
+					"toolCallId": "tc-1",
+					"input": {"skill": "handoff"}
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-free-minimax-m3"},
+			"fileContext": {
+				"skills": {"handoff": {"name": "handoff", "description": "x"}}
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var toolMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 1)
+	assert.Equal(t, "handoff", toolMsg.ToolCalls[0].SkillName)
+}
+
+func TestCodebuffAttachSkillNames_NoFalsePositiveSubstring(t *testing.T) {
+	// A skill named "go" should NOT match inputs containing "going" or
+	// "cargo" — the matching must use word boundaries, not substring.
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "run_terminal_command",
+					"toolCallId": "tc-1",
+					"input": {"command": "going forward with refactor"}
+				},
+				{
+					"type": "tool",
+					"toolName": "run_terminal_command",
+					"toolCallId": "tc-2",
+					"input": {"command": "cargo build --release"}
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-free-minimax-m3"},
+			"fileContext": {
+				"skills": {
+					"go": {"name": "go", "description": "Go skill."}
+				}
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var toolMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 2)
+
+	assert.Empty(t, toolMsg.ToolCalls[0].SkillName,
+		"'going' should not match skill 'go'")
+	assert.Empty(t, toolMsg.ToolCalls[1].SkillName,
+		"'cargo' should not match skill 'go'")
+}
+
+func TestCodebuffAttachSkillNames_WordBoundaryMatch(t *testing.T) {
+	// A skill named "go" SHOULD match when it appears as a standalone
+	// word token in the input.
+	chatMessages := `[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "run_terminal_command",
+					"toolCallId": "tc-1",
+					"input": {"command": "go build ./..."}
+				}
+			]
+		}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-free-minimax-m3"},
+			"fileContext": {
+				"skills": {
+					"go": {"name": "go", "description": "Go skill."}
+				}
+			}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, "")
+	_, msgs, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+
+	var toolMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].HasToolUse {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 1)
+
+	assert.Equal(t, "go", toolMsg.ToolCalls[0].SkillName,
+		"'go build' should match skill 'go' as a standalone token")
+}
+
+func TestCodebuffToolCategories(t *testing.T) {
+	tests := []struct {
+		tool     string
+		category string
+	}{
+		{"read_subtree", "Read"},
+		{"file-picker", "Read"},
+		{"read_files", "Read"},
+		{"list_directory", "Read"},
+		{"str_replace", "Edit"},
+		{"write_file", "Write"},
+		{"basher", "Bash"},
+		{"spawn_agents", "Task"},
+		{"suggest_followups", "Tool"},
+		{"write_todos", "Tool"},
+		{"read_url", "Tool"},
+		{"ask_user", "Tool"},
+		{"render_ui", "Tool"},
+		{"gravity_index", "Tool"},
+		{"skill", "Tool"},
+		{"code-searcher", "Tool"},
+		{"code-reviewer", "Tool"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.tool, func(t *testing.T) {
+			got := NormalizeToolCategory(tc.tool)
+			assert.Equalf(t, tc.category, got, "NormalizeToolCategory(%q)", tc.tool)
+		})
+	}
+}

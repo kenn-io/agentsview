@@ -465,6 +465,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentReasonix,
 		AgentRooCode,
 		AgentPoolside,
+		AgentCodebuff,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
@@ -1292,4 +1293,16 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	}
 	assert.True(t, hasUnix, "DefaultDirs should contain .reasonix")
 	assert.True(t, hasWindows, "DefaultDirs should contain AppData/Roaming/reasonix")
+}
+
+func TestFreebuffNotRegistered(t *testing.T) {
+	// Freebuff intentionally shares the Codebuff provider and is NOT
+	// registered in Registry. Sessions with agentType containing "free"
+	// are classified as Freebuff by the parser, but both agent types
+	// share one provider to avoid double-discovery and skip-cache
+	// contention. See types.go:718-728 for the design rationale.
+	for _, def := range Registry {
+		assert.NotEqualf(t, AgentFreebuff, def.Type,
+			"AgentFreebuff must not be registered — it shares the Codebuff provider")
+	}
 }
