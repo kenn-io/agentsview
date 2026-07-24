@@ -72,8 +72,8 @@ func appendFallbackPollPlan(
 			for _, scope := range scopes {
 				duplicate := false
 				for _, existing := range merged {
-					if existing.SyncDir == scope.SyncDir &&
-						existing.DegradedProbe == scope.DegradedProbe {
+					if existing.Agent == scope.Agent &&
+						existing.SyncDir == scope.SyncDir {
 						duplicate = true
 						break
 					}

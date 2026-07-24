@@ -11,9 +11,8 @@ import (
 // by a logical watcher root. A physical root may cover multiple configured
 // directories or providers, so registration must preserve every exact scope.
 type WatchScope struct {
-	Agent         string
-	SyncDir       string
-	DegradedProbe parser.DegradedPollingStateProbe
+	Agent   string
+	SyncDir string
 }
 
 // WatchRoot is one desired logical watcher root. Exists describes startup
@@ -43,17 +42,12 @@ func pollingObligationsForScopes(
 		byDir[cleanDir] = append(byDir[cleanDir], scope)
 	}
 	byKey := make(map[string][]string)
-	degraded := make(map[string]parser.DegradedPollingStateProbe)
-	degradedAgent := make(map[string]parser.AgentType)
+	obligationAgent := make(map[string]parser.AgentType)
+	splitByDir := len(byDir) > 1
 	for cleanDir, dirScopes := range byDir {
 		obligationKey := key
-		var (
-			probe      parser.DegradedPollingStateProbe
-			probeAgent string
-			probeOK    = true
-			agent      parser.AgentType
-			sameAgent  = true
-		)
+		var agent parser.AgentType
+		sameAgent := true
 		for _, scope := range dirScopes {
 			scopeAgent := parser.AgentType(scope.Agent)
 			if agent == "" {
@@ -61,31 +55,20 @@ func pollingObligationsForScopes(
 			} else if scopeAgent != agent {
 				sameAgent = false
 			}
-			if scope.DegradedProbe == nil {
-				probeOK = false
-				break
-			}
-			if probe == nil {
-				probe = scope.DegradedProbe
-				probeAgent = scope.Agent
-				continue
-			}
-			if scope.Agent != probeAgent {
-				probeOK = false
-				break
-			}
 		}
-		if probeOK && probe != nil {
+		if splitByDir && sameAgent && agent != "" {
 			obligationKey = key + "|" + cleanDir
-			degraded[obligationKey] = probe
+		}
+		currentAgent := parser.AgentType("")
+		if sameAgent {
+			currentAgent = agent
+		}
+		if prior, ok := obligationAgent[obligationKey]; !ok {
+			obligationAgent[obligationKey] = currentAgent
+		} else if prior == "" || currentAgent == "" || prior != currentAgent {
+			obligationAgent[obligationKey] = ""
 		}
 		byKey[obligationKey] = appendUniqueScopeRoot(byKey[obligationKey], cleanDir)
-		if !sameAgent {
-			agent = ""
-		}
-		if agent != "" {
-			degradedAgent[obligationKey] = agent
-		}
 	}
 	keys := make([]string, 0, len(byKey))
 	for obligationKey := range byKey {
@@ -97,11 +80,10 @@ func pollingObligationsForScopes(
 		roots := byKey[obligationKey]
 		slices.Sort(roots)
 		obligations = append(obligations, PollingObligation{
-			Key:           obligationKey,
-			Agent:         degradedAgent[obligationKey],
-			Roots:         roots,
-			Probe:         filepath.Clean(probe),
-			DegradedProbe: degraded[obligationKey],
+			Key:   obligationKey,
+			Agent: obligationAgent[obligationKey],
+			Roots: roots,
+			Probe: filepath.Clean(probe),
 		})
 	}
 	return obligations

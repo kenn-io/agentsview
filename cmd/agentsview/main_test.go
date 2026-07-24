@@ -33,12 +33,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-type staticDegradedPollProbe struct{}
-
-func (*staticDegradedPollProbe) DegradedPollingState(context.Context) (string, error) {
-	return "state", nil
-}
-
 func TestRuntimeWarningHelper(t *testing.T) {
 	logOutput := captureLogOutput(t)
 	var visible bytes.Buffer
@@ -54,16 +48,20 @@ func TestRuntimeWarningHelper(t *testing.T) {
 	assert.Contains(t, logOutput.String(), "could not write daemon runtime record")
 }
 
-func TestLateBoundDegradedPollProbeActivatesWhenOpenCodeRootBecomesSQLite(t *testing.T) {
+func TestProviderDegradedPollingResolverActivatesWhenOpenCodeRootBecomesSQLite(t *testing.T) {
 	root := t.TempDir()
-	provider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+	resolver := newProviderDegradedPollingResolver()
+	obligation := pollingObligation{
+		Key:   "opencode-root",
+		Agent: parser.AgentOpenCode,
 		Roots: []string{root},
-	})
-	require.True(t, ok)
-	probe := lateBoundDegradedPollProbe{provider: provider, root: root}
+		Probe: root,
+	}
 
-	_, err := probe.DegradedPollingState(t.Context())
-	require.ErrorIs(t, err, parser.ErrUnsupportedProviderFeature)
+	decision, err := resolver.ShouldReconcile(t.Context(), obligation)
+	require.NoError(t, err)
+	assert.True(t, decision.Poll)
+	assert.False(t, decision.Tracked)
 
 	db, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
 	require.NoError(t, err)
@@ -72,18 +70,66 @@ func TestLateBoundDegradedPollProbeActivatesWhenOpenCodeRootBecomesSQLite(t *tes
 	_, err = db.Exec(`CREATE TABLE probe_state (id INTEGER PRIMARY KEY)`)
 	require.NoError(t, err)
 
-	state, err := probe.DegradedPollingState(t.Context())
+	decision, err = resolver.ShouldReconcile(t.Context(), obligation)
 	require.NoError(t, err)
-	assert.NotEmpty(t, state)
+	assert.True(t, decision.Poll)
+	assert.True(t, decision.Tracked)
 }
 
-func TestLateBoundDegradedPollProbeFallsBackWhenOpenCodeRootBecomesHybrid(t *testing.T) {
-	root := t.TempDir()
-	provider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+func TestPendingOpenCodeRootPreservesProviderOwnershipWhenItBecomesSQLite(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-opencode")
+	got := watchPollingObligations(
+		[]watchRoot{{
+			path:               root,
+			scopes:             []watchScope{{agent: parser.AgentOpenCode, syncDir: root}},
+			pendingPollingDirs: []string{root},
+		}},
+		[]agentsync.RecursiveWatchResult{{Watched: 1}},
+		[]string{root},
+	)
+	require.Len(t, got, 1)
+	assert.Equal(t, agentsync.PollingObligation{
+		Key:   root,
+		Agent: parser.AgentOpenCode,
 		Roots: []string{root},
-	})
-	require.True(t, ok)
-	probe := lateBoundDegradedPollProbe{provider: provider, root: root}
+		Probe: root,
+	}, got[0])
+
+	resolver := newProviderDegradedPollingResolver()
+	obligation := pollingObligation{
+		Key:   got[0].Key,
+		Agent: got[0].Agent,
+		Roots: got[0].Roots,
+		Probe: got[0].Probe,
+	}
+	decision, err := resolver.ShouldReconcile(t.Context(), obligation)
+	require.NoError(t, err)
+	assert.True(t, decision.Poll)
+	assert.False(t, decision.Tracked)
+
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	db, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Ping())
+	_, err = db.Exec(`CREATE TABLE probe_state (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	decision, err = resolver.ShouldReconcile(t.Context(), obligation)
+	require.NoError(t, err)
+	assert.True(t, decision.Poll)
+	assert.True(t, decision.Tracked)
+}
+
+func TestProviderDegradedPollingResolverFallsBackWhenOpenCodeRootBecomesHybrid(t *testing.T) {
+	root := t.TempDir()
+	resolver := newProviderDegradedPollingResolver()
+	obligation := pollingObligation{
+		Key:   "opencode-root",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{root},
+		Probe: root,
+	}
 
 	db, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
 	require.NoError(t, err)
@@ -92,15 +138,18 @@ func TestLateBoundDegradedPollProbeFallsBackWhenOpenCodeRootBecomesHybrid(t *tes
 	_, err = db.Exec(`CREATE TABLE probe_state (id INTEGER PRIMARY KEY)`)
 	require.NoError(t, err)
 
-	state, err := probe.DegradedPollingState(t.Context())
+	decision, err := resolver.ShouldReconcile(t.Context(), obligation)
 	require.NoError(t, err)
-	assert.NotEmpty(t, state)
+	assert.True(t, decision.Poll)
+	assert.True(t, decision.Tracked)
 
 	require.NoError(t,
 		os.MkdirAll(filepath.Join(root, "storage", "session"), 0o755))
 
-	_, err = probe.DegradedPollingState(t.Context())
-	require.ErrorIs(t, err, parser.ErrUnsupportedProviderFeature)
+	decision, err = resolver.ShouldReconcile(t.Context(), obligation)
+	require.NoError(t, err)
+	assert.True(t, decision.Poll)
+	assert.False(t, decision.Tracked)
 }
 
 func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterSlowStartup(t *testing.T) {
@@ -604,11 +653,11 @@ func TestPollUnwatchedRootsOnceUsesScopedAuthoritativeReconciliation(t *testing.
 	roots := []string{"/tmp/claude", "/tmp/codex"}
 
 	pollUnwatchedRootsOnce(t.Context(), fake, []pollingObligation{{
-		Key: "roots",
+		Key:   "roots",
 		Roots: roots,
 	}})
 	pollUnwatchedRootsOnce(t.Context(), fake, []pollingObligation{{
-		Key: "roots",
+		Key:   "roots",
 		Roots: roots,
 	}})
 
@@ -1647,7 +1696,10 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 	)
 
 	assert.Equal(t, []agentsync.PollingObligation{
-		{Key: pendingPath, Roots: []string{shared}, Probe: pendingPath},
+		{
+			Key: pendingPath, Agent: parser.AgentDevin,
+			Roots: []string{shared}, Probe: pendingPath,
+		},
 		{Key: "persistent:" + shared, Roots: []string{shared}, Probe: shared},
 	}, got)
 }
@@ -1655,11 +1707,10 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing.T) {
 	syncDir := t.TempDir()
 	watchPath := filepath.Join(syncDir, "sessions")
-	probe := &staticDegradedPollProbe{}
 	roots := []watchRoot{{
 		path: watchPath, exists: true, recursive: true,
 		scopes: []watchScope{{
-			agent: parser.AgentClaude, syncDir: syncDir, degradedProbe: probe,
+			agent: parser.AgentClaude, syncDir: syncDir,
 		}},
 	}}
 
@@ -1671,9 +1722,9 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 
 	require.Len(t, got, 1)
 	assert.Equal(t, watchPath+"|"+filepath.Clean(syncDir), got[0].Key)
+	assert.Equal(t, parser.AgentClaude, got[0].Agent)
 	assert.Equal(t, []string{syncDir}, got[0].Roots)
 	assert.Equal(t, watchPath, got[0].Probe)
-	assert.Same(t, probe, got[0].DegradedProbe)
 }
 
 func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.T) {
@@ -1681,13 +1732,12 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 	openCodeDir := filepath.Join(base, "opencode")
 	unsupportedDir := filepath.Join(base, "kilo")
 	watchPath := filepath.Join(base, "shared")
-	probe := &staticDegradedPollProbe{}
 	roots := []watchRoot{{
 		path:      watchPath,
 		exists:    true,
 		recursive: true,
 		scopes: []watchScope{
-			{agent: parser.AgentOpenCode, syncDir: openCodeDir, degradedProbe: probe},
+			{agent: parser.AgentOpenCode, syncDir: openCodeDir},
 			{agent: parser.AgentKilo, syncDir: unsupportedDir},
 		},
 	}}
@@ -1701,16 +1751,16 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 	require.Len(t, got, 2)
 	assert.Equal(t, []agentsync.PollingObligation{
 		{
-			Key:           watchPath,
-			Roots:         []string{unsupportedDir},
-			Probe:         watchPath,
-			DegradedProbe: nil,
+			Key:   watchPath + "|" + filepath.Clean(unsupportedDir),
+			Agent: parser.AgentKilo,
+			Roots: []string{unsupportedDir},
+			Probe: watchPath,
 		},
 		{
-			Key:           watchPath + "|" + filepath.Clean(openCodeDir),
-			Roots:         []string{openCodeDir},
-			Probe:         watchPath,
-			DegradedProbe: probe,
+			Key:   watchPath + "|" + filepath.Clean(openCodeDir),
+			Agent: parser.AgentOpenCode,
+			Roots: []string{openCodeDir},
+			Probe: watchPath,
 		},
 	}, got)
 }
@@ -1718,13 +1768,12 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 func TestWatchPollingObligationsSharedDirWithUnsupportedScopeDisablesProbe(t *testing.T) {
 	sharedDir := t.TempDir()
 	watchPath := filepath.Join(sharedDir, "shared")
-	probe := &staticDegradedPollProbe{}
 	roots := []watchRoot{{
 		path:      watchPath,
 		exists:    true,
 		recursive: true,
 		scopes: []watchScope{
-			{agent: parser.AgentOpenCode, syncDir: sharedDir, degradedProbe: probe},
+			{agent: parser.AgentOpenCode, syncDir: sharedDir},
 			{agent: parser.AgentKilo, syncDir: sharedDir},
 		},
 	}}
@@ -1793,6 +1842,7 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
 		func(run func()) { run() }, nil,
+		nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
@@ -1853,6 +1903,7 @@ func TestWatcherUnavailableFallbackDefersMissingNestedRootScope(t *testing.T) {
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
 		func(run func()) { run() }, nil,
+		nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
@@ -1912,6 +1963,7 @@ func TestWatcherUnavailableFallbackDefersNestedRootLostAfterRegistration(t *test
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
 		func(run func()) { run() }, nil,
+		nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
@@ -1981,6 +2033,7 @@ func TestWatcherUnavailableObligationsGateBeforeFallback(t *testing.T) {
 			stepAvailable = append(stepAvailable,
 				availableUnwatchedPollRoots(coordinator.currentPollObligations()))
 		},
+		nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
@@ -2020,14 +2073,17 @@ func TestWatcherUnavailableObligationsGateBeforeFallback(t *testing.T) {
 
 func TestWatcherUnavailableFallbackDoesNotBypassUnchangedDegradedProbe(t *testing.T) {
 	configured := requireExistingPollRoot(t, t.TempDir(), "opencode")
-	watchPath := filepath.Join(configured, "sessions")
-	require.NoError(t, os.MkdirAll(watchPath, 0o755))
-	probe := &sequenceDegradedPollProbe{states: []string{"stable", "stable"}}
+	db, err := sql.Open("sqlite3", filepath.Join(configured, "opencode.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Ping())
+	_, err = db.Exec(`CREATE TABLE probe_state (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
 
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, newProviderDegradedPollingResolver(),
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
@@ -2038,19 +2094,19 @@ func TestWatcherUnavailableFallbackDoesNotBypassUnchangedDegradedProbe(t *testin
 		},
 		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
 			return coordinator.AddObligation(pollingObligation{
-				Key:           obligation.Key,
-				Roots:         obligation.Roots,
-				Probe:         obligation.Probe,
-				DegradedProbe: obligation.DegradedProbe,
+				Key:   obligation.Key,
+				Agent: obligation.Agent,
+				Roots: obligation.Roots,
+				Probe: obligation.Probe,
 			})
 		},
 	}
 	roots := []watchRoot{{
-		path:      watchPath,
+		path:      configured,
 		exists:    true,
 		recursive: true,
 		scopes: []watchScope{
-			{agent: parser.AgentOpenCode, syncDir: configured, degradedProbe: probe},
+			{agent: parser.AgentOpenCode, syncDir: configured},
 		},
 	}}
 

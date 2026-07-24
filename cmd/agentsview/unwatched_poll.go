@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,10 +40,81 @@ type pollingObligation struct {
 	// the scope then would tombstone every session under the missing
 	// subtree. Empty means the Roots themselves are probed.
 	Probe string
-	// DegradedProbe carries an additive provider-owned freshness token for
-	// degraded polling. Equal consecutive states suppress authoritative
-	// reconciliation for this obligation's Roots on that tick.
-	DegradedProbe parser.DegradedPollingStateProbe
+}
+
+type degradedPollingDecision struct {
+	Poll    bool
+	Tracked bool
+}
+
+type degradedPollingResolver interface {
+	ShouldReconcile(context.Context, pollingObligation) (
+		degradedPollingDecision, error,
+	)
+	Forget(pollingObligation)
+}
+
+type providerDegradedPollingResolver struct {
+	mu     sync.Mutex
+	states map[string]string
+}
+
+func newProviderDegradedPollingResolver() *providerDegradedPollingResolver {
+	return &providerDegradedPollingResolver{
+		states: make(map[string]string),
+	}
+}
+
+func (r *providerDegradedPollingResolver) ShouldReconcile(
+	ctx context.Context,
+	obligation pollingObligation,
+) (degradedPollingDecision, error) {
+	if err := ctx.Err(); err != nil {
+		return degradedPollingDecision{}, err
+	}
+	if obligation.Agent == "" || obligation.Probe == "" || len(obligation.Roots) == 0 {
+		return degradedPollingDecision{Poll: true}, nil
+	}
+	provider, ok := parser.NewProvider(obligation.Agent, parser.ProviderConfig{
+		Roots: append([]string(nil), obligation.Roots...),
+	})
+	if !ok {
+		r.Forget(obligation)
+		return degradedPollingDecision{Poll: true}, nil
+	}
+	probe, err := parser.ResolveDegradedPollingProbe(ctx, provider, obligation.Probe)
+	if err != nil {
+		if ctx.Err() != nil {
+			return degradedPollingDecision{}, ctx.Err()
+		}
+		r.Forget(obligation)
+		return degradedPollingDecision{Poll: true}, nil
+	}
+	state, err := probe.DegradedPollingState(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return degradedPollingDecision{}, ctx.Err()
+		}
+		r.Forget(obligation)
+		return degradedPollingDecision{Poll: true}, nil
+	}
+	r.mu.Lock()
+	prior, ok := r.states[obligation.Key]
+	r.states[obligation.Key] = state
+	r.mu.Unlock()
+	if ok && prior == state {
+		return degradedPollingDecision{Tracked: true}, nil
+	}
+	return degradedPollingDecision{Poll: true, Tracked: true}, nil
+}
+
+func (r *providerDegradedPollingResolver) Forget(obligation pollingObligation) {
+	if obligation.Key == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.states, obligation.Key)
 }
 
 type sharedUnwatchedPollCoordinator struct {
@@ -57,6 +127,7 @@ type sharedUnwatchedPollCoordinator struct {
 	doWork       func(func())
 	// onRootsOwned is a test observer invoked after installation and before ack.
 	onRootsOwned func([]string)
+	degradedPoll degradedPollingResolver
 	add          chan unwatchedPollAdd
 	// pollWake coalesces ticks and explicit wakes while the serialized worker runs.
 	pollWake chan struct{}
@@ -66,8 +137,6 @@ type sharedUnwatchedPollCoordinator struct {
 	// coordinator loop; each entry keeps its probe so availability is
 	// evaluated per obligation at poll time.
 	pollObligations []pollingObligation
-	pollStates      map[string]string
-	pollRevisions   map[string]uint64
 	stop            chan struct{}
 	done            chan struct{}
 	stopOnce        sync.Once
@@ -81,6 +150,7 @@ func newUnwatchedPollCoordinator(
 	ticker := time.NewTicker(unwatchedPollInterval)
 	return newUnwatchedPollCoordinatorWithTicks(
 		ctx, engine, ticker.C, ticker.Stop, idleTracker.Do, nil,
+		newProviderDegradedPollingResolver(),
 	)
 }
 
@@ -91,24 +161,24 @@ func newUnwatchedPollCoordinatorWithTicks(
 	stopTicker func(),
 	doWork func(func()),
 	onRootsOwned func([]string),
+	degradedPoll degradedPollingResolver,
 ) *sharedUnwatchedPollCoordinator {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	coordinator := &sharedUnwatchedPollCoordinator{
-		ctx:           ctx,
-		workerCtx:     workerCtx,
-		workerCancel:  workerCancel,
-		engine:        engine,
-		ticks:         ticks,
-		stopTicker:    stopTicker,
-		doWork:        doWork,
-		add:           make(chan unwatchedPollAdd),
-		pollWake:      make(chan struct{}, 1),
-		pollDone:      make(chan struct{}),
-		pollStates:    make(map[string]string),
-		pollRevisions: make(map[string]uint64),
-		stop:          make(chan struct{}),
-		done:          make(chan struct{}),
-		onRootsOwned:  onRootsOwned,
+		ctx:          ctx,
+		workerCtx:    workerCtx,
+		workerCancel: workerCancel,
+		engine:       engine,
+		ticks:        ticks,
+		stopTicker:   stopTicker,
+		doWork:       doWork,
+		onRootsOwned: onRootsOwned,
+		degradedPoll: degradedPoll,
+		add:          make(chan unwatchedPollAdd),
+		pollWake:     make(chan struct{}, 1),
+		pollDone:     make(chan struct{}),
+		stop:         make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 	go coordinator.run()
 	return coordinator
@@ -132,10 +202,10 @@ func (c *sharedUnwatchedPollCoordinator) updateRoots(
 ) error {
 	request := unwatchedPollAdd{
 		obligation: pollingObligation{
-			Key:           obligation.Key,
-			Roots:         append([]string(nil), obligation.Roots...),
-			Probe:         obligation.Probe,
-			DegradedProbe: obligation.DegradedProbe,
+			Key:   obligation.Key,
+			Agent: obligation.Agent,
+			Roots: append([]string(nil), obligation.Roots...),
+			Probe: obligation.Probe,
 		},
 		remove: remove,
 		done:   make(chan struct{}),
@@ -178,9 +248,10 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 			snapshot := sortedPollObligations(obligations)
 			c.pollMu.Lock()
 			c.pollObligations = snapshot
-			c.pollRevisions[request.obligation.Key]++
-			delete(c.pollStates, request.obligation.Key)
 			c.pollMu.Unlock()
+			if c.degradedPoll != nil {
+				c.degradedPoll.Forget(request.obligation)
+			}
 			if c.onRootsOwned != nil {
 				c.onRootsOwned(unwatchedPollObligationRoots(obligations))
 			}
@@ -232,22 +303,25 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			if c.workerCtx.Err() != nil {
 				return
 			}
-			obligations, priorStates, priorRevisions := c.currentPollSnapshot()
-			selected, nextStates := c.preparePollRun(
-				c.workerCtx, obligations, priorStates,
-			)
+			obligations := c.currentPollSnapshot()
+			selected, tracked, err := c.preparePollRun(c.workerCtx, obligations)
+			if err != nil {
+				c.resetTracked(tracked)
+				return
+			}
 			if len(selected) == 0 {
 				continue
 			}
 			log.Printf("polling %d unwatched root(s)", len(unwatchedPollObligationSliceRoots(selected)))
 			c.doWork(func() {
 				if c.workerCtx.Err() != nil {
+					c.resetTracked(tracked)
 					return
 				}
 				if err := pollUnwatchedRootsOnce(c.workerCtx, c.engine, selected); err != nil {
+					c.resetTracked(tracked)
 					return
 				}
-				c.commitPollStates(nextStates, priorRevisions)
 			})
 		}
 	}
@@ -271,9 +345,12 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 // deferred scope as an authoritative empty discovery and tombstone its
 // sessions.
 func availableUnwatchedPollRoots(obligations []pollingObligation) []string {
-	selected, _ := availableUnwatchedPollObligationsWithState(
+	selected, _, err := availableUnwatchedPollObligations(
 		context.Background(), obligations, nil,
 	)
+	if err != nil {
+		return nil
+	}
 	return unwatchedPollObligationSliceRoots(selected)
 }
 
@@ -356,52 +433,39 @@ func pollUnwatchedRootsOnce(
 	return nil
 }
 
-func (c *sharedUnwatchedPollCoordinator) currentPollSnapshot() (
-	[]pollingObligation,
-	map[string]string,
-	map[string]uint64,
-) {
+func (c *sharedUnwatchedPollCoordinator) currentPollSnapshot() []pollingObligation {
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
-	return append([]pollingObligation(nil), c.pollObligations...),
-		clonePollStates(c.pollStates),
-		clonePollRevisions(c.pollRevisions)
+	return append([]pollingObligation(nil), c.pollObligations...)
 }
 
 func (c *sharedUnwatchedPollCoordinator) preparePollRun(
 	ctx context.Context,
 	obligations []pollingObligation,
-	prior map[string]string,
-) ([]pollingObligation, map[string]string) {
-	return availableUnwatchedPollObligationsWithState(
-		ctx, obligations, prior,
+) ([]pollingObligation, []pollingObligation, error) {
+	return availableUnwatchedPollObligations(
+		ctx, obligations, c.degradedPoll,
 	)
 }
 
-func (c *sharedUnwatchedPollCoordinator) commitPollStates(
-	states map[string]string,
-	revisions map[string]uint64,
+func (c *sharedUnwatchedPollCoordinator) resetTracked(
+	obligations []pollingObligation,
 ) {
-	if len(states) == 0 {
+	if c.degradedPoll == nil || len(obligations) == 0 {
 		return
 	}
-	c.pollMu.Lock()
-	defer c.pollMu.Unlock()
-	for key, state := range states {
-		if revision, ok := revisions[key]; ok && c.pollRevisions[key] != revision {
-			continue
-		}
-		c.pollStates[key] = state
+	for _, obligation := range obligations {
+		c.degradedPoll.Forget(obligation)
 	}
 }
 
-func availableUnwatchedPollObligationsWithState(
+func availableUnwatchedPollObligations(
 	ctx context.Context,
 	obligations []pollingObligation,
-	prior map[string]string,
-) ([]pollingObligation, map[string]string) {
+	degradedPoll degradedPollingResolver,
+) ([]pollingObligation, []pollingObligation, error) {
 	blocked := make(map[string]struct{})
-	pendingStates := make(map[string]string)
+	trackedByKey := make(map[string]pollingObligation)
 	selected := make([]pollingObligation, 0, len(obligations))
 	for _, obligation := range obligations {
 		probeMissing := false
@@ -418,13 +482,16 @@ func availableUnwatchedPollObligationsWithState(
 			}
 			continue
 		}
-		if obligation.DegradedProbe != nil {
-			state, err := obligation.DegradedProbe.DegradedPollingState(ctx)
-			if err == nil {
-				if prior[obligation.Key] == state {
-					continue
-				}
-				pendingStates[obligation.Key] = state
+		if degradedPoll != nil && obligation.Agent != "" {
+			decision, err := degradedPoll.ShouldReconcile(ctx, obligation)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !decision.Poll {
+				continue
+			}
+			if decision.Tracked {
+				trackedByKey[obligation.Key] = obligation
 			}
 		}
 		roots := make([]string, 0, len(obligation.Roots))
@@ -437,48 +504,48 @@ func availableUnwatchedPollObligationsWithState(
 			}
 		}
 		if len(roots) == 0 {
+			if tracked, ok := trackedByKey[obligation.Key]; ok && degradedPoll != nil {
+				degradedPoll.Forget(tracked)
+				delete(trackedByKey, obligation.Key)
+			}
 			continue
 		}
 		selected = append(selected, pollingObligation{
-			Key:           obligation.Key,
-			Agent:         obligation.Agent,
-			Roots:         roots,
-			Probe:         obligation.Probe,
-			DegradedProbe: obligation.DegradedProbe,
+			Key:   obligation.Key,
+			Agent: obligation.Agent,
+			Roots: roots,
+			Probe: obligation.Probe,
 		})
 	}
 	filtered := make([]pollingObligation, 0, len(selected))
 	for _, obligation := range selected {
-		deferred := false
+		roots := make([]string, 0, len(obligation.Roots))
 		for _, root := range obligation.Roots {
-			if overlapsDeferredScope(filepath.Clean(root), blocked) {
-				deferred = true
-				break
+			if !overlapsDeferredScope(filepath.Clean(root), blocked) {
+				roots = append(roots, root)
 			}
 		}
-		if deferred {
-			delete(pendingStates, obligation.Key)
+		if len(roots) == 0 {
+			if tracked, ok := trackedByKey[obligation.Key]; ok && degradedPoll != nil {
+				degradedPoll.Forget(tracked)
+				delete(trackedByKey, obligation.Key)
+			}
 			continue
 		}
+		if len(roots) != len(obligation.Roots) {
+			if tracked, ok := trackedByKey[obligation.Key]; ok && degradedPoll != nil {
+				degradedPoll.Forget(tracked)
+				delete(trackedByKey, obligation.Key)
+			}
+		}
+		obligation.Roots = roots
 		filtered = append(filtered, obligation)
 	}
-	return filtered, pendingStates
-}
-
-func clonePollStates(states map[string]string) map[string]string {
-	if len(states) == 0 {
-		return nil
+	tracked := make([]pollingObligation, 0, len(filtered))
+	for _, obligation := range filtered {
+		if trackedObligation, ok := trackedByKey[obligation.Key]; ok {
+			tracked = append(tracked, trackedObligation)
+		}
 	}
-	cloned := make(map[string]string, len(states))
-	maps.Copy(cloned, states)
-	return cloned
-}
-
-func clonePollRevisions(revisions map[string]uint64) map[string]uint64 {
-	if len(revisions) == 0 {
-		return nil
-	}
-	cloned := make(map[string]uint64, len(revisions))
-	maps.Copy(cloned, revisions)
-	return cloned
+	return filtered, tracked, nil
 }

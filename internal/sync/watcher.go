@@ -87,10 +87,6 @@ type PollingObligation struct {
 	// expansion. Empty means the obligation spans mixed providers and must use
 	// generic root reconciliation.
 	Agent parser.AgentType
-	// DegradedProbe is an additive provider-owned freshness probe for degraded
-	// polling. Equal consecutive states suppress authoritative reconciliation
-	// for this obligation's Roots on that tick.
-	DegradedProbe parser.DegradedPollingStateProbe
 }
 
 // WatcherOptions configures runtime ownership handoffs that are not needed by

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,32 +43,43 @@ type cancelBlockingUnwatchedPollSyncer struct {
 	calls    int
 }
 
-type sequenceDegradedPollProbe struct {
-	mu     sync.Mutex
-	states []string
+type scriptedDegradedPollingResolver struct {
+	mu        sync.Mutex
+	decisions map[string][]degradedPollingDecision
+	positions map[string]int
 }
 
-func (p *sequenceDegradedPollProbe) DegradedPollingState(
-	context.Context,
-) (string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.states) == 0 {
-		return "", nil
+func (r *scriptedDegradedPollingResolver) ShouldReconcile(
+	ctx context.Context,
+	obligation pollingObligation,
+) (degradedPollingDecision, error) {
+	if err := ctx.Err(); err != nil {
+		return degradedPollingDecision{}, err
 	}
-	state := p.states[0]
-	if len(p.states) > 1 {
-		p.states = p.states[1:]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.positions == nil {
+		r.positions = make(map[string]int)
 	}
-	return state, nil
+	decisions := r.decisions[obligation.Key]
+	if len(decisions) == 0 {
+		return degradedPollingDecision{Poll: true}, nil
+	}
+	idx := r.positions[obligation.Key]
+	if idx >= len(decisions) {
+		idx = len(decisions) - 1
+	}
+	decision := decisions[idx]
+	if idx < len(decisions)-1 {
+		r.positions[obligation.Key] = idx + 1
+	}
+	return decision, nil
 }
 
-type errorDegradedPollProbe struct {
-	err error
-}
-
-func (p errorDegradedPollProbe) DegradedPollingState(context.Context) (string, error) {
-	return "", p.err
+func (r *scriptedDegradedPollingResolver) Forget(obligation pollingObligation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.positions, obligation.Key)
 }
 
 func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
@@ -179,7 +189,7 @@ func TestUnwatchedPollConcurrentAddDeduplicatesUpdatedRootSet(t *testing.T) {
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
@@ -216,7 +226,7 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 	ticks := make(chan time.Time, 1)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
@@ -240,18 +250,25 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 func TestUnwatchedPollDegradedProbeSkipsUnchangedScope(t *testing.T) {
 	ticks := make(chan time.Time, 4)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4)}
+	resolver := &scriptedDegradedPollingResolver{
+		decisions: map[string][]degradedPollingDecision{
+			"opencode-root": {
+				{Poll: true, Tracked: true},
+				{Tracked: true},
+				{Poll: true, Tracked: true},
+			},
+		},
+	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, resolver,
 	)
 	t.Cleanup(coordinator.Stop)
 	root := requireExistingPollRoot(t, t.TempDir(), "opencode")
-	probe := &sequenceDegradedPollProbe{
-		states: []string{"state-1", "state-1", "state-2"},
-	}
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key:           "opencode-root",
-		Roots:         []string{root},
-		DegradedProbe: probe,
+		Key:   "opencode-root",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{root},
+		Probe: root,
 	}))
 
 	ticks <- time.Now()
@@ -273,15 +290,21 @@ func TestUnwatchedPollDegradedProbeSkipsUnchangedScope(t *testing.T) {
 func TestUnwatchedPollDegradedProbeErrorFallsBackToAuthoritativePoll(t *testing.T) {
 	ticks := make(chan time.Time, 3)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
+	resolver := &scriptedDegradedPollingResolver{
+		decisions: map[string][]degradedPollingDecision{
+			"opencode-root": {{Poll: true}, {Poll: true}},
+		},
+	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, resolver,
 	)
 	t.Cleanup(coordinator.Stop)
 	root := requireExistingPollRoot(t, t.TempDir(), "opencode")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key:           "opencode-root",
-		Roots:         []string{root},
-		DegradedProbe: errorDegradedPollProbe{err: errors.New("probe failed")},
+		Key:   "opencode-root",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{root},
+		Probe: root,
 	}))
 
 	ticks <- time.Now()
@@ -297,21 +320,26 @@ func TestUnwatchedPollUsesProviderScopedReconciliationForOwnedRoots(t *testing.T
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	parent := requireExistingPollRoot(t, t.TempDir(), "shared")
 	child := requireExistingPollRoot(t, parent, "opencode")
-	selected, states := availableUnwatchedPollObligationsWithState(
+	selected, tracked, err := availableUnwatchedPollObligations(
 		t.Context(),
 		[]pollingObligation{{
-		Key:           "opencode-root",
-		Agent:         parser.AgentOpenCode,
-		Roots:         []string{child},
-		DegradedProbe: &sequenceDegradedPollProbe{states: []string{"stable", "stable"}},
+			Key:   "opencode-root",
+			Agent: parser.AgentOpenCode,
+			Roots: []string{child},
+			Probe: child,
 		}, {
 			Key:   "codex-root",
 			Agent: parser.AgentCodex,
 			Roots: []string{parent},
 		}},
-		map[string]string{"opencode-root": "stable"},
+		&scriptedDegradedPollingResolver{
+			decisions: map[string][]degradedPollingDecision{
+				"opencode-root": {{Tracked: true}},
+			},
+		},
 	)
-	require.Equal(t, map[string]string{}, states)
+	require.NoError(t, err)
+	require.Empty(t, tracked)
 	require.Equal(t, []pollingObligation{{
 		Key:   "codex-root",
 		Agent: parser.AgentCodex,
@@ -336,7 +364,7 @@ func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
@@ -374,7 +402,7 @@ func TestUnwatchedPollDefersScopesWhileProbePathMissing(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
@@ -413,7 +441,7 @@ func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
@@ -607,7 +635,7 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 		release: make(chan struct{}),
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(func() {
 		select {
@@ -661,7 +689,7 @@ func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		parentCtx, syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(func() {
 		cancelParent()
@@ -701,7 +729,7 @@ func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		parentCtx, syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(func() {
 		cancelParent()
@@ -739,15 +767,24 @@ func TestUnwatchedPollReplacementDoesNotRestoreStaleProbeState(t *testing.T) {
 		started: make(chan []string, 2),
 		release: make(chan struct{}),
 	}
+	resolver := &scriptedDegradedPollingResolver{
+		decisions: map[string][]degradedPollingDecision{
+			"root": {
+				{Poll: true, Tracked: true},
+				{Tracked: true},
+			},
+		},
+	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, resolver,
 	)
 	t.Cleanup(coordinator.Stop)
 	root := requireExistingPollRoot(t, t.TempDir(), "root")
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key:           "root",
-		Roots:         []string{root},
-		DegradedProbe: &sequenceDegradedPollProbe{states: []string{"stable", "stable"}},
+		Key:   "root",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{root},
+		Probe: root,
 	}))
 
 	coordinator.requestPoll()
@@ -761,9 +798,10 @@ func TestUnwatchedPollReplacementDoesNotRestoreStaleProbeState(t *testing.T) {
 	replaced := make(chan error, 1)
 	go func() {
 		replaced <- coordinator.AddObligation(pollingObligation{
-			Key:           "root",
-			Roots:         []string{root},
-			DegradedProbe: &sequenceDegradedPollProbe{states: []string{"stable", "stable"}},
+			Key:   "root",
+			Agent: parser.AgentOpenCode,
+			Roots: []string{root},
+			Probe: root,
 		})
 	}()
 
@@ -783,7 +821,7 @@ func TestUnwatchedPollRemoveRootsStopsReconciliationAfterNativeRecovery(t *testi
 	ticks := make(chan time.Time, 1)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
@@ -807,7 +845,7 @@ func TestUnwatchedPollRemovingOneOverlappingObligationKeepsSharedRoot(t *testing
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	parent := t.TempDir()
@@ -832,7 +870,7 @@ func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	t.Cleanup(coordinator.Stop)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "empty"}))
@@ -847,7 +885,7 @@ func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil,
+		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil, nil,
 	)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key: "owned", Roots: []string{"/owned"},
@@ -879,6 +917,7 @@ func TestUnwatchedPollAddObligationRacingStopReturnsOwnershipOrStopped(t *testin
 			func(roots []string) {
 				ownedSnapshots <- append([]string(nil), roots...)
 			},
+			nil,
 		)
 		start := make(chan struct{})
 		addResult := make(chan error, 1)

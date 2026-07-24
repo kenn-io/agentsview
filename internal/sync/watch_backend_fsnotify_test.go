@@ -16,13 +16,9 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
-
-type testDegradedProbe struct{}
-
-func (testDegradedProbe) DegradedPollingState(context.Context) (string, error) {
-	return "stable", nil
-}
 
 func testFSNotifyBackend(t *testing.T) *fsnotifyBackend {
 	t.Helper()
@@ -295,6 +291,7 @@ func TestFSNotifyBackendRootLossTransfersExactScopeToPolling(t *testing.T) {
 	assert.Equal(t, backendItemDirectory, event.ItemType)
 	obligation := requireReceiveWithin(t, polling, time.Second)
 	assert.Equal(t, "fsnotify-runtime:"+root, obligation.Key)
+	assert.Equal(t, parser.AgentClaude, obligation.Agent)
 	assert.Equal(t, []string{syncDir}, obligation.Roots)
 	assert.Empty(t, backend.watcher.WatchList())
 }
@@ -317,7 +314,7 @@ func TestFSNotifyBackendRootLossPreservesDegradedProbePerScope(t *testing.T) {
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{
-			{Agent: "opencode", SyncDir: openCodeDir, DegradedProbe: testDegradedProbe{}},
+			{Agent: "opencode", SyncDir: openCodeDir},
 			{Agent: "kilo", SyncDir: unsupportedDir},
 		},
 	}}, 2)
@@ -334,15 +331,16 @@ func TestFSNotifyBackendRootLossPreservesDegradedProbePerScope(t *testing.T) {
 		first.Key:  first,
 		second.Key: second,
 	}
-	require.Contains(t, obligations, "fsnotify-runtime:"+root)
 	require.Contains(t, obligations, "fsnotify-runtime:"+root+"|"+openCodeDir)
-	assert.Equal(t, []string{unsupportedDir},
-		obligations["fsnotify-runtime:"+root].Roots)
-	assert.Nil(t, obligations["fsnotify-runtime:"+root].DegradedProbe)
+	require.Contains(t, obligations, "fsnotify-runtime:"+root+"|"+unsupportedDir)
 	assert.Equal(t, []string{openCodeDir},
 		obligations["fsnotify-runtime:"+root+"|"+openCodeDir].Roots)
-	assert.NotNil(t,
-		obligations["fsnotify-runtime:"+root+"|"+openCodeDir].DegradedProbe)
+	assert.Equal(t, parser.AgentOpenCode,
+		obligations["fsnotify-runtime:"+root+"|"+openCodeDir].Agent)
+	assert.Equal(t, []string{unsupportedDir},
+		obligations["fsnotify-runtime:"+root+"|"+unsupportedDir].Roots)
+	assert.Equal(t, parser.AgentKilo,
+		obligations["fsnotify-runtime:"+root+"|"+unsupportedDir].Agent)
 }
 
 func waitForBackendEvent(
@@ -437,12 +435,14 @@ func TestFSNotifyBackendRuntimeDegradationPreservesOverlappingRootScopes(t *test
 	assert.False(t, excluded)
 	first := requireReceiveWithin(t, polling, time.Second)
 	second := requireReceiveWithin(t, polling, time.Second)
-	obligations := map[string][]string{
-		first.Key:  first.Roots,
-		second.Key: second.Roots,
+	obligations := map[string]PollingObligation{
+		first.Key:  first,
+		second.Key: second,
 	}
-	assert.Equal(t, []string{parentScope}, obligations["fsnotify-runtime:"+parent])
-	assert.Equal(t, []string{nestedScope}, obligations["fsnotify-runtime:"+nested])
+	assert.Equal(t, []string{parentScope}, obligations["fsnotify-runtime:"+parent].Roots)
+	assert.Equal(t, parser.AgentClaude, obligations["fsnotify-runtime:"+parent].Agent)
+	assert.Equal(t, []string{nestedScope}, obligations["fsnotify-runtime:"+nested].Roots)
+	assert.Equal(t, parser.AgentCursor, obligations["fsnotify-runtime:"+nested].Agent)
 }
 
 func TestFSNotifyBackendRuntimeCreateRecursivelyWatchesMovedSubtree(t *testing.T) {

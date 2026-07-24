@@ -829,7 +829,6 @@ func TestLocalPGPushWatchPropagatesDegradedProbeToArchivePoller(t *testing.T) {
 		},
 		database: database,
 	}
-	probe := &staticDegradedPollProbe{}
 	poller := &recordingUnwatchedRootPoller{
 		added: make(chan pollingObligation, 1),
 	}
@@ -843,10 +842,10 @@ func TestLocalPGPushWatchPropagatesDegradedProbeToArchivePoller(t *testing.T) {
 			options syncpkg.WatcherOptions,
 		) (func(), func(), []string) {
 			require.NoError(t, options.OnPollingRequired(syncpkg.PollingObligation{
-				Key:           "watch-root|scope",
-				Roots:         []string{filepath.Join(dataDir, "scope")},
-				Probe:         filepath.Join(dataDir, "watch-root"),
-				DegradedProbe: probe,
+				Key:   "watch-root|scope",
+				Agent: parser.AgentOpenCode,
+				Roots: []string{filepath.Join(dataDir, "scope")},
+				Probe: filepath.Join(dataDir, "watch-root"),
 			}))
 			return func() {}, func() {}, nil
 		},
@@ -881,9 +880,9 @@ func TestLocalPGPushWatchPropagatesDegradedProbeToArchivePoller(t *testing.T) {
 	select {
 	case obligation := <-poller.added:
 		assert.Equal(t, "watch-root|scope", obligation.Key)
+		assert.Equal(t, parser.AgentOpenCode, obligation.Agent)
 		assert.Equal(t, []string{filepath.Join(dataDir, "scope")}, obligation.Roots)
 		assert.Equal(t, filepath.Join(dataDir, "watch-root"), obligation.Probe)
-		assert.Same(t, probe, obligation.DegradedProbe)
 	default:
 		t.Fatal("expected polling obligation to reach archive poller")
 	}
@@ -953,6 +952,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				func(roots []string) {
 					owned <- append([]string(nil), roots...)
 				},
+				nil,
 			)
 		},
 	}

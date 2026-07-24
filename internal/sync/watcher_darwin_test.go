@@ -1593,7 +1593,7 @@ func TestDarwinWatcherFallbackPreservesDegradedProbePerScope(t *testing.T) {
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{
-			{Agent: "opencode", SyncDir: openCodeDir, DegradedProbe: testDegradedProbe{}},
+			{Agent: "opencode", SyncDir: openCodeDir},
 			{Agent: "kilo", SyncDir: unsupportedDir},
 		},
 	}}, 10)
@@ -1607,16 +1607,18 @@ func TestDarwinWatcherFallbackPreservesDegradedProbePerScope(t *testing.T) {
 		first.Key:  first,
 		second.Key: second,
 	}
-	require.Contains(t, obligations, darwinFallbackPollingObligationKey(root))
 	require.Contains(t,
 		obligations, darwinFallbackPollingObligationKey(root)+"|"+openCodeDir)
-	assert.Equal(t, []string{unsupportedDir},
-		obligations[darwinFallbackPollingObligationKey(root)].Roots)
-	assert.Nil(t, obligations[darwinFallbackPollingObligationKey(root)].DegradedProbe)
+	require.Contains(t,
+		obligations, darwinFallbackPollingObligationKey(root)+"|"+unsupportedDir)
 	assert.Equal(t, []string{openCodeDir},
 		obligations[darwinFallbackPollingObligationKey(root)+"|"+openCodeDir].Roots)
-	assert.NotNil(t,
-		obligations[darwinFallbackPollingObligationKey(root)+"|"+openCodeDir].DegradedProbe)
+	assert.Equal(t, parser.AgentOpenCode,
+		obligations[darwinFallbackPollingObligationKey(root)+"|"+openCodeDir].Agent)
+	assert.Equal(t, []string{unsupportedDir},
+		obligations[darwinFallbackPollingObligationKey(root)+"|"+unsupportedDir].Roots)
+	assert.Equal(t, parser.AgentKilo,
+		obligations[darwinFallbackPollingObligationKey(root)+"|"+unsupportedDir].Agent)
 }
 
 // TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic stops the watcher

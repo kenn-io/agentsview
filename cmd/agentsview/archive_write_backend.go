@@ -104,6 +104,7 @@ func newArchivePushUnwatchedPoller(
 	ticker := time.NewTicker(unwatchedPollInterval)
 	return newUnwatchedPollCoordinatorWithTicks(
 		ctx, engine, ticker.C, ticker.Stop, func(work func()) { work() }, nil,
+		newProviderDegradedPollingResolver(),
 	)
 }
 
@@ -924,11 +925,10 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			},
 			OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
 				return poller.AddObligation(pollingObligation{
-					Key:           obligation.Key,
-					Agent:         obligation.Agent,
-					Roots:         obligation.Roots,
-					Probe:         obligation.Probe,
-					DegradedProbe: obligation.DegradedProbe,
+					Key:   obligation.Key,
+					Agent: obligation.Agent,
+					Roots: obligation.Roots,
+					Probe: obligation.Probe,
 				})
 			},
 			OnPollingReleased: poller.RemoveObligation,
