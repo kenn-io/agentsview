@@ -77,6 +77,32 @@ func TestLateBoundDegradedPollProbeActivatesWhenOpenCodeRootBecomesSQLite(t *tes
 	assert.NotEmpty(t, state)
 }
 
+func TestLateBoundDegradedPollProbeFallsBackWhenOpenCodeRootBecomesHybrid(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	probe := lateBoundDegradedPollProbe{provider: provider, root: root}
+
+	db, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.Ping())
+	_, err = db.Exec(`CREATE TABLE probe_state (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	state, err := probe.DegradedPollingState(t.Context())
+	require.NoError(t, err)
+	assert.NotEmpty(t, state)
+
+	require.NoError(t,
+		os.MkdirAll(filepath.Join(root, "storage", "session"), 0o755))
+
+	_, err = probe.DegradedPollingState(t.Context())
+	require.ErrorIs(t, err, parser.ErrUnsupportedProviderFeature)
+}
+
 func TestServeRuntimeRecordWriteFailureWarnsVisibleAfterSlowStartup(t *testing.T) {
 	out, err := runServeRuntimeWarningHelper(t, true, 1200*time.Millisecond)
 	require.NoError(t, err, string(out))
@@ -567,12 +593,24 @@ func (f *fakeUnwatchedPollSyncer) ReconcileWatchRoots(
 	return nil
 }
 
+func (f *fakeUnwatchedPollSyncer) ReconcileProviderRoots(
+	ctx context.Context, _ parser.AgentType, roots []string,
+) error {
+	return f.ReconcileWatchRoots(ctx, roots, false)
+}
+
 func TestPollUnwatchedRootsOnceUsesScopedAuthoritativeReconciliation(t *testing.T) {
 	fake := &fakeUnwatchedPollSyncer{}
 	roots := []string{"/tmp/claude", "/tmp/codex"}
 
-	pollUnwatchedRootsOnce(t.Context(), fake, roots)
-	pollUnwatchedRootsOnce(t.Context(), fake, roots)
+	pollUnwatchedRootsOnce(t.Context(), fake, []pollingObligation{{
+		Key: "roots",
+		Roots: roots,
+	}})
+	pollUnwatchedRootsOnce(t.Context(), fake, []pollingObligation{{
+		Key: "roots",
+		Roots: roots,
+	}})
 
 	require.Equal(t, 2, fake.calls)
 	assert.Equal(t, roots, fake.callRoots[0])

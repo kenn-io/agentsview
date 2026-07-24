@@ -331,6 +331,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 				OnPollingRequired: func(obligation sync.PollingObligation) error {
 					return unwatchedPoller.AddObligation(pollingObligation{
 						Key:           obligation.Key,
+						Agent:         obligation.Agent,
 						Roots:         obligation.Roots,
 						Probe:         obligation.Probe,
 						DegradedProbe: obligation.DegradedProbe,
@@ -2581,6 +2582,11 @@ func collectProviderWatchRoots(
 				log.Printf("%s provider degraded poll probe for %s: %v",
 					def.Type, root, probeErr)
 				degradedProbe = nil
+			}
+		} else if def.Type == parser.AgentOpenCode {
+			degradedProbe = lateBoundDegradedPollProbe{
+				provider: provider,
+				root:     root,
 			}
 		}
 		_, err := os.Stat(root)

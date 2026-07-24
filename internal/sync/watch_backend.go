@@ -44,14 +44,23 @@ func pollingObligationsForScopes(
 	}
 	byKey := make(map[string][]string)
 	degraded := make(map[string]parser.DegradedPollingStateProbe)
+	degradedAgent := make(map[string]parser.AgentType)
 	for cleanDir, dirScopes := range byDir {
 		obligationKey := key
 		var (
 			probe      parser.DegradedPollingStateProbe
 			probeAgent string
 			probeOK    = true
+			agent      parser.AgentType
+			sameAgent  = true
 		)
 		for _, scope := range dirScopes {
+			scopeAgent := parser.AgentType(scope.Agent)
+			if agent == "" {
+				agent = scopeAgent
+			} else if scopeAgent != agent {
+				sameAgent = false
+			}
 			if scope.DegradedProbe == nil {
 				probeOK = false
 				break
@@ -71,6 +80,12 @@ func pollingObligationsForScopes(
 			degraded[obligationKey] = probe
 		}
 		byKey[obligationKey] = appendUniqueScopeRoot(byKey[obligationKey], cleanDir)
+		if !sameAgent {
+			agent = ""
+		}
+		if agent != "" {
+			degradedAgent[obligationKey] = agent
+		}
 	}
 	keys := make([]string, 0, len(byKey))
 	for obligationKey := range byKey {
@@ -83,6 +98,7 @@ func pollingObligationsForScopes(
 		slices.Sort(roots)
 		obligations = append(obligations, PollingObligation{
 			Key:           obligationKey,
+			Agent:         degradedAgent[obligationKey],
 			Roots:         roots,
 			Probe:         filepath.Clean(probe),
 			DegradedProbe: degraded[obligationKey],

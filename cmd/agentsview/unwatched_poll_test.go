@@ -23,6 +23,7 @@ type recordingUnwatchedPollSyncer struct {
 	mu           sync.Mutex
 	calls        [][]string
 	full         []bool
+	agents       []parser.AgentType
 	wake         chan struct{}
 	reconcileErr error
 }
@@ -83,6 +84,12 @@ func (s *cancelBlockingUnwatchedPollSyncer) ReconcileWatchRoots(
 	return ctx.Err()
 }
 
+func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRoots(
+	ctx context.Context, _ parser.AgentType, roots []string,
+) error {
+	return s.ReconcileWatchRoots(ctx, roots, false)
+}
+
 func (s *cancelBlockingUnwatchedPollSyncer) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,6 +113,12 @@ func (s *blockingUnwatchedPollSyncer) ReconcileWatchRoots(
 	return nil
 }
 
+func (s *blockingUnwatchedPollSyncer) ReconcileProviderRoots(
+	ctx context.Context, _ parser.AgentType, roots []string,
+) error {
+	return s.ReconcileWatchRoots(ctx, roots, false)
+}
+
 func (s *blockingUnwatchedPollSyncer) snapshot() ([][]string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,6 +135,22 @@ func (s *recordingUnwatchedPollSyncer) ReconcileWatchRoots(
 	s.mu.Lock()
 	s.calls = append(s.calls, append([]string(nil), roots...))
 	s.full = append(s.full, full)
+	s.agents = append(s.agents, "")
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+	return s.reconcileErr
+}
+
+func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
+	_ context.Context, agent parser.AgentType, roots []string,
+) error {
+	s.mu.Lock()
+	s.calls = append(s.calls, append([]string(nil), roots...))
+	s.full = append(s.full, false)
+	s.agents = append(s.agents, agent)
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
@@ -138,6 +167,12 @@ func (s *recordingUnwatchedPollSyncer) snapshot() [][]string {
 		result[i] = append([]string(nil), s.calls[i]...)
 	}
 	return result
+}
+
+func (s *recordingUnwatchedPollSyncer) agentSnapshot() []parser.AgentType {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]parser.AgentType(nil), s.agents...)
 }
 
 func TestUnwatchedPollConcurrentAddDeduplicatesUpdatedRootSet(t *testing.T) {
@@ -256,6 +291,38 @@ func TestUnwatchedPollDegradedProbeErrorFallsBackToAuthoritativePoll(t *testing.
 
 	assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
 		"a degraded probe error must fall back to authoritative polling without caching state")
+}
+
+func TestUnwatchedPollUsesProviderScopedReconciliationForOwnedRoots(t *testing.T) {
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
+	parent := requireExistingPollRoot(t, t.TempDir(), "shared")
+	child := requireExistingPollRoot(t, parent, "opencode")
+	selected, states := availableUnwatchedPollObligationsWithState(
+		t.Context(),
+		[]pollingObligation{{
+		Key:           "opencode-root",
+		Agent:         parser.AgentOpenCode,
+		Roots:         []string{child},
+		DegradedProbe: &sequenceDegradedPollProbe{states: []string{"stable", "stable"}},
+		}, {
+			Key:   "codex-root",
+			Agent: parser.AgentCodex,
+			Roots: []string{parent},
+		}},
+		map[string]string{"opencode-root": "stable"},
+	)
+	require.Equal(t, map[string]string{}, states)
+	require.Equal(t, []pollingObligation{{
+		Key:   "codex-root",
+		Agent: parser.AgentCodex,
+		Roots: []string{parent},
+	}}, selected)
+
+	require.NoError(t, pollUnwatchedRootsOnce(t.Context(), syncer, selected))
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{parent}}, syncer.snapshot())
+	assert.Equal(t, []parser.AgentType{parser.AgentCodex}, syncer.agentSnapshot(),
+		"provider-owned polling must preserve agent scope instead of using generic root expansion")
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
@@ -521,7 +588,7 @@ func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T
 			Probe: filepath.Join(nested, "missing-subtree")},
 	}
 	roots := availableUnwatchedPollRoots(obligations)
-	pollUnwatchedRootsOnce(t.Context(), engine, roots)
+	pollUnwatchedRootsOnce(t.Context(), engine, nil)
 
 	assert.Empty(t, roots,
 		"an ancestor overlapping a blocked scope must not stay pollable")

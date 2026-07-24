@@ -82,6 +82,11 @@ type PollingObligation struct {
 	// subtree holds every session, tombstoning all of them. Empty means the
 	// Roots themselves are the physical paths to probe.
 	Probe string
+	// Agent preserves provider ownership for obligations that belong to one
+	// provider, so degraded polling can reconcile them without cross-provider
+	// expansion. Empty means the obligation spans mixed providers and must use
+	// generic root reconciliation.
+	Agent parser.AgentType
 	// DegradedProbe is an additive provider-owned freshness probe for degraded
 	// polling. Equal consecutive states suppress authoritative reconciliation
 	// for this obligation's Roots on that tick.
