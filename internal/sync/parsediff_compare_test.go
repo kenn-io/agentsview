@@ -353,6 +353,22 @@ func TestCompareSessionFields(t *testing.T) {
 			}},
 		},
 		{
+			name: "session_kind drift is a real diff for full-replace agents",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.SessionKind = ""
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.SessionKind = "bg"
+			},
+			want: []want{{
+				field:  FieldSessionKind,
+				stored: "(null)",
+				parsed: "bg",
+			}},
+		},
+		{
 			name: "relationship_type drift is a real diff",
 			stored: func(s *db.Session) {
 				s.Agent = "gemini"
@@ -728,6 +744,17 @@ func TestCompareMessageMetadata(t *testing.T) {
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
 		assert.Contains(t, diffs[0].Detail, "thinking_text differs")
+	})
+
+	t.Run("prompt_source drift is a metadata diff", func(t *testing.T) {
+		stored := []db.Message{{Ordinal: 0, Role: "user"}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "user", PromptSource: "queued",
+		}}
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "prompt_source differs")
 	})
 
 	t.Run("tool_name drift is a tool_calls diff", func(t *testing.T) {
