@@ -23,7 +23,8 @@ func newSessionSearchCommand() *cobra.Command {
 		in, scope                                string
 		excludeSystem, reveal                    bool
 		project, excludeProject, agent           string
-		machine, date, dateFrom, dateTo          string
+		machine, branch                          string
+		date, dateFrom, dateTo                   string
 		activeSince, since                       string
 		includeChildren, includeAutomated        bool
 		includeOneShot                           bool
@@ -53,6 +54,10 @@ func newSessionSearchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			gitBranch, err := branchFilterToken(project, branch)
+			if err != nil {
+				return err
+			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
@@ -68,6 +73,7 @@ func newSessionSearchCommand() *cobra.Command {
 				Project:          project,
 				ExcludeProject:   excludeProject,
 				Machine:          machine,
+				GitBranch:        gitBranch,
 				Agent:            agent,
 				Date:             date,
 				DateFrom:         dateFrom,
@@ -110,6 +116,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&project, "project", "", "Filter by project name")
 	flags.StringVar(&excludeProject, "exclude-project", "", "Exclude project")
 	flags.StringVar(&machine, "machine", "", "Filter by machine")
+	flags.StringVar(&branch, "branch", "", "Filter by git branch name (requires --project)")
 	flags.StringVar(&agent, "agent", "", "Filter by agent")
 	flags.StringVar(&date, "date", "", "Sessions active on YYYY-MM-DD")
 	flags.StringVar(&dateFrom, "date-from", "", "Sessions active on or after YYYY-MM-DD")

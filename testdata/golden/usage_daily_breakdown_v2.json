@@ -108,7 +108,8 @@
           "cacheReadTokens": 0,
           "cost": 0.0042
         }
-      ]
+      ],
+      "branchBreakdowns": []
     },
     {
       "date": "2026-07-02",
@@ -160,7 +161,8 @@
           "cacheReadTokens": 0,
           "cost": 0.00288
         }
-      ]
+      ],
+      "branchBreakdowns": []
     },
     {
       "date": "2026-07-03",
@@ -238,7 +240,8 @@
           "cacheReadTokens": 400,
           "cost": 0.01726
         }
-      ]
+      ],
+      "branchBreakdowns": []
     }
   ],
   "totals": {

@@ -410,10 +410,10 @@ func render(r results) (string, int) {
 	return b.String(), 0
 }
 
-// renderSyntax reports unparseable result lines in one capture. A
-// benchmark whose result line is corrupted (e.g. by interleaved log
-// output) parses on neither side and would otherwise vanish from
-// the gate without a trace.
+// renderSyntax reports unparseable result lines in one capture
+// (e.g. log output interleaved into a result line). Candidate-side
+// corruption is fatal in render; baseline-side corruption only drops
+// the affected benchmark to the missing-baseline not-gated path.
 func renderSyntax(b *strings.Builder, side string, errs []string) {
 	if len(errs) == 0 {
 		return

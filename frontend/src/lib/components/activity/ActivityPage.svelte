@@ -18,6 +18,12 @@
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import BranchPicker from "../shared/BranchPicker.svelte";
+  import { searchBranches } from "../../api/client.js";
+  import {
+    branchPickerValues,
+    reconcileBranchFilterValues,
+  } from "../../branchFilters.js";
   import {
     addDays,
     endOfMonth,
@@ -113,6 +119,23 @@
       displayLabel: machine,
     })),
   ]);
+  const branchProjects = $derived(activity.project ? [activity.project] : []);
+  const selectedBranchNames = $derived(
+    branchPickerValues(activity.branch ? [activity.branch] : []),
+  );
+
+  function searchActivityBranches(params: {
+    projects?: string[];
+    search: string;
+    limit: number;
+  }) {
+    return searchBranches({
+      ...params,
+      includeOneShot: true,
+      includeAutomated: true,
+      scope: "all",
+    });
+  }
   const automationOptions: TypeaheadOption[] = $derived([
     {
       name: "all",
@@ -269,6 +292,14 @@
     activity.load();
   }
 
+  function onBranchChange(values: string[]) {
+    activity.setBranch(reconcileBranchFilterValues(
+      activity.branch ? [activity.branch] : [],
+      values,
+    )[0] ?? "");
+    activity.load();
+  }
+
   function onAutomationChange(value: string) {
     activity.setAutomation(value as Automation);
     activity.load();
@@ -353,6 +384,24 @@
         title={m.activity_filter_by_machine()}
         emptyLabel={m.activity_no_matching_machines()}
         onselect={onMachineChange}
+      />
+    </div>
+
+    <div class="toolbar-typeahead">
+      <BranchPicker
+        mode="single"
+        selected={selectedBranchNames}
+        projects={branchProjects}
+        search={searchActivityBranches}
+        label={m.activity_filter_by_branch()}
+        allLabel={m.activity_all_branches()}
+        placeholder={m.activity_filter_branches_placeholder()}
+        clearSearchLabel={m.shared_branch_clear_search()}
+        loadingLabel={m.shared_branch_loading()}
+        emptyLabel={m.shared_branch_no_match()}
+        refineLabel={m.shared_branch_refine()}
+        noBranchLabel={m.shared_no_branch()}
+        onChange={onBranchChange}
       />
     </div>
 

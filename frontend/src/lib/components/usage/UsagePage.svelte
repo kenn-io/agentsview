@@ -31,6 +31,14 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
+  import BranchPicker from "../shared/BranchPicker.svelte";
+  import { searchBranches } from "../../api/client.js";
+  import {
+    BRANCH_LIST_SEP,
+    branchPickerValues,
+    reconcileBranchFilterValues,
+    scopeBranchFilterValues,
+  } from "../../branchFilters.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
     yokedDates,
@@ -55,6 +63,49 @@
       count: a.session_count,
     })),
   );
+
+  const branchProjects = $derived.by(() => {
+    if (sessions.filters.project) return [sessions.filters.project];
+    const excluded = new Set(
+      usage.excludedProjects ? usage.excludedProjects.split(",") : [],
+    );
+    const included = sessions.projects
+      .map((project) => project.name)
+      .filter((project) => !excluded.has(project));
+    return included.length === sessions.projects.length ? [] : included;
+  });
+  const selectedBranchValues = $derived(
+    scopeBranchFilterValues(
+      usage.selectedGitBranch
+        ? usage.selectedGitBranch.split(BRANCH_LIST_SEP)
+        : [],
+      sessions.filters.project,
+    ),
+  );
+  const selectedBranchNames = $derived(
+    branchPickerValues(selectedBranchValues),
+  );
+
+  function searchUsageBranches(params: {
+    projects?: string[];
+    search: string;
+    limit: number;
+  }) {
+    return searchBranches({
+      ...params,
+      includeOneShot: true,
+      includeAutomated: true,
+      scope: "all",
+    });
+  }
+
+  function onUsageBranchesChange(values: string[]) {
+    usage.selectedGitBranch = reconcileBranchFilterValues(
+      selectedBranchValues,
+      values,
+    ).join(BRANCH_LIST_SEP);
+    usage.fetchAll();
+  }
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
@@ -177,10 +228,10 @@
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
     "from", "to", "window_days",
-    "model", "exclude_model", "exclude_agent",
+    "model", "exclude_model", "exclude_agent", "branch",
   ]);
   const SESSION_FILTER_KEYS = new Set([
-    "project", "machine", "agent",
+    "project", "machine", "git_branch", "agent",
     "termination",
     "active_since", "exclude_project",
     "min_messages", "max_messages", "min_user_messages",
@@ -309,6 +360,11 @@
         usage.excludedAgents = newExAgent;
         changed = true;
       }
+      const newBranch = params["branch"] ?? "";
+      if (newBranch !== usage.selectedGitBranch) {
+        usage.selectedGitBranch = newBranch;
+        changed = true;
+      }
       if (usage.excludedModels) {
         usage.excludedModels = "";
         changed = true;
@@ -337,6 +393,7 @@
       excludedProjects: usage.excludedProjects,
       excludedProjectKeys: usage.excludedProjectKeys,
       excludedAgents: usage.excludedAgents,
+      selectedGitBranch: usage.selectedGitBranch,
       excludedModels: usage.excludedModels,
       selectedModels: usage.selectedModels,
     };
@@ -437,6 +494,22 @@
         onSelectAll={() => usage.selectAllModels()}
         onDeselectAll={() =>
           usage.deselectAllModels(modelItems.map((m) => m.name))}
+      />
+
+      <BranchPicker
+        mode="multi"
+        selected={selectedBranchNames}
+        projects={branchProjects}
+        search={searchUsageBranches}
+        label={m.usage_branch()}
+        allLabel={m.activity_all_branches()}
+        placeholder={m.activity_filter_branches_placeholder()}
+        clearSearchLabel={m.shared_branch_clear_search()}
+        loadingLabel={m.shared_branch_loading()}
+        emptyLabel={m.shared_branch_no_match()}
+        refineLabel={m.shared_branch_refine()}
+        noBranchLabel={m.shared_no_branch()}
+        onChange={onUsageBranchesChange}
       />
 
       <RefreshControl

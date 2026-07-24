@@ -52,6 +52,24 @@ describe("ActivityPage refresh control layout", () => {
   });
 });
 
+describe("ActivityPage branch filter", () => {
+  it("wires the shared single-select branch picker through the activity store", () => {
+    expect(source).toContain("<BranchPicker");
+    expect(source).toContain('mode="single"');
+    expect(source).toContain("selected={selectedBranchNames}");
+    expect(source).toContain("onChange={onBranchChange}");
+    expect(source).toContain("reconcileBranchFilterValues(");
+    expect(source).toContain("activity.branch ? [activity.branch] : []");
+  });
+
+  it("passes the active project as branch search scope", () => {
+    expect(source).toContain(
+      "activity.project ? [activity.project] : []",
+    );
+    expect(source).toContain("projects={branchProjects}");
+  });
+});
+
 describe("ActivityPage date yoke controls", () => {
   it("updates shared yoke state from the unified range picker", () => {
     expect(source).toContain("<RangePicker");

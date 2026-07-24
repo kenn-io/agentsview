@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   getProjects: vi.fn(),
   getAgents: vi.fn(),
   getMachines: vi.fn(),
+  getBranches: vi.fn(),
 }));
 
 const apiRuntimeMocks = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ vi.mock("../api/generated/index", () => ({
     getApiV1Projects: api.getProjects,
     getApiV1Agents: api.getAgents,
     getApiV1Machines: api.getMachines,
+    getApiV1Branches: api.getBranches,
   },
 }));
 vi.mock("../api/runtime.js", () => ({
@@ -84,6 +86,7 @@ beforeEach(() => {
   api.getProjects.mockReset();
   api.getAgents.mockReset();
   api.getMachines.mockReset();
+  api.getBranches.mockReset();
   apiRuntimeMocks.callGenerated.mockReset();
   apiRuntimeMocks.callGenerated.mockImplementation(
     (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
@@ -91,6 +94,7 @@ beforeEach(() => {
   api.getProjects.mockResolvedValue({ projects: [] });
   api.getAgents.mockResolvedValue({ agents: [] });
   api.getMachines.mockResolvedValue({ machines: [] });
+  api.getBranches.mockResolvedValue({ branches: [] });
   activity.report = null;
   activity.loading = false;
   activity.error = null;
@@ -104,6 +108,7 @@ beforeEach(() => {
   activity.setProject("");
   activity.setAgent("");
   activity.setMachine("");
+  activity.setBranch("");
   activity.setAutomation("all");
   // Reset the filter-option cache so each test exercises the fetch.
   activity.invalidateFilterOptions();
@@ -171,16 +176,37 @@ describe("load", () => {
     expect(activity.error).toBeNull();
   });
 
-  it("passes project/agent/machine filters", async () => {
+  it("passes project/agent/machine/branch filters", async () => {
     api.getActivityReport.mockResolvedValue(makeReport());
     activity.setProject("p1");
     activity.setAgent("claude");
     activity.setMachine("m1");
+    activity.setBranch("p1\x1fmain");
     await activity.load();
     const arg = api.getActivityReport.mock.calls.at(-1)![0];
     expect(arg.project).toBe("p1");
     expect(arg.agent).toBe("claude");
     expect(arg.machine).toBe("m1");
+    expect(arg.gitBranch).toBe("p1\x1fmain");
+  });
+
+  it("clears a branch scoped to another project on project change", async () => {
+    activity.setProject("p1");
+    activity.setBranch("p1\x1fmain");
+    activity.setProject("p2");
+    expect(activity.branch).toBe("");
+  });
+
+  it("keeps the branch when the project change matches its scope", async () => {
+    activity.setBranch("p1\x1fmain");
+    activity.setProject("p1");
+    expect(activity.branch).toBe("p1\x1fmain");
+  });
+
+  it("clears a conflicting legacy branch during URL hydration", () => {
+    activity.hydrateFromUrl({ project: "p2", git_branch: "p1\x1fmain" });
+    expect(activity.project).toBe("p2");
+    expect(activity.branch).toBe("");
   });
 
   it("defaults the automation class to all", async () => {
@@ -316,13 +342,13 @@ describe("loadFilterOptions", () => {
     api.getMachines.mockResolvedValueOnce({
       machines: ["laptop", "desktop"],
     });
-
     await activity.loadFilterOptions();
 
     const full = { includeOneShot: true, includeAutomated: true };
     expect(api.getProjects).toHaveBeenCalledWith(full);
     expect(api.getAgents).toHaveBeenCalledWith(full);
     expect(api.getMachines).toHaveBeenCalledWith(full);
+    expect(api.getBranches).not.toHaveBeenCalled();
 
     expect(activity.projects).toEqual([{ name: "proj-a", count: 1 }]);
     expect(activity.agents).toEqual([{ name: "claude", count: 2 }]);

@@ -23,6 +23,37 @@ func TestUsageSummaryResultEmitsEmptyProjectsMap(t *testing.T) {
 	assert.Contains(t, string(b), `"projects":{}`)
 }
 
+func TestFoldBranchTotals(t *testing.T) {
+	t.Parallel()
+	daily := []db.DailyUsageEntry{
+		{
+			Date: "2026-05-14",
+			BranchBreakdowns: []db.BranchBreakdown{
+				{ProjectKey: "pl1:sha256:first", Project: "", Branch: "main", InputTokens: 10, OutputTokens: 4, Cost: 1},
+			},
+		},
+		{
+			Date: "2026-05-15",
+			BranchBreakdowns: []db.BranchBreakdown{
+				{ProjectKey: "pl1:sha256:second", Project: "", Branch: "main", InputTokens: 20, OutputTokens: 8, Cost: 2},
+			},
+		},
+	}
+
+	got := foldBranchTotals(daily)
+
+	assert.Equal(t, []BranchTotal{
+		{ProjectKey: "pl1:sha256:second", Project: "", Branch: "main", InputTokens: 20, OutputTokens: 8, Cost: 2},
+		{ProjectKey: "pl1:sha256:first", Project: "", Branch: "main", InputTokens: 10, OutputTokens: 4, Cost: 1},
+	}, got, "keeps colliding display labels distinct by project key")
+}
+
+func TestFoldBranchTotalsEmpty(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, foldBranchTotals(nil))
+	assert.Empty(t, foldBranchTotals([]db.DailyUsageEntry{{Date: "2026-05-14"}}))
+}
+
 func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
 	t.Parallel()
 	// SavingsVsUncached is computed per-model in the DB layer;

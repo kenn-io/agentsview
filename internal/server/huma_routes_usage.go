@@ -30,7 +30,8 @@ type UsageFilterInput struct {
 	Agent             string `query:"agent" doc:"Filter by agent"`
 	Project           string `query:"project" doc:"Filter by project"`
 	Machine           string `query:"machine" doc:"Filter by machine"`
-	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	GitBranch         string `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
+	ExcludeGitBranch  string `query:"exclude_git_branch" doc:"Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeProjectKey string `query:"exclude_project_key" doc:"Exclude an opaque project key"`
 	ExcludeAgent      string `query:"exclude_agent" doc:"Exclude an agent"`
@@ -43,6 +44,7 @@ type UsageFilterInput struct {
 	IncludeAutomated  bool   `query:"include_automated" doc:"Include automated sessions"`
 	NoDefaultRange    bool   `query:"no_default_range" doc:"Preserve omitted from/to without applying default range"`
 	Breakdowns        bool   `query:"breakdowns" default:"true" doc:"Include per-model, per-project, and per-agent breakdowns"`
+	BranchBreakdowns  bool   `query:"branch_breakdowns" default:"false" doc:"Include per-project branch breakdowns"`
 	SessionCounts     bool   `query:"session_counts" default:"true" doc:"Include distinct session counts"`
 }
 
@@ -75,6 +77,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		Project:           in.Project,
 		Machine:           in.Machine,
 		GitBranch:         in.GitBranch,
+		ExcludeGitBranch:  in.ExcludeGitBranch,
 		ExcludeProject:    in.ExcludeProject,
 		ExcludeProjectKey: in.ExcludeProjectKey,
 		ExcludeAgent:      in.ExcludeAgent,
@@ -87,6 +90,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		IncludeAutomated:  in.IncludeAutomated,
 		NoDefaultRange:    in.NoDefaultRange,
 		Breakdowns:        &in.Breakdowns,
+		BranchBreakdowns:  &in.BranchBreakdowns,
 		SessionCounts:     &in.SessionCounts,
 	}
 }

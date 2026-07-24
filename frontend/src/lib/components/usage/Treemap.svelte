@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
   import { squarify } from "../../utils/treemap.js";
 
   interface TreemapItem {
@@ -13,10 +12,20 @@
   interface Props {
     items: TreemapItem[];
     height?: number;
-    onSelect?: (id: string) => void;
+    onSelect: (id: string) => void;
+    // Localized tooltip/aria copy comes from the caller because it
+    // depends on what selecting a tile does there (hide vs. filter).
+    titleFor: (id: string, label: string) => string;
+    ariaLabelFor: (id: string, label: string) => string;
   }
 
-  const { items, height = 260, onSelect }: Props = $props();
+  const {
+    items,
+    height = 260,
+    onSelect,
+    titleFor,
+    ariaLabelFor,
+  }: Props = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
   let width = $state(600);
@@ -79,7 +88,7 @@
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onSelect?.(id);
+      onSelect(id);
     }
   }
 </script>
@@ -104,17 +113,18 @@
         height={tile.height}
       />
     </clipPath>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <g
       class="tile"
-      tabindex="0"
+      tabindex={0}
       role="button"
-      aria-label={m.usage_hide_from_chart({ label: tile.label })}
-      onclick={() => onSelect?.(tile.id)}
+      aria-label={ariaLabelFor(tile.id, tile.label)}
+      onclick={() => onSelect(tile.id)}
       onkeydown={(e) => handleKey(e, tile.id)}
       clip-path="url(#{clipId})"
     >
-      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+      <title>{titleFor(tile.id, tile.label)}</title>
       <rect
         x={tile.x}
         y={tile.y}

@@ -2,9 +2,14 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type DbBranchInfo = {
+export type BranchTotal = {
   branch: string;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
   project: string;
-  token: string;
+  project_key: string;
 };
 

@@ -22,31 +22,32 @@ type sessionSpec struct {
 	parentSessionID   string
 	relationshipType  string
 	terminationStatus string
+	gitBranch         string
 }
 
 var specs = []sessionSpec{
-	{"project-alpha", "small-2", 2, 2, "", "", ""},
-	{"project-alpha", "small-5", 5, 3, "", "", ""},
+	{"project-alpha", "small-2", 2, 2, "", "", "", "main"},
+	{"project-alpha", "small-5", 5, 3, "", "", "", "feature/login"},
 	// One unclean session for e2e termination tests.
 	{"project-beta", "mixed-content-7", 7, 3, "", "",
-		"tool_call_pending"},
-	{"project-beta", "medium-8", 8, 4, "", "", ""},
-	{"project-beta", "medium-100", 100, 50, "", "", ""},
-	{"project-gamma", "large-200", 200, 100, "", "", ""},
-	{"project-gamma", "large-1500", 1500, 750, "", "", ""},
-	{"project-delta", "xlarge-5500", 5500, 2750, "", "", ""},
+		"tool_call_pending", "main"},
+	{"project-beta", "medium-8", 8, 4, "", "", "", "fix/crash"},
+	{"project-beta", "medium-100", 100, 50, "", "", "", "main"},
+	{"project-gamma", "large-200", 200, 100, "", "", "", "release/v2"},
+	{"project-gamma", "large-1500", 1500, 750, "", "", "", ""},
+	{"project-delta", "xlarge-5500", 5500, 2750, "", "", "", "main"},
 
 	// Sub-agent and fork sessions: must NOT appear in session
 	// list, stats, or analytics summary counts.
 	{"project-alpha", "subagent-1", 12, 6,
-		"test-session-small-5", "subagent", ""},
+		"test-session-small-5", "subagent", "", "feature/login"},
 	{"project-alpha", "subagent-2", 8, 4,
-		"test-session-small-5", "subagent", ""},
+		"test-session-small-5", "subagent", "", "feature/login"},
 	{"project-beta", "fork-1", 15, 7,
-		"test-session-medium-8", "fork", ""},
+		"test-session-medium-8", "fork", "", "fix/crash"},
 
 	// Empty session (0 messages): must also be excluded.
-	{"project-gamma", "empty-0", 0, 0, "", "", ""},
+	{"project-gamma", "empty-0", 0, 0, "", "", "", ""},
 }
 
 func main() {
@@ -162,6 +163,7 @@ func createSessionFixture(
 		Project:          spec.project,
 		Machine:          "test-machine",
 		Agent:            "claude",
+		GitBranch:        spec.gitBranch,
 		StartedAt:        new(startedAt.Format(time.RFC3339Nano)),
 		EndedAt:          new(endedAt.Format(time.RFC3339Nano)),
 		MessageCount:     spec.msgCount,

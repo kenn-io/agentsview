@@ -1546,3 +1546,54 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
+
+func TestStoreGetBranchesPickerQuery(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	// The ensureStoreSchema seed session (test-project, empty branch) ended
+	// 2026-03-12T10:30Z. br-3 has no ended_at so recency falls back to
+	// started_at; br-4/br-5 tie so the pair breaks the tie alphabetically.
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, git_branch,
+			 started_at, ended_at, message_count, user_message_count)
+		VALUES
+			('br-1', 'm', 'alpha', 'claude', 'main',
+			 '2026-03-14T09:00:00Z'::timestamptz,
+			 '2026-03-14T10:00:00Z'::timestamptz, 2, 2),
+			('br-2', 'm', 'alpha', 'claude', 'feat/x',
+			 '2026-03-15T09:00:00Z'::timestamptz,
+			 '2026-03-15T10:00:00Z'::timestamptz, 2, 2),
+			('br-3', 'm', 'beta', 'claude', 'main',
+			 '2026-03-14T12:00:00Z'::timestamptz, NULL, 2, 2),
+			('br-4', 'm', 'gamma', 'claude', 'x',
+			 '2026-03-10T09:00:00Z'::timestamptz,
+			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2),
+			('br-5', 'm', 'delta', 'claude', 'x',
+			 '2026-03-10T09:00:00Z'::timestamptz,
+			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2),
+			('br-6', 'm', 'alpha', 'claude', 'feature-old',
+			 '2026-03-13T09:00:00Z'::timestamptz,
+			 '2026-03-13T10:00:00Z'::timestamptz, 2, 2),
+			('br-7', 'm', 'gamma', 'claude', 'feat/x',
+			 '2026-03-20T09:00:00Z'::timestamptz,
+			 '2026-03-20T10:00:00Z'::timestamptz, 2, 2)
+	`)
+	require.NoError(t, err, "inserting branch sessions")
+
+	branches, err := store.GetBranches(context.Background(), db.BranchQuery{
+		Projects: []string{"alpha", "beta"},
+		Search:   "FEAT",
+		Limit:    1,
+	})
+	require.NoError(t, err, "GetBranches")
+	assert.Equal(t, db.BranchResult{
+		Branches: []db.BranchOption{{Branch: "feat/x"}},
+		HasMore:  true,
+	}, branches, "filter selected projects before dedupe and limit+1 pagination")
+}

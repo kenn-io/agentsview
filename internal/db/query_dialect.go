@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -82,9 +83,9 @@ func SQLiteQueryDialect() QueryDialect {
 				", ''), " + q("created_at") + "))"
 		},
 		dateParam:              func(ph string) string { return ph },
-		activityExpr:           "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
+		activityExpr:           activityCoalesceSQLite,
 		activityParam:          func(ph string) string { return ph },
-		cursorActivityExpr:     "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
+		cursorActivityExpr:     activityCoalesceSQLite,
 		cursorParam:            func(ph string) string { return ph },
 		castCursor:             func(ph string, _ valueKind) string { return ph },
 		emptyStringIsNull:      true,
@@ -713,6 +714,13 @@ func splitCSV(s string) []string {
 const (
 	branchFilterSep = "\x1f"
 	branchListSep   = "\x1e"
+
+	// NoBranchFilterToken is the plain branch-name filter value for sessions
+	// whose branch is empty. Empty itself means no active filter in URLs/stores.
+	NoBranchFilterToken = "\x1dno_branch"
+	// NoBranchMatchToken is the explicit fail-closed value used when two active
+	// inclusion filters have no overlap.
+	NoBranchMatchToken = "\x1dno_branch_match"
 )
 
 // EncodeBranchFilterToken builds the opaque (project, branch) filter token.
@@ -720,6 +728,23 @@ const (
 // the frontend passes the token back verbatim.
 func EncodeBranchFilterToken(project, branch string) string {
 	return project + branchFilterSep + branch
+}
+
+// ErrBranchWithoutProject flags a branch filter with no project to scope it.
+// Surfaces translate it into their own parameter wording.
+var ErrBranchWithoutProject = errors.New("branch filter requires a project")
+
+// BranchFilterToken encodes a plain (project, branch) pair into a filter
+// token, or "" (no error) if branch is empty. Errors with
+// ErrBranchWithoutProject if branch is set but project is not.
+func BranchFilterToken(project, branch string) (string, error) {
+	if branch == "" {
+		return "", nil
+	}
+	if project == "" {
+		return "", ErrBranchWithoutProject
+	}
+	return EncodeBranchFilterToken(project, branch), nil
 }
 
 // SplitBranchFilterTokens decodes a branchListSep-joined list of
@@ -742,25 +767,75 @@ func SplitBranchFilterTokens(s string) []BranchInfo {
 	return out
 }
 
-// BranchPairPredicate uses OR-of-ANDs instead of row-value IN for backend
-// portability. An empty decoded pair set returns false so invalid filters do
-// not broaden to all rows.
+// RewriteQualifiedBranchFilterProjects rewrites only the project component of
+// project-qualified branch tokens. Plain branch names and sentinel values pass
+// through unchanged.
+func RewriteQualifiedBranchFilterProjects(
+	tokens string,
+	rewrite func(string) (string, error),
+) (string, error) {
+	parts := strings.Split(tokens, branchListSep)
+	for i, token := range parts {
+		project, branch, qualified := strings.Cut(token, branchFilterSep)
+		if !qualified {
+			continue
+		}
+		rewritten, err := rewrite(project)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = EncodeBranchFilterToken(rewritten, branch)
+	}
+	return strings.Join(parts, branchListSep), nil
+}
+
+// BranchPairPredicate accepts current branch-name values and legacy
+// (project, branch) tokens. Plain branch names match across the separately
+// applied project filter; legacy tokens retain old shared URLs precisely.
+// The explicit no-match sentinel fails closed instead of matching a real name.
 func BranchPairPredicate(
 	projectCol, branchCol, tokens string, placeholder func(string) string,
 ) string {
-	pairs := SplitBranchFilterTokens(tokens)
-	if len(pairs) == 0 {
+	for token := range strings.SplitSeq(tokens, branchListSep) {
+		if token == NoBranchMatchToken {
+			return "1 = 0"
+		}
+	}
+
+	parts := make([]string, 0, strings.Count(tokens, branchListSep)+1)
+	for token := range strings.SplitSeq(tokens, branchListSep) {
+		if token == "" {
+			continue
+		}
+		if token == NoBranchFilterToken {
+			parts = append(parts, branchCol+" = "+placeholder(""))
+			continue
+		}
+		project, branch, legacy := strings.Cut(token, branchFilterSep)
+		if legacy {
+			parts = append(parts, "("+projectCol+" = "+placeholder(project)+
+				" AND "+branchCol+" = "+placeholder(branch)+")")
+			continue
+		}
+		parts = append(parts, branchCol+" = "+placeholder(token))
+	}
+	if len(parts) == 0 {
 		return "1 = 0"
 	}
-	parts := make([]string, len(pairs))
-	for i, p := range pairs {
-		parts[i] = "(" + projectCol + " = " + placeholder(p.Project) +
-			" AND " + branchCol + " = " + placeholder(p.Branch) + ")"
-	}
+	return orTree(parts)
+}
+
+// orTree ORs predicates together, nesting them as a balanced tree so
+// the parse depth stays logarithmic. A flat OR chain parses left-deep,
+// and SQLite caps expression nesting at 1000 — which a branch filter
+// can exceed (deselect-all in the usage branch dropdown excludes every
+// known (project, branch) pair).
+func orTree(parts []string) string {
 	if len(parts) == 1 {
 		return parts[0]
 	}
-	return "(" + strings.Join(parts, " OR ") + ")"
+	mid := len(parts) / 2
+	return "(" + orTree(parts[:mid]) + " OR " + orTree(parts[mid:]) + ")"
 }
 
 // BranchPairClauseArgs is the raw-args ("?" placeholder) form of
@@ -769,6 +844,32 @@ func BranchPairClauseArgs(
 	projectCol, branchCol, tokens string, args []any,
 ) (string, []any) {
 	clause := BranchPairPredicate(
+		projectCol, branchCol, tokens,
+		func(v string) string {
+			args = append(args, v)
+			return "?"
+		})
+	return clause, args
+}
+
+// BranchPairExcludePredicate is the exclude-filter counterpart to
+// BranchPairPredicate: matches rows whose (project, branch) pair is none of
+// the given tokens. An empty or fully malformed token list excludes nothing
+// (NOT of the include side's fail-closed "1 = 0") — omitting an exclude
+// filter must never narrow results.
+func BranchPairExcludePredicate(
+	projectCol, branchCol, tokens string, placeholder func(string) string,
+) string {
+	return "NOT (" +
+		BranchPairPredicate(projectCol, branchCol, tokens, placeholder) + ")"
+}
+
+// BranchPairExcludeClauseArgs is the raw-args ("?" placeholder) form of
+// BranchPairExcludePredicate.
+func BranchPairExcludeClauseArgs(
+	projectCol, branchCol, tokens string, args []any,
+) (string, []any) {
+	clause := BranchPairExcludePredicate(
 		projectCol, branchCol, tokens,
 		func(v string) string {
 			args = append(args, v)

@@ -597,6 +597,7 @@ func (b *httpBackend) UsageSummary(
 		"project":             req.Project,
 		"machine":             req.Machine,
 		"git_branch":          req.GitBranch,
+		"exclude_git_branch":  req.ExcludeGitBranch,
 		"exclude_project":     req.ExcludeProject,
 		"exclude_project_key": req.ExcludeProjectKey,
 		"exclude_agent":       req.ExcludeAgent,
@@ -617,6 +618,9 @@ func (b *httpBackend) UsageSummary(
 	}
 	if req.Breakdowns != nil {
 		q.Set("breakdowns", strconv.FormatBool(*req.Breakdowns))
+	}
+	if req.BranchBreakdowns != nil {
+		q.Set("branch_breakdowns", strconv.FormatBool(*req.BranchBreakdowns))
 	}
 	if req.SessionCounts != nil {
 		q.Set("session_counts", strconv.FormatBool(*req.SessionCounts))
@@ -655,6 +659,7 @@ func (b *httpBackend) UsagePairwiseComparison(
 		"project":             req.Project,
 		"machine":             req.Machine,
 		"git_branch":          req.GitBranch,
+		"exclude_git_branch":  req.ExcludeGitBranch,
 		"exclude_project":     req.ExcludeProject,
 		"exclude_project_key": req.ExcludeProjectKey,
 		"exclude_agent":       req.ExcludeAgent,

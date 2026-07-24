@@ -25,6 +25,14 @@ const (
 
 const dataVersionTooNewExitCode = 3
 
+func branchFilterToken(project, branch string) (string, error) {
+	tok, err := db.BranchFilterToken(project, branch)
+	if errors.Is(err, db.ErrBranchWithoutProject) {
+		return "", errors.New("--branch requires --project")
+	}
+	return tok, err
+}
+
 type cliExitError struct {
 	code   int
 	err    error
@@ -580,6 +588,7 @@ func newActivityReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Timezone, "timezone", "", "IANA timezone for range bucketing")
 	cmd.Flags().StringVar(&cfg.Bucket, "bucket", "", "Bucket size: 5m, 15m, 1h, 1d, 1w")
 	cmd.Flags().StringVar(&cfg.Project, "project", "", "Filter by project")
+	cmd.Flags().StringVar(&cfg.Branch, "branch", "", "Filter by git branch name (requires --project)")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().StringVar(&cfg.Machine, "machine", "", "Filter by machine name")
 	registerFormatFlags(cmd.Flags())

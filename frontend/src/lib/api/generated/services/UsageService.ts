@@ -23,6 +23,7 @@ export class UsageService {
     project,
     machine,
     gitBranch,
+    excludeGitBranch,
     excludeProject,
     excludeProjectKey,
     excludeAgent,
@@ -35,6 +36,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
   }: {
     /**
@@ -66,9 +68,13 @@ export class UsageService {
      */
     machine?: string,
     /**
-     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     * Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
      */
     gitBranch?: string,
+    /**
+     * Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+     */
+    excludeGitBranch?: string,
     /**
      * Exclude a project
      */
@@ -118,6 +124,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -133,6 +143,7 @@ export class UsageService {
         'project': project,
         'machine': machine,
         'git_branch': gitBranch,
+        'exclude_git_branch': excludeGitBranch,
         'exclude_project': excludeProject,
         'exclude_project_key': excludeProjectKey,
         'exclude_agent': excludeAgent,
@@ -145,6 +156,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
         'current_cost': currentCost,
       },
@@ -180,6 +192,7 @@ export class UsageService {
     project,
     machine,
     gitBranch,
+    excludeGitBranch,
     excludeProject,
     excludeProjectKey,
     excludeAgent,
@@ -192,6 +205,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
   }: {
     /**
@@ -235,9 +249,13 @@ export class UsageService {
      */
     machine?: string,
     /**
-     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     * Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
      */
     gitBranch?: string,
+    /**
+     * Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+     */
+    excludeGitBranch?: string,
     /**
      * Exclude a project
      */
@@ -287,6 +305,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -302,6 +324,7 @@ export class UsageService {
         'project': project,
         'machine': machine,
         'git_branch': gitBranch,
+        'exclude_git_branch': excludeGitBranch,
         'exclude_project': excludeProject,
         'exclude_project_key': excludeProjectKey,
         'exclude_agent': excludeAgent,
@@ -314,6 +337,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
         'left_dimension': leftDimension,
         'left_value': leftValue,
@@ -348,6 +372,7 @@ export class UsageService {
     project,
     machine,
     gitBranch,
+    excludeGitBranch,
     excludeProject,
     excludeProjectKey,
     excludeAgent,
@@ -360,6 +385,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
   }: {
     /**
@@ -387,9 +413,13 @@ export class UsageService {
      */
     machine?: string,
     /**
-     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     * Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
      */
     gitBranch?: string,
+    /**
+     * Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+     */
+    excludeGitBranch?: string,
     /**
      * Exclude a project
      */
@@ -439,6 +469,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -454,6 +488,7 @@ export class UsageService {
         'project': project,
         'machine': machine,
         'git_branch': gitBranch,
+        'exclude_git_branch': excludeGitBranch,
         'exclude_project': excludeProject,
         'exclude_project_key': excludeProjectKey,
         'exclude_agent': excludeAgent,
@@ -466,6 +501,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
       },
       errors: {
@@ -496,6 +532,7 @@ export class UsageService {
     project,
     machine,
     gitBranch,
+    excludeGitBranch,
     excludeProject,
     excludeProjectKey,
     excludeAgent,
@@ -508,6 +545,7 @@ export class UsageService {
     includeAutomated,
     noDefaultRange,
     breakdowns = true,
+    branchBreakdowns = false,
     sessionCounts = true,
     limit = 20,
   }: {
@@ -536,9 +574,13 @@ export class UsageService {
      */
     machine?: string,
     /**
-     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     * Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted
      */
     gitBranch?: string,
+    /**
+     * Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted
+     */
+    excludeGitBranch?: string,
     /**
      * Exclude a project
      */
@@ -588,6 +630,10 @@ export class UsageService {
      */
     breakdowns?: boolean,
     /**
+     * Include per-project branch breakdowns
+     */
+    branchBreakdowns?: boolean,
+    /**
      * Include distinct session counts
      */
     sessionCounts?: boolean,
@@ -607,6 +653,7 @@ export class UsageService {
         'project': project,
         'machine': machine,
         'git_branch': gitBranch,
+        'exclude_git_branch': excludeGitBranch,
         'exclude_project': excludeProject,
         'exclude_project_key': excludeProjectKey,
         'exclude_agent': excludeAgent,
@@ -619,6 +666,7 @@ export class UsageService {
         'include_automated': includeAutomated,
         'no_default_range': noDefaultRange,
         'breakdowns': breakdowns,
+        'branch_breakdowns': branchBreakdowns,
         'session_counts': sessionCounts,
         'limit': limit,
       },

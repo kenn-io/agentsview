@@ -1,7 +1,6 @@
 <script lang="ts">
   import { formatDateTime, m } from "../../i18n/index.js";
-  import type { Report } from "../../api/types.js";
-  import type { ActivitySessionRow } from "../../api/generated/index";
+  import type { Report, SessionRow } from "../../api/types.js";
   import { router } from "../../stores/router.svelte.js";
   import { XIcon } from "../../icons.js";
   import { TableHeaderCell } from "@kenn-io/kit-ui";
@@ -18,11 +17,7 @@
     onClearFilter?: () => void;
   } = $props();
 
-  // by_session is typed `any[] | null` by the codegen; cast to the
-  // generated element model for field-level type safety.
-  const allRows = $derived(
-    (report.by_session ?? []) as ActivitySessionRow[],
-  );
+  const allRows = $derived(report.by_session ?? []);
 
   // Page-local time-slot filter from the Concurrency chart: a non-null id list
   // restricts the table to the sessions active in the clicked slot. An empty
@@ -58,13 +53,13 @@
     }
   }
 
-  function isUntimed(row: ActivitySessionRow): boolean {
+  function isUntimed(row: SessionRow): boolean {
     return row.agent_minutes === null;
   }
 
   function compare(
-    a: ActivitySessionRow,
-    b: ActivitySessionRow,
+    a: SessionRow,
+    b: SessionRow,
     key: SortKey,
   ): number {
     switch (key) {
@@ -85,8 +80,8 @@
   }
 
   function byKeyThenId(
-    a: ActivitySessionRow,
-    b: ActivitySessionRow,
+    a: SessionRow,
+    b: SessionRow,
     dir: number,
   ): number {
     const primary = compare(a, b, sortKey) * dir;
@@ -108,8 +103,8 @@
     if (!partitionUntimed) {
       return [...rows].sort((a, b) => byKeyThenId(a, b, dir));
     }
-    const timed: ActivitySessionRow[] = [];
-    const untimed: ActivitySessionRow[] = [];
+    const timed: SessionRow[] = [];
+    const untimed: SessionRow[] = [];
     for (const row of rows) {
       if (isUntimed(row)) untimed.push(row);
       else timed.push(row);
@@ -130,8 +125,8 @@
     return Math.round(v).toLocaleString();
   }
 
-  function rowModel(row: ActivitySessionRow): string {
-    const models = (row.models ?? []) as string[];
+  function rowModel(row: SessionRow): string {
+    const models = row.models ?? [];
     if (models.length > 1) return m.activity_mixed();
     return row.primary_model || "—";
   }

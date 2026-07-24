@@ -202,7 +202,9 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel}개 단계"
       }
@@ -464,6 +466,9 @@
   "sidebar_filters_machine": "머신",
   "sidebar_filters_search_machines": "머신 검색...",
   "sidebar_filters_no_machines": "머신 없음",
+  "sidebar_filters_branch": "브랜치",
+  "sidebar_filters_search_branches": "브랜치 검색...",
+  "sidebar_filters_no_branches": "브랜치 없음",
   "sidebar_filters_min_prompts": "최소 프롬프트 수",
   "sidebar_filters_clear_filters": "필터 지우기",
   "sidebar_row_expand": "펼치기",
@@ -482,6 +487,7 @@
   "shared_active_filters_label": "필터:",
   "shared_active_filters_clear_project": "프로젝트 필터 지우기",
   "shared_active_filters_remove_machine": "{machine} 필터 제거",
+  "shared_active_filters_remove_branch": "{branch} 브랜치 필터 제거",
   "shared_active_filters_remove_agent": "{agent} 필터 제거",
   "shared_active_filters_clear_min_prompts": "최소 프롬프트 필터 지우기",
   "shared_active_filters_min_prompts": "≥{count} 프롬프트",
@@ -614,7 +620,9 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "세션 {countLabel}개"
       }
@@ -789,6 +797,7 @@
   "analytics_skill_trend_empty": "스킬 사용 데이터가 없습니다",
   "usage_model": "모델",
   "usage_models": "모델",
+  "usage_branch": "브랜치",
   "usage_refresh": "사용량 데이터 새로고침",
   "usage_summary_total_cost": "총 비용",
   "usage_summary_copilot_ai_credits": "Copilot AI 크레딧",
@@ -824,12 +833,18 @@
     }
   ],
   "usage_cost_over_time_title": "시간대별 비용",
+  "usage_unattributed": "미귀속",
   "usage_cost_attribution_title": "비용 배분",
   "usage_attribution_treemap": "트리맵",
   "usage_attribution_list": "목록",
   "usage_click_to_hide_hint": "클릭하여 차트에서 숨기기",
   "usage_click_to_hide": "{label} 숨기기",
   "usage_hide_from_chart": "{label}을(를) 차트에서 숨기기",
+  "usage_click_to_filter_hint": "클릭하여 필터 추가 또는 제거",
+  "usage_click_to_filter": "클릭하여 {label}(으)로 필터링",
+  "usage_click_to_clear_filter": "클릭하여 {label} 필터 해제",
+  "usage_filter_to_item": "{label}(으)로 필터링",
+  "usage_clear_filter_item": "{label} 필터 해제",
   "usage_cache_efficiency_title": "캐시 효율성",
   "usage_cache_reads": "캐시 읽기",
   "usage_cache_writes": "캐시 쓰기",
@@ -883,6 +898,8 @@
   "activity_all_agents": "모든 에이전트",
   "activity_filter_by_machine": "머신으로 필터링",
   "activity_all_machines": "모든 머신",
+  "activity_filter_by_branch": "브랜치로 필터링",
+  "activity_all_branches": "모든 브랜치",
   "activity_filter_by_automation": "자동화 여부로 필터링",
   "activity_all_sessions": "모든 세션",
   "activity_interactive": "대화형",
@@ -891,6 +908,7 @@
   "activity_project": "프로젝트",
   "activity_model": "모델",
   "activity_agent": "에이전트",
+  "activity_branch": "브랜치",
   "activity_min_unit": " 분",
   "activity_int_auto_split": "대화형 {int} / 자동 {auto}",
   "activity_breakdown": "세부 내역",
@@ -1812,13 +1830,19 @@
   "activity_insight_no_matching_agents": "일치하는 에이전트 없음",
   "activity_filter_agents_placeholder": "에이전트 필터링",
   "activity_filter_machines_placeholder": "머신 필터링",
+  "activity_filter_branches_placeholder": "브랜치 필터링",
   "activity_filter_automation_placeholder": "자동화 필터링",
   "activity_no_matching_agents": "일치하는 에이전트 없음",
   "activity_no_matching_machines": "일치하는 머신 없음",
+  "activity_no_matching_branches": "일치하는 브랜치 없음",
   "activity_no_automation_filters": "자동화 필터 없음",
   "activity_loading_report": "활동 보고서 로드 중...",
   "appearance_high_contrast": "고대비",
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
-  "appearance_text_size": "텍스트 크기"
+  "appearance_text_size": "텍스트 크기",
+  "shared_branch_clear_search": "브랜치 검색 지우기",
+  "shared_branch_loading": "브랜치를 불러오는 중…",
+  "shared_branch_no_match": "일치하는 브랜치가 없습니다",
+  "shared_branch_refine": "더 많은 브랜치가 있습니다. 검색어를 구체화하세요."
 }

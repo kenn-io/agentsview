@@ -1,32 +1,28 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import type { Report } from "../../api/types.js";
-  import type { ActivityKeyMinutes } from "../../api/generated/index";
+  import type { KeyMinutes, Report } from "../../api/types.js";
+  import { branchFilterToken, branchLabel } from "../../branchFilters.js";
 
   let { report }: { report: Report } = $props();
 
   type Metric = "minutes" | "cost";
   let metric = $state<Metric>("minutes");
 
-  // by_* fields are typed `any[] | null` by the codegen; cast each
-  // to the generated element model for field-level type safety.
-  function asKeyMinutes(arr: any[] | null): ActivityKeyMinutes[] {
-    return (arr ?? []) as ActivityKeyMinutes[];
-  }
+  type BreakdownRow = KeyMinutes & { displayLabel?: string };
 
-  function rowValue(row: ActivityKeyMinutes): number {
+  function rowValue(row: BreakdownRow): number {
     return metric === "cost" ? row.cost : row.agent_minutes;
   }
 
   // Per-row automation split for the active metric. Interactive + automated
   // sum to rowValue, so the two bar segments stack to the full bar width.
-  function interactiveValue(row: ActivityKeyMinutes): number {
+  function interactiveValue(row: BreakdownRow): number {
     return metric === "cost"
       ? row.interactive_cost
       : row.interactive_agent_minutes;
   }
 
-  function automatedValue(row: ActivityKeyMinutes): number {
+  function automatedValue(row: BreakdownRow): number {
     return metric === "cost" ? row.automated_cost : row.automated_agent_minutes;
   }
 
@@ -34,8 +30,8 @@
   // cost-only row contributes nothing to the minutes view (and would otherwise
   // render as an empty "0" bar), and a zero-cost row drops from the cost view.
   // The backend pre-sorts by minutes, so re-sort for the cost view.
-  function rankedRows(arr: any[] | null): ActivityKeyMinutes[] {
-    return asKeyMinutes(arr)
+  function rankedRows(arr: BreakdownRow[] | null): BreakdownRow[] {
+    return (arr ?? [])
       .filter((r) => rowValue(r) > 0)
       .sort((a, b) => rowValue(b) - rowValue(a));
   }
@@ -43,24 +39,42 @@
   const byProject = $derived(rankedRows(report.by_project));
   const byModel = $derived(rankedRows(report.by_model));
   const byAgent = $derived(rankedRows(report.by_agent));
+  // Tokenizing branch rows depends only on the report, not the metric, so
+  // keep it out of the rankedRows derived: flipping minutes/cost re-ranks
+  // without re-allocating every row of an uncapped (project, branch) list.
+  const branchRows = $derived(
+    (report.by_branch ?? []).map((b) => ({
+      ...b,
+      key: branchFilterToken(b.project_key, b.branch),
+      displayLabel: branchLabel(b.project, b.branch, m.shared_no_branch()),
+    })),
+  );
+  const byBranch = $derived(rankedRows(branchRows));
 
   interface Panel {
     title: string;
-    rows: ActivityKeyMinutes[];
-	projectRows: boolean;
+    rows: BreakdownRow[];
+    projectRows: boolean;
+    label?: (row: BreakdownRow) => string;
   }
 
   const panels = $derived.by((): Panel[] => [
     { title: m.activity_project(), rows: byProject, projectRows: true },
     { title: m.activity_model(), rows: byModel, projectRows: false },
     { title: m.activity_agent(), rows: byAgent, projectRows: false },
+    {
+      title: m.activity_branch(),
+      rows: byBranch,
+      projectRows: false,
+      label: (row) => row.displayLabel ?? row.key,
+    },
   ]);
 
-  function rowIdentity(row: ActivityKeyMinutes, projectRows: boolean): string {
-	return projectRows ? (row.project_key || row.key) : row.key;
+  function rowIdentity(row: BreakdownRow, projectRows: boolean): string {
+    return projectRows ? (row.project_key || row.key) : row.key;
   }
 
-  function maxValue(rows: ActivityKeyMinutes[]): number {
+  function maxValue(rows: BreakdownRow[]): number {
     if (rows.length === 0) return 1;
     const m = Math.max(...rows.map(rowValue));
     // Fall back to 1 only when the max is non-positive, so the largest bar
@@ -80,7 +94,7 @@
     return `$${v.toFixed(2)}`;
   }
 
-  function fmtValue(row: ActivityKeyMinutes): string {
+  function fmtValue(row: KeyMinutes): string {
     return metric === "cost" ? fmtCost(row.cost) : fmtMinutes(row.agent_minutes);
   }
 
@@ -95,13 +109,18 @@
 
   let tooltip = $state<{ x: number; y: number; text: string } | null>(null);
 
-  function sumValue(rows: ActivityKeyMinutes[]): number {
+  function sumValue(rows: KeyMinutes[]): number {
     let total = 0;
     for (const r of rows) total += rowValue(r);
     return total;
   }
 
-  function showTip(e: MouseEvent, row: ActivityKeyMinutes, total: number) {
+  function showTip(
+    e: MouseEvent,
+    row: KeyMinutes,
+    total: number,
+    label: string,
+  ) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pct = total > 0 ? Math.round((rowValue(row) / total) * 100) : 0;
     const unit = metric === "cost" ? "" : m.activity_min_unit();
@@ -109,7 +128,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${row.key} · ${fmtValue(row)}${unit} · ${pct}% · ${split}`,
+      text: `${label} · ${fmtValue(row)}${unit} · ${pct}% · ${split}`,
     };
   }
 
@@ -162,14 +181,15 @@
         {#if panel.rows.length > 0}
           <div class="bar-list">
             {#each panel.rows as row (rowIdentity(row, panel.projectRows))}
+              {@const label = panel.label?.(row) ?? row.key}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="bar-row"
-                onmouseenter={(e) => showTip(e, row, total)}
+                onmouseenter={(e) => showTip(e, row, total, label)}
                 onmouseleave={hideTip}
               >
-                <span class="bar-label" title={row.key}>
-                  {truncate(row.key, 22)}
+                <span class="bar-label" title={label}>
+                  {truncate(label, 22)}
                 </span>
                 <div class="bar-track">
                   <div

@@ -1,7 +1,43 @@
 <script lang="ts">
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
+  import type { DailyUsageEntry } from "../../api/types/usage.js";
+  import {
+    branchLabel,
+    branchFilterToken,
+  } from "../../branchFilters.js";
   import { seriesColorMap } from "../../utils/projectColor.js";
   import { m } from "../../i18n/index.js";
+
+  // key is the stable series identity (opaque project key or branch
+  // token); label is the human-readable name shown in the legend.
+  function breakdownItems(
+    day: DailyUsageEntry,
+    groupBy: GroupBy,
+  ): Array<{ key: string; label: string; cost: number }> {
+    switch (groupBy) {
+      case "project":
+        return (day.projectBreakdowns ?? []).map((b) => ({
+          key: b.project_key, label: b.project, cost: b.cost,
+        }));
+      case "model":
+        return (day.modelBreakdowns ?? []).map((b) => ({
+          key: b.modelName, label: b.modelName, cost: b.cost,
+        }));
+      case "agent":
+        return (day.agentBreakdowns ?? []).map((b) => ({
+          key: b.agent, label: b.agent, cost: b.cost,
+        }));
+      case "branch":
+        return (day.branchBreakdowns ?? []).map((b) => {
+          const token = branchFilterToken(b.project_key, b.branch);
+          return {
+            key: token,
+            label: branchLabel(b.project, b.branch, noBranchLabel),
+            cost: b.cost,
+          };
+        });
+    }
+  }
 
   const CHART_H = 180;
   const X_LABEL_H = 20;
@@ -36,6 +72,7 @@
   }
 
   const groupBy = $derived(usage.toggles.timeSeries.groupBy);
+  const noBranchLabel = $derived(m.shared_no_branch());
 
   const seriesData = $derived.by((): {
     points: Point[];
@@ -52,28 +89,29 @@
     const totals = new Map<string, number>();
 	const labels: Record<string, string> = {};
     for (const day of daily) {
-      if (groupBy === "project" && day.projectBreakdowns) {
-        for (const b of day.projectBreakdowns) {
-		  labels[b.project_key] = b.project;
-          totals.set(b.project_key,
-            (totals.get(b.project_key) ?? 0) + b.cost);
-        }
-      } else if (groupBy === "model" && day.modelBreakdowns) {
-        for (const b of day.modelBreakdowns) {
-          totals.set(b.modelName,
-            (totals.get(b.modelName) ?? 0) + b.cost);
-		  labels[b.modelName] = b.modelName;
-        }
-      } else if (groupBy === "agent" && day.agentBreakdowns) {
-        for (const b of day.agentBreakdowns) {
-          totals.set(b.agent,
-            (totals.get(b.agent) ?? 0) + b.cost);
-		  labels[b.agent] = b.agent;
-        }
+      for (const { key, label, cost } of breakdownItems(day, groupBy)) {
+        labels[key] = label;
+        totals.set(key, (totals.get(key) ?? 0) + cost);
       }
     }
 
-    // If only one key or few keys, no need for "Other".
+    if (groupBy === "branch") {
+      // Branch breakdowns contain only session-attributable cost. Keep the
+      // chart honest by making the remainder explicit instead of silently
+      // plotting partial totals as if they were complete.
+      let unattributedTotal = 0;
+      for (const day of daily) {
+        const attributed = breakdownItems(day, groupBy)
+          .reduce((sum, item) => sum + item.cost, 0);
+        const remainder = Math.max(0, day.totalCost - attributed);
+        unattributedTotal += remainder;
+      }
+      if (unattributedTotal > 0) {
+        totals.set("__unattributed__", unattributedTotal);
+        labels["__unattributed__"] = m.usage_unattributed();
+      }
+    }
+
     if (totals.size === 0) {
       const points = daily.map((d) => ({
         date: d.date,
@@ -97,21 +135,7 @@
     const points: Point[] = [];
     for (const day of daily) {
       const values: Record<string, number> = {};
-      let items: Array<{ key: string; cost: number }> = [];
-
-      if (groupBy === "project" && day.projectBreakdowns) {
-        items = day.projectBreakdowns.map((b) => ({
-		  key: b.project_key, cost: b.cost,
-        }));
-      } else if (groupBy === "model" && day.modelBreakdowns) {
-        items = day.modelBreakdowns.map((b) => ({
-          key: b.modelName, cost: b.cost,
-        }));
-      } else if (groupBy === "agent" && day.agentBreakdowns) {
-        items = day.agentBreakdowns.map((b) => ({
-          key: b.agent, cost: b.cost,
-        }));
-      }
+      const items = breakdownItems(day, groupBy);
 
       for (const { key, cost } of items) {
         if (topKeys.has(key)) {
@@ -119,6 +143,16 @@
         } else {
           values["__other__"] =
             (values["__other__"] ?? 0) + cost;
+        }
+      }
+      if (groupBy === "branch") {
+        const attributed = items.reduce((sum, item) => sum + item.cost, 0);
+        const remainder = Math.max(0, day.totalCost - attributed);
+        if (remainder > 0) {
+          const key = topKeys.has("__unattributed__")
+            ? "__unattributed__"
+            : "__other__";
+          values[key] = (values[key] ?? 0) + remainder;
         }
       }
       points.push({ date: day.date, values });
@@ -224,7 +258,7 @@
           `L${x0},${top}` +
           `L${x0 + BAR_WIDTH},${top}` +
           `L${x0 + BAR_WIDTH},${bot}Z`;
-        const color = key === "__other__"
+        const color = key === "__other__" || key === "__unattributed__"
           ? "var(--text-muted)"
           : colors.get(key) ?? "var(--text-muted)";
         result.push({ key, d, color });
@@ -345,6 +379,11 @@
   function handleGroupByChange(g: GroupBy) {
     usage.setTimeSeriesGroupBy(g);
   }
+
+  function legendLabel(key: string): string {
+    if (key === "__other__") return m.shared_other();
+    return seriesData.labels[key] ?? key;
+  }
 </script>
 
 <div class="chart-container">
@@ -371,6 +410,13 @@
         onclick={() => handleGroupByChange("agent")}
       >
         {m.analytics_col_agent()}
+      </button>
+      <button
+        class="toggle-btn"
+        class:active={groupBy === "branch"}
+        onclick={() => handleGroupByChange("branch")}
+      >
+        {m.usage_branch()}
       </button>
     </div>
   </div>
@@ -421,7 +467,7 @@
       </svg>
     </div>
 
-    {#if seriesData.keys.length > 1}
+    {#if seriesData.keys.length > 1 || seriesData.keys.includes("__unattributed__")}
       <div class="legend">
         {#each seriesData.keys as key}
           <span class="legend-item">
@@ -429,7 +475,7 @@
               class="legend-dot"
               style="background: {colorMap.get(key) ?? 'var(--text-muted)'}"
             ></span>
-			{key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
+            {legendLabel(key)}
           </span>
         {/each}
       </div>

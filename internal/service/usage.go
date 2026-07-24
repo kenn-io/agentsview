@@ -25,6 +25,7 @@ type UsageRequest struct {
 	Project           string `json:"project,omitempty"`
 	Machine           string `json:"machine,omitempty"`
 	GitBranch         string `json:"git_branch,omitempty"`
+	ExcludeGitBranch  string `json:"exclude_git_branch,omitempty"`
 	ExcludeProject    string `json:"exclude_project,omitempty"`
 	ExcludeProjectKey string `json:"exclude_project_key,omitempty"`
 	ExcludeAgent      string `json:"exclude_agent,omitempty"`
@@ -37,6 +38,7 @@ type UsageRequest struct {
 	IncludeAutomated  bool   `json:"include_automated,omitempty"`
 	NoDefaultRange    bool   `json:"no_default_range,omitempty"`
 	Breakdowns        *bool  `json:"breakdowns,omitempty"`
+	BranchBreakdowns  *bool  `json:"branch_breakdowns,omitempty"`
 	SessionCounts     *bool  `json:"session_counts,omitempty"`
 	// ProjectLabels and ExcludeProjectLabels carry exact internal labels
 	// resolved from opaque keys. Unlike the public string fields, they are
@@ -52,23 +54,41 @@ type UsageRequest struct {
 func ResolveUsageProjectKeys(
 	ctx context.Context, store db.Store, req UsageRequest,
 ) (UsageRequest, error) {
-	if req.ExcludeProjectKey == "" {
+	if req.ExcludeProjectKey == "" &&
+		!strings.Contains(req.GitBranch, "pl1:sha256:") &&
+		!strings.Contains(req.ExcludeGitBranch, "pl1:sha256:") {
 		return req, nil
 	}
-	resolved, err := resolveUsageProjectKeyLabels(
-		ctx, store, req.ExcludeProjectKey,
+	byKey, err := usageProjectLabelsByKey(ctx, store)
+	if err != nil {
+		return UsageRequest{}, err
+	}
+	if req.ExcludeProjectKey != "" {
+		resolved, resolveErr := resolveUsageProjectKeyLabelsFromMap(
+			byKey, req.ExcludeProjectKey,
+		)
+		if resolveErr != nil {
+			return UsageRequest{}, resolveErr
+		}
+		req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+		req.ExcludeProjectKey = ""
+	}
+	req.GitBranch, err = resolveUsageBranchProjectKeys(req.GitBranch, byKey)
+	if err != nil {
+		return UsageRequest{}, err
+	}
+	req.ExcludeGitBranch, err = resolveUsageBranchProjectKeys(
+		req.ExcludeGitBranch, byKey,
 	)
 	if err != nil {
 		return UsageRequest{}, err
 	}
-	req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
-	req.ExcludeProjectKey = ""
 	return req, nil
 }
 
-func resolveUsageProjectKeyLabels(
-	ctx context.Context, store db.Store, keys string,
-) ([]string, error) {
+func usageProjectLabelsByKey(
+	ctx context.Context, store db.Store,
+) (map[string]string, error) {
 	labels, err := store.GetActiveProjectLabels(ctx)
 	if err != nil {
 		return nil, err
@@ -83,6 +103,22 @@ func resolveUsageProjectKeyLabels(
 			byKey[entry.ProjectKey] = label
 		}
 	}
+	return byKey, nil
+}
+
+func resolveUsageProjectKeyLabels(
+	ctx context.Context, store db.Store, keys string,
+) ([]string, error) {
+	byKey, err := usageProjectLabelsByKey(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return resolveUsageProjectKeyLabelsFromMap(byKey, keys)
+}
+
+func resolveUsageProjectKeyLabelsFromMap(
+	byKey map[string]string, keys string,
+) ([]string, error) {
 	resolved := make([]string, 0)
 	for _, key := range splitCSVTokens(keys) {
 		label, ok := byKey[key]
@@ -95,6 +131,27 @@ func resolveUsageProjectKeyLabels(
 		resolved = append(resolved, label)
 	}
 	return resolved, nil
+}
+
+func resolveUsageBranchProjectKeys(
+	tokens string, byKey map[string]string,
+) (string, error) {
+	return db.RewriteQualifiedBranchFilterProjects(
+		tokens,
+		func(project string) (string, error) {
+			if !strings.HasPrefix(project, "pl1:sha256:") {
+				return project, nil
+			}
+			label, ok := byKey[project]
+			if !ok {
+				return "", &UsageInputError{
+					Code: UsageErrorCodeUnknownProjectKey,
+					Msg:  "unknown project key",
+				}
+			}
+			return label, nil
+		},
+	)
 }
 
 func ResolveUsagePairwiseProjectKeys(
@@ -177,6 +234,10 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 	if req.Breakdowns != nil {
 		breakdowns = *req.Breakdowns
 	}
+	branchBreakdowns := false
+	if req.BranchBreakdowns != nil {
+		branchBreakdowns = *req.BranchBreakdowns
+	}
 	sessionCounts := true
 	if req.SessionCounts != nil {
 		sessionCounts = *req.SessionCounts
@@ -189,9 +250,10 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		ProjectLabels: mergeResolvedProjectLabels(
 			req.Project, req.ProjectLabels,
 		),
-		Machine:        req.Machine,
-		GitBranch:      req.GitBranch,
-		ExcludeProject: req.ExcludeProject,
+		Machine:          req.Machine,
+		GitBranch:        req.GitBranch,
+		ExcludeGitBranch: req.ExcludeGitBranch,
+		ExcludeProject:   req.ExcludeProject,
 		ExcludeProjectLabels: mergeResolvedProjectLabels(
 			req.ExcludeProject, req.ExcludeProjectLabels,
 		),
@@ -205,6 +267,7 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		ActiveSince:       req.ActiveSince,
 		Termination:       req.Termination,
 		Breakdowns:        breakdowns,
+		BranchBreakdowns:  branchBreakdowns,
 		SkipSessionCounts: !sessionCounts,
 	}, nil
 }
@@ -265,6 +328,18 @@ type AgentTotal struct {
 	Cost                float64 `json:"cost"`
 }
 
+// BranchTotal holds range-wide token and cost totals per (project, branch).
+type BranchTotal struct {
+	ProjectKey          string  `json:"project_key"`
+	Project             string  `json:"project"`
+	Branch              string  `json:"branch"`
+	InputTokens         int     `json:"inputTokens"`
+	OutputTokens        int     `json:"outputTokens"`
+	CacheCreationTokens int     `json:"cacheCreationTokens"`
+	CacheReadTokens     int     `json:"cacheReadTokens"`
+	Cost                float64 `json:"cost"`
+}
+
 // CacheStats summarizes cache hit/miss for the period.
 type CacheStats struct {
 	CacheReadTokens     int     `json:"cacheReadTokens"`
@@ -310,6 +385,7 @@ type UsageSummaryResult struct {
 	ProjectTotals    []ProjectTotal                    `json:"projectTotals"`
 	ModelTotals      []ModelTotal                      `json:"modelTotals"`
 	AgentTotals      []AgentTotal                      `json:"agentTotals"`
+	BranchTotals     []BranchTotal                     `json:"branchTotals"`
 	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
 	CacheStats       CacheStats                        `json:"cacheStats"`
 	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
@@ -398,6 +474,11 @@ func buildUsageSummary(
 		out.ProjectTotals = []ProjectTotal{}
 		out.ModelTotals = []ModelTotal{}
 		out.AgentTotals = []AgentTotal{}
+	}
+	if f.BranchBreakdowns {
+		out.BranchTotals = foldBranchTotals(result.Daily)
+	} else {
+		out.BranchTotals = []BranchTotal{}
 	}
 	return out
 }
@@ -497,6 +578,51 @@ func foldAgentTotals(daily []db.DailyUsageEntry) []AgentTotal {
 			return out[i].Cost > out[j].Cost
 		}
 		return out[i].Agent < out[j].Agent
+	})
+	return out
+}
+
+// foldBranchTotals sums daily (project, branch) breakdowns into range-wide
+// totals sorted by cost descending.
+func foldBranchTotals(daily []db.DailyUsageEntry) []BranchTotal {
+	type key struct{ projectKey, branch string }
+	m := make(map[key]*BranchTotal)
+	for _, d := range daily {
+		for _, bb := range d.BranchBreakdowns {
+			k := key{projectKey: bb.ProjectKey, branch: bb.Branch}
+			bt, ok := m[k]
+			if !ok {
+				bt = &BranchTotal{
+					ProjectKey: bb.ProjectKey,
+					Project:    bb.Project,
+					Branch:     bb.Branch,
+				}
+				m[k] = bt
+			}
+			bt.InputTokens += bb.InputTokens
+			bt.OutputTokens += bb.OutputTokens
+			bt.CacheCreationTokens += bb.CacheCreationTokens
+			bt.CacheReadTokens += bb.CacheReadTokens
+			bt.Cost += bb.Cost
+		}
+	}
+	out := make([]BranchTotal, 0, len(m))
+	for _, v := range m {
+		out = append(out, *v)
+	}
+	// BranchTotal is not db.BranchBreakdown, so this comparator is a copy;
+	// keep its ordering in sync with db.SortBranchBreakdowns.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Cost != out[j].Cost {
+			return out[i].Cost > out[j].Cost
+		}
+		if out[i].ProjectKey != out[j].ProjectKey {
+			return out[i].ProjectKey < out[j].ProjectKey
+		}
+		if out[i].Project != out[j].Project {
+			return out[i].Project < out[j].Project
+		}
+		return out[i].Branch < out[j].Branch
 	})
 	return out
 }
