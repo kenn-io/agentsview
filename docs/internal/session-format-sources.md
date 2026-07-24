@@ -261,8 +261,8 @@ Grok section and remove the explicit registry exception in the coverage test.
   OpenCode-based rebuild (public beta 2026-03-10, GA 2026-04-02); new sessions
   stopped appearing around 2026-03-21.
 - **Usage and cost:** `ui_messages.json` carries per-request `api_req_started`
-  metadata with input, output, cache-read, and cache-write tokens, explicit USD
-  cost, and `usageMissing` flag. `task_metadata.json` does not carry the
+  metadata with input, output, cache-read, and cache-write tokens, explicit
+  USD cost, and `usageMissing` flag. `task_metadata.json` does not carry the
   RooCode-style ID/token/cost wiring; token and cost totals are derived from
   the transcript itself.
 - **Agentsview:** `internal/parser/kilo_legacy.go` and
@@ -1096,3 +1096,22 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/reasonix.go` and
   `internal/parser/reasonix_provider.go`; discovery spans multiple roots and
   uses metadata sidecars for identity.
+
+## Omnigent (`omnigent`)
+
+- **Format:** A shared SQLite `chat.db` containing conversations and ordered
+  conversation items, with session metadata and usage stored alongside each
+  conversation.
+- **Evidence:** `documentation`.
+- **Upstream:** The first-party
+  [database documentation](https://omnigent.ai/docs/deploy/database) was
+  checked 2026-07-22 and identifies SQLite `chat.db` as the local persistence
+  store. It does not publish the table schema, so column-level mappings and
+  compatibility across observed schema generations remain implementation
+  evidence.
+- **Usage and cost:** Session usage can contain input and output tokens,
+  per-model breakdowns, and an optional authoritative USD total. An absent
+  cost remains unset so Agentsview can use catalog pricing.
+- **Agentsview:** `internal/parser/omnigent.go` and
+  `internal/parser/omnigent_provider.go`; fixtures under
+  `internal/parser/testdata/omnigent/` provide observed event-shape evidence.

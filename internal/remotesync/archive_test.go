@@ -240,6 +240,49 @@ func TestHermesArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 	}
 }
 
+func TestWriteArchiveExcludesOmnigentAuthenticationDatabase(t *testing.T) {
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	targets := TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {chatDB},
+		},
+	}
+	for _, tt := range []struct {
+		name  string
+		write func(io.Writer) error
+	}{
+		{
+			name: "full",
+			write: func(w io.Writer) error {
+				return WriteArchive(w, targets)
+			},
+		},
+		{
+			name: "delta",
+			write: func(w io.Writer) error {
+				return WriteArchiveFiles(w, targets, []string{chatDB})
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			require.NoError(t, tt.write(&archive))
+			_, err := tar.NewReader(&archive).Next()
+			assert.ErrorIs(t, err, io.EOF,
+				"Omnigent authentication state must never enter a remote archive")
+		})
+	}
+}
+
 func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {
 	stateDB := filepath.Join(t.TempDir(), "profile", "state.db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))

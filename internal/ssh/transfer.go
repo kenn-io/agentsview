@@ -45,6 +45,9 @@ func buildTarCommand(
 		}
 	}
 	for agent, agentDirs := range dirs {
+		if agent == parser.AgentOmnigent {
+			continue
+		}
 		if _, fileScoped := files[agent]; fileScoped {
 			continue
 		}
@@ -52,7 +55,10 @@ func buildTarCommand(
 			addPath(d)
 		}
 	}
-	for _, agentFiles := range files {
+	for agent, agentFiles := range files {
+		if agent == parser.AgentOmnigent {
+			continue
+		}
 		for _, f := range agentFiles {
 			addPath(f)
 		}

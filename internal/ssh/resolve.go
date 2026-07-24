@@ -337,7 +337,10 @@ func remoteDefaultRootTail(rel string) string {
 // resolveAgentHasOnDiskSource reports whether a file-backed agent has local
 // sources the resolve script should probe via the provider facade.
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
-	if def.Type == parser.AgentTrae {
+	// Omnigent's chat.db co-locates transcripts with authentication secrets.
+	// Remote sync must remain disabled until it has a fresh, allowlisted export
+	// schema; copying or sanitizing the source database can retain deleted pages.
+	if def.Type == parser.AgentTrae || def.Type == parser.AgentOmnigent {
 		return false
 	}
 	if !def.FileBased {

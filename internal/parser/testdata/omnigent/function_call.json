@@ -1,0 +1,1 @@
+{"agent": "polly", "name": "sys_os_shell", "arguments": "{\"command\": \"pwd\"}", "call_id": "toolu_1"}

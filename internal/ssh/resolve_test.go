@@ -26,7 +26,7 @@ func TestBuildResolveScript(t *testing.T) {
 		want := def.FileBased &&
 			parser.ProviderMigrationModes()[def.Type] ==
 				parser.ProviderMigrationProviderAuthoritative
-		if def.Type == parser.AgentTrae {
+		if def.Type == parser.AgentTrae || def.Type == parser.AgentOmnigent {
 			want = false
 		}
 		if want {
@@ -184,6 +184,30 @@ func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
 	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/orchestrator/state.db-journal"))
 	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/research/state.db"))
 	assert.True(t, hasSuffix(extraFiles, ".hermes/state.db"))
+}
+
+func TestResolveScriptExcludesOmnigentAuthenticationDatabase(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".omnigent")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	for _, name := range []string{
+		"chat.db",
+		"chat.db-wal",
+		"chat.db-shm",
+		"chat.db-journal",
+	} {
+		require.NoError(t,
+			os.WriteFile(filepath.Join(root, name), []byte("sqlite"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, files, _ := parseResolvedTargets(string(out))
+
+	assert.NotContains(t, dirs, parser.AgentOmnigent)
+	assert.NotContains(t, files, parser.AgentOmnigent)
 }
 
 func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {

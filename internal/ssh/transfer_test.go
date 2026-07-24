@@ -189,6 +189,29 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 	assert.Equal(t, "Committed in WAL", title)
 }
 
+func TestBuildTarCommandExcludesOmnigentAuthenticationDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{parser.AgentOmnigent: {root}},
+		map[parser.AgentType][]string{
+			parser.AgentOmnigent: {chatDB},
+		},
+		nil,
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+	require.NoError(t, err, "archive command output: %s", archive)
+	assert.Empty(t, tarNames(t, archive),
+		"Omnigent authentication state must never enter an SSH archive")
+}
+
 func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("remote snapshot script uses POSIX symlinks and paths")

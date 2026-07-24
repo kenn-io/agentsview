@@ -263,6 +263,7 @@ can still be parsed.
 | OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/` | JSONL per session                                                                                                               |
 | OpenCode              | `~/.local/share/opencode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                            |
+| Omnigent              | `~/.omnigent/`                                                                   | SQLite `chat.db`, one session per conversation                                                                                  |
 | Pi                    | `~/.pi/agent/sessions/`                                                          | JSONL per session                                                                                                               |
 | Piebald               | `~/.local/share/piebald/`                                                        | SQLite database (`app.db`)                                                                                                      |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
@@ -290,6 +291,15 @@ present for the full transcript (user turns, assistant replies, thinking,
 and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
 to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
+
+Omnigent sessions are read from `~/.omnigent/chat.db`. AgentsView creates one
+session per conversation and supports the older single-table schema, the
+co-located split-table schema, and the current binary-uuid-id schema. Set
+`OMNIGENT_DIR` or `omnigent_dirs` to override the
+default directory. Filesystem-event sync follows Omnigent's `updated_at`
+updates and syncs only the conversations changed or deleted since the last
+sweep. The periodic full sync reconciles direct database edits that do not
+advance `updated_at`; a detected schema-generation change is reparsed in full.
 
 **VS Code Copilot default directories** vary by platform:
 

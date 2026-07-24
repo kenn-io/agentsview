@@ -262,6 +262,8 @@ type Engine struct {
 	lastSync                time.Time
 	lastSyncStats           SyncStats
 	currentProgress         *Progress
+	omnigentRetryGeneration uint64
+	omnigentRetryPending    bool
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -831,6 +833,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	// matching the capture-before-discovery ordering of full syncs.
 	preContainerStates := e.captureSQLiteContainerStates(paths)
 	files, classificationErr := e.classifyPaths(ctx, paths)
+	missingPaths = omitMissingPersistentContainerPaths(missingPaths, files)
 	if len(files) == 0 && len(missingPaths) == 0 {
 		return classificationErr
 	}
@@ -879,7 +882,6 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 			return fmt.Errorf("watcher source tombstone: %w", err)
 		}
 	}
-
 	e.mu.Lock()
 	e.lastSync = time.Now()
 	e.lastSyncStats = stats
@@ -900,6 +902,26 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 		)
 	}
 	return nil
+}
+
+func omitMissingPersistentContainerPaths(
+	missingPaths []string, files []parser.DiscoveredFile,
+) []string {
+	return slices.DeleteFunc(missingPaths, func(missingPath string) bool {
+		for _, file := range files {
+			if file.Agent != parser.AgentOmnigent ||
+				file.ProviderSource == nil ||
+				!parser.IsOmnigentContainerSource(*file.ProviderSource) {
+				continue
+			}
+			container := providerDiscoveredPath(*file.ProviderSource)
+			if filepath.Clean(missingPath) == filepath.Clean(container) ||
+				providerVirtualSourceBackedByEvent(container, missingPath) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // classifyPaths maps changed file system paths to
@@ -1002,9 +1024,14 @@ func (e *Engine) classifyProviderChangedPath(
 		if !ok || factory == nil {
 			continue
 		}
+		providerForceFullDiscovery := false
+		if pending, _ := e.omnigentFullRetry(); agentType == parser.AgentOmnigent {
+			providerForceFullDiscovery = pending
+		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:   roots,
-			Machine: e.machine,
+			Roots:              roots,
+			Machine:            e.machine,
+			ForceFullDiscovery: providerForceFullDiscovery,
 		})
 		def := provider.Definition()
 		watchRoots, err := e.providerChangedPathWatchRoots(
@@ -1076,6 +1103,21 @@ func (e *Engine) classifyProviderChangedPath(
 				}
 				continue
 			}
+			if agentType == parser.AgentOmnigent {
+				sources, err = e.expandOmnigentInheritedMetadataSources(
+					ctx, provider, sources,
+				)
+				if err != nil {
+					classificationErr = errors.Join(
+						classificationErr,
+						fmt.Errorf(
+							"%s provider dependent-source classification for %q: %w",
+							def.Type, path, err,
+						),
+					)
+					continue
+				}
+			}
 			for _, source := range sources {
 				sourcePath := providerDiscoveredPath(source)
 				if sourcePath == "" {
@@ -1092,6 +1134,7 @@ func (e *Engine) classifyProviderChangedPath(
 				if eventKind == "remove" &&
 					filepath.Clean(sourcePath) == filepath.Clean(path) &&
 					!parser.IsRegularFile(sourcePath) &&
+					!parser.IsOmnigentContainerSource(source) &&
 					!providerDeletedPhysicalSQLiteSource(agent, sourcePath) &&
 					!providerVirtualSourceContainerExists(sourcePath) {
 					continue
@@ -1118,6 +1161,60 @@ func (e *Engine) classifyProviderChangedPath(
 		}
 	}
 	return files, classificationErr
+}
+
+func (e *Engine) expandOmnigentInheritedMetadataSources(
+	ctx context.Context,
+	provider parser.Provider,
+	sources []parser.SourceRef,
+) ([]parser.SourceRef, error) {
+	resolver, ok := provider.(parser.ReconciliationSourceResolver)
+	if !ok || len(sources) == 0 {
+		return sources, nil
+	}
+	seenSources := make(map[string]struct{}, len(sources))
+	parentIDs := make([]string, 0, len(sources))
+	seenParents := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		if path := providerDiscoveredPath(source); path != "" {
+			seenSources[path] = struct{}{}
+		}
+		id, member := parser.OmnigentMemberSessionID(source)
+		if !member {
+			continue
+		}
+		id = applyIDPrefixToID(e.idPrefix, id)
+		if _, exists := seenParents[id]; exists {
+			continue
+		}
+		seenParents[id] = struct{}{}
+		parentIDs = append(parentIDs, id)
+	}
+	paths, err := e.db.ListActiveDescendantSessionSourcePaths(
+		ctx, e.machine, string(parser.AgentOmnigent), parentIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		if _, exists := seenSources[path]; exists {
+			continue
+		}
+		source, found, err := resolver.SourceForReconciliation(ctx, path, "")
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		sourcePath := providerDiscoveredPath(source)
+		if sourcePath == "" {
+			continue
+		}
+		seenSources[sourcePath] = struct{}{}
+		sources = append(sources, source)
+	}
+	return sources, nil
 }
 
 func storedSourceDBHintScopes(
@@ -3022,33 +3119,38 @@ func (e *Engine) ReconcileWatchRoots(
 func (e *Engine) ReconcileWatchRootsWithStats(
 	ctx context.Context, roots []string, full bool,
 ) (SyncStats, int, error) {
-	return e.reconcileScopedWatchRoots(ctx, "", roots, full, false)
+	return e.reconcileScopedWatchRoots(ctx, "", roots, full, false, true)
 }
 
 func (e *Engine) reconcileWatchRoots(
 	ctx context.Context, roots []string, full, force bool,
 ) error {
-	_, _, err := e.reconcileScopedWatchRoots(ctx, "", roots, full, force)
+	_, _, err := e.reconcileScopedWatchRoots(
+		ctx, "", roots, full, force, true,
+	)
 	return err
 }
 
-// ReconcileProviderRoots reconciles the given roots for a single provider. It
-// bypasses the cross-provider expansion in logicalRootsForWatchRoots and
-// restricts both discovery and deletion to that provider, so a shallow-watched
-// agent's scheduled pass never enumerates or tombstones another agent's
-// sessions under an overlapping root.
+// ReconcileProviderRoots runs the bounded scheduled pass for one provider. It
+// bypasses the cross-provider expansion in logicalRootsForWatchRoots so a
+// shallow-watched agent never enumerates or tombstones another agent's sessions
+// under an overlapping root. Providers whose scheduled discovery is
+// non-authoritative leave deletion proof to the archive audit.
 func (e *Engine) ReconcileProviderRoots(
 	ctx context.Context, agent parser.AgentType, roots []string,
 ) error {
 	if agent == "" {
 		return e.reconcileWatchRoots(ctx, roots, false, false)
 	}
-	_, _, err := e.reconcileScopedWatchRoots(ctx, agent, roots, false, false)
+	_, _, err := e.reconcileScopedWatchRoots(
+		ctx, agent, roots, false, false, false,
+	)
 	return err
 }
 
 func (e *Engine) reconcileScopedWatchRoots(
-	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+	ctx context.Context, agent parser.AgentType, roots []string, full, force,
+	forceFullOmnigent bool,
 ) (SyncStats, int, error) {
 	var logicalRoots []string
 	var excludedRemoteRoots int
@@ -3065,7 +3167,7 @@ func (e *Engine) reconcileScopedWatchRoots(
 		return SyncStats{}, 0, nil
 	}
 	stats, metrics, tombstoned, err := e.reconcileWatchRootsStreamed(
-		ctx, agent, logicalRoots, full, force,
+		ctx, agent, logicalRoots, full, force, forceFullOmnigent,
 	)
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	if stats.Synced > 0 || tombstoned > 0 {
@@ -3102,7 +3204,8 @@ func (e *Engine) ReconciliationRootsForAgent(agent string) []string {
 }
 
 func (e *Engine) reconcileWatchRootsStreamed(
-	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+	ctx context.Context, agent parser.AgentType, roots []string, full, force,
+	forceFullOmnigent bool,
 ) (stats SyncStats, metrics ReconciliationMetrics, tombstoned int, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return SyncStats{Aborted: true}, metrics, 0, err
@@ -3157,8 +3260,9 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		scope.agent = agent
 	}
 	preContainerStates := e.captureSQLiteContainerStates(nil)
-	providers, completedScopes, failedRoots, failures, discoveryErr, err := e.streamReconciliationCandidates(
-		ctx, scope, spool,
+	providers, completedScopes, nonAuthoritativeProviders, failedRoots,
+		failures, discoveryErr, err := e.streamReconciliationCandidates(
+		ctx, scope, spool, forceFullOmnigent,
 	)
 	stats.providerFailures = failures
 	if err != nil {
@@ -3170,9 +3274,9 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		cleaned = true
 		return stats, metrics, 0, err
 	}
-	baselineEligibleProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
+	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
-		baselineEligibleProviders[completed.agent] = struct{}{}
+		authoritativeProviders[completed.agent] = struct{}{}
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	e.finishStreamingSQLiteContainerDiscovery()
@@ -3244,7 +3348,7 @@ func (e *Engine) reconcileWatchRootsStreamed(
 			break
 		}
 		baselineCandidates, baselineAdmitted := eligibleReconciliationBaselines(
-			page, baselineTracker.list(), baselineEligibleProviders,
+			page, baselineTracker.list(), authoritativeProviders,
 		)
 		if err := e.baselineReconciliationCandidates(
 			ctx, baselineCandidates, baselineAdmitted,
@@ -3316,7 +3420,7 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.Failed == 0 && stats.providerFailures == 0 {
 		tombstoned, retErr = e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, roots, agent, spool,
+			ctx, roots, agent, nonAuthoritativeProviders, spool,
 		)
 	} else if canTombstoneCompletedScopes && ctx.Err() == nil &&
 		!stats.Aborted && stats.Failed == 0 {
@@ -3343,7 +3447,7 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 ) (deleted int, retErr error) {
 	for _, scope := range incomplete.completed {
 		count, err := e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, scope.roots, scope.agent, spool,
+			ctx, scope.roots, scope.agent, nil, spool,
 		)
 		deleted += count
 		if err == nil {
@@ -3407,15 +3511,18 @@ func eligibleReconciliationBaselines(
 
 func (e *Engine) streamReconciliationCandidates(
 	ctx context.Context, scope *rootSyncScope, spool reconciliationSpoolStore,
+	forceFullOmnigent bool,
 ) (
 	map[parser.AgentType]parser.Provider,
 	[]reconciliationProviderScope,
+	map[parser.AgentType]struct{},
 	[]string,
 	int,
 	error,
 	error,
 ) {
 	providers := make(map[parser.AgentType]parser.Provider)
+	nonAuthoritativeProviders := make(map[parser.AgentType]struct{})
 	var completedScopes []reconciliationProviderScope
 	var failedRoots []string
 	var failures int
@@ -3446,6 +3553,8 @@ func (e *Engine) streamReconciliationCandidates(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			ForceFullDiscovery: agent == parser.AgentOmnigent &&
+				forceFullOmnigent,
 		})
 		providers[agent] = provider
 		if provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
@@ -3480,10 +3589,18 @@ func (e *Engine) streamReconciliationCandidates(
 		})
 		if err != nil {
 			if spoolErr != nil {
-				return providers, completedScopes, failedRoots, failures, discoveryErr, spoolErr
+				return providers, completedScopes, nonAuthoritativeProviders,
+					failedRoots, failures, discoveryErr, spoolErr
 			}
 			if ctx.Err() != nil {
-				return providers, completedScopes, failedRoots, failures, discoveryErr, ctx.Err()
+				return providers, completedScopes, nonAuthoritativeProviders,
+					failedRoots, failures, discoveryErr, ctx.Err()
+			}
+			var nonAuthoritative parser.DiscoveryNonAuthoritativeError
+			if errors.As(err, &nonAuthoritative) {
+				log.Printf("%s provider streaming discovery: %v", agent, err)
+				nonAuthoritativeProviders[agent] = struct{}{}
+				continue
 			}
 			log.Printf("%s provider streaming discovery: %v", agent, err)
 			failures++
@@ -3493,6 +3610,10 @@ func (e *Engine) streamReconciliationCandidates(
 			))
 			continue
 		}
+		if agent == parser.AgentOmnigent && !forceFullOmnigent {
+			nonAuthoritativeProviders[agent] = struct{}{}
+			continue
+		}
 		completedScopes = append(completedScopes, reconciliationProviderScope{
 			agent: agent,
 			roots: append([]string(nil), roots...),
@@ -3500,7 +3621,8 @@ func (e *Engine) streamReconciliationCandidates(
 	}
 	slices.Sort(failedRoots)
 	failedRoots = slices.Compact(failedRoots)
-	return providers, completedScopes, failedRoots, failures, discoveryErr, nil
+	return providers, completedScopes, nonAuthoritativeProviders,
+		failedRoots, failures, discoveryErr, nil
 }
 
 type reconciliationProviderScope struct {
@@ -3847,13 +3969,16 @@ func (e *Engine) tombstoneMissingWatchSourcesLocked(
 	roots []string,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
-	return e.tombstoneMissingWatchSourcesForAgentLocked(ctx, roots, "", spool)
+	return e.tombstoneMissingWatchSourcesForAgentLocked(
+		ctx, roots, "", nil, spool,
+	)
 }
 
 func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 	ctx context.Context,
 	roots []string,
 	agentFilter parser.AgentType,
+	nonAuthoritativeProviders map[parser.AgentType]struct{},
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
 	if e.pathRewriter != nil {
@@ -3866,6 +3991,9 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		if agentFilter != "" && agent != agentFilter {
 			continue
 		}
+		if _, nonAuthoritative := nonAuthoritativeProviders[agent]; nonAuthoritative {
+			continue
+		}
 		var provider parser.Provider
 		var replacementIndex reconciliationSpoolStore
 		ownsReplacementIndex := false
@@ -3873,7 +4001,8 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		if factory := e.providerFactories[agent]; factory != nil {
 			provider = factory.NewProvider(parser.ProviderConfig{
 				Roots: e.agentDirs[agent], Machine: e.machine,
-				PathRewriter: e.pathRewriter,
+				PathRewriter:       e.pathRewriter,
+				ForceFullDiscovery: agent == parser.AgentOmnigent,
 			})
 		}
 		for _, root := range roots {
@@ -4481,7 +4610,9 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
+	providerFound, providerFailures, omnigentRetryAttempt := e.discoverProviderSources(
+		ctx, scope, forceDiscoveredFiles || writeMode == syncWriteBulk,
+	)
 	for _, file := range providerFound {
 		counts[file.Agent]++
 	}
@@ -4578,6 +4709,14 @@ func (e *Engine) syncAllLocked(
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
+	if scope == nil && omnigentRetryAttempt != 0 &&
+		!stats.Aborted && ctx.Err() == nil &&
+		stats.Failed == 0 && providerFailures == 0 {
+		// The retry generation is global across configured Omnigent roots.
+		// Only an unscoped pass covers every root that may have advanced its
+		// change cursor before a failed parse.
+		e.completeOmnigentFullRetry(omnigentRetryAttempt)
+	}
 	stats.providerFailures = providerFailures
 	for range providerFailures {
 		stats.RecordFailed()
@@ -4742,9 +4881,11 @@ const slowProviderDiscoveryThreshold = 100 * time.Millisecond
 func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
-) ([]parser.DiscoveredFile, int) {
+	forceFullDiscovery bool,
+) ([]parser.DiscoveredFile, int, uint64) {
 	var files []parser.DiscoveredFile
 	var failures int
+	var omnigentRetryAttempt uint64
 
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
@@ -4779,9 +4920,16 @@ func (e *Engine) discoverProviderSources(
 		if !ok || factory == nil {
 			continue
 		}
+		providerForceFullDiscovery := forceFullDiscovery
+		if pending, generation := e.omnigentFullRetry(); agentType == parser.AgentOmnigent &&
+			pending {
+			providerForceFullDiscovery = true
+			omnigentRetryAttempt = generation
+		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:   filteredRoots,
-			Machine: e.machine,
+			Roots:              filteredRoots,
+			Machine:            e.machine,
+			ForceFullDiscovery: providerForceFullDiscovery,
 		})
 		// Shared-database providers are streamed source-by-source by their
 		// dedicated sync phase. Calling Discover here would build an archive-sized
@@ -4803,6 +4951,7 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
+			e.requestOmnigentFullRetry(agentType)
 			continue
 		}
 		forceParseSource := func(string) bool { return false }
@@ -4839,6 +4988,14 @@ func (e *Engine) discoverProviderSources(
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
 			}
+			if agentType == parser.AgentOmnigent &&
+				omnigentRetryAttempt != 0 {
+				// A pending full retry is correctness work, not ordinary
+				// incremental discovery. Keep it through SyncAllSince's mtime
+				// cutoff and bypass stored freshness gates so the failed member
+				// is actually reparsed before the generation is acknowledged.
+				discovered.ForceParse = true
+			}
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
 			}
@@ -4863,7 +5020,34 @@ func (e *Engine) discoverProviderSources(
 			files = append(files, discovered)
 		}
 	}
-	return files, failures
+	return files, failures, omnigentRetryAttempt
+}
+
+func (e *Engine) requestOmnigentFullRetry(agent parser.AgentType) {
+	if agent != parser.AgentOmnigent {
+		return
+	}
+	e.mu.Lock()
+	e.omnigentRetryGeneration++
+	if e.omnigentRetryGeneration == 0 {
+		e.omnigentRetryGeneration++
+	}
+	e.omnigentRetryPending = true
+	e.mu.Unlock()
+}
+
+func (e *Engine) omnigentFullRetry() (bool, uint64) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.omnigentRetryPending, e.omnigentRetryGeneration
+}
+
+func (e *Engine) completeOmnigentFullRetry(generation uint64) {
+	e.mu.Lock()
+	if e.omnigentRetryPending && e.omnigentRetryGeneration == generation {
+		e.omnigentRetryPending = false
+	}
+	e.mu.Unlock()
 }
 
 func providerSourcePathSet(sources []parser.SourceRef) map[string]struct{} {
@@ -6046,6 +6230,7 @@ func (e *Engine) collectAndBatch(
 
 	var pending []pendingWrite
 	var pendingLeases []*parseRetentionLease
+	var pendingCacheWrites []skipCacheWrite
 	// Size baseline bookkeeping by the batch, capped at one flush page:
 	// a single-path watcher sync must not pay for page-sized structures
 	// (a 256-entry map of struct keys dominates the per-append B/op).
@@ -6132,11 +6317,26 @@ func (e *Engine) collectAndBatch(
 			} else {
 				outcome = e.writeBatchWithOutcome(pending, writeMode, false)
 			}
+			if outcome.failedSessions == 0 && outcome.cwdFiltered == 0 {
+				for _, candidate := range pendingCacheWrites {
+					e.cacheSkip(
+						candidate.key, candidate.mtime,
+						candidate.sourceFingerprint,
+					)
+				}
+			}
 			if err := e.baselinePendingWriteSources(
 				ctx, pending, outcome.written,
 			); err != nil {
 				log.Printf("baseline parsed session sources: %v", err)
 				outcome.failedSessions++
+			}
+			if outcome.failedSessions > 0 {
+				for _, write := range pending {
+					e.requestOmnigentFullRetry(
+						parser.AgentType(write.sess.Agent),
+					)
+				}
 			}
 			stats.RecordSynced(outcome.writtenSessions)
 			for range outcome.failedSessions {
@@ -6155,6 +6355,7 @@ func (e *Engine) collectAndBatch(
 		}()
 		pending = pending[:0]
 		pendingLeases = pendingLeases[:0]
+		pendingCacheWrites = pendingCacheWrites[:0]
 	}
 
 	budget := e.retentionBudget()
@@ -6193,6 +6394,7 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
+			e.requestOmnigentFullRetry(r.agent)
 			e.noteSQLiteContainerResult(r.path, false)
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
@@ -6203,6 +6405,9 @@ func (e *Engine) collectAndBatch(
 		}
 		for range r.providerFailureCount {
 			stats.RecordFailed()
+		}
+		if r.providerFailureCount > 0 {
+			e.requestOmnigentFullRetry(r.agent)
 		}
 		if r.skip {
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
@@ -6215,6 +6420,7 @@ func (e *Engine) collectAndBatch(
 				if err != nil {
 					log.Printf("check skipped source cwd admission: %v", err)
 					stats.RecordFailed()
+					e.requestOmnigentFullRetry(r.agent)
 					e.poisonSQLiteContainerPass()
 				} else {
 					baselineProcessedSource(r, admitted)
@@ -6225,6 +6431,7 @@ func (e *Engine) collectAndBatch(
 			r.releaseRetention()
 			continue
 		}
+		e.applyProviderIdentityMigrationPolicies(&r.processResult)
 		excludedSessionIDs := e.applyIDPrefixToSessionIDs(
 			r.excludedSessionIDs,
 		)
@@ -6244,6 +6451,7 @@ func (e *Engine) collectAndBatch(
 			); err != nil {
 				log.Printf("delete parser-excluded sessions: %v", err)
 				stats.RecordFailed()
+				e.requestOmnigentFullRetry(r.agent)
 				e.noteSQLiteContainerResult(r.path, false)
 				r.releaseRetention()
 				continue
@@ -6279,6 +6487,7 @@ func (e *Engine) collectAndBatch(
 					"tombstone source-missing members: %v", tombstoneErr,
 				)
 				stats.RecordFailed()
+				e.requestOmnigentFullRetry(r.agent)
 				e.noteSQLiteContainerResult(r.path, false)
 				r.releaseRetention()
 				continue
@@ -6343,6 +6552,7 @@ func (e *Engine) collectAndBatch(
 			if err := e.writeIncremental(r.incremental); err != nil {
 				log.Printf("%v", err)
 				stats.RecordFailed()
+				e.requestOmnigentFullRetry(r.agent)
 				r.releaseRetention()
 				continue
 			}
@@ -6377,6 +6587,13 @@ func (e *Engine) collectAndBatch(
 			if r.retentionLease != nil {
 				pendingLeases = append(pendingLeases, r.retentionLease)
 				r.retentionLease = nil
+			}
+			if r.cacheAfterWrite && vetoed == 0 && len(r.retrySessionIDs) == 0 {
+				pendingCacheWrites = append(pendingCacheWrites, skipCacheWrite{
+					key:               r.skipCacheKey(),
+					mtime:             r.mtime,
+					sourceFingerprint: r.sourceFingerprint,
+				})
 			}
 			if len(pending) >= batchSize || budget.underPressure() {
 				flushPending()
@@ -6582,6 +6799,7 @@ type sourceMissingMember struct {
 type processResult struct {
 	results            []parser.ParseResult
 	excludedSessionIDs []string
+	identityMigrations []parser.SessionIdentityMigration
 	// sourceMissingMembers carries stored sessions whose virtual member
 	// source no longer exists inside a still-present shared container
 	// (e.g. a Windsurf conversation deleted from state.vscdb). They must
@@ -6598,6 +6816,11 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	// cacheAfterWrite records a successful, complete rowless container parse
+	// after its member writes commit. Unlike ordinary provider results, these
+	// containers have no physical-path session row that can make the next full
+	// sync fresh through the archive database.
+	cacheAfterWrite bool
 	// sourceFingerprint carries S3 object fingerprints into
 	// skip-cache writes so same-mtime object rewrites do not stay
 	// hidden behind a cached parse failure or non-interactive result.
@@ -6950,16 +7173,49 @@ func (e *Engine) processProviderFile(
 				// refresh; non-Codex providers avoid the index lookup entirely.
 				e.clearSkip(cacheKey)
 			} else {
-				if verifiedStateOK &&
-					e.shouldSkipProviderSourceByDB(file, fingerprint) {
-					e.promoteVerifiedSource(verifiedCapture)
+				cacheStillFresh := true
+				if file.Agent == parser.AgentOmnigent {
+					restorer, ok := provider.(parser.CachedSourceStateRestorer)
+					if ok {
+						restored, err := restorer.RestoreCachedSourceState(
+							ctx, source,
+						)
+						if err != nil {
+							return processResult{
+								err: fmt.Errorf(
+									"restore cached %s source state: %w",
+									file.Agent, err,
+								),
+							}, true
+						}
+						if restored {
+							currentFingerprint, err := provider.Fingerprint(
+								ctx, source,
+							)
+							if err != nil {
+								return processResult{err: err}, true
+							}
+							if currentFingerprint != fingerprint {
+								e.clearSkip(cacheKey)
+								cacheStillFresh = false
+							}
+						}
+					}
 				}
-				return processResult{
-					skip:      true,
-					mtime:     fingerprint.MTimeNS,
-					cacheSkip: true,
-					cacheKey:  cacheKey,
-				}, true
+				if cacheStillFresh {
+					if verifiedStateOK &&
+						e.shouldSkipProviderSourceByDB(file, fingerprint) {
+						e.promoteVerifiedSource(verifiedCapture)
+					}
+					return processResult{
+						skip:      true,
+						mtime:     fingerprint.MTimeNS,
+						cacheSkip: true,
+						cacheKey:  cacheKey,
+					}, true
+				}
+				// A commit raced cache validation and tracker restoration.
+				// Fall through to parse the now-current container.
 			}
 		}
 	}
@@ -7089,14 +7345,18 @@ func (e *Engine) processProviderFile(
 			owned := e.providerSourceSessionOwnershipsForForceReplace(
 				provider, source,
 			)
+			omnigentContainerExists :=
+				file.Agent == parser.AgentOmnigent &&
+					parser.IsOmnigentContainerSource(source) &&
+					parser.IsRegularFile(providerDiscoveredPath(source))
 			if e.pathRewriter == nil &&
-				providerVirtualSourceContainerExists(file.Path) {
+				(providerVirtualSourceContainerExists(file.Path) ||
+					omnigentContainerExists) {
 				// The provider re-resolved this exact virtual member against a
-				// still-present shared container and it yields no session: the
-				// member was removed from the container, not the container from
-				// disk. Hard-deleting here would destroy rows the reconciliation
-				// audit preserves as revivable source-missing tombstones, so
-				// carry the stored ownership to the tombstone seam instead.
+				// still-present shared container, or authoritatively parsed an
+				// empty Omnigent container. The member was removed from the
+				// container, not the container from disk. Carry the stored
+				// ownership to the revivable tombstone seam.
 				missingMembers = owned
 			} else {
 				for _, member := range owned {
@@ -7107,6 +7367,7 @@ func (e *Engine) processProviderFile(
 		skipRes := processResult{
 			skip:                  !outcome.ForceReplace,
 			excludedSessionIDs:    excludedSessionIDs,
+			identityMigrations:    outcome.SessionIdentityMigrations,
 			sourceMissingMembers:  missingMembers,
 			mtime:                 fingerprint.MTimeNS,
 			cacheSkip:             cacheSkip,
@@ -7125,12 +7386,22 @@ func (e *Engine) processProviderFile(
 		}
 		return skipRes, true
 	}
-
 	parsedResults := parseOutcomeResults(outcome.Results)
 	parsedCount := len(parsedResults)
+	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
+	var missingMembers []sourceMissingMember
+	if file.Agent == parser.AgentOmnigent && outcome.ForceReplace &&
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
+		missingMembers =
+			e.providerSourceMissingSessionOwnershipsForCompleteResult(
+				provider, source, parsedResults,
+			)
+	}
 	res := processResult{
 		results:               e.dropUnchangedSharedSQLiteResults(file, parsedResults),
-		excludedSessionIDs:    append([]string(nil), outcome.ExcludedSessionIDs...),
+		excludedSessionIDs:    excludedSessionIDs,
+		identityMigrations:    outcome.SessionIdentityMigrations,
+		sourceMissingMembers:  missingMembers,
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
@@ -7139,6 +7410,14 @@ func (e *Engine) processProviderFile(
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 		providerFailureCount:  providerFailureCount,
 		retentionLease:        lease,
+	}
+	if file.Agent == parser.AgentOmnigent && cacheSkip && cleanCache &&
+		!e.forceParse && !file.ForceParse &&
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
+		fingerprint.Hash != "" {
+		path := providerDiscoveredPath(source)
+		_, _, virtual := parser.ParseOmnigentVirtualSourcePath(path)
+		res.cacheAfterWrite = !virtual
 	}
 	// Incremental-append providers (Claude and Codex) need the stored file
 	// identity so a later sync can detect an atomic file replacement
@@ -7205,11 +7484,11 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 		// Every aider run in a history file shares the file's content hash, so
 		// a same-mtime append/truncate is caught by the hash compare.
 		compareHash = true
-	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-		// OpenCode-family providers fan one shared container out to per-session
-		// results. The per-session mtime is the session's own updated time, and
-		// the hash compare uses the opencode storage fingerprint to catch
-		// same-mtime content changes.
+	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode,
+		parser.AgentIcodemate, parser.AgentOmnigent:
+		// These providers fan one shared container out to per-session results.
+		// The per-session mtime is the session's own updated time, and the hash
+		// compare catches same-mtime content changes.
 		compareHash = true
 	case parser.AgentZed, parser.AgentKiro:
 		// Zed and Kiro fan one container DB out to a session per row and have no
@@ -7321,6 +7600,29 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 		}
 	}
 	return members
+}
+
+func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
+	provider parser.Provider,
+	source parser.SourceRef,
+	results []parser.ParseResult,
+) []sourceMissingMember {
+	emitted := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		if id != "" {
+			emitted[id] = struct{}{}
+		}
+	}
+	stored := e.providerSourceSessionOwnershipsForForceReplace(provider, source)
+	missing := make([]sourceMissingMember, 0, len(stored))
+	for _, member := range stored {
+		if _, present := emitted[member.sessionID]; present {
+			continue
+		}
+		missing = append(missing, member)
+	}
+	return missing
 }
 
 // applyProviderFilePathPolicies reproduces the DB-aware, file-path-scoped
@@ -7439,6 +7741,72 @@ func (e *Engine) applyProviderFilePathPolicies(
 	res.results = kept
 }
 
+// applyProviderIdentityMigrationPolicies preserves explicit user deletion
+// state when one provider identity supersedes another. Parser cleanup still
+// removes ordinary live legacy rows, but a trashed or permanently excluded
+// legacy identity suppresses its replacement. The qualified replacement is
+// also parser-excluded to clean up rows imported by older binaries, while a
+// trashed legacy row is removed from parser cleanup so its recoverable messages
+// stay in the archive.
+func (e *Engine) applyProviderIdentityMigrationPolicies(
+	res *processResult,
+) {
+	if res == nil || len(res.identityMigrations) == 0 {
+		return
+	}
+
+	protectedPrevious := make(map[string]struct{})
+	suppressedCurrent := make(map[string]string)
+	for _, migration := range res.identityMigrations {
+		previousID := applyIDPrefixToID(e.idPrefix, migration.PreviousID)
+		currentID := applyIDPrefixToID(e.idPrefix, migration.CurrentID)
+		if previousID == "" || currentID == "" {
+			continue
+		}
+		if !e.db.IsSessionTrashed(previousID) &&
+			!e.db.IsSessionExcluded(previousID) {
+			continue
+		}
+		protectedPrevious[previousID] = struct{}{}
+		suppressedCurrent[currentID] = migration.CurrentID
+	}
+	if len(suppressedCurrent) == 0 {
+		return
+	}
+
+	kept := res.results[:0]
+	for _, result := range res.results {
+		currentID := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		if _, suppressed := suppressedCurrent[currentID]; suppressed {
+			continue
+		}
+		kept = append(kept, result)
+	}
+	res.results = kept
+
+	exclusions := res.excludedSessionIDs[:0]
+	seen := make(map[string]struct{}, len(res.excludedSessionIDs)+len(suppressedCurrent))
+	for _, id := range res.excludedSessionIDs {
+		fullID := applyIDPrefixToID(e.idPrefix, id)
+		if _, protected := protectedPrevious[fullID]; protected {
+			continue
+		}
+		if _, exists := seen[fullID]; exists {
+			continue
+		}
+		seen[fullID] = struct{}{}
+		exclusions = append(exclusions, id)
+	}
+	for fullID, providerID := range suppressedCurrent {
+		if _, exists := seen[fullID]; exists {
+			continue
+		}
+		seen[fullID] = struct{}{}
+		exclusions = append(exclusions, providerID)
+	}
+	res.excludedSessionIDs = exclusions
+}
+
 func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {
 	if !outcome.ResultSetComplete {
 		return false
@@ -7487,12 +7855,22 @@ func providerProcessCacheKey(
 	if agent == "" {
 		agent = source.Provider
 	}
-	key := ""
-	if key := plannedSkipKey(source, fingerprint); key != "" {
-		return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	key := plannedSkipKey(source, fingerprint)
+	if key == "" {
+		key = file.Path
 	}
-	key = file.Path
-	return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	key = providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	if agent == parser.AgentOmnigent {
+		path := providerDiscoveredPath(source)
+		if _, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); !virtual {
+			separator := "?"
+			if strings.Contains(key, "?") {
+				separator = "&"
+			}
+			key += separator + "data_version=" + strconv.Itoa(db.CurrentDataVersion())
+		}
+	}
+	return key
 }
 
 func providerProcessCacheKeyWithHash(
@@ -7516,7 +7894,7 @@ func providerProcessCacheKeyWithHash(
 // which compares the fingerprint hash against the stored row.
 func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin,
+	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentOmnigent,
 		parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
@@ -7530,7 +7908,8 @@ func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
 	switch agent {
 	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentHermes,
-		parser.AgentQoder, parser.AgentWindsurf, parser.AgentGemini:
+		parser.AgentOmnigent, parser.AgentQoder, parser.AgentWindsurf,
+		parser.AgentGemini:
 		return true
 	default:
 		return false
@@ -7548,6 +7927,16 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 	}
 	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
 		return true
+	}
+	if agent == parser.AgentOmnigent {
+		path := providerDiscoveredPath(source)
+		if _, _, virtual := parser.ParseOmnigentVirtualSourcePath(path); !virtual {
+			// Whole-container Omnigent sources have only virtual member rows in
+			// the archive. Their cache identity includes both the physical database
+			// hash and parser data version, so a restart cannot accept an entry from
+			// an older parser version.
+			return true
+		}
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
 	if e.pathRewriter != nil {
@@ -9461,6 +9850,32 @@ type writeBatchOutcome struct {
 	written         []bool
 }
 
+type skipCacheWrite struct {
+	key               string
+	mtime             int64
+	sourceFingerprint string
+}
+
+// markStaleFailedMemberWrite demotes the stored data version of a session
+// whose write failed. Shared-container members have no per-file mtime to
+// invalidate, so without the demotion a partial write (session row updated,
+// messages not) would compare as unchanged and never be repaired.
+func (e *Engine) markStaleFailedMemberWrite(pw pendingWrite) {
+	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
+		return
+	}
+	// Sessions are stored under the remote-sync prefixed ID
+	// (applyRemoteRewrites in prepareSessionWrite), so the demotion must
+	// target the same row.
+	id := applyIDPrefixToID(e.idPrefix, pw.sess.ID)
+	staleVersion := max(db.CurrentDataVersion()-1, 0)
+	if e.db.GetSessionDataVersion(id) > staleVersion {
+		if err := e.db.SetSessionDataVersion(id, staleVersion); err != nil {
+			log.Printf("mark failed member write stale for %s: %v", id, err)
+		}
+	}
+}
+
 func dataVersionForWrite(pw pendingWrite) int {
 	if !pw.needsRetry {
 		return db.CurrentDataVersion()
@@ -9575,6 +9990,7 @@ func (e *Engine) writeBatchWithOutcome(
 				continue
 			}
 			log.Printf("upsert session %s: %v", s.ID, err)
+			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
 		}
@@ -9604,6 +10020,7 @@ func (e *Engine) writeBatchWithOutcome(
 				"write messages for %s: %v",
 				s.ID, werr,
 			)
+			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
 		}
@@ -9614,6 +10031,7 @@ func (e *Engine) writeBatchWithOutcome(
 				"write usage events for %s: %v",
 				s.ID, err,
 			)
+			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
 		}
@@ -9628,6 +10046,7 @@ func (e *Engine) writeBatchWithOutcome(
 			log.Printf(
 				"set data_version for %s: %v", s.ID, err,
 			)
+			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
 		}
@@ -10492,6 +10911,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
+	pendingByID := make(map[string]pendingWrite, len(batch))
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
 	for pendingIndex, pw := range batch {
@@ -10525,6 +10945,7 @@ func (e *Engine) writeBatchBulkWithOutcome(
 			ReplaceMessages: replaceMessages,
 		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
+		pendingByID[s.ID] = pw
 		if pw.sess.File.Path != "" {
 			sources[s.ID] = batchSourceFile{
 				path:        pw.sess.File.Path,
@@ -10545,12 +10966,20 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))
 	if err != nil {
 		log.Printf("write session batch: %v", err)
+		for _, pw := range pendingByID {
+			e.markStaleFailedMemberWrite(pw)
+		}
 		outcome.failedSessions = len(writes)
 		return outcome
 	}
 	for _, writtenIndex := range result.WrittenIndexes {
 		if writtenIndex >= 0 && writtenIndex < len(pendingIndexes) {
 			outcome.written[pendingIndexes[writtenIndex]] = true
+		}
+	}
+	for _, id := range result.FailedIDs {
+		if pw, ok := pendingByID[id]; ok {
+			e.markStaleFailedMemberWrite(pw)
 		}
 	}
 	for _, id := range result.ExcludedIDs {

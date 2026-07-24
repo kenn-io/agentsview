@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ManifestEntry describes one regular file available for remote sync.
@@ -69,6 +71,9 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 		return nil
 	}
 	for agent, dirs := range targets.Dirs {
+		if agent == parser.AgentOmnigent {
+			continue
+		}
 		if _, fileScoped := targets.Files[agent]; fileScoped {
 			continue
 		}
@@ -81,7 +86,10 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			}
 		}
 	}
-	for _, files := range targets.Files {
+	for agent, files := range targets.Files {
+		if agent == parser.AgentOmnigent {
+			continue
+		}
 		for _, path := range files {
 			if _, ok := hermesSQLite[filepath.Clean(path)]; ok {
 				continue

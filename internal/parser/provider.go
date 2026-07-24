@@ -47,6 +47,10 @@ type ProviderFactory interface {
 type ProviderConfig struct {
 	Roots   []string
 	Machine string
+	// ForceFullDiscovery requests complete source coverage for archive rebuilds.
+	// Providers with bounded incremental discovery use it to bypass retained
+	// change-tracking state.
+	ForceFullDiscovery bool
 	// PathRewriter maps an on-disk source path to its canonical stored form.
 	// It is non-nil only during remote (SSH) sync, where source files are read
 	// from a temporary extraction directory but must keep a stable identity
@@ -92,6 +96,14 @@ type Provider interface {
 		context.Context,
 		IncrementalRequest,
 	) (IncrementalOutcome, IncrementalStatus, error)
+}
+
+// CachedSourceStateRestorer rebuilds bounded in-memory provider state when the
+// engine validates a persisted source cache entry without parsing the source.
+// Shared-container providers use it to avoid treating the first watcher event
+// after restart as a cold whole-container discovery.
+type CachedSourceStateRestorer interface {
+	RestoreCachedSourceState(context.Context, SourceRef) (bool, error)
 }
 
 // ReconciliationSourceResolver rebuilds the exact source emitted by streaming
@@ -427,12 +439,22 @@ type ParseRequest struct {
 // result must use a session-scoped path when the backing source can produce more
 // than one logical session.
 type ParseOutcome struct {
-	Results            []ParseResultOutcome
-	ExcludedSessionIDs []string
-	SourceErrors       []SourceError
-	ResultSetComplete  bool
-	ForceReplace       bool
-	SkipReason         SkipReason
+	Results                   []ParseResultOutcome
+	ExcludedSessionIDs        []string
+	SessionIdentityMigrations []SessionIdentityMigration
+	SourceErrors              []SourceError
+	ResultSetComplete         bool
+	ForceReplace              bool
+	SkipReason                SkipReason
+}
+
+// SessionIdentityMigration relates a retired persisted identity to the
+// replacement identity emitted by the same authoritative provider parse. The
+// sync engine uses this relationship to carry forward user trash and permanent
+// exclusion state before applying parser cleanup or replacement writes.
+type SessionIdentityMigration struct {
+	PreviousID string
+	CurrentID  string
 }
 
 // ParseResultOutcome pairs a normalized parse result with per-session retry and
@@ -642,6 +664,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQoderProviderFactory(def)
 	case AgentReasonix:
 		return newReasonixProviderFactory(def)
+	case AgentOmnigent:
+		return newOmnigentProviderFactory(def)
 	case AgentShelley:
 		return newShelleyProviderFactory(def)
 	case AgentVSCopilot:

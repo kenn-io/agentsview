@@ -17,6 +17,7 @@ func validateProviderOutcome(
 	fingerprint parser.SourceFingerprint,
 	outcome parser.ParseOutcome,
 ) error {
+	resultIDs := make(map[string]struct{}, len(outcome.Results))
 	for _, result := range outcome.Results {
 		session := result.Result.Session
 		if session.Agent != def.Type {
@@ -30,10 +31,41 @@ func validateProviderOutcome(
 		if err := validateProviderParseResultSessionIDs(def, result.Result); err != nil {
 			return err
 		}
+		resultIDs[session.ID] = struct{}{}
 	}
 	for _, sessionID := range outcome.ExcludedSessionIDs {
 		if err := validateProviderSessionID(def, sessionID, "excluded session id"); err != nil {
 			return err
+		}
+	}
+	for _, migration := range outcome.SessionIdentityMigrations {
+		if err := validateProviderSessionID(
+			def, migration.PreviousID, "previous migration session id",
+		); err != nil {
+			return err
+		}
+		if err := validateProviderSessionID(
+			def, migration.CurrentID, "current migration session id",
+		); err != nil {
+			return err
+		}
+		if migration.PreviousID == "" || migration.CurrentID == "" {
+			return fmt.Errorf(
+				"%s: provider session identity migration requires both IDs",
+				def.Type,
+			)
+		}
+		if migration.PreviousID == migration.CurrentID {
+			return fmt.Errorf(
+				"%s: provider session identity migration must change ID %q",
+				def.Type, migration.PreviousID,
+			)
+		}
+		if _, emitted := resultIDs[migration.CurrentID]; !emitted {
+			return fmt.Errorf(
+				"%s: provider migration current ID %q was not emitted",
+				def.Type, migration.CurrentID,
+			)
 		}
 	}
 	for _, sourceErr := range outcome.SourceErrors {
