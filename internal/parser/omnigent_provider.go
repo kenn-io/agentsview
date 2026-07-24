@@ -245,6 +245,20 @@ func IsOmnigentContainerSource(source SourceRef) bool {
 	return ok && src.Container != "" && src.MemberID == ""
 }
 
+// OmnigentMemberSessionID returns the archived session identity addressed by a
+// virtual Omnigent member source. The sync engine uses it to look up already
+// archived descendants whose cwd and branch inherit from a changed root.
+func OmnigentMemberSessionID(source SourceRef) (string, bool) {
+	if source.Provider != AgentOmnigent {
+		return "", false
+	}
+	src, ok := source.Opaque.(multiSessionSource)
+	if !ok || src.MemberID == "" {
+		return "", false
+	}
+	return omnigentIDPrefix + src.MemberID, true
+}
+
 func omnigentLegacySessionIDs(
 	src multiSessionSource, results []ParseResult,
 ) []string {
@@ -1145,6 +1159,13 @@ func (t *omnigentChangeTracker) restoreCachedContainer(
 	defer conn.Close()
 	schema, err := detectOmnigentSchema(conn)
 	if err != nil {
+		if omnigentSchemaUnsupported(err) {
+			// Unsupported parse outcomes are intentionally skip-cached. A
+			// restart may validate that cache entry with a cold tracker; the
+			// known unsupported state still proves the cached skip, but cannot
+			// seed supported-schema change cursors.
+			return false, nil
+		}
 		return false, err
 	}
 	conversationRowID, conversationTail, err :=

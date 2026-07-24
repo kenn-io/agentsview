@@ -1303,6 +1303,92 @@ func TestAuditOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
 		"authoritative reconciliation must refresh multi-workspace metadata")
 }
 
+func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	observed := make(map[int]int64)
+	for _, archiveSize := range []int{130, 1030} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
+			writer, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(`
+				UPDATE conversations
+				   SET parent_conversation_id = 'conv_0000',
+				       root_conversation_id = 'conv_0000'
+				 WHERE workspace_id = 0 AND id = 'conv_0001'`)
+			require.NoError(t, err)
+			_, err = writer.Exec(`
+				UPDATE omnigent_conversation_metadata
+				   SET workspace = '/work/before', git_branch = 'main'
+				 WHERE workspace_id = 0 AND id = 'conv_0000'`)
+			require.NoError(t, err)
+			_, err = writer.Exec(`
+				UPDATE omnigent_conversation_metadata
+				   SET kind = 2, workspace = '', git_branch = ''
+				 WHERE workspace_id = 0 AND id = 'conv_0001'`)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			archive := dbtest.OpenTestDB(t)
+			var resultCount atomic.Int64
+			factory := omnigentParseCountingFactory{
+				delegate: omnigentDefaultProviderFactory(t),
+				count:    new(atomic.Int64),
+				results:  &resultCount,
+			}
+			engine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {root},
+				},
+				Machine:           "local",
+				ProviderFactories: []parser.ProviderFactory{factory},
+			})
+			t.Cleanup(engine.Close)
+			syncOmnigentArchive(t, engine, archive, archiveSize)
+			childID := "omnigent:0:conv_0001"
+			before, err := archive.GetSession(t.Context(), childID)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			assert.Equal(t, "/work/before", before.Cwd)
+			assert.Equal(t, "before", before.Project)
+			assert.Equal(t, "main", before.GitBranch)
+
+			writer, err = sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(`
+				UPDATE conversations
+				   SET updated_at = ?
+				 WHERE workspace_id = 0 AND id = 'conv_0000'`,
+				time.Now().Unix(),
+			)
+			require.NoError(t, err)
+			_, err = writer.Exec(`
+				UPDATE omnigent_conversation_metadata
+				   SET workspace = '/work/after', git_branch = 'review'
+				 WHERE workspace_id = 0 AND id = 'conv_0000'`)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			resultCount.Store(0)
+			require.NoError(t, engine.SyncPathsContext(
+				t.Context(), []string{dbPath},
+			))
+			observed[archiveSize] = resultCount.Load()
+			after, err := archive.GetSession(t.Context(), childID)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, "/work/after", after.Cwd)
+			assert.Equal(t, "after", after.Project)
+			assert.Equal(t, "review", after.GitBranch)
+		})
+	}
+	assert.Equal(t, observed[130], observed[1030],
+		"dependent metadata refresh work must not grow with unrelated conversations")
+}
+
 func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -1610,7 +1696,19 @@ func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	engine.SyncAll(context.Background(), nil)
+	firstUnsupported := engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, firstUnsupported.Failed)
+	engine.Close()
+	restarted := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(restarted.Close)
+	secondUnsupported := restarted.SyncAll(context.Background(), nil)
+	assert.Zero(t, secondUnsupported.Failed,
+		"a cached unsupported source must remain a clean skip")
 	after, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
 	require.NoError(t, err)
 	require.NotNil(t, after, "unsupported source must not retire archived sessions")

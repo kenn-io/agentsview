@@ -1103,6 +1103,21 @@ func (e *Engine) classifyProviderChangedPath(
 				}
 				continue
 			}
+			if agentType == parser.AgentOmnigent {
+				sources, err = e.expandOmnigentInheritedMetadataSources(
+					ctx, provider, sources,
+				)
+				if err != nil {
+					classificationErr = errors.Join(
+						classificationErr,
+						fmt.Errorf(
+							"%s provider dependent-source classification for %q: %w",
+							def.Type, path, err,
+						),
+					)
+					continue
+				}
+			}
 			for _, source := range sources {
 				sourcePath := providerDiscoveredPath(source)
 				if sourcePath == "" {
@@ -1146,6 +1161,60 @@ func (e *Engine) classifyProviderChangedPath(
 		}
 	}
 	return files, classificationErr
+}
+
+func (e *Engine) expandOmnigentInheritedMetadataSources(
+	ctx context.Context,
+	provider parser.Provider,
+	sources []parser.SourceRef,
+) ([]parser.SourceRef, error) {
+	resolver, ok := provider.(parser.ReconciliationSourceResolver)
+	if !ok || len(sources) == 0 {
+		return sources, nil
+	}
+	seenSources := make(map[string]struct{}, len(sources))
+	parentIDs := make([]string, 0, len(sources))
+	seenParents := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		if path := providerDiscoveredPath(source); path != "" {
+			seenSources[path] = struct{}{}
+		}
+		id, member := parser.OmnigentMemberSessionID(source)
+		if !member {
+			continue
+		}
+		id = applyIDPrefixToID(e.idPrefix, id)
+		if _, exists := seenParents[id]; exists {
+			continue
+		}
+		seenParents[id] = struct{}{}
+		parentIDs = append(parentIDs, id)
+	}
+	paths, err := e.db.ListActiveDescendantSessionSourcePaths(
+		ctx, e.machine, string(parser.AgentOmnigent), parentIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		if _, exists := seenSources[path]; exists {
+			continue
+		}
+		source, found, err := resolver.SourceForReconciliation(ctx, path, "")
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		sourcePath := providerDiscoveredPath(source)
+		if sourcePath == "" {
+			continue
+		}
+		seenSources[sourcePath] = struct{}{}
+		sources = append(sources, source)
+	}
+	return sources, nil
 }
 
 func storedSourceDBHintScopes(
