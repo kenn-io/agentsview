@@ -557,6 +557,7 @@ func TestSessionIdentity(t *testing.T) {
 		s.Agent = "claude"
 		s.AgentLabel = "Claude Triage"
 		s.Entrypoint = "sdk-cli"
+		s.SessionKind = "bg"
 		s.SessionName = Ptr("Agent Title")
 		s.StartedAt = Ptr("2024-06-15T08:00:00Z")
 		s.EndedAt = Ptr("2024-06-15T09:00:00Z")
@@ -572,6 +573,7 @@ func TestSessionIdentity(t *testing.T) {
 	assert.Equal(t, "sqlite-identity", index.Sessions[0].ID)
 	assert.Equal(t, "Claude Triage", index.Sessions[0].AgentLabel)
 	assert.Equal(t, "sdk-cli", index.Sessions[0].Entrypoint)
+	assert.Equal(t, "bg", index.Sessions[0].SessionKind)
 	require.NotNil(t, index.Sessions[0].DisplayName)
 	assert.Equal(t, "Agent Title", *index.Sessions[0].DisplayName)
 }
@@ -599,6 +601,7 @@ func TestSessionIdentityAbsent(t *testing.T) {
 	require.Len(t, index.Sessions, 1)
 	assert.Equal(t, "", index.Sessions[0].AgentLabel)
 	assert.Equal(t, "", index.Sessions[0].Entrypoint)
+	assert.Equal(t, "", index.Sessions[0].SessionKind)
 }
 
 func TestSessionKindAndPromptSourcePersist(t *testing.T) {

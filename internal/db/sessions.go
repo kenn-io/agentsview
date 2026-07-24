@@ -616,6 +616,7 @@ type SidebarSessionIndexRow struct {
 	Agent              string  `json:"agent"`
 	AgentLabel         string  `json:"agent_label,omitempty"`
 	Entrypoint         string  `json:"entrypoint,omitempty"`
+	SessionKind        string  `json:"session_kind,omitempty"`
 	DisplayName        *string `json:"display_name,omitempty"`
 	StartedAt          *string `json:"started_at"`
 	EndedAt            *string `json:"ended_at"`
@@ -761,6 +762,7 @@ func (db *DB) GetSidebarSessionIndex(
 			agent,
 			agent_label,
 			entrypoint,
+			session_kind,
 			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
@@ -801,6 +803,7 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.Agent,
 			&row.AgentLabel,
 			&row.Entrypoint,
+			&row.SessionKind,
 			&row.DisplayName,
 			&row.StartedAt,
 			&row.EndedAt,
@@ -1016,6 +1019,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.agent,
 			s.agent_label,
 			s.entrypoint,
+			s.session_kind,
 			COALESCE(s.display_name, s.session_name) AS display_name,
 			s.started_at,
 			s.ended_at,
@@ -1051,6 +1055,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.Agent,
 			&row.AgentLabel,
 			&row.Entrypoint,
+			&row.SessionKind,
 			&row.DisplayName,
 			&row.StartedAt,
 			&row.EndedAt,
