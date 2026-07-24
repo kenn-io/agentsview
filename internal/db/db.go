@@ -321,7 +321,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (71: OpenCode SQLite cwd/project derivation now prefers a concrete
 // session.directory over the synthetic global project worktree "/". Existing
 // OpenCode rows need re-parsing so unchanged sessions refresh cwd and project.)
-const dataVersion = 71
+// (72: OpenCode invalid tool calls emit an errored result event. OpenCode
+// records unknown-tool calls as a synthetic "invalid" tool that completes
+// successfully, so existing rows carry no failure signal. Re-parsing attaches
+// the errored event so tool-health failure counts cover historical sessions.)
+const dataVersion = 72
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

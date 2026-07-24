@@ -1007,9 +1007,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionOpenCodeSessionDirectory(t *testing.T) {
-	assert.Equal(t, 71, CurrentDataVersion(),
-		"OpenCode cwd/project derivation requires a data version bump")
+func TestCurrentDataVersionOpenCodeInvalidToolFailure(t *testing.T) {
+	assert.Equal(t, 72, CurrentDataVersion(),
+		"OpenCode invalid-tool failure detection requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
