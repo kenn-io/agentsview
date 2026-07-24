@@ -328,7 +328,7 @@ describe("SessionVitals", () => {
     mocks.fetchSessionTiming.mockResolvedValue(timingWithCall());
     component = mount(SessionVitals, {
       target: document.body,
-      props: { sessionId: "sess-1" },
+      props: { sessionId: "sess-1", session: undefined },
     });
     await tick();
     await tick();
