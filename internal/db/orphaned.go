@@ -378,9 +378,15 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		sql   string
 	}{
 		{
+			// A resync rebuilds the archive, so every copied session must be
+			// re-verified by the exporter: copied rows are forced pending=1 on
+			// both the fresh-insert and merge branches. Unchanged content is
+			// cheap to skip because artifacts are content-addressed. Generation
+			// still advances and never regresses so a stale source claim cannot
+			// become valid in the rebuilt archive.
 			"artifact_export_queue",
 			`INSERT INTO main.artifact_export_queue(session_id, enqueued_at, generation, pending)
-			 SELECT session_id, enqueued_at, generation + 1, pending
+			 SELECT session_id, enqueued_at, generation + 1, 1
 			 FROM old_db.artifact_export_queue WHERE true
 			 ON CONFLICT(session_id) DO UPDATE SET
 				enqueued_at = CASE
@@ -391,7 +397,7 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 					ELSE excluded.enqueued_at
 				END,
 				generation = max(artifact_export_queue.generation, excluded.generation) + 1,
-				pending = max(artifact_export_queue.pending, excluded.pending)`,
+				pending = 1`,
 		},
 		{
 			"artifact_publications",

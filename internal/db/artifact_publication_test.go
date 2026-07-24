@@ -632,10 +632,14 @@ func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, target.Close()) })
 	require.NoError(t, target.CopySyncStateFrom(sourcePath))
 
+	// A resync re-verifies every copied session, so the acknowledged
+	// "published" row is re-dirtied alongside the still-pending "queued" row.
 	pending, err := target.PendingArtifactExports(ctx, 10)
 	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "queued", pending[0].SessionID)
+	require.Len(t, pending, 2)
+	assert.ElementsMatch(t, []string{"queued", "published"}, []string{
+		pending[0].SessionID, pending[1].SessionID,
+	})
 	var publications []ArtifactPublication
 	streamedRevision, err := target.StreamArtifactPublications(ctx, "desktop-a1b2c3", func(row ArtifactPublication) error {
 		publications = append(publications, row)
@@ -673,6 +677,120 @@ func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
 		ManifestHash: "stale", SourceFingerprint: "stale",
 	}})
 	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+}
+
+// TestCopySyncStateForcesPendingOnFreshCopiedQueueRows models the shipped
+// resync flow: the old DB holds acknowledged (pending=0) queue rows, the fresh
+// DB has no origin key so the triggers stay gated and the queue is empty, and
+// CopySyncStateFrom must re-dirty every copied row so the exporter re-verifies
+// the rebuilt archive. Covers the fresh-insert branch of the queue copy.
+func TestCopySyncStateForcesPendingOnFreshCopiedQueueRows(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	seedArtifactOrigin(t, source)
+	ctx := t.Context()
+
+	for _, id := range []string{"sess-1", "sess-2"} {
+		require.NoError(t, source.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "local", Agent: "claude",
+		}))
+	}
+	claims, err := source.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, claims, 2)
+	require.NoError(t, source.AcknowledgeArtifactExports(ctx, claims))
+	drained, err := source.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Empty(t, drained, "old queue rows are acknowledged before the resync")
+	oldGen := map[string]int64{}
+	for _, claim := range claims {
+		oldGen[claim.SessionID] = claim.Generation
+	}
+	require.NoError(t, source.Close())
+
+	target, err := Open(filepath.Join(dir, "target.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, target.Close()) })
+	for _, id := range []string{"sess-1", "sess-2"} {
+		require.NoError(t, target.UpsertSession(Session{
+			ID: id, Project: "project", Machine: "local", Agent: "claude",
+		}))
+	}
+	emptyBefore, err := target.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Empty(t, emptyBefore, "no origin key: queue triggers stay gated during resync")
+
+	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+
+	pending, err := target.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2, "a resync must re-verify every copied session")
+	assert.ElementsMatch(t, []string{"sess-1", "sess-2"}, []string{
+		pending[0].SessionID, pending[1].SessionID,
+	})
+	for _, item := range pending {
+		assert.Greater(t, item.Generation, oldGen[item.SessionID],
+			"copied generation must advance and never regress")
+	}
+}
+
+// TestCopySyncStateMergesQueueRowsAsPending exercises the ON CONFLICT merge
+// branch of the queue copy (previously untested). The fresh DB already has the
+// origin key and a trigger-created row that has itself been acknowledged, and
+// the old DB carries an acknowledged row for the same session at a different
+// generation. After the copy the row is pending again and its generation is the
+// advanced maximum of both sources.
+func TestCopySyncStateMergesQueueRowsAsPending(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	seedArtifactOrigin(t, source)
+	ctx := t.Context()
+
+	require.NoError(t, source.UpsertSession(Session{
+		ID: "overlap", Project: "project", Machine: "local", Agent: "claude",
+	}))
+	for i := range 3 {
+		_, err = source.getWriter().Exec(
+			`UPDATE sessions SET display_name = ? WHERE id = 'overlap'`, "v"+strconv.Itoa(i))
+		require.NoError(t, err)
+	}
+	oldClaims, err := source.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, oldClaims, 1)
+	oldGen := oldClaims[0].Generation
+	require.Greater(t, oldGen, int64(1))
+	require.NoError(t, source.AcknowledgeArtifactExports(ctx, oldClaims))
+	require.NoError(t, source.Close())
+
+	target, err := Open(filepath.Join(dir, "target.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, target.Close()) })
+	seedArtifactOrigin(t, target)
+	require.NoError(t, target.UpsertSession(Session{
+		ID: "overlap", Project: "project", Machine: "local", Agent: "claude",
+	}))
+	newClaims, err := target.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, newClaims, 1)
+	newGen := newClaims[0].Generation
+	require.NoError(t, target.AcknowledgeArtifactExports(ctx, newClaims))
+	acked, err := target.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Empty(t, acked, "both queue rows are acknowledged before the merge")
+
+	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+
+	pending, err := target.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the merged row is re-dirtied by the resync")
+	assert.Equal(t, "overlap", pending[0].SessionID)
+	expected := max(oldGen+1, newGen) + 1
+	assert.Equal(t, expected, pending[0].Generation,
+		"merged generation is the advanced maximum of both sources")
 }
 
 func TestArtifactPublicationStateCopyAcceptsPreRevisionCheckpointHead(t *testing.T) {

@@ -11,19 +11,34 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// bootstrapExportQueue is a test seam for injecting bootstrap failures.
-var bootstrapExportQueue = (*db.DB).BootstrapArtifactExportQueue
+// bootstrapExportQueue and requeueExportQueue are test seams for injecting
+// queue-population failures. Bootstrap enqueues each session once (INSERT OR
+// IGNORE); requeue force-dirties every owned session for a divergent origin.
+var (
+	bootstrapExportQueue = (*db.DB).BootstrapArtifactExportQueue
+	requeueExportQueue   = (*db.DB).RequeueAllArtifactExports
+)
 
-// bootstrapQueueForOrigin populates the export queue after origin persists.
-// On failure it rolls the stored origin back to previous so a retry re-runs
-// the bootstrap instead of fast-pathing to success with an unpopulated queue.
-func bootstrapQueueForOrigin(database *db.DB, origin, previous string) error {
-	err := bootstrapExportQueue(database)
+// populateQueueForOrigin runs populate after the origin persists. On failure it
+// rolls the stored origin back to previous so a retry re-runs population instead
+// of fast-pathing to success with an unpopulated queue. When previous is empty
+// the origin key is deleted rather than set to an empty value, because the
+// export gates test key existence, not the stored value.
+func populateQueueForOrigin(
+	database *db.DB, populate func(*db.DB) error, origin, previous string,
+) error {
+	err := populate(database)
 	if err == nil {
 		return nil
 	}
-	err = fmt.Errorf("bootstrapping export queue for origin %s: %w", origin, err)
-	if rollbackErr := database.SetSyncState(originStateKey, previous); rollbackErr != nil {
+	err = fmt.Errorf("populating export queue for origin %s: %w", origin, err)
+	var rollbackErr error
+	if previous == "" {
+		rollbackErr = database.DeleteSyncState(originStateKey)
+	} else {
+		rollbackErr = database.SetSyncState(originStateKey, previous)
+	}
+	if rollbackErr != nil {
 		return errors.Join(err,
 			fmt.Errorf("rolling back artifact origin: %w", rollbackErr))
 	}
@@ -49,7 +64,7 @@ func EnsureOrigin(database *db.DB) (string, error) {
 	if err := database.SetSyncState(originStateKey, origin); err != nil {
 		return "", fmt.Errorf("persisting artifact origin: %w", err)
 	}
-	if err := bootstrapQueueForOrigin(database, origin, ""); err != nil {
+	if err := populateQueueForOrigin(database, bootstrapExportQueue, origin, ""); err != nil {
 		return "", err
 	}
 	return origin, nil
@@ -74,7 +89,14 @@ func AdoptOrigin(database *db.DB, origin string) error {
 	if err := database.SetSyncState(originStateKey, origin); err != nil {
 		return fmt.Errorf("persisting artifact origin: %w", err)
 	}
-	return bootstrapQueueForOrigin(database, origin, existing)
+	// A divergent adoption replaces an established origin whose sessions may
+	// already be acknowledged, so bootstrap's INSERT OR IGNORE would leave the
+	// new origin's ledger empty. Force-requeue every owned session instead.
+	// First-time adoption keeps the cheaper bootstrap.
+	if existing != "" {
+		return populateQueueForOrigin(database, requeueExportQueue, origin, existing)
+	}
+	return populateQueueForOrigin(database, bootstrapExportQueue, origin, existing)
 }
 
 // StoredOrigin returns the persisted origin ID without creating one.

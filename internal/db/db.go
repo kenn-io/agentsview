@@ -2456,6 +2456,31 @@ func (db *DB) BootstrapArtifactExportQueue() error {
 	return nil
 }
 
+// RequeueAllArtifactExports forces every live locally-owned session pending
+// with a bumped generation. Called when a divergent artifact origin is
+// adopted: BootstrapArtifactExportQueue is INSERT OR IGNORE, so a session
+// already acknowledged (pending=0) under the previous origin would be skipped
+// and never re-verified under the new origin. This re-dirties the ledger so
+// the new origin publishes every owned session. The ON CONFLICT clause matches
+// the session queue triggers' generation semantics.
+func (db *DB) RequeueAllArtifactExports() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(`
+		INSERT INTO artifact_export_queue(session_id)
+		SELECT id FROM sessions
+		WHERE machine = 'local' AND deleted_at IS NULL
+		ON CONFLICT(session_id) DO UPDATE SET
+			enqueued_at = CASE WHEN pending = 0
+				THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
+			generation = generation + 1,
+			pending = 1`)
+	if err != nil {
+		return fmt.Errorf("requeueing artifact export queue: %w", err)
+	}
+	return nil
+}
+
 // syncMarkerSchemaSQL creates the sync_marker index and the triggers that
 // keep it equal to the max of created_at, local_modified_at, ended_at,
 // started_at, and file_mtime, normalized to ms-precision UTC text. This is
@@ -4153,6 +4178,18 @@ func (db *DB) DeleteSyncStateByPrefix(prefix string) error {
 	_, err := db.getWriter().Exec(
 		"DELETE FROM pg_sync_state WHERE key LIKE ? ESCAPE '\\'",
 		escaped+"%",
+	)
+	return err
+}
+
+// DeleteSyncState removes the pg_sync_state row for exactly key, if present.
+// Origin rollback uses this instead of writing an empty value because the
+// artifact export gates test key existence, not the stored value.
+func (db *DB) DeleteSyncState(key string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		"DELETE FROM pg_sync_state WHERE key = ?", key,
 	)
 	return err
 }

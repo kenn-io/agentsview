@@ -128,30 +128,81 @@ func TestEnsureOriginRollsBackWhenBootstrapFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stored, "failed bootstrap must roll the origin back")
 
+	// The rollback deletes the origin key entirely rather than writing an empty
+	// value, so the export gate (which tests key existence) stays closed. A
+	// session written after the failed creation must not enqueue.
+	seedSession(t, database, "sess-2", "alpha")
+	gated, err := database.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	require.Empty(t, gated, "failed origin creation must leave the export gate closed")
+
 	bootstrapExportQueue = (*db.DB).BootstrapArtifactExportQueue
 	origin, err := EnsureOrigin(database)
 	require.NoError(t, err)
 	require.NotEmpty(t, origin, "retry after rollback must re-run creation")
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
 	require.NoError(t, err)
-	require.Len(t, pending, 1, "retry must re-run the bootstrap")
-	assert.Equal(t, "sess-1", pending[0].SessionID)
+	require.Len(t, pending, 2, "retry must re-run the bootstrap for every pre-existing session")
+	assert.ElementsMatch(t, []string{"sess-1", "sess-2"}, []string{
+		pending[0].SessionID, pending[1].SessionID,
+	})
 }
 
-func TestAdoptOriginRestoresPreviousOriginWhenBootstrapFails(t *testing.T) {
+func TestAdoptOriginRestoresPreviousOriginWhenRequeueFails(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, AdoptOrigin(database, "before-a1b2c3"))
 
-	injected := errors.New("bootstrap exploded")
-	bootstrapExportQueue = func(*db.DB) error { return injected }
-	t.Cleanup(func() { bootstrapExportQueue = (*db.DB).BootstrapArtifactExportQueue })
+	injected := errors.New("requeue exploded")
+	requeueExportQueue = func(*db.DB) error { return injected }
+	t.Cleanup(func() { requeueExportQueue = (*db.DB).RequeueAllArtifactExports })
 
+	// Adopting a divergent origin over an established one routes through the
+	// requeue path, not bootstrap.
 	err := AdoptOrigin(database, "after-d4e5f6")
 	require.ErrorIs(t, err, injected)
 	stored, err := StoredOrigin(database)
 	require.NoError(t, err)
 	assert.Equal(t, "before-a1b2c3", stored,
-		"failed adoption must restore the previous origin")
+		"failed divergent adoption must restore the previous origin")
+}
+
+// TestAdoptOriginRequeuesAllExportsOnDivergentAdoption covers the divergent
+// adoption path: when a new origin replaces an established one whose sessions
+// are already acknowledged, INSERT OR IGNORE bootstrap would leave the ledger
+// empty, so every owned session must be force-requeued with a bumped
+// generation.
+func TestAdoptOriginRequeuesAllExportsOnDivergentAdoption(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, AdoptOrigin(database, "origin-a1b2c3"))
+	seedSession(t, database, "sess-1", "alpha")
+	seedSession(t, database, "sess-2", "alpha")
+
+	ctx := t.Context()
+	pending, err := database.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+	genBefore := map[string]int64{}
+	for _, item := range pending {
+		genBefore[item.SessionID] = item.Generation
+	}
+
+	// Simulate the prior origin having fully published every session.
+	require.NoError(t, database.AcknowledgeArtifactExports(ctx, pending))
+	drained, err := database.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Empty(t, drained)
+
+	require.NoError(t, AdoptOrigin(database, "origin-d4e5f6"))
+	pending, err = database.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2, "divergent adoption re-verifies every owned session")
+	assert.ElementsMatch(t, []string{"sess-1", "sess-2"}, []string{
+		pending[0].SessionID, pending[1].SessionID,
+	})
+	for _, item := range pending {
+		assert.Greater(t, item.Generation, genBefore[item.SessionID],
+			"divergent adoption must bump the generation of every requeued session")
+	}
 }
 
 // TestAdoptOriginBootstrapsPreExistingLocalSessions mirrors the EnsureOrigin
