@@ -361,7 +361,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // last_activity_at, the Devin fingerprint hashes only raw epoch integers and
 // zero-time metadata, so it is byte-identical before and after the fix and
 // incremental sync would skip the correction.)
-const dataVersion = 78
+// (79: Claude launch/prompt provenance. Re-parsing populates the new
+// sessions.session_kind and messages.prompt_source columns from top-level
+// sessionKind and promptSource fields on existing Claude rows.)
+const dataVersion = 79
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
