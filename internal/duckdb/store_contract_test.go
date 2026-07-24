@@ -62,7 +62,7 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	assert.Equal(t, []string{"open", "spanning"}, ids)
 }
 
-func TestSessionIdentity(t *testing.T) {
+func TestClaudeProvenanceRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	startedAt := "2024-06-15T08:00:00Z"
@@ -75,6 +75,7 @@ func TestSessionIdentity(t *testing.T) {
 		Agent:            "claude",
 		AgentLabel:       "Claude Triage",
 		Entrypoint:       "sdk-cli",
+		SessionKind:      "bg",
 		SessionName:      &sessionName,
 		StartedAt:        &startedAt,
 		EndedAt:          &endedAt,
@@ -82,6 +83,14 @@ func TestSessionIdentity(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 1,
 	}), "upsert identity session")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID:     "duck-identity",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+		PromptSource:  "typed",
+	}}), "insert identity message")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
@@ -97,8 +106,19 @@ func TestSessionIdentity(t *testing.T) {
 	assert.Equal(t, "duck-identity", index.Sessions[0].ID)
 	assert.Equal(t, "Claude Triage", index.Sessions[0].AgentLabel)
 	assert.Equal(t, "sdk-cli", index.Sessions[0].Entrypoint)
+	assert.Equal(t, "bg", index.Sessions[0].SessionKind)
 	require.NotNil(t, index.Sessions[0].DisplayName)
 	assert.Equal(t, "Agent Title", *index.Sessions[0].DisplayName)
+
+	session, err := store.GetSession(ctx, "duck-identity")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "bg", session.SessionKind)
+
+	messages, err := store.GetMessages(ctx, "duck-identity", 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "typed", messages[0].PromptSource)
 }
 
 func TestDuckDBSidebarIndexTotalCountsCanonicalRoots(t *testing.T) {

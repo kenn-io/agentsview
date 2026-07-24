@@ -14,7 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
+func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_session_identity_test"
@@ -39,6 +39,7 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 		Agent:            "claude",
 		AgentLabel:       "triage",
 		Entrypoint:       "sdk-cli",
+		SessionKind:      "bg",
 		MessageCount:     1,
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
@@ -47,6 +48,14 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 		FilePath:         &filePath,
 	}
 	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sess.ID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+		PromptSource:  "typed",
+	}}), "InsertMessages")
 
 	sync := &Sync{
 		pg:         pg,
@@ -58,14 +67,15 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 	_, pushErr := sync.Push(ctx, true, nil)
 	require.NoError(t, pushErr, "Push")
 
-	var agentLabel sql.NullString
-	var entrypoint sql.NullString
+	var agentLabel, entrypoint, sessionKind sql.NullString
 	require.NoError(t, pg.QueryRowContext(ctx,
-		`SELECT agent_label, entrypoint FROM sessions WHERE id = $1`,
+		`SELECT agent_label, entrypoint, session_kind
+		 FROM sessions WHERE id = $1`,
 		sess.ID,
-	).Scan(&agentLabel, &entrypoint), "query raw PG row")
+	).Scan(&agentLabel, &entrypoint, &sessionKind), "query raw PG row")
 	assert.Equal(t, "triage", agentLabel.String)
 	assert.Equal(t, "sdk-cli", entrypoint.String)
+	assert.Equal(t, "bg", sessionKind.String)
 
 	store, err := NewStore(pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
@@ -78,6 +88,7 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 	require.Len(t, idx.Sessions, 1, "expected one session in sidebar index")
 	assert.Equal(t, "triage", idx.Sessions[0].AgentLabel)
 	assert.Equal(t, "sdk-cli", idx.Sessions[0].Entrypoint)
+	assert.Equal(t, "bg", idx.Sessions[0].SessionKind)
 
 	page, err := store.ListSessions(ctx, db.SessionFilter{
 		IncludeChildren: true,
@@ -94,4 +105,10 @@ func TestPGSessionIdentityVisibleInReadPaths(t *testing.T) {
 	assert.Equal(t, "sdk-cli", full.Entrypoint)
 	require.NotNil(t, full.FilePath)
 	assert.Equal(t, filePath, *full.FilePath)
+	assert.Equal(t, "bg", full.SessionKind)
+
+	messages, err := store.GetMessages(ctx, sess.ID, 0, 10, true)
+	require.NoError(t, err, "GetMessages")
+	require.Len(t, messages, 1)
+	assert.Equal(t, "typed", messages[0].PromptSource)
 }
