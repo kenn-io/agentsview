@@ -228,6 +228,13 @@ Grok section and remove the explicit registry exception in the coverage test.
   prefers a concrete `session.directory` over `project.worktree` when resolving
   cwd/project (verified against live `opencode.db` rows under `project_id=global`
   on 2026-07-23; see #1236).
+- **Invalid tool calls:** Model calls to unknown or malformed tools are
+  recorded as a synthetic `invalid` tool part whose `execute` succeeds
+  (`packages/opencode/src/tool/invalid.ts`, registered in
+  `packages/opencode/src/tool/registry.ts` at the pinned commit), so
+  `state.status` is `completed` with the error text in the output. Agentsview
+  attaches an errored result event to `tool:"invalid"` parts so tool health
+  counts them as failures (verified 2026-07-24; see #1254).
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
