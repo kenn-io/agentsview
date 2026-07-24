@@ -984,7 +984,13 @@ type openCodeToolData struct {
 
 // openCodeToolState holds the nested state of a tool call.
 type openCodeToolState struct {
-	Input json.RawMessage `json:"input"`
+	Input    json.RawMessage `json:"input"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+// openCodeToolMetadata holds the optional metadata from a tool state.
+type openCodeToolMetadata struct {
+	Exit int `json:"exit"`
 }
 
 func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
@@ -1002,6 +1008,12 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		if err := json.Unmarshal(d.State, &state); err == nil {
 			if len(state.Input) > 0 {
 				inputJSON = string(state.Input)
+			}
+			if len(state.Metadata) > 0 {
+				var m openCodeToolMetadata
+				if err := json.Unmarshal(state.Metadata, &m); err == nil && m.Exit > 0 {
+					isFailure = true
+				}
 			}
 		}
 	}
