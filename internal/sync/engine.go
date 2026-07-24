@@ -8507,18 +8507,18 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
-	// Claude-only: if the stored preview is empty despite the
-	// session already having user turns, the parser skipped
-	// every user message so far (e.g. a session that opens with
-	// /clear or /effort). Fall back to a full parse so any real
-	// user message appended this sync becomes first_message.
+	// Claude-only: if the stored preview is empty, the parser has
+	// not seen a real user prompt yet (e.g. a session that opens
+	// with IDE context, /clear, or /effort). Fall back to a full
+	// parse so any real user message appended this sync becomes
+	// first_message.
 	//
 	// Other agents can legitimately have UserMsgCount > 0 with
 	// an empty first_message — for example Codex inserts orphan
 	// subagent notifications as Role=user messages that bypass
 	// firstMessage — so this fall-through is gated on Claude.
 	if agent == parser.AgentClaude &&
-		inc.FirstMessage == "" && inc.UserMsgCount > 0 {
+		inc.FirstMessage == "" {
 		return processResult{}, false
 	}
 

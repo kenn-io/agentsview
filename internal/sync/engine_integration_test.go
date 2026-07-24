@@ -13542,6 +13542,62 @@ func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
 	assert.Equal(t, 2, updated.UserMessageCount, "UserMessageCount after append = %d, want 2", updated.UserMessageCount)
 }
 
+func TestIncrementalSync_ClaudeIDEContextOnlyRepairedOnAppend(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Initial sync: Claude has only emitted injected IDE context,
+	// so there is no real user prompt to use as the title.
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "ide-context-only.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "ide-context-only",
+	)
+	require.NoError(t, err, "GetSessionFull after initial sync")
+	if full.FirstMessage != nil {
+		require.Equal(t, "", *full.FirstMessage,
+			"initial FirstMessage = %q, want empty", *full.FirstMessage)
+	}
+	require.Zero(t, full.UserMessageCount,
+		"initial UserMessageCount = %d, want 0", full.UserMessageCount)
+
+	// Appending the first real prompt must force a full parse so
+	// first_message is derived instead of remaining permanently empty.
+	appended := testjsonl.ClaudeUserJSON(
+		"Explain this code", tsZeroS1,
+	) + "\n"
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close(), "close")
+
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "ide-context-only",
+	)
+	require.NoError(t, err, "GetSessionFull after append")
+	require.NotNil(t, updated.FirstMessage,
+		"FirstMessage after append = nil, want %q", "Explain this code")
+	assert.Equal(t, "Explain this code", *updated.FirstMessage,
+		"FirstMessage after append = %q, want %q",
+		*updated.FirstMessage, "Explain this code")
+	assert.Equal(t, 1, updated.UserMessageCount,
+		"UserMessageCount after append = %d, want 1",
+		updated.UserMessageCount)
+}
+
 // TestIncrementalSync_CodexReemittedPromptDedupedOnAppend covers
 // the case where Codex re-emits the initial prompt verbatim on a
 // continued turn. The duplicate is appended after the first sync,
