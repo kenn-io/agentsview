@@ -97,6 +97,9 @@ func isAwaitingUserStopReason(stopReason string) bool {
 // in forked sessions or malformed transcripts) must not retroactively
 // mark the final unresolved call as resolved.
 func hasOrphanedToolCall(messages []ParsedMessage) bool {
+	if len(messages) == 0 {
+		return false
+	}
 	lastAssistantIdx := -1
 	for i, v := range slices.Backward(messages) {
 		if v.IsSystem {

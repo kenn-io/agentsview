@@ -74,6 +74,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
     label: "Posit Assistant",
   },
   { name: "roocode", color: "var(--accent-rose)", label: "RooCode" },
+  { name: "poolside", color: "var(--accent-cyan)", label: "Poolside" },
 ];
 
 const agentColorMap = new Map(

@@ -10936,6 +10936,11 @@ func shouldReplaceFullParseMessages(
 		// similar to RooCode. An incremental append would leave
 		// the existing rows' result events stale.
 		pw.sess.Agent == parser.AgentKiloLegacy ||
+		// Poolside pairs tool_call.result back to earlier
+		// tool_call.parsed messages via step_id, appending
+		// ResultEvents. An incremental append would leave
+		// existing tool calls without their results.
+		pw.sess.Agent == parser.AgentPoolside ||
 		pw.sess.Agent == parser.AgentReasonix
 }
 

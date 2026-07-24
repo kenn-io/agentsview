@@ -64,6 +64,13 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				}
 				continue
 			}
+			if def.Type == parser.AgentPoolside {
+				target := resolvePoolsideTarget(dir)
+				if target != "" {
+					dirs[def.Type] = append(dirs[def.Type], target)
+				}
+				continue
+			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
 			}
@@ -307,6 +314,29 @@ func resolveKiloLegacyTarget(root string) (string, []string) {
 		return "", nil
 	}
 	return targetRoot, files
+}
+
+// resolvePoolsideTarget narrows a Poolside application-data root to
+// the trajectories/ subdirectory. The configured root is the entire
+// poolside data directory, which may contain config, caches, or
+// credentials alongside trajectories. Only the trajectories/ subdirectory
+// is parsed, so only it must be archived during remote sync. When the
+// root already points to a trajectories/ directory, it is used as-is.
+func resolvePoolsideTarget(root string) string {
+	clean := filepath.Clean(root)
+	if filepath.Base(clean) == "trajectories" {
+		info, err := os.Stat(clean)
+		if err != nil || !info.IsDir() {
+			return ""
+		}
+		return clean
+	}
+	trajectoriesDir := filepath.Join(clean, "trajectories")
+	info, err := os.Stat(trajectoriesDir)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return trajectoriesDir
 }
 
 func windsurfRemoteWorkspaceRoot(root string) string {

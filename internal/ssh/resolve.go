@@ -154,6 +154,22 @@ func buildResolveScript() string {
 			"av_emit_agent_file \"" + string(parser.AgentKiloLegacy) + "\" \"$av_kl_task/api_conversation_history.json\"; " +
 			"done; " +
 			"}\n" +
+			// Poolside's root is the application-data directory, which
+			// may contain config, caches, or credentials. Only the
+			// trajectories/ subdirectory is parsed, so only it must be
+			// archived during remote sync, mirroring
+			// remotesync.resolvePoolsideTarget.
+			"av_emit_poolside_target() { " +
+			"target=\"$1\"; " +
+			"case \"$target\" in */) target=\"${target%/}\";; esac; " +
+			"case \"${target##*/}\" in " +
+			"trajectories) [ -d \"$target\" ] && " +
+			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$target\";; " +
+			"*) av_poolside_traj=\"$target/trajectories\"; " +
+			"[ -d \"$av_poolside_traj\" ] && " +
+			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$av_poolside_traj\";; " +
+			"esac; " +
+			"}\n" +
 			"av_emit_target() { " +
 			"agent=\"$1\"; " +
 			"target=\"$2\"; " +
@@ -167,6 +183,10 @@ func buildResolveScript() string {
 			"fi; " +
 			"if [ \"$agent\" = \"" + string(parser.AgentKiloLegacy) + "\" ]; then " +
 			"av_emit_kilo_legacy_target \"$target\"; " +
+			"return; " +
+			"fi; " +
+			"if [ \"$agent\" = \"" + string(parser.AgentPoolside) + "\" ]; then " +
+			"av_emit_poolside_target \"$target\"; " +
 			"return; " +
 			"fi; " +
 			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +

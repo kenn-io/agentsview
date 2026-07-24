@@ -1085,6 +1085,32 @@ Grok section and remove the explicit registry exception in the coverage test.
   `internal/parser/aider_provider.go`; roles and run boundaries are
   reconstructed from Markdown.
 
+## Poolside Agent CLI (`poolside`)
+
+- **Format:** Single NDJSON trajectory file per session under
+  `<root>/trajectories/trajectory-<type>_<uuid>.ndjson`. Events include
+  `session.start`, `session.input`, `assistant_message.start/end`,
+  `tool_call.parsed`, `tool_call.result`, `thought.start/end`, and
+  `tool_call.inference.start/end`.
+- **Evidence:** `documentation`.
+- **Upstream:** The public
+  [pool release repository](https://github.com/poolsideai/pool) (README,
+  changelog, and third-party notices only; no source code) and the
+  [Poolside Agent CLI documentation](https://docs.poolside.ai/cli/pool)
+  were checked 2026-07-23. Upstream confirms sessions are saved
+  automatically and that per-session trajectory files exist (`pool config`
+  prints the trajectory directory; `pool history trajectories` browses
+  them), but publishes neither the on-disk paths nor the NDJSON event
+  schema. The event format was characterized from real trajectory files.
+- **Usage and cost:** Per-inference token counts (`input_tokens`,
+  `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`)
+  are persisted in `tool_call.inference.end` events. The model is recorded
+  in `tool_call.inference.start` and paired by `step_id`. No authoritative
+  USD cost is persisted; Agentsview computes cost from its pricing catalog.
+- **Agentsview:** `internal/parser/poolside.go` and
+  `internal/parser/poolside_provider.go`; single-file provider with
+  NDJSON line-by-line parsing.
+
 ## Reasonix (`reasonix`)
 
 - **Format:** Session JSONL plus `.jsonl.meta` sidecars across live, archive,

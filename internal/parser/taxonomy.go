@@ -263,6 +263,12 @@ func NormalizeToolCategory(rawName string) string {
 	case "use_computer":
 		return "Tool"
 
+	// Poolside tools (only tools not already covered above)
+	case "todo_action", "switch_mode", "question", "exit":
+		return "Tool"
+	case "shell_kill", "shell_status", "shell_tail":
+		return "Bash"
+
 	default:
 		// MCP tools may carry a server prefix (e.g.
 		// "Zencoder_subagent__ZencoderSubagent") or use

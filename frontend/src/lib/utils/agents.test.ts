@@ -48,6 +48,7 @@ describe("KNOWN_AGENTS", () => {
       "vibe",
       "posit-assistant",
       "roocode",
+      "poolside",
     ]);
   });
 

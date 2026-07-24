@@ -345,6 +345,7 @@ thread JSON files.
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                           |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
+| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/share/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                        |
 | Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |

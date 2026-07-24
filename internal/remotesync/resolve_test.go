@@ -98,6 +98,59 @@ func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	assert.Equal(t, []string{claudeRoot}, targets.Dirs[parser.AgentClaude])
 }
 
+// TestResolveTargetsPoolsideNarrowsToTrajectories ensures the HTTP
+// remote-sync resolver narrows Poolside's application-data root to
+// only the trajectories/ subdirectory, preventing unrelated config,
+// caches, or credentials from being archived.
+func TestResolveTargetsPoolsideNarrowsToTrajectories(t *testing.T) {
+	root := t.TempDir()
+	trajectoriesDir := filepath.Join(root, "trajectories")
+	settingsFile := filepath.Join(root, "config.json")
+	require.NoError(t, os.MkdirAll(trajectoriesDir, 0o755))
+	require.NoError(t, os.WriteFile(settingsFile, []byte(`{"api_key":"sk-secret"}`), 0o644))
+
+	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentPoolside: {root},
+	}})
+
+	require.Len(t, targets.Dirs[parser.AgentPoolside], 1,
+		"Poolside must resolve to exactly one directory (trajectories/)")
+	assert.Equal(t, trajectoriesDir, targets.Dirs[parser.AgentPoolside][0],
+		"resolved target must be the trajectories/ subdirectory, not the parent root")
+	assert.NotContains(t, targets.Dirs[parser.AgentPoolside], root,
+		"the application-data root itself must not be an archived target")
+}
+
+// TestResolveTargetsPoolsideSkipsMissingTrajectories ensures the HTTP
+// resolver emits nothing when the trajectories/ subdirectory does not
+// exist.
+func TestResolveTargetsPoolsideSkipsMissingTrajectories(t *testing.T) {
+	root := t.TempDir()
+
+	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentPoolside: {root},
+	}})
+
+	assert.NotContains(t, targets.Dirs, parser.AgentPoolside,
+		"a Poolside root without trajectories/ must not produce a target")
+}
+
+// TestResolveTargetsPoolsideTrajectoriesRoot verifies the HTTP resolver
+// handles a configured root that IS already the trajectories/ directory,
+// using it as-is without producing trajectories/trajectories/.
+func TestResolveTargetsPoolsideTrajectoriesRoot(t *testing.T) {
+	trajectoriesDir := filepath.Join(t.TempDir(), "trajectories")
+	require.NoError(t, os.MkdirAll(trajectoriesDir, 0o755))
+
+	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentPoolside: {trajectoriesDir},
+	}})
+
+	require.Len(t, targets.Dirs[parser.AgentPoolside], 1)
+	assert.Equal(t, trajectoriesDir, targets.Dirs[parser.AgentPoolside][0],
+		"a trajectories/ root must be used as-is, not appended to")
+}
+
 func TestResolveTargetsExpandsHermesProfilesWithDatabaseFiles(t *testing.T) {
 	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
 	withSessions := filepath.Join(profilesRoot, "research")
@@ -288,11 +341,14 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	windsurfWorkspaceDir := filepath.Join(windsurfWorkspaceRoot, "workspace-a")
 	windsurfStateDB := filepath.Join(windsurfWorkspaceDir, parser.WindsurfStateDBName)
 	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
+	poolsideRoot := filepath.Join(home, ".local", "share", "poolside")
+	poolsideTrajectories := filepath.Join(poolsideRoot, "trajectories")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
 	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
+	require.NoError(t, os.MkdirAll(poolsideTrajectories, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
@@ -308,13 +364,12 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 
 	goTargets := remotesync.ResolveTargets(config.Config{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {claudeDir},
-			parser.AgentCodex:  {codexDir},
-			parser.AgentDevin:  {devinDir},
-			parser.AgentAider:  {aiderRoot},
-			parser.AgentWindsurf: {
-				windsurfUserRoot,
-			},
+			parser.AgentClaude:   {claudeDir},
+			parser.AgentCodex:    {codexDir},
+			parser.AgentDevin:    {devinDir},
+			parser.AgentAider:    {aiderRoot},
+			parser.AgentWindsurf: {windsurfUserRoot},
+			parser.AgentPoolside: {poolsideRoot},
 		},
 	})
 	assert.ElementsMatch(t, sshDirs[parser.AgentClaude], goTargets.Dirs[parser.AgentClaude])
@@ -335,6 +390,10 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	assert.ElementsMatch(t, sshFiles[parser.AgentWindsurf], goTargets.Files[parser.AgentWindsurf])
 	assert.NotContains(t, sshDirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
 	assert.ElementsMatch(t, sshExtra, goTargets.ExtraFiles)
+	// Poolside: both resolvers must narrow to the trajectories/
+	// subdirectory, not the application-data root.
+	assert.ElementsMatch(t, []string{poolsideTrajectories}, sshDirs[parser.AgentPoolside])
+	assert.ElementsMatch(t, sshDirs[parser.AgentPoolside], goTargets.Dirs[parser.AgentPoolside])
 }
 
 func TestSelectAllowedFiles(t *testing.T) {

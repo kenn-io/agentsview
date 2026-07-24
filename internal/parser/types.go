@@ -64,6 +64,7 @@ const (
 	AgentReasonix       AgentType = "reasonix"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
+	AgentPoolside       AgentType = "poolside"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -795,6 +796,22 @@ var Registry = []AgentDef{
 			"AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline",
 		},
 		IDPrefix:  "roocode:",
+		FileBased: true,
+	},
+	{
+		Type:        AgentPoolside,
+		DisplayName: "Poolside",
+		EnvVar:      "POOLSIDE_DIR",
+		ConfigKey:   "poolside_dirs",
+		DefaultDirs: []string{
+			// macOS
+			"Library/Application Support/poolside",
+			// Linux
+			".local/share/poolside",
+			// Windows
+			"AppData/Roaming/poolside",
+		},
+		IDPrefix:  "poolside:",
 		FileBased: true,
 	},
 }
