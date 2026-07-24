@@ -364,12 +364,12 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 
 	goTargets := remotesync.ResolveTargets(config.Config{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude:     {claudeDir},
-			parser.AgentCodex:      {codexDir},
-			parser.AgentDevin:      {devinDir},
-			parser.AgentAider:      {aiderRoot},
-			parser.AgentWindsurf:   {windsurfUserRoot},
-			parser.AgentPoolside:   {poolsideRoot},
+			parser.AgentClaude:   {claudeDir},
+			parser.AgentCodex:    {codexDir},
+			parser.AgentDevin:    {devinDir},
+			parser.AgentAider:    {aiderRoot},
+			parser.AgentWindsurf: {windsurfUserRoot},
+			parser.AgentPoolside: {poolsideRoot},
 		},
 	})
 	assert.ElementsMatch(t, sshDirs[parser.AgentClaude], goTargets.Dirs[parser.AgentClaude])
