@@ -676,8 +676,8 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	assert.True(t, optedIn[AgentOpenHands])
 	assert.True(t, optedIn[AgentAider])
 	// Omnigent's event tracker deliberately observes only bounded row-ID and
-	// timestamp windows. Scheduled authoritative reconciliation covers
-	// same-fingerprint in-place edits through the streamed provider pass.
+	// timestamp windows. Scheduled reconciliation replays those bounded
+	// cursors; the daily archive audit performs authoritative discovery.
 	assert.True(t, optedIn[AgentOmnigent])
 	// Cowork's provider WatchPlan registers its root recursively
 	// (coworkWatchRoots Recursive:true overrides legacy ShallowWatch), so

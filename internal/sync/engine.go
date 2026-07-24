@@ -3050,33 +3050,38 @@ func (e *Engine) ReconcileWatchRoots(
 func (e *Engine) ReconcileWatchRootsWithStats(
 	ctx context.Context, roots []string, full bool,
 ) (SyncStats, int, error) {
-	return e.reconcileScopedWatchRoots(ctx, "", roots, full, false)
+	return e.reconcileScopedWatchRoots(ctx, "", roots, full, false, true)
 }
 
 func (e *Engine) reconcileWatchRoots(
 	ctx context.Context, roots []string, full, force bool,
 ) error {
-	_, _, err := e.reconcileScopedWatchRoots(ctx, "", roots, full, force)
+	_, _, err := e.reconcileScopedWatchRoots(
+		ctx, "", roots, full, force, true,
+	)
 	return err
 }
 
-// ReconcileProviderRoots reconciles the given roots for a single provider. It
-// bypasses the cross-provider expansion in logicalRootsForWatchRoots and
-// restricts both discovery and deletion to that provider, so a shallow-watched
-// agent's scheduled pass never enumerates or tombstones another agent's
-// sessions under an overlapping root.
+// ReconcileProviderRoots runs the bounded scheduled pass for one provider. It
+// bypasses the cross-provider expansion in logicalRootsForWatchRoots so a
+// shallow-watched agent never enumerates or tombstones another agent's sessions
+// under an overlapping root. Providers whose scheduled discovery is
+// non-authoritative leave deletion proof to the archive audit.
 func (e *Engine) ReconcileProviderRoots(
 	ctx context.Context, agent parser.AgentType, roots []string,
 ) error {
 	if agent == "" {
 		return e.reconcileWatchRoots(ctx, roots, false, false)
 	}
-	_, _, err := e.reconcileScopedWatchRoots(ctx, agent, roots, false, false)
+	_, _, err := e.reconcileScopedWatchRoots(
+		ctx, agent, roots, false, false, false,
+	)
 	return err
 }
 
 func (e *Engine) reconcileScopedWatchRoots(
-	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+	ctx context.Context, agent parser.AgentType, roots []string, full, force,
+	forceFullOmnigent bool,
 ) (SyncStats, int, error) {
 	var logicalRoots []string
 	var excludedRemoteRoots int
@@ -3093,7 +3098,7 @@ func (e *Engine) reconcileScopedWatchRoots(
 		return SyncStats{}, 0, nil
 	}
 	stats, metrics, tombstoned, err := e.reconcileWatchRootsStreamed(
-		ctx, agent, logicalRoots, full, force,
+		ctx, agent, logicalRoots, full, force, forceFullOmnigent,
 	)
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	if stats.Synced > 0 || tombstoned > 0 {
@@ -3130,7 +3135,8 @@ func (e *Engine) ReconciliationRootsForAgent(agent string) []string {
 }
 
 func (e *Engine) reconcileWatchRootsStreamed(
-	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
+	ctx context.Context, agent parser.AgentType, roots []string, full, force,
+	forceFullOmnigent bool,
 ) (stats SyncStats, metrics ReconciliationMetrics, tombstoned int, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return SyncStats{Aborted: true}, metrics, 0, err
@@ -3185,8 +3191,9 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		scope.agent = agent
 	}
 	preContainerStates := e.captureSQLiteContainerStates(nil)
-	providers, completedScopes, failedRoots, failures, discoveryErr, err := e.streamReconciliationCandidates(
-		ctx, scope, spool,
+	providers, completedScopes, nonAuthoritativeProviders, failedRoots,
+		failures, discoveryErr, err := e.streamReconciliationCandidates(
+		ctx, scope, spool, forceFullOmnigent,
 	)
 	stats.providerFailures = failures
 	if err != nil {
@@ -3198,9 +3205,9 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		cleaned = true
 		return stats, metrics, 0, err
 	}
-	baselineEligibleProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
+	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
-		baselineEligibleProviders[completed.agent] = struct{}{}
+		authoritativeProviders[completed.agent] = struct{}{}
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	e.finishStreamingSQLiteContainerDiscovery()
@@ -3272,7 +3279,7 @@ func (e *Engine) reconcileWatchRootsStreamed(
 			break
 		}
 		baselineCandidates, baselineAdmitted := eligibleReconciliationBaselines(
-			page, baselineTracker.list(), baselineEligibleProviders,
+			page, baselineTracker.list(), authoritativeProviders,
 		)
 		if err := e.baselineReconciliationCandidates(
 			ctx, baselineCandidates, baselineAdmitted,
@@ -3344,7 +3351,7 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.Failed == 0 && stats.providerFailures == 0 {
 		tombstoned, retErr = e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, roots, agent, spool,
+			ctx, roots, agent, nonAuthoritativeProviders, spool,
 		)
 	} else if canTombstoneCompletedScopes && ctx.Err() == nil &&
 		!stats.Aborted && stats.Failed == 0 {
@@ -3371,7 +3378,7 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 ) (deleted int, retErr error) {
 	for _, scope := range incomplete.completed {
 		count, err := e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, scope.roots, scope.agent, spool,
+			ctx, scope.roots, scope.agent, nil, spool,
 		)
 		deleted += count
 		if err == nil {
@@ -3435,15 +3442,18 @@ func eligibleReconciliationBaselines(
 
 func (e *Engine) streamReconciliationCandidates(
 	ctx context.Context, scope *rootSyncScope, spool reconciliationSpoolStore,
+	forceFullOmnigent bool,
 ) (
 	map[parser.AgentType]parser.Provider,
 	[]reconciliationProviderScope,
+	map[parser.AgentType]struct{},
 	[]string,
 	int,
 	error,
 	error,
 ) {
 	providers := make(map[parser.AgentType]parser.Provider)
+	nonAuthoritativeProviders := make(map[parser.AgentType]struct{})
 	var completedScopes []reconciliationProviderScope
 	var failedRoots []string
 	var failures int
@@ -3474,7 +3484,8 @@ func (e *Engine) streamReconciliationCandidates(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
-			ForceFullDiscovery: agent == parser.AgentOmnigent,
+			ForceFullDiscovery: agent == parser.AgentOmnigent &&
+				forceFullOmnigent,
 		})
 		providers[agent] = provider
 		if provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
@@ -3509,10 +3520,18 @@ func (e *Engine) streamReconciliationCandidates(
 		})
 		if err != nil {
 			if spoolErr != nil {
-				return providers, completedScopes, failedRoots, failures, discoveryErr, spoolErr
+				return providers, completedScopes, nonAuthoritativeProviders,
+					failedRoots, failures, discoveryErr, spoolErr
 			}
 			if ctx.Err() != nil {
-				return providers, completedScopes, failedRoots, failures, discoveryErr, ctx.Err()
+				return providers, completedScopes, nonAuthoritativeProviders,
+					failedRoots, failures, discoveryErr, ctx.Err()
+			}
+			var nonAuthoritative parser.DiscoveryNonAuthoritativeError
+			if errors.As(err, &nonAuthoritative) {
+				log.Printf("%s provider streaming discovery: %v", agent, err)
+				nonAuthoritativeProviders[agent] = struct{}{}
+				continue
 			}
 			log.Printf("%s provider streaming discovery: %v", agent, err)
 			failures++
@@ -3522,6 +3541,10 @@ func (e *Engine) streamReconciliationCandidates(
 			))
 			continue
 		}
+		if agent == parser.AgentOmnigent && !forceFullOmnigent {
+			nonAuthoritativeProviders[agent] = struct{}{}
+			continue
+		}
 		completedScopes = append(completedScopes, reconciliationProviderScope{
 			agent: agent,
 			roots: append([]string(nil), roots...),
@@ -3529,7 +3552,8 @@ func (e *Engine) streamReconciliationCandidates(
 	}
 	slices.Sort(failedRoots)
 	failedRoots = slices.Compact(failedRoots)
-	return providers, completedScopes, failedRoots, failures, discoveryErr, nil
+	return providers, completedScopes, nonAuthoritativeProviders,
+		failedRoots, failures, discoveryErr, nil
 }
 
 type reconciliationProviderScope struct {
@@ -3876,13 +3900,16 @@ func (e *Engine) tombstoneMissingWatchSourcesLocked(
 	roots []string,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
-	return e.tombstoneMissingWatchSourcesForAgentLocked(ctx, roots, "", spool)
+	return e.tombstoneMissingWatchSourcesForAgentLocked(
+		ctx, roots, "", nil, spool,
+	)
 }
 
 func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 	ctx context.Context,
 	roots []string,
 	agentFilter parser.AgentType,
+	nonAuthoritativeProviders map[parser.AgentType]struct{},
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
 	if e.pathRewriter != nil {
@@ -3893,6 +3920,9 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 	}
 	for agent, dirs := range e.agentDirs {
 		if agentFilter != "" && agent != agentFilter {
+			continue
+		}
+		if _, nonAuthoritative := nonAuthoritativeProviders[agent]; nonAuthoritative {
 			continue
 		}
 		var provider parser.Provider

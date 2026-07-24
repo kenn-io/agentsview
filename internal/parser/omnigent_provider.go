@@ -200,6 +200,11 @@ func streamOmnigentMemberMatches(
 	defer conn.Close()
 	schema, err := detectOmnigentSchema(conn)
 	if err != nil {
+		if omnigentSchemaUnsupported(err) {
+			return nonAuthoritativeDiscoveryError(
+				AgentOmnigent, "unsupported schema", err,
+			)
+		}
 		return err
 	}
 	idExpr := omnigentIDExpr(schema, "id")

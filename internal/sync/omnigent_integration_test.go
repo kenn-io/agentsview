@@ -110,6 +110,29 @@ func (p *omnigentParseCountingProvider) RestoreCachedSourceState(
 	return restorer.RestoreCachedSourceState(ctx, source)
 }
 
+func (p *omnigentParseCountingProvider) DiscoverEach(
+	ctx context.Context, yield func(parser.SourceRef) error,
+) error {
+	discoverer, ok := p.Provider.(parser.StreamingDiscoverer)
+	if !ok {
+		return parser.UnsupportedProviderFeatureError{
+			Provider: p.Definition().Type,
+			Feature:  "streaming discovery",
+		}
+	}
+	return discoverer.DiscoverEach(ctx, yield)
+}
+
+func (p *omnigentParseCountingProvider) SourceForReconciliation(
+	ctx context.Context, path, project string,
+) (parser.SourceRef, bool, error) {
+	resolver, ok := p.Provider.(parser.ReconciliationSourceResolver)
+	if !ok {
+		return parser.SourceRef{}, false, nil
+	}
+	return resolver.SourceForReconciliation(ctx, path, project)
+}
+
 func (p *omnigentParseCountingProvider) Parse(
 	ctx context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
@@ -1184,7 +1207,7 @@ func TestSyncOmnigentSameTimestampAppendIsReconciledByFullSync(t *testing.T) {
 		"the scheduled full sync must reconcile edits the sweep deferred")
 }
 
-func TestSyncOmnigentPeriodicFullSyncDetectsInPlaceItemEdit(t *testing.T) {
+func TestSyncOmnigentArchiveAuditDetectsInPlaceItemEdit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1208,8 +1231,8 @@ func TestSyncOmnigentPeriodicFullSyncDetectsInPlaceItemEdit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	require.NoError(t, engine.ReconcileProviderRoots(
-		t.Context(), parser.AgentOmnigent, []string{root},
+	require.NoError(t, engine.ReconcileWatchRoots(
+		t.Context(), []string{root}, false,
 	))
 	messages, err := archive.GetAllMessages(
 		context.Background(), "omnigent:conv_0000")
@@ -1218,7 +1241,7 @@ func TestSyncOmnigentPeriodicFullSyncDetectsInPlaceItemEdit(t *testing.T) {
 	assert.Equal(t, "edited", messages[0].Content)
 }
 
-func TestReconcileOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
+func TestAuditOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1268,8 +1291,8 @@ func TestReconcileOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
 	assert.Equal(t, "/work/before", deferred.Cwd,
 		"bounded watcher discovery may defer a metadata-only edit")
 
-	require.NoError(t, engine.ReconcileProviderRoots(
-		t.Context(), parser.AgentOmnigent, []string{root},
+	require.NoError(t, engine.ReconcileWatchRoots(
+		t.Context(), []string{root}, false,
 	))
 	reconciled, err := archive.GetSession(
 		t.Context(), "omnigent:7:conv_workspace",
@@ -1278,6 +1301,77 @@ func TestReconcileOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
 	require.NotNil(t, reconciled)
 	assert.Equal(t, "/work/after", reconciled.Cwd,
 		"authoritative reconciliation must refresh multi-workspace metadata")
+}
+
+func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	observed := make(map[int]int64)
+	for _, archiveSize := range []int{256, 1024} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := writeOmnigentSyncDB(t, root, archiveSize)
+			archive := dbtest.OpenTestDB(t)
+			var parseCount atomic.Int64
+			factory := omnigentParseCountingFactory{
+				delegate: omnigentDefaultProviderFactory(t),
+				count:    &parseCount,
+			}
+			engine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentOmnigent: {root},
+				},
+				Machine:           "local",
+				ProviderFactories: []parser.ProviderFactory{factory},
+			})
+			t.Cleanup(engine.Close)
+			syncOmnigentArchive(t, engine, archive, archiveSize)
+
+			writer, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(
+				`UPDATE conversations SET updated_at = ? WHERE id = ?`,
+				time.Now().Unix(), fmt.Sprintf("conv_%04d", archiveSize/2),
+			)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			parseCount.Store(0)
+			require.NoError(t, engine.ReconcileProviderRoots(
+				t.Context(), parser.AgentOmnigent, []string{root},
+			))
+			observed[archiveSize] = parseCount.Load()
+			assert.Equal(t, int64(1), parseCount.Load(),
+				"scheduled reconciliation should parse only the changed member")
+
+			deletedID := fmt.Sprintf("conv_%04d", archiveSize-1)
+			writer, err = sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = writer.Exec(
+				`DELETE FROM conversation_items WHERE conversation_id = ?`,
+				deletedID,
+			)
+			require.NoError(t, err)
+			_, err = writer.Exec(
+				`DELETE FROM conversations WHERE id = ?`, deletedID,
+			)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			require.NoError(t, engine.ReconcileProviderRoots(
+				t.Context(), parser.AgentOmnigent, []string{root},
+			))
+			session, err := archive.GetSession(
+				t.Context(), "omnigent:"+deletedID,
+			)
+			require.NoError(t, err)
+			assert.NotNil(t, session,
+				"bounded scheduled discovery cannot prove member deletion")
+		})
+	}
+	assert.Equal(t, observed[256], observed[1024],
+		"scheduled work must not grow with the conversation archive")
 }
 
 func TestSyncPathsOmnigentSchemaChangeHonorsLegacyDeletionState(t *testing.T) {
@@ -1521,4 +1615,40 @@ func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, after, "unsupported source must not retire archived sessions")
 	assert.Equal(t, before.MessageCount, after.MessageCount)
+}
+
+func TestReconcileOmnigentUnsupportedSchemaIsNonfatalAndPreservesArchive(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	syncOmnigentArchive(t, engine, archive, 1)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`DROP TABLE conversation_items`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{root}, false,
+	))
+	archived, err := archive.GetSessionFull(
+		t.Context(), "omnigent:conv_0000",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.DeletedAt)
+	assert.Equal(t, 1, archived.MessageCount)
 }
