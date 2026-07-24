@@ -2011,7 +2011,11 @@ func isCountedClaudeUserTurn(entry dagEntry) bool {
 	}
 	content := gjson.Get(entry.line, "message.content")
 	text, _, _, _, _, _ := ExtractTextContent(content)
-	return classifyClaudeSystemMessage(text) == ""
+	text, skip := preprocessClaudeUserText(text)
+	if skip || strings.TrimSpace(text) == "" {
+		return false
+	}
+	return !isClaudeSystemMessage(text)
 }
 
 // extractMessages converts dagEntries into ParsedMessages, applying

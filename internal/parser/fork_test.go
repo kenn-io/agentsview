@@ -117,28 +117,31 @@ func TestForkDetection_SmallGapRetry(t *testing.T) {
 	assertMessage(t, results[0].Messages[3], RoleAssistant, "retry answer")
 }
 
-func TestForkDetection_IDEContextDoesNotPromoteObsoleteBranch(t *testing.T) {
+func TestForkDetection_ReminderPrefixedIDEContextDoesNotPromoteObsoleteBranch(
+	t *testing.T,
+) {
+	const reminder = "<system-reminder>context</system-reminder>\n"
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "a", "").
 		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "ok", "b", "a").
 		AddClaudeUserWithUUID(
 			"2024-01-01T10:00:02Z",
-			"<ide_opened_file>one</ide_opened_file>",
+			reminder+"<ide_opened_file>one</ide_opened_file>",
 			"c", "b",
 		).
 		AddClaudeUserWithUUID(
 			"2024-01-01T10:00:03Z",
-			"<ide_selection>two</ide_selection>",
+			reminder+"<ide_selection>two</ide_selection>",
 			"d", "c",
 		).
 		AddClaudeUserWithUUID(
 			"2024-01-01T10:00:04Z",
-			"<ide_opened_file>three</ide_opened_file>",
+			reminder+"<ide_opened_file>three</ide_opened_file>",
 			"e", "d",
 		).
 		AddClaudeUserWithUUID(
 			"2024-01-01T10:00:05Z",
-			"<ide_selection>four</ide_selection>",
+			reminder+"<ide_selection>four</ide_selection>",
 			"f", "e",
 		).
 		AddClaudeUserWithUUID(

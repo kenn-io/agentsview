@@ -13603,11 +13603,7 @@ func TestIncrementalSync_ClaudeIDEContextOnlyRepairedOnAppend(t *testing.T) {
 // record and can stream assistant work for hours before the next real
 // prompt. Appends without a real prompt must stay on the incremental
 // path so per-event work is bounded by the appended bytes, not the
-// transcript size. The already-consumed prefix is overwritten with
-// garbage after the first sync as a tripwire: the incremental path
-// never re-reads it, while a fall-through to a full parse would parse
-// the garbage, drop the stored continuation row, and change the
-// session counts.
+// transcript size.
 func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -13632,15 +13628,6 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 	require.Zero(t, full.UserMessageCount,
 		"initial UserMessageCount = %d, want 0", full.UserMessageCount)
 
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat before corrupting prefix")
-	garbage := strings.Repeat("x", int(info.Size())-1) + "\n"
-	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
-	require.NoError(t, err, "open for prefix rewrite")
-	_, err = f.WriteAt([]byte(garbage), 0)
-	require.NoError(t, err, "rewrite consumed prefix")
-	require.NoError(t, f.Close(), "close after prefix rewrite")
-
 	// None of these qualify as a first real prompt: injected IDE
 	// context is promoted to a system row, /clear is a
 	// preview-skipped command that cannot become first_message,
@@ -13656,7 +13643,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 		),
 		testjsonl.ClaudeAssistantJSON("still working", tsZeroS5),
 	)
-	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err, "open for append")
 	_, err = f.WriteString(appended)
 	require.NoError(t, err, "append")
@@ -13668,14 +13655,12 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 		context.Background(), "continuation-only",
 	)
 	require.NoError(t, err, "GetSessionFull after append")
+	assert.True(t, updated.LastWriteIncremental,
+		"promptless append should use the incremental write path")
 	assert.Equal(t, 4, updated.MessageCount,
-		"MessageCount after append = %d, want 4 (a full parse "+
-			"would have re-read the corrupted prefix)",
-		updated.MessageCount)
+		"MessageCount after append = %d, want 4", updated.MessageCount)
 	assert.Equal(t, 1, updated.UserMessageCount,
-		"UserMessageCount after append = %d, want 1 (the /clear "+
-			"turn only)",
-		updated.UserMessageCount)
+		"UserMessageCount after append = %d, want 1", updated.UserMessageCount)
 	if updated.FirstMessage != nil {
 		assert.Equal(t, "", *updated.FirstMessage,
 			"FirstMessage after append = %q, want empty",
