@@ -3872,7 +3872,7 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		// AgentFreebuff, also process AgentCodebuff's directories so
 		// Freebuff sessions can be tombstoned.
 		if agentFilter != "" && agent != agentFilter &&
-			!(agentFilter == parser.AgentFreebuff && agent == parser.AgentCodebuff) {
+			(agentFilter != parser.AgentFreebuff || agent != parser.AgentCodebuff) {
 			continue
 		}
 		var provider parser.Provider
@@ -3924,29 +3924,195 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 						break
 					}
 					missingByPath := make(map[string]bool, len(page))
-				for _, ownership := range page {
-					statPath := ownership.FilePath
-					persistentMemberContainerExists := false
-					missing, ok := missingByPath[statPath]
-					if !ok {
-						_, statErr := e.lstatSource(statPath)
-						missing = os.IsNotExist(statErr)
-						missingByPath[statPath] = missing
-					}
-					if !missing {
-						gone, checkErr := aggregateOwnedMemberGone(
-							ctx, spool, provider, agent, ownership,
-							allProviderRootsCovered,
-						)
-						if checkErr != nil {
-							return deleted, checkErr
+					for _, ownership := range page {
+						statPath := ownership.FilePath
+						persistentMemberContainerExists := false
+						missing, ok := missingByPath[statPath]
+						if !ok {
+							_, statErr := e.lstatSource(statPath)
+							missing = os.IsNotExist(statErr)
+							missingByPath[statPath] = missing
 						}
-						if !gone {
+						if !missing {
+							gone, checkErr := aggregateOwnedMemberGone(
+								ctx, spool, provider, agent, ownership,
+								allProviderRootsCovered,
+							)
+							if checkErr != nil {
+								return deleted, checkErr
+							}
+							if !gone {
+								continue
+							}
+							// The container still exists but the streamed pass no
+							// longer yields this member; tombstone directly — the
+							// guards below all assume a vanished stored path.
+							changed, err := e.tombstoneSessionSourceOwnership(
+								ctx, ownership.Machine, ownership.Agent,
+								ownership.ID, ownership.FilePath,
+							)
+							if err != nil {
+								return deleted, fmt.Errorf(
+									"tombstone %s session %s after watch reconciliation: %w",
+									agent, ownership.ID, err,
+								)
+							}
+							if changed {
+								deleted++
+							}
 							continue
 						}
-						// The container still exists but the streamed pass no
-						// longer yields this member; tombstone directly — the
-						// guards below all assume a vanished stored path.
+						// A vanished tracked copy with a surviving same-identity
+						// duplicate is a replacement, not a deletion; the next sync
+						// re-points the session at the survivor. Claude keys
+						// replacements by the session ID in the filename; a Codex
+						// UUID can exist as both a live dated copy and a flat
+						// archived copy sharing one discovery identity. Both resolve
+						// through a bounded per-source index lookup: the streamed
+						// pass's spool when it covers every configured root, else a
+						// lazily built disk-backed index (at most one per pass).
+						replacementIdentity := reconciliationReplacementIdentity(
+							agent, ownership.FilePath,
+						)
+						if replacementIdentity != "" && provider != nil {
+							if replacementIndex == nil {
+								if spool != nil {
+									if !allProviderRootsCovered {
+										// A scoped pass cannot prove that a same-identity
+										// replacement does not exist under another configured root.
+										continue
+									}
+									replacementIndex = spool
+								} else {
+									replacementIndex, err = e.buildReconciliationReplacementIndex(
+										ctx, provider, dirs,
+									)
+									if err != nil {
+										return deleted, fmt.Errorf(
+											"index %s reconciliation replacements: %w", agent, err,
+										)
+									}
+									if agent == parser.AgentCodex {
+										reconciliationRuntimeMetricsFor(ctx).
+											codexReplacementIndexBuild()
+									}
+									ownsReplacementIndex = true
+									defer func() {
+										if ownsReplacementIndex {
+											retErr = errors.Join(
+												retErr, replacementIndex.CloseAndRemove(),
+											)
+										}
+									}()
+								}
+							}
+							replacement, found, lookupErr := replacementIndex.Candidate(
+								ctx, agent, replacementIdentity,
+							)
+							if lookupErr != nil {
+								return deleted, fmt.Errorf(
+									"lookup %s reconciliation replacement: %w", agent, lookupErr,
+								)
+							}
+							if found && !sameReconciliationSourcePath(
+								replacement.Path, ownership.FilePath,
+							) {
+								continue
+							}
+						}
+						persistentArchive := provider != nil && provider.Capabilities().Source.PersistentArchive == parser.CapabilitySupported
+						if persistentArchive {
+							resolver, ok := provider.(parser.PersistentArchiveSourceResolver)
+							if ok {
+								physicalPath, valid := resolver.PersistentArchiveSource(
+									statPath, ownership.ID,
+								)
+								if valid {
+									if !allProviderRootsCovered {
+										// A scoped pass cannot prove that this member does not
+										// exist in a persistent container under another root.
+										continue
+									}
+									if _, statErr := e.lstatSource(physicalPath); statErr != nil {
+										// A vanished or unreadable persistent container cannot
+										// authoritatively prove that an archived member was deleted.
+										continue
+									}
+									if spool == nil {
+										continue
+									}
+									present, lookupErr := spool.ContainsSource(
+										ctx, agent,
+										canonicalReconciliationSourceIdentity(ownership.FilePath),
+									)
+									if lookupErr != nil {
+										return deleted, fmt.Errorf(
+											"lookup %s persistent member %s: %w",
+											agent, ownership.FilePath, lookupErr,
+										)
+									}
+									if present {
+										continue
+									}
+									persistentMemberContainerExists = true
+								}
+							}
+						} else if resolver, ok := provider.(parser.ReconciliationSourceResolver); ok {
+							source, found, err := resolver.SourceForReconciliation(
+								ctx, statPath, "",
+							)
+							if err != nil {
+								return deleted, fmt.Errorf(
+									"validate %s source %s during watch reconciliation: %w",
+									agent, statPath, err,
+								)
+							}
+							if found {
+								_, _, virtual := parser.ParseVirtualSourcePath(
+									providerDiscoveredPath(source),
+								)
+								if virtual && !allProviderRootsCovered {
+									// A scoped pass cannot prove that the same logical
+									// member did not move to another configured root.
+									continue
+								}
+								if spool == nil || !virtual {
+									continue
+								}
+								identity := ""
+								identityResolver, resolvesIdentity := provider.(parser.ReconciliationMemberIdentityResolver)
+								if resolvesIdentity {
+									identity = identityResolver.ReconciliationMemberIdentity(
+										ownership.ID,
+									)
+								}
+								present, lookupErr := spool.ContainsSourceIdentity(
+									ctx, agent,
+									canonicalReconciliationSourceIdentity(ownership.FilePath),
+									identity,
+								)
+								if lookupErr != nil {
+									return deleted, fmt.Errorf(
+										"lookup %s virtual member %s: %w",
+										agent, ownership.FilePath, lookupErr,
+									)
+								}
+								if present {
+									continue
+								}
+							}
+						}
+						if !persistentMemberContainerExists {
+							missing, ok = missingByPath[statPath]
+							if !ok {
+								_, statErr := e.lstatSource(statPath)
+								missing = os.IsNotExist(statErr)
+								missingByPath[statPath] = missing
+							}
+							if !missing {
+								continue
+							}
+						}
 						changed, err := e.tombstoneSessionSourceOwnership(
 							ctx, ownership.Machine, ownership.Agent,
 							ownership.ID, ownership.FilePath,
@@ -3960,177 +4126,11 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 						if changed {
 							deleted++
 						}
-						continue
 					}
-					// A vanished tracked copy with a surviving same-identity
-					// duplicate is a replacement, not a deletion; the next sync
-					// re-points the session at the survivor. Claude keys
-					// replacements by the session ID in the filename; a Codex
-					// UUID can exist as both a live dated copy and a flat
-					// archived copy sharing one discovery identity. Both resolve
-					// through a bounded per-source index lookup: the streamed
-					// pass's spool when it covers every configured root, else a
-					// lazily built disk-backed index (at most one per pass).
-					replacementIdentity := reconciliationReplacementIdentity(
-						agent, ownership.FilePath,
-					)
-					if replacementIdentity != "" && provider != nil {
-						if replacementIndex == nil {
-							if spool != nil {
-								if !allProviderRootsCovered {
-									// A scoped pass cannot prove that a same-identity
-									// replacement does not exist under another configured root.
-									continue
-								}
-								replacementIndex = spool
-							} else {
-								replacementIndex, err = e.buildReconciliationReplacementIndex(
-									ctx, provider, dirs,
-								)
-								if err != nil {
-									return deleted, fmt.Errorf(
-										"index %s reconciliation replacements: %w", agent, err,
-									)
-								}
-								if agent == parser.AgentCodex {
-									reconciliationRuntimeMetricsFor(ctx).
-										codexReplacementIndexBuild()
-								}
-								ownsReplacementIndex = true
-								defer func() {
-									if ownsReplacementIndex {
-										retErr = errors.Join(
-											retErr, replacementIndex.CloseAndRemove(),
-										)
-									}
-								}()
-							}
-						}
-						replacement, found, lookupErr := replacementIndex.Candidate(
-							ctx, agent, replacementIdentity,
-						)
-						if lookupErr != nil {
-							return deleted, fmt.Errorf(
-								"lookup %s reconciliation replacement: %w", agent, lookupErr,
-							)
-						}
-						if found && !sameReconciliationSourcePath(
-							replacement.Path, ownership.FilePath,
-						) {
-							continue
-						}
+					cursor = page[len(page)-1].Cursor()
+					if len(page) < db.WatchReconcileSourcePageSize {
+						break
 					}
-					persistentArchive := provider != nil && provider.Capabilities().Source.PersistentArchive == parser.CapabilitySupported
-					if persistentArchive {
-						resolver, ok := provider.(parser.PersistentArchiveSourceResolver)
-						if ok {
-							physicalPath, valid := resolver.PersistentArchiveSource(
-								statPath, ownership.ID,
-							)
-							if valid {
-								if !allProviderRootsCovered {
-									// A scoped pass cannot prove that this member does not
-									// exist in a persistent container under another root.
-									continue
-								}
-								if _, statErr := e.lstatSource(physicalPath); statErr != nil {
-									// A vanished or unreadable persistent container cannot
-									// authoritatively prove that an archived member was deleted.
-									continue
-								}
-								if spool == nil {
-									continue
-								}
-								present, lookupErr := spool.ContainsSource(
-									ctx, agent,
-									canonicalReconciliationSourceIdentity(ownership.FilePath),
-								)
-								if lookupErr != nil {
-									return deleted, fmt.Errorf(
-										"lookup %s persistent member %s: %w",
-										agent, ownership.FilePath, lookupErr,
-									)
-								}
-								if present {
-									continue
-								}
-								persistentMemberContainerExists = true
-							}
-						}
-					} else if resolver, ok := provider.(parser.ReconciliationSourceResolver); ok {
-						source, found, err := resolver.SourceForReconciliation(
-							ctx, statPath, "",
-						)
-						if err != nil {
-							return deleted, fmt.Errorf(
-								"validate %s source %s during watch reconciliation: %w",
-								agent, statPath, err,
-							)
-						}
-						if found {
-							_, _, virtual := parser.ParseVirtualSourcePath(
-								providerDiscoveredPath(source),
-							)
-							if virtual && !allProviderRootsCovered {
-								// A scoped pass cannot prove that the same logical
-								// member did not move to another configured root.
-								continue
-							}
-							if spool == nil || !virtual {
-								continue
-							}
-							identity := ""
-							identityResolver, resolvesIdentity := provider.(parser.ReconciliationMemberIdentityResolver)
-							if resolvesIdentity {
-								identity = identityResolver.ReconciliationMemberIdentity(
-									ownership.ID,
-								)
-							}
-							present, lookupErr := spool.ContainsSourceIdentity(
-								ctx, agent,
-								canonicalReconciliationSourceIdentity(ownership.FilePath),
-								identity,
-							)
-							if lookupErr != nil {
-								return deleted, fmt.Errorf(
-									"lookup %s virtual member %s: %w",
-									agent, ownership.FilePath, lookupErr,
-								)
-							}
-							if present {
-								continue
-							}
-						}
-					}
-					if !persistentMemberContainerExists {
-						missing, ok = missingByPath[statPath]
-						if !ok {
-							_, statErr := e.lstatSource(statPath)
-							missing = os.IsNotExist(statErr)
-							missingByPath[statPath] = missing
-						}
-						if !missing {
-							continue
-						}
-					}
-					changed, err := e.tombstoneSessionSourceOwnership(
-						ctx, ownership.Machine, ownership.Agent,
-						ownership.ID, ownership.FilePath,
-					)
-					if err != nil {
-						return deleted, fmt.Errorf(
-							"tombstone %s session %s after watch reconciliation: %w",
-							agent, ownership.ID, err,
-						)
-					}
-					if changed {
-						deleted++
-					}
-				}
-				cursor = page[len(page)-1].Cursor()
-				if len(page) < db.WatchReconcileSourcePageSize {
-					break
-				}
 				}
 			}
 		}

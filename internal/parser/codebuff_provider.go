@@ -215,8 +215,13 @@ func codebuffParseFile(
 }
 
 func codebuffProviderCapabilities() Capabilities {
+	caps := jsonlFileProviderSourceCapabilities()
+	// Codebuff reparses the entire mutable JSON transcript on every sync,
+	// so force full message replacement to avoid stale ordinals and
+	// missed in-place block updates.
+	caps.ForceReplaceOnParse = CapabilitySupported
 	return Capabilities{
-		Source: jsonlFileProviderSourceCapabilities(),
+		Source: caps,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,

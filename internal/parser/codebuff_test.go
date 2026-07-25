@@ -1293,10 +1293,12 @@ func TestParseCodebuffSession_ImageBlockNoFilename(t *testing.T) {
 
 func TestAgentByPrefix_FreebuffAlias(t *testing.T) {
 	// Freebuff sessions use the "freebuff:" prefix but share the Codebuff
-	// provider. AgentByPrefix must resolve them to the Codebuff definition.
+	// provider. AgentByPrefix must resolve them to the Codebuff definition
+	// with the freebuff: prefix so callers can strip it correctly.
 	def, ok := AgentByPrefix("freebuff:2026-07-15T20-01-32.065Z")
 	require.True(t, ok, "AgentByPrefix should resolve freebuff: prefix")
 	assert.Equal(t, AgentCodebuff, def.Type,
 		"freebuff: prefix should map to Codebuff provider")
-	assert.Equal(t, "codebuff:", def.IDPrefix)
+	assert.Equal(t, "freebuff:", def.IDPrefix,
+		"IDPrefix should match the freebuff: prefix for correct stripping")
 }

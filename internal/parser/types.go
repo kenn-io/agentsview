@@ -863,16 +863,23 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 // AgentNameLacksPerMessageTokenData reports whether the named agent
 // records no per-message token data. Names match registry types
 // exactly and unknown names fail closed; CSV filter parsing trims its
-// parts before calling.
+// parts before calling. Freebuff is treated as a Codebuff alias.
 func AgentNameLacksPerMessageTokenData(agent string) bool {
 	def, ok := AgentByType(AgentType(agent))
+	if !ok && AgentType(agent) == AgentFreebuff {
+		def, ok = AgentByType(AgentCodebuff)
+	}
 	return ok && def.Usage.NoPerMessageTokenData
 }
 
 // AgentNameUsesAICredits reports whether the named agent's cost is
-// denominated in AI credits rather than USD.
+// denominated in AI credits rather than USD. Freebuff is treated as
+// a Codebuff alias.
 func AgentNameUsesAICredits(agent string) bool {
 	def, ok := AgentByType(AgentType(agent))
+	if !ok && AgentType(agent) == AgentFreebuff {
+		def, ok = AgentByType(AgentCodebuff)
+	}
 	return ok && def.Usage.AICreditsDenominated
 }
 
@@ -946,10 +953,12 @@ func StripHostPrefix(id string) (host, rawID string) {
 func AgentByPrefix(sessionID string) (AgentDef, bool) {
 	_, rawID := StripHostPrefix(sessionID)
 	// Freebuff shares the Codebuff provider but emits sessions with the
-	// "freebuff:" prefix. Map it to the Codebuff definition so prefix
-	// lookup, single-session resync, and reconciliation work correctly.
+	// "freebuff:" prefix. Return a copy with the freebuff prefix so
+	// callers that strip the prefix (FindSourceFile, ProviderNormalizeRawSessionID)
+	// work correctly.
 	if strings.HasPrefix(rawID, string(AgentFreebuff)+":") {
 		if def, ok := AgentByType(AgentCodebuff); ok {
+			def.IDPrefix = string(AgentFreebuff) + ":"
 			return def, true
 		}
 	}

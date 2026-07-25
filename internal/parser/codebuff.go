@@ -148,8 +148,6 @@ func parseCodebuffSession(
 		fileInfo.Mtime = info.ModTime().UnixNano()
 	}
 
-	fullID := string(agent) + ":" + sessionID
-
 	// Derive project from run-state cwd or project hint.
 	// Use ExtractProjectFromCwd (git-root aware) rather than
 	// GetProjectName because rs.Cwd is a full absolute path, not
@@ -160,6 +158,10 @@ func parseCodebuffSession(
 			project = p
 		}
 	}
+
+	// Include project in session ID to prevent collisions across projects
+	// with identical timestamps.
+	fullID := string(agent) + ":" + project + ":" + sessionID
 
 	sess := &ParsedSession{
 		ID:               fullID,
