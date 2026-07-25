@@ -7,6 +7,7 @@ export type DbUsageTotals = {
   cacheReadTokens: number;
   cacheSavings: number;
   copilotAICredits?: number;
+  codebuffAICredits?: number;
   inputTokens: number;
   outputTokens: number;
   totalCost: number;

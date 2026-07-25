@@ -3908,6 +3908,13 @@ func (s *Store) GetDailyUsage(
 	if aiCredits > 0 {
 		result.Totals.CopilotAICredits = aiCredits
 	}
+	var codebuffCredits float64
+	for key, b := range accum {
+		codebuffCredits += db.CodebuffCreditsFromCost(key.agent, b.aggregateCost)
+	}
+	if codebuffCredits > 0 {
+		result.Totals.CodebuffAICredits = codebuffCredits
+	}
 
 	if result.Daily == nil {
 		result.Daily = []db.DailyUsageEntry{}

@@ -105,6 +105,14 @@
             },
           ]
         : []),
+      ...(usage.summary?.totals.codebuffAICredits
+        ? [
+            {
+              label: () => m.usage_summary_codebuff_ai_credits(),
+              value: () => fmtCredits(usage.summary?.totals.codebuffAICredits ?? 0),
+            },
+          ]
+        : []),
       {
         label: () => m.usage_summary_input_tokens(),
         value: () => fmtTokens(inputTokens),

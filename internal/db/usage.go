@@ -36,6 +36,20 @@ func AICreditsFromCost(agent string, costUSD float64) float64 {
 	return costUSD / aiCreditUSD
 }
 
+// CodebuffCreditsFromCost converts a USD cost into Codebuff AI credits.
+// Codebuff and Freebuff use credits (1 credit = $0.01) but are not
+// Copilot-family agents, so they get their own separate credit display.
+func CodebuffCreditsFromCost(agent string, costUSD float64) float64 {
+	if costUSD == 0 {
+		return 0
+	}
+	t := parser.AgentType(agent)
+	if t == parser.AgentCodebuff || t == parser.AgentFreebuff {
+		return costUSD / aiCreditUSD
+	}
+	return 0
+}
+
 // NoTokenData reports whether a daily-usage total carries neither token
 // data nor cost: every token counter, the cost total, and any Copilot AI
 // credits are zero. It distinguishes a window whose sessions simply do not
@@ -46,7 +60,8 @@ func NoTokenData(t UsageTotals) bool {
 		t.CacheCreationTokens == 0 &&
 		t.CacheReadTokens == 0 &&
 		t.TotalCost == 0 &&
-		t.CopilotAICredits == 0
+		t.CopilotAICredits == 0 &&
+		t.CodebuffAICredits == 0
 }
 
 // UsageFilter controls the date range, agent, and timezone
@@ -1639,6 +1654,7 @@ type UsageTotals struct {
 	CacheReadTokens     int     `json:"cacheReadTokens"`
 	TotalCost           float64 `json:"totalCost"`
 	CopilotAICredits    float64 `json:"copilotAICredits,omitempty"`
+	CodebuffAICredits   float64 `json:"codebuffAICredits,omitempty"`
 	// CacheSavings is the net dollar delta vs an uncached run:
 	// cache reads save (input_rate - cache_read_rate) per token,
 	// cache creations cost (input_rate - cache_creation_rate)
@@ -2152,6 +2168,13 @@ func (db *DB) GetDailyUsage(
 		if aiCredits > 0 {
 			totals.CopilotAICredits = aiCredits
 		}
+		var codebuffCredits float64
+		for key, b := range accum {
+			codebuffCredits += CodebuffCreditsFromCost(key.agent, b.aggregateCost)
+		}
+		if codebuffCredits > 0 {
+			totals.CodebuffAICredits = codebuffCredits
+		}
 		var sessionCounts UsageSessionCounts
 		if seenSessions != nil {
 			sessionCounts = NewUsageSessionCounts(seenSessions)
@@ -2375,6 +2398,15 @@ func (db *DB) GetDailyUsage(
 	}
 	if aiCredits > 0 {
 		totals.CopilotAICredits = aiCredits
+	}
+	var codebuffCredits float64
+	for _, d := range daily {
+		for _, ab := range d.AgentBreakdowns {
+			codebuffCredits += CodebuffCreditsFromCost(ab.Agent, ab.Cost)
+		}
+	}
+	if codebuffCredits > 0 {
+		totals.CodebuffAICredits = codebuffCredits
 	}
 
 	var sessionCounts UsageSessionCounts

@@ -1602,6 +1602,13 @@ func (s *Store) GetDailyUsage(
 		if aiCredits > 0 {
 			totals.CopilotAICredits = aiCredits
 		}
+		var codebuffCredits float64
+		for key, b := range accum {
+			codebuffCredits += db.CodebuffCreditsFromCost(key.agent, b.aggregateCost)
+		}
+		if codebuffCredits > 0 {
+			totals.CodebuffAICredits = codebuffCredits
+		}
 
 		var sessionCounts db.UsageSessionCounts
 		if seenSessions != nil {
@@ -1811,6 +1818,15 @@ func (s *Store) GetDailyUsage(
 	}
 	if aiCredits > 0 {
 		totals.CopilotAICredits = aiCredits
+	}
+	var codebuffCredits float64
+	for _, d := range daily {
+		for _, ab := range d.AgentBreakdowns {
+			codebuffCredits += db.CodebuffCreditsFromCost(ab.Agent, ab.Cost)
+		}
+	}
+	if codebuffCredits > 0 {
+		totals.CodebuffAICredits = codebuffCredits
 	}
 
 	var sessionCounts db.UsageSessionCounts
