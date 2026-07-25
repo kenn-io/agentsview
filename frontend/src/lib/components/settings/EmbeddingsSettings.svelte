@@ -83,7 +83,7 @@
     const signal = statusRead.begin();
     try {
       const next = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsStatus(),
+        EmbeddingsService.getApiV1EmbeddingsStatus({}),
         signal,
       );
       if (disposed || !statusRead.isCurrent(signal)) return;
@@ -123,7 +123,7 @@
     const signal = generationsRead.begin();
     try {
       const res = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsGenerations(),
+        EmbeddingsService.getApiV1EmbeddingsGenerations({}),
         signal,
       );
       if (disposed || !generationsRead.isCurrent(signal)) return;

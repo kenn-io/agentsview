@@ -11,5 +11,7 @@ export type SyncAnomalyStats = {
   sanitize?: SyncSanitizeStats;
   unknown_schema_sessions_by_agent?: Record<string, number>;
   unknown_schema_sessions_total?: number;
+  unsupported_source_layouts_by_agent?: Record<string, number>;
+  unsupported_source_layouts_total?: number;
 };
 

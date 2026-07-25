@@ -4,6 +4,7 @@
 /* eslint-disable */
 export type ConfigDuckDBConfig = {
   allow_insecure: boolean;
+  attach_timeout?: number;
   exclude_projects?: any[] | null;
   machine_name: string;
   path: string;
