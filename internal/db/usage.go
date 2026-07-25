@@ -369,12 +369,14 @@ const usageMatchingMessageSourceEligibility = `
     m.role = 'assistant'
     AND m.model != '<synthetic>'`
 
+// usageEventEligibility includes events with a model or a cost (cost-only
+// events from Codebuff/Freebuff have empty model but carry CostUSD).
 const usageEventEligibility = `
-    ue.model != ''
+    (ue.model != '' OR ue.cost_usd IS NOT NULL)
     AND s.deleted_at IS NULL`
 
 const usageEventSourceEligibility = `
-    ue.model != ''`
+    ue.model != '' OR ue.cost_usd IS NOT NULL`
 
 const usageSessionEligibility = `s.deleted_at IS NULL`
 
