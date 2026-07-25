@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -64,6 +65,9 @@ type RecallExtractServerConfig struct {
 	// Endpoint is the OpenAI-compatible base URL, e.g.
 	// "http://127.0.0.1:30000/v1".
 	Endpoint string `toml:"endpoint" json:"endpoint"`
+	// APIKeyEnv names the environment variable holding the API key.
+	// Empty means anonymous access.
+	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
 	// Timeout is a parseable duration string applied to each model call.
 	// Distillation calls on local models are slow; default "120s".
 	Timeout string `toml:"timeout" json:"timeout"`
@@ -71,6 +75,15 @@ type RecallExtractServerConfig struct {
 	// Extraction sends transcript content to the endpoint; without this
 	// explicit opt-in, non-loopback endpoints must use HTTPS.
 	AllowHTTP bool `toml:"allow_http" json:"allow_http,omitempty"`
+}
+
+// APIKey reads the API key from the environment variable named by
+// APIKeyEnv. Returns "" when APIKeyEnv is unset.
+func (s RecallExtractServerConfig) APIKey() string {
+	if s.APIKeyEnv == "" {
+		return ""
+	}
+	return os.Getenv(s.APIKeyEnv)
 }
 
 // RecallExtractPromptsConfig selects the prompt profile and optional

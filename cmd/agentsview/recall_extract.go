@@ -98,6 +98,7 @@ func resolveExtractDistillation(
 	return extractDistillation{
 		Client: &extract.Client{
 			BaseURL:    server.Endpoint,
+			APIKey:     server.APIKey(),
 			Model:      cfg.Model,
 			HTTPClient: httpClient,
 			Request:    request,

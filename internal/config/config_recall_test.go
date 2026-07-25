@@ -214,6 +214,17 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 	}
 }
 
+func TestRecallExtractServerConfigAPIKeyEnv(t *testing.T) {
+	var server RecallExtractServerConfig
+	assert.Equal(t, "", server.APIKey(), "no env var configured")
+
+	server.APIKeyEnv = "AGENTSVIEW_TEST_RECALL_API_KEY"
+	assert.Equal(t, "", server.APIKey(), "configured env var not set in environment")
+
+	t.Setenv("AGENTSVIEW_TEST_RECALL_API_KEY", "secret-123")
+	assert.Equal(t, "secret-123", server.APIKey())
+}
+
 // TestRecallExtractValidationRedactsEndpointCredentials pins that
 // validation errors never echo endpoint credentials: config errors land on
 // stderr and in CI logs, and endpoints may carry Basic-auth userinfo or

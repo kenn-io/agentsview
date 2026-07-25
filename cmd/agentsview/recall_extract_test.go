@@ -315,6 +315,7 @@ func TestRecallExtractPreviewSubcommandBuildsChunks(t *testing.T) {
 
 func TestResolveExtractDistillationAppliesOverrides(t *testing.T) {
 	temp := 0.3
+	t.Setenv("AGENTSVIEW_TEST_RECALL_API_KEY", "atlas-secret")
 	cfg := config.RecallExtractConfig{
 		Enabled:          true,
 		Model:            "qwen3.5-27b",
@@ -325,7 +326,11 @@ func TestResolveExtractDistillationAppliesOverrides(t *testing.T) {
 		BackstopInterval: "1h",
 		FailureBackoff:   "2h",
 		Servers: map[string]config.RecallExtractServerConfig{
-			"local": {Endpoint: "http://127.0.0.1:30000/v1", Timeout: "120s"},
+			"local": {
+				Endpoint:  "http://127.0.0.1:30000/v1",
+				APIKeyEnv: "AGENTSVIEW_TEST_RECALL_API_KEY",
+				Timeout:   "120s",
+			},
 		},
 		Request: config.RecallExtractRequestConfig{
 			Temperature: &temp,
@@ -338,6 +343,7 @@ func TestResolveExtractDistillationAppliesOverrides(t *testing.T) {
 	assert.Equal(t, "qwen", dist.Profile,
 		"model prefix must select the qwen profile")
 	assert.Equal(t, "http://127.0.0.1:30000/v1", dist.Client.BaseURL)
+	assert.Equal(t, "atlas-secret", dist.Client.APIKey)
 	assert.Equal(t, 0.3, dist.Client.Request.Temperature)
 	assert.Equal(t, 512, dist.Client.Request.MaxTokens)
 	assert.Equal(t, map[string]any{"custom": true},

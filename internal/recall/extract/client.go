@@ -245,6 +245,9 @@ var entrySchema = map[string]any{
 // fingerprint.
 type Client struct {
 	BaseURL string
+	// APIKey is sent as a bearer token when non-empty. Keep credentials
+	// outside BaseURL so redacted endpoint logs stay useful.
+	APIKey string
 	Model   string
 	// RetryBackoff seeds the exponential wait between transient retries;
 	// zero means 500ms. It shapes latency, not output, so it stays outside
@@ -408,6 +411,9 @@ func (c *Client) distill(
 		return nil, Usage{}, fmt.Errorf("building distill request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	response, err := c.httpClient().Do(request)
 	if err != nil {
@@ -609,14 +615,17 @@ func (c *Client) distill(
 	return entries, parsed.Usage, nil
 }
 
-// credentialedEndpoint reports whether the configured endpoint URL
-// carries credential material: userinfo, or any raw query segment whose
-// key is not the api-version surface selector (mirroring the config
-// redactor's fail-closed allowlist). Raw wire segments, no parser:
+// credentialedEndpoint reports whether the configured request carries
+// credential material: a bearer token, URL userinfo, or any raw query
+// segment whose key is not the api-version surface selector (mirroring
+// the config redactor's fail-closed allowlist). Raw wire segments, no parser:
 // url.ParseQuery would reject exactly the malformed queries that still
 // travel verbatim, and a rejection must not fail open. An unparseable URL
 // counts as credentialed for the same reason.
 func (c *Client) credentialedEndpoint() bool {
+	if c.APIKey != "" {
+		return true
+	}
 	endpoint, err := url.Parse(c.BaseURL)
 	if err != nil {
 		return true

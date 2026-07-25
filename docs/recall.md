@@ -63,13 +63,28 @@ model = "your-model-name"
 endpoint = "http://127.0.0.1:30000/v1"
 ```
 
+For a remote OpenAI-compatible provider such as Atlas Cloud, keep the key in the
+environment and point the server entry at the provider's `/v1` base URL:
+
+```toml
+[recall.extract]
+enabled = true
+model = "deepseek-ai/deepseek-v4-pro"
+server = "atlascloud"
+
+[recall.extract.servers.atlascloud]
+endpoint = "https://api.atlascloud.ai/v1"
+api_key_env = "ATLASCLOUD_API_KEY"
+timeout = "120s"
+```
+
 Optional keys: `deployment` (labels which serving instance produced the corpus),
 `server` (selects among multiple named servers), `quiet_period` (default `"30m"`
 — how long a session must have been ended before extraction),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
-`max_window_chars` (default 50000), `max_tokens`, a `[recall.extract.prompts]`
-table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
-`extra_body`).
+`max_window_chars` (default 50000), `max_tokens`, per-server `api_key_env`, a
+`[recall.extract.prompts]` table (`profile`, `dir`), and a
+`[recall.extract.request]` table (`temperature`, `extra_body`).
 
 Non-loopback endpoints must use HTTPS: extraction sends transcript content to
 the endpoint, and plaintext HTTP off the machine could be intercepted. A server
