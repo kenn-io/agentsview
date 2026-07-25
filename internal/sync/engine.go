@@ -3000,10 +3000,18 @@ func (e *Engine) SyncAll(
 	return
 }
 
-// HasActiveSessionSourceBelow checks only the exact configured agent that owns
-// the rename event's logical watch root.
+// HasActiveSessionSourceBelow checks if a path contains active sessions.
+// Freebuff shares the Codebuff provider, so when checking Codebuff,
+// also check Freebuff to catch rename events for Freebuff-only directories.
 func (e *Engine) HasActiveSessionSourceBelow(agent, path string) (bool, error) {
-	return e.db.HasActiveSessionSourceBelow(agent, path)
+	found, err := e.db.HasActiveSessionSourceBelow(agent, path)
+	if err != nil || found {
+		return found, err
+	}
+	if agent == string(parser.AgentCodebuff) {
+		return e.db.HasActiveSessionSourceBelow(string(parser.AgentFreebuff), path)
+	}
+	return false, nil
 }
 
 // ReconcileWatchRoots runs authoritative discovery for a bounded set of watch
@@ -6105,8 +6113,17 @@ func (e *Engine) collectAndBatch(
 		clear(baselineAdmission)
 	}
 	baselineProcessedSource := func(job syncJob, admitted bool) {
+		// Use the parsed session's agent type for the baseline row,
+		// not the provider's agent type. Freebuff sessions have
+		// agent=AgentFreebuff but are discovered under Codebuff.
+		agent := job.agent
+		if len(job.results) > 0 {
+			if sessAgent := job.results[0].Session.Agent; sessAgent != "" {
+				agent = sessAgent
+			}
+		}
 		source := db.SessionSourcePath{
-			Agent: string(job.agent), FilePath: e.effectiveSourcePath(job.path),
+			Agent: string(agent), FilePath: e.effectiveSourcePath(job.path),
 		}
 		if source.Agent == "" || source.FilePath == "" {
 			return

@@ -148,7 +148,17 @@ func parseCodebuffSession(
 		fileInfo.Mtime = info.ModTime().UnixNano()
 	}
 
-	// Derive project from run-state cwd or project hint.
+	// Use projectHint (the storage directory name) for the session ID
+	// to ensure stability. The cwd-derived project name can change if
+	// the git root changes, which would break source lookup and cause
+	// session ID instability.
+	projectID := projectHint
+	if projectID == "" {
+		projectID = "unknown"
+	}
+	fullID := string(agent) + ":" + projectID + ":" + sessionID
+
+	// Derive display project from run-state cwd for UI display.
 	// Use ExtractProjectFromCwd (git-root aware) rather than
 	// GetProjectName because rs.Cwd is a full absolute path, not
 	// a Claude-style encoded project name.
@@ -158,10 +168,6 @@ func parseCodebuffSession(
 			project = p
 		}
 	}
-
-	// Include project in session ID to prevent collisions across projects
-	// with identical timestamps.
-	fullID := string(agent) + ":" + project + ":" + sessionID
 
 	sess := &ParsedSession{
 		ID:               fullID,
@@ -187,15 +193,13 @@ func parseCodebuffSession(
 	// this value. Leave peak context unavailable.
 
 	// Emit usage event for reported credits. The actual model is unknown
-	// (selected server-side, can change mid-session), so use a placeholder
-	// model name. Usage queries filter out events with empty model, so a
-	// non-empty value is required for cost display.
+	// (selected server-side, can change mid-session), so Model is left
+	// empty. Cost is tracked at the session level via credits.
 	if rs.CreditsUsed > 0 {
 		cost := rs.CreditsUsed * 0.01
 		sess.UsageEvents = []ParsedUsageEvent{{
 			SessionID: fullID,
 			Source:    "session",
-			Model:     "codebuff",
 			OccurredAt: func() string {
 				if !endedAt.IsZero() {
 					return endedAt.Format(time.RFC3339Nano)

@@ -268,7 +268,7 @@ func codebuffProviderCapabilities() Capabilities {
 			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
-			Model:                CapabilitySupported,
+			Model:                CapabilityNotApplicable,
 			AggregateUsageEvents: CapabilitySupported,
 			Relationships:        CapabilityNotApplicable,
 			TerminationStatus:    CapabilityNotApplicable,

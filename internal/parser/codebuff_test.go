@@ -701,7 +701,8 @@ func TestCodebuffProviderCapabilities(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
 	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
 	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
-	assert.Equal(t, CapabilitySupported, caps.Content.Model)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.Model,
+		"model is unknown (selected server-side, can change mid-session)")
 	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
 	assert.Equal(t, CapabilityNotApplicable, caps.Content.Relationships)
 	assert.Equal(t, CapabilityNotApplicable, caps.Content.TerminationStatus)
