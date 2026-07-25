@@ -652,7 +652,7 @@ func newPGPushCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
 	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
 	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")
-	cmd.Flags().BoolVar(&cfg.FromNow, "from-now", false, "On a target's FIRST push, start from now instead of backfilling local history (ignored with --full)")
+	cmd.Flags().BoolVar(&cfg.FromNow, "from-now", false, "On a target's FIRST push, start from now instead of backfilling local history (ignored with --full; requires --no-vectors)")
 	return cmd
 }
 

@@ -333,7 +333,7 @@ func (b daemonArchiveWriteBackend) PGPush(
 			SyncStateTarget:        target.SyncStateTarget,
 			MigrateLegacySyncState: target.MigrateLegacySyncState,
 			NoVectors:              cfg.NoVectors,
-			FromNow:                cfg.FromNow,
+			FromNow:                cfg.FromNow && !cfg.Full,
 			ScopeVectorsToChangedSessions: cfg.
 				ScopeVectorsToChangedSessions,
 			LastReconciledVectorGeneration: cfg.

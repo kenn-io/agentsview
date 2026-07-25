@@ -99,6 +99,16 @@ func pgVectorPushSource(
 func runPGPush(
 	cfg PGPushConfig, targetName string,
 ) error {
+	// Refuse up front: the vector phase cannot be bounded, and discovering that
+	// only after connecting leaves watch mode retrying a configuration that can
+	// never succeed, having already synced locally and opened a stream.
+	if cfg.FromNow && !cfg.Full && !cfg.NoVectors {
+		return fmt.Errorf(
+			"--from-now cannot bound the vector phase (it would upload " +
+				"embeddings and raw text for sessions before the boundary); " +
+				"re-run with --no-vectors",
+		)
+	}
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)

@@ -178,6 +178,10 @@ func (s *Sync) PushWithOptions(
 			lastPushBoundaryStateKey, err,
 		)
 	}
+	// Freshness must be judged on what was on disk when this push started: the
+	// recovery paths below clear lastPush and boundaryState, which would make an
+	// established target whose marker was lost look brand new.
+	initialLastPush, initialBoundaryState := lastPush, boundaryState
 	pushStateCleared := false
 	if reset, reason := pushTargetState(
 		lastPush,
@@ -301,7 +305,8 @@ func (s *Sync) PushWithOptions(
 	// (watermark, boundary state) and nothing remote (this marker) has ever
 	// recorded a push, and that no reset cleared state on this run.
 	applyFromNow := pushFromNowApplies(
-		s.pushFromNow, lastPush, boundaryState, markerExists, pushStateCleared,
+		s.pushFromNow, initialLastPush, initialBoundaryState,
+		markerExists, pushStateCleared,
 	)
 	// The boundary scopes SESSION selection only. Phases that are archive-wide
 	// would still upload pre-boundary content, defeating the point, so a bounded
