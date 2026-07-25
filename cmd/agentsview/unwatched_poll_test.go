@@ -362,7 +362,8 @@ func TestUnwatchedPollUsesProviderScopedReconciliationForOwnedRoots(t *testing.T
 		Roots: []string{parent},
 	}}, selected)
 
-	require.NoError(t, pollUnwatchedRootsOnce(t.Context(), syncer, selected))
+	_, err = pollUnwatchedRootsOnce(t.Context(), syncer, selected)
+	require.NoError(t, err)
 	requirePollWithin(t, syncer.wake, time.Second)
 	assert.Equal(t, [][]string{{parent}}, syncer.snapshot())
 	assert.Equal(t, []parser.AgentType{parser.AgentCodex}, syncer.agentSnapshot(),
@@ -377,7 +378,7 @@ func TestUnwatchedPollContinuesAfterEarlierProviderFailure(t *testing.T) {
 		errs: []error{errors.New("claude failed"), nil},
 	}
 
-	err := pollUnwatchedRootsOnce(t.Context(), syncer, []pollingObligation{
+	_, err := pollUnwatchedRootsOnce(t.Context(), syncer, []pollingObligation{
 		{Key: "claude-root", Agent: parser.AgentClaude, Roots: []string{claudeRoot}},
 		{Key: "opencode-root", Agent: parser.AgentOpenCode, Roots: []string{openCodeRoot}},
 	})
@@ -388,6 +389,49 @@ func TestUnwatchedPollContinuesAfterEarlierProviderFailure(t *testing.T) {
 		[]parser.AgentType{parser.AgentClaude, parser.AgentOpenCode},
 		syncer.agentSnapshot(),
 		"a later provider-owned group must still poll after an earlier provider group fails")
+}
+
+func TestUnwatchedPollPreservesTrackedStateForSuccessfulGroupsAfterPeerFailure(
+	t *testing.T,
+) {
+	ticks := make(chan time.Time)
+	claudeRoot := requireExistingPollRoot(t, t.TempDir(), "claude")
+	openCodeRoot := requireExistingPollRoot(t, t.TempDir(), "opencode")
+	syncer := &recordingUnwatchedPollSyncer{
+		wake: make(chan struct{}, 4),
+		errs: []error{errors.New("claude failed"), nil, nil},
+	}
+	resolver := &scriptedDegradedPollingResolver{
+		decisions: map[string][]degradedPollingDecision{
+			"claude-root":   {{Poll: true, Tracked: true}, {Poll: true, Tracked: true}},
+			"opencode-root": {{Poll: true, Tracked: true}, {Tracked: true}},
+		},
+	}
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, resolver,
+	)
+	t.Cleanup(coordinator.Stop)
+	for _, obligation := range []pollingObligation{{
+		Key: "claude-root", Agent: parser.AgentClaude, Roots: []string{claudeRoot}, Probe: claudeRoot,
+	}, {
+		Key: "opencode-root", Agent: parser.AgentOpenCode, Roots: []string{openCodeRoot}, Probe: openCodeRoot,
+	}} {
+		require.NoError(t, coordinator.AddObligation(obligation))
+	}
+
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool {
+		return len(syncer.snapshot()) == 2
+	}, time.Second, time.Millisecond)
+
+	coordinator.requestPoll()
+	assert.Eventually(t, func() bool {
+		return len(syncer.snapshot()) == 3
+	}, time.Second, time.Millisecond)
+	assert.Equal(t,
+		[][]string{{claudeRoot}, {openCodeRoot}, {claudeRoot}},
+		syncer.snapshot(),
+		"only the failed provider group must poll again after a peer group succeeds")
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
@@ -587,7 +631,8 @@ func TestAvailableUnwatchedPollObligationsKeepsDifferentAgentOverlapPollable(t *
 	}}, selected)
 
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
-	require.NoError(t, pollUnwatchedRootsOnce(t.Context(), syncer, selected))
+	_, err = pollUnwatchedRootsOnce(t.Context(), syncer, selected)
+	require.NoError(t, err)
 	requirePollWithin(t, syncer.wake, time.Second)
 	assert.Equal(t, [][]string{{base}}, syncer.snapshot())
 	assert.Equal(t, []parser.AgentType{parser.AgentOpenCode}, syncer.agentSnapshot(),

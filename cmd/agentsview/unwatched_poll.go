@@ -306,7 +306,7 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			obligations := c.currentPollSnapshot()
 			selected, tracked, err := c.preparePollRun(c.workerCtx, obligations)
 			if err != nil {
-				c.resetTracked(tracked)
+				c.resetTracked(tracked, tracked)
 				return
 			}
 			if len(selected) == 0 {
@@ -315,11 +315,12 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			log.Printf("polling %d unwatched root(s)", len(unwatchedPollObligationSliceRoots(selected)))
 			c.doWork(func() {
 				if c.workerCtx.Err() != nil {
-					c.resetTracked(tracked)
+					c.resetTracked(tracked, tracked)
 					return
 				}
-				if err := pollUnwatchedRootsOnce(c.workerCtx, c.engine, selected); err != nil {
-					c.resetTracked(tracked)
+				failed, err := pollUnwatchedRootsOnce(c.workerCtx, c.engine, selected)
+				if err != nil {
+					c.resetTracked(tracked, failed)
 					return
 				}
 			})
@@ -391,12 +392,14 @@ func unwatchedPollRoots(owned map[string]struct{}) []string {
 
 func pollUnwatchedRootsOnce(
 	ctx context.Context, engine unwatchedPollSyncer, obligations []pollingObligation,
-) error {
+) ([]pollingObligation, error) {
 	if len(obligations) == 0 {
-		return nil
+		return nil, nil
 	}
 	watchRoots := make(map[string]struct{})
+	generic := make([]pollingObligation, 0)
 	byAgent := make(map[parser.AgentType]map[string]struct{})
+	byAgentObligations := make(map[parser.AgentType][]pollingObligation)
 	for _, obligation := range obligations {
 		target := watchRoots
 		if obligation.Agent != "" {
@@ -404,6 +407,11 @@ func pollUnwatchedRootsOnce(
 				byAgent[obligation.Agent] = make(map[string]struct{})
 			}
 			target = byAgent[obligation.Agent]
+			byAgentObligations[obligation.Agent] = append(
+				byAgentObligations[obligation.Agent], obligation,
+			)
+		} else {
+			generic = append(generic, obligation)
 		}
 		for _, root := range obligation.Roots {
 			if root != "" {
@@ -412,10 +420,12 @@ func pollUnwatchedRootsOnce(
 		}
 	}
 	var pollErr error
+	failed := make([]pollingObligation, 0)
 	if roots := unwatchedPollRoots(watchRoots); len(roots) > 0 {
 		if err := engine.ReconcileWatchRoots(ctx, roots, false); err != nil {
 			log.Printf("polling unwatched roots: %v", err)
 			pollErr = errors.Join(pollErr, err)
+			failed = append(failed, generic...)
 		}
 	}
 	agents := make([]parser.AgentType, 0, len(byAgent))
@@ -431,9 +441,10 @@ func pollUnwatchedRootsOnce(
 		if err := engine.ReconcileProviderRoots(ctx, agent, roots); err != nil {
 			log.Printf("polling unwatched %s roots: %v", agent, err)
 			pollErr = errors.Join(pollErr, err)
+			failed = append(failed, byAgentObligations[agent]...)
 		}
 	}
-	return pollErr
+	return failed, pollErr
 }
 
 func (c *sharedUnwatchedPollCoordinator) currentPollSnapshot() []pollingObligation {
@@ -452,13 +463,19 @@ func (c *sharedUnwatchedPollCoordinator) preparePollRun(
 }
 
 func (c *sharedUnwatchedPollCoordinator) resetTracked(
-	obligations []pollingObligation,
+	tracked, failed []pollingObligation,
 ) {
-	if c.degradedPoll == nil || len(obligations) == 0 {
+	if c.degradedPoll == nil || len(tracked) == 0 || len(failed) == 0 {
 		return
 	}
-	for _, obligation := range obligations {
-		c.degradedPoll.Forget(obligation)
+	failedByKey := make(map[string]struct{}, len(failed))
+	for _, obligation := range failed {
+		failedByKey[obligation.Key] = struct{}{}
+	}
+	for _, obligation := range tracked {
+		if _, ok := failedByKey[obligation.Key]; ok {
+			c.degradedPoll.Forget(obligation)
+		}
 	}
 }
 
