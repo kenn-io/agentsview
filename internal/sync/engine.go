@@ -6545,17 +6545,25 @@ func (e *Engine) skippedSourceAllowsCwdFilter(
 		return true, nil
 	}
 	path := e.effectiveSourcePath(job.path)
-	ids, err := e.db.ListSessionIDsByFilePath(path, string(job.agent))
-	if err != nil {
-		return false, err
+	// Freebuff shares the Codebuff provider. Query both agent types
+	// so CWD filtering works for sources containing only Freebuff sessions.
+	agentsToQuery := []string{string(job.agent)}
+	if job.agent == parser.AgentCodebuff {
+		agentsToQuery = append(agentsToQuery, string(parser.AgentFreebuff))
 	}
-	for _, id := range ids {
-		session, err := e.db.GetSession(ctx, id)
+	for _, agentStr := range agentsToQuery {
+		ids, err := e.db.ListSessionIDsByFilePath(path, agentStr)
 		if err != nil {
 			return false, err
 		}
-		if session != nil && !e.cwdFilter.allows(session.Cwd) {
-			return false, nil
+		for _, id := range ids {
+			session, err := e.db.GetSession(ctx, id)
+			if err != nil {
+				return false, err
+			}
+			if session != nil && !e.cwdFilter.allows(session.Cwd) {
+				return false, nil
+			}
 		}
 	}
 	return true, nil
