@@ -1389,9 +1389,26 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 
 	unlockStart := holdExternalDaemonStartLock(t, dir)
 	oldHost, oldPort := testPingServer(t)
+	waitStarted := make(chan struct{})
+	oldWaitForDaemonStartup := waitForDaemonStartupForEnsure
+	waitForDaemonStartupForEnsure = func(
+		ctx context.Context,
+		dataDir string,
+		timeout time.Duration,
+		authToken ...string,
+	) bool {
+		close(waitStarted)
+		return oldWaitForDaemonStartup(
+			ctx, dataDir, timeout, authToken...,
+		)
+	}
+	t.Cleanup(func() {
+		waitForDaemonStartupForEnsure = oldWaitForDaemonStartup
+	})
+
 	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick())
+		<-waitStarted
 		_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
 			oldHost, oldPort,
 			withRuntimeVersion("1.0.0"),
@@ -1406,7 +1423,12 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 
 	require.NoError(t, <-errCh)
 	require.Error(t, err)
-	assert.True(t, db.IsDataVersionTooNew(err))
+	assert.True(
+		t,
+		db.IsDataVersionTooNew(err),
+		"expected data-version-too-new error, got %v",
+		err,
+	)
 	assert.Nil(t, rt)
 	assert.False(t, stopped)
 	found, compatErr := FindIncompatibleDaemonRuntime(dir)

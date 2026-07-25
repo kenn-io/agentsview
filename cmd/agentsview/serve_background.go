@@ -25,6 +25,7 @@ var errServeStartupInProgress = errors.New(
 	"agentsview serve startup is already in progress",
 )
 
+var waitForDaemonStartupForEnsure = WaitForDaemonStartupContext
 var startServeBackgroundProcessForEnsure = startServeBackgroundProcess
 var startServeBackgroundProcessForRun = startServeBackgroundProcess
 
@@ -552,7 +553,7 @@ probeDaemon:
 		}
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		WaitForDaemonStartupContext(
+		waitForDaemonStartupForEnsure(
 			ctx, cfg.DataDir, waitTimeout, cfg.AuthToken,
 		)
 		if err := ctx.Err(); err != nil {

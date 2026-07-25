@@ -36,10 +36,12 @@ waitForDaemonStartupForEnsure = func(
 	ctx context.Context,
 	dataDir string,
 	timeout time.Duration,
-	authToken string,
-) {
+	authToken ...string,
+) bool {
 	close(waitStarted)
-	oldWaitForDaemonStartup(ctx, dataDir, timeout, authToken)
+	return oldWaitForDaemonStartup(
+		ctx, dataDir, timeout, authToken...,
+	)
 }
 t.Cleanup(func() {
 	waitForDaemonStartupForEnsure = oldWaitForDaemonStartup
