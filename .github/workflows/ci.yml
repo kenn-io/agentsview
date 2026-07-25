@@ -1,14 +1,19 @@
 name: CI
 
 on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Git ref to check out
+        required: false
+        type: string
+        default: ""
   push:
     branches: [main]
   # Run on every pull request regardless of base branch so stacked PRs that
   # target another feature branch (not just main) still get the full test,
   # lint, and e2e suite. The expensive desktop/tauri bundle builds are gated
   # to main separately in desktop-artifacts.yml.
-  pull_request:
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -18,10 +23,11 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
@@ -37,10 +43,11 @@ jobs:
         run: make lint-ci
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
@@ -67,10 +74,11 @@ jobs:
         working-directory: frontend
 
   frontend-node-25:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
@@ -86,10 +94,11 @@ jobs:
         working-directory: frontend
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
@@ -108,10 +117,11 @@ jobs:
         run: make docs-check
 
   scripts:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - name: Run shell script tests
@@ -124,7 +134,7 @@ jobs:
 
   test:
     name: Go Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ contains(fromJSON('["ubuntu-latest","ubuntu-24.04","ubuntu-22.04"]'), matrix.os) && (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -132,6 +142,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -185,6 +196,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - name: Prepare placeholder sidecar resource
@@ -215,10 +227,11 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update
 
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -246,7 +259,7 @@ jobs:
         run: echo "::warning::Codecov upload failed"
 
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     services:
       postgres:
         image: pgvector/pgvector:pg18
@@ -264,6 +277,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -312,10 +326,11 @@ jobs:
           TEST_SSH_KEY: ${{ github.workspace }}/testdata/ssh/test_key
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request_target' || github.ref == 'refs/heads/main') && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
