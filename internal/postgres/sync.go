@@ -177,6 +177,11 @@ type Sync struct {
 	// pushFromNow starts a fresh target at the current time rather than
 	// backfilling the local archive. See SyncOptions.PushFromNow.
 	pushFromNow bool
+
+	// skipUnboundedPhases is set for the duration of a push whose from-now
+	// boundary applied, so archive-wide phases that the boundary cannot scope
+	// are skipped instead of uploading pre-boundary content.
+	skipUnboundedPhases bool
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.

@@ -563,6 +563,7 @@ agentsview pg push [target] [flags]
 | -------------------- | ------- | -------------------------------------------------------------- |
 | `--full`             | `false` | Force full local resync and re-push                            |
 | `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run             |
+| `--from-now`         | `false` | On a target's FIRST push, start at now instead of backfilling  |
 | `--projects`         |         | Comma-separated projects to push (inclusive)                   |
 | `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                 |
@@ -571,8 +572,14 @@ agentsview pg push [target] [flags]
 | `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only) |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                  |
 
-See [PostgreSQL Sync — Project Filtering](/pg-sync/#project-filtering) for
-details on how filtering interacts with the push watermark.
+`--from-now` bounds a target's very first push to sessions from that point on,
+for pushing into a database shared with other people where uploading the whole
+local archive would disclose unrelated work. It applies only when the target is
+provably new (no watermark, no boundary state, no push marker, and no reset on
+this run), is ignored with `--full`, and requires `--no-vectors` because the
+vector phase cannot be bounded. See
+[PostgreSQL Sync — Project Filtering](/pg-sync/#project-filtering) for details
+on how filtering interacts with the push watermark.
 
 ______________________________________________________________________
 

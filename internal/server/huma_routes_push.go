@@ -159,6 +159,10 @@ type daemonPushRequest struct {
 	// NoVectors carries the CLI --no-vectors flag, which has no daemon-side
 	// flag of its own, into the push handler's vector-source gate.
 	NoVectors bool `json:"no_vectors,omitempty"`
+	// FromNow carries the CLI --from-now flag. Without it a delegated push
+	// silently backfills the whole archive, which is the opposite of what the
+	// flag was asked to do.
+	FromNow bool `json:"from_now,omitempty"`
 	// ScopeVectorsToChangedSessions is set by change-triggered watch
 	// pushes so the vector phase reads state only for the changed
 	// relational sessions (see postgres.PushOptions).
@@ -365,6 +369,7 @@ func (s *Server) humaPGPush(
 							SyncStateTarget:        body.SyncStateTarget,
 							MigrateLegacySyncState: body.MigrateLegacySyncState,
 							VectorSource:           vectorSource,
+							PushFromNow:            body.FromNow,
 						},
 					)
 					if err != nil {

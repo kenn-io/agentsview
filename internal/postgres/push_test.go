@@ -1823,33 +1823,34 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 	), "full mode should not skip by fingerprint check")
 }
 
-// A from-now push must bound only a target's FIRST push, and must never
-// silently narrow an established target or override an explicit full push.
-func TestPushFromNowBoundary(t *testing.T) {
-	const cutoff = "2026-07-24 12:00:00"
-	const established = "2026-07-01 00:00:00"
+// A from-now boundary may only be seeded when the target is PROVABLY new.
+// The reset paths clear lastPush, so an empty watermark alone does not
+// distinguish a fresh target from an established one whose marker was lost or
+// whose first push failed part-way; seeding there would permanently skip the
+// history those resets exist to restore.
+func TestPushFromNowApplies(t *testing.T) {
 	cases := []struct {
 		name          string
 		enabled       bool
-		requestedFull bool
 		lastPush      string
-		want          string
-		wantApplied   bool
+		boundaryState string
+		markerExists  bool
+		stateCleared  bool
+		want          bool
 	}{
-		{"fresh target starts at now", true, false, "", cutoff, true},
-		{"disabled backfills as before", false, false, "", "", false},
-		{"explicit full push wins", true, true, "", "", false},
-		{"established target is untouched", true, false, established, established, false},
-		{"established target with full push is untouched", true, true, established, established, false},
-		{"disabled and established is untouched", false, false, established, established, false},
+		{name: "provably fresh target", enabled: true, want: true},
+		{name: "disabled", enabled: false, want: false},
+		{name: "established target has a watermark", enabled: true, lastPush: "2026-07-01 00:00:00", want: false},
+		{name: "partial first push left boundary state", enabled: true, boundaryState: "{}", want: false},
+		{name: "target already carries this push marker", enabled: true, markerExists: true, want: false},
+		{name: "a reset cleared state on this run", enabled: true, stateCleared: true, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, applied := pushFromNowBoundary(
-				tc.enabled, tc.requestedFull, tc.lastPush, cutoff,
-			)
-			assert.Equal(t, tc.want, got)
-			assert.Equal(t, tc.wantApplied, applied)
+			assert.Equal(t, tc.want, pushFromNowApplies(
+				tc.enabled, tc.lastPush, tc.boundaryState,
+				tc.markerExists, tc.stateCleared,
+			))
 		})
 	}
 }

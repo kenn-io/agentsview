@@ -25,6 +25,10 @@ type daemonPushRequest struct {
 	// NoVectors mirrors the CLI --no-vectors flag into the daemon: it has no
 	// per-invocation flag of its own, so the gate must travel in the request.
 	NoVectors bool `json:"no_vectors,omitempty"`
+	// FromNow carries the CLI --from-now flag. Without it a delegated push
+	// silently backfills the whole archive, which is the opposite of what the
+	// flag was asked to do.
+	FromNow bool `json:"from_now,omitempty"`
 	// ScopeVectorsToChangedSessions is set by change-triggered watch
 	// pushes so the daemon's vector phase reads state only for the
 	// changed relational sessions (see postgres.PushOptions).

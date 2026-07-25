@@ -134,10 +134,6 @@ func (s *Sync) PushWithOptions(
 ) (PushResult, error) {
 	full := opts.Full
 	start := time.Now()
-	// The caller's own --full intent, kept because `full` is reassigned below
-	// when reset detection forces a rebuild; PushFromNow must never override an
-	// explicitly requested full push.
-	requestedFull := full
 	var result PushResult
 	state := s.effectiveSyncState()
 	aliasBackfillState := s.aliasBackfillSyncStateOrDefault()
@@ -296,6 +292,31 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 	}
+	// Decide the from-now boundary here, after every reset check and before the
+	// setup phases below. Freshness has to be proven, not assumed: a reset path
+	// clears lastPush, so lastPush alone cannot distinguish a genuinely new
+	// target from an established one whose marker was lost or whose first push
+	// failed part-way. Re-seeding the boundary in those cases would permanently
+	// skip history that should be restored, so require that nothing local
+	// (watermark, boundary state) and nothing remote (this marker) has ever
+	// recorded a push, and that no reset cleared state on this run.
+	applyFromNow := pushFromNowApplies(
+		s.pushFromNow, lastPush, boundaryState, markerExists, pushStateCleared,
+	)
+	// The boundary scopes SESSION selection only. Phases that are archive-wide
+	// would still upload pre-boundary content, defeating the point, so a bounded
+	// first push refuses or skips them rather than leaking quietly.
+	// Scoped to this push, so a later unbounded push still syncs these phases.
+	s.skipUnboundedPhases = applyFromNow
+	defer func() { s.skipUnboundedPhases = false }()
+	if applyFromNow && s.vectorSource != nil {
+		return result, fmt.Errorf(
+			"--from-now cannot bound the vector phase: it would upload " +
+				"embeddings and raw text for sessions before the boundary; " +
+				"re-run with --no-vectors",
+		)
+	}
+
 	if err := timedPushSetupStep("model pricing sync",
 		func() error { return s.syncModelPricing(ctx) }); err != nil {
 		return result, err
@@ -306,22 +327,18 @@ func (s *Sync) PushWithOptions(
 	}
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
-	// Start a brand-new target at "now" instead of backfilling the archive.
-	// Applied HERE, after every reset check above has run: those checks key on
-	// lastPush being non-empty and treat a watermark with no matching target
-	// fingerprint or PG-side marker as corrupt local state, so a watermark
-	// seeded any earlier (or from outside this process) would be wiped and the
-	// push would fall back to a full backfill. finalizePushState records cutoff
-	// at the end, so every later push for the target is normally incremental.
-	if boundary, applied := pushFromNowBoundary(
-		s.pushFromNow, requestedFull, lastPush, cutoff,
-	); applied {
+	// Seed the watermark so this target's history starts at the join point. The
+	// decision was made above; it cannot be pre-seeded from outside the process
+	// because the reset checks treat a watermark with no matching fingerprint or
+	// PG-side marker as corrupt local state and clear it. finalizePushState
+	// records cutoff at the end, so every later push is normally incremental.
+	if applyFromNow {
 		log.Printf(
 			"pgsync: first push for this target starts at %s "+
 				"(from-now); local history before it is not uploaded",
 			cutoff,
 		)
-		lastPush = boundary
+		lastPush = cutoff
 	}
 
 	// Candidate selection shares ListSessionsForMirrorWindow with the
@@ -1375,18 +1392,23 @@ func persistPushTargetFingerprint(
 	return nil
 }
 
-// pushFromNowBoundary decides the lower bound of a from-now push. It applies
-// only to a target with NO watermark yet, and never overrides an explicitly
-// requested full push: narrowing an established target would silently create a
-// gap in what the hub has, whereas bounding a target's very first push just
-// means its history starts at the join point.
-func pushFromNowBoundary(
-	enabled, requestedFull bool, lastPush, cutoff string,
-) (string, bool) {
-	if !enabled || requestedFull || lastPush != "" {
-		return lastPush, false
-	}
-	return cutoff, true
+// pushFromNowApplies reports whether a from-now boundary may be seeded.
+//
+// It requires PROOF that the target has never been pushed to, not merely an
+// empty watermark: the reset paths above clear lastPush, so an established
+// target whose PG marker was lost, whose fingerprint changed, or whose first
+// push failed part-way would otherwise look brand new. Seeding a boundary there
+// would permanently skip the history those resets exist to restore. Boundary
+// state counts because a partial first push leaves fingerprints behind with no
+// watermark, and stateCleared because a reset on this very run means state that
+// did exist was just discarded.
+func pushFromNowApplies(
+	enabled bool, lastPush, boundaryState string,
+	markerExists, stateCleared bool,
+) bool {
+	return enabled &&
+		lastPush == "" && boundaryState == "" &&
+		!markerExists && !stateCleared
 }
 
 func pushTargetState(
@@ -3441,7 +3463,7 @@ func nilIfZero(n int) any {
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	// Cursor admin rows are global and unattributed, so project-filtered pushes
 	// cannot sync them honestly.
-	if s.isFiltered() {
+	if s.isFiltered() || s.skipUnboundedPhases {
 		return nil
 	}
 
