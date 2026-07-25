@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -12,11 +13,11 @@ import (
 // Freebuff sessions are handled through the same provider and distinguished
 // via AgentLabel rather than a separate agent type.
 func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
-	return NewSingleFileProviderFactory(
+	return NewSourceSetFactory(
 		def,
 		codebuffProviderCapabilities(),
-		func(cfg ProviderConfig) singleFileSourceSet {
-			return NewSingleFileSourceSet(
+		func(cfg ProviderConfig) SourceSet {
+			inner := NewSingleFileSourceSet(
 				def.Type,
 				cfg.Roots,
 				WithStreamingFileDiscovery(codebuffDiscoverEach),
@@ -38,8 +39,28 @@ func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
 					return codebuffParseFile(src, req)
 				}),
 			)
+			return codebuffSourceSet{inner}
 		},
 	)
+}
+
+// codebuffSourceSet wraps singleFileSourceSet to force full message
+// replacement on every successful parse. Codebuff reparses the entire
+// mutable JSON transcript on every sync, so the append-only writer
+// would leave stale ordinals and missed in-place block updates.
+type codebuffSourceSet struct {
+	singleFileSourceSet
+}
+
+func (s codebuffSourceSet) Parse(
+	ctx context.Context,
+	req ParseRequest,
+) (ParseOutcome, error) {
+	outcome, err := s.singleFileSourceSet.Parse(ctx, req)
+	if err == nil && outcome.ResultSetComplete && len(outcome.Results) > 0 {
+		outcome.ForceReplace = true
+	}
+	return outcome, err
 }
 
 // codebuffWatchRoots creates watch plans for recursive watching of
@@ -101,9 +122,28 @@ func codebuffClassifyPath(
 	return singleFileMatch{}, false
 }
 
-// codebuffFindFile finds a session by raw session ID (timestamp) under
-// the root. Searches across all project subdirectories.
+// codebuffFindFile finds a session by raw session ID under the root.
+// The rawID may be either "project:timestamp" (new format) or just
+// "timestamp" (legacy compatibility). For the new format, it searches
+// the specific project directory. For legacy format, it searches all
+// project subdirectories.
 func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
+	// Try to split into project:timestamp.
+	parts := strings.SplitN(rawID, ":", 2)
+	if len(parts) == 2 {
+		projectName := parts[0]
+		timestamp := parts[1]
+		chatPath := filepath.Join(root, projectName, "chats", timestamp, "chat-messages.json")
+		if IsRegularFile(chatPath) {
+			return singleFileMatch{
+				Path:        chatPath,
+				ProjectHint: projectName,
+			}, true
+		}
+		return singleFileMatch{}, false
+	}
+
+	// Legacy format: search all projects for the timestamp.
 	projects, err := os.ReadDir(root)
 	if err != nil {
 		return singleFileMatch{}, false

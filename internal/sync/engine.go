@@ -7407,18 +7407,42 @@ func (e *Engine) applyProviderFilePathPolicies(
 		currentID := result.Session.ID
 		currentPrefixedID := e.idPrefix + result.Session.ID
 
-		existingIDs, err := e.db.ListSessionIDsByFilePath(lookupPath, string(agent))
-		if err != nil {
-			log.Printf("list session IDs by file path: %v", err)
-			kept = append(kept, result)
-			continue
+		// Freebuff shares the Codebuff provider. Query both agent types
+		// so stale rows and resurrection guards work for both.
+		agentsToQuery := []string{string(agent)}
+		if agent == parser.AgentCodebuff {
+			agentsToQuery = append(agentsToQuery, string(parser.AgentFreebuff))
+		}
+		var existingIDs []string
+		for _, agentStr := range agentsToQuery {
+			ids, err := e.db.ListSessionIDsByFilePath(lookupPath, agentStr)
+			if err != nil {
+				log.Printf("list session IDs by file path: %v", err)
+				continue
+			}
+			existingIDs = append(existingIDs, ids...)
+		}
+		if len(existingIDs) == 0 && len(agentsToQuery) > 1 {
+			// Check if the query for the primary agent failed.
+			_, err := e.db.ListSessionIDsByFilePath(lookupPath, string(agent))
+			if err != nil {
+				log.Printf("list session IDs by file path: %v", err)
+				kept = append(kept, result)
+				continue
+			}
 		}
 
 		// Resurrection guard. The path's identity is removed when a trashed row
 		// shares it, or when any alternate identity for the path (the
 		// provider's excluded fallback IDs or a stale stored ID) is trashed or
 		// permanently excluded. In that case the new row must not be written.
-		suppress := e.db.HasTrashedSessionByFilePath(lookupPath, string(agent))
+		suppress := false
+		for _, agentStr := range agentsToQuery {
+			if e.db.HasTrashedSessionByFilePath(lookupPath, agentStr) {
+				suppress = true
+				break
+			}
+		}
 		if !suppress {
 			for id := range excluded {
 				if id == currentID || id == currentPrefixedID {

@@ -187,14 +187,15 @@ func parseCodebuffSession(
 	// this value. Leave peak context unavailable.
 
 	// Emit usage event for reported credits. The actual model is unknown
-	// (selected server-side, can change mid-session), so Model is left
-	// empty. Credits are billing units (1 credit = $0.01), mapped to
-	// CostUSD for cost display.
+	// (selected server-side, can change mid-session), so use a placeholder
+	// model name. Usage queries filter out events with empty model, so a
+	// non-empty value is required for cost display.
 	if rs.CreditsUsed > 0 {
 		cost := rs.CreditsUsed * 0.01
 		sess.UsageEvents = []ParsedUsageEvent{{
 			SessionID: fullID,
 			Source:    "session",
+			Model:     "codebuff",
 			OccurredAt: func() string {
 				if !endedAt.IsZero() {
 					return endedAt.Format(time.RFC3339Nano)
