@@ -197,19 +197,26 @@ func parseCodebuffSession(
 	// empty. Cost is tracked at the session level via credits.
 	if rs.CreditsUsed > 0 {
 		cost := rs.CreditsUsed * 0.01
+		// Determine occurred_at: prefer message timestamps, then fall
+		// back to the session directory timestamp, then source mtime.
+		occurredAt := startedAt
+		if !endedAt.IsZero() {
+			occurredAt = endedAt
+		}
+		if occurredAt.IsZero() && !sessionDate.IsZero() {
+			occurredAt = sessionDate
+		}
+		if occurredAt.IsZero() && fileInfo.Mtime > 0 {
+			occurredAt = time.Unix(0, fileInfo.Mtime)
+		}
 		sess.UsageEvents = []ParsedUsageEvent{{
-			SessionID: fullID,
-			Source:    "session",
-			OccurredAt: func() string {
-				if !endedAt.IsZero() {
-					return endedAt.Format(time.RFC3339Nano)
-				}
-				return startedAt.Format(time.RFC3339Nano)
-			}(),
-			CostUSD:    &cost,
-			CostStatus: "reported",
-			CostSource: "session",
-			DedupKey:   "session:" + fullID,
+			SessionID:   fullID,
+			Source:      "session",
+			OccurredAt:  occurredAt.Format(time.RFC3339Nano),
+			CostUSD:     &cost,
+			CostStatus:  "reported",
+			CostSource:  "session",
+			DedupKey:    "session:" + fullID,
 		}}
 	}
 

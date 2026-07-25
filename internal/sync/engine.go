@@ -12156,6 +12156,26 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		_, mtime := roocodeEffectiveStat(path, info)
 		return mtime
 	}
+	if def.Type == parser.AgentCodebuff {
+		// Freshness spans chat-messages.json plus run-state.json and
+		// chat-meta.json. Compute the composite max mtime across all
+		// three files so companion-file-only changes are caught.
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		mtime := info.ModTime().UnixNano()
+		dir := filepath.Dir(path)
+		for _, name := range []string{"run-state.json", "chat-meta.json"} {
+			companion := filepath.Join(dir, name)
+			if ci, err := os.Stat(companion); err == nil {
+				if cm := ci.ModTime().UnixNano(); cm > mtime {
+					mtime = cm
+				}
+			}
+		}
+		return mtime
+	}
 	if def.Type == parser.AgentKiloLegacy {
 		// Freshness spans task_metadata.json (the stored path) plus
 		// its siblings ui_messages.json and api_conversation_history.json.
