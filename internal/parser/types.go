@@ -834,8 +834,8 @@ var Registry = []AgentDef{
 		FileBased:   true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
-			AICreditsDenominated:  true,
 		},
+		PeriodicReconcile: true,
 	},
 }
 

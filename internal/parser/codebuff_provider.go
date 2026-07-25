@@ -97,7 +97,7 @@ func codebuffWatchRoots(roots []string) []WatchRoot {
 // IsDir reports whether path names an existing directory.
 func IsDir(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	return err == nil && info != nil && info.IsDir()
 }
 
 // codebuffClassifyPath maps a changed path back to its source
