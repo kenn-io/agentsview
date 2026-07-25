@@ -1008,9 +1008,10 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionClaudeLaunchProvenance(t *testing.T) {
-	assert.Equal(t, 79, CurrentDataVersion(),
-		"session_kind/prompt_source backfill requires a data version bump")
+func TestCurrentDataVersionClaudeIDEEnvelopeSplit(t *testing.T) {
+	assert.Equal(t, 80, CurrentDataVersion(),
+		"version 80 splits Claude IDE envelopes off mixed prompts after "+
+			"the Claude launch provenance reparse")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

@@ -364,7 +364,12 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (79: Claude launch/prompt provenance. Re-parsing populates the new
 // sessions.session_kind and messages.prompt_source columns from top-level
 // sessionKind and promptSource fields on existing Claude rows.)
-const dataVersion = 79
+// (80: Claude Code IDE context wrappers prepended onto a real prompt in
+// the same entry are now split into a hidden system-metadata message plus
+// the real prompt, instead of leaving the raw wrapper in first_message and
+// the visible transcript. Existing rows need re-parsing so first_message
+// and message content drop the leading markup.)
+const dataVersion = 80
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

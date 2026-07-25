@@ -1108,6 +1108,29 @@ func extractMessagesFrom(
 				ordinal++
 				continue
 			}
+			// The VS Code extension sometimes prepends an IDE-context
+			// wrapper directly onto a real prompt in the same entry.
+			// Split it into a hidden system-metadata message plus the
+			// real prompt, so first_message and the visible transcript
+			// show only the prompt.
+			if subtype, envelope, remainder, ok :=
+				splitLeadingClaudeIDEEnvelope(text); ok {
+				messages = append(messages, ParsedMessage{
+					Ordinal:          ordinal,
+					Role:             RoleUser,
+					Content:          envelope,
+					Timestamp:        e.timestamp,
+					IsSystem:         true,
+					ContentLength:    len(envelope),
+					SourceType:       "system",
+					SourceSubtype:    subtype,
+					SourceUUID:       e.uuid,
+					SourceParentUUID: e.parentUuid,
+					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
+				})
+				ordinal++
+				text = remainder
+			}
 			// Skip unclassified noise (e.g. non-caveat
 			// <local-command-*> envelopes).
 			if isClaudeSystemMessage(text) {
@@ -2148,6 +2171,29 @@ func extractMessages(entries []dagEntry) (
 				ordinal++
 				continue
 			}
+			// The VS Code extension sometimes prepends an IDE-context
+			// wrapper directly onto a real prompt in the same entry.
+			// Split it into a hidden system-metadata message plus the
+			// real prompt, so first_message and the visible transcript
+			// show only the prompt.
+			if subtype, envelope, remainder, ok :=
+				splitLeadingClaudeIDEEnvelope(text); ok {
+				messages = append(messages, ParsedMessage{
+					Ordinal:          ordinal,
+					Role:             RoleUser,
+					Content:          envelope,
+					Timestamp:        e.timestamp,
+					IsSystem:         true,
+					ContentLength:    len(envelope),
+					SourceType:       "system",
+					SourceSubtype:    subtype,
+					SourceUUID:       e.uuid,
+					SourceParentUUID: e.parentUuid,
+					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
+				})
+				ordinal++
+				text = remainder
+			}
 			if isClaudeSystemMessage(text) {
 				continue
 			}
@@ -2633,6 +2679,50 @@ func isStandaloneClaudeTaggedMessage(content, tag string) bool {
 	afterOpen := trimmed[len(openTag):]
 	return strings.Index(afterOpen, closeTag) ==
 		len(afterOpen)-len(closeTag)
+}
+
+// claudeIDEEnvelopeTags are the VS Code extension's IDE-context
+// wrapper tags: standalone messages using these are already
+// promoted to hidden system metadata by classifyClaudeSystemMessage.
+// splitLeadingClaudeIDEEnvelope handles the remaining case where the
+// extension prepends one of these wrappers directly onto a real
+// prompt in the same user entry.
+var claudeIDEEnvelopeTags = [...]string{"ide_opened_file", "ide_selection"}
+
+// splitLeadingClaudeIDEEnvelope detects a well-formed IDE-context
+// envelope at the very start of content that is followed by
+// additional real prompt text, and separates the two. The standalone
+// case (envelope with nothing else) is left alone here; that is
+// handled by classifyClaudeSystemMessage so the whole message
+// promotes to system metadata.
+//
+// Splitting keeps the envelope recorded as hidden system metadata
+// (same subtype as the standalone case) while letting first_message
+// and the visible transcript show only the real prompt that follows,
+// instead of raw IDE-context markup.
+func splitLeadingClaudeIDEEnvelope(
+	content string,
+) (subtype, envelope, remainder string, ok bool) {
+	trimmed := trimClaudeSystemMessagePrefix(content)
+	for _, tag := range claudeIDEEnvelopeTags {
+		openTag := "<" + tag + ">"
+		closeTag := "</" + tag + ">"
+		if !strings.HasPrefix(trimmed, openTag) {
+			continue
+		}
+		closeIdx := strings.Index(trimmed, closeTag)
+		if closeIdx < 0 {
+			continue
+		}
+		envelopeEnd := closeIdx + len(closeTag)
+		rest := strings.TrimSpace(trimmed[envelopeEnd:])
+		if rest == "" {
+			// Standalone: classifyClaudeSystemMessage handles this.
+			continue
+		}
+		return tag, trimmed[:envelopeEnd], rest, true
+	}
+	return "", "", "", false
 }
 
 func stripLeadingClaudeSystemReminderContent(content string) string {
