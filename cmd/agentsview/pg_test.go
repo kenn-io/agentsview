@@ -591,3 +591,30 @@ func TestPGPushProgressPrinterKeepsCompletedStages(t *testing.T) {
 			"line %d must end with an elapsed suffix", i)
 	}
 }
+
+// --full wins over --from-now, and the rule is applied once at the command
+// entry point: the watch backend clears Full after its startup cycle, so a
+// retry must not be able to resurrect a boundary the user did not ask for, and
+// the local and daemon backends must not each decide it separately.
+func TestResolveFromNowPrecedence(t *testing.T) {
+	cases := []struct {
+		name    string
+		fromNow bool
+		full    bool
+		want    bool
+	}{
+		{"from-now alone applies", true, false, true},
+		{"full wins over from-now", true, true, false},
+		{"full alone", false, true, false},
+		{"neither", false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveFromNowPrecedence(PGPushConfig{
+				FromNow: tc.fromNow, Full: tc.full,
+			})
+			assert.Equal(t, tc.want, got.FromNow)
+			assert.Equal(t, tc.full, got.Full, "Full itself must be untouched")
+		})
+	}
+}

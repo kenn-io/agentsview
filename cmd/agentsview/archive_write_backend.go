@@ -333,7 +333,7 @@ func (b daemonArchiveWriteBackend) PGPush(
 			SyncStateTarget:        target.SyncStateTarget,
 			MigrateLegacySyncState: target.MigrateLegacySyncState,
 			NoVectors:              cfg.NoVectors,
-			FromNow:                cfg.FromNow && !cfg.Full,
+			FromNow:                cfg.FromNow,
 			ScopeVectorsToChangedSessions: cfg.
 				ScopeVectorsToChangedSessions,
 			LastReconciledVectorGeneration: cfg.
@@ -624,7 +624,7 @@ func (b *localArchiveWriteBackend) PGPush(
 	ps, err := postgres.New(
 		target.PG.URL, target.PG.Schema, b.database,
 		target.PG.MachineName, target.PG.AllowInsecure,
-		target.syncOptions(projects, excludeProjects, vectorSource, cfg.FromNow && !cfg.Full),
+		target.syncOptions(projects, excludeProjects, vectorSource, cfg.FromNow),
 	)
 	if err != nil {
 		return postgres.PushResult{}, err
@@ -871,7 +871,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 				s, cErr := postgres.New(
 					target.PG.URL, target.PG.Schema, b.database,
 					target.PG.MachineName, target.PG.AllowInsecure,
-					target.syncOptions(projects, exclude, vectorSource, cfg.FromNow && !cfg.Full),
+					target.syncOptions(projects, exclude, vectorSource, cfg.FromNow),
 				)
 				if cErr != nil {
 					return nil, cErr

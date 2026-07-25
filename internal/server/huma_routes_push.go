@@ -369,7 +369,8 @@ func (s *Server) humaPGPush(
 							SyncStateTarget:        body.SyncStateTarget,
 							MigrateLegacySyncState: body.MigrateLegacySyncState,
 							VectorSource:           vectorSource,
-							PushFromNow:            body.FromNow,
+							// Never trust the caller to have resolved this.
+							PushFromNow: body.FromNow && !body.Full,
 						},
 					)
 					if err != nil {

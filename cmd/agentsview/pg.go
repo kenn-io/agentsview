@@ -96,19 +96,20 @@ func pgVectorPushSource(
 	return newVectorPushSource(appCfg)
 }
 
+// resolveFromNowPrecedence settles --full over --from-now ONCE, at the command
+// entry point. The watch backend clears Full after its startup cycle, so a
+// later retry of `--full --from-now` would otherwise resurrect the boundary and
+// permanently skip history; the daemon and local paths would also have to agree
+// on the rule independently.
+func resolveFromNowPrecedence(cfg PGPushConfig) PGPushConfig {
+	cfg.FromNow = cfg.FromNow && !cfg.Full
+	return cfg
+}
+
 func runPGPush(
 	cfg PGPushConfig, targetName string,
 ) error {
-	// Refuse up front: the vector phase cannot be bounded, and discovering that
-	// only after connecting leaves watch mode retrying a configuration that can
-	// never succeed, having already synced locally and opened a stream.
-	if cfg.FromNow && !cfg.Full && !cfg.NoVectors {
-		return fmt.Errorf(
-			"--from-now cannot bound the vector phase (it would upload " +
-				"embeddings and raw text for sessions before the boundary); " +
-				"re-run with --no-vectors",
-		)
-	}
+	cfg = resolveFromNowPrecedence(cfg)
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)

@@ -236,6 +236,7 @@ func runPGPushWatch(
 	cfg PGPushConfig,
 	targetName string,
 ) error {
+	cfg = resolveFromNowPrecedence(cfg)
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
