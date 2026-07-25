@@ -34,7 +34,7 @@ func mustRate(dollars string) money.Money {
 }
 
 const (
-	defaultSnapshotRef     = "97c961ef945546cf463faed5de0d5521b302adcf"
+	defaultSnapshotRef     = "f6ab33b020fe51171356b3691c00c8216243c744"
 	defaultSnapshotSHA256  = "ea928d93944ab0434cf961e188860afed4eed287c096ca68acd3fc9a45c5e34b"
 	defaultSnapshotBranch  = "litellm-pricing-snapshot"
 	defaultSnapshotFile    = "litellm_snapshot.json.gz"
