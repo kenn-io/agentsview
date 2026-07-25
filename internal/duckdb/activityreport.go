@@ -612,7 +612,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 					ue.cost_source AS cost_source
 			FROM usage_events ue
 			JOIN sessions s ON s.id = ue.session_id
-			WHERE ue.model != ''
+			WHERE (ue.model != '' OR ue.cost_usd IS NOT NULL)
 				AND s.deleted_at IS NULL
 				AND ue.session_id IN (%[1]s)
 		),

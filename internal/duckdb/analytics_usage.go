@@ -3164,7 +3164,7 @@ const duckUsageMatchingMessageEligibility = duckUsageMatchingMessageSourceEligib
 			AND s.deleted_at IS NULL`
 
 const duckUsageEventSourceEligibility = `
-			ue.model != ''`
+			(ue.model != '' OR ue.cost_usd IS NOT NULL)`
 
 const duckUsageEventEligibility = duckUsageEventSourceEligibility + `
 			AND s.deleted_at IS NULL`

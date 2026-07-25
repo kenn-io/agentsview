@@ -35,11 +35,11 @@ const pgUsageMatchingMessageSourceEligibility = `
 	AND m.model != '<synthetic>'`
 
 const pgUsageEventEligibility = `
-	ue.model != ''
+	(ue.model != '' OR ue.cost_usd IS NOT NULL)
 	AND s.deleted_at IS NULL`
 
 const pgUsageEventSourceEligibility = `
-	ue.model != ''`
+	(ue.model != '' OR ue.cost_usd IS NOT NULL)`
 
 const pgUsageSessionEligibility = `s.deleted_at IS NULL`
 

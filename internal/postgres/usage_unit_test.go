@@ -309,7 +309,6 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	normalized := strings.ToLower(query)
 	assert.NotContains(t, normalized, "and u.ts >=")
 	assert.NotContains(t, normalized, "and u.ts <=")
-	assert.NotContains(t, normalized, " or ")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")

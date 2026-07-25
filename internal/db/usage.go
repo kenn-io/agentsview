@@ -376,7 +376,7 @@ const usageEventEligibility = `
     AND s.deleted_at IS NULL`
 
 const usageEventSourceEligibility = `
-    ue.model != '' OR ue.cost_usd IS NOT NULL`
+    (ue.model != '' OR ue.cost_usd IS NOT NULL)`
 
 const usageSessionEligibility = `s.deleted_at IS NULL`
 
