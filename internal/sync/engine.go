@@ -3382,12 +3382,23 @@ func (e *Engine) baselineReconciliationCandidates(
 	candidates []reconciliationCandidate,
 	admitted []db.SessionSourcePath,
 ) error {
-	sources := make([]db.SessionSourcePath, 0, len(candidates))
+	sources := make([]db.SessionSourcePath, 0, len(candidates)*2)
 	for _, candidate := range candidates {
+		path := e.effectiveSourcePath(candidate.Path)
 		sources = append(sources, db.SessionSourcePath{
 			Agent:    string(candidate.Provider),
-			FilePath: e.effectiveSourcePath(candidate.Path),
+			FilePath: path,
 		})
+		// Freebuff shares the Codebuff provider but sessions are stored
+		// with agent=AgentFreebuff. Replace baselines for both agent
+		// keys so stale Freebuff baselines are cleared when the source
+		// is rejected by CWD filter or other admission checks.
+		if candidate.Provider == parser.AgentCodebuff {
+			sources = append(sources, db.SessionSourcePath{
+				Agent:    string(parser.AgentFreebuff),
+				FilePath: path,
+			})
+		}
 	}
 	if err := e.db.ReplaceActiveSessionSourceBaselines(
 		ctx, e.machine, sources, admitted,
