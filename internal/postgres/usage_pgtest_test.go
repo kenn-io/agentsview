@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -294,9 +295,9 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -312,21 +313,21 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES
 			('pg-copilot-rollup-root', 'shutdown', 'gpt-5.1', 1000, 500,
 			 NULL, '', '', '2026-03-12T10:01:00Z', 'first'),
 			('pg-copilot-rollup-root', 'shutdown', 'gpt-5.1', 1000, 500,
-			 0.03, 'exact', 'copilot-reported', '2026-03-12T10:02:00Z', 'final'),
+			 30000, 'exact', 'copilot-reported', '2026-03-12T10:02:00Z', 'final'),
 			('pg-copilot-rollup-child', 'provider', 'gpt-5.1', 0, 0,
-			 0.02, 'exact', 'provider', '2026-03-12T10:03:00Z', 'child')`)
+			 20000, 'exact', 'provider', '2026-03-12T10:03:00Z', 'child')`)
 	require.NoError(t, err)
 
 	rollup, err := service.GetSessionUsageRollup(
 		ctx, store, "pg-copilot-rollup-root", false)
 	require.NoError(t, err)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.05, rollup.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.05"), rollup.Cost)
 }
 
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
@@ -1211,38 +1212,38 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
 			 NULL, '', '', '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
-			 0.0275, 'exact', 'copilot-reported',
+			 27500, 'exact', 'copilot-reported',
 			 '2026-03-13T10:02:00Z'::timestamptz, 'segment-2')`)
 	require.NoError(t, err)
 
 	usage, err := store.GetSessionUsage(ctx, "copilot:reported", true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	assert.InDelta(t, 0.0275, usage.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0275"), usage.Cost)
 	assert.InDelta(t, 0.0275/0.01, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
-	assert.InDelta(t, 0.01375, usage.Breakdown[0].CostUSD, 1e-12)
-	assert.InDelta(t, 0.01375, usage.Breakdown[1].CostUSD, 1e-12)
-	assert.Equal(t, usage.CostUSD,
-		usage.Breakdown[0].CostUSD+usage.Breakdown[1].CostUSD)
+	assert.Equal(t, money.MustParseDollars("0.01375"), usage.Breakdown[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.01375"), usage.Breakdown[1].Cost)
+	assert.Equal(t, usage.Cost,
+		money.MustAdd(usage.Breakdown[0].Cost, usage.Breakdown[1].Cost))
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-03-12", To: "2026-03-13", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.InDelta(t, 0.01375, daily.Daily[0].TotalCost, 1e-12)
-	assert.InDelta(t, 0.01375, daily.Daily[1].TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.01375"), daily.Daily[0].TotalCost)
+	assert.Equal(t, money.MustParseDollars("0.01375"), daily.Daily[1].TotalCost)
 	for _, day := range daily.Daily {
 		require.Len(t, day.ModelBreakdowns, 1)
 		assert.Equal(t, day.TotalCost, day.ModelBreakdowns[0].Cost)
 	}
-	assert.InDelta(t, 0.0275, daily.Totals.TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0275"), daily.Totals.TotalCost)
 	assert.InDelta(t, 2.75, daily.Totals.CopilotAICredits, 1e-9,
 		"credits derive from the authoritative reported cost")
 	require.NotNil(t, daily.Pricing)
@@ -1268,10 +1269,10 @@ func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES (
 			'copilot:cost-only', 'shutdown', 'copilot', 0, 0,
-			0.0175, 'exact', 'copilot-reported',
+			17500, 'exact', 'copilot-reported',
 			'2026-03-12T10:01:00Z'::timestamptz, 'cost-only'
 		)`)
 	require.NoError(t, err)
@@ -1280,7 +1281,7 @@ func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	assert.True(t, u.HasCost)
-	assert.InDelta(t, 0.0175, u.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0175"), u.Cost)
 	assert.False(t, u.HasTokenData,
 		"a cost-only reported row is not token data")
 	assert.Empty(t, u.Models,
@@ -1315,6 +1316,6 @@ func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.False(t, u.HasCost, "HasCost should be false")
-	assert.Zero(t, u.CostUSD, "CostUSD should be 0 when unpriced")
+	assert.Zero(t, u.Cost, "Cost should be zero when unpriced")
 	assert.Equal(t, 0.0, u.AICredits, "AICredits should be 0 when unpriced")
 }
