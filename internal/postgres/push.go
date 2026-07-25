@@ -134,6 +134,10 @@ func (s *Sync) PushWithOptions(
 ) (PushResult, error) {
 	full := opts.Full
 	start := time.Now()
+	// The caller's own --full intent, kept because `full` is reassigned below
+	// when reset detection forces a rebuild; PushFromNow must never override an
+	// explicitly requested full push.
+	requestedFull := full
 	var result PushResult
 	state := s.effectiveSyncState()
 	aliasBackfillState := s.aliasBackfillSyncStateOrDefault()
@@ -301,6 +305,24 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
+
+	// Start a brand-new target at "now" instead of backfilling the archive.
+	// Applied HERE, after every reset check above has run: those checks key on
+	// lastPush being non-empty and treat a watermark with no matching target
+	// fingerprint or PG-side marker as corrupt local state, so a watermark
+	// seeded any earlier (or from outside this process) would be wiped and the
+	// push would fall back to a full backfill. finalizePushState records cutoff
+	// at the end, so every later push for the target is normally incremental.
+	if boundary, applied := pushFromNowBoundary(
+		s.pushFromNow, requestedFull, lastPush, cutoff,
+	); applied {
+		log.Printf(
+			"pgsync: first push for this target starts at %s "+
+				"(from-now); local history before it is not uploaded",
+			cutoff,
+		)
+		lastPush = boundary
+	}
 
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
@@ -1351,6 +1373,20 @@ func persistPushTargetFingerprint(
 		)
 	}
 	return nil
+}
+
+// pushFromNowBoundary decides the lower bound of a from-now push. It applies
+// only to a target with NO watermark yet, and never overrides an explicitly
+// requested full push: narrowing an established target would silently create a
+// gap in what the hub has, whereas bounding a target's very first push just
+// means its history starts at the join point.
+func pushFromNowBoundary(
+	enabled, requestedFull bool, lastPush, cutoff string,
+) (string, bool) {
+	if !enabled || requestedFull || lastPush != "" {
+		return lastPush, false
+	}
+	return cutoff, true
 }
 
 func pushTargetState(

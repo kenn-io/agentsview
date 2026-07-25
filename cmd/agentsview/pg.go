@@ -29,6 +29,10 @@ type PGPushConfig struct {
 	Debounce        time.Duration
 	Interval        time.Duration
 	NoVectors       bool
+	// FromNow starts a target that has no watermark yet at the current time
+	// instead of backfilling the whole local archive. Ignored with --full and
+	// on a target that already has push history.
+	FromNow bool
 	// ScopeVectorsToChangedSessions is set internally by the watch
 	// loop for change-triggered pushes; it has no CLI flag.
 	ScopeVectorsToChangedSessions bool
@@ -66,6 +70,7 @@ func (s pgTargetSelection) label() string {
 func (s pgTargetSelection) syncOptions(
 	projects, excludeProjects []string,
 	vectorSource postgres.VectorPushSource,
+	pushFromNow bool,
 ) postgres.SyncOptions {
 	return postgres.SyncOptions{
 		Projects:               projects,
@@ -73,6 +78,7 @@ func (s pgTargetSelection) syncOptions(
 		SyncStateTarget:        s.SyncStateTarget,
 		MigrateLegacySyncState: s.MigrateLegacySyncState,
 		VectorSource:           vectorSource,
+		PushFromNow:            pushFromNow,
 	}
 }
 

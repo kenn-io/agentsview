@@ -173,6 +173,10 @@ type Sync struct {
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
 	vectorSource VectorPushSource
+
+	// pushFromNow starts a fresh target at the current time rather than
+	// backfilling the local archive. See SyncOptions.PushFromNow.
+	pushFromNow bool
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.
@@ -219,6 +223,13 @@ type SyncOptions struct {
 	// VectorSource, when non-nil, enables the vector push phase, replicating
 	// the local vectors.db active generation into PG. Nil skips the phase.
 	VectorSource VectorPushSource
+	// PushFromNow starts a target's history at the moment of its FIRST push
+	// instead of backfilling the whole local archive. It applies only when the
+	// target has no watermark yet and the caller did not ask for a full push,
+	// so it cannot silently narrow an established target. Intended for pushing
+	// into a SHARED database, where uploading a machine's entire history would
+	// disclose unrelated local work to everyone with read access.
+	PushFromNow bool
 }
 
 // New creates a Sync instance and verifies the PG connection.
@@ -297,6 +308,7 @@ func New(
 		projects:               opts.Projects,
 		excludeProjects:        opts.ExcludeProjects,
 		vectorSource:           opts.VectorSource,
+		pushFromNow:            opts.PushFromNow,
 	}, nil
 }
 

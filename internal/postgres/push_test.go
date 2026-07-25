@@ -1822,3 +1822,34 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 		sessionID, 2, unchangedFP, true, baseComparisons,
 	), "full mode should not skip by fingerprint check")
 }
+
+// A from-now push must bound only a target's FIRST push, and must never
+// silently narrow an established target or override an explicit full push.
+func TestPushFromNowBoundary(t *testing.T) {
+	const cutoff = "2026-07-24 12:00:00"
+	const established = "2026-07-01 00:00:00"
+	cases := []struct {
+		name          string
+		enabled       bool
+		requestedFull bool
+		lastPush      string
+		want          string
+		wantApplied   bool
+	}{
+		{"fresh target starts at now", true, false, "", cutoff, true},
+		{"disabled backfills as before", false, false, "", "", false},
+		{"explicit full push wins", true, true, "", "", false},
+		{"established target is untouched", true, false, established, established, false},
+		{"established target with full push is untouched", true, true, established, established, false},
+		{"disabled and established is untouched", false, false, established, established, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, applied := pushFromNowBoundary(
+				tc.enabled, tc.requestedFull, tc.lastPush, cutoff,
+			)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.wantApplied, applied)
+		})
+	}
+}
