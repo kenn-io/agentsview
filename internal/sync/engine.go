@@ -6132,6 +6132,19 @@ func (e *Engine) collectAndBatch(
 			if sessAgent := job.results[0].Session.Agent; sessAgent != "" {
 				agent = sessAgent
 			}
+		} else if job.agent == parser.AgentCodebuff {
+			// For skipped sources with no results, query the DB for
+			// the actual agent type. Freebuff sessions are stored as
+			// AgentFreebuff but discovered under Codebuff.
+			path := e.effectiveSourcePath(job.path)
+			for _, candidateAgent := range []parser.AgentType{
+				parser.AgentCodebuff, parser.AgentFreebuff,
+			} {
+				if ids, err := e.db.ListSessionIDsByFilePath(path, string(candidateAgent)); err == nil && len(ids) > 0 {
+					agent = candidateAgent
+					break
+				}
+			}
 		}
 		source := db.SessionSourcePath{
 			Agent: string(agent), FilePath: e.effectiveSourcePath(job.path),
