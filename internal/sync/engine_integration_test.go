@@ -1395,7 +1395,7 @@ func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "kiro:full-sync-session", 2)
 
 	ks.updateSession(t, "physical-path-session", overlapPayload, 1779015620000)
-	env.engine.SyncPaths([]string{ks.path})
+	require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{ks.path}))
 
 	assertSessionMessageCount(t, env.db, "kiro:physical-path-session", 2)
 	assertMessageContent(t, env.db, "kiro:physical-path-session",
@@ -1404,9 +1404,9 @@ func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	)
 
 	ks.updateSession(t, "virtual-path-session", overlapPayload, 1779015630000)
-	env.engine.SyncPaths([]string{
+	require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{
 		parser.KiroSQLiteVirtualPath(ks.path, "virtual-path-session"),
-	})
+	}))
 
 	assertSessionMessageCount(t, env.db, "kiro:virtual-path-session", 2)
 	assertMessageContent(t, env.db, "kiro:virtual-path-session",

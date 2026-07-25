@@ -31,10 +31,14 @@ func writeAiderRepoSession(t *testing.T, root, repo, prompt string) (path, id st
 // writeClaudeCorpus writes n minimal Claude sessions under dir and returns
 // their derived session IDs.
 func writeClaudeCorpus(t *testing.T, dir string, n int) []string {
+	return writeNamedClaudeCorpus(t, dir, "claude", n)
+}
+
+func writeNamedClaudeCorpus(t *testing.T, dir, prefix string, n int) []string {
 	t.Helper()
 	ids := make([]string, 0, n)
 	for i := range n {
-		name := fmt.Sprintf("claude-%04d", i)
+		name := fmt.Sprintf("%s-%04d", prefix, i)
 		path := filepath.Join(dir, "project", name+".jsonl")
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte(
@@ -149,4 +153,65 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 		"agent-scoped reconciliation must not stat other providers' sources")
 	assert.LessOrEqual(t, engine.LastReconciliationResult().Metrics.MaxRehydratedSources,
 		aiderCount, "rehydration must stay bounded by the scoped provider's corpus")
+}
+
+func TestReconcileProviderRootsDoesNotExpandAcrossSameProviderScopes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	base := t.TempDir()
+	parentDir := filepath.Join(base, "claude")
+	nestedDir := filepath.Join(parentDir, "nested")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+
+	parentIDs := writeNamedClaudeCorpus(t, parentDir, "parent", 5)
+	nestedIDs := writeNamedClaudeCorpus(t, nestedDir, "nested", 100)
+	deletedPath := filepath.Join(parentDir, "project", "parent-0002.jsonl")
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {parentDir, nestedDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, len(parentIDs)+len(nestedIDs),
+		engine.SyncAll(t.Context(), nil).Synced, "cold pass ingests every source")
+	require.NoError(t, os.Remove(deletedPath))
+
+	rec := &lstatRecorder{}
+	engine.lstat = rec.stat
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentClaude, []string{parentDir}))
+
+	deleted, err := database.GetSessionFull(t.Context(), parentIDs[2])
+	require.NoError(t, err)
+	require.NotNil(t, deleted)
+	require.NotNil(t, deleted.DeletionCause)
+	assert.Equal(t, "source_missing", *deleted.DeletionCause)
+
+	for i, id := range parentIDs {
+		if i == 2 {
+			continue
+		}
+		active, err := database.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		assert.NotNil(t, active, "surviving parent sessions must remain active")
+	}
+
+	for _, id := range nestedIDs {
+		active, err := database.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		assert.NotNil(t, active,
+			"agent-scoped reconciliation must not enumerate or tombstone a nested configured scope")
+	}
+
+	assert.Zero(t, rec.countUnder(nestedDir),
+		"agent-scoped reconciliation must not stat a nested configured scope for the same provider")
+	assert.LessOrEqual(t, engine.LastReconciliationResult().Metrics.MaxRehydratedSources,
+		len(parentIDs),
+		"rehydration must stay bounded by the selected parent scope")
 }

@@ -639,6 +639,56 @@ func TestAvailableUnwatchedPollObligationsKeepsDifferentAgentOverlapPollable(t *
 		"a missing probe for one provider must not block an overlapping root owned by another provider")
 }
 
+func TestUnwatchedPollKeepsUnchangedNestedProviderScopeSuppressed(t *testing.T) {
+	base := t.TempDir()
+	nested := requireExistingPollRoot(t, base, "nested")
+	resolver := &scriptedDegradedPollingResolver{
+		decisions: map[string][]degradedPollingDecision{
+			"opencode-parent": {{Poll: true, Tracked: true}},
+			"opencode-nested": {{Poll: false}},
+		},
+	}
+
+	selected, tracked, err := availableUnwatchedPollObligations(
+		t.Context(),
+		[]pollingObligation{
+			{
+				Key:   "opencode-parent",
+				Agent: parser.AgentOpenCode,
+				Roots: []string{base},
+				Probe: base,
+			},
+			{
+				Key:   "opencode-nested",
+				Agent: parser.AgentOpenCode,
+				Roots: []string{nested},
+				Probe: nested,
+			},
+		},
+		resolver,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []pollingObligation{{
+		Key:   "opencode-parent",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{base},
+		Probe: base,
+	}}, selected)
+	require.Equal(t, []pollingObligation{{
+		Key:   "opencode-parent",
+		Agent: parser.AgentOpenCode,
+		Roots: []string{base},
+		Probe: base,
+	}}, tracked)
+
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
+	_, err = pollUnwatchedRootsOnce(t.Context(), syncer, selected)
+	require.NoError(t, err)
+	requirePollWithin(t, syncer.wake, time.Second)
+	assert.Equal(t, [][]string{{base}}, syncer.snapshot())
+	assert.Equal(t, []parser.AgentType{parser.AgentOpenCode}, syncer.agentSnapshot())
+}
+
 // TestAvailableUnwatchedPollRootsBlocksMixedRelativeAndAbsoluteScopes pins the
 // path-form parity between this gate and the engine: ReconcileWatchRoots
 // expands requested roots against configured dirs in absolute form

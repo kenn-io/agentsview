@@ -705,7 +705,7 @@ func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	assert.False(t, sessions.exists)
 	assert.Equal(t, []watchScope{{agent: parser.AgentCodex, syncDir: sessionsDir}}, sessions.scopes)
 	assert.Equal(t, []string{sessionsDir}, sessions.pendingPollingDirs)
-	assert.Empty(t, sessions.persistentPollingDirs)
+	assert.Empty(t, sessions.persistentPollingScopes)
 
 	archived, ok := findCollectedWatchRoot(roots, archivedDir)
 	require.True(t, ok, "missing archive root remains in the logical plan")
@@ -713,7 +713,7 @@ func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	assert.False(t, archived.exists)
 	assert.Equal(t, []watchScope{{agent: parser.AgentCodex, syncDir: archivedDir}}, archived.scopes)
 	assert.Equal(t, []string{archivedDir}, archived.pendingPollingDirs)
-	assert.Empty(t, archived.persistentPollingDirs)
+	assert.Empty(t, archived.persistentPollingScopes)
 }
 
 func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
@@ -1597,8 +1597,10 @@ func TestStartFileWatcherKeepsPollingForIndependentReasonAfterPendingCoverage(t 
 		},
 		{
 			path: root, exists: true,
-			scopes:                []watchScope{{agent: parser.AgentDevin, syncDir: root}},
-			persistentPollingDirs: []string{root},
+			scopes: []watchScope{{agent: parser.AgentDevin, syncDir: root}},
+			persistentPollingScopes: map[string][]watchScope{
+				root: {{agent: parser.AgentDevin, syncDir: root}},
+			},
 		},
 	}
 
@@ -1686,8 +1688,10 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 		},
 		{
 			path: filepath.Join(shared, "existing"), exists: true,
-			scopes:                []watchScope{{agent: parser.AgentDevin, syncDir: shared}},
-			persistentPollingDirs: []string{shared},
+			scopes: []watchScope{{agent: parser.AgentDevin, syncDir: shared}},
+			persistentPollingScopes: map[string][]watchScope{
+				shared: {{agent: parser.AgentDevin, syncDir: shared}},
+			},
 		},
 	}
 
@@ -1708,6 +1712,70 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 			Roots: []string{shared}, Probe: shared,
 		},
 	}, got)
+}
+
+func TestWatchPollingObligationsPreservePollOnlyOwnerOnSharedConfiguredDir(t *testing.T) {
+	shared := t.TempDir()
+	roots := []watchRoot{{
+		path: filepath.Join(shared, "watched"),
+		scopes: []watchScope{{
+			agent: parser.AgentClaude, syncDir: shared,
+		}},
+	}}
+
+	tests := []struct {
+		name   string
+		scopes []watchScope
+		agent  parser.AgentType
+	}{
+		{
+			name: "single complete owner stays provider scoped",
+			scopes: []watchScope{{
+				agent: parser.AgentOpenCode, syncDir: shared,
+			}},
+			agent: parser.AgentOpenCode,
+		},
+		{
+			name: "mixed owners stay generic",
+			scopes: []watchScope{
+				{agent: parser.AgentOpenCode, syncDir: shared},
+				{agent: parser.AgentClaude, syncDir: shared},
+			},
+			agent: "",
+		},
+		{
+			name: "incomplete owner metadata stays generic",
+			scopes: []watchScope{
+				{agent: parser.AgentOpenCode, syncDir: shared},
+				{agent: "", syncDir: shared},
+			},
+			agent: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			roots[0].persistentPollingScopes = map[string][]watchScope{
+				shared: tc.scopes,
+			}
+
+			got := watchPollingObligations(
+				roots,
+				[]agentsync.RecursiveWatchResult{{Watched: 1}},
+				[]string{shared},
+				nil,
+			)
+
+			require.Equal(t, []agentsync.PollingObligation{{
+				Key:   "persistent:" + shared,
+				Agent: tc.agent,
+				Roots: []string{shared},
+				Probe: shared,
+			}}, got)
+			assert.NotEqual(t, parser.AgentClaude, got[0].Agent,
+				"persistent ownership must come from the persistent reason, not the carrier watch root")
+		})
+	}
 }
 
 func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing.T) {

@@ -3159,6 +3159,11 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		scope = nil
 	} else if scope != nil {
 		scope.agent = agent
+		if agent != "" {
+			scope.exactRoots = matchedConfiguredRootsForSelections(
+				roots, e.agentDirs[agent],
+			)
+		}
 	}
 	preContainerStates := e.captureSQLiteContainerStates(nil)
 	providers, completedScopes, failedRoots, failures, discoveryErr, err := e.streamReconciliationCandidates(
@@ -3874,9 +3879,14 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		var replacementIndex reconciliationSpoolStore
 		ownsReplacementIndex := false
 		allProviderRootsCovered := reconciliationCoversConfiguredRoots(roots, dirs)
-		if factory := e.providerFactories[agent]; factory != nil {
+		excludedDescendantRoots := unselectedDescendantConfiguredRoots(roots, dirs)
+		matchedConfiguredRoots := matchedConfiguredRootsForRequestedPaths(
+			roots, dirs,
+		)
+		if factory := e.providerFactories[agent]; factory != nil &&
+			len(matchedConfiguredRoots) > 0 {
 			provider = factory.NewProvider(parser.ProviderConfig{
-				Roots: e.agentDirs[agent], Machine: e.machine,
+				Roots: matchedConfiguredRoots, Machine: e.machine,
 				PathRewriter: e.pathRewriter,
 			})
 		}
@@ -3913,6 +3923,9 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 				missingByPath := make(map[string]bool, len(page))
 				for _, ownership := range page {
 					statPath := ownership.FilePath
+					if pathUnderAnyConfiguredRoot(statPath, excludedDescendantRoots) {
+						continue
+					}
 					persistentMemberContainerExists := false
 					missing, ok := missingByPath[statPath]
 					if !ok {
@@ -4160,6 +4173,108 @@ func reconciliationCoversConfiguredRoots(requested, configured []string) bool {
 	return true
 }
 
+func unselectedDescendantConfiguredRoots(
+	selected, configured []string,
+) []string {
+	cleanSelected := make([]string, 0, len(selected))
+	for _, root := range selected {
+		cleaned := cleanRootPath(root)
+		if cleaned == "" || slices.Contains(cleanSelected, cleaned) {
+			continue
+		}
+		cleanSelected = append(cleanSelected, cleaned)
+	}
+	excluded := make([]string, 0, len(configured))
+	for _, dir := range configured {
+		cleanedDir := cleanRootPath(dir)
+		if cleanedDir == "" || slices.Contains(cleanSelected, cleanedDir) {
+			continue
+		}
+		if !slices.ContainsFunc(cleanSelected, func(root string) bool {
+			return samePathOrDescendant(cleanedDir, root)
+		}) {
+			continue
+		}
+		excluded = append(excluded, cleanedDir)
+	}
+	return excluded
+}
+
+func matchedConfiguredRootsForSelections(
+	selected, configured []string,
+) []string {
+	cleanSelected := make(map[string]struct{}, len(selected))
+	for _, root := range selected {
+		cleaned := cleanRootPath(root)
+		if cleaned == "" {
+			continue
+		}
+		cleanSelected[cleaned] = struct{}{}
+	}
+	matched := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, dir := range configured {
+		cleanedDir := cleanRootPath(dir)
+		if cleanedDir == "" {
+			continue
+		}
+		if _, ok := cleanSelected[cleanedDir]; !ok {
+			continue
+		}
+		if _, dup := seen[cleanedDir]; dup {
+			continue
+		}
+		seen[cleanedDir] = struct{}{}
+		matched = append(matched, dir)
+	}
+	return matched
+}
+
+func matchedConfiguredRootsForRequestedPaths(
+	requested, configured []string,
+) []string {
+	cleanRequested := make(map[string]struct{}, len(requested))
+	for _, root := range requested {
+		cleaned := cleanRootPath(validatedProviderSourceStatPath(root))
+		if cleaned == "" {
+			continue
+		}
+		cleanRequested[cleaned] = struct{}{}
+	}
+	matched := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, dir := range configured {
+		cleanedDir := cleanRootPath(dir)
+		if cleanedDir == "" {
+			continue
+		}
+		matchedRequest := false
+		for requestedPath := range cleanRequested {
+			if samePathOrDescendant(requestedPath, cleanedDir) ||
+				samePathOrDescendant(cleanedDir, requestedPath) {
+				matchedRequest = true
+				break
+			}
+		}
+		if !matchedRequest {
+			continue
+		}
+		if _, dup := seen[cleanedDir]; dup {
+			continue
+		}
+		seen[cleanedDir] = struct{}{}
+		matched = append(matched, dir)
+	}
+	return matched
+}
+
+func pathUnderAnyConfiguredRoot(path string, roots []string) bool {
+	cleanedPath := cleanRootPath(path)
+	return slices.ContainsFunc(roots, func(root string) bool {
+		return samePathOrDescendant(cleanedPath, root)
+	})
+}
+
 func (e *Engine) buildReconciliationReplacementIndex(
 	ctx context.Context, provider parser.Provider, configuredRoots []string,
 ) (result reconciliationSpoolStore, retErr error) {
@@ -4229,39 +4344,9 @@ func (e *Engine) logicalRootsForWatchRoots(roots []string) []string {
 	return logical
 }
 
-// logicalRootsForAgentWatchRoots resolves the given roots against one agent's
-// configured dirs only. Unlike logicalRootsForWatchRoots it never crosses into
-// another provider's dirs, so an overlapping ancestor root cannot drag other
-// providers into a scoped reconciliation.
-func (e *Engine) logicalRootsForAgentWatchRoots(
-	agent parser.AgentType, roots []string,
-) []string {
-	dirs := e.agentDirs[agent]
-	var logical []string
-	for _, root := range roots {
-		cleanedRoot := cleanRootPath(root)
-		matched := false
-		for _, dir := range dirs {
-			cleanedDir := cleanRootPath(dir)
-			if !samePathOrDescendant(cleanedRoot, cleanedDir) &&
-				!samePathOrDescendant(cleanedDir, cleanedRoot) {
-				continue
-			}
-			if !slices.Contains(logical, cleanedDir) {
-				logical = append(logical, cleanedDir)
-			}
-			matched = true
-		}
-		if !matched && !slices.Contains(logical, cleanedRoot) {
-			logical = append(logical, cleanedRoot)
-		}
-	}
-	return logical
-}
-
-// agentReconciliationRoots restricts the requested roots to a single agent's
-// configured dirs and excludes remote object roots, mirroring
-// localReconciliationRoots but without the cross-provider expansion.
+// agentReconciliationRoots cleans, deduplicates, and remote-filters the exact
+// provider roots selected for one agent. Unlike localReconciliationRoots it
+// never expands a selected root to overlapping configured dirs.
 func (e *Engine) agentReconciliationRoots(
 	agent parser.AgentType, roots []string,
 ) ([]string, int) {
@@ -4272,9 +4357,13 @@ func (e *Engine) agentReconciliationRoots(
 			remote++
 			continue
 		}
-		local = append(local, root)
+		cleanedRoot := cleanRootPath(root)
+		if cleanedRoot == "" || slices.Contains(local, cleanedRoot) {
+			continue
+		}
+		local = append(local, cleanedRoot)
 	}
-	return e.logicalRootsForAgentWatchRoots(agent, local), remote
+	return local, remote
 }
 
 // localReconciliationRoots expands a full watcher recovery to every configured
@@ -4361,6 +4450,10 @@ func (e *Engine) SyncRootsSince(
 
 type rootSyncScope struct {
 	roots []string
+	// exactRoots maps agent-scoped selections back onto configured roots so
+	// relative/absolute equivalents remain in scope without re-expanding into
+	// overlapping sibling configured dirs.
+	exactRoots []string
 	// agent, when non-empty, restricts discovery to a single provider so a
 	// scoped reconciliation cannot drag other providers into the pass through
 	// ancestor/descendant root overlap. Zero value matches every agent.
@@ -4395,6 +4488,15 @@ func (s *rootSyncScope) includes(dir string) bool {
 		return false
 	}
 	cleaned := cleanRootPath(dir)
+	if s.agent != "" {
+		exactRoots := s.exactRoots
+		if len(exactRoots) == 0 {
+			exactRoots = s.roots
+		}
+		return slices.ContainsFunc(exactRoots, func(root string) bool {
+			return cleanRootPath(root) == cleaned
+		})
+	}
 	return slices.ContainsFunc(s.roots, func(root string) bool {
 		return samePathOrDescendant(cleaned, root)
 	})

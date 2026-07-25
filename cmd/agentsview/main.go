@@ -1916,10 +1916,13 @@ func watchPollingObligations(
 				root.path, root.path, root.pendingPollingDirs, false,
 			)...)
 		}
-		for _, dir := range root.persistentPollingDirs {
+		for dir, scopes := range root.persistentPollingScopes {
 			cleanDir := filepath.Clean(dir)
-			add(root.pollingObligations(
-				"persistent:"+cleanDir, cleanDir, []string{cleanDir}, false,
+			add(pollingObligationsForScopes(
+				"persistent:"+cleanDir,
+				cleanDir,
+				scopes,
+				false,
 			)...)
 		}
 		if i >= len(results) {
@@ -1951,9 +1954,12 @@ func watchPollingObligations(
 	for _, dir := range unwatchedDirs {
 		dir = filepath.Clean(dir)
 		if _, ok := represented[dir]; !ok {
-			add(sync.PollingObligation{
-				Key: "persistent:" + dir, Roots: []string{dir}, Probe: dir,
-			})
+			add(pollingObligationsForScopes(
+				"persistent:"+dir,
+				dir,
+				[]watchScope{{syncDir: dir}},
+				false,
+			)...)
 		}
 	}
 	slices.SortFunc(obligations, func(a, b sync.PollingObligation) int {
@@ -1968,28 +1974,49 @@ func (r watchRoot) pollingObligations(
 	dirs []string,
 	providerScoped bool,
 ) []sync.PollingObligation {
-	dirs = deduplicateStrings(dirs)
-	if len(dirs) == 0 {
+	return pollingObligationsForScopes(
+		rootKey,
+		probePath,
+		r.scopesForDirs(dirs),
+		providerScoped,
+	)
+}
+
+func pollingObligationsForScopes(
+	rootKey string,
+	probePath string,
+	scopes []watchScope,
+	providerScoped bool,
+) []sync.PollingObligation {
+	if len(scopes) == 0 {
 		return nil
 	}
-	dirFilter := make(map[string]struct{}, len(dirs))
-	for _, dir := range dirs {
-		dirFilter[filepath.Clean(dir)] = struct{}{}
+	grouped := make(map[string][]watchScope, len(scopes))
+	for _, scope := range scopes {
+		cleanDir := filepath.Clean(scope.syncDir)
+		if cleanDir == "" {
+			continue
+		}
+		grouped[cleanDir] = appendUniqueWatchScope(grouped[cleanDir], watchScope{
+			agent:   scope.agent,
+			syncDir: cleanDir,
+		})
+	}
+	if len(grouped) == 0 {
+		return nil
 	}
 	byKey := make(map[string][]string)
 	obligationAgent := make(map[string]parser.AgentType)
-	for _, dir := range dirs {
-		cleanDir := filepath.Clean(dir)
+	dirs := make([]string, 0, len(grouped))
+	for dir := range grouped {
+		dirs = append(dirs, dir)
+	}
+	slices.Sort(dirs)
+	for _, cleanDir := range dirs {
 		key := rootKey
 		var agent parser.AgentType
 		sameAgent := true
-		for _, scope := range r.scopes {
-			if filepath.Clean(scope.syncDir) != cleanDir {
-				continue
-			}
-			if _, ok := dirFilter[filepath.Clean(scope.syncDir)]; !ok {
-				continue
-			}
+		for _, scope := range grouped[cleanDir] {
 			if agent == "" {
 				agent = scope.agent
 			} else if scope.agent != agent {
@@ -2152,30 +2179,12 @@ func symlinkPollingObligations(
 ) []sync.PollingObligation {
 	obligations := make([]sync.PollingObligation, 0, len(symlinkGatedDirs))
 	for symRoot, scopes := range symlinkGatedDirs {
-		roots := make([]string, 0, len(scopes))
-		agent := parser.AgentType("")
-		sameAgent := true
-		for _, scope := range scopes {
-			if scope.syncDir != "" {
-				roots = appendUniqueString(roots, filepath.Clean(scope.syncDir))
-			}
-			if agent == "" {
-				agent = scope.agent
-			} else if scope.agent != agent {
-				sameAgent = false
-			}
-		}
-		currentAgent := parser.AgentType("")
-		if sameAgent {
-			currentAgent = agent
-		}
-		slices.Sort(roots)
-		obligations = append(obligations, sync.PollingObligation{
-			Key:   "symlink:" + filepath.Clean(symRoot),
-			Agent: currentAgent,
-			Roots: roots,
-			Probe: filepath.Clean(symRoot),
-		})
+		obligations = append(obligations, pollingObligationsForScopes(
+			"symlink:"+filepath.Clean(symRoot),
+			filepath.Clean(symRoot),
+			scopes,
+			false,
+		)...)
 	}
 	slices.SortFunc(obligations, func(a, b sync.PollingObligation) int {
 		return strings.Compare(a.Key, b.Key)
@@ -2190,7 +2199,7 @@ func accountRegisteredWatchRoots(
 ) []string {
 	persistent := make(map[string]bool)
 	for _, root := range roots {
-		for _, dir := range root.persistentPollingDirs {
+		for dir := range root.persistentPollingScopes {
 			persistent[dir] = true
 		}
 	}
@@ -2453,13 +2462,27 @@ type watchScope struct {
 	syncDir string
 }
 
+func appendUniqueWatchScope(scopes []watchScope, next watchScope) []watchScope {
+	next.syncDir = filepath.Clean(next.syncDir)
+	if next.syncDir == "" {
+		return scopes
+	}
+	if slices.ContainsFunc(scopes, func(existing watchScope) bool {
+		return existing.agent == next.agent &&
+			filepath.Clean(existing.syncDir) == next.syncDir
+	}) {
+		return scopes
+	}
+	return append(scopes, next)
+}
+
 type watchRoot struct {
-	path                  string
-	recursive             bool
-	exists                bool
-	scopes                []watchScope
-	pendingPollingDirs    []string
-	persistentPollingDirs []string
+	path                    string
+	recursive               bool
+	exists                  bool
+	scopes                  []watchScope
+	pendingPollingDirs      []string
+	persistentPollingScopes map[string][]watchScope
 }
 
 func (r watchRoot) registeredRoot() sync.WatchRoot {
@@ -2486,6 +2509,31 @@ func (r watchRoot) syncDirs() []string {
 	return dirs
 }
 
+func (r watchRoot) scopesForDirs(dirs []string) []watchScope {
+	if len(dirs) == 0 {
+		return nil
+	}
+	dirFilter := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		cleanDir := filepath.Clean(dir)
+		if cleanDir != "" {
+			dirFilter[cleanDir] = struct{}{}
+		}
+	}
+	scopes := make([]watchScope, 0, len(r.scopes))
+	for _, scope := range r.scopes {
+		cleanDir := filepath.Clean(scope.syncDir)
+		if _, ok := dirFilter[cleanDir]; !ok {
+			continue
+		}
+		scopes = appendUniqueWatchScope(scopes, watchScope{
+			agent:   scope.agent,
+			syncDir: cleanDir,
+		})
+	}
+	return scopes
+}
+
 // collectWatchRoots resolves the configured watch plan. symlinkGatedDirs maps
 // each recursive provider root skipped because it is a symlink to the exact
 // provider-owned configured dirs whose reconciliation scope its target
@@ -2497,7 +2545,7 @@ func collectWatchRoots(cfg config.Config) (
 	symlinkGatedDirs map[string][]watchScope,
 ) {
 	rootIndexes := make(map[string]int)
-	persistentPollingDirs := make(map[string]struct{})
+	persistentPollingScopes := make(map[string][]watchScope)
 	symlinkGatedDirs = make(map[string][]watchScope)
 	addRoot := func(
 		agent parser.AgentType,
@@ -2529,6 +2577,13 @@ func collectWatchRoots(cfg config.Config) (
 			scopes:    []watchScope{scope},
 		})
 	}
+	addPersistentPollingScope := func(scope watchScope) {
+		persistentPollingScopes[filepath.Clean(scope.syncDir)] = appendUniqueWatchScope(
+			persistentPollingScopes[filepath.Clean(scope.syncDir)],
+			scope,
+		)
+		unwatchedDirs = appendUniqueString(unwatchedDirs, filepath.Clean(scope.syncDir))
+	}
 	for _, def := range parser.Registry {
 		for _, d := range cfg.ResolveDirs(def.Type) {
 			addAgentRoot := func(
@@ -2542,18 +2597,16 @@ func collectWatchRoots(cfg config.Config) (
 			_, hasProvider := parser.ProviderFactoryByType(def.Type)
 			if providerWatched, polling := collectProviderWatchRoots(def, d, addAgentRoot); providerWatched {
 				if polling.persistent {
-					persistentPollingDirs[d] = struct{}{}
-					unwatchedDirs = appendUniqueString(unwatchedDirs, d)
+					addPersistentPollingScope(watchScope{
+						agent:   def.Type,
+						syncDir: d,
+					})
 				}
 				for _, symRoot := range polling.symlinkRoots {
-					scope := watchScope{agent: def.Type, syncDir: filepath.Clean(d)}
-					if !slices.ContainsFunc(symlinkGatedDirs[symRoot], func(existing watchScope) bool {
-						return existing.agent == scope.agent && existing.syncDir == scope.syncDir
-					}) {
-						symlinkGatedDirs[symRoot] = append(
-							symlinkGatedDirs[symRoot], scope,
-						)
-					}
+					symlinkGatedDirs[filepath.Clean(symRoot)] = appendUniqueWatchScope(
+						symlinkGatedDirs[filepath.Clean(symRoot)],
+						watchScope{agent: def.Type, syncDir: d},
+					)
 				}
 				for _, missing := range polling.missingRoots {
 					idx, ok := rootIndexes[filepath.Clean(missing)]
@@ -2569,24 +2622,34 @@ func collectWatchRoots(cfg config.Config) (
 			}
 			if !def.FileBased {
 				if hasProvider {
-					persistentPollingDirs[d] = struct{}{}
-					unwatchedDirs = appendUniqueString(unwatchedDirs, d)
+					addPersistentPollingScope(watchScope{
+						agent:   def.Type,
+						syncDir: d,
+					})
 				}
 				continue
 			}
 			fallbackUnwatched := collectLegacyWatchRoots(def, d, addAgentRoot)
 			for _, pollingDir := range fallbackUnwatched {
-				persistentPollingDirs[pollingDir] = struct{}{}
-				unwatchedDirs = appendUniqueString(unwatchedDirs, pollingDir)
+				addPersistentPollingScope(watchScope{
+					agent:   def.Type,
+					syncDir: pollingDir,
+				})
 			}
 		}
 	}
-	for dir := range persistentPollingDirs {
+	for dir, scopes := range persistentPollingScopes {
 		for i := range roots {
 			if slices.Contains(roots[i].syncDirs(), dir) {
-				roots[i].persistentPollingDirs = appendUniqueString(
-					roots[i].persistentPollingDirs, dir,
-				)
+				if roots[i].persistentPollingScopes == nil {
+					roots[i].persistentPollingScopes = make(map[string][]watchScope)
+				}
+				for _, scope := range scopes {
+					roots[i].persistentPollingScopes[dir] = appendUniqueWatchScope(
+						roots[i].persistentPollingScopes[dir],
+						scope,
+					)
+				}
 				break
 			}
 		}
