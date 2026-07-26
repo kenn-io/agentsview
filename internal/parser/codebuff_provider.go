@@ -63,41 +63,23 @@ func (s codebuffSourceSet) Parse(
 	return outcome, err
 }
 
-// codebuffWatchRoots creates shallow watch plans at the chats/ directory
-// level for each project under each root. The on-disk layout is
-// <root>/<project>/chats/<timestamp>/. Watching each <root>/*/chats/
-// directory with Recursive: false creates one watch per project instead
-// of one per session, reducing inotify usage from O(N*M) to O(N).
+// codebuffWatchRoots creates recursive watch plans for each root.
+// The on-disk layout is <root>/<project>/chats/<timestamp>/. Recursive
+// watching ensures changes inside timestamp subdirectories are observed.
+// The PeriodicReconcile flag on the Codebuff agent def handles newly
+// created projects, and the recursiveWatchBudget mechanism handles
+// inotify exhaustion by degrading to polling.
 func codebuffWatchRoots(roots []string) []WatchRoot {
-	var out []WatchRoot
+	out := make([]WatchRoot, 0, len(roots))
 	for _, root := range roots {
-		projects, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, project := range projects {
-			if !project.IsDir() {
-				continue
-			}
-			chatsDir := filepath.Join(root, project.Name(), "chats")
-			if !IsDir(chatsDir) {
-				continue
-			}
-			out = append(out, WatchRoot{
-				Path:         chatsDir,
-				Recursive:    false,
-				IncludeGlobs: []string{"chat-messages.json", "run-state.json", "chat-meta.json"},
-				DebounceKey:  "codebuff:sessions:" + chatsDir,
-			})
-		}
+		out = append(out, WatchRoot{
+			Path:         root,
+			Recursive:    true,
+			IncludeGlobs: []string{"chat-messages.json", "run-state.json", "chat-meta.json"},
+			DebounceKey:  "codebuff:sessions:" + root,
+		})
 	}
 	return out
-}
-
-// IsDir reports whether path names an existing directory.
-func IsDir(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info != nil && info.IsDir()
 }
 
 // codebuffClassifyPath maps a changed path back to its source
