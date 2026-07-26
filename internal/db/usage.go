@@ -2128,6 +2128,14 @@ func (db *DB) GetDailyUsage(
 				return modelNames[i] < modelNames[j]
 			})
 			entry.ModelsUsed = modelNames
+			// Accumulate TotalCost from ALL models (including empty
+			// model names from cost-only events), not just those in
+			// ModelsUsed.
+			for _, ma := range dd.models {
+				if ma != nil {
+					entry.TotalCost += ma.aggregateCost
+				}
+			}
 			mbd := make(
 				[]ModelBreakdown, 0, len(modelNames),
 			)
@@ -2140,7 +2148,6 @@ func (db *DB) GetDailyUsage(
 				entry.OutputTokens += ma.outputTok
 				entry.CacheCreationTokens += ma.cacheCr
 				entry.CacheReadTokens += ma.cacheRd
-				entry.TotalCost += ma.aggregateCost
 				mbd = append(mbd, ModelBreakdown{
 					ModelName:           m,
 					InputTokens:         ma.inputTok,
@@ -2296,6 +2303,12 @@ func (db *DB) GetDailyUsage(
 			return modelNames[i] < modelNames[j]
 		})
 		entry.ModelsUsed = modelNames
+		// Accumulate TotalCost from ALL models (including empty
+		// model names from cost-only events), not just those in
+		// ModelsUsed.
+		for _, b := range dm.models {
+			entry.TotalCost += b.aggregateCost
+		}
 		mbd := make(
 			[]ModelBreakdown, 0, len(modelNames),
 		)
@@ -2308,7 +2321,6 @@ func (db *DB) GetDailyUsage(
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
-			entry.TotalCost += b.aggregateCost
 			mbd = append(mbd, ModelBreakdown{
 				ModelName:           m,
 				InputTokens:         b.inputTok,
