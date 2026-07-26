@@ -411,14 +411,16 @@ func readCodebuffChatMeta(path string) codebuffChatMeta {
 
 // parseCodebuffSessionDate parses the session directory name as an ISO 8601
 // timestamp. The directory name format is "2026-07-16T00-09-00.236Z".
+// The returned time is always in the local timezone so that time-only
+// message timestamps (HH:MM PM) combine correctly with the date.
 func parseCodebuffSessionDate(sessionID string) time.Time {
 	// Try full ISO format with milliseconds and Z suffix.
 	if ts, err := time.Parse("2006-01-02T15-04-05.999Z", sessionID); err == nil {
-		return ts
+		return ts.In(time.Local)
 	}
 	// Try without milliseconds.
 	if ts, err := time.Parse("2006-01-02T15-04-05Z", sessionID); err == nil {
-		return ts
+		return ts.In(time.Local)
 	}
 	// Try with milliseconds, no Z. Interpret as local time since
 	// codebuff records wall-clock timestamps without a UTC offset.
