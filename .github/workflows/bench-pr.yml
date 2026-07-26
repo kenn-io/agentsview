@@ -21,4 +21,4 @@ jobs:
   run:
     uses: kenn-io/agentsview/.github/workflows/bench.yml@main
     with:
-      checkout_ref: refs/pull/${{ github.event.pull_request.number }}/merge
+      checkout_ref: ${{ github.sha }}
