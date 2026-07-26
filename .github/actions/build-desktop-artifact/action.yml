@@ -26,6 +26,8 @@ runs:
       with:
         node-version: "24"
 
+    - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
+
     - name: Setup MinGW (Windows)
       if: runner.os == 'Windows'
       uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
