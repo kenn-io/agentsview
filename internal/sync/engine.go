@@ -8409,6 +8409,32 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		if e.shouldSkipByPath(path, effectiveInfo) {
 			return mtime, true
 		}
+	case parser.AgentCodebuff:
+		// Codebuff's fingerprint is composite (chat-messages.json
+		// plus run-state.json and chat-meta.json). The stat-only
+		// composite below matches the stored Size/Mtime the fingerprint
+		// stamps, so unchanged sessions skip without reading transcript
+		// bytes, and a sibling-only change still changes the composite
+		// and falls through to the full fingerprint.
+		dir := filepath.Dir(path)
+		size := info.Size()
+		mtime := info.ModTime().UnixNano()
+		for _, name := range []string{"run-state.json", "chat-meta.json"} {
+			companion := filepath.Join(dir, name)
+			if ci, err := os.Stat(companion); err == nil {
+				size += ci.Size()
+				if ts := ci.ModTime().UnixNano(); ts > mtime {
+					mtime = ts
+				}
+			}
+		}
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  size,
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
 	}
 	return 0, false
 }
