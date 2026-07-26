@@ -29,12 +29,6 @@ name: Bench Gate
 
 on:
   workflow_call:
-    inputs:
-      checkout_ref:
-        description: Git ref to check out
-        required: false
-        type: string
-        default: ""
 concurrency:
   group: bench-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -49,7 +43,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
           fetch-depth: 0
 
