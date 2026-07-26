@@ -50,7 +50,7 @@ func createCodebuffArchive(t *testing.T, numSessions int) string {
 		sessionsPerProject = 1
 	}
 
-	for p := 0; p < numProjects; p++ {
+	for p := range numProjects {
 		project := fmt.Sprintf("project-%d", p)
 		for s := 0; s < sessionsPerProject; s++ {
 			ts := fmt.Sprintf("2026-07-15T%02d-00-00.000Z", 10+s)
@@ -145,7 +145,7 @@ func TestSyncAllCodebuffScalingVerifiesBoundedWork(t *testing.T) {
 		// session would regress a stale fresh check, and any such
 		// regression would manifest as Synced > 0 on at least one of
 		// the warm iterations.
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			assert.Equal(t, 0,
 				engine.SyncAll(context.Background(), nil).Synced,
 				"warm pass %d over %d-session archive must skip "+
