@@ -464,10 +464,14 @@ func parseCodebuffMessages(
 			msg.Get("timestamp").Str, currentDate,
 		)
 
-		// Detect midnight rollover for time-only timestamps: if the
-		// parsed hour is less than the previous hour, we've crossed
-		// midnight and should advance the date.
-		if !ts.IsZero() && prevHour >= 0 {
+		// Detect midnight rollover for time-only timestamps only.
+		// RFC3339 timestamps retain their timezone, so their hours
+		// should not be compared with local time-only timestamps.
+		rawTS := strings.TrimSpace(msg.Get("timestamp").Str)
+		isTimeOnly := !strings.Contains(rawTS, "T") &&
+			!strings.Contains(rawTS, "-") &&
+			strings.Contains(rawTS, ":")
+		if !ts.IsZero() && prevHour >= 0 && isTimeOnly {
 			if ts.Hour() < prevHour {
 				currentDate = currentDate.AddDate(0, 0, 1)
 				// Re-parse with the advanced date.

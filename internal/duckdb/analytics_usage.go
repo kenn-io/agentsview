@@ -3837,7 +3837,17 @@ func (s *Store) GetDailyUsage(
 			continue
 		}
 		entry := db.DailyUsageEntry{Date: date}
-		modelNames := sortedUsageBucketKeys(day.models)
+		// Filter out empty model names from cost-only events (e.g.
+		// Codebuff) to avoid blank entries in ModelsUsed. This
+		// filtering is specific to model lists; project, agent, and
+		// machine breakdowns keep their full key sets.
+		allModelKeys := sortedUsageBucketKeys(day.models)
+		modelNames := make([]string, 0, len(allModelKeys))
+		for _, k := range allModelKeys {
+			if k != "" {
+				modelNames = append(modelNames, k)
+			}
+		}
 		entry.ModelsUsed = modelNames
 		// Accumulate token totals from ALL models (including empty
 		// model names from cost-only events), not just those in
@@ -3968,11 +3978,7 @@ func addUsageBucket(m map[string]duckUsageBucket, key string, b duckUsageBucket)
 func sortedUsageBucketKeys(m map[string]duckUsageBucket) []string {
 	out := make([]string, 0, len(m))
 	for key := range m {
-		// Filter out empty model names from cost-only events
-		// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
-		if key != "" {
-			out = append(out, key)
-		}
+		out = append(out, key)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		left := m[out[i]]
@@ -4335,6 +4341,7 @@ func (s *Store) GetSessionUsage(
 	var authoritativeCost *float64
 	var hasComputedCost, hasReportedCost bool
 	hasRows := false
+	hasContributingCost := false
 	for _, r := range rows {
 		if r.authoritativeCostRows > 0 {
 			v := r.authoritativeCost
@@ -4357,7 +4364,9 @@ func (s *Store) GetSessionUsage(
 		}
 		// Exclude empty-model rows (e.g. Codebuff cost-only events)
 		// from hasRows so they don't count as token data, matching
-		// SQLite and PostgreSQL session usage paths.
+		// SQLite and PostgreSQL session usage paths. But track
+		// contributing cost rows separately for HasCost.
+		hasContributingCost = true
 		if r.model != "" {
 			hasRows = true
 			models[r.model] = true
@@ -4408,7 +4417,7 @@ func (s *Store) GetSessionUsage(
 		out.HasCost = true
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
-	} else if len(unpriced) == 0 && hasRows {
+	} else if len(unpriced) == 0 && hasContributingCost {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
 		out.CostSource = export.CombinedCostSource(
