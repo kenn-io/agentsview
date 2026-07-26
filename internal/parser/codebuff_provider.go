@@ -169,10 +169,12 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 // codebuffFingerprintSource computes a fingerprint for the source.
 // It includes the primary chat-messages.json plus companion files
 // (run-state.json, chat-meta.json) for comprehensive freshness.
-// The composite stat values (total size, max mtime) are returned
-// immediately so the engine can skip unchanged sources without
-// reading transcript bytes. The content hash is computed only when
-// the engine needs it for the skip cache key.
+// The composite stat values (total size, max mtime) are computed first
+// so the engine's pre-fingerprint freshness gate can skip unchanged
+// sources before this function is called. The content hash is always
+// computed when this function runs (for the skip cache key), but the
+// engine's providerSourceFreshBeforeFingerprint check ensures this
+// function is only called for sources that may have changed.
 func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
