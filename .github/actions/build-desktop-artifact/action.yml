@@ -75,7 +75,7 @@ runs:
         cd desktop
         export TAURI_ENV_TARGET_TRIPLE="$AGENTSVIEW_TARGET_TRIPLE"
         npm run prepare-sidecar
-        build_cmd=(npx tauri build --bundles "$BUNDLE")
+        build_cmd=(npx tauri build --verbose --bundles "$BUNDLE")
         if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
           build_cmd+=(--target "$AGENTSVIEW_TARGET_TRIPLE")
         fi
