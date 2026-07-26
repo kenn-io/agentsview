@@ -480,8 +480,15 @@ func parseCodebuffMessages(
 				)
 			}
 		}
+		// Only track prevHour for time-only timestamps to avoid
+		// incorrect rollover when formats are mixed. Reset prevHour
+		// when a non-time-only timestamp is encountered.
 		if !ts.IsZero() {
-			prevHour = ts.Hour()
+			if isTimeOnly {
+				prevHour = ts.Hour()
+			} else {
+				prevHour = -1
+			}
 		}
 
 		if !ts.IsZero() {
