@@ -1234,6 +1234,13 @@ func providerChangedPathForceParse(
 			parser.IsGeminiProjectMetadataFile(eventPath) {
 			return false
 		}
+		// Codebuff changed-path events must force a fingerprint
+		// comparison. The composite stat-only freshness gate may skip
+		// same-size, same-mtime rewrites, so a concrete changed-path
+		// signal must always trigger the full fingerprint path.
+		if agent == parser.AgentCodebuff {
+			return true
+		}
 		return true
 	}
 	return eventKind == "remove" &&

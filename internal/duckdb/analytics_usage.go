@@ -3955,7 +3955,11 @@ func addUsageBucket(m map[string]duckUsageBucket, key string, b duckUsageBucket)
 func sortedUsageBucketKeys(m map[string]duckUsageBucket) []string {
 	out := make([]string, 0, len(m))
 	for key := range m {
-		out = append(out, key)
+		// Filter out empty model names from cost-only events
+		// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
+		if key != "" {
+			out = append(out, key)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		left := m[out[i]]

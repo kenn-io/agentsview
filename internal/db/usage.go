@@ -2108,7 +2108,11 @@ func (db *DB) GetDailyUsage(
 
 			modelNames := make([]string, 0, len(dd.models))
 			for m := range dd.models {
-				modelNames = append(modelNames, m)
+				// Filter out empty model names from cost-only events
+				// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
+				if m != "" {
+					modelNames = append(modelNames, m)
+				}
 			}
 			sort.Slice(modelNames, func(i, j int) bool {
 				left := dd.models[modelNames[i]]
@@ -2275,7 +2279,11 @@ func (db *DB) GetDailyUsage(
 
 		modelNames := make([]string, 0, len(dm.models))
 		for m := range dm.models {
-			modelNames = append(modelNames, m)
+			// Filter out empty model names from cost-only events
+			// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
+			if m != "" {
+				modelNames = append(modelNames, m)
+			}
 		}
 		sort.Slice(modelNames, func(i, j int) bool {
 			left := dm.models[modelNames[i]]
