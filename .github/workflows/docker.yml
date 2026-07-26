@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
           go-version-file: go.mod
-          cache: ${{ runner.os != 'Linux' || !(github.repository == 'kenn-io/agentsview' && github.ref == 'refs/heads/main') }}
+          cache: ${{ !(github.repository == 'kenn-io/agentsview' && github.ref == 'refs/heads/main') }}
 
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore

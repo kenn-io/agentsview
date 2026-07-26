@@ -53,3 +53,4 @@ jobs:
           target_triple: ${{ matrix.target_triple }}
           artifact_name: ${{ matrix.artifact_name }}
           artifact_dir: ${{ matrix.artifact_dir }}
+          setup_go_cache: true

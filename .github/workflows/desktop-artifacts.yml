@@ -57,3 +57,4 @@ jobs:
           target_triple: ${{ matrix.target_triple }}
           artifact_name: ${{ matrix.artifact_name }}
           artifact_dir: ${{ matrix.artifact_dir }}
+          setup_go_cache: ${{ !contains(fromJSON('["ubuntu-latest","ubuntu-24.04","ubuntu-22.04"]'), matrix.os) || !(github.repository == 'kenn-io/agentsview' && (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository))) }}
