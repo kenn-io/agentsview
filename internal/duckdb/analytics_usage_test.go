@@ -1676,3 +1676,115 @@ func duckHOWMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 	}
 	return -1
 }
+
+// TestDuckSessionUsageCostOnlyEmptyModelOmitsEmptyName pins DuckDB parity
+// for cost-only Codebuff/Freebuff events: usage_events rows that carry a
+// non-copilot-reported cost_usd but no model name must not surface in
+// Models or UnpricedModels. The SQLite path is covered by
+// db.TestGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName; the PostgreSQL
+// path lives in postgres/usage_pgtest_test.go. Without this guard a future
+// divergence between the DuckDB fix and the SQLite/PG fix paths slips
+// through silently because the duckSessionUsageAggregateRows SQL folds
+// empty-model rows into a single per-model aggregate row.
+//
+// HasCost must still resolve true via the allUnpricedPriced analog rather
+// than via len(unpriced) == 0, so the CostSource provenance also reflects
+// the row's cost_status/cost_source attribution.
+func TestDuckSessionUsageCostOnlyEmptyModelOmitsEmptyName(t *testing.T) {
+	ctx := context.Background()
+	sessionID := "duck-codebuff-cost-only"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "codebuff first",
+			"2026-05-01T10:00:00.000Z", 0,
+		),
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+
+	_, err := store.duck.ExecContext(ctx, `
+		INSERT INTO usage_events (
+			id, session_id, source, model,
+			input_tokens, output_tokens,
+			cache_creation_input_tokens, cache_read_input_tokens,
+			reasoning_tokens, cost_usd, cost_status, cost_source,
+			occurred_at, dedup_key
+		) VALUES (
+			9001, ?, 'provider', '',
+			0, 0, 0, 0, 0,
+			0.05, 'estimated', 'codebuff',
+			CAST('2026-05-01T10:00:00.000Z' AS TIMESTAMP),
+			'codebuff-empty-model-cost'
+		)`, sessionID)
+	require.NoError(t, err, "insert cost-only usage event")
+
+	u, err := store.GetSessionUsage(ctx, sessionID, true)
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "usage is nil")
+
+	assert.True(t, u.HasCost,
+		"cost-only Codebuff row must drive HasCost=true via the allUnpricedPriced path")
+	assert.InDelta(t, 0.05, u.CostUSD, 1e-9, "CostUSD")
+	assert.NotNil(t, u.Models,
+		"Models must serialize as [] not null")
+	assert.Empty(t, u.Models,
+		"empty-model rows must not surface as Models:[\"\"]")
+	assert.Empty(t, u.UnpricedModels,
+		"empty-model rows must not surface as UnpricedModels:[\"\"]")
+	require.Len(t, u.Breakdown, 1, "Breakdown length")
+	entry := u.Breakdown[0]
+	assert.Equal(t, "", entry.Model, "Breakdown entry Model")
+	assert.InDelta(t, 0.05, entry.CostUSD, 1e-9, "Breakdown entry CostUSD")
+}
+
+// TestDuckSessionUsageEmptyModelUnpricedOnlyKeepsHasCostFalse is the
+// regression target for the allUnpricedPriced analog added to
+// analytics_usage.go.GetSessionUsage. An empty-model row whose model has
+// no pricing (priced=false) and contributes=true must still set HasCost
+// to false, even though the row's empty model name is dropped from the
+// unpriced set. Before the analog, dropping "" from unpriced would let
+// len(unpriced) == 0 spuriously promote HasCost=true on a session whose
+// only contributing rows were unpriced empty-model rows.
+func TestDuckSessionUsageEmptyModelUnpricedOnlyKeepsHasCostFalse(t *testing.T) {
+	ctx := context.Background()
+	sessionID := "duck-codebuff-unpriced-empty"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "codebuff unpriced",
+			"2026-05-01T11:00:00.000Z", 0,
+		),
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+
+	// Empty model name, no cost, no pricing — the row contributes
+	// (hasBillableTokens=true via input_tokens) but is priced=false.
+	// Without the allUnpricedPriced analog, dropping "" from unpriced
+	// would flip HasCost to true.
+	_, err := store.duck.ExecContext(ctx, `
+		INSERT INTO usage_events (
+			id, session_id, source, model,
+			input_tokens, output_tokens,
+			cache_creation_input_tokens, cache_read_input_tokens,
+			reasoning_tokens, cost_usd, cost_status, cost_source,
+			occurred_at, dedup_key
+		) VALUES (
+			9101, ?, 'provider', '',
+			500, 0, 0, 0, 0,
+			NULL, '', '',
+			CAST('2026-05-01T11:00:00.000Z' AS TIMESTAMP),
+			'unpriced-empty-model'
+		)`, sessionID)
+	require.NoError(t, err, "insert unpriced empty-model usage event")
+
+	u, err := store.GetSessionUsage(ctx, sessionID, true)
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "usage is nil")
+
+	assert.False(t, u.HasCost,
+		"unpriced empty-model-only session must keep HasCost=false via allUnpricedPriced")
+	assert.Empty(t, u.Models,
+		"empty-model rows must not surface as Models:[\"\"]")
+	assert.Empty(t, u.UnpricedModels,
+		"empty-model rows must not surface as UnpricedModels:[\"\"]")
+}

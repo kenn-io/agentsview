@@ -4342,6 +4342,13 @@ func (s *Store) GetSessionUsage(
 	var hasComputedCost, hasReportedCost bool
 	hasRows := false
 	hasContributingCost := false
+	// allUnpricedPriced mirrors SQLite/PG's allPriced analog: it stays
+	// true until a contributing row is priced=false, even for empty-
+	// model rows that are filtered out of the models/unpriced sets
+	// below. Without it, dropping "" from unpriced would let a session
+	// composed entirely of unpriced empty-model rows spuriously set
+	// HasCost=true just because len(unpriced)==0.
+	allUnpricedPriced := true
 	for _, r := range rows {
 		if r.authoritativeCostRows > 0 {
 			v := r.authoritativeCost
@@ -4377,7 +4384,19 @@ func (s *Store) GetSessionUsage(
 			r.billableOutput != 0 || r.billableReason != 0 ||
 			r.billableCacheCr != 0 || r.billableCacheRd != 0
 		if !priced {
-			unpriced[r.model] = true
+			// Empty-model rows drop out of UnpricedModels so a
+			// Codebuff-style session never surfaces
+			// UnpricedModels:[""]. The allUnpricedPriced flip
+			// (the SQLite/PG allPriced analog in db/usage.go and
+			// postgres/usage.go) happens outside the empty-model
+			// guard so HasCost keeps its original semantic: an
+			// unpriced empty-model contributing row still flips
+			// HasCost off, even though "" no longer leaks into
+			// UnpricedModels.
+			allUnpricedPriced = false
+			if r.model != "" {
+				unpriced[r.model] = true
+			}
 		}
 	}
 	breakdown := make([]db.SessionUsageBreakdownEntry, 0, len(breakdownRows))
@@ -4417,7 +4436,7 @@ func (s *Store) GetSessionUsage(
 		out.HasCost = true
 		out.CostUSD = *authoritativeCost
 		out.CostSource = export.CostSourceReported
-	} else if len(unpriced) == 0 && hasContributingCost {
+	} else if allUnpricedPriced && hasContributingCost {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
 		out.CostSource = export.CombinedCostSource(

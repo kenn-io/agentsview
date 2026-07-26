@@ -2834,18 +2834,12 @@ func (db *DB) GetSessionUsage(
 		contributing = true
 		// Skip empty model names so cost-only Codebuff events do not
 		// surface as Models: [""] or UnpricedModels: [""]. DuckDB
-		// already filters Models in analytics_usage.go; this restores
-		// parity on the SQLite path. UnpricedModels also gets the
-		// filter so a missing model name is not reported as an
-		// unpriced named model. Do NOT mirror this in DuckDB's
-		// analytics_usage.go unpriced map without first mirroring
-		// the allPriced flip — DuckDB's GetSessionUsage resolves
-		// HasCost via len(unpriced) == 0 && hasContributingCost, so
-		// filtering empty models there would falsely promote
-		// HasCost on sessions whose only unpriced rows happen to
-		// lack a model name. allPriced still flips to false outside
-		// the model guard here, so HasCost keeps its original
-		// semantic.
+		// mirrors this filter in analytics_usage.go.GetSessionUsage
+		// alongside an allUnpricedPriced analog so dropping "" from
+		// the unpriced set does not spuriously promote HasCost on
+		// sessions whose only unpriced rows happen to lack a model
+		// name. allPriced still flips to false outside the model
+		// guard here, so HasCost keeps its original semantic.
 		if r.model != "" {
 			modelsSet[r.model] = struct{}{}
 		}
