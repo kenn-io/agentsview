@@ -1314,3 +1314,56 @@ func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	assert.Zero(t, u.CostUSD, "CostUSD should be 0 when unpriced")
 	assert.Equal(t, 0.0, u.AICredits, "AICredits should be 0 when unpriced")
 }
+
+// TestStoreGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName pins
+// PostgreSQL parity for cost-only Codebuff/Freebuff events:
+// usage_events rows that carry cost_usd but no model name must not
+// surface in Models or UnpricedModels. The SQLite path is covered
+// by db.TestGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName; without
+// this guard a future divergence between the PG and SQLite fix paths
+// slips through silently because the PG test file is //go:build pgtest
+// gated and runs only against a live PG instance.
+func TestStoreGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName(t *testing.T) {
+	_, store := prepareUsageSchema(
+		t, "agentsview_session_usage_codebuff_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'codebuff:costonly', 'test-machine', 'proj', 'codebuff',
+			'2026-07-15T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err, "insert session")
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, cost_usd, cost_status, cost_source,
+			occurred_at, dedup_key
+		) VALUES (
+			'codebuff:costonly', 'session', '', 0.05, 'estimated',
+			'codebuff', '2026-07-15T10:05:00Z'::timestamptz,
+			'session:codebuff:costonly'
+		)`)
+	require.NoError(t, err, "insert usage event")
+
+	got, err := store.GetSessionUsage(ctx, "codebuff:costonly", true)
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, got, "GetSessionUsage result = nil")
+	assert.True(t, got.HasCost,
+		"HasCost = false, want true (model-less reported cost)")
+	assert.InDelta(t, 0.05, got.CostUSD, 1e-9, "CostUSD")
+	assert.Empty(t, got.Models,
+		"Models must be empty for model-less cost-only events")
+	assert.NotNil(t, got.Models,
+		"Models must be a non-nil empty slice so JSON stays \"models\":[]")
+	assert.Empty(t, got.UnpricedModels,
+		"UnpricedModels must not contain a blank model name")
+	require.Len(t, got.Breakdown, 1, "Breakdown")
+	assert.True(t, got.Breakdown[0].HasCost, "breakdown HasCost")
+	assert.Equal(t, "", got.Breakdown[0].Model, "breakdown Model")
+	assert.InDelta(t, 0.05, got.Breakdown[0].CostUSD, 1e-9,
+		"breakdown CostUSD")
+}

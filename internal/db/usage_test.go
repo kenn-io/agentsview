@@ -3467,6 +3467,51 @@ func TestGetSessionUsage_ExplicitCostOnly(t *testing.T) {
 	assert.InDelta(t, 0.02, entry.CostUSD, 1e-9, "entry CostUSD")
 }
 
+// TestGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName pins the
+// backend parity for Codebuff/Freebuff cost-only events: usage_events
+// rows that carry CostUSD but no model name (because Codebuff selects
+// the model server-side after billing) must not surface as
+// Models: [""] or UnpricedModels: [""]. DuckDB already filters in
+// analytics_usage.go; this test guards the SQLite path that
+// GetSessionUsage uses.
+func TestGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "codebuff:costonly", "proj", func(s *Session) {
+		s.Agent = "codebuff"
+		s.StartedAt = new("2026-07-15T10:00:00Z")
+	})
+	cost := 0.05
+	require.NoError(t, d.ReplaceSessionUsageEvents("codebuff:costonly",
+		[]UsageEvent{{
+			SessionID:  "codebuff:costonly",
+			Source:     "session",
+			Model:      "",
+			CostUSD:    &cost,
+			CostStatus: "estimated", CostSource: "codebuff",
+			OccurredAt: "2026-07-15T10:05:00Z",
+			DedupKey:   "session:codebuff:costonly",
+		}}), "ReplaceSessionUsageEvents")
+
+	u, err := d.GetSessionUsage(ctx, "codebuff:costonly", true)
+	requireNoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "session usage = nil")
+	assert.True(t, u.HasCost, "HasCost = false, want true (model-less reported cost)")
+	assert.InDelta(t, 0.05, u.CostUSD, 1e-9, "CostUSD")
+	assert.Empty(t, u.Models, "Models must be empty for model-less cost-only events")
+	assert.NotNil(t, u.Models,
+		"Models must be a non-nil empty slice so the JSON wire shape stays \"models\":[]")
+	assert.Empty(t, u.UnpricedModels,
+		"UnpricedModels must not contain an empty model name")
+	// Breakdown still exposes the row so callers can see the
+	// authoritative reported cost, with HasCost set on the entry.
+	require.Len(t, u.Breakdown, 1, "Breakdown")
+	assert.True(t, u.Breakdown[0].HasCost, "breakdown entry HasCost")
+	assert.Equal(t, "", u.Breakdown[0].Model, "breakdown entry Model")
+	assert.InDelta(t, 0.05, u.Breakdown[0].CostUSD, 1e-9,
+		"breakdown entry CostUSD")
+}
+
 func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
