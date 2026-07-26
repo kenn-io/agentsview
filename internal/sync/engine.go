@@ -5309,35 +5309,13 @@ func (e *Engine) discoveredFileEffectiveMtime(
 		}
 		return mtime, nil
 	}
-	// Codebuff is excluded from the provider-Fingerprint path for
-	// cost: its Fingerprint content-hashes chat-messages.json plus
-	// run-state.json and chat-meta.json, so consulting it here would
-	// read every session's full transcript on each incremental sync,
-	// scaling cutoff filtering with the archive instead of the changed
-	// batch. The stat-only composite carries the same cutoff signal —
-	// the max mtime and total size of all three files — so a
-	// companion-only change still looks fresh. Sources that pass the
-	// cutoff go on to the full fingerprint as usual.
-	if file.Agent == parser.AgentCodebuff {
-		info, err := os.Stat(file.Path)
-		if err != nil {
-			return 0, err
-		}
-		mtime := info.ModTime().UnixNano()
-		dir := filepath.Dir(file.Path)
-		for _, name := range []string{"run-state.json", "chat-meta.json"} {
-			companion := filepath.Join(dir, name)
-			if ci, err := os.Stat(companion); err == nil {
-				if ts := ci.ModTime().UnixNano(); ts > mtime {
-					mtime = ts
-				}
-			}
-		}
-		return mtime, nil
-	}
 	// Provider-authoritative sources resolve freshness through the provider
 	// Fingerprint so composite provider-owned source state participates in
-	// incremental-sync cutoff checks.
+	// incremental-sync cutoff checks. Codebuff uses the provider-Fingerprint
+	// path because it is hash-sensitive (providerFingerprintHashInCacheKey)
+	// and the stat-only shortcut would miss same-size rewrites with preserved
+	// mtimes. The providerSourceFreshBeforeFingerprint check handles the
+	// stat-only optimization for unchanged sessions before the full fingerprint.
 	if file.ProviderSource != nil && file.ProviderProcess {
 		if mtime, ok, err := e.providerSourceMtime(ctx, file); err != nil {
 			return 0, err
