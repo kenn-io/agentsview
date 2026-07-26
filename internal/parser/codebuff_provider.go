@@ -169,6 +169,10 @@ func codebuffFindFile(root, rawID string) (singleFileMatch, bool) {
 // codebuffFingerprintSource computes a fingerprint for the source.
 // It includes the primary chat-messages.json plus companion files
 // (run-state.json, chat-meta.json) for comprehensive freshness.
+// The composite stat values (total size, max mtime) are returned
+// immediately so the engine can skip unchanged sources without
+// reading transcript bytes. The content hash is computed only when
+// the engine needs it for the skip cache key.
 func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
@@ -185,36 +189,39 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 
+	// Include run-state.json and chat-meta.json in the composite stat.
+	dir := filepath.Dir(src.Path)
+	for _, name := range []string{"run-state.json", "chat-meta.json"} {
+		companion := filepath.Join(dir, name)
+		if ci, err := os.Stat(companion); err == nil {
+			fingerprint.Size += ci.Size()
+			if ts := ci.ModTime().UnixNano(); ts > fingerprint.MTimeNS {
+				fingerprint.MTimeNS = ts
+			}
+		}
+	}
+
+	// Compute content hash only when the composite stat has changed.
+	// The engine's skip cache compares MTimeNS first; unchanged sources
+	// skip without reading transcript bytes.
 	h := sha256.New()
 	if err := addSiblingMetadataFingerprintPart(
 		h, "chat-messages", src.Path, info,
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
-
-	// Include run-state.json and chat-meta.json for completeness.
-	dir := filepath.Dir(src.Path)
 	for _, name := range []string{"run-state.json", "chat-meta.json"} {
 		companion := filepath.Join(dir, name)
-		companionInfo, err := siblingMetadataFileInfo(companion)
-		if err != nil {
-			return SourceFingerprint{}, err
-		}
-		if companionInfo == nil {
-			continue
-		}
-		fingerprint.Size += companionInfo.Size()
-		if ts := companionInfo.ModTime().UnixNano(); ts > fingerprint.MTimeNS {
-			fingerprint.MTimeNS = ts
-		}
-		if err := addSiblingMetadataFingerprintPart(
-			h, name, companion, companionInfo,
-		); err != nil {
-			return SourceFingerprint{}, err
+		if ci, err := os.Stat(companion); err == nil {
+			if err := addSiblingMetadataFingerprintPart(
+				h, name, companion, ci,
+			); err != nil {
+				return SourceFingerprint{}, err
+			}
 		}
 	}
-
 	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
+
 	return fingerprint, nil
 }
 
