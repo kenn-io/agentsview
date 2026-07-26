@@ -835,7 +835,6 @@ var Registry = []AgentDef{
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
 		},
-		PeriodicReconcile: true,
 	},
 }
 

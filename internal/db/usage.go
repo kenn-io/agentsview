@@ -1475,7 +1475,14 @@ func dailyUsageAmounts(
 	rates := lookup.Rates
 	if r.costUSD.Valid && r.costSource != CopilotReportedCostSource {
 		cost = r.costUSD.Float64
-		pricing.RecordReported(r.model, lookup)
+		if r.model != "" {
+			pricing.RecordReported(r.model, lookup)
+		} else {
+			// Cost-only events (e.g. Codebuff) have no model but
+			// carry an authoritative reported cost. Record as
+			// unattributed so pricing provenance is correct.
+			pricing.RecordUnattributedReported()
+		}
 	} else {
 		cost = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
@@ -2128,11 +2135,16 @@ func (db *DB) GetDailyUsage(
 				return modelNames[i] < modelNames[j]
 			})
 			entry.ModelsUsed = modelNames
-			// Accumulate TotalCost from ALL models (including empty
-			// model names from cost-only events), not just those in
-			// ModelsUsed.
+			// Accumulate token totals and cost from ALL models
+			// (including empty model names from cost-only events),
+			// not just those in ModelsUsed. Empty model names are
+			// filtered only from ModelsUsed and model breakdowns.
 			for _, ma := range dd.models {
 				if ma != nil {
+					entry.InputTokens += ma.inputTok
+					entry.OutputTokens += ma.outputTok
+					entry.CacheCreationTokens += ma.cacheCr
+					entry.CacheReadTokens += ma.cacheRd
 					entry.TotalCost += ma.aggregateCost
 				}
 			}
@@ -2144,10 +2156,6 @@ func (db *DB) GetDailyUsage(
 				if !ok || ma == nil {
 					continue
 				}
-				entry.InputTokens += ma.inputTok
-				entry.OutputTokens += ma.outputTok
-				entry.CacheCreationTokens += ma.cacheCr
-				entry.CacheReadTokens += ma.cacheRd
 				mbd = append(mbd, ModelBreakdown{
 					ModelName:           m,
 					InputTokens:         ma.inputTok,
@@ -2303,10 +2311,15 @@ func (db *DB) GetDailyUsage(
 			return modelNames[i] < modelNames[j]
 		})
 		entry.ModelsUsed = modelNames
-		// Accumulate TotalCost from ALL models (including empty
-		// model names from cost-only events), not just those in
-		// ModelsUsed.
+		// Accumulate token totals and cost from ALL models
+		// (including empty model names from cost-only events),
+		// not just those in ModelsUsed. Empty model names are
+		// filtered only from ModelsUsed and model breakdowns.
 		for _, b := range dm.models {
+			entry.InputTokens += b.inputTok
+			entry.OutputTokens += b.outputTok
+			entry.CacheCreationTokens += b.cacheCr
+			entry.CacheReadTokens += b.cacheRd
 			entry.TotalCost += b.aggregateCost
 		}
 		mbd := make(
@@ -2317,10 +2330,6 @@ func (db *DB) GetDailyUsage(
 			if !ok {
 				continue
 			}
-			entry.InputTokens += b.inputTok
-			entry.OutputTokens += b.outputTok
-			entry.CacheCreationTokens += b.cacheCr
-			entry.CacheReadTokens += b.cacheRd
 			mbd = append(mbd, ModelBreakdown{
 				ModelName:           m,
 				InputTokens:         b.inputTok,

@@ -3529,7 +3529,14 @@ func duckUsageAggregateCost(
 			billableInput, billableOutput, billableReasoning,
 			billableCacheCr, billableCacheRd)
 	if hasReportedCost {
-		pricing.RecordReported(model, lookup)
+		if model != "" {
+			pricing.RecordReported(model, lookup)
+		} else {
+			// Cost-only events (e.g. Codebuff) have no model but
+			// carry an authoritative reported cost. Record as
+			// unattributed so pricing provenance is correct.
+			pricing.RecordUnattributedReported()
+		}
 	}
 	if hasBillableTokens {
 		pricing.RecordComputed(model, lookup)
@@ -3832,12 +3839,18 @@ func (s *Store) GetDailyUsage(
 		entry := db.DailyUsageEntry{Date: date}
 		modelNames := sortedUsageBucketKeys(day.models)
 		entry.ModelsUsed = modelNames
-		for _, model := range modelNames {
-			b := day.models[model]
+		// Accumulate token totals from ALL models (including empty
+		// model names from cost-only events), not just those in
+		// ModelsUsed. Empty model names are filtered only from
+		// ModelsUsed and model breakdowns.
+		for _, b := range day.models {
 			entry.InputTokens += b.inputTok
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
+		}
+		for _, model := range modelNames {
+			b := day.models[model]
 			entry.ModelBreakdowns = append(entry.ModelBreakdowns, db.ModelBreakdown{
 				ModelName:           model,
 				InputTokens:         b.inputTok,
@@ -4342,8 +4355,13 @@ func (s *Store) GetSessionUsage(
 		if !contributes {
 			continue
 		}
-		hasRows = true
-		models[r.model] = true
+		// Exclude empty-model rows (e.g. Codebuff cost-only events)
+		// from hasRows so they don't count as token data, matching
+		// SQLite and PostgreSQL session usage paths.
+		if r.model != "" {
+			hasRows = true
+			models[r.model] = true
+		}
 		totalCost += cost
 		hasReportedCost = hasReportedCost || r.reportedCostRows > 0
 		hasComputedCost = hasComputedCost || r.billableInput != 0 ||
