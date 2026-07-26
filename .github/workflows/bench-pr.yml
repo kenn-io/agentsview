@@ -1,7 +1,8 @@
 name: Bench Gate
 
-# Fork PRs use GitHub-hosted runners. Same-repository PRs call the
-# main-branch workflow, whose Linux jobs can use the managed public fleet.
+# The PR dispatcher always calls the main-pinned workflow. That workflow
+# independently routes same-repository Linux jobs to the managed public fleet
+# and fork jobs to GitHub-hosted runners.
 on:
   pull_request:
     # Docs/frontend-only PRs cannot change the gated Go paths. If
@@ -14,25 +15,10 @@ on:
       - "Makefile"
       - ".github/workflows/bench.yml"
       - ".github/workflows/bench-pr.yml"
-  pull_request_target:
-    # Docs/frontend-only PRs cannot change the gated Go paths. If
-    # this check is ever made required on branch protection, pair it
-    # with a no-op sibling workflow on the inverse paths.
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - ".github/workflows/bench.yml"
-      - ".github/workflows/bench-pr.yml"
-
 permissions: read-all
 
 jobs:
   run:
-    if: >-
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository)
     uses: kenn-io/agentsview/.github/workflows/bench.yml@main
     with:
       checkout_ref: refs/pull/${{ github.event.pull_request.number }}/merge

@@ -1,7 +1,8 @@
 name: Desktop Artifacts
 
-# Fork PRs use GitHub-hosted runners. Same-repository PRs call the
-# main-branch workflow, whose Linux jobs can use the managed public fleet.
+# The PR dispatcher always calls the main-pinned workflow. That workflow
+# independently routes same-repository Linux jobs to the managed public fleet
+# and fork jobs to GitHub-hosted runners.
 on:
   pull_request:
     branches: [main]
@@ -13,24 +14,10 @@ on:
       - '.github/workflows/desktop-artifacts.yml'
       - '.github/actions/build-desktop-artifact/**'
       - '.github/workflows/desktop-artifacts-pr.yml'
-  pull_request_target:
-    branches: [main]
-    paths:
-      - 'desktop/**'
-      - 'frontend/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/desktop-artifacts.yml'
-      - '.github/actions/build-desktop-artifact/**'
-      - '.github/workflows/desktop-artifacts-pr.yml'
-
 permissions: read-all
 
 jobs:
   run:
-    if: >-
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository)
     uses: kenn-io/agentsview/.github/workflows/desktop-artifacts.yml@main
     with:
       checkout_ref: refs/pull/${{ github.event.pull_request.number }}/merge
