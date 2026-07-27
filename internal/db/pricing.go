@@ -172,6 +172,102 @@ func (db *DB) UpsertModelPricing(
 	return tx.Commit()
 }
 
+// PricingMeta is one provenance sentinel row written alongside a
+// pricing reconciliation.
+type PricingMeta struct {
+	Key   string
+	Value string
+}
+
+// ReconcileModelPricing removes obsolete patterns and upserts the desired
+// rows in one transaction. Desired rows that share a removed pattern are
+// reinserted, allowing one source to retire an alias while another source
+// continues to publish that same unqualified model name. Every metadata
+// sentinel row in meta is written in the same transaction, so readers can
+// never observe reconciled rows without the provenance metadata that
+// allows retiring them later.
+func (db *DB) ReconcileModelPricing(
+	prices []ModelPricing, removePatterns []string,
+	meta ...PricingMeta,
+) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	if len(prices) == 0 && len(removePatterns) == 0 && len(meta) == 0 {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	removeSet := make(map[string]struct{}, len(removePatterns))
+	for _, pattern := range removePatterns {
+		removeSet[pattern] = struct{}{}
+	}
+	existing, err := db.listModelPricing(context.Background())
+	if err != nil {
+		return fmt.Errorf(
+			"listing current pricing before reconciliation: %w", err,
+		)
+	}
+	kept := existing[:0]
+	for _, price := range existing {
+		if _, removing := removeSet[price.ModelPattern]; !removing {
+			kept = append(kept, price)
+		}
+	}
+	_, prices = FilterChangedModelPricing(kept, prices)
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning pricing reconciliation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for i := 0; i < len(removePatterns); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(removePatterns))
+		placeholders := make(
+			[]string, end-i,
+		)
+		args := make([]any, end-i)
+		for j, pattern := range removePatterns[i:end] {
+			placeholders[j] = "?"
+			args[j] = pattern
+		}
+		query := `DELETE FROM model_pricing WHERE model_pattern IN (` +
+			strings.Join(placeholders, ", ") + `)`
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf(
+				"removing obsolete pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
+	for i := 0; i < len(prices); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(prices))
+		query, args := sqlitePricingUpsertStatement(prices[i:end])
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf(
+				"upserting pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
+	for _, entry := range meta {
+		if entry.Key == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			setPricingMetaSQL, entry.Key, entry.Value,
+		); err != nil {
+			return fmt.Errorf(
+				"setting pricing meta %q: %w", entry.Key, err,
+			)
+		}
+	}
+	return tx.Commit()
+}
+
 // GetPricingMeta reads a metadata value stored as a sentinel
 // row in model_pricing. Returns "" if not found.
 func (db *DB) GetPricingMeta(key string) (string, error) {
@@ -191,19 +287,21 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 	return val, nil
 }
 
+// setPricingMetaSQL upserts a metadata sentinel row; shared by
+// SetPricingMeta and the in-transaction write in
+// ReconcileModelPricing.
+const setPricingMetaSQL = `INSERT INTO model_pricing
+		(model_pattern, input_per_mtok, output_per_mtok,
+		 cache_creation_per_mtok, cache_read_per_mtok,
+		 updated_at)
+	 VALUES (?, 0, 0, 0, 0, ?)
+	 ON CONFLICT(model_pattern) DO UPDATE SET
+		updated_at = excluded.updated_at`
+
 // SetPricingMeta stores a metadata value as a sentinel row
 // in model_pricing with zero pricing fields.
 func (db *DB) SetPricingMeta(key, value string) error {
-	_, err := db.getWriter().Exec(
-		`INSERT INTO model_pricing
-			(model_pattern, input_per_mtok, output_per_mtok,
-			 cache_creation_per_mtok, cache_read_per_mtok,
-			 updated_at)
-		 VALUES (?, 0, 0, 0, 0, ?)
-		 ON CONFLICT(model_pattern) DO UPDATE SET
-			updated_at = excluded.updated_at`,
-		key, value,
-	)
+	_, err := db.getWriter().Exec(setPricingMetaSQL, key, value)
 	if err != nil {
 		return fmt.Errorf(
 			"setting pricing meta %q: %w", key, err,

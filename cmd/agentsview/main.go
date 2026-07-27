@@ -438,15 +438,28 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}
 	})
 
-	// Seed model_pricing so a fresh database (first run, or a
-	// resync whose pricing copy failed) is populated before
-	// the dashboard starts answering requests. Resyncs also
-	// copy pricing across the swap themselves, since this seed
-	// only runs once per daemon lifetime. Synchronous fallback
-	// upsert so the first usage page load does not observe an
-	// empty table; background LiteLLM refresh follows
-	// immediately.
+	// Seed fallback pricing synchronously and start the initial network
+	// refresh before scheduling later refreshes. This keeps first-run usage
+	// requests priced even when both upstream catalogs are unavailable.
 	seedPricing(database)
+
+	// After the startup refresh (kicked off inside seedPricing),
+	// keep model_pricing fresh with a 24 h loop so newly-released
+	// models get rates within a day without a restart. custom_model_pricing
+	// is layered in-memory via SetCustomPricing (see applyCustomPricing
+	// below) and is not touched by the refresh, so user overrides for
+	// fork/private models survive every tick.
+	go periodicPricingRefresh(ctx, database, 24*time.Hour)
+
+	// Apply the config-driven custom pricing map on top of the
+	// pricing that seedPricing just wrote into model_pricing so
+	// fork-private models (e.g. MiniMax-M3, internal/private
+	// endpoints) carry their owner's authoritative rates into
+	// every GetDailyUsage call. Without this, custom_model_pricing
+	// would only influence the CLI statusline / pg serve paths
+	// where applyCustomPricing runs explicitly, leaving the
+	// embedded server reading rates from model_pricing only.
+	applyCustomPricing(database, cfg)
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "serve",

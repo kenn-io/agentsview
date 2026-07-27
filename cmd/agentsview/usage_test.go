@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
+	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 )
 
@@ -1410,6 +1411,382 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 			require.NotNil(t, request, "request")
 			assert.Equal(t, tc.wantEmail, request["email"])
 			assert.Equal(t, tc.wantUser, request["userId"])
+		})
+	}
+}
+
+// TestPeriodicPricingRefresh_ZeroIntervalReturnsImmediately guards
+// against a bad config value (interval <= 0) turning into a hot
+// spin loop.
+func TestPeriodicPricingRefresh_ZeroIntervalReturnsImmediately(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		periodicPricingRefresh(context.Background(), nil, 0)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodicPricingRefresh did not return on interval<=0")
+	}
+}
+
+// TestPeriodicPricingRefresh_StopsOnContextCancel ensures the
+// goroutine unwinds cleanly when the server is shutting down.
+func TestPeriodicPricingRefresh_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		// Long interval so the ticker never fires during the test.
+		periodicPricingRefresh(ctx, nil, time.Hour)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodicPricingRefresh did not stop after cancel")
+	}
+}
+
+func TestSeedPricingSeedsBeforeStartingRefresh(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	refreshStarted := make(chan struct{})
+
+	seedPricingWithRefresh(database, func(*db.DB) {
+		close(refreshStarted)
+	})
+
+	fallback, err := database.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, fallback,
+		"fallback pricing must be visible when startup seeding returns")
+	select {
+	case <-refreshStarted:
+	case <-time.After(time.Second):
+		t.Fatal("initial background refresh did not start")
+	}
+}
+
+func TestRefreshPricingFromSourcesReconcilesOpenRouterAliases(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	openRouterRows := []pricing.ModelPricing{
+		{
+			ModelPattern:  "provider-a/shared-model",
+			InputPerMTok:  1,
+			OutputPerMTok: 2,
+		},
+		{
+			ModelPattern:  "shared-model",
+			InputPerMTok:  1,
+			OutputPerMTok: 2,
+		},
+	}
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return nil, nil
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return openRouterRows, nil
+			},
+		},
+	}
+
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+	alias, err := database.GetModelPricing("shared-model")
+	require.NoError(t, err)
+	require.NotNil(t, alias, "unique bare alias should be stored")
+
+	openRouterRows = []pricing.ModelPricing{
+		{
+			ModelPattern:  "provider-a/shared-model",
+			InputPerMTok:  1,
+			OutputPerMTok: 2,
+		},
+		{
+			ModelPattern:  "provider-b/shared-model",
+			InputPerMTok:  3,
+			OutputPerMTok: 4,
+		},
+	}
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	alias, err = database.GetModelPricing("shared-model")
+	require.NoError(t, err)
+	assert.Nil(t, alias,
+		"bare alias should be removed after its suffix becomes ambiguous")
+	for _, pattern := range []string{
+		"provider-a/shared-model",
+		"provider-b/shared-model",
+	} {
+		row, getErr := database.GetModelPricing(pattern)
+		require.NoError(t, getErr)
+		assert.NotNil(t, row, "qualified row %q should remain", pattern)
+	}
+}
+
+// TestRefreshPricingFromSourcesSuppressesLiteLLMShadowedAliases proves an
+// OpenRouter bare alias is not stored (and not recorded as alias
+// provenance) when LiteLLM already covers the same canonical model via a
+// provider-qualified row, so OpenRouter rates cannot shadow LiteLLM's for
+// bare session model names.
+func TestRefreshPricingFromSourcesSuppressesLiteLLMShadowedAliases(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return []pricing.ModelPricing{
+					{
+						ModelPattern:  "minimax/MiniMax-M3",
+						InputPerMTok:  2,
+						OutputPerMTok: 8,
+					},
+				}, nil
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return []pricing.ModelPricing{
+					{
+						ModelPattern:  "minimax/minimax-m3",
+						InputPerMTok:  9,
+						OutputPerMTok: 9,
+					},
+					{
+						ModelPattern:  "minimax-m3",
+						InputPerMTok:  9,
+						OutputPerMTok: 9,
+					},
+					{
+						ModelPattern:  "acme/unshadowed",
+						InputPerMTok:  1,
+						OutputPerMTok: 1,
+					},
+					{
+						ModelPattern:  "unshadowed",
+						InputPerMTok:  1,
+						OutputPerMTok: 1,
+					},
+				}, nil
+			},
+		},
+	}
+
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	shadowed, err := database.GetModelPricing("minimax-m3")
+	require.NoError(t, err)
+	assert.Nil(t, shadowed,
+		"alias shadowed by LiteLLM's qualified row must not be stored")
+	litellmRow, err := database.GetModelPricing("minimax/MiniMax-M3")
+	require.NoError(t, err)
+	require.NotNil(t, litellmRow, "LiteLLM row survives")
+	assert.Equal(t, 2.0, litellmRow.InputPerMTok)
+	surviving, err := database.GetModelPricing("unshadowed")
+	require.NoError(t, err)
+	require.NotNil(t, surviving, "unshadowed alias is stored")
+
+	meta, err := database.GetPricingMeta(pricing.OpenRouterAliasesMetaKey)
+	require.NoError(t, err)
+	assert.Equal(t, `["unshadowed"]`, meta,
+		"alias metadata reflects only stored aliases")
+}
+
+// TestRefreshPricingFromSourcesRetiresCanonicallyShadowedRows proves an
+// OpenRouter row stored while LiteLLM still lacked the model is deleted
+// once LiteLLM publishes the same model under the same provider with a
+// different spelling. Both spellings canonicalize alike and rank
+// equally, so a leftover row would make the bare session model name
+// ambiguous and price it at zero.
+func TestRefreshPricingFromSourcesRetiresCanonicallyShadowedRows(
+	t *testing.T,
+) {
+	database := dbtest.OpenTestDB(t)
+	litellmRows := []pricing.ModelPricing{
+		{ModelPattern: "acme/other", InputPerMTok: 1, OutputPerMTok: 1},
+	}
+	sources := []pricing.PricingSource{
+		{
+			Name: "litellm",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return litellmRows, nil
+			},
+		},
+		{
+			Name: "openrouter",
+			Fetch: func() ([]pricing.ModelPricing, error) {
+				return []pricing.ModelPricing{
+					{
+						ModelPattern:  "minimax/minimax-m3",
+						InputPerMTok:  9,
+						OutputPerMTok: 9,
+					},
+				}, nil
+			},
+		},
+	}
+
+	// LiteLLM does not list the model yet, so OpenRouter owns the row.
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+	stored, err := database.GetModelPricing("minimax/minimax-m3")
+	require.NoError(t, err)
+	require.NotNil(t, stored, "OpenRouter row stored while unshadowed")
+
+	// LiteLLM picks the model up under a different spelling.
+	litellmRows = append(litellmRows, pricing.ModelPricing{
+		ModelPattern:  "minimax/MiniMax-M3",
+		InputPerMTok:  2,
+		OutputPerMTok: 8,
+	})
+	require.NoError(t, refreshPricingFromSourcesWith(database, sources))
+
+	shadowed, err := database.GetModelPricing("minimax/minimax-m3")
+	require.NoError(t, err)
+	assert.Nil(t, shadowed,
+		"the canonically duplicate OpenRouter row must be retired")
+	litellmRow, err := database.GetModelPricing("minimax/MiniMax-M3")
+	require.NoError(t, err)
+	require.NotNil(t, litellmRow, "LiteLLM row owns the model")
+	assert.Equal(t, 2.0, litellmRow.InputPerMTok)
+
+	// The suppressed pattern is recorded so pg push can retire its own
+	// copy; nothing else identifies the row as obsolete downstream.
+	shadowedMeta, err := database.GetPricingMeta(
+		pricing.OpenRouterShadowedMetaKey,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, `["minimax/minimax-m3"]`, shadowedMeta,
+		"shadowed patterns are published as provenance metadata")
+
+	rates, err := database.ListModelPricing(context.Background())
+	require.NoError(t, err)
+	lookup := make(map[string]pricing.ModelPricing, len(rates))
+	for _, rate := range rates {
+		lookup[rate.ModelPattern] = pricing.ModelPricing{
+			ModelPattern:  rate.ModelPattern,
+			InputPerMTok:  rate.InputPerMTok,
+			OutputPerMTok: rate.OutputPerMTok,
+		}
+	}
+	resolved, ok := pricing.Resolve(lookup, "MiniMax-M3")
+	require.True(t, ok, "bare session model name resolves again")
+	assert.Equal(t, 2.0, resolved.InputPerMTok,
+		"and resolves to the higher-priority LiteLLM rate")
+}
+
+// TestRefreshPricingFromSourcesPreservesCatalogWhenSourceFails proves a
+// partial refresh never mutates the last fully reconciled snapshot. In
+// particular, a LiteLLM outage must not restore the qualified OpenRouter row
+// that the healthy refresh suppressed, because it would make a bare model
+// lookup ambiguous and price it at zero.
+func TestRefreshPricingFromSourcesPreservesCatalogWhenSourceFails(
+	t *testing.T,
+) {
+	for _, failedSource := range []string{"litellm", "openrouter"} {
+		t.Run(failedSource, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			sourceErrors := map[string]error{}
+			litellmRows := []pricing.ModelPricing{
+				{
+					ModelPattern:  "minimax/MiniMax-M3",
+					InputPerMTok:  2,
+					OutputPerMTok: 8,
+				},
+				{
+					ModelPattern: "litellm/kept",
+					InputPerMTok: 1,
+				},
+			}
+			openRouterRows := []pricing.ModelPricing{
+				{
+					ModelPattern: "minimax/minimax-m3",
+					InputPerMTok: 9,
+				},
+				{
+					ModelPattern: "minimax-m3",
+					InputPerMTok: 9,
+				},
+				{
+					ModelPattern: "router/kept",
+					InputPerMTok: 3,
+				},
+			}
+			sources := []pricing.PricingSource{
+				{
+					Name: "litellm",
+					Fetch: func() ([]pricing.ModelPricing, error) {
+						return litellmRows, sourceErrors["litellm"]
+					},
+				},
+				{
+					Name: "openrouter",
+					Fetch: func() ([]pricing.ModelPricing, error) {
+						return openRouterRows, sourceErrors["openrouter"]
+					},
+				},
+			}
+
+			require.NoError(t,
+				refreshPricingFromSourcesWith(database, sources))
+
+			// Both sources now advertise changes, but one outage makes the
+			// snapshot incomplete and neither change may land.
+			litellmRows = []pricing.ModelPricing{
+				{
+					ModelPattern:  "minimax/MiniMax-M3",
+					InputPerMTok:  6,
+					OutputPerMTok: 12,
+				},
+				{
+					ModelPattern: "litellm/new-during-outage",
+					InputPerMTok: 4,
+				},
+			}
+			openRouterRows = []pricing.ModelPricing{
+				{
+					ModelPattern: "minimax/minimax-m3",
+					InputPerMTok: 9,
+				},
+				{
+					ModelPattern: "router/new-during-outage",
+					InputPerMTok: 7,
+				},
+			}
+			sourceErrors[failedSource] = assert.AnError
+			require.NoError(t,
+				refreshPricingFromSourcesWith(database, sources))
+
+			shadowed, err := database.GetModelPricing(
+				"minimax/minimax-m3",
+			)
+			require.NoError(t, err)
+			assert.Nil(t, shadowed,
+				"lower-priority canonical collision stays retired")
+
+			higherPriority, err := database.GetModelPricing(
+				"minimax/MiniMax-M3",
+			)
+			require.NoError(t, err)
+			require.NotNil(t, higherPriority)
+			assert.Equal(t, 2.0, higherPriority.InputPerMTok,
+				"persisted higher-priority rate stays unchanged")
+
+			for _, pattern := range []string{
+				"litellm/new-during-outage",
+				"router/new-during-outage",
+			} {
+				row, getErr := database.GetModelPricing(pattern)
+				require.NoError(t, getErr)
+				assert.Nil(t, row,
+					"incomplete snapshot must not add %q", pattern)
+			}
 		})
 	}
 }

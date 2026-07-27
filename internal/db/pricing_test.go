@@ -196,6 +196,55 @@ func TestPricingMeta(t *testing.T) {
 	}
 }
 
+// TestReconcileModelPricingWritesMetaWithRows verifies the metadata
+// sentinel commits through the same ReconcileModelPricing call as the
+// row changes, including when the row set itself is a no-op, and that
+// omitting metadata leaves the existing sentinel untouched.
+func TestReconcileModelPricingWritesMetaWithRows(t *testing.T) {
+	d := testDB(t)
+
+	require.NoError(t, d.ReconcileModelPricing(
+		[]ModelPricing{
+			{ModelPattern: "provider/model-a", InputPerMTok: 1},
+			{ModelPattern: "model-a", InputPerMTok: 1},
+		},
+		nil,
+		PricingMeta{Key: "_openrouter_aliases", Value: `["model-a"]`},
+	), "reconcile with meta")
+
+	got, err := d.GetPricingMeta("_openrouter_aliases")
+	require.NoError(t, err)
+	assert.Equal(t, `["model-a"]`, got,
+		"meta must be visible after the reconcile call returns")
+
+	// Meta-only update: identical rows, alias retired.
+	require.NoError(t, d.ReconcileModelPricing(
+		[]ModelPricing{
+			{ModelPattern: "provider/model-a", InputPerMTok: 1},
+		},
+		[]string{"model-a"},
+		PricingMeta{Key: "_openrouter_aliases", Value: `[]`},
+	), "reconcile retiring alias")
+
+	got, err = d.GetPricingMeta("_openrouter_aliases")
+	require.NoError(t, err)
+	assert.Equal(t, `[]`, got, "meta updated alongside alias removal")
+	row, err := d.GetModelPricing("model-a")
+	require.NoError(t, err)
+	assert.Nil(t, row, "retired alias row removed")
+
+	// Omitting the metadata skips the sentinel write entirely.
+	require.NoError(t, d.ReconcileModelPricing(
+		[]ModelPricing{
+			{ModelPattern: "provider/model-b", OutputPerMTok: 2},
+		},
+		nil,
+	), "reconcile without meta")
+	got, err = d.GetPricingMeta("_openrouter_aliases")
+	require.NoError(t, err)
+	assert.Equal(t, `[]`, got, "omitted metadata must not be touched")
+}
+
 func TestGetModelPricingNotFound(t *testing.T) {
 	d := testDB(t)
 

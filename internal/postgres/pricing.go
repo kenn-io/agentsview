@@ -323,7 +323,10 @@ func pgPricingUpsertStatement(
 		OR model_pricing.cache_creation_per_mtok IS DISTINCT FROM
 			EXCLUDED.cache_creation_per_mtok
 		OR model_pricing.cache_read_per_mtok IS DISTINCT FROM
-			EXCLUDED.cache_read_per_mtok`)
+			EXCLUDED.cache_read_per_mtok
+		OR (model_pricing.model_pattern LIKE '\_%' ESCAPE '\'
+			AND model_pricing.updated_at IS DISTINCT FROM
+				EXCLUDED.updated_at)`)
 	return b.String(), args
 }
 
@@ -362,10 +365,11 @@ func listPGModelPricing(
 	return out, nil
 }
 
-func upsertModelPricing(
+func reconcileModelPricing(
 	ctx context.Context, pg *sql.DB, prices []db.ModelPricing,
+	removePatterns []string,
 ) error {
-	if len(prices) == 0 {
+	if len(prices) == 0 && len(removePatterns) == 0 {
 		return nil
 	}
 
@@ -374,6 +378,24 @@ func upsertModelPricing(
 		return fmt.Errorf("beginning pg pricing upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	for i := 0; i < len(removePatterns); i += pricingUpsertBatch {
+		end := min(i+pricingUpsertBatch, len(removePatterns))
+		placeholders := make([]string, end-i)
+		args := make([]any, end-i)
+		for j, pattern := range removePatterns[i:end] {
+			placeholders[j] = fmt.Sprintf("$%d", j+1)
+			args[j] = pattern
+		}
+		query := `DELETE FROM model_pricing WHERE model_pattern IN (` +
+			strings.Join(placeholders, ", ") + `)`
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf(
+				"removing obsolete pricing batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
 
 	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	for i := 0; i < len(prices); i += pricingUpsertBatch {
@@ -395,6 +417,44 @@ func upsertModelPricing(
 	return nil
 }
 
+// pricingSyncChanges plans one push of the local pricing table onto
+// PostgreSQL: the rows to upsert and the patterns to delete.
+//
+// Deletions are driven by provenance sentinels rather than by set
+// difference, because a pattern PostgreSQL holds and the local archive
+// lacks is indistinguishable from one another machine pushed:
+//
+//   - _openrouter_aliases lists the bare aliases the local refresh
+//     currently emits. Aliases in PostgreSQL's copy of that list but not
+//     in the local one were retired, so they are removed.
+//   - _openrouter_shadowed lists the patterns the local refresh
+//     suppressed because a higher-priority source already covers them.
+//     That list is absolute, not a diff: every pattern on it must not
+//     exist, so it is removed without consulting PostgreSQL's copy.
+//
+// Without the second sentinel a qualified OpenRouter row pushed before
+// LiteLLM listed the model (minimax/minimax-m3 against a later
+// minimax/MiniMax-M3) would survive in PostgreSQL after the local
+// reconciliation dropped it, and pg serve would keep resolving the bare
+// model name against two tied keys, treat it as ambiguous, and price it
+// at zero.
+func pricingSyncChanges(
+	existing, desired []db.ModelPricing,
+) ([]db.ModelPricing, []string, error) {
+	return db.PlanModelPricingSync(existing, desired)
+}
+
+func containsPricingPattern(
+	rows []db.ModelPricing, pattern string,
+) bool {
+	for _, row := range rows {
+		if row.ModelPattern == pattern {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
 	if err != nil {
@@ -407,13 +467,18 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing pg model pricing: %w", err)
 	}
-	_, changedPrices := db.FilterChangedModelPricing(
+	changedPrices, removePatterns, err := pricingSyncChanges(
 		existing, prices,
 	)
-	if len(changedPrices) == 0 {
+	if err != nil {
+		return fmt.Errorf("planning model pricing sync: %w", err)
+	}
+	if len(changedPrices) == 0 && len(removePatterns) == 0 {
 		return nil
 	}
-	if err := upsertModelPricing(ctx, s.pg, changedPrices); err != nil {
+	if err := reconcileModelPricing(
+		ctx, s.pg, changedPrices, removePatterns,
+	); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
 	}
 	return nil

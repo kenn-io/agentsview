@@ -1272,6 +1272,49 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	assert.Equal(t, 2.0, output)
 }
 
+func TestSyncModelPricingRemovesShadowedOpenRouterRow(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "minimax/minimax-m3",
+		InputPerMTok: 9,
+	}}))
+	require.NoError(t, local.SetPricingMeta(
+		"_openrouter_shadowed", `[]`,
+	))
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	require.NoError(t, local.ReconcileModelPricing(
+		[]db.ModelPricing{{
+			ModelPattern: "minimax/MiniMax-M3",
+			InputPerMTok: 2,
+		}},
+		[]string{"minimax/minimax-m3"},
+		db.PricingMeta{
+			Key:   "_openrouter_shadowed",
+			Value: `["minimax/minimax-m3"]`,
+		},
+	))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	var count int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM model_pricing WHERE model_pattern = ?`,
+		"minimax/minimax-m3",
+	).Scan(&count))
+	assert.Zero(t, count, "shadowed row removed from the mirror")
+
+	var input float64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT input_per_mtok FROM model_pricing WHERE model_pattern = ?`,
+		"minimax/MiniMax-M3",
+	).Scan(&input))
+	assert.Equal(t, 2.0, input,
+		"the higher-priority row is mirrored")
+}
+
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
