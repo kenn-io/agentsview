@@ -2,6 +2,7 @@
   import { Button, Checkbox, SegmentedControl } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
+  import { settings } from "../../stores/settings.svelte.js";
   import {
     ui,
     ALL_BLOCK_TYPES,
@@ -9,6 +10,22 @@
     type BlockType,
     type MessageLayout,
   } from "../../stores/ui.svelte.js";
+  import {
+    isChartPalette,
+    type ChartPalette,
+  } from "../../utils/chartPalette.js";
+
+  const CHART_PALETTE_OPTIONS: { value: ChartPalette; label: string }[] =
+    $derived([
+      {
+        value: "agentsview",
+        label: m.appearance_chart_palette_agentsview(),
+      },
+      {
+        value: "matplotlib",
+        label: m.appearance_chart_palette_matplotlib(),
+      },
+    ]);
 
   const LAYOUT_OPTIONS: { value: MessageLayout; label: string }[] = $derived([
     { value: "default", label: m.appearance_layout_default() },
@@ -49,6 +66,20 @@
     <Button size="sm" onclick={() => ui.toggleHighContrast()}>
       {ui.highContrast ? m.appearance_on() : m.appearance_off()}
     </Button>
+  </div>
+
+  <div class="setting-row option-row">
+    <span class="setting-label">{m.appearance_chart_palette()}</span>
+    <SegmentedControl
+      options={CHART_PALETTE_OPTIONS}
+      value={settings.chartPalette}
+      ariaLabel={m.appearance_chart_palette()}
+      disabled={settings.saving || settings.readOnly}
+      onchange={(value) => {
+        if (!isChartPalette(value)) return;
+        void settings.save({ chart_palette: value });
+      }}
+    />
   </div>
 
   <div class="setting-row option-row">

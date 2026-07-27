@@ -74,6 +74,7 @@ describe("SettingsPage", () => {
 
     resolveSettings({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
@@ -102,6 +103,7 @@ describe("SettingsPage", () => {
   it("persists the selected interface language for reload", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
