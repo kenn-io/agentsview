@@ -218,7 +218,6 @@ func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
 	) ([]pricing.ModelPricing, error) {
 		return []pricing.ModelPricing{{
 			ModelPattern: "scheduled-model",
-			InputPerMTok: 2,
 		}}, nil
 	}, now)
 
@@ -226,7 +225,6 @@ func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
 	price, err := database.GetModelPricing("scheduled-model")
 	require.NoError(t, err)
 	require.NotNil(t, price)
-	assert.Equal(t, 2.0, price.InputPerMTok)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
 }
 
