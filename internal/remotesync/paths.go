@@ -4,6 +4,7 @@ import (
 	"fmt"
 	pathpkg "path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -133,11 +134,47 @@ func validateTargetSetPaths(targets TargetSet) error {
 }
 
 // pathWithinForbiddenRoots reports whether path is a forbidden root or lies
-// beneath one, treating path and roots as local OS filepaths. It is a thin
-// wrapper over PathWithinForbiddenRoots for this package's many same-package
-// callers, all of which operate on local filesystem paths.
+// beneath one, treating path and roots as local OS filepaths. Both sides are
+// first canonicalized into the same local comparison domain (see
+// localComparablePath), so a forbidden root configured with a relative
+// spelling still guards its children when compared against an absolute
+// target, and spelling-variant aliases of one directory on a
+// case-insensitive filesystem compare equal. It wraps
+// PathWithinForbiddenRoots for this package's many same-package callers,
+// all of which operate on local filesystem paths.
 func pathWithinForbiddenRoots(roots []string, path string) bool {
-	return PathWithinForbiddenRoots(roots, path, filepath.Separator)
+	comparable := make([]string, 0, len(roots))
+	for _, root := range roots {
+		// filepath.Abs("") would resolve to the working directory,
+		// silently turning a blank root into a cwd-wide exclusion.
+		if root == "" {
+			continue
+		}
+		comparable = append(comparable, localComparablePath(root))
+	}
+	return PathWithinForbiddenRoots(
+		comparable, localComparablePath(path), filepath.Separator,
+	)
+}
+
+// localComparablePath canonicalizes a local OS path for forbidden-root
+// comparison: resolved to absolute against the process working directory
+// (so "." and other relative override spellings anchor to the same place as
+// their absolute aliases) and case-folded on Windows and macOS, whose
+// default filesystems are case-insensitive. Folding on a case-sensitive
+// APFS/NTFS variant can only over-prune — it never widens what leaves the
+// machine. Symlink aliases are intentionally not resolved here: the archive
+// and manifest walkers never traverse symlinks, so a symlinked spelling of
+// a forbidden root cannot smuggle its contents into an archive.
+func localComparablePath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = filepath.Clean(p)
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		abs = strings.ToLower(abs)
+	}
+	return abs
 }
 
 // PathWithinForbiddenRoots reports whether path is a forbidden root or lies

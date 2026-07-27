@@ -93,9 +93,67 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			}
 		}
 	}
-	return TargetSet{
+	return filterForbiddenTargets(TargetSet{
 		Dirs: dirs, Files: files, ExtraFiles: extra, ForbiddenRoots: forbiddenRoots,
+	})
+}
+
+// filterForbiddenTargets drops resolved targets that lie inside a forbidden
+// root before they are advertised. Overlapping directory overrides can nest
+// an allowed agent's root beneath an excluded agent's root; advertising the
+// nested target would make every honest client echo it back and fail the
+// whole request in SelectAllowedTargets (fail closed, HTTP 403) instead of
+// syncing the remaining targets. The per-item forbidden checks in
+// SelectAllowedTargets stay as defense-in-depth against stale or
+// hand-crafted requests. Registry order does not matter here: the filter
+// runs after every excluded agent has contributed its roots.
+func filterForbiddenTargets(t TargetSet) TargetSet {
+	if len(t.ForbiddenRoots) == 0 {
+		return t
 	}
+	fileScoped := make(map[parser.AgentType]bool, len(t.Files))
+	for agent := range t.Files {
+		fileScoped[agent] = true
+	}
+	for agent, dirs := range t.Dirs {
+		kept := withoutForbidden(dirs, t.ForbiddenRoots)
+		if len(kept) == 0 {
+			delete(t.Dirs, agent)
+			continue
+		}
+		t.Dirs[agent] = kept
+	}
+	for agent, files := range t.Files {
+		kept := withoutForbidden(files, t.ForbiddenRoots)
+		if len(kept) == 0 {
+			delete(t.Files, agent)
+			continue
+		}
+		t.Files[agent] = kept
+	}
+	// A file-scoped agent's root is only safe to advertise alongside its
+	// curated file list; if filtering removed either half, drop both so the
+	// agent cannot degrade to a raw directory target.
+	for agent := range fileScoped {
+		_, hasDirs := t.Dirs[agent]
+		_, hasFiles := t.Files[agent]
+		if hasDirs != hasFiles {
+			delete(t.Dirs, agent)
+			delete(t.Files, agent)
+		}
+	}
+	t.ExtraFiles = withoutForbidden(t.ExtraFiles, t.ForbiddenRoots)
+	return t
+}
+
+func withoutForbidden(paths, forbiddenRoots []string) []string {
+	var kept []string
+	for _, path := range paths {
+		if !pathWithinForbiddenRoots(forbiddenRoots, path) {
+			kept = append(kept, path)
+		}
+	}
+	return kept
 }
 
 func appendUniqueForbiddenRoot(roots []string, root string) []string {

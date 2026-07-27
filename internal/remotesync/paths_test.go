@@ -1,10 +1,13 @@
 package remotesync
 
 import (
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // forbiddenRootCase is the shared edge-case table used to characterize the
@@ -135,11 +138,63 @@ func TestPathWithinForbiddenRootsWindowsStyleFixtures(t *testing.T) {
 // TestPathWithinForbiddenRootsLocalWrapper confirms the unexported
 // pathWithinForbiddenRoots wrapper used by this package's other files
 // (archive.go, manifest.go, resolve.go, types.go) matches the exported
-// predicate for local OS paths.
+// predicate for local OS paths, except where its canonicalization
+// deliberately strengthens matching: a relative path is anchored to the
+// working directory before comparison, so root "/" now guards it too.
 func TestPathWithinForbiddenRootsLocalWrapper(t *testing.T) {
+	localWants := map[string]bool{
+		// filepath.Abs anchors "relative/x" under cwd, which lies
+		// beneath root "/" — the wrapper intentionally diverges from
+		// the pure lexical predicate here.
+		"root_slash_does_not_match_relative_path": true,
+	}
 	for _, tc := range forbiddenRootCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, pathWithinForbiddenRoots(tc.roots, tc.path))
+			want := tc.want
+			if localWant, ok := localWants[tc.name]; ok {
+				want = localWant
+			}
+			assert.Equal(t, want, pathWithinForbiddenRoots(tc.roots, tc.path))
 		})
+	}
+}
+
+// TestPathWithinForbiddenRootsLocalWrapperCanonicalizesRelativeSpellings
+// pins the fix for filesystem-equivalent alias spellings: a forbidden root
+// configured relatively must still guard its absolute alias's children,
+// and vice versa, and a root of "." must guard relative children.
+func TestPathWithinForbiddenRootsLocalWrapperCanonicalizesRelativeSpellings(
+	t *testing.T,
+) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	t.Chdir(base)
+	absRoot := filepath.Join(base, "sessions")
+
+	assert.True(t, pathWithinForbiddenRoots(
+		[]string{"sessions"}, filepath.Join(absRoot, "chat.db"),
+	), "relative root spelling must guard absolute children")
+	assert.True(t, pathWithinForbiddenRoots(
+		[]string{absRoot}, filepath.Join("sessions", "chat.db"),
+	), "absolute root must guard relatively spelled children")
+	assert.True(t, pathWithinForbiddenRoots([]string{"."}, "sessions"),
+		"root \".\" must guard relative children of the working directory")
+	assert.False(t, pathWithinForbiddenRoots(
+		[]string{"sessions"}, filepath.Join(base, "sessions2"),
+	), "canonicalization must preserve component-boundary matching")
+}
+
+// TestPathWithinForbiddenRootsLocalWrapperCaseFolding asserts the local
+// wrapper compares case-insensitively exactly on hosts whose default
+// filesystems are case-insensitive (Windows, macOS) and case-sensitively
+// everywhere else.
+func TestPathWithinForbiddenRootsLocalWrapperCaseFolding(t *testing.T) {
+	got := pathWithinForbiddenRoots([]string{"/a/Secret"}, "/a/sECRET/file")
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		assert.True(t, got,
+			"case-variant alias of a forbidden root must match on a case-insensitive host")
+	} else {
+		assert.False(t, got,
+			"case-sensitive hosts must not conflate case-variant paths")
 	}
 }

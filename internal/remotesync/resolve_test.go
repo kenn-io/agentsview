@@ -125,6 +125,69 @@ func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	assert.Equal(t, []string{claudeRoot}, targets.Dirs[parser.AgentClaude])
 }
 
+// TestResolveTargetsOmitsAllowedTargetsInsideForbiddenRoots pins the fix
+// for overlapping directory overrides: an allowed agent's root nested
+// inside an excluded agent's root must be omitted from the advertised
+// TargetSet — not advertised and then rejected — so an honest client
+// echoing the advertised set syncs the remaining targets instead of
+// failing the whole request with 403.
+func TestResolveTargetsOmitsAllowedTargetsInsideForbiddenRoots(t *testing.T) {
+	base := t.TempDir()
+	traeRoot := filepath.Join(base, "trae")
+	nestedClaude := filepath.Join(traeRoot, "claude")
+	outsideClaude := filepath.Join(base, "claude")
+	require.NoError(t, os.MkdirAll(nestedClaude, 0o755))
+	require.NoError(t, os.MkdirAll(outsideClaude, 0o755))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentTrae:   {traeRoot},
+			parser.AgentClaude: {nestedClaude, outsideClaude},
+		},
+	})
+
+	assert.Equal(t, []string{outsideClaude}, targets.Dirs[parser.AgentClaude],
+		"nested root must be dropped from the advertised set, siblings kept")
+	assert.Equal(t, []string{traeRoot}, targets.ForbiddenRoots)
+
+	selected, ok := remotesync.SelectAllowedTargets(targets, targets)
+	require.True(t, ok,
+		"a client echoing the advertised set must not be rejected")
+	assert.Equal(t, []string{outsideClaude}, selected.Dirs[parser.AgentClaude])
+}
+
+// TestResolveTargetsDropsFileScopedAgentWhenSessionFilesForbidden guards
+// the file-scoped pairing invariant: when a forbidden root swallows a
+// file-scoped agent's curated session files but not its advertised root,
+// both halves must be dropped — otherwise the agent would degrade to a
+// raw directory target and expose settings and caches its file scoping
+// exists to keep unreachable.
+func TestResolveTargetsDropsFileScopedAgentWhenSessionFilesForbidden(
+	t *testing.T,
+) {
+	base := t.TempDir()
+	rooRoot := filepath.Join(base, "globalStorage", "rooveterinaryinc.roo-cline")
+	tasksDir := filepath.Join(rooRoot, "tasks")
+	taskDir := filepath.Join(tasksDir, "task-1")
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "history_item.json"),
+		[]byte(`{"id":"task-1","ts":1,"task":"t"}`), 0o644,
+	))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentTrae:    {tasksDir},
+			parser.AgentRooCode: {rooRoot},
+		},
+	})
+
+	assert.Equal(t, []string{tasksDir}, targets.ForbiddenRoots)
+	assert.NotContains(t, targets.Dirs, parser.AgentRooCode,
+		"file-scoped root must not survive as a raw directory target")
+	assert.NotContains(t, targets.Files, parser.AgentRooCode)
+}
+
 // TestResolveTargetsPoolsideNarrowsToTrajectories ensures the HTTP
 // remote-sync resolver narrows Poolside's application-data root to
 // only the trajectories/ subdirectory, preventing unrelated config,
