@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     Button,
+    SearchInput,
     SettingsLayout,
     SettingsSection,
     TextInput,
@@ -25,15 +26,25 @@
 
   let authTokenInput: string = $state("");
   let active = $state("appearance");
+  let searchQuery = $state("");
   const panels = $derived(settingsPanels());
-  const categories: SettingsCategory[] = $derived(
-    panels.map((panel) => ({
-      id: panel.id,
-      label: panel.label,
-      group: panel.group,
-      summary: panel.description,
-    })),
-  );
+  const categories: SettingsCategory[] = $derived.by(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return panels
+      .filter(
+        (panel) =>
+          query === "" ||
+          `${panel.label} ${panel.title} ${panel.group} ${panel.description} ${panel.keywords}`
+            .toLowerCase()
+            .includes(query),
+      )
+      .map((panel) => ({
+        id: panel.id,
+        label: panel.label,
+        group: panel.group,
+        summary: panel.description,
+      }));
+  });
 
   onMount(() => {
     authTokenInput = getAuthToken();
@@ -112,6 +123,18 @@
     </div>
   {:else}
     <SettingsLayout {categories} bind:active title={m.settings_title()}>
+      {#snippet sidebarHeader()}
+        <SearchInput
+          bind:value={searchQuery}
+          placeholder={m.settings_search_placeholder()}
+          ariaLabel={m.settings_search_aria()}
+          size="sm"
+          block
+        />
+        {#if categories.length === 0}
+          <p class="settings-search-empty">{m.settings_search_empty()}</p>
+        {/if}
+      {/snippet}
       {#snippet panel(activeId)}
         {#each panels as meta (meta.id)}
           <div class="settings-panel" hidden={meta.id !== activeId}>
@@ -189,6 +212,12 @@
 
   .settings-panel[hidden] {
     display: none;
+  }
+
+  .settings-search-empty {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
   }
 
   .settings-loading,

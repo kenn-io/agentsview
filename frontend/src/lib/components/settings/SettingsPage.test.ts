@@ -196,4 +196,122 @@ describe("SettingsPage", () => {
 
     unmount(component);
   });
+
+  it("filters settings by keywords and restores the selected panel", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    settingsService.getApiV1SettingsWorktreeMappings.mockResolvedValue({
+      mappings: [],
+    });
+
+    const component = mount(SettingsPage, {
+      target: document.body,
+    });
+    await tick();
+    await tick();
+
+    const nav = document.body.querySelector(
+      'nav[aria-label="Settings"]',
+    )!;
+    const terminal = Array.from(nav.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Terminal"),
+    )!;
+    terminal.click();
+    await tick();
+
+    const search = document.body.querySelector<HTMLInputElement>(
+      'input[type="search"][aria-label="Search settings"]',
+    );
+    expect(search).not.toBeNull();
+
+    search!.value = "vectors";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    expect(nav.querySelectorAll("button")).toHaveLength(1);
+    expect(nav.textContent).toContain("Embeddings");
+
+    search!.value = "no such setting";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    expect(nav.querySelectorAll("button")).toHaveLength(0);
+    expect(document.body.textContent).toContain("No matching settings");
+
+    search!.value = "";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    expect(nav.querySelectorAll("button")).toHaveLength(9);
+    expect(
+      nav.querySelector('[aria-current="true"]')?.textContent,
+    ).toContain("Terminal");
+
+    unmount(component);
+  });
+
+  it("preserves a terminal draft while switching panels", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    settingsService.getApiV1SettingsWorktreeMappings.mockResolvedValue({
+      mappings: [],
+    });
+
+    const component = mount(SettingsPage, {
+      target: document.body,
+    });
+    await tick();
+    await tick();
+
+    const nav = document.body.querySelector(
+      'nav[aria-label="Settings"]',
+    )!;
+    const terminal = Array.from(nav.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Terminal"),
+    )!;
+    terminal.click();
+    await tick();
+
+    const customMode = Array.from(
+      document.body.querySelectorAll<HTMLElement>('[role="radio"]'),
+    ).find((control) => control.textContent?.includes("Custom"));
+    expect(customMode).toBeTruthy();
+    customMode!.click();
+    await tick();
+
+    const binary = document.body.querySelector<HTMLInputElement>(
+      "#terminal-bin",
+    )!;
+    binary.value = "/usr/bin/kitty";
+    binary.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    const appearance = Array.from(nav.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Appearance"),
+    )!;
+    appearance.click();
+    await tick();
+    terminal.click();
+    await tick();
+
+    expect(
+      document.body.querySelector<HTMLInputElement>("#terminal-bin")?.value,
+    ).toBe("/usr/bin/kitty");
+
+    unmount(component);
+  });
 });
