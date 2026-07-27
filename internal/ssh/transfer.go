@@ -18,24 +18,16 @@ import (
 )
 
 // buildTarCommand generates the remote shell script for the given
-// agent directories, agent-scoped files, and extra files. Uses -C /
+// agent directories, agent-scoped files, and extra files, while
+// preserving excluded-provider roots as path boundaries. Uses -C /
 // so paths are relative to root, and feeds paths to tar over stdin
 // instead of expanding them as tar argv. The script itself is sent to
 // the remote shell over stdin, so a large file-scoped Windsurf export
-// does not consume ssh/exec argument space.
+// does not consume ssh/exec argument space. Agent ownership alone is
+// not sufficient: an allowed directory can contain a forbidden
+// provider's store, so every transfer input is screened independently
+// of its owner. Pass a nil forbiddenRoots when there are none.
 func buildTarCommand(
-	dirs map[parser.AgentType][]string,
-	files map[parser.AgentType][]string,
-	extraFiles []string,
-) string {
-	return buildTarCommandWithForbiddenRoots(dirs, files, extraFiles, nil)
-}
-
-// buildTarCommandWithForbiddenRoots creates an SSH archive command while
-// preserving excluded-provider roots as path boundaries. Agent ownership alone
-// is not sufficient: an allowed directory can contain a forbidden provider's
-// store, so every transfer input is screened independently of its owner.
-func buildTarCommandWithForbiddenRoots(
 	dirs map[parser.AgentType][]string,
 	files map[parser.AgentType][]string,
 	extraFiles []string,
@@ -306,20 +298,9 @@ func shellQuote(s string) string {
 }
 
 // downloadAndExtract tars remote agent dirs and extracts to a local
-// temp dir. Returns the temp dir path; caller must clean up.
+// temp dir. Returns the temp dir path; caller must clean up. Pass a
+// nil forbiddenRoots when there are none.
 func downloadAndExtract(
-	ctx context.Context,
-	host, user string, port int, sshOpts []string,
-	dirs map[parser.AgentType][]string,
-	files map[parser.AgentType][]string,
-	extraFiles []string,
-) (string, error) {
-	return downloadAndExtractWithForbiddenRoots(
-		ctx, host, user, port, sshOpts, dirs, files, extraFiles, nil,
-	)
-}
-
-func downloadAndExtractWithForbiddenRoots(
 	ctx context.Context,
 	host, user string, port int, sshOpts []string,
 	dirs map[parser.AgentType][]string,
@@ -327,7 +308,7 @@ func downloadAndExtractWithForbiddenRoots(
 	extraFiles []string,
 	forbiddenRoots []string,
 ) (string, error) {
-	tarCmd := buildTarCommandWithForbiddenRoots(
+	tarCmd := buildTarCommand(
 		dirs, files, extraFiles, forbiddenRoots,
 	)
 	stdout, cleanup, err := runSSHScriptStream(

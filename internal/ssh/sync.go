@@ -64,7 +64,7 @@ func (rs *RemoteSync) Run(
 		"Downloading session data from %s (%d agents)...\n",
 		rs.Host, len(dirs),
 	)
-	tmpDir, err := downloadAndExtractWithForbiddenRoots(
+	tmpDir, err := downloadAndExtract(
 		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
 		dirs, files, extraFiles, forbiddenRoots,
 	)

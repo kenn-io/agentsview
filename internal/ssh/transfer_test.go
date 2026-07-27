@@ -24,7 +24,7 @@ func TestBuildTarCommand(t *testing.T) {
 		parser.AgentClaude: {"/home/wes/.claude/projects"},
 		parser.AgentCodex:  {"/home/wes/.codex/sessions"},
 	}
-	cmd := buildTarCommand(dirs, nil, []string{"/home/wes/.codex/session_index.jsonl"})
+	cmd := buildTarCommand(dirs, nil, []string{"/home/wes/.codex/session_index.jsonl"}, nil)
 
 	assert.Contains(t, cmd, "| tar cf - -C / -T -", "bad tar pipe: %s", cmd)
 	assert.NotContains(t, tarCommandLine(t, cmd), "home/wes/.claude/projects",
@@ -50,7 +50,7 @@ func TestBuildTarCommandSkipsFileScopedWindsurfDirs(t *testing.T) {
 		},
 	}
 
-	cmd := buildTarCommand(dirs, files, nil)
+	cmd := buildTarCommand(dirs, files, nil, nil)
 
 	assert.Contains(t, cmd, "'./home/wes/Windsurf/User/workspaceStorage/a/state.vscdb'")
 	assert.Contains(t, cmd, "'./home/wes/Windsurf/User/workspaceStorage/a/workspace.json'")
@@ -94,6 +94,7 @@ func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
 			parser.AgentWindsurf: {stateDB, workspaceJSON},
 		},
 		nil,
+		nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -124,6 +125,7 @@ func TestBuildTarCommandSkipsMissingFileScopedPath(t *testing.T) {
 		map[parser.AgentType][]string{
 			parser.AgentWindsurf: {stateDB, missingWAL},
 		},
+		nil,
 		nil,
 	)
 	cmd := exec.Command("sh")
@@ -166,6 +168,7 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 		map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
 		nil,
 		[]string{wal, shm, stateDB + "-journal"},
+		nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -203,6 +206,7 @@ func TestBuildTarCommandExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 			parser.AgentTrae: {chatDB},
 		},
 		nil,
+		nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -225,7 +229,7 @@ func TestBuildTarCommandPrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
 	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
 	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
 
-	script := buildTarCommandWithForbiddenRoots(
+	script := buildTarCommand(
 		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
 		nil, nil, []string{forbidden},
 	)
@@ -254,7 +258,7 @@ func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 
 		script := buildTarCommand(
 			map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
-			nil, nil,
+			nil, nil, nil,
 		)
 		cmd := exec.Command("sh")
 		cmd.Stdin = strings.NewReader(script)
@@ -278,7 +282,7 @@ func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 
 		script := buildTarCommand(
 			map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
-			nil, []string{wal},
+			nil, []string{wal}, nil,
 		)
 		cmd := exec.Command("sh")
 		cmd.Stdin = strings.NewReader(script)
@@ -316,7 +320,7 @@ func TestBuildTarCommandSkipsFailedHermesSnapshotAndKeepsOtherData(t *testing.T)
 		map[parser.AgentType][]string{
 			parser.AgentHermes: {badSessions, goodSessions},
 		},
-		nil, []string{badStateDB, goodStateDB},
+		nil, []string{badStateDB, goodStateDB}, nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -354,7 +358,7 @@ func TestBuildTarCommandWithoutPythonKeepsTranscriptsAndOtherAgents(t *testing.T
 			parser.AgentHermes: {hermesSessions},
 			parser.AgentClaude: {claudeDir},
 		},
-		nil, []string{hermesStateDB},
+		nil, []string{hermesStateDB}, nil,
 	)
 	tarPath, err := exec.LookPath("tar")
 	require.NoError(t, err)
@@ -402,7 +406,7 @@ func TestDownloadAndExtractReportsSuccessfulSSHStderr(t *testing.T) {
 	require.NoError(t, err)
 	os.Stderr = stderrWriter
 	extracted, syncErr := downloadAndExtract(
-		context.Background(), "remote", "", 0, nil, nil, nil, nil,
+		context.Background(), "remote", "", 0, nil, nil, nil, nil, nil,
 	)
 	closeErr := stderrWriter.Close()
 	os.Stderr = originalStderr
@@ -440,7 +444,7 @@ func TestBuildTarCommandSkipsLineDelimitedUnsafePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(safeFile, []byte("{}\n"), 0o644))
 	require.NoError(t, os.WriteFile(unsafeFile, []byte("{}\n"), 0o644))
 
-	script := buildTarCommand(nil, nil, []string{safeFile, unsafeFile})
+	script := buildTarCommand(nil, nil, []string{safeFile, unsafeFile}, nil)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.Output()
