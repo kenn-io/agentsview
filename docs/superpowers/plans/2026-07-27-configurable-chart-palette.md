@@ -701,9 +701,11 @@ expect(getByRole("radio", { name: "Matplotlib" }).getAttribute("aria-checked"))
 
 Add a read-only assertion that both palette radio buttons are disabled.
 
-Update every `getApiV1Settings` response fixture in `SettingsPage.test.ts` to
-include `chart_palette: "agentsview"`. Those fixtures exercise the real settings
-store and must satisfy the new required API response contract.
+Update every successful `getApiV1Settings` response fixture in both
+`settings.test.ts` and `SettingsPage.test.ts` to include
+`chart_palette: "agentsview"`, including the existing read-only-mode store test.
+Those fixtures exercise the real settings store and must satisfy the new
+required API response contract.
 
 - [ ] **Step 3: Run the focused tests and verify RED**
 
