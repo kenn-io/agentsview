@@ -786,6 +786,7 @@ func TestHTTPStatusErrorPermanentClassification(t *testing.T) {
 		{http.StatusBadRequest, "maximum context length is 8192 tokens", true},
 		{http.StatusRequestEntityTooLarge, "input too large", true},
 		{http.StatusUnprocessableEntity, "content policy violation", true},
+		{http.StatusBadRequest, "Invalid embedding input: Input strings must not be empty or whitespace-only", true},
 		{http.StatusBadRequest, "", false},
 		{http.StatusBadRequest, "no route", false},
 		{http.StatusBadRequest, "invalid token", false},

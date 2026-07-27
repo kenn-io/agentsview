@@ -133,6 +133,9 @@ func hasDocumentSpecificEmbeddingError(body string) bool {
 	if strings.Contains(body, "content") && strings.Contains(body, "policy") {
 		return true
 	}
+	if describesEmptyEmbeddingInput(body) {
+		return true
+	}
 	overLimit := strings.Contains(body, "too long") ||
 		strings.Contains(body, "too large") ||
 		strings.Contains(body, "too many") ||
@@ -148,6 +151,15 @@ func hasDocumentSpecificEmbeddingError(body string) bool {
 		strings.Contains(body, "context") ||
 		strings.Contains(body, "input") ||
 		strings.Contains(body, "text")
+}
+
+func describesEmptyEmbeddingInput(body string) bool {
+	hasWhitespaceRejection := strings.Contains(body, "whitespace-only") ||
+		strings.Contains(body, "whitespace only")
+	if !hasWhitespaceRejection || !strings.Contains(body, "empty") {
+		return false
+	}
+	return strings.Contains(body, "embedding input")
 }
 
 // embeddingsRequestBody is the OpenAI-compatible embeddings request.
