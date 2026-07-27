@@ -230,12 +230,20 @@ describe("SettingsPage", () => {
 
     expect(nav).toHaveProperty("hidden", true);
     expect(document.body.textContent).toContain("No matching settings");
+    expect(document.body.querySelector(".kit-settings__panel")).toHaveProperty(
+      "hidden",
+      true,
+    );
 
     search!.value = "";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
 
     expect(nav.querySelectorAll("button")).toHaveLength(9);
+    expect(document.body.querySelector(".kit-settings__panel")).toHaveProperty(
+      "hidden",
+      false,
+    );
     expect(nav.querySelector('[aria-current="true"]')?.textContent).toContain("Terminal");
 
     unmount(component);
@@ -287,6 +295,11 @@ describe("SettingsPage", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
     expect(document.body.textContent).toContain("No matching settings");
+    expect(document.body.querySelector(".kit-settings__panel")).toHaveProperty(
+      "hidden",
+      true,
+    );
+    expect(document.body.querySelector("#terminal-bin")).toBe(binary);
 
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -339,6 +352,13 @@ describe("SettingsPage", () => {
     expect(nav.querySelectorAll("button")).toHaveLength(1);
     expect(nav.textContent).toContain("语义嵌入");
     expect(document.body.querySelector('button[aria-label="清除搜索"]')).not.toBeNull();
+
+    search.value = "vectors";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    expect(nav.querySelectorAll("button")).toHaveLength(1);
+    expect(nav.textContent).toContain("语义嵌入");
 
     unmount(component);
   });

@@ -81,6 +81,10 @@
       ".kit-settings__nav",
     );
     if (nav) nav.hidden = hidden;
+    const panel = pageElement?.querySelector<HTMLElement>(
+      ".kit-settings__panel",
+    );
+    if (panel) panel.hidden = hidden;
   });
 
   onMount(() => {
@@ -236,8 +240,11 @@
   .settings-standalone {
     width: 100%;
     max-width: 640px;
+    max-height: 100%;
+    min-height: 0;
     margin: 0 auto;
     padding: 24px 20px 48px;
+    overflow-y: auto;
   }
 
   .settings-header {
@@ -252,6 +259,11 @@
   }
 
   .settings-panel[hidden] {
+    display: none;
+  }
+
+  :global(.kit-settings__nav[hidden]),
+  :global(.kit-settings__panel[hidden]) {
     display: none;
   }
 

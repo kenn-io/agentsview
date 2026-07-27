@@ -214,6 +214,10 @@ test.describe("Usage page", () => {
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page
+      .getByRole("navigation", { name: "Settings" })
+      .locator("button", { hasText: "Date ranges" })
+      .click();
+    await page
       .getByRole("switch", { name: "Link date ranges across pages" })
       .check();
 

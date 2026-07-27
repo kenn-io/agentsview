@@ -89,6 +89,11 @@ App-level glue that remains local:
   `FindBar` to the in-session search store.
 - kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;
   kit-ui `SettingsSection` owns settings section framing.
+  `SettingsPage.svelte` intentionally integrates with the pinned layout's
+  `.kit-settings__nav`, `.kit-settings__panel`, and `.kit-settings__scroll`
+  elements to hide zero-result content and reset panel scroll. Treat these
+  selectors as a version-pinned integration contract: kit-ui dependency bumps
+  that touch settings must run the settings browser coverage before adoption.
 
 Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
 days inclusive of today. `presetRange()` (dateRangeSelector.ts) and

@@ -1,4 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type Response } from "@playwright/test";
+
+async function openSettledSettings(page: Page) {
+  let responseCount = 0;
+  const settingsLoaded = new Promise<void>((resolve) => {
+    const onResponse = (response: Response) => {
+      if (new URL(response.url()).pathname !== "/api/v1/settings") return;
+      responseCount += 1;
+      if (responseCount < 2) return;
+      page.off("response", onResponse);
+      resolve();
+    };
+    page.on("response", onResponse);
+  });
+
+  await page.goto("/settings");
+  await settingsLoaded;
+}
 
 test.describe("Settings layout", () => {
   test("keeps navigation and actions fixed while panel content scrolls", async ({ page }) => {
@@ -48,5 +65,30 @@ test.describe("Settings layout", () => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
       .toBe(true);
+  });
+
+  test("hides an unmatched panel without discarding its draft", async ({ page }) => {
+    // App and SettingsPage both start an initial settings read. Wait for both
+    // before editing so a late response cannot reset the unsaved draft.
+    await openSettledSettings(page);
+
+    const nav = page.getByRole("navigation", { name: "Settings" });
+    await nav.locator("button", { hasText: "Terminal" }).click();
+    await page.getByRole("radio", { name: "Custom", exact: true }).click();
+
+    const binary = page.getByLabel("Terminal binary");
+    await binary.fill("/usr/bin/kitty");
+
+    const search = page.getByRole("searchbox", { name: "Search settings" });
+    await search.fill("no such setting");
+
+    await expect(page.getByText("No matching settings", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Terminal" })).toHaveCount(0);
+    await expect(page.locator("#terminal-bin")).toBeHidden();
+
+    await search.fill("");
+
+    await expect(page.getByRole("heading", { name: "Terminal" })).toBeVisible();
+    await expect(binary).toHaveValue("/usr/bin/kitty");
   });
 });
