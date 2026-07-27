@@ -80,6 +80,14 @@ func RefreshIfStale(
 			return false, nil
 		}
 	}
+	return refreshAt(database, fetch, now)
+}
+
+func refreshAt(
+	database *db.DB,
+	fetch func() ([]pricing.ModelPricing, error),
+	now time.Time,
+) (bool, error) {
 	if err := database.SetPricingMeta(
 		refreshAttemptMetaKey, now.UTC().Format(time.RFC3339),
 	); err != nil {
@@ -120,11 +128,38 @@ func EnsureCurrent(ctx context.Context, database *db.DB) error {
 	)
 }
 
+// RefreshCurrent applies the online pricing lifecycle immediately, regardless
+// of the most recent refresh attempt.
+func RefreshCurrent(ctx context.Context, database *db.DB) error {
+	return refreshCurrent(
+		ctx, database, pricing.FetchLiteLLMPricingContext, time.Now(),
+	)
+}
+
+func refreshCurrent(
+	ctx context.Context,
+	database *db.DB,
+	fetch func(context.Context) ([]pricing.ModelPricing, error),
+	now time.Time,
+) error {
+	return runCurrent(ctx, database, fetch, now, true)
+}
+
 func ensureCurrent(
 	ctx context.Context,
 	database *db.DB,
 	fetch func(context.Context) ([]pricing.ModelPricing, error),
 	now time.Time,
+) error {
+	return runCurrent(ctx, database, fetch, now, false)
+}
+
+func runCurrent(
+	ctx context.Context,
+	database *db.DB,
+	fetch func(context.Context) ([]pricing.ModelPricing, error),
+	now time.Time,
+	force bool,
 ) error {
 	previousAttempt, err := database.GetPricingMeta(refreshAttemptMetaKey)
 	if err != nil {
@@ -133,7 +168,13 @@ func ensureCurrent(
 	fetchCurrent := func() ([]pricing.ModelPricing, error) {
 		return fetch(ctx)
 	}
-	_, err = Ensure(database, false, fetchCurrent, now)
+	if force {
+		if err = SeedFallback(database); err == nil {
+			_, err = refreshAt(database, fetchCurrent, now)
+		}
+	} else {
+		_, err = Ensure(database, false, fetchCurrent, now)
+	}
 	if err == nil || ctx.Err() == nil {
 		return err
 	}

@@ -208,6 +208,28 @@ func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
 	assert.Equal(t, 1, retryCalls)
 }
 
+func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
+	database := testDB(t)
+	now := pricingTestNow()
+	seedPricingAttempt(t, database, now, 10*time.Minute)
+
+	err := refreshCurrent(context.Background(), database, func(
+		context.Context,
+	) ([]pricing.ModelPricing, error) {
+		return []pricing.ModelPricing{{
+			ModelPattern: "scheduled-model",
+			InputPerMTok: 2,
+		}}, nil
+	}, now)
+
+	require.NoError(t, err)
+	price, err := database.GetModelPricing("scheduled-model")
+	require.NoError(t, err)
+	require.NotNil(t, price)
+	assert.Equal(t, 2.0, price.InputPerMTok)
+	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
+}
+
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
 	return dbtest.OpenTestDBAt(
