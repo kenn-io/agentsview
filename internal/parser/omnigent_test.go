@@ -1,5 +1,5 @@
-// ABOUTME: Tests for the omnigent chat.db parser: cross-generation schema
-// ABOUTME: equivalence, item decode, fingerprinting, usage, and a real-copy run.
+// ABOUTME: Tests for the omnigent chat.db parser: the two supported schema
+// ABOUTME: generations, item decode, fingerprinting, usage, and change tracking.
 package parser
 
 import (
@@ -41,8 +41,8 @@ func (c *omnigentParseCancellationContext) Err() error {
 }
 
 // omnigentSeedItem is one logical conversation_items row, referenced by its
-// testdata payload file. The gen-specific builders translate `typeName` into a
-// VARCHAR name (old) or SMALLINT code (split).
+// testdata payload file. Both supported generations encode type as a
+// SMALLINT code.
 type omnigentSeedItem struct {
 	conv, typeName, fixture, search string
 	pos                             int
@@ -78,26 +78,9 @@ const omnigentTestUsage = `{"input_tokens":100,"output_tokens":50,` +
 	`"total_cost_usd":1.5,"by_model":{"claude-opus-4-8":` +
 	`{"input_tokens":100,"output_tokens":50,"total_cost_usd":1.5}}}`
 
-const omnigentOldGenDDL = `
-CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL);
-CREATE TABLE conversations (
-	id VARCHAR(64) PRIMARY KEY,
-	created_at INTEGER, updated_at INTEGER, title TEXT,
-	kind VARCHAR(32), model_override VARCHAR(128),
-	parent_conversation_id VARCHAR(64), root_conversation_id VARCHAR(64),
-	sub_agent_name VARCHAR(128), workspace VARCHAR(2048),
-	git_branch VARCHAR(255), session_usage TEXT
-);
-CREATE INDEX ix_conversations_updated_at ON conversations(updated_at, id);
-CREATE TABLE conversation_items (
-	id VARCHAR(64) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
-	position INTEGER NOT NULL, type VARCHAR(32) NOT NULL,
-	data TEXT NOT NULL, search_text TEXT NOT NULL
-);
-CREATE INDEX ix_conversation_items_conversation_id_position
-	ON conversation_items(conversation_id, position);
-`
-
+// omnigentSplitGenDDL is the older of the two supported generations: text
+// ids, split session metadata, and model overrides in a separate
+// agent_configuration table.
 const omnigentSplitGenDDL = `
 CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL);
 CREATE TABLE conversations (
@@ -186,70 +169,70 @@ func readOmnigentFixture(t *testing.T, name string) string {
 	return string(data)
 }
 
-func seedOmnigentItems(t *testing.T, db *sql.DB, useCodes bool) {
+func seedOmnigentItems(t *testing.T, db *sql.DB) {
 	t.Helper()
 	for i, it := range omnigentSeedItems {
-		typeVal := it.typeName
-		if useCodes {
-			typeVal = fmt.Sprintf("%d", omnigentItemTypeCode[it.typeName])
-		}
 		data := readOmnigentFixture(t, it.fixture)
-		if useCodes {
-			_, err := db.Exec(
-				`INSERT INTO conversation_items
-				 (conversation_id, id, position, type, data, search_text)
-				 VALUES (?,?,?,?,?,?)`,
-				it.conv, fmt.Sprintf("item_%d", i), it.pos, typeVal, data, it.search)
-			require.NoError(t, err)
-			continue
-		}
 		_, err := db.Exec(
 			`INSERT INTO conversation_items
-			 (id, conversation_id, position, type, data, search_text)
+			 (conversation_id, id, position, type, data, search_text)
 			 VALUES (?,?,?,?,?,?)`,
-			fmt.Sprintf("item_%d", i), it.conv, it.pos, typeVal, data, it.search)
+			it.conv, fmt.Sprintf("item_%d", i), it.pos,
+			omnigentItemTypeCode[it.typeName], data, it.search)
 		require.NoError(t, err)
 	}
 }
 
-// writeOmnigentOldGenDB builds a single-table, VARCHAR-enum chat.db.
-func writeOmnigentOldGenDB(t *testing.T) string {
+// omnigentDBOptions configures writeOmnigentDB, the single builder spanning
+// both supported generations (text-ID split, with agent_configuration, and
+// binary-ID split, with session_overrides).
+type omnigentDBOptions struct {
+	binaryIDs      bool
+	alembicVersion string
+	seed           func(t *testing.T, db *sql.DB)
+}
+
+// writeOmnigentDB creates a chat.db under the generation selected by opts and
+// runs opts.seed to populate it. Callers get a thin named wrapper per test
+// shape rather than calling this directly.
+func writeOmnigentDB(t *testing.T, opts omnigentDBOptions) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), omnigentDBName)
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
 
-	execOmnigentDDL(t, db, omnigentOldGenDDL)
-	_, err = db.Exec(`INSERT INTO alembic_version VALUES ('n1a2b3c4d5e6')`)
+	ddl := omnigentSplitGenDDL
+	if opts.binaryIDs {
+		ddl = omnigentBinaryIDGenDDL
+	}
+	execOmnigentDDL(t, db, ddl)
+	version := opts.alembicVersion
+	if version == "" {
+		version = "test"
+	}
+	_, err = db.Exec(`INSERT INTO alembic_version VALUES (?)`, version)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO conversations
-		(id, created_at, updated_at, title, kind, model_override,
-		 parent_conversation_id, root_conversation_id, sub_agent_name,
-		 workspace, git_branch, session_usage)
-		VALUES
-		('conv_root', 1783716327, 1783718231, 'top task', 'default',
-		 'claude-opus-4-8', '', 'conv_root', '', '/work/proj', 'main', ?),
-		('conv_kid', 1783716400, 1783716701, 'claude_code:scout', 'sub_agent',
-		 '', 'conv_root', 'conv_root', 'claude_code', '', '', '')`,
-		omnigentTestUsage)
-	require.NoError(t, err)
-	seedOmnigentItems(t, db, false)
+	if opts.seed != nil {
+		opts.seed(t, db)
+	}
 	return path
 }
 
-// writeOmnigentSplitGenDB builds a split-table, SMALLINT-enum chat.db.
+// writeOmnigentSplitGenDB builds the text-ID split generation's two-
+// conversation semantic fixture (root + sub-agent), model override sourced
+// from agent_configuration.
 func writeOmnigentSplitGenDB(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	db, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	defer db.Close()
+	return writeOmnigentDB(t, omnigentDBOptions{
+		alembicVersion: "bb2c3d4e5f6a",
+		seed:           seedOmnigentSplitGenRows,
+	})
+}
 
-	execOmnigentDDL(t, db, omnigentSplitGenDDL)
-	_, err = db.Exec(`INSERT INTO alembic_version VALUES ('bb2c3d4e5f6a')`)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO conversations
+func seedOmnigentSplitGenRows(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO conversations
 		(id, created_at, updated_at, title, parent_conversation_id,
 		 root_conversation_id)
 		VALUES
@@ -267,12 +250,82 @@ func writeOmnigentSplitGenDB(t *testing.T) string {
 		(conversation_id, model_override)
 		VALUES ('conv_root', 'claude-opus-4-8')`)
 	require.NoError(t, err)
-	seedOmnigentItems(t, db, true)
-	return path
+	seedOmnigentItems(t, db)
 }
 
-// assertOmnigentParse checks the invariants both generations must satisfy.
-func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix string) {
+// writeOmnigentSingleWorkspaceCardinalityDB builds count conversations, all
+// in workspace 0, for tests that exercise archive-size-independent behavior
+// against a single container.
+func writeOmnigentSingleWorkspaceCardinalityDB(t *testing.T, count int) string {
+	t.Helper()
+	return writeOmnigentDB(t, omnigentDBOptions{
+		alembicVersion: "cardinality",
+		seed: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			for i := range count {
+				id := fmt.Sprintf("conv_%03d", i)
+				updatedAt := int64(1_700_000_000 + i)
+				if i == count-1 {
+					updatedAt = 4_000_000_000
+				}
+				_, err := db.Exec(`INSERT INTO conversations
+					(workspace_id, id, created_at, updated_at, title,
+					 root_conversation_id)
+					VALUES (0, ?, ?, ?, ?, ?)`, id, updatedAt-1, updatedAt, id, id)
+				require.NoError(t, err)
+				_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
+					(workspace_id, id, kind)
+					VALUES (0, ?, 1)`, id)
+				require.NoError(t, err)
+				_, err = db.Exec(`INSERT INTO conversation_items
+					(workspace_id, conversation_id, id, position, type, data,
+					 search_text)
+					VALUES (0, ?, ?, 0, 1,
+						'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
+						'hi')`, id, id+"_i0")
+				require.NoError(t, err)
+			}
+		},
+	})
+}
+
+// writeOmnigentSplitWorkspaceCardinalityDB builds count workspaces, each with
+// one conversation "conv", for tests that exercise workspace-scoped
+// incremental discovery.
+func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
+	t.Helper()
+	return writeOmnigentDB(t, omnigentDBOptions{
+		alembicVersion: "workspace-cardinality",
+		seed: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			for workspaceID := range count {
+				updatedAt := int64(1_700_000_000 + workspaceID)
+				_, err := db.Exec(`INSERT INTO conversations
+					(workspace_id, id, created_at, updated_at, title,
+					 root_conversation_id)
+					VALUES (?, 'conv', ?, ?, 'conversation', 'conv')`,
+					workspaceID, updatedAt-1, updatedAt)
+				require.NoError(t, err)
+				_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
+					(workspace_id, id, kind, workspace)
+					VALUES (?, 'conv', 1, '/work/project')`, workspaceID)
+				require.NoError(t, err)
+				_, err = db.Exec(`INSERT INTO conversation_items
+					(workspace_id, conversation_id, id, position, type, data,
+					 search_text)
+					VALUES (?, 'conv', 'item', 0, 1,
+						'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
+						'hi')`, workspaceID)
+				require.NoError(t, err)
+			}
+		},
+	})
+}
+
+// assertOmnigentParse checks the split-generation semantic fixture's
+// invariants (built by writeOmnigentSplitGenDB and writeOmnigentDB variants
+// that reuse seedOmnigentSplitGenRows-shaped content).
+func assertOmnigentParse(t *testing.T, results []ParseResult) {
 	t.Helper()
 	require.Len(t, results, 2)
 	byID := map[string]ParseResult{}
@@ -280,8 +333,8 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 		byID[r.Session.ID] = r
 	}
 
-	rootID := "omnigent:" + workspacePrefix + "conv_root"
-	kidID := "omnigent:" + workspacePrefix + "conv_kid"
+	rootID := "omnigent:0:conv_root"
+	kidID := "omnigent:0:conv_kid"
 	root, ok := byID[rootID]
 	require.True(t, ok, "root session present")
 	assert.Equal(t, omnigentAgent, root.Session.Agent)
@@ -345,24 +398,19 @@ func assertOmnigentParse(t *testing.T, results []ParseResult, workspacePrefix st
 	assert.Equal(t, "main", kid.Session.GitBranch)
 }
 
-func TestParseOmnigentDB_OldGen(t *testing.T) {
-	results, err := ParseOmnigentDB(writeOmnigentOldGenDB(t), "testhost")
-	require.NoError(t, err)
-	assertOmnigentParse(t, results, "")
-}
-
 func TestParseOmnigentDB_SplitGen(t *testing.T) {
 	results, err := ParseOmnigentDB(writeOmnigentSplitGenDB(t), "testhost")
 	require.NoError(t, err)
-	assertOmnigentParse(t, results, "0:")
+	assertOmnigentParse(t, results)
 }
 
 func TestOmnigentProviderMemberParseInfersContinuationRelationship(t *testing.T) {
-	path := writeOmnigentOldGenDB(t)
+	path := writeOmnigentSplitGenDB(t)
 	writer, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	_, err = writer.Exec(
-		`UPDATE conversations SET kind = 'default' WHERE id = 'conv_kid'`,
+		`UPDATE omnigent_conversation_metadata SET kind = 1
+		  WHERE workspace_id = 0 AND id = 'conv_kid'`,
 	)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
@@ -371,7 +419,8 @@ func TestOmnigentProviderMemberParseInfersContinuationRelationship(t *testing.T)
 	})
 	require.True(t, ok)
 	source, found, err := provider.FindSource(
-		context.Background(), FindSourceRequest{FullSessionID: "omnigent:conv_kid"},
+		context.Background(),
+		FindSourceRequest{FullSessionID: "omnigent:0:conv_kid"},
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -382,7 +431,7 @@ func TestOmnigentProviderMemberParseInfersContinuationRelationship(t *testing.T)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, RelContinuation,
 		outcome.Results[0].Result.Session.RelationshipType)
-	assert.Equal(t, "omnigent:conv_root",
+	assert.Equal(t, "omnigent:0:conv_root",
 		outcome.Results[0].Result.Session.ParentSessionID)
 }
 
@@ -401,36 +450,6 @@ func TestDecodeOmnigentFunctionOutputPreservesJSONString(t *testing.T) {
 	assert.True(t, json.Valid([]byte(result.ContentRaw)))
 	assert.Equal(t, output, DecodeContent(result.ContentRaw))
 	assert.Equal(t, len(output), result.ContentLength)
-}
-
-// TestParseOmnigentDB_CrossGenEquivalence asserts the two generations produce
-// the same transcript, so the schema adapter is the only difference.
-func TestParseOmnigentDB_CrossGenEquivalence(t *testing.T) {
-	oldRes, err := ParseOmnigentDB(writeOmnigentOldGenDB(t), "h")
-	require.NoError(t, err)
-	splitRes, err := ParseOmnigentDB(writeOmnigentSplitGenDB(t), "h")
-	require.NoError(t, err)
-	require.Equal(t, len(oldRes), len(splitRes))
-
-	summarize := func(rs []ParseResult) map[string]string {
-		m := map[string]string{}
-		for _, r := range rs {
-			var b strings.Builder
-			for _, msg := range r.Messages {
-				fmt.Fprintf(&b, "%s|%s|%v|", msg.Role, msg.Content, msg.HasToolUse)
-			}
-			m[r.Session.ID] = b.String()
-		}
-		return m
-	}
-	normalizeSplitIDs := func(rs []ParseResult) []ParseResult {
-		for i := range rs {
-			rs[i].Session.ID = strings.Replace(
-				rs[i].Session.ID, "omnigent:0:", "omnigent:", 1)
-		}
-		return rs
-	}
-	assert.Equal(t, summarize(oldRes), summarize(normalizeSplitIDs(splitRes)))
 }
 
 func TestParseOmnigentDB_SplitWorkspaceIdentity(t *testing.T) {
@@ -500,8 +519,55 @@ func TestParseOmnigentDB_UnsupportedSchema(t *testing.T) {
 	require.ErrorAs(t, err, &unsupported)
 }
 
+// TestDetectOmnigentSchemaSingleTableLegacyIsUnsupported proves the dropped
+// generation (session metadata columns on conversations, no
+// omnigent_conversation_metadata table) takes the same unsupported path as
+// any other schema this parser cannot read: a clean, nonfatal skip.
+func TestDetectOmnigentSchemaSingleTableLegacyIsUnsupported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), omnigentDBName)
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	execOmnigentDDL(t, db, `
+		CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL);
+		CREATE TABLE conversations (
+			id VARCHAR(64) PRIMARY KEY,
+			created_at INTEGER, updated_at INTEGER, title TEXT,
+			kind VARCHAR(32), model_override VARCHAR(128),
+			parent_conversation_id VARCHAR(64), root_conversation_id VARCHAR(64),
+			sub_agent_name VARCHAR(128), workspace VARCHAR(2048),
+			git_branch VARCHAR(255), session_usage TEXT
+		);
+		CREATE INDEX ix_conversations_updated_at ON conversations(updated_at, id);
+		CREATE TABLE conversation_items (
+			id VARCHAR(64) PRIMARY KEY, conversation_id VARCHAR(64) NOT NULL,
+			position INTEGER NOT NULL, type VARCHAR(32) NOT NULL,
+			data TEXT NOT NULL, search_text TEXT NOT NULL
+		);
+		CREATE INDEX ix_conversation_items_conversation_id_position
+			ON conversation_items(conversation_id, position);`)
+	_, err = db.Exec(`INSERT INTO alembic_version VALUES ('n1a2b3c4d5e6')`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO conversations
+		(id, created_at, updated_at, title, kind, model_override,
+		 root_conversation_id)
+		VALUES ('conv_root', 1, 2, 'top task', 'default', 'claude-opus-4-8',
+			'conv_root')`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	conn, err := openOmnigentDB(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = detectOmnigentSchema(conn)
+	var unsupported ErrOmnigentUnsupportedSchema
+	require.ErrorAs(t, err, &unsupported)
+
+	_, parseErr := ParseOmnigentDB(path, "h")
+	require.ErrorAs(t, parseErr, &unsupported)
+}
+
 func TestDetectOmnigentSchemaPropagatesDatabaseErrors(t *testing.T) {
-	path := writeOmnigentOldGenDB(t)
+	path := writeOmnigentSplitGenDB(t)
 	conn, err := openOmnigentDB(path)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
@@ -545,7 +611,7 @@ func TestOmnigentProviderUnsupportedSchemaIsNonDestructive(t *testing.T) {
 }
 
 func TestOmnigentProviderPartialItemIndexIsNonDestructive(t *testing.T) {
-	path := writeOmnigentOldGenDB(t)
+	path := writeOmnigentSplitGenDB(t)
 	writer, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	_, err = writer.Exec(
@@ -578,7 +644,7 @@ func TestOmnigentProviderPartialItemIndexIsNonDestructive(t *testing.T) {
 }
 
 func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
-	path := writeOmnigentOldGenDB(t)
+	path := writeOmnigentSplitGenDB(t)
 	conn, err := openOmnigentDB(path)
 	require.NoError(t, err)
 	defer conn.Close()
@@ -601,7 +667,7 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 	require.NoError(t, err)
 	_, err = writer.Exec(`INSERT INTO conversation_items
 		(id, conversation_id, position, type, data, search_text)
-		VALUES ('extra', 'conv_root', 99, 'message',
+		VALUES ('extra', 'conv_root', 99, 1,
 			'{"role":"user","content":[{"type":"input_text","text":"more"}]}',
 			'more')`)
 	require.NoError(t, err)
@@ -619,7 +685,7 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 	for _, archiveSize := range []int{100, 200} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			path := writeOmnigentCardinalityDB(t, archiveSize)
+			path := writeOmnigentSingleWorkspaceCardinalityDB(t, archiveSize)
 			changedID := fmt.Sprintf("conv_%03d", archiveSize/2)
 			provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 				Roots: []string{filepath.Dir(path)}, Machine: "host",
@@ -636,7 +702,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 			require.NoError(t, err)
 			_, err = writer.Exec(`INSERT INTO conversation_items
 				(id, conversation_id, position, type, data, search_text)
-				VALUES (?, ?, 1, 'message',
+				VALUES (?, ?, 1, 1,
 					'{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
 					'changed')`, changedID+"_i1", changedID)
 			require.NoError(t, err)
@@ -648,8 +714,9 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 				})
 			require.NoError(t, err)
 			require.Len(t, changed, 1)
+			changedKey := "0:" + changedID
 			changedIndex := slices.IndexFunc(changed, func(source SourceRef) bool {
-				return source.DisplayPath == VirtualSourcePath(path, changedID)
+				return source.DisplayPath == VirtualSourcePath(path, changedKey)
 			})
 			require.NotEqual(t, -1, changedIndex)
 			outcome, err := provider.Parse(context.Background(), ParseRequest{
@@ -664,7 +731,7 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 }
 
 func TestOmnigentWarmDiscoveryYieldsContainer(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 100)
+	path := writeOmnigentSingleWorkspaceCardinalityDB(t, 100)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 		Roots: []string{filepath.Dir(path)}, Machine: "host",
 	})
@@ -688,7 +755,7 @@ func TestOmnigentWarmDiscoveryYieldsContainer(t *testing.T) {
 }
 
 func TestOmnigentColdEmptyChangedPathReconcilesAuthoritatively(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 0)
+	path := writeOmnigentSingleWorkspaceCardinalityDB(t, 0)
 	factory, ok := ProviderFactoryByType(AgentOmnigent)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{
@@ -710,7 +777,7 @@ func TestOmnigentColdEmptyChangedPathReconcilesAuthoritatively(t *testing.T) {
 }
 
 func TestOmnigentChangedPathCancellationDoesNotAdvanceFloor(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 5)
+	path := writeOmnigentSingleWorkspaceCardinalityDB(t, 5)
 	conn, err := openOmnigentDB(path)
 	require.NoError(t, err)
 	schema, err := detectOmnigentSchema(conn)
@@ -718,7 +785,7 @@ func TestOmnigentChangedPathCancellationDoesNotAdvanceFloor(t *testing.T) {
 	require.NoError(t, conn.Close())
 	tracker := newOmnigentChangeTracker()
 	tracker.containers[path] = omnigentTrackedContainer{
-		schema: schema, checkedAt: 5,
+		schema: schema, conversationRowID: 1, itemRowID: 1,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -729,14 +796,14 @@ func TestOmnigentChangedPathCancellationDoesNotAdvanceFloor(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, changed)
 	tracker.mu.Lock()
-	floor := tracker.containers[path].checkedAt
+	floor := tracker.containers[path].conversationRowID
 	tracker.mu.Unlock()
-	assert.EqualValues(t, 5, floor,
+	assert.EqualValues(t, 1, floor,
 		"a failed scan must not advance past unobserved changes")
 }
 
 func TestOmnigentContainerParseHonorsCancellationAfterStart(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 5)
+	path := writeOmnigentSingleWorkspaceCardinalityDB(t, 5)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 		Roots: []string{filepath.Dir(path)}, Machine: "host",
 	})
@@ -776,7 +843,7 @@ func TestOmnigentContainerParseHonorsCancellationAfterStart(t *testing.T) {
 }
 
 func TestOmnigentWarmEventsDeferStoredHintDeletionReconciliation(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 65)
+	path := writeOmnigentSingleWorkspaceCardinalityDB(t, 65)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 		Roots: []string{filepath.Dir(path)}, Machine: "host",
 	})
@@ -790,6 +857,10 @@ func TestOmnigentWarmEventsDeferStoredHintDeletionReconciliation(t *testing.T) {
 			`DELETE FROM conversation_items WHERE conversation_id = ?`, id,
 		)
 		require.NoError(t, err)
+		_, err = writer.Exec(
+			`DELETE FROM omnigent_conversation_metadata WHERE id = ?`, id,
+		)
+		require.NoError(t, err)
 		_, err = writer.Exec(`DELETE FROM conversations WHERE id = ?`, id)
 		require.NoError(t, err)
 	}
@@ -799,8 +870,8 @@ func TestOmnigentWarmEventsDeferStoredHintDeletionReconciliation(t *testing.T) {
 		context.Background(), ChangedPathRequest{
 			Path: path, EventKind: "write",
 			StoredSourcePaths: []string{
-				VirtualSourcePath(path, "conv_031"),
-				VirtualSourcePath(path, "conv_032"),
+				VirtualSourcePath(path, "0:conv_031"),
+				VirtualSourcePath(path, "0:conv_032"),
 			},
 		},
 	)
@@ -810,7 +881,7 @@ func TestOmnigentWarmEventsDeferStoredHintDeletionReconciliation(t *testing.T) {
 }
 
 func TestOmnigentPresentStoredHintsDoNotFanOut(t *testing.T) {
-	path := writeOmnigentCardinalityDB(t, 200)
+	path := writeOmnigentSingleWorkspaceCardinalityDB(t, 200)
 	conn, err := openOmnigentDB(path)
 	require.NoError(t, err)
 	schema, err := detectOmnigentSchema(conn)
@@ -822,19 +893,17 @@ func TestOmnigentPresentStoredHintsDoNotFanOut(t *testing.T) {
 
 	hints := make([]string, 0, len(metas))
 	for _, meta := range metas {
-		hints = append(hints, VirtualSourcePath(path, meta.member().key(schema)))
+		hints = append(hints, VirtualSourcePath(path, meta.member().key()))
 	}
 
-	tracker := newOmnigentChangeTracker()
-	tracker.containers[path] = omnigentTrackedContainer{
-		schema: schema, checkedAt: time.Now().Unix(),
-	}
+	tracker := omnigentTrackerAtCurrentHighWater(t, path, schema)
 	writer, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = writer.Exec(
-		`UPDATE conversations SET updated_at = ? WHERE id = 'conv_005'`,
-		time.Now().Unix(),
-	)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(workspace_id, conversation_id, id, position, type, data, search_text)
+		VALUES (0, 'conv_005', 'conv_005_i1', 1, 1,
+			'{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}',
+			'changed')`)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -847,7 +916,7 @@ func TestOmnigentPresentStoredHintsDoNotFanOut(t *testing.T) {
 	require.Len(t, changed, 1,
 		"stored hints for present members must not scale event fan-out "+
 			"with archive size")
-	assert.Equal(t, "conv_005", changed[0].MemberID)
+	assert.Equal(t, "0:conv_005", changed[0].MemberID)
 }
 
 func TestOmnigentSplitWorkspaceChangedPathClassification(t *testing.T) {
@@ -1121,7 +1190,6 @@ func omnigentTrackerAtCurrentHighWater(
 	tracker := newOmnigentChangeTracker()
 	tracker.containers[path] = omnigentTrackedContainer{
 		schema:            schema,
-		checkedAt:         time.Now().Unix(),
 		conversationRowID: conversationRowID,
 		conversationTail:  conversationTail,
 		itemRowID:         itemRowID,
@@ -1139,16 +1207,6 @@ func TestOmnigentIncrementalQueriesUseSeekableIndexes(t *testing.T) {
 		wantDetail string
 		wantItems  string
 	}{
-		{
-			name: "old schema updated_at range",
-			writeDB: func(t *testing.T, count int) string {
-				return writeOmnigentCardinalityDB(t, count)
-			},
-			query:      omnigentChangedMetaQuery,
-			args:       []any{int64(1), int64(2)},
-			wantDetail: "ix_conversations_updated_at",
-			wantItems:  "ix_conversation_items_conversation_id_position",
-		},
 		{
 			name:       "split schema new conversation rows",
 			writeDB:    writeOmnigentSplitWorkspaceCardinalityDB,
@@ -1200,35 +1258,6 @@ func TestOmnigentIncrementalQueriesUseSeekableIndexes(t *testing.T) {
 	}
 }
 
-func writeOmnigentCardinalityDB(t *testing.T, count int) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	database, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	execOmnigentDDL(t, database, omnigentOldGenDDL)
-	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('cardinality')`)
-	require.NoError(t, err)
-	for i := range count {
-		id := fmt.Sprintf("conv_%03d", i)
-		updatedAt := int64(1_700_000_000 + i)
-		if i == count-1 {
-			updatedAt = 4_000_000_000
-		}
-		_, err = database.Exec(`INSERT INTO conversations
-			(id, created_at, updated_at, title, kind, root_conversation_id)
-			VALUES (?, ?, ?, ?, 'default', ?)`, id, updatedAt-1, updatedAt, id, id)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO conversation_items
-			(id, conversation_id, position, type, data, search_text)
-			VALUES (?, ?, 0, 'message',
-				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
-				'hi')`, id+"_i0", id)
-		require.NoError(t, err)
-	}
-	require.NoError(t, database.Close())
-	return path
-}
-
 func initializeOmnigentProvider(t *testing.T, provider Provider, want int) {
 	t.Helper()
 	sources, err := provider.Discover(context.Background())
@@ -1239,36 +1268,6 @@ func initializeOmnigentProvider(t *testing.T, provider Provider, want int) {
 	)
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, want)
-}
-
-func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	database, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	execOmnigentDDL(t, database, omnigentSplitGenDDL)
-	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('workspace-cardinality')`)
-	require.NoError(t, err)
-	for workspaceID := range count {
-		updatedAt := int64(1_700_000_000 + workspaceID)
-		_, err = database.Exec(`INSERT INTO conversations
-			(workspace_id, id, created_at, updated_at, title, root_conversation_id)
-			VALUES (?, 'conv', ?, ?, 'conversation', 'conv')`,
-			workspaceID, updatedAt-1, updatedAt)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
-			(workspace_id, id, kind, workspace)
-			VALUES (?, 'conv', 1, '/work/project')`, workspaceID)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO conversation_items
-			(workspace_id, conversation_id, id, position, type, data, search_text)
-			VALUES (?, 'conv', 'item', 0, 1,
-				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
-				'hi')`, workspaceID)
-		require.NoError(t, err)
-	}
-	require.NoError(t, database.Close())
-	return path
 }
 
 // omnigentHexBytes decodes a 32-char hex conversation ID into the 16 raw
@@ -1293,24 +1292,27 @@ const (
 	omnigentBinaryUsageJSON = `{"input_tokens":1500,"output_tokens":350}`
 )
 
-// writeOmnigentBinaryIDDB builds a newest-generation database: BLOB uuid ids,
-// int enum codes, split metadata, framed session_usage, and a sub-agent child.
+// writeOmnigentBinaryIDDB builds the current generation's two-conversation
+// fixture: BLOB uuid ids, int enum codes, split metadata, framed
+// session_usage, and a sub-agent child.
 func writeOmnigentBinaryIDDB(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	database, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	execOmnigentDDL(t, database, omnigentBinaryIDGenDDL)
-	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('d1e2f3a4b5c6')`)
-	require.NoError(t, err)
+	return writeOmnigentDB(t, omnigentDBOptions{
+		binaryIDs:      true,
+		alembicVersion: "d1e2f3a4b5c6",
+		seed:           seedOmnigentBinaryIDRows,
+	})
+}
 
+func seedOmnigentBinaryIDRows(t *testing.T, db *sql.DB) {
+	t.Helper()
 	conv := omnigentHexBytes(t, omnigentBinaryConvHex)
 	sub := omnigentHexBytes(t, omnigentBinarySubHex)
 	insertConv := func(
 		id, parent, root []byte, title string, updatedAt int64,
 		sessionOverrides string,
 	) {
-		_, err = database.Exec(`INSERT INTO conversations
+		_, err := db.Exec(`INSERT INTO conversations
 			(id, created_at, updated_at, title, parent_conversation_id,
 			 root_conversation_id, agent_id, session_overrides)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1326,17 +1328,17 @@ func writeOmnigentBinaryIDDB(t *testing.T) string {
 
 	// session_usage uses the compression framing: sentinel + raw codec.
 	framedUsage := append([]byte{0x00, 0x00}, []byte(omnigentBinaryUsageJSON)...)
-	_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
+	_, err := db.Exec(`INSERT INTO omnigent_conversation_metadata
 		(id, kind, workspace, git_branch, session_usage)
 		VALUES (?, 1, '/workspace/project-a', 'main', ?)`,
 		conv, framedUsage)
 	require.NoError(t, err)
-	_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
+	_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
 		(id, kind, sub_agent_name, workspace)
 		VALUES (?, 2, 'explorer', '/workspace/project-a')`, sub)
 	require.NoError(t, err)
 	insertItem := func(convID []byte, itemHex string, position, typeCode int, data, search string) {
-		_, err = database.Exec(`INSERT INTO conversation_items
+		_, err := db.Exec(`INSERT INTO conversation_items
 			(id, conversation_id, response_id, created_at, position, type,
 			 status, data, search_text)
 			VALUES (?, ?, 'resp_001', 1700000010, ?, ?, 1, ?, ?)`,
@@ -1358,9 +1360,6 @@ func writeOmnigentBinaryIDDB(t *testing.T) string {
 	insertItem(sub, omnigentBinaryItemHexE, 0, 1,
 		`{"role":"user","content":[{"type":"input_text","text":"Map the retry package"}]}`,
 		"Map the retry package")
-
-	require.NoError(t, database.Close())
-	return path
 }
 
 func TestOmnigentBinaryIDGenerationParses(t *testing.T) {
@@ -1404,7 +1403,7 @@ func TestOmnigentBinaryIDGenerationParses(t *testing.T) {
 }
 
 func TestOmnigentMetaMessageIsHiddenButChangesFingerprint(t *testing.T) {
-	path := writeOmnigentOldGenDB(t)
+	path := writeOmnigentSplitGenDB(t)
 	before, err := ParseOmnigentDB(path, "host")
 	require.NoError(t, err)
 	require.Len(t, before, 2)
@@ -1412,13 +1411,13 @@ func TestOmnigentMetaMessageIsHiddenButChangesFingerprint(t *testing.T) {
 	for _, result := range before {
 		beforeByID[result.Session.ID] = result
 	}
-	beforeRoot := beforeByID["omnigent:conv_root"]
+	beforeRoot := beforeByID["omnigent:0:conv_root"]
 
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	_, err = database.Exec(`INSERT INTO conversation_items
 		(id, conversation_id, position, type, data, search_text)
-		VALUES ('meta_item', 'conv_root', -1, 'message', ?, ?)`,
+		VALUES ('meta_item', 'conv_root', -1, 1, ?, ?)`,
 		readOmnigentFixture(t, "message_meta_user.json"),
 		"secret injected skill instructions",
 	)
@@ -1432,7 +1431,7 @@ func TestOmnigentMetaMessageIsHiddenButChangesFingerprint(t *testing.T) {
 	for _, result := range after {
 		afterByID[result.Session.ID] = result
 	}
-	afterRoot := afterByID["omnigent:conv_root"]
+	afterRoot := afterByID["omnigent:0:conv_root"]
 
 	assert.Equal(t, beforeRoot.Session.FirstMessage, afterRoot.Session.FirstMessage)
 	assert.Equal(t, beforeRoot.Session.MessageCount, afterRoot.Session.MessageCount)
@@ -1695,28 +1694,4 @@ func TestParseOmnigentDB_SourceGenerated(t *testing.T) {
 	assert.Empty(t, expected, "all seeded sessions must be present")
 	assert.Len(t, seenIDs, 3, "seeded sessions must have unique UUID4 identities")
 	assert.Equal(t, 12, totalUserMessages)
-}
-
-// TestParseOmnigentDB_RealCopy is an opt-in eyeball against a real snapshot.
-// Set OMNIGENT_POC_DB to a *copy* of a chat.db (never the live file).
-func TestParseOmnigentDB_RealCopy(t *testing.T) {
-	dbPath := os.Getenv("OMNIGENT_POC_DB")
-	if dbPath == "" {
-		t.Skip("set OMNIGENT_POC_DB to a chat.db copy to run this eyeball test")
-	}
-	results, err := ParseOmnigentDB(dbPath, "local")
-	require.NoError(t, err)
-	require.NotEmpty(t, results)
-
-	var roots, subs, msgs int
-	for _, r := range results {
-		if r.Session.RelationshipType == RelSubagent {
-			subs++
-		} else {
-			roots++
-		}
-		msgs += len(r.Messages)
-	}
-	t.Logf("omnigent: %d sessions (%d root, %d sub-agent), %d messages",
-		len(results), roots, subs, msgs)
 }

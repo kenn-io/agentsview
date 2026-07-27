@@ -11,19 +11,16 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
-// omnigentChangeTracker remembers each container's schema plus bounded change
-// cursors for the watcher path: legacy databases use their indexed updated_at
-// column, while split databases keep rowid high-water marks for newly inserted
-// conversations and immutable items. Metadata-only edits with no new rows are
-// deferred to the scheduled container pass, whose composite fingerprint gate
-// observes every byte change. Cold and schema-changed containers retain a
-// whole-container backstop.
+// omnigentChangeTracker remembers each container's schema plus bounded rowid
+// high-water marks for the watcher path: newly inserted conversations and
+// immutable items. Metadata-only edits with no new rows are deferred to the
+// scheduled container pass, whose composite fingerprint gate observes every
+// byte change. Cold and schema-changed containers retain a whole-container
+// backstop.
 type omnigentTrackedContainer struct {
 	schema            omnigentSchema
-	checkedAt         int64
 	conversationRowID int64
 	conversationTail  string
 	itemRowID         int64
@@ -384,7 +381,7 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 	}
 	// A member ID that no longer parses under the detected schema identifies
 	// a retired legacy member (pre-schema-change identity), not a failure.
-	member, err := omnigentMemberForSchema(schema, src.MemberID)
+	member, err := omnigentMemberForSchema(src.MemberID)
 	if err != nil {
 		return SourceFingerprint{}, nil
 	}
@@ -408,24 +405,14 @@ func loadOmnigentConversationMeta(
 ) (omnigentMeta, bool, error) {
 	idExpr := omnigentIDExpr(schema, "c.id")
 	query := `
-		SELECT c.rowid, 0, ` + idExpr + `, COALESCE(c.updated_at, 0),
+		SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
 		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
 		  FROM conversations c
-		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
-		 WHERE c.id = ?
-		 GROUP BY c.id`
-	args := []any{omnigentIDArg(schema, member.rawID)}
-	if schema.splitMetadata {
-		query = `
-			SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
-			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-			  FROM conversations c
-			  LEFT JOIN conversation_items ci
-			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-			 WHERE c.workspace_id = ? AND c.id = ?
-			 GROUP BY c.workspace_id, c.id`
-		args = []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
-	}
+		  LEFT JOIN conversation_items ci
+		    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+		 WHERE c.workspace_id = ? AND c.id = ?
+		 GROUP BY c.workspace_id, c.id`
+	args := []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
 	var meta omnigentMeta
 	err := conn.QueryRow(query, args...).Scan(
 		&meta.rowID, &meta.workspaceID, &meta.rawID, &meta.updatedAt,
@@ -477,29 +464,7 @@ func (t *omnigentChangeTracker) matchesSince(
 		// result set reconciles archived membership and seeds the floor.
 		return []multiSessionMatch{match}, nil
 	}
-	if schema.splitMetadata {
-		return t.splitSchemaMatchesSince(
-			ctx, conn, schema, match, tracked,
-		)
-	}
-	// Capture the new floor before querying so a commit that lands during
-	// the scan is re-observed by the next event instead of skipped. The
-	// window's upper bound keeps a clock-skewed future updated_at from
-	// re-surfacing on every scan; such rows wait for the next full parse.
-	checkedAt := time.Now().Unix()
-	changed, err := listOmnigentConversationMetasSince(
-		ctx, conn, schema, max(tracked.checkedAt-1, 0), checkedAt+1,
-	)
-	if err != nil {
-		return nil, err
-	}
-	t.mu.Lock()
-	if current, ok := t.containers[match.Container]; ok && current.schema == schema {
-		current.checkedAt = checkedAt
-		t.containers[match.Container] = current
-	}
-	t.mu.Unlock()
-	return omnigentMatches(match.Container, schema, changed), nil
+	return t.splitSchemaMatchesSince(ctx, conn, schema, match, tracked)
 }
 
 // splitSchemaMatchesSince fans out the members changed since the tracked rowid
@@ -558,10 +523,10 @@ func (t *omnigentChangeTracker) splitSchemaMatchesSince(
 	changed := newConversations
 	seen := make(map[string]struct{}, len(changed)+len(members))
 	for _, meta := range changed {
-		seen[meta.member().key(schema)] = struct{}{}
+		seen[meta.member().key()] = struct{}{}
 	}
 	for _, member := range members {
-		key := member.key(schema)
+		key := member.key()
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -655,7 +620,7 @@ func omnigentConversationRowIdentity(
 			"reading omnigent conversation row identity: %w", err,
 		)
 	}
-	return member.key(schema), true, nil
+	return member.key(), true, nil
 }
 
 func omnigentLatestConversationRow(
@@ -679,7 +644,7 @@ func omnigentLatestConversationRow(
 			"reading latest omnigent conversation row: %w", err,
 		)
 	}
-	return rowID, member.key(schema), nil
+	return rowID, member.key(), nil
 }
 
 func omnigentItemRowIdentity(
@@ -690,15 +655,11 @@ func omnigentItemRowIdentity(
 	}
 	conversationExpr := omnigentIDExpr(schema, "conversation_id")
 	itemExpr := omnigentIDExpr(schema, "id")
-	workspaceExpr := "0"
-	if schema.splitMetadata {
-		workspaceExpr = "workspace_id"
-	}
 	var member omnigentMemberID
 	var itemID string
 	err := conn.QueryRowContext(
 		ctx,
-		`SELECT `+workspaceExpr+`, `+conversationExpr+`, `+itemExpr+`
+		`SELECT workspace_id, `+conversationExpr+`, `+itemExpr+`
 		   FROM conversation_items
 		  WHERE rowid = ?`,
 		rowID,
@@ -711,7 +672,7 @@ func omnigentItemRowIdentity(
 			"reading omnigent item row identity: %w", err,
 		)
 	}
-	return member.key(schema) + ":" + itemID, true, nil
+	return member.key() + ":" + itemID, true, nil
 }
 
 func omnigentLatestItemRow(
@@ -719,16 +680,12 @@ func omnigentLatestItemRow(
 ) (int64, string, error) {
 	conversationExpr := omnigentIDExpr(schema, "conversation_id")
 	itemExpr := omnigentIDExpr(schema, "id")
-	workspaceExpr := "0"
-	if schema.splitMetadata {
-		workspaceExpr = "workspace_id"
-	}
 	var rowID int64
 	var member omnigentMemberID
 	var itemID string
 	err := conn.QueryRowContext(
 		ctx,
-		`SELECT rowid, `+workspaceExpr+`, `+conversationExpr+`, `+itemExpr+`
+		`SELECT rowid, workspace_id, `+conversationExpr+`, `+itemExpr+`
 		   FROM conversation_items
 		  ORDER BY rowid DESC
 		  LIMIT 1`,
@@ -741,35 +698,7 @@ func omnigentLatestItemRow(
 			"reading latest omnigent item row: %w", err,
 		)
 	}
-	return rowID, member.key(schema) + ":" + itemID, nil
-}
-
-func listOmnigentConversationMetasSince(
-	ctx context.Context, conn *sql.DB, schema omnigentSchema,
-	updatedAfter, updatedThrough int64,
-) ([]omnigentMeta, error) {
-	return queryOmnigentConversationMetas(
-		ctx, conn, omnigentChangedMetaQuery(schema),
-		updatedAfter, updatedThrough,
-	)
-}
-
-func omnigentChangedMetaQuery(schema omnigentSchema) string {
-	idExpr := omnigentIDExpr(schema, "c.id")
-	query := `
-		WITH selected AS MATERIALIZED (
-			SELECT rowid, id, COALESCE(updated_at, 0) AS updated_at
-			  FROM conversations
-			 WHERE updated_at >= ?
-			   AND updated_at <= ?
-		)
-		SELECT c.rowid, 0, ` + idExpr + `, c.updated_at,
-		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-		  FROM selected c
-		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
-		 GROUP BY c.id
-		 ORDER BY c.updated_at, c.rowid`
-	return query
+	return rowID, member.key() + ":" + itemID, nil
 }
 
 func listOmnigentNewConversationMetas(
@@ -792,7 +721,7 @@ func listOmnigentNewConversationMetas(
 			return out, cursor, tailIdentity, nil
 		}
 		cursor = page[len(page)-1].rowID
-		tailIdentity = page[len(page)-1].member().key(schema)
+		tailIdentity = page[len(page)-1].member().key()
 		if len(page) < omnigentChangePageSize {
 			return out, cursor, tailIdentity, nil
 		}
@@ -848,7 +777,7 @@ func listOmnigentNewItemMembers(
 					fmt.Errorf("scanning new omnigent item: %w", err)
 			}
 			cursor = rowID
-			tailIdentity = member.key(schema) + ":" + itemID
+			tailIdentity = member.key() + ":" + itemID
 			members = append(members, member)
 			pageSize++
 		}
@@ -902,7 +831,7 @@ func omnigentMatches(
 	matches := make([]multiSessionMatch, 0, len(metas))
 	seen := make(map[string]struct{}, len(metas))
 	for _, meta := range metas {
-		key := meta.member().key(schema)
+		key := meta.member().key()
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -926,10 +855,6 @@ func (t *omnigentChangeTracker) restoreCachedContainer(
 	if warm {
 		return false, nil
 	}
-	// Capture the floor before querying. A fingerprint recheck in the engine
-	// rejects the cache hit if a commit lands while these bounded cursors are
-	// restored.
-	checkedAt := time.Now().Unix()
 	conn, err := openOmnigentDB(container)
 	if err != nil {
 		return false, err
@@ -958,7 +883,6 @@ func (t *omnigentChangeTracker) restoreCachedContainer(
 	t.mu.Lock()
 	t.containers[container] = omnigentTrackedContainer{
 		schema:            schema,
-		checkedAt:         checkedAt,
 		conversationRowID: conversationRowID,
 		conversationTail:  conversationTail,
 		itemRowID:         itemRowID,
@@ -971,9 +895,6 @@ func (t *omnigentChangeTracker) restoreCachedContainer(
 func (t *omnigentChangeTracker) parseContainer(
 	ctx context.Context, src multiSessionSource, req ParseRequest,
 ) ([]ParseResult, error) {
-	// Capture the floor before reading so a commit that lands during the
-	// parse is re-observed by the next changed-member scan.
-	checkedAt := time.Now().Unix()
 	results, schema, metas, itemRowID, itemTail, err := omnigentParseContainerData(
 		ctx, src, req,
 	)
@@ -986,13 +907,12 @@ func (t *omnigentChangeTracker) parseContainer(
 		for _, meta := range metas {
 			if meta.rowID > conversationRowID {
 				conversationRowID = meta.rowID
-				conversationTail = meta.member().key(schema)
+				conversationTail = meta.member().key()
 			}
 		}
 		t.mu.Lock()
 		t.containers[src.Container] = omnigentTrackedContainer{
 			schema:            schema,
-			checkedAt:         checkedAt,
 			conversationRowID: conversationRowID,
 			conversationTail:  conversationTail,
 			itemRowID:         itemRowID,
@@ -1054,7 +974,7 @@ func omnigentParseMember(
 	}
 	// A member ID that no longer parses under the detected schema is a retired
 	// legacy identity; a nil result retires its archived session.
-	member, err := omnigentMemberForSchema(schema, src.MemberID)
+	member, err := omnigentMemberForSchema(src.MemberID)
 	if err != nil {
 		return nil, nil
 	}
@@ -1160,11 +1080,4 @@ func parseOmnigentVirtualPath(path string) (string, string, bool) {
 		return "", "", false
 	}
 	return container, member, true
-}
-
-// ParseOmnigentVirtualSourcePath recognizes only virtual member paths whose
-// separator follows the physical chat.db basename. Directory names containing
-// '#' therefore remain valid physical container paths.
-func ParseOmnigentVirtualSourcePath(path string) (string, string, bool) {
-	return parseOmnigentVirtualPath(path)
 }

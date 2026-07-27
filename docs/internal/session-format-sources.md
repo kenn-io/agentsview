@@ -1161,7 +1161,7 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Format:** A shared SQLite `chat.db` containing conversations and ordered
   conversation items, with session metadata and usage stored alongside each
   conversation.
-- **Evidence:** `documentation`, `source`, `generated-schema`.
+- **Evidence:** `source`.
 - **Upstream:** The first-party
   [database documentation](https://omnigent.ai/docs/deploy/database)
   identifies SQLite `chat.db` as the local persistence store and was checked
@@ -1184,7 +1184,16 @@ Grok section and remove the explicit registry exception in the coverage test.
   and
   [deterministic benchmark seeder](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/dev/benchmarks/omnigent/seed.py)
   were inspected. The seeder runs the Alembic lineage to head before
-  inserting model-backed rows.
+  inserting model-backed rows. Agentsview supports two schema generations
+  observed at that lineage head: the split text-ID generation (session
+  metadata in `omnigent_conversation_metadata`, model overrides in a separate
+  `agent_configuration` table) and the current split binary-UUID generation
+  (16-byte `BLOB` ids, `session_overrides` JSON on `conversations`). The
+  earlier single-table generation, where session metadata columns (including
+  `kind`) lived directly on `conversations` with no separate metadata table,
+  predates that split and is detected-unsupported: Agentsview fails closed
+  with a nonfatal `ErrOmnigentUnsupportedSchema`, skips the container, and
+  preserves any archive rows already synced from it.
 - **Regeneration:** From that checkout, run
   `uv run dev/benchmarks/omnigent/seed.py --database-uri sqlite:////absolute/temp/path/chat.db --sessions 3 --items-per-session 4 --projects 1 --filed-fraction 1`,
   then set `OMNIGENT_SOURCE_DB` to the generated file for the opt-in parser

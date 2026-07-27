@@ -78,7 +78,6 @@ var omnigentItemTypeByCode = map[int]string{
 
 // omnigent CONVERSATION_KIND codes.
 const (
-	omnigentKindDefaultCode  = "1"
 	omnigentKindSubAgentCode = "2"
 	omnigentKindSubAgentName = "sub_agent"
 )
@@ -95,11 +94,10 @@ func (e ErrOmnigentUnsupportedSchema) Error() string {
 }
 
 // omnigentSchema captures the on-disk shape resolved by feature detection.
+// Session metadata always lives in omnigent_conversation_metadata: the
+// single-table generation that kept it on conversations is detected-
+// unsupported (ErrOmnigentUnsupportedSchema), not decoded.
 type omnigentSchema struct {
-	// splitMetadata is true when session metadata (kind, workspace, git_branch,
-	// session_usage, ...) lives in omnigent_conversation_metadata rather than on
-	// the conversations table.
-	splitMetadata bool
 	// intEnums is true when conversation_items.type is a SMALLINT code rather
 	// than a VARCHAR name.
 	intEnums bool
@@ -151,13 +149,7 @@ type omnigentMemberID struct {
 	rawID       string
 }
 
-func omnigentMemberForSchema(s omnigentSchema, value string) (omnigentMemberID, error) {
-	if !s.splitMetadata {
-		if !IsValidSessionID(value) {
-			return omnigentMemberID{}, fmt.Errorf("invalid omnigent session ID: %s", value)
-		}
-		return omnigentMemberID{rawID: value}, nil
-	}
+func omnigentMemberForSchema(value string) (omnigentMemberID, error) {
 	workspace, rawID, ok := strings.Cut(value, ":")
 	if !ok || rawID == "" || !IsValidSessionID(rawID) {
 		return omnigentMemberID{}, fmt.Errorf("invalid omnigent member ID: %s", value)
@@ -169,15 +161,12 @@ func omnigentMemberForSchema(s omnigentSchema, value string) (omnigentMemberID, 
 	return omnigentMemberID{workspaceID: workspaceID, rawID: rawID}, nil
 }
 
-func (m omnigentMemberID) key(s omnigentSchema) string {
-	if !s.splitMetadata {
-		return m.rawID
-	}
+func (m omnigentMemberID) key() string {
 	return fmt.Sprintf("%d:%s", m.workspaceID, m.rawID)
 }
 
-func (m omnigentMemberID) sessionID(s omnigentSchema) string {
-	return omnigentIDPrefix + m.key(s)
+func (m omnigentMemberID) sessionID() string {
+	return omnigentIDPrefix + m.key()
 }
 
 // openOmnigentDB opens chat.db read-only. Callers own Close.
@@ -219,47 +208,32 @@ func detectOmnigentSchema(conn *sql.DB) (omnigentSchema, error) {
 	if err != nil {
 		return omnigentSchema{}, err
 	}
-	kindColumn, err := omnigentColumnExists(conn, "conversations", "kind")
-	if err != nil {
-		return omnigentSchema{}, err
-	}
 	metadataTable, err := omnigentTableExists(conn, "omnigent_conversation_metadata")
 	if err != nil {
 		return omnigentSchema{}, err
 	}
-
-	switch {
-	case kindColumn:
-		// Older single-table shape: metadata columns live on conversations.
-		s.splitMetadata = false
-		s.hasSessionUsage, err = omnigentColumnExists(
-			conn, "conversations", "session_usage")
-	case metadataTable:
-		// Split shape: metadata is co-located in this file.
-		s.splitMetadata = true
-		s.hasAgentConfig, err = omnigentTableExists(conn, "agent_configuration")
-		if err == nil {
-			s.hasSessionOverrides, err = omnigentColumnExists(
-				conn, "conversations", "session_overrides")
-		}
-		if err == nil {
-			s.hasSessionUsage, err = omnigentColumnExists(
-				conn, "omnigent_conversation_metadata", "session_usage")
-		}
-	default:
-		// Split shape but metadata not in this database (multi-physical-DB
-		// deployment). We cannot recover kind/workspace/usage, so skip.
+	if !metadataTable {
+		// Either the single-table legacy generation (metadata columns on
+		// conversations, no separate metadata table) or a split shape whose
+		// metadata lives in another physical database. Neither is
+		// recoverable from this file alone.
 		return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
 			Reason: "session metadata table not present in this database",
 		}
 	}
+	s.hasAgentConfig, err = omnigentTableExists(conn, "agent_configuration")
+	if err == nil {
+		s.hasSessionOverrides, err = omnigentColumnExists(
+			conn, "conversations", "session_overrides")
+	}
+	if err == nil {
+		s.hasSessionUsage, err = omnigentColumnExists(
+			conn, "omnigent_conversation_metadata", "session_usage")
+	}
 	if err != nil {
 		return omnigentSchema{}, fmt.Errorf("inspect omnigent schema: %w", err)
 	}
-	itemPrefix := []string{"conversation_id", "position"}
-	if s.splitMetadata {
-		itemPrefix = []string{"workspace_id", "conversation_id", "position"}
-	}
+	itemPrefix := []string{"workspace_id", "conversation_id", "position"}
 	itemIndex, err := omnigentIndexWithPrefix(conn, "conversation_items", itemPrefix)
 	if err != nil {
 		return omnigentSchema{}, fmt.Errorf("inspect omnigent item indexes: %w", err)
@@ -270,21 +244,18 @@ func detectOmnigentSchema(conn *sql.DB) (omnigentSchema, error) {
 		}
 	}
 
-	changePrefix := []string{"updated_at"}
-	if s.splitMetadata {
-		hasArchived, columnErr := omnigentColumnExists(
-			conn, "conversations", "archived",
+	hasArchived, columnErr := omnigentColumnExists(
+		conn, "conversations", "archived",
+	)
+	if columnErr != nil {
+		return omnigentSchema{}, fmt.Errorf(
+			"inspect omnigent archived column: %w", columnErr,
 		)
-		if columnErr != nil {
-			return omnigentSchema{}, fmt.Errorf(
-				"inspect omnigent archived column: %w", columnErr,
-			)
-		}
-		changePrefix = []string{"workspace_id", "updated_at"}
-		if hasArchived {
-			changePrefix = []string{"workspace_id", "archived", "updated_at"}
-			s.changeIndexArchived = true
-		}
+	}
+	changePrefix := []string{"workspace_id", "updated_at"}
+	if hasArchived {
+		changePrefix = []string{"workspace_id", "archived", "updated_at"}
+		s.changeIndexArchived = true
 	}
 	name, indexErr := omnigentIndexWithPrefix(
 		conn, "conversations", changePrefix,
@@ -456,22 +427,15 @@ func omnigentConversationExists(dbPath, memberKey string) bool {
 	if err != nil {
 		return false
 	}
-	member, err := omnigentMemberForSchema(schema, memberKey)
+	member, err := omnigentMemberForSchema(memberKey)
 	if err != nil {
 		return false
 	}
 	var one int
-	if schema.splitMetadata {
-		err = conn.QueryRow(
-			`SELECT 1 FROM conversations WHERE workspace_id = ? AND id = ? LIMIT 1`,
-			member.workspaceID, omnigentIDArg(schema, member.rawID),
-		).Scan(&one)
-	} else {
-		err = conn.QueryRow(
-			`SELECT 1 FROM conversations WHERE id = ? LIMIT 1`,
-			omnigentIDArg(schema, member.rawID),
-		).Scan(&one)
-	}
+	err = conn.QueryRow(
+		`SELECT 1 FROM conversations WHERE workspace_id = ? AND id = ? LIMIT 1`,
+		member.workspaceID, omnigentIDArg(schema, member.rawID),
+	).Scan(&one)
 	return err == nil
 }
 
@@ -507,20 +471,12 @@ func listOmnigentConversationMetas(
 ) ([]omnigentMeta, error) {
 	idExpr := omnigentIDExpr(schema, "c.id")
 	query := `
-		SELECT c.rowid, 0, ` + idExpr + `, COALESCE(c.updated_at, 0),
+		SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
 		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
 		  FROM conversations c
-		  LEFT JOIN conversation_items ci ON ci.conversation_id = c.id
-		 GROUP BY c.id`
-	if schema.splitMetadata {
-		query = `
-			SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
-			       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-			  FROM conversations c
-			  LEFT JOIN conversation_items ci
-			    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-			 GROUP BY c.workspace_id, c.id`
-	}
+		  LEFT JOIN conversation_items ci
+		    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
+		 GROUP BY c.workspace_id, c.id`
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("listing omnigent conversation metas: %w", err)
@@ -564,27 +520,11 @@ type omnigentConversationRow struct {
 func omnigentConvSelect(s omnigentSchema) string {
 	usage := "'' AS session_usage"
 	if s.hasSessionUsage {
-		if s.splitMetadata {
-			usage = "COALESCE(m.session_usage, '') AS session_usage"
-		} else {
-			usage = "COALESCE(c.session_usage, '') AS session_usage"
-		}
+		usage = "COALESCE(m.session_usage, '') AS session_usage"
 	}
 	idExpr := omnigentIDExpr(s, "c.id")
 	rootExpr := omnigentIDExpr(s, "c.root_conversation_id")
 	parentExpr := omnigentIDExpr(s, "c.parent_conversation_id")
-	if !s.splitMetadata {
-		return `
-			SELECT 0, ` + idExpr + `, COALESCE(` + rootExpr + `, ''),
-			       COALESCE(c.created_at, 0), COALESCE(c.updated_at, 0),
-			       COALESCE(c.title, ''), COALESCE(c.kind, ''),
-			       COALESCE(c.model_override, ''), '',
-			       COALESCE(` + parentExpr + `, ''),
-			       COALESCE(c.sub_agent_name, ''), COALESCE(c.workspace, ''),
-			       COALESCE(c.git_branch, ''), ` + usage + `
-			  FROM conversations c
-			 WHERE c.id = ?`
-	}
 	model := "'' AS model_override"
 	if s.hasAgentConfig {
 		model = "COALESCE(a.model_override, '') AS model_override"
@@ -619,10 +559,7 @@ func loadOmnigentConversation(
 	s omnigentSchema, member omnigentMemberID,
 ) (omnigentConversationRow, error) {
 	row := omnigentConversationRow{}
-	args := []any{omnigentIDArg(s, member.rawID)}
-	if s.splitMetadata {
-		args = []any{member.workspaceID, omnigentIDArg(s, member.rawID)}
-	}
+	args := []any{member.workspaceID, omnigentIDArg(s, member.rawID)}
 	err := conn.QueryRowContext(ctx, omnigentConvSelect(s), args...).Scan(
 		&row.workspaceID, &row.id, &row.rootID, &row.createdAt, &row.updatedAt, &row.title,
 		&row.kindRaw, &row.modelOverride, &row.sessionOverrides, &row.parentID,
@@ -749,7 +686,7 @@ func parseOmnigentConversationFromDB(
 	}
 
 	sess := ParsedSession{
-		ID:               member.sessionID(schema),
+		ID:               member.sessionID(),
 		Agent:            omnigentAgent,
 		Machine:          machine,
 		Project:          ExtractProjectFromCwd(workspace),
@@ -762,7 +699,7 @@ func parseOmnigentConversationFromDB(
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
 		File: FileInfo{
-			Path:  VirtualSourcePath(dbPath, member.key(schema)),
+			Path:  VirtualSourcePath(dbPath, member.key()),
 			Size:  dbInfo.Size(),
 			Mtime: conv.updatedAt * int64(time.Second),
 			Hash:  fingerprint,
@@ -771,7 +708,7 @@ func parseOmnigentConversationFromDB(
 	if conv.parentID != "" {
 		sess.ParentSessionID = omnigentMemberID{
 			workspaceID: conv.workspaceID, rawID: conv.parentID,
-		}.sessionID(schema)
+		}.sessionID()
 	}
 	if omnigentIsSubAgent(conv.kindRaw) {
 		sess.RelationshipType = RelSubagent
@@ -934,21 +871,13 @@ func loadOmnigentMessages(
 	query := `
 		SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
 		  FROM conversation_items
-		 WHERE conversation_id = ?
+		 WHERE workspace_id = ? AND conversation_id = ?
 		 ORDER BY position ASC`
-	args := []any{omnigentIDArg(schema, member.rawID)}
-	if schema.splitMetadata {
-		query = `
-			SELECT position, type, COALESCE(data, ''), COALESCE(search_text, '')
-			  FROM conversation_items
-			 WHERE workspace_id = ? AND conversation_id = ?
-			 ORDER BY position ASC`
-		args = []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
-	}
+	args := []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf(
-			"listing omnigent items for %s: %w", member.key(schema), err)
+			"listing omnigent items for %s: %w", member.key(), err)
 	}
 	defer rows.Close()
 
