@@ -1543,6 +1543,43 @@ func (db *DB) GetChildSessions(
 	return scanSessionRows(rows)
 }
 
+// subagentSpawnerExpr resolves the parent of the session aliased `s`
+// from the authoritative tool_calls spawn edges (recorded by the parser
+// from toolUseResult.agentId).
+//
+// A child is normally referenced by exactly one edge, but copied or
+// forked history can leave several sessions claiming the same child.
+// Resolution must then be a pure function of the stored edges and never
+// of the order they arrived, because any single sync may observe only a
+// subset of them: a link written from a partial view has to self-correct
+// once the rest land, rather than being locked in.
+//
+// A fork derives from the session it was forked from, so it always
+// starts later. Ordering candidates by start time therefore resolves to
+// the original spawner from any subset, and converges on the next sync.
+// The remaining keys keep that total order well defined:
+//   - started_at is nullable TEXT (the empty string is likewise treated
+//     as unset in this package), and SQLite sorts NULL first, so an
+//     unknown start time would otherwise outrank every real one — the
+//     leading IS NULL key pushes those candidates last instead.
+//   - the session id breaks ties, so a child whose candidates all lack a
+//     start time still resolves the same way on every sync instead of
+//     following whichever edge SQLite visited first.
+//
+// The LEFT JOIN keeps an edge whose spawner has no sessions row as a
+// last-resort candidate (it sorts with the unknown start times) rather
+// than discarding it.
+const subagentSpawnerExpr = `
+		SELECT tc.session_id
+		FROM tool_calls tc
+		LEFT JOIN sessions ps ON ps.id = tc.session_id
+		WHERE tc.subagent_session_id = s.id
+		ORDER BY
+			(NULLIF(ps.started_at, '') IS NULL),
+			NULLIF(ps.started_at, ''),
+			tc.session_id
+		LIMIT 1`
+
 // LinkSubagentSessions sets parent_session_id and
 // relationship_type on sessions referenced by
 // tool_calls.subagent_session_id (the authoritative spawn edge).
@@ -1553,6 +1590,9 @@ func (db *DB) GetChildSessions(
 // nested subagents (depth >= 2), which the parser pins to the main
 // session because Claude Code stores every subagent flat under
 // <main>/subagents/. Already-correct subagents are left untouched.
+//
+// See subagentSpawnerExpr for how a child claimed by more than one
+// spawner is resolved.
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1565,16 +1605,8 @@ func (db *DB) LinkSubagentSessions() error {
 	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
 	// same pattern).
 	_, err := db.getWriter().Exec(`
-		UPDATE sessions
-		SET parent_session_id = COALESCE(
-			(
-				SELECT tc.session_id
-				FROM tool_calls tc
-				WHERE tc.subagent_session_id = sessions.id
-				GROUP BY tc.subagent_session_id
-				HAVING COUNT(DISTINCT tc.session_id) = 1
-			),
-			parent_session_id
+		UPDATE sessions AS s
+		SET parent_session_id = (` + subagentSpawnerExpr + `
 		),
 		relationship_type = 'subagent',
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -1585,30 +1617,19 @@ func (db *DB) LinkSubagentSessions() error {
 		-- the old relationship_type != 'subagent' guard skipped them, leaving
 		-- the hierarchy flat.
 		--
-		-- Resolve the parent only from an UNAMBIGUOUS edge: the grouped
-		-- subquery yields a spawner only when exactly one distinct session
-		-- spawned this child (HAVING COUNT(DISTINCT tc.session_id) = 1). With
-		-- conflicting edges from copied/forked history it yields NULL and
-		-- COALESCE keeps the current parent, so a correctly parented subagent
-		-- is never re-parented arbitrarily. Update when EITHER the row is not
-		-- yet 'subagent' (upgrade continuation/fork/empty; parent preserved if
-		-- ambiguous) OR the unambiguous parent differs (null-safe IS NOT).
-		-- Already-correct subagents match neither branch (no churn).
+		-- Update when EITHER the row is not yet 'subagent' (upgrade
+		-- continuation/fork/empty) OR the resolved spawner differs from the
+		-- stored parent (null-safe IS NOT, so a subagent with a NULL parent is
+		-- still linked). Because the resolved spawner depends only on the
+		-- stored edges, a row already pointing at it matches neither branch:
+		-- linking stays a no-op and does not churn local_modified_at.
 		WHERE EXISTS (
 			SELECT 1 FROM tool_calls tc
-			WHERE tc.subagent_session_id = sessions.id
+			WHERE tc.subagent_session_id = s.id
 		)
 		AND (
 			relationship_type != 'subagent'
-			OR parent_session_id IS NOT COALESCE(
-				(
-					SELECT tc.session_id
-					FROM tool_calls tc
-					WHERE tc.subagent_session_id = sessions.id
-					GROUP BY tc.subagent_session_id
-					HAVING COUNT(DISTINCT tc.session_id) = 1
-				),
-				parent_session_id
+			OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
 			)
 		)`)
 	if err != nil {
