@@ -847,6 +847,7 @@
   "settings_search_aria": "搜尋設定",
   "settings_search_empty": "沒有相符的設定",
   "settings_search_clear": "清除搜尋",
+  "settings_search_result": "顯示：{category}",
   "settings_search_keywords_appearance": "主題 對比度 版面配置 文字 字體 區塊 theme contrast layout text font blocks",
   "settings_search_keywords_language": "語言 地區設定 翻譯 language locale translation",
   "settings_search_keywords_date_ranges": "日期 範圍 關聯 頁面 date range linked pages",

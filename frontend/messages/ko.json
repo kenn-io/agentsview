@@ -849,6 +849,7 @@
   "settings_search_aria": "설정 검색",
   "settings_search_empty": "일치하는 설정 없음",
   "settings_search_clear": "검색 지우기",
+  "settings_search_result": "{category} 표시 중",
   "settings_search_keywords_appearance": "테마 대비 레이아웃 텍스트 글꼴 블록 theme contrast layout text font blocks",
   "settings_search_keywords_language": "언어 로캘 번역 language locale translation",
   "settings_search_keywords_date_ranges": "날짜 범위 연결 페이지 date range linked pages",

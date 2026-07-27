@@ -1,20 +1,28 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
 
 async function openSettledSettings(page: Page) {
-  let responseCount = 0;
+  const responses: Response[] = [];
   const settingsLoaded = new Promise<void>((resolve) => {
     const onResponse = (response: Response) => {
       if (new URL(response.url()).pathname !== "/api/v1/settings") return;
-      responseCount += 1;
-      if (responseCount < 2) return;
+      responses.push(response);
+      if (responses.length < 2) return;
       page.off("response", onResponse);
-      resolve();
+      void Promise.all(responses.map((item) => item.finished())).then(() => {
+        resolve();
+      });
     };
     page.on("response", onResponse);
   });
 
   await page.goto("/settings");
   await settingsLoaded;
+  await page.evaluate(
+    () => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }),
+  );
+  await expect(page.locator(".settings-loading")).toHaveCount(0);
 }
 
 test.describe("Settings layout", () => {

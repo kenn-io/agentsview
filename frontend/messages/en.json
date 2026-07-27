@@ -874,6 +874,7 @@
   "settings_search_aria": "Search settings",
   "settings_search_empty": "No matching settings",
   "settings_search_clear": "Clear search",
+  "settings_search_result": "Showing {category}",
   "settings_search_keywords_appearance": "theme contrast layout text font blocks",
   "settings_search_keywords_language": "language locale translation",
   "settings_search_keywords_date_ranges": "date range linked pages",

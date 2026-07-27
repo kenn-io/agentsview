@@ -29,15 +29,23 @@
   let searchQuery = $state("");
   let pageElement: HTMLElement;
   const panels = $derived(settingsPanels());
+
+  function normalizeSearchText(value: string): string {
+    return value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
+
   const categories: SettingsCategory[] = $derived.by(() => {
-    const query = searchQuery.trim().toLowerCase();
+    const query = normalizeSearchText(searchQuery.trim());
     return panels
       .filter(
         (panel) =>
           query === "" ||
-          `${panel.label} ${panel.title} ${panel.group} ${panel.description} ${panel.keywords}`
-            .toLowerCase()
-            .includes(query),
+          normalizeSearchText(
+            `${panel.label} ${panel.title} ${panel.group} ${panel.description} ${panel.keywords}`,
+          ).includes(query),
       )
       .map((panel) => ({
         id: panel.id,
@@ -66,6 +74,14 @@
   const noSearchResults = $derived(
     searchQuery.trim() !== "" && categories.length === 0,
   );
+  const searchStatus = $derived.by(() => {
+    if (searchQuery.trim() === "") return "";
+    if (noSearchResults) return m.settings_search_empty();
+    const activePanel = panels.find((panel) => panel.id === displayedActive);
+    return activePanel
+      ? m.settings_search_result({ category: activePanel.label })
+      : "";
+  });
 
   $effect(() => {
     displayedActive;
@@ -73,18 +89,6 @@
       ".kit-settings__scroll",
     );
     if (scroller) scroller.scrollTop = 0;
-  });
-
-  $effect(() => {
-    const hidden = noSearchResults;
-    const nav = pageElement?.querySelector<HTMLElement>(
-      ".kit-settings__nav",
-    );
-    if (nav) nav.hidden = hidden;
-    const panel = pageElement?.querySelector<HTMLElement>(
-      ".kit-settings__panel",
-    );
-    if (panel) panel.hidden = hidden;
   });
 
   onMount(() => {
@@ -102,6 +106,7 @@
 
 <div
   class="settings-page"
+  class:settings-no-results={noSearchResults}
   bind:this={pageElement}
 >
   {#if settings.loading || !settings.loaded || settings.needsAuth || settings.error}
@@ -176,8 +181,15 @@
           size="sm"
           block
         />
-        {#if categories.length === 0}
-          <p class="settings-search-empty">{m.settings_search_empty()}</p>
+        {#if searchStatus}
+          <p
+            class="settings-search-status"
+            class:settings-search-empty={noSearchResults}
+            role="status"
+            aria-live="polite"
+          >
+            {searchStatus}
+          </p>
         {/if}
       {/snippet}
       {#snippet panel(activeId)}
@@ -262,11 +274,12 @@
     display: none;
   }
 
-  :global(.kit-settings__nav[hidden]),
-  :global(.kit-settings__panel[hidden]) {
+  .settings-page.settings-no-results :global(.kit-settings__nav),
+  .settings-page.settings-no-results :global(.kit-settings__panel) {
     display: none;
   }
 
+  .settings-search-status,
   .settings-search-empty {
     margin: 0;
     color: var(--text-muted);
