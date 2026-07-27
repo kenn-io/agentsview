@@ -28,6 +28,22 @@ func (err DiscoveryIncompleteError) Error() string {
 	return string(err.Provider) + " discovery incomplete: " + err.Reason
 }
 
+// DiscoveryNonAuthoritativeError reports a source state that can be skipped
+// without failing reconciliation but cannot prove that archived sources are
+// absent. Callers may commit sources yielded by other providers, but must not
+// tombstone this provider's stored sessions from the incomplete membership.
+type DiscoveryNonAuthoritativeError struct {
+	Provider AgentType
+	Reason   string
+}
+
+func (err DiscoveryNonAuthoritativeError) Error() string {
+	if err.Provider == "" {
+		return "discovery non-authoritative: " + err.Reason
+	}
+	return string(err.Provider) + " discovery non-authoritative: " + err.Reason
+}
+
 type discoveryIncompleteCause struct {
 	incomplete DiscoveryIncompleteError
 	cause      error
@@ -36,6 +52,19 @@ type discoveryIncompleteCause struct {
 func (err discoveryIncompleteCause) Error() string { return err.incomplete.Error() }
 func (err discoveryIncompleteCause) Unwrap() []error {
 	return []error{err.incomplete, err.cause}
+}
+
+type discoveryNonAuthoritativeCause struct {
+	nonAuthoritative DiscoveryNonAuthoritativeError
+	cause            error
+}
+
+func (err discoveryNonAuthoritativeCause) Error() string {
+	return err.nonAuthoritative.Error()
+}
+
+func (err discoveryNonAuthoritativeCause) Unwrap() []error {
+	return []error{err.nonAuthoritative, err.cause}
 }
 
 type discoveryYieldError struct{ cause error }
@@ -52,6 +81,22 @@ func incompleteDiscoveryError(
 	}
 	return discoveryIncompleteCause{
 		incomplete: DiscoveryIncompleteError{
+			Provider: provider,
+			Reason:   reason + ": " + cause.Error(),
+		},
+		cause: cause,
+	}
+}
+
+func nonAuthoritativeDiscoveryError(
+	provider AgentType, reason string, cause error,
+) error {
+	var nonAuthoritative DiscoveryNonAuthoritativeError
+	if errors.As(cause, &nonAuthoritative) {
+		return cause
+	}
+	return discoveryNonAuthoritativeCause{
+		nonAuthoritative: DiscoveryNonAuthoritativeError{
 			Provider: provider,
 			Reason:   reason + ": " + cause.Error(),
 		},

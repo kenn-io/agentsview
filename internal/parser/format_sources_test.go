@@ -18,13 +18,14 @@ var formatSourceHeadingRE = regexp.MustCompile(
 )
 
 var formatSourceEvidenceRE = regexp.MustCompile(
-	"(?m)^- \\*\\*Evidence:\\*\\* `([^`]+)`\\.$",
+	"(?m)^- \\*\\*Evidence:\\*\\* ((?:`[a-z0-9-]+`, )*`[a-z0-9-]+`)\\.$",
 )
 
 var (
-	formatSourceCloneRE     = regexp.MustCompile("Clone `https://[^`]+\\.git`")
-	formatSourceRevisionRE  = regexp.MustCompile("`([0-9a-f]{40})`")
-	formatSourceCheckDateRE = regexp.MustCompile(
+	formatSourceEvidenceClassRE = regexp.MustCompile("`([^`]+)`")
+	formatSourceCloneRE         = regexp.MustCompile("Clone `https://[^`]+\\.git`")
+	formatSourceRevisionRE      = regexp.MustCompile("`([0-9a-f]{40})`")
+	formatSourceCheckDateRE     = regexp.MustCompile(
 		`\b(?:checked|searched)\s+20\d{2}-\d{2}-\d{2}\b`,
 	)
 )
@@ -80,6 +81,23 @@ func TestSessionFormatSourcesRejectIncompleteSection(t *testing.T) {
 	assert.Contains(t, errs, `provider "example" missing "Usage and cost" field`)
 }
 
+func TestSessionFormatSourcesAcceptGeneratedSchemaEvidence(t *testing.T) {
+	raw := []byte(`## Example (` + "`example`" + `)
+
+- **Format:** SQLite.
+- **Evidence:** ` + "`documentation`, `source`, `generated-schema`" + `.
+- **Upstream:** Documentation was checked 2026-07-19. Clone ` + "`https://github.com/example/tool.git`" + `
+  at
+  ` + "`0123456789abcdef0123456789abcdef01234567`" + `; see the pinned
+  [schema](https://github.com/example/tool/blob/0123456789abcdef0123456789abcdef01234567/schema.py).
+- **Regeneration:** Run the pinned seeder against a temporary database.
+- **Usage and cost:** No usage is persisted.
+- **Agentsview:** internal/parser/example.go.
+`)
+
+	assert.Empty(t, validateFormatSourceInventory(raw))
+}
+
 func TestSessionFormatSourcesRejectInvalidEvidenceClass(t *testing.T) {
 	raw := []byte(`## Example (` + "`example`" + `)
 
@@ -92,6 +110,86 @@ func TestSessionFormatSourcesRejectInvalidEvidenceClass(t *testing.T) {
 
 	errs := validateFormatSourceInventory(raw)
 	assert.Contains(t, errs, `provider "example" has invalid evidence class "inferred"`)
+}
+
+func TestSessionFormatSourcesRejectUnknownCompositeEvidenceClass(t *testing.T) {
+	raw := []byte(`## Example (` + "`example`" + `)
+
+- **Format:** SQLite.
+- **Evidence:** ` + "`documentation`, `source`, `inferred`" + `.
+- **Upstream:** Vendor material was checked 2026-07-19.
+- **Usage and cost:** No usage is persisted.
+- **Agentsview:** internal/parser/example.go.
+`)
+
+	errs := validateFormatSourceInventory(raw)
+	assert.Contains(t, errs, `provider "example" has invalid evidence class "inferred"`)
+}
+
+func TestSessionFormatSourcesRejectGeneratedSchemaWithoutProvenance(t *testing.T) {
+	raw := []byte(`## Example (` + "`example`" + `)
+
+- **Format:** SQLite.
+- **Evidence:** ` + "`generated-schema`" + `.
+- **Upstream:** A database was generated.
+- **Usage and cost:** No usage is persisted.
+- **Agentsview:** internal/parser/example.go.
+`)
+
+	errs := validateFormatSourceInventory(raw)
+	assert.Contains(t, errs,
+		`provider "example" has invalid evidence class combination "generated-schema"`)
+}
+
+func TestSessionFormatSourcesRequireCompositeEvidenceMetadata(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	tests := []struct {
+		name     string
+		upstream string
+		want     string
+	}{
+		{
+			name: "source revision",
+			upstream: "Documentation was checked 2026-07-19. Clone " +
+				"`https://github.com/example/tool.git`.",
+			want: `provider "example" source evidence lacks a full revision`,
+		},
+		{
+			name: "source clone URL",
+			upstream: "Documentation was checked 2026-07-19. Revision `" +
+				revision + "`; see the pinned [schema](https://github.com/" +
+				"example/tool/blob/" + revision + "/schema.py).",
+			want: `provider "example" source evidence lacks an HTTPS clone URL`,
+		},
+		{
+			name: "source pinned file link",
+			upstream: "Documentation was checked 2026-07-19. Clone " +
+				"`https://github.com/example/tool.git` at `" + revision + "`.",
+			want: `provider "example" source evidence lacks a pinned file link`,
+		},
+		{
+			name: "documentation check date",
+			upstream: "Clone `https://github.com/example/tool.git` at `" +
+				revision + "`; see the pinned [schema](https://github.com/" +
+				"example/tool/blob/" + revision + "/schema.py).",
+			want: `provider "example" documentation evidence lacks a check date`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte("## Example (`example`)\n\n" +
+				"- **Format:** SQLite.\n" +
+				"- **Evidence:** `documentation`, `source`, `generated-schema`.\n" +
+				"- **Upstream:** " + tt.upstream + "\n" +
+				"- **Regeneration:** Run the pinned seeder.\n" +
+				"- **Usage and cost:** No usage is persisted.\n" +
+				"- **Agentsview:** internal/parser/example.go.\n")
+
+			errs := validateFormatSourceInventory(raw)
+			assert.Contains(t, errs, tt.want)
+		})
+	}
 }
 
 func TestSessionFormatSourcesRejectMalformedEvidenceDeclaration(t *testing.T) {
@@ -250,40 +348,83 @@ func validateFormatSourceInventory(raw []byte) []string {
 			))
 			continue
 		}
-		evidence := evidenceMatch[1]
-		if evidence != "source" && evidence != "documentation" &&
-			evidence != "no-public-source" {
+		evidenceMatches := formatSourceEvidenceClassRE.FindAllStringSubmatch(
+			evidenceMatch[1], -1,
+		)
+		evidenceClasses := make([]string, 0, len(evidenceMatches))
+		hasInvalidClass := false
+		for _, evidenceMatch := range evidenceMatches {
+			evidence := evidenceMatch[1]
+			evidenceClasses = append(evidenceClasses, evidence)
+			if evidence != "source" && evidence != "documentation" &&
+				evidence != "no-public-source" &&
+				evidence != "generated-schema" {
+				errs = append(errs, fmt.Sprintf(
+					"provider %q has invalid evidence class %q", agent, evidence,
+				))
+				hasInvalidClass = true
+			}
+		}
+		if hasInvalidClass {
+			continue
+		}
+		composite := false
+		if len(evidenceClasses) > 1 {
+			if len(evidenceClasses) == 3 &&
+				evidenceClasses[0] == "documentation" &&
+				evidenceClasses[1] == "source" &&
+				evidenceClasses[2] == "generated-schema" {
+				composite = true
+			} else {
+				errs = append(errs, fmt.Sprintf(
+					"provider %q has invalid evidence class combination %q",
+					agent, strings.Join(evidenceClasses, ", "),
+				))
+				continue
+			}
+		}
+
+		evidence := evidenceClasses[0]
+		if evidence == "generated-schema" {
 			errs = append(errs, fmt.Sprintf(
-				"provider %q has invalid evidence class %q", agent, evidence,
+				"provider %q has invalid evidence class combination %q",
+				agent, evidence,
 			))
 			continue
 		}
-
-		switch evidence {
-		case "source":
+		hasSource := evidence == "source" || composite
+		hasDocumentation := evidence == "documentation" || composite
+		if hasSource {
 			revisionMatch := formatSourceRevisionRE.FindStringSubmatch(section)
 			if revisionMatch == nil {
 				errs = append(errs, fmt.Sprintf(
 					"provider %q source evidence lacks a full revision", agent,
 				))
-				continue
+			} else {
+				if !formatSourceCloneRE.MatchString(section) {
+					errs = append(errs, fmt.Sprintf(
+						"provider %q source evidence lacks an HTTPS clone URL", agent,
+					))
+				}
+				if !strings.Contains(section, "/blob/"+revisionMatch[1]+"/") {
+					errs = append(errs, fmt.Sprintf(
+						"provider %q source evidence lacks a pinned file link", agent,
+					))
+				}
 			}
-			if !formatSourceCloneRE.MatchString(section) {
-				errs = append(errs, fmt.Sprintf(
-					"provider %q source evidence lacks an HTTPS clone URL", agent,
-				))
-			}
-			if !strings.Contains(section, "/blob/"+revisionMatch[1]+"/") {
-				errs = append(errs, fmt.Sprintf(
-					"provider %q source evidence lacks a pinned file link", agent,
-				))
-			}
-		case "documentation", "no-public-source":
+		}
+		if hasDocumentation {
 			if !formatSourceCheckDateRE.MatchString(section) {
 				errs = append(errs, fmt.Sprintf(
-					"provider %q %s evidence lacks a check date", agent, evidence,
+					"provider %q documentation evidence lacks a check date", agent,
 				))
 			}
+		} else if evidence == "no-public-source" &&
+			!formatSourceCheckDateRE.MatchString(section) {
+			errs = append(errs, fmt.Sprintf(
+				"provider %q no-public-source evidence lacks a check date",
+				agent,
+			))
 		}
 	}
 	return errs

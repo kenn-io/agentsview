@@ -241,6 +241,10 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 		_, err := readonly.DeleteParserExcludedSessions(nil)
 		return err
 	})
+	requireReadOnlyOp(t, "RetireParserSupersededSessions", func() error {
+		_, _, err := readonly.RetireParserSupersededSessions("", nil)
+		return err
+	})
 	requireReadOnlyOp(t, "DeleteSessions", func() error {
 		_, err := readonly.DeleteSessions(nil)
 		return err

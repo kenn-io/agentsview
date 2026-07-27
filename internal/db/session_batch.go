@@ -32,6 +32,7 @@ type SessionBatchResult struct {
 	ExcludedSessions int
 	ExcludedIDs      []string
 	FailedSessions   int
+	FailedIDs        []string
 	Errors           []error
 }
 
@@ -109,6 +110,7 @@ func (db *DB) WriteSessionBatch(
 				return result, rerr
 			}
 			result.FailedSessions++
+			result.FailedIDs = append(result.FailedIDs, write.Session.ID)
 			result.Errors = append(result.Errors, err)
 		}
 	}

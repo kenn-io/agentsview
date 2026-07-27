@@ -67,6 +67,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentIcodemate: {
 			UnchangedResults: UnchangedResultMTimeAndHash,
 		},
+		AgentOmnigent: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+			UnchangedResults:                    UnchangedResultMTimeAndHash,
+		},
 	}
 
 	for _, factory := range ProviderFactories() {

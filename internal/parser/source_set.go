@@ -124,6 +124,36 @@ func (p *SourceSetProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func (p *SourceSetProvider) RestoreCachedSourceState(
+	ctx context.Context, source SourceRef,
+) (bool, error) {
+	restorer, ok := p.sources.(CachedSourceStateRestorer)
+	if !ok {
+		return false, nil
+	}
+	return restorer.RestoreCachedSourceState(ctx, source)
+}
+
+func (p *SourceSetProvider) SourceSyncSemantics(
+	source SourceRef,
+) SourceSyncSemantics {
+	resolver, ok := p.sources.(SourceSyncSemanticsProvider)
+	if !ok {
+		return SourceSyncSemantics{}
+	}
+	return resolver.SourceSyncSemantics(source)
+}
+
+func (p *SourceSetProvider) DependentSourceRootSessionID(
+	source SourceRef,
+) (string, bool) {
+	resolver, ok := p.sources.(DependentSourceResolver)
+	if !ok {
+		return "", false
+	}
+	return resolver.DependentSourceRootSessionID(source)
+}
+
 func (p *SourceSetProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,

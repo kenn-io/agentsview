@@ -45,6 +45,20 @@ type ProviderSyncSemantics struct {
 	UnchangedResults               UnchangedResultPolicy
 }
 
+// SourceSyncSemantics declares policies that depend on one resolved source's
+// shape. BackingContainerPath is the physical container for either a whole
+// container or one virtual member; it is empty for ordinary sources. The zero
+// value opts out of every specialized behavior.
+type SourceSyncSemantics struct {
+	BackingContainerPath           string
+	PersistentContainer            bool
+	CompleteResultOwnsMembers      bool
+	CacheAfterWrite                bool
+	CacheKeyIncludesDataVersion    bool
+	SkipCacheFreshWithoutStoredRow bool
+	DemoteDataVersionOnFailedWrite bool
+}
+
 // SourceCapabilities declares optional source mechanics implemented by a
 // provider.
 type SourceCapabilities struct {
@@ -62,10 +76,18 @@ type SourceCapabilities struct {
 	// virtual members from one physical container and exact reconciliation
 	// rehydration is required to avoid reopening or rescanning that container.
 	SharedContainerSource CapabilitySupport
-	PerSessionErrors      CapabilitySupport
-	ExcludedSessions      CapabilitySupport
-	ForceReplaceOnParse   CapabilitySupport
-	VerifiedLocalStat     CapabilitySupport
+	// IncrementalDiscoveryCursor means default discovery yields only sources
+	// changed since the provider's stored change cursor and consumes
+	// ProviderConfig.ForceFullDiscovery to bypass it. Cursor discovery cannot
+	// prove absence, so a provider-scoped scheduled pass stays
+	// non-authoritative, and a failed parse or write must schedule one
+	// forced-full pass: the advanced cursor would otherwise never revisit the
+	// failed source.
+	IncrementalDiscoveryCursor CapabilitySupport
+	PerSessionErrors           CapabilitySupport
+	ExcludedSessions           CapabilitySupport
+	ForceReplaceOnParse        CapabilitySupport
+	VerifiedLocalStat          CapabilitySupport
 	// PersistentArchive means a vanished physical container must not tombstone
 	// its stored virtual members. A still-present container remains
 	// authoritative for member deletion.

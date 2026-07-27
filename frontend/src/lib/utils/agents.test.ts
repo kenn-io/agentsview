@@ -49,6 +49,7 @@ describe("KNOWN_AGENTS", () => {
       "posit-assistant",
       "roocode",
       "poolside",
+      "omnigent",
     ]);
   });
 
@@ -123,6 +124,9 @@ describe("agentColor", () => {
     );
     expect(agentColor("roocode")).toBe(
       "var(--accent-rose)",
+    );
+    expect(agentColor("omnigent")).toBe(
+      "var(--accent-teal)",
     );
   });
 
@@ -200,6 +204,7 @@ describe("agentLabel", () => {
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");
     expect(agentLabel("qoder")).toBe("Qoder");
     expect(agentLabel("roocode")).toBe("RooCode");
+    expect(agentLabel("omnigent")).toBe("Omnigent");
   });
 
   it("capitalizes simple agent names", () => {

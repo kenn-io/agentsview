@@ -1284,6 +1284,211 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 	return int(deleted), nil
 }
 
+// DeleteParserMigrationSuppressedSessions removes replacement identities that
+// a provider suppressed because a predecessor was protected. Unlike ordinary
+// parser exclusion cleanup, this rechecks each replacement's user trash and
+// permanent exclusion state inside the deletion transaction so protection
+// added after the provider policy check cannot be erased.
+//
+// The returned IDs are the unprotected replacements approved for cleanup. An
+// approved ID is returned even when its session row is already absent so a
+// resync can keep an older copy from being restored as an orphan.
+func (db *DB) DeleteParserMigrationSuppressedSessions(
+	ids []string,
+) ([]string, error) {
+	if err := db.requireWritable(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"begin parser-suppressed replacement delete: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	approved := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		protected, err := parserSessionIdentityProtectedTx(tx, id)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"checking suppressed replacement %s: %w", id, err,
+			)
+		}
+		if protected {
+			continue
+		}
+		approved = append(approved, id)
+		if err := deleteSessionMessagesTx(tx, id); err != nil {
+			return nil, fmt.Errorf(
+				"pre-deleting suppressed replacement %s messages: %w",
+				id, err,
+			)
+		}
+		if _, err := tx.Exec(
+			"DELETE FROM sessions WHERE id = ?", id,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"deleting suppressed replacement %s: %w", id, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf(
+			"commit parser-suppressed replacement delete: %w", err,
+		)
+	}
+	return approved, nil
+}
+
+// RetireParserSupersededSessions removes live parser identities only after
+// their replacement is durable. Unlike ordinary parser exclusion cleanup,
+// this rechecks user trash and permanent exclusion state inside the retirement
+// transaction. If a predecessor became protected after the parser's initial
+// policy check, the unprotected replacement is removed in the same transaction
+// so the identity change cannot resurrect a user-deleted session.
+//
+// The returned bool reports whether a protected predecessor suppressed the
+// replacement.
+func (db *DB) RetireParserSupersededSessions(
+	replacementID string,
+	ids []string,
+) (int, bool, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, false, err
+	}
+	if len(ids) == 0 {
+		return 0, false, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return 0, false, fmt.Errorf(
+			"begin parser-superseded retirement: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	protected := false
+	retireIDs := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" || id == replacementID {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		isProtected, err := parserSessionIdentityProtectedTx(tx, id)
+		if err != nil {
+			return 0, false, fmt.Errorf(
+				"checking superseded session %s: %w", id, err,
+			)
+		}
+		if isProtected {
+			protected = true
+			continue
+		}
+		retireIDs = append(retireIDs, id)
+	}
+
+	if protected && replacementID != "" {
+		replacementProtected, err := parserSessionIdentityProtectedTx(
+			tx, replacementID,
+		)
+		if err != nil {
+			return 0, false, fmt.Errorf(
+				"checking replacement session %s: %w",
+				replacementID, err,
+			)
+		}
+		if !replacementProtected {
+			if err := deleteSessionMessagesTx(tx, replacementID); err != nil {
+				return 0, false, fmt.Errorf(
+					"pre-deleting suppressed replacement %s messages: %w",
+					replacementID, err,
+				)
+			}
+			if _, err := tx.Exec(
+				"DELETE FROM sessions WHERE id = ?", replacementID,
+			); err != nil {
+				return 0, false, fmt.Errorf(
+					"deleting suppressed replacement %s: %w",
+					replacementID, err,
+				)
+			}
+		}
+	}
+
+	deleted := int64(0)
+	for _, id := range retireIDs {
+		if err := deleteSessionMessagesTx(tx, id); err != nil {
+			return 0, false, fmt.Errorf(
+				"pre-deleting superseded session %s messages: %w",
+				id, err,
+			)
+		}
+		res, err := tx.Exec("DELETE FROM sessions WHERE id = ?", id)
+		if err != nil {
+			return 0, false, fmt.Errorf(
+				"retiring superseded session %s: %w", id, err,
+			)
+		}
+		n, _ := res.RowsAffected()
+		deleted += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf(
+			"commit parser-superseded retirement: %w", err,
+		)
+	}
+	return int(deleted), protected, nil
+}
+
+func parserSessionIdentityProtectedTx(tx *sql.Tx, id string) (bool, error) {
+	var excluded int
+	err := tx.QueryRow(
+		"SELECT 1 FROM excluded_sessions WHERE id = ?", id,
+	).Scan(&excluded)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("checking permanent exclusion: %w", err)
+	}
+	if excluded == 1 {
+		return true, nil
+	}
+
+	var deletedAt, deletionCause sql.NullString
+	err = tx.QueryRow(
+		"SELECT deleted_at, deletion_cause FROM sessions WHERE id = ?", id,
+	).Scan(&deletedAt, &deletionCause)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking trash state: %w", err)
+	}
+	return deletedAt.Valid &&
+		(!deletionCause.Valid ||
+			deletionCause.String != deletionCauseSourceMissing), nil
+}
+
 const insertSessionSQL = `
 		INSERT INTO sessions (
 			id, project, machine, agent, first_message, session_name,
@@ -2250,6 +2455,85 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 		return nil, fmt.Errorf("iterating session IDs by file path: %w", err)
 	}
 	return ids, nil
+}
+
+const descendantSessionRootBatchSize = 100
+
+// ListActiveDescendantSessionSourcePaths returns the source paths of active
+// descendants already linked beneath parentIDs. Both the seed and recursive
+// steps use idx_sessions_parent, so work scales with the affected subagent
+// trees rather than every archived session.
+func (db *DB) ListActiveDescendantSessionSourcePaths(
+	ctx context.Context,
+	machine, agent string,
+	parentIDs []string,
+) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	var paths []string
+	for start := 0; start < len(parentIDs); start += descendantSessionRootBatchSize {
+		end := min(start+descendantSessionRootBatchSize, len(parentIDs))
+		batch := parentIDs[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		query := `
+			WITH RECURSIVE descendants(id, file_path) AS (
+				SELECT id, file_path
+				  FROM sessions INDEXED BY idx_sessions_parent
+				 WHERE parent_session_id IS NOT NULL
+				   AND parent_session_id IN (` + placeholders + `)
+				   AND machine = ? AND agent = ? AND deleted_at IS NULL
+				UNION
+				SELECT s.id, s.file_path
+				  FROM sessions AS s INDEXED BY idx_sessions_parent
+				  JOIN descendants AS d ON s.parent_session_id = d.id
+				 WHERE s.parent_session_id IS NOT NULL
+				   AND s.machine = ? AND s.agent = ? AND s.deleted_at IS NULL
+			)
+			SELECT file_path
+			  FROM descendants
+			 WHERE file_path IS NOT NULL AND file_path <> ''
+			 ORDER BY file_path`
+		args := make([]any, 0, len(batch)+4)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		args = append(args, machine, agent, machine, agent)
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"listing active descendant session sources: %w", err,
+			)
+		}
+		for rows.Next() {
+			var path string
+			if err := rows.Scan(&path); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf(
+					"scanning active descendant session source: %w", err,
+				)
+			}
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf(
+				"iterating active descendant session sources: %w", err,
+			)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf(
+				"closing active descendant session sources: %w", err,
+			)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 const storedSourcePathHintRootBatchSize = 100

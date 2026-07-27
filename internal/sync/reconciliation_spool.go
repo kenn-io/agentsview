@@ -76,6 +76,7 @@ type reconciliationSpool struct {
 
 type reconciliationSpoolStore interface {
 	Add(context.Context, reconciliationCandidate) error
+	CandidateCounts(context.Context) (map[parser.AgentType]int, error)
 	Candidate(context.Context, parser.AgentType, string) (reconciliationCandidate, bool, error)
 	ContainsSource(context.Context, parser.AgentType, string) (bool, error)
 	ContainsSourceIdentity(context.Context, parser.AgentType, string, string) (bool, error)
@@ -300,6 +301,49 @@ func (spool *reconciliationSpool) Add(
 		return fmt.Errorf("write reconciliation candidate: %w", err)
 	}
 	return nil
+}
+
+func (spool *reconciliationSpool) CandidateCounts(
+	ctx context.Context,
+) (map[parser.AgentType]int, error) {
+	if err := spool.seal(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := spool.db.QueryContext(ctx, `
+		SELECT provider, COUNT(*)
+		  FROM candidates
+		 GROUP BY provider
+	`)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf(
+			"count reconciliation candidates by provider: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	counts := make(map[parser.AgentType]int)
+	for rows.Next() {
+		var provider string
+		var count int
+		if err := rows.Scan(&provider, &count); err != nil {
+			return nil, fmt.Errorf(
+				"scan reconciliation provider candidate count: %w", err,
+			)
+		}
+		counts[parser.AgentType(provider)] = count
+	}
+	if err := rows.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf(
+			"iterate reconciliation provider candidate counts: %w", err,
+		)
+	}
+	return counts, nil
 }
 
 func (spool *reconciliationSpool) Page(

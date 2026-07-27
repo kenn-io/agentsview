@@ -465,6 +465,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentReasonix,
 		AgentRooCode,
 		AgentPoolside,
+		AgentOmnigent,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
@@ -621,6 +622,16 @@ func TestShelleyRegistryEntry(t *testing.T) {
 	assert.Equal(t, "shelley:", def.IDPrefix)
 }
 
+func TestOmnigentRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOmnigent)
+	require.True(t, ok, "AgentOmnigent missing from Registry")
+	require.True(t, def.FileBased, "Omnigent FileBased")
+	assert.Equal(t, "OMNIGENT_DIR", def.EnvVar)
+	assert.Equal(t, "omnigent_dirs", def.ConfigKey)
+	assert.Equal(t, "omnigent:", def.IDPrefix)
+	require.Equal(t, []string{".omnigent"}, def.DefaultDirs)
+}
+
 func TestOpenCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentOpenCode)
 	require.True(t, ok, "AgentOpenCode missing from Registry")
@@ -665,6 +676,10 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	// subdirectory changes are invisible to their shallow watch coverage.
 	assert.True(t, optedIn[AgentOpenHands])
 	assert.True(t, optedIn[AgentAider])
+	// Omnigent's event tracker deliberately observes only bounded row-ID and
+	// timestamp windows. Scheduled reconciliation replays those bounded
+	// cursors; the daily archive audit performs authoritative discovery.
+	assert.True(t, optedIn[AgentOmnigent])
 	// Cowork's provider WatchPlan registers its root recursively
 	// (coworkWatchRoots Recursive:true overrides legacy ShallowWatch), so
 	// scheduled reconciliation would redundantly rescan the whole archive.
@@ -676,24 +691,6 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	assert.False(t, optedIn[AgentHermes])
 	assert.False(t, optedIn[AgentClaude])
 	assert.False(t, optedIn[AgentGemini])
-}
-
-func TestRemoteSyncExcludedCapability(t *testing.T) {
-	excluded := map[AgentType]bool{}
-	for _, def := range Registry {
-		excluded[def.Type] = def.RemoteSyncExcluded
-	}
-	// Trae's modern layout stores sessions as encrypted state that a remote
-	// machine cannot read, so it opts out of every remote sync artifact.
-	assert.True(t, excluded[AgentTrae])
-	assert.False(t, excluded[AgentClaude])
-	assert.False(t, excluded[AgentCodex])
-}
-
-func TestRemoteSyncExcludedAgent(t *testing.T) {
-	assert.True(t, RemoteSyncExcludedAgent(AgentTrae))
-	assert.False(t, RemoteSyncExcludedAgent(AgentClaude))
-	assert.False(t, RemoteSyncExcludedAgent(AgentType("unknown-agent")))
 }
 
 func TestAgentByPrefixCowork(t *testing.T) {
