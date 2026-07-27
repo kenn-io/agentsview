@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Card, Checkbox, SegmentedControl, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
-  import SettingsSection from "./SettingsSection.svelte";
   import {
     SettingsService,
     type ApplyWorktreeMappingsResponse,
@@ -186,10 +185,7 @@
   );
 </script>
 
-<SettingsSection
-  title={m.worktree_title()}
-  description={m.worktree_description()}
->
+<div class="worktree-settings">
   {#if readOnly}
     <div class="muted">{m.worktree_local_only()}</div>
   {:else if loading}
@@ -300,9 +296,15 @@
       </button>
     </div>
   {/if}
-</SettingsSection>
+</div>
 
 <style>
+  .worktree-settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
   .machine-row,
   .button-row,
   .mapping-actions {

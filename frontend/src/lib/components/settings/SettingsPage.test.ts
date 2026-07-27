@@ -149,4 +149,51 @@ describe("SettingsPage", () => {
 
     unmount(component);
   });
+
+  it("groups settings and switches the visible panel", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    settingsService.getApiV1SettingsWorktreeMappings.mockResolvedValue({
+      mappings: [],
+    });
+
+    const component = mount(SettingsPage, {
+      target: document.body,
+    });
+    await tick();
+    await tick();
+
+    const nav = document.body.querySelector(
+      'nav[aria-label="Settings"]',
+    );
+    expect(nav).not.toBeNull();
+    expect(nav!.textContent).toContain("Preferences");
+    expect(nav!.textContent).toContain("Data");
+    expect(nav!.textContent).toContain("Connections");
+
+    const visiblePanel = () =>
+      document.body.querySelector<HTMLElement>(
+        ".settings-panel:not([hidden])",
+      );
+    expect(visiblePanel()?.textContent).toContain("Appearance");
+
+    const terminal = Array.from(nav!.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Terminal"),
+    );
+    expect(terminal).toBeTruthy();
+    terminal!.click();
+    await tick();
+
+    expect(visiblePanel()?.textContent).toContain("Launch mode");
+    expect(visiblePanel()?.textContent).not.toContain("Block visibility");
+
+    unmount(component);
+  });
 });

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Button, Checkbox, SegmentedControl } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
-  import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import {
     ui,
@@ -50,10 +49,7 @@
   );
 </script>
 
-<SettingsSection
-  title={m.appearance_title()}
-  description={m.appearance_description()}
->
+<div class="appearance-settings">
   <div class="setting-row">
     <span class="setting-label">{m.appearance_theme()}</span>
     <Button size="sm" onclick={() => ui.toggleTheme()}>
@@ -114,9 +110,15 @@
       {/each}
     </div>
   </div>
-</SettingsSection>
+</div>
 
 <style>
+  .appearance-settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
   .setting-row {
     display: flex;
     align-items: center;

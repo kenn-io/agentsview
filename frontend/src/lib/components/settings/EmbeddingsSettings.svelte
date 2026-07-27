@@ -2,7 +2,6 @@
   import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
-  import SettingsSection from "./SettingsSection.svelte";
   import { EmbeddingsService } from "../../api/generated/index";
   import type { VectorBuildStatus } from "../../api/generated/index";
   import type { VectorGenerationInfo } from "../../api/generated/models/VectorGenerationInfo";
@@ -204,10 +203,7 @@
   }
 </script>
 
-<SettingsSection
-  title={m.settings_embeddings_title()}
-  description={m.settings_embeddings_description()}
->
+<div class="embeddings-settings">
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
@@ -351,9 +347,15 @@
       {/if}
     </div>
   {/if}
-</SettingsSection>
+</div>
 
 <style>
+  .embeddings-settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
   .muted {
     font-size: 12px;
     color: var(--text-muted);

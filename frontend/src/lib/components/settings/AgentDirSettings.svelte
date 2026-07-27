@@ -1,6 +1,5 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
 
   const AGENT_LABELS: Record<string, string> = {
@@ -31,27 +30,22 @@
   };
 </script>
 
-<SettingsSection
-  title={m.settings_agent_dir_title()}
-  description={m.settings_agent_dir_description()}
->
-  <div class="dir-list">
-    {#each Object.entries(settings.agentDirs) as [agent, dirs]}
-      <div class="dir-row">
-        <span class="dir-agent">{AGENT_LABELS[agent] ?? agent}</span>
-        <div class="dir-paths">
-          {#if dirs.length === 0}
-            <span class="dir-none">{m.settings_agent_dir_not_configured()}</span>
-          {:else}
-            {#each dirs as dir}
-              <code class="dir-path">{dir}</code>
-            {/each}
-          {/if}
-        </div>
+<div class="dir-list">
+  {#each Object.entries(settings.agentDirs) as [agent, dirs]}
+    <div class="dir-row">
+      <span class="dir-agent">{AGENT_LABELS[agent] ?? agent}</span>
+      <div class="dir-paths">
+        {#if dirs.length === 0}
+          <span class="dir-none">{m.settings_agent_dir_not_configured()}</span>
+        {:else}
+          {#each dirs as dir}
+            <code class="dir-path">{dir}</code>
+          {/each}
+        {/if}
       </div>
-    {/each}
-  </div>
-</SettingsSection>
+    </div>
+  {/each}
+</div>
 
 <style>
   .dir-list {
