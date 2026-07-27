@@ -4,11 +4,16 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { seriesColorMap } from "../../utils/projectColor.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
   import type { Money } from "../../money.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
+
+  interface Props {
+    colorMap: ReadonlyMap<string, string>;
+  }
+
+  let { colorMap }: Props = $props();
 
   function fmtPct(v: number, total: number): string {
     if (total <= 0) return "";
@@ -59,10 +64,6 @@
     items.sort((a, b) => b.cost.microdollars - a.cost.microdollars);
     return items;
   });
-
-  const colorMap = $derived(
-    seriesColorMap(rowItems.map((item) => item.id).sort()),
-  );
 
   const rows = $derived.by((): Row[] => {
     const items = rowItems;

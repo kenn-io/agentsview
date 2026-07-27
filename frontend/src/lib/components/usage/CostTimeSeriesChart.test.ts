@@ -12,11 +12,13 @@ import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
 import { usage } from "../../stores/usage.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
+import { settings } from "../../stores/settings.svelte.js";
 import type {
   DailyUsageEntry,
   UsageSummaryResponse,
 } from "../../api/types/usage.js";
 import { projectColor } from "../../utils/projectColor.js";
+import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
 const OBSERVED_WIDTH = 1648;
 
@@ -138,23 +140,36 @@ function modelDailyEntry(
   return entry;
 }
 
+function mountChart() {
+  const groupBy = usage.toggles.timeSeries.groupBy;
+  return mount(CostTimeSeriesChart, {
+    target: document.body,
+    props: {
+      colorMap: usageChartColorMaps(
+        usage.summary,
+        settings.chartPalette,
+      )[groupBy],
+    },
+  });
+}
+
 describe("CostTimeSeriesChart", () => {
   beforeEach(() => {
     globalThis.ResizeObserver =
       ImmediateResizeObserver as typeof ResizeObserver;
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "project";
+    settings.chartPalette = "agentsview";
   });
 
   afterEach(() => {
     usage.summary = null;
+    settings.chartPalette = "agentsview";
     document.body.innerHTML = "";
   });
 
   it("keeps the rightmost date label inside the SVG viewBox", async () => {
-    const component = mount(CostTimeSeriesChart, {
-      target: document.body,
-    });
+    const component = mountChart();
     await tick();
 
     const svg = document.querySelector("svg.chart-svg");
@@ -188,7 +203,7 @@ describe("CostTimeSeriesChart", () => {
 		},
 	];
 
-	const component = mount(CostTimeSeriesChart, { target: document.body });
+	const component = mountChart();
 	await tick();
 
 	expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
@@ -210,7 +225,7 @@ describe("CostTimeSeriesChart", () => {
       ]),
     ];
 
-    const component = mount(CostTimeSeriesChart, { target: document.body });
+    const component = mountChart();
     await tick();
 
     const paths = Array.from(
@@ -236,7 +251,7 @@ describe("CostTimeSeriesChart", () => {
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ];
 
-    const component = mount(CostTimeSeriesChart, { target: document.body });
+    const component = mountChart();
     await tick();
 
     const paths = document.querySelectorAll<SVGPathElement>(
@@ -257,7 +272,7 @@ describe("CostTimeSeriesChart", () => {
     }));
     usage.summary.daily = [modelDailyEntry(0, models)];
 
-    const component = mount(CostTimeSeriesChart, { target: document.body });
+    const component = mountChart();
     await tick();
 
     const paths = Array.from(
@@ -270,6 +285,35 @@ describe("CostTimeSeriesChart", () => {
     expect(dots).toHaveLength(6);
     expect(paths.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
     expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
+    unmount(component);
+  });
+
+  it("uses lexical Matplotlib colors for colliding model paths and legend dots", async () => {
+    settings.chartPalette = "matplotlib";
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary.daily = [
+      modelDailyEntry(0, [
+        { modelName: "gpt-5.6-sol", cost: testMoney(8) },
+        { modelName: "claude-opus-5", cost: testMoney(4) },
+      ]),
+      modelDailyEntry(1, [
+        { modelName: "gpt-5.6-sol", cost: testMoney(3) },
+        { modelName: "claude-opus-5", cost: testMoney(2) },
+      ]),
+    ];
+
+    const component = mountChart();
+    await tick();
+
+    const paths = Array.from(
+      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+    ).map((path) => path.getAttribute("fill"));
+    const dots = Array.from(
+      document.querySelectorAll<HTMLElement>(".legend-dot"),
+    ).map((dot) => dot.style.background);
+    expect(paths).toEqual(["#ff7f0e", "#1f77b4"]);
+    expect(dots).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
     unmount(component);
   });
 });

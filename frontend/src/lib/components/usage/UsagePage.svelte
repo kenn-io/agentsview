@@ -16,6 +16,7 @@
   import { events } from "../../stores/events.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -38,9 +39,14 @@
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
   import { m } from "../../i18n/index.js";
+  import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
+
+  const chartColorMaps = $derived(
+    usageChartColorMaps(usage.summary, settings.chartPalette),
+  );
 
   const projectItems = $derived(
     sessions.projects.map((p) => ({
@@ -478,11 +484,15 @@
     <UsageSummaryCards />
 
     <Card level="default" padding="none" class="chart-panel wide">
-      <CostTimeSeriesChart />
+      <CostTimeSeriesChart
+        colorMap={chartColorMaps[usage.toggles.timeSeries.groupBy]}
+      />
     </Card>
 
     <Card level="default" padding="none" class="chart-panel wide">
-      <AttributionPanel />
+      <AttributionPanel
+        colorMap={chartColorMaps[usage.toggles.attribution.groupBy]}
+      />
     </Card>
 
     <div class="bottom-grid">

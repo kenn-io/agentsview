@@ -1,8 +1,13 @@
 <script lang="ts">
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
-  import { seriesColorMap } from "../../utils/projectColor.js";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
+
+  interface Props {
+    colorMap: ReadonlyMap<string, string>;
+  }
+
+  let { colorMap }: Props = $props();
 
   const CHART_H = 180;
   const X_LABEL_H = 20;
@@ -13,8 +18,6 @@
   // ascenders do not clip against the SVG viewBox edge.
   const TOP_PAD = 10;
   const MAX_SERIES = 5;
-
-  const OTHER_COLOR = "var(--text-muted)";
 
   let containerEl: HTMLDivElement | undefined = $state();
   let containerWidth = $state(600);
@@ -143,12 +146,6 @@
 
     return { points, keys, maxY: maxY || 1, labels };
   });
-
-  const colorMap = $derived(
-    seriesColorMap(
-      seriesData.keys.filter((key) => key !== "__other__").sort(),
-    ),
-  );
 
   const chartWidth = $derived(
     Math.max(containerWidth - Y_LABEL_W - X_LABEL_RIGHT_PAD, 100),
