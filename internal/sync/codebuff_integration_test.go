@@ -430,3 +430,183 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 			"the engine recomputed from the empty parsed-message "+
 			"slice and overwrote chat-meta.json's count")
 }
+
+// TestSyncCodebuffMetaOnlyDriftReparsesSession pins the roborev LOW
+// carryover at internal/parser/codebuff_provider.go:194 and the matching
+// freshness gate in internal/sync/engine.go around line 12253: a future
+// regression that drops chat-meta.json from the composite stat would
+// silently orphan rows whose only on-disk change is a meta touch. The
+// stat-only freshness gate must observe the meta-only mtime bump and
+// reparse exactly one session while leaving the other five unchanged.
+//
+// chat-messages.json and run-state.json stay on disk untouched.
+func TestSyncCodebuffMetaOnlyDriftReparsesSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := createCodebuffArchive(t, 6)
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 6,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse every discovered session")
+
+	targetDir := filepath.Join(
+		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
+	)
+	metaPath := filepath.Join(targetDir, "chat-meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{
+		"messageCount": 1,
+		"firstPrompt": "Meta-drift prompt",
+		"messagesSize": 4096
+	}`), 0o644))
+	time.Sleep(10 * time.Millisecond)
+	bump := time.Now()
+	require.NoError(t, os.Chtimes(metaPath, bump, bump))
+
+	assert.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"chat-meta.json-only drift must reparse exactly one "+
+			"session; a zero here means the freshness composite "+
+			"stat dropped chat-meta.json and the meta-only mtime "+
+			"bump passed the gate as unchanged, and a value "+
+			"above one means the composite double-counted the "+
+			"shared session")
+}
+
+// TestSyncCodebuffRunStateOnlyDriftReparsesSession pins the run-state.json
+// leg of the freshness composite trio at internal/parser/codebuff_provider.go:196
+// and engine.go around line 12260: a future regression that drops
+// run-state.json from the composite stat would silently orphan rows whose
+// only on-disk change is a run-state touch (e.g. when the upstream agent
+// accumulates credits without appending to chat-messages.json). The
+// stat-only freshness gate must observe the run-state-only mtime bump
+// and reparse exactly one session while leaving the other five unchanged.
+//
+// chat-messages.json and chat-meta.json stay on disk untouched.
+func TestSyncCodebuffRunStateOnlyDriftReparsesSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := createCodebuffArchive(t, 6)
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 6,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse every discovered session")
+
+	targetDir := filepath.Join(
+		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
+	)
+	runStatePath := filepath.Join(targetDir, "run-state.json")
+	require.NoError(t, os.WriteFile(runStatePath, []byte(`{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek",
+				"creditsUsed": 200
+			},
+			"fileContext": {"cwd": "/initial/cwd"}
+		}
+	}`), 0o644))
+	time.Sleep(10 * time.Millisecond)
+	bump := time.Now()
+	require.NoError(t, os.Chtimes(runStatePath, bump, bump))
+
+	assert.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"run-state.json-only drift must reparse exactly one "+
+			"session; a zero here means the freshness composite "+
+			"stat dropped run-state.json and the run-state-only "+
+			"mtime bump passed the gate as unchanged, and a value "+
+			"above one means the composite double-counted the "+
+			"shared session")
+}
+
+// TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession exercises
+// freshness composite stat at the same time as each individual leg:
+// mutating BOTH chat-meta.json AND run-state.json (chat-messages.json
+// untouched) between two syncs must reparse exactly one session. The
+// composite stat folds each leg's size and max mtime via sum/max, so
+// the realistic failure modes for this test are:
+//
+//   - "missed both fresh mtime bumps": max(mtime) returned false
+//     despite both legs bumping, surfacing as Synced == 0. (A
+//     single missed leg would still advance the max — the
+//     meta-only and run-state-only tests catch that case more
+//     directly.)
+//   - "double-count the shared session": the composite emits one
+//     re-parse per bumped file, returning Synced >= 2.
+//
+// Both legs reference the SAME session directory, so they must
+// de-duplicate to a single re-parse. The shared mtime bump between
+// the two files removes a subtle flake risk if the host filesystem
+// has a coarser-than-10ms mtime resolution.
+func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := createCodebuffArchive(t, 6)
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 6,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse every discovered session")
+
+	targetDir := filepath.Join(
+		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
+	)
+	metaPath := filepath.Join(targetDir, "chat-meta.json")
+	runStatePath := filepath.Join(targetDir, "run-state.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{
+		"messageCount": 1,
+		"firstPrompt": "Composite-drift prompt",
+		"messagesSize": 8192
+	}`), 0o644))
+	require.NoError(t, os.WriteFile(runStatePath, []byte(`{
+		"sessionState": {
+			"mainAgentState": {
+				"agentType": "base2-deepseek",
+				"creditsUsed": 500
+			},
+			"fileContext": {"cwd": "/initial/cwd"}
+		}
+	}`), 0o644))
+	time.Sleep(10 * time.Millisecond)
+	bump := time.Now()
+	require.NoError(t, os.Chtimes(metaPath, bump, bump))
+	require.NoError(t, os.Chtimes(runStatePath, bump, bump))
+
+	assert.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"composite (chat-meta + run-state) drift must reparse "+
+			"exactly one session; a zero here means the freshness "+
+			"composite missed BOTH bumped files (each leg is "+
+			"folded via max mtime, so a single missing leg would "+
+			"still let the other advance the max), and a value "+
+			"above one means the composite double-counted the "+
+			"shared session")
+}
