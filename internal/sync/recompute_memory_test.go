@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,42 @@ func TestRecomputeSignalsDoesNotReleaseHeapDirectly(t *testing.T) {
 	require.NoError(t, fx.engine.RecomputeSignals(ctx, id))
 
 	assert.Zero(t, calls)
+}
+
+func TestBackfillSignalsRecomputesVersion2TerminalAPIErrorSession(t *testing.T) {
+	fx := newEngineFixture(t)
+	ctx := context.Background()
+	const id = "api-stale"
+	endedAt := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+
+	require.NoError(t, fx.db.UpsertSession(db.Session{
+		ID: id, Project: "proj", Machine: "m", Agent: "claude",
+		MessageCount: 2, UserMessageCount: 1, EndedAt: &endedAt,
+	}))
+	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
+		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
+		{
+			SessionID: id, Ordinal: 1, Role: "assistant",
+			Content: "API Error: Unable to connect to API (ConnectionRefused)",
+		},
+	}))
+	require.NoError(t, fx.db.UpdateSessionSignals(id, db.SessionSignalUpdate{
+		Outcome:           "completed",
+		OutcomeConfidence: "medium",
+		QualitySignals: db.QualitySignals{
+			Version: 2,
+		},
+	}))
+
+	require.NoError(t,
+		fx.db.BackfillSignals(ctx, fx.engine.BackfillSignalComputer()))
+
+	sess, err := fx.db.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, db.CurrentQualitySignalVersion, sess.QualitySignalVersion)
+	assert.Equal(t, "errored", sess.Outcome)
+	assert.Equal(t, "medium", sess.OutcomeConfidence)
 }
 
 func TestRecomputeHeapReleaserSkipsSmallSessions(t *testing.T) {
