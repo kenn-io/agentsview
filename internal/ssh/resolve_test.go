@@ -67,6 +67,7 @@ func TestResolveScriptExcludesTraeProfile(t *testing.T) {
 }
 
 func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	root := filepath.Join(home, "claude personal")
 	projectsDir := filepath.Join(root, "projects")
@@ -214,6 +215,7 @@ func TestResolveScriptExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 }
 
 func TestResolveScriptCarriesTraeForbiddenRoot(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
 	require.NoError(t, os.MkdirAll(root, 0o755))
@@ -237,6 +239,7 @@ func TestResolveScriptCarriesMissingExcludedRoot(t *testing.T) {
 }
 
 func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := filepath.ToSlash(physTempDir(t))
 	profileSessions := path.Join(
 		home, ".hermes", "profiles", "research", "sessions",
@@ -260,6 +263,7 @@ func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {
 }
 
 func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := filepath.ToSlash(physTempDir(t))
 	profilesRoot := path.Join(home, ".hermes", "profiles")
 	researchRoot := path.Join(profilesRoot, "research")
@@ -288,6 +292,7 @@ func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testi
 }
 
 func TestResolveScriptHermesTrailingSlashOverrideIncludesStateDB(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := filepath.ToSlash(physTempDir(t))
 	customRoot := path.Join(home, "custom-hermes")
 	customSessions := path.Join(customRoot, "sessions")
@@ -306,6 +311,7 @@ func TestResolveScriptHermesTrailingSlashOverrideIncludesStateDB(t *testing.T) {
 }
 
 func TestResolveScriptIncludesFlatCustomHermesRoot(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	customRoot := filepath.Join(home, "custom", "hermes-archive")
 	require.NoError(t, os.MkdirAll(customRoot, 0o755))
@@ -441,6 +447,7 @@ func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
 // treats resolved entries as tar targets, so emitting the code root would
 // archive the entire repository instead of just .aider.chat.history.md files.
 func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	codeRoot := filepath.Join(home, "code")
 	repoA := filepath.Join(codeRoot, "repo-a")
@@ -569,6 +576,19 @@ func hasRecordWithPathSuffix(records []string, prefix, suffix string) bool {
 		}
 	}
 	return false
+}
+
+// skipScriptPathEqualityOnWindows skips script-execution tests that
+// assert exact emitted path spellings or build POSIX symlink fixtures.
+// The resolve script targets POSIX remote hosts; on Windows CI it runs
+// under MSYS sh, whose pwd -P prints /c/... POSIX spellings for Windows
+// paths, so physical-path emission (av_phys_dir) rewrites fixtures into
+// a dialect no real deployment produces.
+func skipScriptPathEqualityOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("resolve script targets POSIX remote hosts; MSYS pwd rewrites Windows paths into /c/... spellings")
+	}
 }
 
 func runResolveScriptForTest(t *testing.T, env ...string) []byte {
@@ -896,6 +916,7 @@ func TestParseResolvedTargetsPreservesNULDelimitedSpellingsExactly(
 }
 
 func TestResolveScriptEmitsPhysicalPathsForSymlinkedRoots(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	physicalTrae := filepath.Join(home, "real-trae")
 	physicalClaude := filepath.Join(home, "real-claude")
@@ -927,6 +948,7 @@ func TestResolveScriptEmitsPhysicalPathsForSymlinkedRoots(t *testing.T) {
 // filename resolves against the physical working directory, and a file
 // spelled through a symlinked parent resolves to its physical location.
 func TestAvPhysFileEdgeCases(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	base := physTempDir(t)
 	physicalDir := filepath.Join(base, "real")
 	require.NoError(t, os.MkdirAll(physicalDir, 0o755))
@@ -965,6 +987,7 @@ func TestAvPhysFileEdgeCases(t *testing.T) {
 // provider's tree: the emitted history-file path must carry the physical
 // forbidden-root prefix so the transfer-side filter drops it.
 func TestResolveScriptAiderSymlinkOverlapStaysForbidden(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	physicalTrae := filepath.Join(home, "real-trae")
 	repoDir := filepath.Join(physicalTrae, "code", "repo")
