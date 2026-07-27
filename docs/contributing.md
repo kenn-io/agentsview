@@ -3,7 +3,13 @@ title: Contributing
 description: Engineering standards and review workflow for AgentsView contributions
 ---
 
-# Contributing to AgentsView
+# Contributing to AgentsView (for Humans)
+
+This guide is for human contributors — if you are one, please read it before
+opening your first pull request. If you are configuring a coding agent, point
+it at
+[AGENTS.md](https://github.com/kenn-io/agentsview/blob/main/AGENTS.md)
+instead.
 
 We welcome changes that leave AgentsView easier to understand, safer to change,
 and more useful than before.
@@ -33,6 +39,34 @@ safety—apply to every contribution regardless of who or what wrote it.
   reason about each change on its own.
 - Do not expose private names, hostnames, identities, infrastructure details,
   credentials, live data, or absolute machine paths in durable artifacts.
+
+## Repository model
+
+AgentsView uses a fork-and-pull-request model. Clone your fork as `origin` and
+add the main repository as `upstream`:
+
+```bash
+git clone git@github.com:YOUR-USERNAME/agentsview.git
+cd agentsview
+git remote add upstream https://github.com/kenn-io/agentsview.git
+```
+
+- Branch from `upstream/main`, and push with an explicit
+  `git push origin <branch>`. Branches created from `upstream/main` may track
+  it, and a bare `git push` can target the wrong remote.
+- Update your branch with `git rebase upstream/main`, not `git merge`. Pull
+  request history should be linear.
+- Pull requests are squash-merged. After your pull request merges, git will
+  not report your local branch as merged — check the pull request state on
+  GitHub, then delete the branch. If you stacked further work on a merged
+  branch, rebase with `git rebase --onto upstream/main <old-base>` so you do
+  not replay landed commits.
+- A clean rebase is not a green build. Re-run the relevant tests after
+  rebasing onto a moved `main`; GitHub's "mergeable" status is a textual
+  check only.
+- Maintainers may rebase or trim your pull request branch before merging.
+  Keep a local copy of work you care about, and read the merged commit rather
+  than assuming the pull request landed exactly as written.
 
 ## Build a durable contribution
 
@@ -96,6 +130,11 @@ maintainability problems while the change is still fresh. Resolving those
 findings before opening a pull request reduces maintainer churn and usually
 shortens the path to a mergeable change.
 
+The repository ships a `.roborev.toml` with the project's review guidelines —
+its threat model, accepted design decisions, and backend-parity checklists —
+so local reviews automatically apply the same assumptions as the automated
+review that runs after you open a pull request.
+
 After [installing roborev](https://www.roborev.io/installation/), initialize it
 inside your checkout:
 
@@ -116,17 +155,38 @@ roborev agent-hook install --agent codex
 The agent hook expects the installed roborev fix skill. It prompts Codex to
 address accumulated findings before the session context goes cold.
 
-Before opening a pull request, we recommend one review of the complete branch.
-As of July 2026, this command matches the project's automated reviewer:
+Before opening a pull request, we recommend one review of the complete
+branch, configured to match the project's automated reviewer. As of July
+2026, that review is a panel: a correctness review plus a security review,
+synthesized into a single result. Add the panel to your roborev config:
+
+```toml
+[review.subagents.codex_default]
+agent = 'codex'
+review_type = 'default'
+
+[review.subagents.codex_security]
+agent = 'codex'
+review_type = 'security'
+
+[review.panels.default_security]
+members = ['codex_default', 'codex_security']
+synthesis_agent = 'codex'
+```
+
+Then run:
 
 ```bash
-roborev review --branch --agent codex --model gpt-5.6-sol
+roborev review --branch --base upstream/main --panel default_security
 roborev tui
 ```
 
-[GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol) is the
-current frontier OpenAI model. Model names change, so check the current roborev
-and OpenAI documentation if this dated example becomes stale.
+The explicit `--base upstream/main` matches the scope of the automated
+review, which diffs the whole pull request against its base. Running only a
+single default review clears correctness findings locally but leaves security
+findings to surface for the first time on GitHub — an avoidable review cycle.
+Panel members follow your agent's current default model; check the roborev
+documentation if this dated example becomes stale.
 
 Codex and OpenAI access are not prerequisites for useful local review. roborev
 supports [multiple coding agents](https://www.roborev.io/agents/); use any
