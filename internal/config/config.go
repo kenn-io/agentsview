@@ -2523,6 +2523,15 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
+	if value, ok := patch["chart_palette"]; ok {
+		palette, ok := value.(ChartPalette)
+		if !ok {
+			return fmt.Errorf("chart_palette must use the typed configuration value")
+		}
+		if _, err := ParseChartPalette(string(palette)); err != nil {
+			return err
+		}
+	}
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {

@@ -850,6 +850,12 @@ in both Cost Over Time and Cost Attribution:
 This is the cross-component regression: both assertions fail if either child
 computes a local active-set map.
 
+In the isolated Attribution child suite, pass a deliberately distinguishable
+supplied color map and assert that its list rows and treemap tiles use those
+exact colors. This independently fails if Attribution ignores the shared map and
+recomputes a local allocation whose full totals happen to match the shared
+universe.
+
 In both child component suites, reset `settings.chartPalette = "agentsview"`
 during cleanup. Add Matplotlib cases using the reported collision pair:
 

@@ -15,8 +15,9 @@ highlighting.
 
 - Let an administrator select the chart palette once for every client of an
   agentsview server.
-- Preserve existing theme-aware palettes and each identifier's preferred hash;
-  only collided Usage fallback slots may move to enforce cross-panel parity.
+- Preserve existing theme-aware palettes plus Usage's preferred hash and probing
+  rules; resolved Usage colors may move under full-universe allocation to
+  enforce cross-panel parity.
 - Provide as many as 36 distinct, non-gray categorical colors before cycling.
 - Keep a series color consistent across its chart, legend, treemap, and
   attribution list.
