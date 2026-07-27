@@ -447,6 +447,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// empty table; background LiteLLM refresh follows
 	// immediately.
 	seedPricing(database)
+	go startPeriodicPricingRefresh(ctx, database)
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "serve",
