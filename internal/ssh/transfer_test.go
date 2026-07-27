@@ -244,6 +244,55 @@ func TestBuildTarCommandPrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
 		"SSH transfer inputs must not recurse into a forbidden nested root")
 }
 
+// TestBuildPlainTarCommandEscapesGlobMetacharactersInExcludePattern verifies
+// that a forbidden root containing tar glob metacharacters (here "[" and
+// "]") produces a backslash-escaped --exclude pattern, not a raw glob. tar
+// --exclude patterns are globs under both GNU tar's fnmatch and bsdtar's
+// libarchive, so an unescaped literal path containing "[...]" would be
+// parsed as a character class instead of matching itself.
+func TestBuildPlainTarCommandEscapesGlobMetacharactersInExcludePattern(t *testing.T) {
+	cmd := buildPlainTarCommand(
+		[]string{"./allowed/session.jsonl"},
+		[]string{"./allowed/[forbidden-provider]"},
+	)
+	assert.Contains(t, cmd, `--exclude='./allowed/\[forbidden-provider]'`,
+		"forbidden root glob metacharacters must be backslash-escaped in the tar --exclude pattern")
+}
+
+// TestBuildTarCommandPrunesBracketCharredForbiddenRootNestedInAllowedRoot is
+// the execution-level counterpart of the escaping test above: it proves a
+// real tar invocation still prunes a forbidden root whose name contains
+// glob metacharacters. On the plain-tar path with no Hermes state DBs,
+// --exclude is the only layer that prevents recursion into a forbidden root
+// nested inside an allowed directory.
+func TestBuildTarCommandPrunesBracketCharredForbiddenRootNestedInAllowedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, "[forbidden-provider]")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
+		nil, nil, []string{forbidden},
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+
+	require.NoError(t, err, "archive command output: %s", archive)
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(keep))
+	assert.NotContains(t, names, archivePathForTest(secret),
+		"a forbidden root containing glob metacharacters must still be pruned by tar --exclude")
+}
+
 func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("remote snapshot script uses POSIX symlinks and paths")

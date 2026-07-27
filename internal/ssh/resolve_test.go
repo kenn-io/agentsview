@@ -107,7 +107,7 @@ func TestResolveScriptExitsZero(t *testing.T) {
 	// HOME so no default dirs are found.
 	out := runResolveScriptForTest(t, "HOME=/nonexistent")
 	dirs, files, extraFiles, forbiddenRoots :=
-		parseResolvedTargetsWithForbidden(string(out))
+		parseResolvedTargets(string(out))
 	assert.Empty(t, dirs)
 	assert.Empty(t, files)
 	assert.Empty(t, extraFiles)
@@ -207,7 +207,7 @@ func TestResolveScriptExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 	))
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
-	dirs, files, _ := parseResolvedTargets(string(out))
+	dirs, files, _, _ := parseResolvedTargets(string(out))
 
 	assert.NotContains(t, dirs, parser.AgentTrae)
 	assert.NotContains(t, files, parser.AgentTrae)
@@ -219,7 +219,7 @@ func TestResolveScriptCarriesTraeForbiddenRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(root, 0o755))
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
-	_, _, _, forbiddenRoots := parseResolvedTargetsWithForbidden(string(out))
+	_, _, _, forbiddenRoots := parseResolvedTargets(string(out))
 
 	assert.Contains(t, forbiddenRoots, root,
 		"the SSH resolver must preserve excluded roots as transfer boundaries")
@@ -230,7 +230,7 @@ func TestResolveScriptCarriesMissingExcludedRoot(t *testing.T) {
 	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
-	_, _, _, forbiddenRoots := parseResolvedTargetsWithForbidden(string(out))
+	_, _, _, forbiddenRoots := parseResolvedTargets(string(out))
 
 	assert.Contains(t, forbiddenRoots, root,
 		"the exclusion boundary must survive creation after remote resolution")
@@ -628,7 +628,7 @@ func TestParseResolvedTargetsIncludesAgentFiles(t *testing.T) {
 		"@agentfile:windsurf:/home/wes/Windsurf/User/workspaceStorage/a/workspace.json\x00" +
 		"@file:/home/wes/.codex/session_index.jsonl\x00"
 
-	dirs, files, extraFiles := parseResolvedTargets(input)
+	dirs, files, extraFiles, _ := parseResolvedTargets(input)
 
 	assert.Equal(t, []string{"/home/wes/Windsurf/User"}, dirs[parser.AgentWindsurf])
 	assert.Equal(t, []string{

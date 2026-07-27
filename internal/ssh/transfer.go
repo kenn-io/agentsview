@@ -122,9 +122,29 @@ func buildPlainTarCommand(paths, forbiddenArchivePaths []string) string {
 	b.WriteString("} | tar cf - -C /")
 	for _, forbiddenPath := range forbiddenArchivePaths {
 		b.WriteString(" --exclude=")
-		b.WriteString(shellQuote(forbiddenPath))
+		b.WriteString(shellQuote(escapeTarExcludeGlob(forbiddenPath)))
 	}
 	b.WriteString(" -T -\n")
+	return b.String()
+}
+
+// escapeTarExcludeGlob backslash-escapes tar --exclude glob metacharacters
+// (*, ?, [, and \ itself) in a literal path so the resulting pattern matches
+// only that exact path. tar --exclude patterns are globs under both GNU
+// tar's fnmatch and bsdtar's libarchive, so an unescaped forbidden-root path
+// containing a metacharacter (e.g. reached via an env-override path
+// containing "[") can silently fail to match itself, defeating the
+// exclusion. Both implementations honor a leading backslash to force a
+// literal match, so escaping here is safe on both.
+func escapeTarExcludeGlob(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '*', '?', '[', '\\':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
 	return b.String()
 }
 

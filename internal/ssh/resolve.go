@@ -389,22 +389,16 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 	}
 }
 
-// parseResolvedTargets parses script output into deduplicated agent root paths,
-// agent-scoped files, and extra files (records tagged with resolveFilePrefix).
-// Generated resolver output is
+// parseResolvedTargets parses script output into deduplicated agent root
+// paths, agent-scoped files, extra files (records tagged with
+// resolveFilePrefix), and forbidden roots (records tagged with
+// resolveForbiddenRootPrefix). Generated resolver output is
 // NUL-delimited so remote paths containing newlines cannot inject extra
 // records; newline-delimited input is accepted only for older tests and
 // defensive compatibility. Most agent targets are directories; Aider
 // targets are individual .aider.chat.history.md files. Skips empty
 // records, empty values, and values containing record separators.
 func parseResolvedTargets(
-	output string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string) {
-	dirs, files, extraFiles, _ := parseResolvedTargetsWithForbidden(output)
-	return dirs, files, extraFiles
-}
-
-func parseResolvedTargetsWithForbidden(
 	output string,
 ) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string) {
 	dirs := make(map[parser.AgentType][]string)
@@ -483,7 +477,7 @@ func parseResolvedTargetsWithForbidden(
 func parseResolvedDirs(
 	output string,
 ) (map[parser.AgentType][]string, []string) {
-	dirs, _, extraFiles := parseResolvedTargets(output)
+	dirs, _, extraFiles, _ := parseResolvedTargets(output)
 	return dirs, extraFiles
 }
 
@@ -493,10 +487,14 @@ func ParseResolvedTargetsForTest(output string) (map[parser.AgentType][]string, 
 	return parseResolvedDirs(output)
 }
 
+// ParseResolvedTargetsWithFilesForTest exposes SSH resolver output parsing
+// to internal/remotesync parity tests, discarding forbidden roots that
+// those tests don't assert on.
 func ParseResolvedTargetsWithFilesForTest(
 	output string,
 ) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string) {
-	return parseResolvedTargets(output)
+	dirs, files, extraFiles, _ := parseResolvedTargets(output)
+	return dirs, files, extraFiles
 }
 
 func resolveOutputRecords(output string) []string {
@@ -522,6 +520,6 @@ func resolveDirs(
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
 	}
-	dirs, files, extraFiles, forbiddenRoots := parseResolvedTargetsWithForbidden(string(out))
+	dirs, files, extraFiles, forbiddenRoots := parseResolvedTargets(string(out))
 	return dirs, files, extraFiles, forbiddenRoots, nil
 }

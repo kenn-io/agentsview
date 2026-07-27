@@ -107,10 +107,13 @@ func (rs *RemoteSync) Run(
 		BlockedResultCategories: rs.BlockedResultCategories,
 		Progress:                progress,
 	}.ImportExtracted(ctx, remotesync.TargetSet{
-		Dirs:           dirs,
-		Files:          files,
-		ExtraFiles:     extraFiles,
-		ForbiddenRoots: forbiddenRoots,
+		Dirs:       dirs,
+		Files:      files,
+		ExtraFiles: extraFiles,
+		// ForbiddenRoots is intentionally omitted: the tar script already
+		// pruned forbidden content before it reached tmpDir, and these
+		// values are remote POSIX paths, not paths in the local-path
+		// domain ImportExtracted operates in.
 	}, tmpDir)
 	if lastProgress.SessionsTotal > 0 {
 		elapsed := time.Since(t0).Truncate(time.Millisecond)
