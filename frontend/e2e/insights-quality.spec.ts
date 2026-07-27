@@ -277,7 +277,11 @@ test.describe("Insights quality rollout", () => {
       name: "Generated Insights Archive",
     });
     await archive.getByTitle("Select template").click();
-    await archive.getByRole("option", { name: "Model and Cost" }).click();
+    const templateFilter = archive.getByRole("combobox", {
+      name: "Filter templates...",
+    });
+    await templateFilter.fill("Model and Cost");
+    await templateFilter.press("Enter");
     await archive.getByRole("button", { name: "Generate" }).click();
 
     await expect(
