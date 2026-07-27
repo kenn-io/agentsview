@@ -333,6 +333,10 @@ type pushWatchOwnerCase struct {
 
 func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 	t.Helper()
+	// Keep SQLite setup outside the timed owner goroutines so channel deadlines
+	// measure watch coordination rather than fixture creation on slow runners.
+	localDuckDB := testLocalArchiveWriteBackend(t)
+	localPostgreSQL := testLocalArchiveWriteBackend(t)
 	return []pushWatchOwnerCase{
 		{
 			name: "daemon DuckDB",
@@ -355,9 +359,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 		{
 			name: "local DuckDB",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				backend := testLocalArchiveWriteBackend(t)
-				backend.watchHooks = hooks
-				return backend.DuckDBPushWatch(
+				localDuckDB.watchHooks = hooks
+				return localDuckDB.DuckDBPushWatch(
 					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
@@ -366,9 +369,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 		{
 			name: "local PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				backend := testLocalArchiveWriteBackend(t)
-				backend.watchHooks = hooks
-				return backend.PGPushWatch(
+				localPostgreSQL.watchHooks = hooks
+				return localPostgreSQL.PGPushWatch(
 					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
