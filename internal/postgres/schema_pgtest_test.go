@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -301,6 +302,95 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			assert.False(t, exists, "%s.%s still exists", table, column)
 		}
 	}
+}
+
+func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (id, machine, project, agent)
+		VALUES ('concurrent-money', 'host', 'project', 'codex');
+		INSERT INTO usage_events (
+			session_id, source, model, cost_microdollars, dedup_key
+		) VALUES ('concurrent-money', 'provider', 'model', 31250, 'cost');
+		ALTER TABLE usage_events
+			ALTER COLUMN cost_microdollars TYPE DOUBLE PRECISION
+			USING cost_microdollars / 1000000.0;
+		ALTER TABLE usage_events
+			RENAME COLUMN cost_microdollars TO cost_usd;
+	`)
+	require.NoError(t, err, "simulate legacy money schema")
+
+	blocker, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err, "begin blocking transaction")
+	defer func() { _ = blocker.Rollback() }()
+	_, err = blocker.ExecContext(t.Context(),
+		`LOCK TABLE usage_events IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err, "lock legacy money table")
+
+	dsnA, err := appendConnParams(pgURL, map[string]string{
+		"application_name": "money-migration-a",
+	})
+	require.NoError(t, err)
+	dsnB, err := appendConnParams(pgURL, map[string]string{
+		"application_name": "money-migration-b",
+	})
+	require.NoError(t, err)
+	migratorA, err := Open(dsnA, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer migratorA.Close()
+	migratorB, err := Open(dsnB, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer migratorB.Close()
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, migrator := range []*sql.DB{migratorA, migratorB} {
+		go func(conn *sql.DB) {
+			<-start
+			existingColumns, err := loadExistingColumns(
+				t.Context(), conn, nil,
+				"usage_events", "cursor_usage_events", "model_pricing",
+			)
+			if err == nil {
+				err = migrateMoneyColumnsPG(
+					t.Context(), conn, existingColumns,
+				)
+			}
+			results <- err
+		}(migrator)
+	}
+	close(start)
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := pg.QueryRowContext(t.Context(), `
+			SELECT COUNT(*)
+			FROM pg_stat_activity
+			WHERE application_name IN (
+				'money-migration-a', 'money-migration-b'
+			)
+			AND wait_event_type = 'Lock'
+		`).Scan(&waiting)
+		return err == nil && waiting == 2
+	}, 5*time.Second, 10*time.Millisecond,
+		"both migration attempts should reach the locked upgrade boundary")
+	require.NoError(t, blocker.Commit(), "release legacy money table")
+	require.NoError(t, <-results, "first concurrent migration")
+	require.NoError(t, <-results, "second concurrent migration")
+
+	var cost int64
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
+		SELECT cost_microdollars
+		FROM usage_events
+		WHERE session_id = 'concurrent-money'
+	`).Scan(&cost))
+	assert.Equal(t, int64(31250), cost)
 }
 
 func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T) {

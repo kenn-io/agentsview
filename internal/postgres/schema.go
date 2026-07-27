@@ -466,6 +466,35 @@ func migrateMoneyColumnsPG(
 			ALTER TABLE model_pricing RENAME COLUMN cache_read_per_mtok TO cache_read_microdollars_per_mtok`},
 	}
 
+	needsMigration := false
+	for _, migration := range legacyColumns {
+		if existingColumns[migration.table][migration.column] {
+			needsMigration = true
+			break
+		}
+	}
+	if !needsMigration {
+		return nil
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning PG microdollar migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(
+		hashtext(current_database()), hashtext(current_schema())
+	)`); err != nil {
+		return fmt.Errorf("locking PG microdollar migration: %w", err)
+	}
+	existingColumns, err = loadExistingColumns(
+		ctx, tx, nil,
+		"usage_events", "cursor_usage_events", "model_pricing",
+	)
+	if err != nil {
+		return err
+	}
+
 	pending := make([]struct {
 		table  string
 		column string
@@ -483,14 +512,11 @@ func migrateMoneyColumnsPG(
 		}
 	}
 	if len(pending) == 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing PG microdollar migration: %w", err)
+		}
 		return nil
 	}
-
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning PG microdollar migration: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	for _, migration := range pending {
 		query := fmt.Sprintf(`SELECT EXISTS (
 			SELECT 1 FROM %s WHERE %s IS NOT NULL
@@ -1571,8 +1597,12 @@ func batchUpdateAutomatedPG(
 	return nil
 }
 
+type columnQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
 func loadExistingColumns(
-	ctx context.Context, db *sql.DB, alters []columnMigration,
+	ctx context.Context, db columnQueryer, alters []columnMigration,
 	extraTables ...string,
 ) (map[string]map[string]bool, error) {
 	tablesSeen := map[string]bool{}

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestCanonicalCheckpointGolden(t *testing.T) {
@@ -31,7 +32,6 @@ func TestCanonicalCheckpointGolden(t *testing.T) {
 }
 
 func TestCanonicalManifestGolden(t *testing.T) {
-	cost := 0.03125
 	ordinal := 2
 	parent := "parent-1"
 	name := "Fixture"
@@ -69,7 +69,7 @@ func TestCanonicalManifestGolden(t *testing.T) {
 				Model:          "claude-test",
 				InputTokens:    11,
 				OutputTokens:   7,
-				CostUSD:        &cost,
+				Cost:           &money.Money{Microdollars: 31_250},
 				CostStatus:     "known",
 				CostSource:     "fixture",
 				OccurredAt:     "2026-06-14T01:02:04Z",
@@ -97,10 +97,10 @@ func TestCanonicalManifestGolden(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t,
-		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"cost_usd\":0.03125,\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":1}\n",
+		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost\":{\"microdollars\":31250},\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":1}\n",
 		string(data),
 	)
-	assert.Equal(t, "1a563d1b1642cf850bb2253643d8cb628a91499cbf48607a6c40b15af01b4a6f", hashHex(data))
+	assert.Equal(t, "7093f4a9c9d3b5ed73d6134fe9f2032a4a5f9b6cedbb7f40060d72f988af6246", hashHex(data))
 }
 
 func TestCanonicalMessageSegmentGolden(t *testing.T) {
