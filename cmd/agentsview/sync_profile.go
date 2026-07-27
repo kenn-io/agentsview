@@ -9,6 +9,8 @@ import (
 	"runtime/pprof"
 	"runtime/trace"
 	"slices"
+
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // startSyncProfile starts whichever of the hidden --cpuprofile,
@@ -19,6 +21,9 @@ import (
 // profiling typo never aborts a real sync.
 func startSyncProfile(cfg SyncConfig) func() {
 	var stoppers []func()
+	cfg.CPUProfile = expandSyncProfilePath("cpuprofile", cfg.CPUProfile)
+	cfg.MemProfile = expandSyncProfilePath("memprofile", cfg.MemProfile)
+	cfg.Trace = expandSyncProfilePath("trace", cfg.Trace)
 
 	if cfg.CPUProfile != "" {
 		f, err := os.Create(cfg.CPUProfile)
@@ -80,4 +85,13 @@ func startSyncProfile(cfg SyncConfig) func() {
 			stop()
 		}
 	}
+}
+
+func expandSyncProfilePath(name, path string) string {
+	expanded, err := pathutil.ExpandHome(path)
+	if err != nil {
+		log.Printf("%s: expand path: %v", name, err)
+		return ""
+	}
+	return expanded
 }

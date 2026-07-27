@@ -26,6 +26,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -843,6 +844,9 @@ func loadPGServeBase() (Config, error) {
 		return cfg, err
 	}
 	cfg.loadEnv()
+	if err := expandDataDir(&cfg); err != nil {
+		return cfg, err
+	}
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
@@ -875,6 +879,9 @@ func LoadMinimal() (Config, error) {
 		return cfg, err
 	}
 	cfg.loadEnv()
+	if err := expandDataDir(&cfg); err != nil {
+		return cfg, err
+	}
 
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
@@ -898,6 +905,9 @@ func LoadReadOnly() (Config, error) {
 		return cfg, err
 	}
 	cfg.loadEnv()
+	if err := expandDataDir(&cfg); err != nil {
+		return cfg, err
+	}
 
 	if err := cfg.loadFileReadOnly(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
@@ -1700,6 +1710,9 @@ func splitFlagList(value string) []string {
 
 func finalize(cfg *Config) error {
 	var err error
+	if err := expandLocalPaths(cfg); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.LocalMachineName) == "" {
 		return fmt.Errorf("identify local sync machine: hostname is empty")
 	}
@@ -2082,6 +2095,9 @@ func ResolveDataDir() (string, error) {
 	if v := dataDirFromEnv(); v != "" {
 		cfg.DataDir = v
 	}
+	if err := expandDataDir(&cfg); err != nil {
+		return "", err
+	}
 	return cfg.DataDir, nil
 }
 
@@ -2347,7 +2363,7 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		if err != nil {
 			return duck, fmt.Errorf("expanding path: %w", err)
 		}
-		expanded, err = expandLeadingTilde(expanded)
+		expanded, err = pathutil.ExpandHome(expanded)
 		if err != nil {
 			return duck, fmt.Errorf("expanding path: %w", err)
 		}
@@ -2378,23 +2394,6 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		duck.MachineName = h
 	}
 	return duck, nil
-}
-
-func expandLeadingTilde(path string) (string, error) {
-	if path == "" || path[0] != '~' {
-		return path, nil
-	}
-	if len(path) > 1 && path[1] != '/' && path[1] != '\\' {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("determining home directory: %w", err)
-	}
-	if path == "~" {
-		return home, nil
-	}
-	return filepath.Join(home, filepath.FromSlash(path[2:])), nil
 }
 
 var (

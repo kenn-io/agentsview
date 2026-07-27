@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/server"
 )
 
@@ -515,7 +516,10 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 		fatal("duckdb quack serve: %v", err)
 	}
 	if cfg.Path != "" {
-		duckCfg.Path = cfg.Path
+		duckCfg.Path, err = pathutil.ExpandHome(cfg.Path)
+		if err != nil {
+			fatal("duckdb quack serve: expanding --path: %v", err)
+		}
 	}
 	if cfg.AllowInsecure {
 		duckCfg.AllowInsecure = true

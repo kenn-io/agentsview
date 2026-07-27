@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -21,6 +22,18 @@ import (
 	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
 )
+
+func TestRecallCWDFlagExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	var filter service.RecallFilter
+	cmd := &cobra.Command{Use: "test"}
+	addRecallFilterFlags(cmd, &filter)
+
+	require.NoError(t, cmd.Flags().Parse([]string{"--cwd", "~/work"}))
+	assert.Equal(t, filepath.Join(home, "work"), filter.CWD)
+}
 
 func TestPrintRecallEntryReviewLineDefaultsReviewStateToUnreviewedAuto(
 	t *testing.T,

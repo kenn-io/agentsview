@@ -1518,6 +1518,31 @@ func TestSessionUsage_ServerTokenSendsBearer(t *testing.T) {
 	require.NotNil(t, out)
 }
 
+func TestSessionUsage_ServerTokenFileExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	tokenFile := filepath.Join(home, "remote-token")
+	require.NoError(t, os.WriteFile(
+		tokenFile, []byte("remote-secret\n"), 0o600,
+	))
+
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{
+		canonicalID:   "remote-session",
+		bearer:        "remote-secret",
+		serverRunning: true,
+	})
+
+	cmd := sessionUsageCommand(t,
+		"session", "usage", "remote-session",
+		"--server", ts.URL,
+		"--server-token-file", "~/remote-token")
+
+	out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
 func TestSessionUsage_ServerHTTPClientHasTimeout(t *testing.T) {
 	oldClient := sessionUsageHTTPClient
 	sessionUsageHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}

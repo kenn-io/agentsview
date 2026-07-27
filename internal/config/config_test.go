@@ -932,6 +932,16 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 	assert.Equal(t, custom, dir)
 }
 
+func TestResolveDataDir_ExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("AGENTSVIEW_DATA_DIR", "~/agentsview-data")
+
+	dir, err := ResolveDataDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "agentsview-data"), dir)
+}
+
 // TestDataDir_LegacyEnvFallback verifies that the legacy AGENT_VIEWER_DATA_DIR
 // env var still takes effect when the canonical AGENTSVIEW_DATA_DIR is unset,
 // and that the canonical name wins when both are set.
@@ -1837,6 +1847,49 @@ func TestLoadFile_SyncIncludeCwdPrefixesDefaultsEmpty(t *testing.T) {
 	cfg := f.LoadMinimal(t)
 
 	assert.Empty(t, cfg.SyncIncludeCwdPrefixes)
+}
+
+func TestLoadMinimal_ExpandsUserSuppliedLocalPaths(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `sync_include_cwd_prefixes = ["~/work"]
+codex_sessions_dirs = ["~/codex-sessions"]
+
+[duckdb]
+path = "~/sessions.duckdb"
+
+[vector]
+db_path = "~/vectors.db"
+
+[recall.extract.prompts]
+dir = "~/recall-prompts"
+
+[terminal]
+mode = "custom"
+custom_bin = "~/bin/terminal"
+
+[agent.codex]
+binary = "~/bin/codex"
+sandbox = "~/bin/sandbox"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{filepath.Join(home, "work")},
+		cfg.SyncIncludeCwdPrefixes)
+	assert.Equal(t, []string{filepath.Join(home, "codex-sessions")},
+		cfg.ResolveDirs(parser.AgentCodex))
+	assert.Equal(t, filepath.Join(home, "sessions.duckdb"), cfg.DuckDB.Path)
+	assert.Equal(t, filepath.Join(home, "vectors.db"), cfg.Vector.DBPath)
+	assert.Equal(t, filepath.Join(home, "recall-prompts"),
+		cfg.Recall.Extract.Prompts.Dir)
+	assert.Equal(t, filepath.Join(home, "bin", "terminal"),
+		cfg.Terminal.CustomBin)
+	assert.Equal(t, filepath.Join(home, "bin", "codex"),
+		cfg.Agent["codex"].Binary)
+	assert.Equal(t, filepath.Join(home, "bin", "sandbox"),
+		cfg.Agent["codex"].Sandbox)
 }
 
 func TestIsDefaultAgentsviewDBPath(t *testing.T) {
