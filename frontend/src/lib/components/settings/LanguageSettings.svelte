@@ -51,7 +51,7 @@
   description={m.settings_language_description()}
 >
   <div class="setting-row">
-    <span class="setting-label">{m.settings_language_label()}</span>
+    <span class="setting-label">🌐 {m.settings_language_label()}</span>
     <Typeahead
       options={localeOptions}
       value={selectedLocale}
