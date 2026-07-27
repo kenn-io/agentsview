@@ -633,6 +633,10 @@ button** that appears on hover. Click it to copy the full
 message content to the clipboard — a checkmark confirms the
 copy for 1.5 seconds.
 
+Inline `<teammate-message>` content and messages from teammate session ancestry
+are labeled **Teammate**, keeping peer-agent replies distinct from user prompts
+and ordinary subagent output.
+
 Claude Code sessions also show a fork action on each message header
 when the local server can launch or return a command. Clicking it
 starts a new Claude run from the selected point by rendering the
@@ -852,12 +856,16 @@ timestamps. Toggle it from the session header.
 
 ![Session Vital Signs in context](/assets/generated/screenshots/session-vital-signs.png)
 
-It has four stacked sections:
+It has five stacked sections when experimental Recall is available:
 
-- **Session summary** — total wall-clock, turn count, tool call
-  count, sub-agent count, and the slowest call as a clickable
-  link that scrolls the conversation to that call. Live sessions
-  show a `running …+` indicator that ticks forward.
+- **Session summary** — repository and worktree context recorded by the trace,
+  total wall-clock, turn count, tool call count, sub-agent count, and the
+  slowest call as a clickable link that scrolls the conversation to that call.
+  Live sessions show a `running …+` indicator that ticks forward.
+- **Recall (experimental)** — provenance-linked entries whose evidence comes
+  from the current session. Evidence-range links jump to the supporting
+  transcript message. An empty state appears when the local archive has no
+  matching entries.
 - **Time spent** — per-category aggregate bars across the
   normalized taxonomy (`Read`, `Edit`, `Write`, `Bash`, `Grep`,
   `Glob`, `Task`, `Tool`, `Other`, plus a `Mixed` bucket for
@@ -869,8 +877,8 @@ It has four stacked sections:
   scroll the conversation to that turn.
 - **Calls** — chronological list of tool calls with horizontal
   duration bars. Parallel `tool_use` runs are bracketed as a
-  single group. Sub-agent rows expand inline to show the child
-  session's calls.
+  single group. Call details start collapsed for quicker transcript navigation.
+  Sub-agent rows expand inline to show the child session's calls.
 
 ![Vital Signs panel detail](/assets/generated/screenshots/vital-signs-panel.png)
 
@@ -1213,7 +1221,7 @@ Settings are organized into sections:
 
 | Section | What You Can Configure |
 |---------|----------------------|
-| Language | Interface language (English, Simplified Chinese, Traditional Chinese, or Korean) |
+| Language | Interface language (English, French, Simplified Chinese, Traditional Chinese, or Korean) |
 | Appearance | Theme (light/dark), high-contrast mode, message layout, text size, block visibility, desktop zoom level |
 | Date ranges | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Insights |
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |

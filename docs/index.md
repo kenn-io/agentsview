@@ -61,6 +61,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="antigravity" href="https://antigravity.google" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Ag</span><span class="agent-chip__name">Antigravity</span></a>
   <a class="agent-chip" data-agent="gptme" href="https://gptme.org" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">gm</span><span class="agent-chip__name">gptme</span></a>
   <a class="agent-chip" data-agent="kilo" href="https://kilocode.ai" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kl</span><span class="agent-chip__name">Kilo</span></a>
+  <a class="agent-chip" data-agent="kilo-legacy" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">KL</span><span class="agent-chip__name">Kilo (legacy)</span></a>
   <a class="agent-chip" data-agent="kimi" href="https://www.kimi.com" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Km</span><span class="agent-chip__name">Kimi</span></a>
   <a class="agent-chip" data-agent="kiro" href="https://kiro.dev" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kr</span><span class="agent-chip__name">Kiro</span></a>
   <a class="agent-chip" data-agent="openhands" href="https://github.com/All-Hands-AI/OpenHands" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">OH</span><span class="agent-chip__name">OpenHands</span></a>
@@ -77,10 +78,13 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="openclaw" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Oc</span><span class="agent-chip__name">OpenClaw</span></a>
   <a class="agent-chip" data-agent="pi" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">&#960;</span><span class="agent-chip__name">Pi</span></a>
   <a class="agent-chip" data-agent="piebald" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Pb</span><span class="agent-chip__name">Piebald</span></a>
+  <a class="agent-chip" data-agent="poolside" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Po</span><span class="agent-chip__name">Poolside</span></a>
   <a class="agent-chip" data-agent="qclaw" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Qc</span><span class="agent-chip__name">QClaw</span></a>
   <a class="agent-chip" data-agent="qwenpaw" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Qp</span><span class="agent-chip__name">QwenPaw</span></a>
   <a class="agent-chip" data-agent="reasonix" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Rx</span><span class="agent-chip__name">Reasonix</span></a>
+  <a class="agent-chip" data-agent="roocode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Ro</span><span class="agent-chip__name">RooCode</span></a>
   <a class="agent-chip" data-agent="shelley" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Sh</span><span class="agent-chip__name">Shelley</span></a>
+  <a class="agent-chip" data-agent="trae" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Tr</span><span class="agent-chip__name">Trae</span></a>
   <a class="agent-chip" data-agent="workbuddy" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Wb</span><span class="agent-chip__name">WorkBuddy</span></a>
 </div>
 
@@ -250,9 +254,10 @@ push session data to a shared database for team or multi-machine setups.
     Works with [dozens of AI coding session sources](/configuration/#session-discovery)
     including Claude Code, OpenClaude, Codex, Copilot, Cursor,
     Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, gptme,
-    Grok, Kilo, MiMoCode, Mistral Vibe, OhMyPi, QwenPaw, Reasonix,
-    Shelley, Visual Studio Copilot, and ZCode. Auto-discovers session
-    directories so there's nothing to configure.
+    Grok, Kilo, Kilo (legacy), MiMoCode, Mistral Vibe, OhMyPi,
+    Poolside, QwenPaw, Reasonix, RooCode, Shelley, Trae, Visual
+    Studio Copilot, and ZCode. Auto-discovers session directories
+    so there's nothing to configure.
 
 -   **Import Chat History**
 

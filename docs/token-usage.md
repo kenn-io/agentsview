@@ -274,7 +274,10 @@ $195.64 today
 The daily table shows input, output, cache-creation, and cache-read token totals
 per local-time day, the estimated cost, and the models that contributed to each
 row. Adding `--breakdown` prints indented per-model sub-rows so you can see
-which model drove the spend on each day.
+which model drove the spend on each day. In JSON output, the same flag also
+populates per-project, per-agent, and per-machine breakdown arrays for every
+day, making costs from shared multi-machine archives separable without another
+query.
 
 ## How Costs Are Computed
 

@@ -835,6 +835,26 @@ test.describe('Command palette', () => {
     await page.waitForTimeout(1500);
     await snap(page, 'search-results');
   });
+
+  test('semantic search setup', async ({ page }) => {
+    await page.keyboard.press('Control+k');
+    const palette = page.locator('.palette-overlay');
+    await expect(palette).toBeVisible({ timeout: 5_000 });
+
+    await palette.getByRole('radio', { name: 'Semantic' }).click();
+    await palette.locator('.palette-input').fill(
+      'database connection pooling'
+    );
+
+    const setup = palette.locator('.semantic-setup');
+    await expect(setup).toContainText(
+      "Semantic search isn't set up",
+      { timeout: 10_000 }
+    );
+    await expect(setup).toContainText('[vector]');
+    await expect(setup).toContainText('agentsview embeddings build');
+    await snapEl(setup, 'semantic-search-setup');
+  });
 });
 
 // ── Modals ──────────────────────────────────────────────

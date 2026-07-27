@@ -56,6 +56,7 @@ generated_assets=(
   "screenshots/resync-modal.png"
   "screenshots/search-grouped.png"
   "screenshots/search-results.png"
+  "screenshots/semantic-search-setup.png"
   "screenshots/session-filtered.png"
   "screenshots/session-filters-active.png"
   "screenshots/session-filters.png"
