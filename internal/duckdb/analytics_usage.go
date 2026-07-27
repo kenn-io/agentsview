@@ -3629,40 +3629,40 @@ func duckSessionUsageBreakdownLabel(r duckSessionUsageRow) string {
 	return "usage"
 }
 
-func (s *Store) dailyUsageAggregateRows(
+func (s *Store) dailyUsageRowsForAggregation(
 	ctx context.Context, f db.UsageFilter,
 ) ([]duckUsageAggregateRow, error) {
 	cte, args := duckDailyUsageCTE(f)
 	machineSelect := "'' AS machine"
-	machineGroup := ""
 	machineOrder := ""
 	if f.Breakdowns {
 		machineSelect = "machine"
-		machineGroup = ", machine"
 		machineOrder = ", machine ASC"
 	}
+	// Keep one result per deduplicated usage row. CostForTokens quantizes each
+	// row to whole microdollars; grouping token counts before that boundary can
+	// turn several unrepresentable sub-microdollar rows into stored cost.
 	query := cte + `
 		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model,
-			SUM(input_tokens_norm) AS input_tokens,
-			SUM(output_tokens_norm) AS output_tokens,
-			SUM(cache_create_norm) AS cache_creation_tokens,
-			SUM(cache_read_norm) AS cache_read_tokens,
-			SUM(CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN input_tokens_norm ELSE 0 END) AS billable_input_tokens,
-			SUM(CASE
+			input_tokens_norm AS input_tokens,
+			output_tokens_norm AS output_tokens,
+			cache_create_norm AS cache_creation_tokens,
+			cache_read_norm AS cache_read_tokens,
+			CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN input_tokens_norm ELSE 0 END AS billable_input_tokens,
+			CASE
 				WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 0
 				WHEN output_tokens_norm = 0 THEN reasoning_tokens_norm
 				ELSE output_tokens_norm
-			END) AS billable_output_tokens,
+			END AS billable_output_tokens,
 			CAST(0 AS BIGINT) AS billable_reasoning_tokens,
-			SUM(CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_create_norm ELSE 0 END) AS billable_cache_creation_tokens,
-			SUM(CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_read_norm ELSE 0 END) AS billable_cache_read_tokens,
-			COALESCE(SUM(cost_microdollars) FILTER (WHERE cost_source != 'copilot-reported'), 0) AS explicit_cost,
-			COUNT(cost_microdollars) FILTER (WHERE cost_source != 'copilot-reported') AS reported_cost_rows,
-			COALESCE(SUM(cost_microdollars) FILTER (WHERE cost_source = 'copilot-reported'), 0) AS authoritative_cost,
-			COUNT(cost_microdollars) FILTER (WHERE cost_source = 'copilot-reported') AS authoritative_cost_rows
+			CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_create_norm ELSE 0 END AS billable_cache_creation_tokens,
+			CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_read_norm ELSE 0 END AS billable_cache_read_tokens,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN cost_microdollars ELSE 0 END AS explicit_cost,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 1 ELSE 0 END AS reported_cost_rows,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows
 		FROM usage_localized
-		GROUP BY session_id, local_date, project, agent` + machineGroup + `, model
-		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC`
+		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
@@ -3694,7 +3694,7 @@ func (s *Store) GetDailyUsage(
 		return db.DailyUsageResult{}, err
 	}
 	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
-	rows, err := s.dailyUsageAggregateRows(ctx, f)
+	rows, err := s.dailyUsageRowsForAggregation(ctx, f)
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
@@ -3976,33 +3976,35 @@ func sortedBoolKeys(m map[string]bool) []string {
 	return out
 }
 
-func (s *Store) sessionUsageAggregateRows(
+func (s *Store) sessionUsageRowsForAggregation(
 	ctx context.Context, f db.UsageFilter, sessionID string,
 ) ([]duckUsageAggregateRow, error) {
 	cte, args := duckUsageCTE(f, sessionID)
+	// Top-session and session-usage callers aggregate these rows in Go only
+	// after each row has been quantized to whole microdollars.
 	query := cte + `
 		SELECT session_id, project, agent, model,
 			display_name, started_at,
-			SUM(input_tokens_norm) AS input_tokens,
-			SUM(output_tokens_norm) AS output_tokens,
-			SUM(cache_create_norm) AS cache_creation_tokens,
-			SUM(cache_read_norm) AS cache_read_tokens,
-			SUM(CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN input_tokens_norm ELSE 0 END) AS billable_input_tokens,
-			SUM(CASE
+			input_tokens_norm AS input_tokens,
+			output_tokens_norm AS output_tokens,
+			cache_create_norm AS cache_creation_tokens,
+			cache_read_norm AS cache_read_tokens,
+			CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN input_tokens_norm ELSE 0 END AS billable_input_tokens,
+			CASE
 				WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 0
 				WHEN output_tokens_norm = 0 THEN reasoning_tokens_norm
 				ELSE output_tokens_norm
-			END) AS billable_output_tokens,
+			END AS billable_output_tokens,
 			CAST(0 AS BIGINT) AS billable_reasoning_tokens,
-			SUM(CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_create_norm ELSE 0 END) AS billable_cache_creation_tokens,
-			SUM(CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_read_norm ELSE 0 END) AS billable_cache_read_tokens,
-			COALESCE(SUM(cost_microdollars) FILTER (WHERE cost_source != 'copilot-reported'), 0) AS explicit_cost,
-			COUNT(cost_microdollars) FILTER (WHERE cost_source != 'copilot-reported') AS reported_cost_rows,
-			COALESCE(SUM(cost_microdollars) FILTER (WHERE cost_source = 'copilot-reported'), 0) AS authoritative_cost,
-			COUNT(cost_microdollars) FILTER (WHERE cost_source = 'copilot-reported') AS authoritative_cost_rows
+			CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_create_norm ELSE 0 END AS billable_cache_creation_tokens,
+			CASE WHEN cost_microdollars IS NULL OR cost_source = 'copilot-reported' THEN cache_read_norm ELSE 0 END AS billable_cache_read_tokens,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN cost_microdollars ELSE 0 END AS explicit_cost,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 1 ELSE 0 END AS reported_cost_rows,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows
 		FROM usage_localized
-		GROUP BY session_id, project, agent, model, display_name, started_at
-		ORDER BY session_id ASC, model ASC`
+		ORDER BY session_id ASC, model ASC, ts ASC,
+			COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb session usage aggregates: %w", err)
@@ -4102,7 +4104,7 @@ func (s *Store) GetTopSessionsByCost(
 		return nil, err
 	}
 	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
-	rows, err := s.sessionUsageAggregateRows(ctx, f, "")
+	rows, err := s.sessionUsageRowsForAggregation(ctx, f, "")
 	if err != nil {
 		return nil, err
 	}
@@ -4163,7 +4165,7 @@ func (s *Store) GetTopSessionsByCost(
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	rows, err := s.sessionUsageAggregateRows(ctx, f, "")
+	rows, err := s.sessionUsageRowsForAggregation(ctx, f, "")
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
@@ -4293,7 +4295,7 @@ func (s *Store) GetSessionUsage(
 		return nil, err
 	}
 	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
-	rows, err := s.sessionUsageAggregateRows(ctx, db.UsageFilter{}, sessionID)
+	rows, err := s.sessionUsageRowsForAggregation(ctx, db.UsageFilter{}, sessionID)
 	if err != nil {
 		return nil, err
 	}

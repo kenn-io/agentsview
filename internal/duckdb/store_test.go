@@ -3676,6 +3676,60 @@ func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	return NewStoreFromDB(syncer.DB()), fixture
 }
 
+func TestDuckUsageQuantizesCostBeforeAggregation(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "sub-micro-model",
+		InputPerMTok: money.Money{Microdollars: 400_000},
+	}}))
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"sub-micro-session", "alpha", "sub-micro", "2026-02-01T12:00:00Z", 1,
+		),
+		Messages: []db.Message{{
+			SessionID: "sub-micro-session", Ordinal: 0, Role: "user",
+			Content: "sub-micro", ContentLength: len("sub-micro"),
+			Timestamp: "2026-02-01T12:00:00Z",
+		}},
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "session", Model: "sub-micro-model", InputTokens: 1,
+				OccurredAt: "2026-02-01T12:01:00Z", DedupKey: "sub-micro-1",
+			},
+			{
+				Source: "session", Model: "sub-micro-model", InputTokens: 1,
+				OccurredAt: "2026-02-01T12:02:00Z", DedupKey: "sub-micro-2",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	filter := db.UsageFilter{
+		From: "2026-02-01", To: "2026-02-01", Timezone: "UTC",
+	}
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, money.Money{}, daily.Totals.TotalCost)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 1)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, money.Money{}, top[0].Cost)
+
+	usage, err := store.GetSessionUsage(ctx, "sub-micro-session", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, money.Money{}, usage.Cost)
+}
+
 func TestDuckDBBranchDimension(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

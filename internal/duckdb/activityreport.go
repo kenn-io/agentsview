@@ -660,7 +660,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 // GetDailyUsage does: an explicit cost_microdollars wins, otherwise the per-model
 // rates price the normalized token amounts. Billable amounts equal the
 // normalized amounts when there is no explicit cost (mirroring the
-// billable_* SQL in dailyUsageAggregateRows). It returns the cache
+// billable_* SQL in dailyUsageRowsForAggregation). It returns the cache
 // savings delta and the cost.
 func duckActivityReportRowStatus(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
