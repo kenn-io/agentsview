@@ -619,9 +619,10 @@ func omnigentRowIdentityAt(
 	}
 	query := `SELECT workspace_id, ` + strings.Join(idExprs, ", ") +
 		` FROM ` + table + ` WHERE rowid = ?`
-	workspaceID, ids, err := omnigentScanIdentityRow(
-		conn.QueryRowContext(ctx, query, rowID), idExprs,
-	)
+	var workspaceID int64
+	ids := make([]string, len(idExprs))
+	dest := append([]any{&workspaceID}, omnigentStringDests(ids)...)
+	err := conn.QueryRowContext(ctx, query, rowID).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
@@ -653,18 +654,6 @@ func omnigentLatestRowIdentity(
 		return 0, "", fmt.Errorf("reading latest omnigent %s row: %w", table, err)
 	}
 	return rowID, omnigentRowIdentityKey(workspaceID, ids), nil
-}
-
-// omnigentScanIdentityRow scans workspace_id plus len(idExprs) id columns
-// from one row.
-func omnigentScanIdentityRow(
-	row *sql.Row, idExprs []string,
-) (int64, []string, error) {
-	var workspaceID int64
-	ids := make([]string, len(idExprs))
-	dest := append([]any{&workspaceID}, omnigentStringDests(ids)...)
-	err := row.Scan(dest...)
-	return workspaceID, ids, err
 }
 
 // omnigentStringDests returns a pointer to each element of ids, in order, for
@@ -727,6 +716,9 @@ func omnigentNewConversationQuery(schema omnigentSchema) string {
 			 ORDER BY rowid
 			 LIMIT ?
 		)`
+	// The shared builder applies COALESCE(c.updated_at, 0) in the outer
+	// SELECT rather than inside the CTE; algebraically equivalent since the
+	// CTE's updated_at is scanned straight through either way.
 	return prefix + omnigentConversationAggregateQuery(schema, "selected", "") + `
 		 ORDER BY c.rowid`
 }
