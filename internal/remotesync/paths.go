@@ -124,7 +124,33 @@ func validateTargetSetPaths(targets TargetSet) error {
 			return fmt.Errorf("target file %q: %w", file, err)
 		}
 	}
+	for _, root := range targets.ForbiddenRoots {
+		if _, err := safeRemotePathArchiveName(root); err != nil {
+			return fmt.Errorf("forbidden root %q: %w", root, err)
+		}
+	}
 	return nil
+}
+
+// pathWithinForbiddenRoots reports whether path is a forbidden root or lies
+// beneath one. Roots are normalized when targets are resolved, and this check
+// deliberately uses filepath.Rel instead of a string prefix so sibling names
+// such as .forbidden-provider-backup do not get conflated with the protected
+// directory.
+func pathWithinForbiddenRoots(roots []string, path string) bool {
+	path = filepath.Clean(path)
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if path == root {
+			return true
+		}
+		rel, err := filepath.Rel(root, path)
+		if err == nil && rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func tempPathToRemotePath(

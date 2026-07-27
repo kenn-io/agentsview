@@ -106,8 +106,13 @@ func TestResolveScriptExitsZero(t *testing.T) {
 	// dirs exist. Verify by running it against an empty
 	// HOME so no default dirs are found.
 	out := runResolveScriptForTest(t, "HOME=/nonexistent")
-	// No dirs should be found.
-	assert.Empty(t, strings.TrimSpace(string(out)))
+	dirs, files, extraFiles, forbiddenRoots :=
+		parseResolvedTargetsWithForbidden(string(out))
+	assert.Empty(t, dirs)
+	assert.Empty(t, files)
+	assert.Empty(t, extraFiles)
+	assert.True(t, hasSuffix(forbiddenRoots, ".config/Trae/User"),
+		"missing excluded roots remain protected if created after resolution")
 }
 
 // TestResolveScriptIncludesCodexIndex verifies the resolve script emits the
@@ -182,6 +187,53 @@ func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
 	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/orchestrator/state.db-journal"))
 	assert.True(t, hasSuffix(extraFiles, ".hermes/profiles/research/state.db"))
 	assert.True(t, hasSuffix(extraFiles, ".hermes/state.db"))
+}
+
+func TestResolveScriptExcludesRemoteSyncExcludedAgentState(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	for _, name := range []string{
+		"chat.db",
+		"chat.db-wal",
+		"chat.db-shm",
+		"chat.db-journal",
+	} {
+		require.NoError(t,
+			os.WriteFile(filepath.Join(root, name), []byte("sqlite"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
+	dirs, files, _ := parseResolvedTargets(string(out))
+
+	assert.NotContains(t, dirs, parser.AgentTrae)
+	assert.NotContains(t, files, parser.AgentTrae)
+}
+
+func TestResolveScriptCarriesTraeForbiddenRoot(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+
+	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
+	_, _, _, forbiddenRoots := parseResolvedTargetsWithForbidden(string(out))
+
+	assert.Contains(t, forbiddenRoots, root,
+		"the SSH resolver must preserve excluded roots as transfer boundaries")
+}
+
+func TestResolveScriptCarriesMissingExcludedRoot(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
+
+	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
+	_, _, _, forbiddenRoots := parseResolvedTargetsWithForbidden(string(out))
+
+	assert.Contains(t, forbiddenRoots, root,
+		"the exclusion boundary must survive creation after remote resolution")
 }
 
 func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {

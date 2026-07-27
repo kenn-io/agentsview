@@ -16,11 +16,19 @@ func ResolveTargets(cfg config.Config) TargetSet {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	var extra []string
+	var forbiddenRoots []string
 	for _, def := range parser.Registry {
+		resolvedDirs := cfg.ResolveDirs(def.Type)
+		if def.RemoteSyncExcluded {
+			for _, dir := range resolvedDirs {
+				forbiddenRoots = appendUniqueForbiddenRoot(forbiddenRoots, dir)
+			}
+			continue
+		}
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
 		}
-		for _, dir := range cfg.ResolveDirs(def.Type) {
+		for _, dir := range resolvedDirs {
 			if def.Type == parser.AgentHermes {
 				hermesDirs, hermesFiles := resolveHermesTargets(dir)
 				if len(hermesDirs) > 0 {
@@ -85,7 +93,20 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			}
 		}
 	}
-	return TargetSet{Dirs: dirs, Files: files, ExtraFiles: extra}
+	return TargetSet{
+		Dirs: dirs, Files: files, ExtraFiles: extra, ForbiddenRoots: forbiddenRoots,
+	}
+}
+
+func appendUniqueForbiddenRoot(roots []string, root string) []string {
+	if root == "" {
+		return roots
+	}
+	root = filepath.Clean(root)
+	if slices.Contains(roots, root) {
+		return roots
+	}
+	return append(roots, root)
 }
 
 func resolveHermesTargets(root string) ([]string, []string) {
@@ -404,7 +425,8 @@ func TargetSetAllowed(allowed TargetSet, requested TargetSet) bool {
 
 func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bool) {
 	selected := TargetSet{
-		Dirs: make(map[parser.AgentType][]string),
+		Dirs:           make(map[parser.AgentType][]string),
+		ForbiddenRoots: append([]string(nil), allowed.ForbiddenRoots...),
 	}
 	for agent, dirs := range requested.Dirs {
 		allowedDirs := allowed.Dirs[agent]
@@ -417,6 +439,9 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		for _, dir := range dirs {
 			selectedDir, ok := selectAllowedString(allowedDirs, dir)
 			if !ok {
+				return TargetSet{}, false
+			}
+			if pathWithinForbiddenRoots(selected.ForbiddenRoots, selectedDir) {
 				return TargetSet{}, false
 			}
 			selected.Dirs[agent] = append(selected.Dirs[agent], selectedDir)
@@ -445,12 +470,18 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			if selected.Files == nil {
 				selected.Files = make(map[parser.AgentType][]string)
 			}
+			if pathWithinForbiddenRoots(selected.ForbiddenRoots, selectedFile) {
+				return TargetSet{}, false
+			}
 			selected.Files[agent] = append(selected.Files[agent], selectedFile)
 		}
 	}
 	for _, file := range requested.ExtraFiles {
 		selectedFile, ok := selectAllowedString(allowed.ExtraFiles, file)
 		if !ok {
+			return TargetSet{}, false
+		}
+		if pathWithinForbiddenRoots(selected.ForbiddenRoots, selectedFile) {
 			return TargetSet{}, false
 		}
 		selected.ExtraFiles = append(selected.ExtraFiles, selectedFile)
@@ -593,6 +624,9 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 }
 
 func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
+	if pathWithinForbiddenRoots(allowed.ForbiddenRoots, file) {
+		return "", false
+	}
 	if canonical, ok := selectAllowedString(allowed.ExtraFiles, file); ok {
 		return canonical, true
 	}

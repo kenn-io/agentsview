@@ -18,6 +18,10 @@ const resolveFilePrefix = "@file"
 // transfer without recursively archiving that agent's root directory.
 const resolveAgentFilePrefix = "@agentfile"
 
+// resolveForbiddenRootPrefix marks a root that must never be recursively
+// transferred, even when another allowed provider root overlaps it.
+const resolveForbiddenRootPrefix = "@forbidden"
+
 const resolveRecordSep = "\x00"
 
 func aiderSkipDirCasePattern() string {
@@ -195,6 +199,10 @@ func buildResolveScript() string {
 			"file=\"$1\"; " +
 			"[ -f \"$file\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
 			"}\n" +
+			"av_emit_forbidden_root() { " +
+			"dir=\"$1\"; [ -n \"$dir\" ] || dir=\"$2\"; " +
+			"[ -n \"$dir\" ] && printf '%s\\000' \"" + resolveForbiddenRootPrefix + ":$dir\"; " +
+			"}\n" +
 			"av_has_hermes_transcript() { " +
 			"av_hermes_transcript_dir=\"$1\"; " +
 			"[ -d \"$av_hermes_transcript_dir\" ] || return 1; " +
@@ -260,6 +268,15 @@ func buildResolveScript() string {
 			"}\n",
 	)
 	for _, def := range parser.Registry {
+		if def.RemoteSyncExcluded {
+			for _, rel := range def.DefaultDirs {
+				fmt.Fprintf(&b,
+					"av_emit_forbidden_root \"%s\" \"$HOME/%s\"\n",
+					remoteEnvExpansion(def.EnvVar), rel,
+				)
+			}
+			continue
+		}
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
 		}
@@ -383,12 +400,21 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 func parseResolvedTargets(
 	output string,
 ) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string) {
+	dirs, files, extraFiles, _ := parseResolvedTargetsWithForbidden(output)
+	return dirs, files, extraFiles
+}
+
+func parseResolvedTargetsWithForbidden(
+	output string,
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string) {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	var extraFiles []string
+	var forbiddenRoots []string
 	seenDir := make(map[parser.AgentType]map[string]struct{})
 	seenFile := make(map[string]struct{})
 	seenAgentFile := make(map[parser.AgentType]map[string]struct{})
+	seenForbiddenRoot := make(map[string]struct{})
 	for _, record := range resolveOutputRecords(output) {
 		record = strings.TrimSpace(record)
 		if record == "" {
@@ -404,6 +430,14 @@ func parseResolvedTargets(
 			}
 			seenFile[value] = struct{}{}
 			extraFiles = append(extraFiles, value)
+			continue
+		}
+		if key == resolveForbiddenRootPrefix {
+			if _, dup := seenForbiddenRoot[value]; dup {
+				continue
+			}
+			seenForbiddenRoot[value] = struct{}{}
+			forbiddenRoots = append(forbiddenRoots, path.Clean(value))
 			continue
 		}
 		if key == resolveAgentFilePrefix {
@@ -443,7 +477,7 @@ func parseResolvedTargets(
 		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
 	}
-	return dirs, files, extraFiles
+	return dirs, files, extraFiles, forbiddenRoots
 }
 
 func parseResolvedDirs(
@@ -482,12 +516,12 @@ func invalidResolvedPath(value string) bool {
 func resolveDirs(
 	ctx context.Context,
 	host, user string, port int, sshOpts []string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, error) {
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string, error) {
 	script := buildResolveScript()
 	out, err := runSSHScript(ctx, host, user, port, sshOpts, script)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
 	}
-	dirs, files, extraFiles := parseResolvedTargets(string(out))
-	return dirs, files, extraFiles, nil
+	dirs, files, extraFiles, forbiddenRoots := parseResolvedTargetsWithForbidden(string(out))
+	return dirs, files, extraFiles, forbiddenRoots, nil
 }

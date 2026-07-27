@@ -83,6 +83,33 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }
 
+func TestResolveTargetsExcludesRemoteSyncExcludedAgentState(t *testing.T) {
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	for _, path := range []string{
+		chatDB,
+		chatDB + "-wal",
+		chatDB + "-shm",
+		chatDB + "-journal",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte("sqlite"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentTrae: {root},
+		},
+	})
+
+	assert.NotContains(t, targets.Dirs, parser.AgentTrae)
+	assert.NotContains(t, targets.Files, parser.AgentTrae)
+	assert.Equal(t, []string{filepath.Clean(root)}, targets.ForbiddenRoots,
+		"excluded-provider roots must remain as transfer boundaries")
+}
+
 func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	root := t.TempDir()
 	traeRoot := filepath.Join(root, "TRAE", "User")
@@ -283,6 +310,32 @@ func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 		"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
 	}, selected.Files[parser.AgentWindsurf])
 	assert.Equal(t, []string{"/srv/.codex/session_index.jsonl"}, selected.ExtraFiles)
+}
+
+func TestSelectAllowedTargetsRetainsForbiddenRootsAndRejectsForbiddenDelta(t *testing.T) {
+	root := t.TempDir()
+	allowedRoot := filepath.Join(root, "sessions")
+	forbiddenRoot := filepath.Join(allowedRoot, ".forbidden-provider")
+	secret := filepath.Join(forbiddenRoot, "chat.db")
+	keep := filepath.Join(allowedRoot, "session.jsonl")
+	require.NoError(t, os.MkdirAll(forbiddenRoot, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	allowed := remotesync.TargetSet{
+		Dirs:           map[parser.AgentType][]string{parser.AgentClaude: {allowedRoot}},
+		ForbiddenRoots: []string{forbiddenRoot},
+	}
+	selected, ok := remotesync.SelectAllowedTargets(allowed, remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {allowedRoot}},
+	})
+
+	require.True(t, ok)
+	assert.Equal(t, []string{forbiddenRoot}, selected.ForbiddenRoots,
+		"archive and manifest writers need the server-resolved boundary")
+	_, ok = remotesync.SelectAllowedFiles(allowed, []string{secret})
+	assert.False(t, ok,
+		"the delta request must reject a forbidden file even under an allowed root")
 }
 
 func TestSelectAllowedTargetsRejectsFileScopedDirOnlyRequest(t *testing.T) {

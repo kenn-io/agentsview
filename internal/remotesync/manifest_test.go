@@ -57,6 +57,28 @@ func TestBuildManifestToleratesMissingRootsAndExtraFiles(t *testing.T) {
 	assert.Empty(t, m.Files)
 }
 
+func TestBuildManifestPrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, ".forbidden-provider")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	manifest, err := BuildManifest(TargetSet{
+		Dirs:           map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
+		ForbiddenRoots: []string{forbidden},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, manifest.Files, 1)
+	assert.Equal(t, keep, manifest.Files[0].Path)
+	assert.NotEqual(t, secret, manifest.Files[0].Path,
+		"the manifest must never advertise a file under a forbidden root")
+}
+
 func TestBuildManifestRejectsFileScopedAgents(t *testing.T) {
 	_, err := BuildManifest(TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentWindsurf: {"/srv/Windsurf/User"}},

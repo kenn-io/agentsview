@@ -189,6 +189,57 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 	assert.Equal(t, "Committed in WAL", title)
 }
 
+func TestBuildTarCommandExcludesRemoteSyncExcludedAgentState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		map[parser.AgentType][]string{
+			parser.AgentTrae: {chatDB},
+		},
+		nil,
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+	require.NoError(t, err, "archive command output: %s", archive)
+	assert.Empty(t, tarNames(t, archive),
+		"a remote-sync-excluded agent's state must never enter an SSH archive")
+}
+
+func TestBuildTarCommandPrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, ".forbidden-provider")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	script := buildTarCommandWithForbiddenRoots(
+		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
+		nil, nil, []string{forbidden},
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+
+	require.NoError(t, err, "archive command output: %s", archive)
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(keep))
+	assert.NotContains(t, names, archivePathForTest(secret),
+		"SSH transfer inputs must not recurse into a forbidden nested root")
+}
+
 func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("remote snapshot script uses POSIX symlinks and paths")

@@ -42,7 +42,7 @@ func (rs *RemoteSync) Run(
 	fmt.Printf(
 		"Resolving agent directories on %s...\n", rs.Host,
 	)
-	dirs, files, extraFiles, err := resolveDirs(
+	dirs, files, extraFiles, forbiddenRoots, err := resolveDirs(
 		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
 	)
 	if err != nil {
@@ -64,8 +64,9 @@ func (rs *RemoteSync) Run(
 		"Downloading session data from %s (%d agents)...\n",
 		rs.Host, len(dirs),
 	)
-	tmpDir, err := downloadAndExtract(
-		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts, dirs, files, extraFiles,
+	tmpDir, err := downloadAndExtractWithForbiddenRoots(
+		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
+		dirs, files, extraFiles, forbiddenRoots,
 	)
 	if err != nil {
 		return stats, fmt.Errorf(
@@ -106,9 +107,10 @@ func (rs *RemoteSync) Run(
 		BlockedResultCategories: rs.BlockedResultCategories,
 		Progress:                progress,
 	}.ImportExtracted(ctx, remotesync.TargetSet{
-		Dirs:       dirs,
-		Files:      files,
-		ExtraFiles: extraFiles,
+		Dirs:           dirs,
+		Files:          files,
+		ExtraFiles:     extraFiles,
+		ForbiddenRoots: forbiddenRoots,
 	}, tmpDir)
 	if lastProgress.SessionsTotal > 0 {
 		elapsed := time.Since(t0).Truncate(time.Millisecond)

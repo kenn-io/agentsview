@@ -28,7 +28,21 @@ func buildTarCommand(
 	files map[parser.AgentType][]string,
 	extraFiles []string,
 ) string {
+	return buildTarCommandWithForbiddenRoots(dirs, files, extraFiles, nil)
+}
+
+// buildTarCommandWithForbiddenRoots creates an SSH archive command while
+// preserving excluded-provider roots as path boundaries. Agent ownership alone
+// is not sufficient: an allowed directory can contain a forbidden provider's
+// store, so every transfer input is screened independently of its owner.
+func buildTarCommandWithForbiddenRoots(
+	dirs map[parser.AgentType][]string,
+	files map[parser.AgentType][]string,
+	extraFiles []string,
+	forbiddenRoots []string,
+) string {
 	hermesStateDBs := hermesSSHStateDBs(dirs, extraFiles)
+	hermesStateDBs = filterForbiddenRoots(hermesStateDBs, forbiddenRoots)
 	hermesSQLite := make(map[string]struct{}, len(hermesStateDBs)*4)
 	for _, stateDB := range hermesStateDBs {
 		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
@@ -37,6 +51,9 @@ func buildTarCommand(
 	}
 	paths := make([]string, 0)
 	addPath := func(remotePath string) {
+		if pathWithinForbiddenRoots(forbiddenRoots, remotePath) {
+			return
+		}
 		if _, isHermesSQLite := hermesSQLite[path.Clean(remotePath)]; isHermesSQLite {
 			return
 		}
@@ -45,6 +62,9 @@ func buildTarCommand(
 		}
 	}
 	for agent, agentDirs := range dirs {
+		if parser.RemoteSyncExcludedAgent(agent) {
+			continue
+		}
 		if _, fileScoped := files[agent]; fileScoped {
 			continue
 		}
@@ -52,7 +72,10 @@ func buildTarCommand(
 			addPath(d)
 		}
 	}
-	for _, agentFiles := range files {
+	for agent, agentFiles := range files {
+		if parser.RemoteSyncExcludedAgent(agent) {
+			continue
+		}
 		for _, f := range agentFiles {
 			addPath(f)
 		}
@@ -60,13 +83,48 @@ func buildTarCommand(
 	for _, f := range extraFiles {
 		addPath(f)
 	}
-	if len(hermesStateDBs) > 0 {
-		return buildPythonSnapshotTarCommand(paths, hermesStateDBs)
+	forbiddenArchivePaths := make([]string, 0, len(forbiddenRoots))
+	for _, root := range forbiddenRoots {
+		if archivePath := tarListPath(root); archivePath != "" {
+			forbiddenArchivePaths = append(forbiddenArchivePaths, archivePath)
+		}
 	}
-	return buildPlainTarCommand(paths)
+	if len(hermesStateDBs) > 0 {
+		return buildPythonSnapshotTarCommand(
+			paths, hermesStateDBs, forbiddenArchivePaths,
+		)
+	}
+	return buildPlainTarCommand(paths, forbiddenArchivePaths)
 }
 
-func buildPlainTarCommand(paths []string) string {
+func filterForbiddenRoots(paths, forbiddenRoots []string) []string {
+	filtered := make([]string, 0, len(paths))
+	for _, remotePath := range paths {
+		if !pathWithinForbiddenRoots(forbiddenRoots, remotePath) {
+			filtered = append(filtered, remotePath)
+		}
+	}
+	return filtered
+}
+
+func pathWithinForbiddenRoots(roots []string, remotePath string) bool {
+	remotePath = path.Clean(remotePath)
+	for _, root := range roots {
+		root = path.Clean(root)
+		if remotePath == root {
+			return true
+		}
+		if root == "/" && strings.HasPrefix(remotePath, "/") {
+			return true
+		}
+		if root != "/" && strings.HasPrefix(remotePath, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func buildPlainTarCommand(paths, forbiddenArchivePaths []string) string {
 	var b strings.Builder
 	b.WriteString("set -e\n")
 	b.WriteString("av_emit_tar_path() { [ -e \"/$1\" ] || return 0; printf '%s\\n' \"$1\"; }\n")
@@ -77,7 +135,12 @@ func buildPlainTarCommand(paths []string) string {
 		b.WriteString(shellQuote(archivePath))
 		b.WriteByte('\n')
 	}
-	b.WriteString("} | tar cf - -C / -T -\n")
+	b.WriteString("} | tar cf - -C /")
+	for _, forbiddenPath := range forbiddenArchivePaths {
+		b.WriteString(" --exclude=")
+		b.WriteString(shellQuote(forbiddenPath))
+	}
+	b.WriteString(" -T -\n")
 	return b.String()
 }
 
@@ -110,7 +173,9 @@ func hermesSSHStateDBs(
 	return stateDBs
 }
 
-func buildPythonSnapshotTarCommand(paths, stateDBs []string) string {
+func buildPythonSnapshotTarCommand(
+	paths, stateDBs, forbiddenArchivePaths []string,
+) string {
 	type sqliteArchivePath struct {
 		Source  string `json:"source"`
 		Archive string `json:"archive"`
@@ -127,7 +192,8 @@ func buildPythonSnapshotTarCommand(paths, stateDBs []string) string {
 	}
 	pathsJSON, _ := json.Marshal(paths)
 	databasesJSON, _ := json.Marshal(databases)
-	fallback := buildPlainTarCommand(paths)
+	forbiddenJSON, _ := json.Marshal(forbiddenArchivePaths)
+	fallback := buildPlainTarCommand(paths, forbiddenArchivePaths)
 	var fallbackWarnings strings.Builder
 	for _, database := range databases {
 		fallbackWarnings.WriteString("  printf '%s\\n' ")
@@ -152,6 +218,18 @@ import tempfile
 
 paths = json.loads(%q)
 databases = json.loads(%q)
+forbidden = json.loads(%q)
+
+def is_forbidden(archive_path):
+    for root in forbidden:
+        if archive_path == root or archive_path.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
+
+def archive_filter(tarinfo):
+    if is_forbidden(tarinfo.name):
+        return None
+    return tarinfo
 
 def warn_skipped(source_path, reason):
     print("warning: skipped Hermes state.db snapshot: {}: {}".format(source_path, reason), file=sys.stderr)
@@ -162,7 +240,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
         if not os.path.lexists(source_path):
             continue
         try:
-            archive.add(source_path, arcname=archive_path, recursive=True)
+            archive.add(source_path, arcname=archive_path, recursive=True, filter=archive_filter)
         except FileNotFoundError:
             continue
     for item in databases:
@@ -212,7 +290,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
 PY
 else
 %s%sfi
-`, string(pathsJSON), string(databasesJSON), fallbackWarnings.String(), fallback)
+`, string(pathsJSON), string(databasesJSON), string(forbiddenJSON), fallbackWarnings.String(), fallback)
 }
 
 func tarListPath(path string) string {
@@ -244,7 +322,22 @@ func downloadAndExtract(
 	files map[parser.AgentType][]string,
 	extraFiles []string,
 ) (string, error) {
-	tarCmd := buildTarCommand(dirs, files, extraFiles)
+	return downloadAndExtractWithForbiddenRoots(
+		ctx, host, user, port, sshOpts, dirs, files, extraFiles, nil,
+	)
+}
+
+func downloadAndExtractWithForbiddenRoots(
+	ctx context.Context,
+	host, user string, port int, sshOpts []string,
+	dirs map[parser.AgentType][]string,
+	files map[parser.AgentType][]string,
+	extraFiles []string,
+	forbiddenRoots []string,
+) (string, error) {
+	tarCmd := buildTarCommandWithForbiddenRoots(
+		dirs, files, extraFiles, forbiddenRoots,
+	)
 	stdout, cleanup, err := runSSHScriptStream(
 		ctx, host, user, port, sshOpts, tarCmd,
 	)
