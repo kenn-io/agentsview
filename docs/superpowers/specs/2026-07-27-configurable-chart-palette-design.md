@@ -42,8 +42,10 @@ chart_palette = "agentsview"
 ```
 
 The accepted values are `agentsview` and `matplotlib`. An omitted value resolves
-to `agentsview`. This preserves existing installations without writing a new key
-merely because the server was upgraded.
+to `agentsview`. An explicitly present empty string is invalid in both TOML and
+the Settings API; omission, not an empty sentinel, selects the default. This
+preserves existing installations without writing a new key merely because the
+server was upgraded.
 
 Configuration loading rejects any non-empty value outside the accepted set with
 an error that names `chart_palette` and the valid values. The Settings API uses
@@ -104,8 +106,21 @@ that same shared universe for cross-panel consistency.
 
 Every visual representation consumes its owning surface's computed color map.
 Paths, bars, legend dots, treemap tiles, rails, and list fills therefore cannot
-drift. A missing identifier and the synthetic `__other__` identifier use the
-muted fallback.
+drift. A missing identifier uses the general muted fallback. In Matplotlib mode,
+the synthetic `__other__` identifier also uses that fallback. In agentsview
+mode, each existing surface retains its current `Other` token, including Skill
+Trend's `--chart-series-other`.
+
+### Theme Tradeoff
+
+The Matplotlib option deliberately uses the exact source hex values instead of
+theme-specific replacements. Some light entries have lower contrast on light
+surfaces, and some dark entries have lower contrast on dark surfaces. This is an
+accepted tradeoff for an optional fidelity-oriented palette. Color remains
+supplemental: every affected chart has a matching text legend, table row, or
+tooltip, and existing keyboard/hover associations remain intact. Visual
+verification must confirm that marks remain discernible in light, dark, and
+high-contrast modes; it must not silently alter the source hex values.
 
 ## Frontend Data Flow
 
@@ -149,6 +164,7 @@ Backend tests will cover the observable configuration and HTTP contracts:
 
 - omitted configuration resolves to `agentsview`;
 - both accepted values load from TOML;
+- an explicitly empty value is rejected while omission defaults correctly;
 - an invalid value is rejected;
 - Settings GET returns the effective value;
 - Settings PUT persists and immediately returns a valid change;
@@ -158,14 +174,16 @@ Frontend tests will protect behavior users can see:
 
 - Matplotlib allocation uses the complete exact ordered gray-free 9-, 18-, and
   36-color sequences;
-- the allocator selects the 18- and 36-color families at the two boundaries;
+- the allocator selects the 18-color family at 10 and the 36-color family at 19;
 - each family remains unique through its advertised capacity and cycles only
   beyond 36;
+- no advertised family contains an achromatic gray entry;
 - allocation is deterministic for reordered and duplicate identifiers;
 - the reported colliding model names remain distinct in both modes;
 - Usage paths, legends, attribution lists, and treemaps use the same identifier
   colors even when the two panels render different series counts;
 - Skill Trend consumes the selected mode's colors;
+- Skill Trend retains `--chart-series-other` in agentsview mode;
 - Trends chart lines, points, and table indicators share the selected mode's
   colors;
 - changing the Appearance control sends the server update and updates rendered

@@ -21,14 +21,16 @@ Paraglide JS, kit-ui `SegmentedControl`, Vitest, Testing Library, and testify.
 ## Global Constraints
 
 - The only persisted values are `agentsview` and `matplotlib`; omission defaults
-  to `agentsview`.
+  to `agentsview`, while an explicitly present empty string is invalid.
 - `agentsview` must preserve existing chart palettes and non-colliding Usage
   colors; only collision-resolved Usage fallback slots may move when
   allocation is shared across both panels.
 - `matplotlib` uses gray-free families of 9, 18, and 36 exact Matplotlib v3.10.5
   colors, selected at active-series counts 1–9, 10–18, and 19 or more.
-- Empty identifiers and `__other__` stay muted; more than 36 active identifiers
-  cycle only after all 36 colors are used.
+- Empty identifiers stay muted. In Matplotlib mode, `__other__` uses the general
+  muted token; in agentsview mode, each surface preserves its current `Other`
+  token. More than 36 active identifiers cycle only after all 36 colors are
+  used.
 - The setting applies to categorical series only. Do not change heatmaps,
   semantic status colors, agent badges, tool categories, or syntax colors.
 - The current browser updates from the PUT response. Other browsers adopt the
@@ -40,6 +42,10 @@ Paraglide JS, kit-ui `SegmentedControl`, Vitest, Testing Library, and testify.
   generators.
 - Add no database migration, dependency, compatibility adapter, or
   custom-palette editor.
+- Matplotlib uses exact, non-theme-adaptive hex values. Treat reduced contrast
+  in some themes as an accepted fidelity tradeoff, retain text/tooltip
+  associations, and visually verify discernibility in light, dark, and
+  high-contrast modes.
 - Follow TDD for each task: observe the specified test fail for the missing
   behavior before writing production code.
 - Before each Go commit, run `go fmt ./...` and `go vet ./...` as required by
@@ -102,11 +108,30 @@ func TestChartPaletteDefaultsAndLoads(t *testing.T) {
 }
 
 func TestChartPaletteRejectsInvalidValue(t *testing.T) {
-	cfg, err := Default()
-	require.NoError(t, err)
-	err = cfg.applyConfigTOML(`chart_palette = "neon"`)
-	require.EqualError(t, err,
-		`chart_palette must be "agentsview" or "matplotlib" (got "neon")`)
+	tests := []struct {
+		name string
+		toml string
+		want string
+	}{
+		{
+			name: "unknown",
+			toml: `chart_palette = "neon"`,
+			want: `chart_palette must be "agentsview" or "matplotlib" (got "neon")`,
+		},
+		{
+			name: "explicit empty",
+			toml: `chart_palette = ""`,
+			want: `chart_palette must be "agentsview" or "matplotlib" (got "")`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			err = cfg.applyConfigTOML(tt.toml)
+			require.EqualError(t, err, tt.want)
+		})
+	}
 }
 
 func TestSaveSettingsPersistsChartPalette(t *testing.T) {
@@ -149,9 +174,6 @@ const (
 
 func ParseChartPalette(value string) (ChartPalette, error) {
 	p := ChartPalette(value)
-	if p == "" {
-		return DefaultChartPalette, nil
-	}
 	switch p {
 	case ChartPaletteAgentsview, ChartPaletteMatplotlib:
 		return p, nil
@@ -171,8 +193,25 @@ func (c Config) ResolvedChartPalette() ChartPalette {
 }
 ```
 
-Add `ChartPalette ChartPalette \`json:"chart_palette"
-toml:"chart_palette"\``to`Config`, initialize it to `DefaultChartPalette`in`Default`, decode it in the anonymous TOML file struct, validate it with `ParseChartPalette`, and assign the parsed value before returning from `applyConfigTOML\`.
+Add this field to `Config`:
+
+```go
+ChartPalette ChartPalette `json:"chart_palette" toml:"chart_palette"`
+```
+
+Initialize it to `DefaultChartPalette` in `Default` and decode it in the
+anonymous TOML file struct. In `applyConfigTOML`, distinguish omission from an
+explicit empty string with the existing TOML metadata:
+
+```go
+if meta.IsDefined("chart_palette") {
+	p, err := ParseChartPalette(string(file.ChartPalette))
+	if err != nil {
+		return err
+	}
+	c.ChartPalette = p
+}
+```
 
 Extend `SaveSettings`' known-key in-memory update:
 
@@ -290,6 +329,9 @@ func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T)
 	w = putSettings(`{"chart_palette":"neon"}`)
 	assertStatus(t, w, http.StatusBadRequest)
 	assertBodyContains(t, w, `chart_palette must be`)
+	w = putSettings(`{"chart_palette":""}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, `chart_palette must be`)
 
 	w = te.get(t, "/api/v1/settings")
 	assertStatus(t, w, http.StatusOK)
@@ -395,7 +437,8 @@ ______________________________________________________________________
 
 - Produces: `isChartPalette(value: unknown): value is ChartPalette`
 
-- Produces: `chartSeriesColorMap(ids, palette, agentsviewColor?)`
+- Produces:
+  `chartSeriesColorMap(ids, palette, agentsviewColor?, agentsviewOtherColor?)`
 
 - Consumes: `seriesColorMap(ids)` for Usage's existing allocator
 
@@ -442,11 +485,28 @@ it("uses gray-free tab10 in Matplotlib order", () => {
   ]);
 });
 
-it("switches families at ten and nineteen active series", () => {
+it("uses exact families through their advertised capacities", () => {
+  expect([...chartSeriesColorMap(ids(10), "matplotlib").values()])
+    .toEqual(EXPECTED_TAB20.slice(0, 10));
   expect([...chartSeriesColorMap(ids(18), "matplotlib").values()])
     .toEqual(EXPECTED_TAB20);
+  expect([...chartSeriesColorMap(ids(19), "matplotlib").values()])
+    .toEqual(EXPECTED_TAB20B_AND_TAB20C.slice(0, 19));
   expect([...chartSeriesColorMap(ids(36), "matplotlib").values()])
     .toEqual(EXPECTED_TAB20B_AND_TAB20C);
+});
+
+it("keeps every advertised Matplotlib family gray-free", () => {
+  const isAchromatic = (hex: string) => {
+    const red = hex.slice(1, 3);
+    const green = hex.slice(3, 5);
+    const blue = hex.slice(5, 7);
+    return red === green && green === blue;
+  };
+  for (const count of [9, 18, 36]) {
+    expect([...chartSeriesColorMap(ids(count), "matplotlib").values()]
+      .some(isAchromatic)).toBe(false);
+  }
 });
 
 it("uses all 36 colors before cycling", () => {
@@ -475,6 +535,16 @@ it("preserves the supplied agentsview colors", () => {
   expect(isChartPalette("agentsview")).toBe(true);
   expect(isChartPalette("matplotlib")).toBe(true);
   expect(isChartPalette("neon")).toBe(false);
+});
+
+it("preserves a surface-specific agentsview Other token", () => {
+  const colors = chartSeriesColorMap(
+    ["commit", "__other__"],
+    "agentsview",
+    () => "legacy",
+    "var(--chart-series-other)",
+  );
+  expect(colors.get("__other__")).toBe("var(--chart-series-other)");
 });
 ```
 
@@ -528,15 +598,19 @@ export function chartSeriesColorMap(
   ids: readonly string[],
   palette: ChartPalette,
   agentsviewColor?: (id: string, index: number) => string,
+  agentsviewOtherColor?: string,
 ): ReadonlyMap<string, string>
 ```
 
 For `agentsview`, deduplicate non-empty identifiers in first-seen order and use
 the supplied callback. When there is no callback, use the existing
 `seriesColorMap(ids)` so Usage retains its stable hash and collision resolution.
+Exclude `__other__` from the active count and assign it
+`agentsviewOtherColor ?? MUTED`.
+
 For `matplotlib`, deduplicate and lexically sort non-empty, non-`__other__`
 identifiers, choose the array by active count, then assign
-`colors[index % colors.length]`. Add empty and `__other__` entries as muted
+`colors[index % colors.length]`. Add empty and `__other__` entries as `MUTED`
 after allocation.
 
 - [ ] **Step 4: Verify GREEN**
@@ -566,6 +640,7 @@ ______________________________________________________________________
 - Modify: `frontend/src/lib/stores/settings.test.ts`
 - Modify: `frontend/src/lib/components/settings/AppearanceSettings.svelte`
 - Modify: `frontend/src/lib/components/settings/AppearanceSettings.test.ts`
+- Modify: `frontend/src/lib/components/settings/SettingsPage.test.ts`
 - Modify: `frontend/messages/en.json`
 - Modify: `frontend/messages/zh-CN.json`
 - Modify: `frontend/messages/zh-TW.json`
@@ -624,12 +699,16 @@ expect(getByRole("radio", { name: "Matplotlib" }).getAttribute("aria-checked"))
 
 Add a read-only assertion that both palette radio buttons are disabled.
 
+Update every `getApiV1Settings` response fixture in `SettingsPage.test.ts` to
+include `chart_palette: "agentsview"`. Those fixtures exercise the real settings
+store and must satisfy the new required API response contract.
+
 - [ ] **Step 3: Run the focused tests and verify RED**
 
 From `frontend/`, run:
 
 ```bash
-npm test -- src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts
+npm test -- src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts src/lib/components/settings/SettingsPage.test.ts
 ```
 
 Expected: FAIL because the store property and chart-color control do not exist.
@@ -705,7 +784,7 @@ From `frontend/`, run:
 
 ```bash
 npm run i18n:compile
-npm test -- src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts
+npm test -- src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts src/lib/components/settings/SettingsPage.test.ts
 npm run check
 ```
 
@@ -714,7 +793,7 @@ Expected: PASS with matching locale keys and no Svelte type errors.
 - [ ] **Step 8: Commit the server-backed preference UI**
 
 ```bash
-git add frontend/src/lib/stores/settings.svelte.ts frontend/src/lib/stores/settings.test.ts frontend/src/lib/components/settings/AppearanceSettings.svelte frontend/src/lib/components/settings/AppearanceSettings.test.ts frontend/messages
+git add frontend/src/lib/stores/settings.svelte.ts frontend/src/lib/stores/settings.test.ts frontend/src/lib/components/settings/AppearanceSettings.svelte frontend/src/lib/components/settings/AppearanceSettings.test.ts frontend/src/lib/components/settings/SettingsPage.test.ts frontend/messages
 git commit -m "feat(settings): select the server chart palette"
 ```
 
@@ -855,7 +934,8 @@ ______________________________________________________________________
 
 - Consumes: `settings.chartPalette`
 
-- Consumes: `chartSeriesColorMap(ids, palette, agentsviewColor)`
+- Consumes:
+  `chartSeriesColorMap(ids, palette, agentsviewColor, agentsviewOtherColor)`
 
 - Preserves: Skill Trend's `--chart-series-N` and Trends' `--trend-*` colors in
   agentsview mode
@@ -866,16 +946,24 @@ ______________________________________________________________________
 - [ ] **Step 1: Write failing Skill Trend tests**
 
 Reset `settings.chartPalette` around every test. Add a Matplotlib test that
-mounts the existing three-skill fixture and asserts:
+mounts the existing three-skill fixture and asserts colors by series identifier,
+not by palette order:
 
 ```ts
-expect(lineColors).toEqual(["#1f77b4", "#ff7f0e", "#2ca02c"]);
-expect(legendColors).toEqual(lineColors);
+expect(legendColorBySkill).toEqual({
+  commit: "#1f77b4",
+  deploy: "#ff7f0e",
+  review: "#2ca02c",
+});
+// DOM line order remains volume-ranked: commit, review, deploy.
+expect(lineColors).toEqual(["#1f77b4", "#2ca02c", "#ff7f0e"]);
 ```
 
-The exact series-to-color order follows the component's fixed volume ranking.
-Retain the existing survivor-stability test and run it in Matplotlib mode too:
-hiding `commit` must not repaint `review`.
+The allocation is lexical while rendering remains volume-ranked. Retain the
+existing survivor-stability test and run it in Matplotlib mode too: hiding
+`commit` must not repaint `review`. Extend the folded-tail test to assert that
+Skill Trend's line and legend entry for `Other` still use
+`var(--chart-series-other)` in agentsview mode.
 
 - [ ] **Step 2: Write a failing Trends test**
 
@@ -906,12 +994,14 @@ const colorMap = $derived(chartSeriesColorMap(
   allSeries.map((series) => series.key),
   settings.chartPalette,
   (_key, index) => `var(--chart-series-${index + 1})`,
+  "var(--chart-series-other)",
 ));
 ```
 
 Look colors up by `series.key` everywhere instead of recalculating from visible
-series. Keep `__other__` muted. This preserves colors when a legend chip hides a
-series.
+series. The resolver keeps `__other__` on `--chart-series-other` in agentsview
+mode and uses the general muted fallback in Matplotlib mode. This preserves
+colors when a legend chip hides a series.
 
 - [ ] **Step 5: Integrate Trends**
 
@@ -984,7 +1074,7 @@ Expected: no diff.
 From `frontend/`, run:
 
 ```bash
-npm test -- src/lib/utils/chartPalette.test.ts src/lib/utils/projectColor.test.ts src/lib/utils/usageChartColors.test.ts src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts src/lib/components/usage/UsagePage.test.ts src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts src/lib/components/analytics/SkillTrend.test.ts src/lib/components/trends/TrendsPage.test.ts
+npm test
 npm run check
 npm run check:kit-ui
 ```
@@ -992,7 +1082,24 @@ npm run check:kit-ui
 Expected: all tests and checks pass without warnings attributable to this
 change.
 
-- [ ] **Step 3: Run Go verification**
+- [ ] **Step 3: Inspect Matplotlib colors in every supported appearance mode**
+
+Start the repository's isolated fixture server from the repository root:
+
+```bash
+bash scripts/e2e-server.sh
+```
+
+Use the T3 preview at `http://127.0.0.1:8090`. Select Matplotlib under Settings,
+then inspect Usage, Skill Trend, and Trends in light, dark, and high-contrast
+modes. Confirm that series marks remain discernible, and that every mark can be
+identified through its text legend, table row, or tooltip. The raw hex fills and
+strokes must remain the exact Matplotlib values; reduced contrast in a specific
+theme is an accepted fidelity tradeoff, not a reason to substitute colors.
+
+Stop only the fixture-server process created for this step after inspection.
+
+- [ ] **Step 4: Run Go verification**
 
 From the repository root, run:
 
@@ -1004,7 +1111,7 @@ CGO_ENABLED=1 go test -tags fts5 ./internal/config ./internal/server
 
 Expected: PASS.
 
-- [ ] **Step 4: Inspect the final branch state**
+- [ ] **Step 5: Inspect the final branch state**
 
 Run:
 
