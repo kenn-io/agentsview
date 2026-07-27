@@ -1176,10 +1176,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   `set_session_usage` and `increment_session_usage` update that metadata row
   without changing `conversations.updated_at`. The metadata table has runner
   and project lookup indexes but no modification timestamp or change index.
-  Consequently, bounded watcher and scheduled passes can detect metadata-only
-  changes only while the conversation is in their capped candidate set; an
-  authoritative archive audit or explicit resync is the completeness backstop
-  for older metadata-only edits. The pinned
+  Consequently, the immediate filesystem-event sync can defer a metadata-only
+  edit. The next scheduled reconciliation pass, an explicit resync, or an
+  archive audit reparses the whole changed container and is not limited to a
+  bounded candidate set, so it picks up the edit regardless of how long ago it
+  was made. The pinned
   [message entity](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/omnigent/entities/conversation.py)
   and
   [deterministic benchmark seeder](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/dev/benchmarks/omnigent/seed.py)
