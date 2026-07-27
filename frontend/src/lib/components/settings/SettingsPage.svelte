@@ -27,6 +27,7 @@
   let authTokenInput: string = $state("");
   let active = $state("appearance");
   let searchQuery = $state("");
+  let pageElement: HTMLElement;
   const panels = $derived(settingsPanels());
   const categories: SettingsCategory[] = $derived.by(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -45,6 +46,42 @@
         summary: panel.description,
       }));
   });
+  const layoutCategories: SettingsCategory[] = $derived.by(() => {
+    if (categories.length > 0) return categories;
+    const activePanel = panels.find((panel) => panel.id === active);
+    return activePanel
+      ? [{
+          id: activePanel.id,
+          label: activePanel.label,
+          group: activePanel.group,
+          summary: activePanel.description,
+        }]
+      : [];
+  });
+  const displayedActive = $derived(
+    categories.some((category) => category.id === active)
+      ? active
+      : (categories[0]?.id ?? active),
+  );
+  const noSearchResults = $derived(
+    searchQuery.trim() !== "" && categories.length === 0,
+  );
+
+  $effect(() => {
+    displayedActive;
+    const scroller = pageElement?.querySelector<HTMLElement>(
+      ".kit-settings__scroll",
+    );
+    if (scroller) scroller.scrollTop = 0;
+  });
+
+  $effect(() => {
+    const hidden = noSearchResults;
+    const nav = pageElement?.querySelector<HTMLElement>(
+      ".kit-settings__nav",
+    );
+    if (nav) nav.hidden = hidden;
+  });
 
   onMount(() => {
     authTokenInput = getAuthToken();
@@ -59,7 +96,10 @@
   }
 </script>
 
-<div class="settings-page">
+<div
+  class="settings-page"
+  bind:this={pageElement}
+>
   {#if settings.loading || !settings.loaded || settings.needsAuth || settings.error}
     <div class="settings-standalone">
       <div class="settings-header">
@@ -122,12 +162,13 @@
       {/if}
     </div>
   {:else}
-    <SettingsLayout {categories} bind:active title={m.settings_title()}>
+    <SettingsLayout categories={layoutCategories} bind:active title={m.settings_title()}>
       {#snippet sidebarHeader()}
         <SearchInput
           bind:value={searchQuery}
           placeholder={m.settings_search_placeholder()}
           ariaLabel={m.settings_search_aria()}
+          clearLabel={m.settings_search_clear()}
           size="sm"
           block
         />

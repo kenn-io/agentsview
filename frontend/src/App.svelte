@@ -683,7 +683,7 @@
     <RecentEditsPage />
   </div>
 {:else if router.route === "settings"}
-  <div class="page-scroll">
+  <div class="page-scroll settings-page-host">
     <SettingsPage />
   </div>
 {:else}
@@ -780,6 +780,11 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  .settings-page-host {
+    display: flex;
+    overflow: hidden;
   }
 
   /* kit-ui-check-ignore: undo toast carries an inline restore action; kit-ui FlashBanner only supports text+dismiss today, so replacing this would change the delete/undo workflow. */

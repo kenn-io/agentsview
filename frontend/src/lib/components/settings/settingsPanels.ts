@@ -32,7 +32,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.appearance_title(),
       description: m.appearance_description(),
       group: preferences,
-      keywords: "theme contrast layout text font blocks",
+      keywords: m.settings_search_keywords_appearance(),
     },
     {
       id: "language",
@@ -40,7 +40,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_language_title(),
       description: m.settings_language_description(),
       group: preferences,
-      keywords: "language locale translation",
+      keywords: m.settings_search_keywords_language(),
     },
     {
       id: "date-ranges",
@@ -48,7 +48,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_date_ranges_title(),
       description: m.settings_date_ranges_description(),
       group: preferences,
-      keywords: "date range linked pages",
+      keywords: m.settings_search_keywords_date_ranges(),
     },
     {
       id: "terminal",
@@ -56,7 +56,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_terminal_title(),
       description: m.settings_terminal_description(),
       group: preferences,
-      keywords: "terminal resume launch binary arguments clipboard",
+      keywords: m.settings_search_keywords_terminal(),
     },
     {
       id: "agent-directories",
@@ -64,7 +64,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_agent_dir_title(),
       description: m.settings_agent_dir_description(),
       group: data,
-      keywords: "agent directories paths scan sessions",
+      keywords: m.settings_search_keywords_agent_directories(),
     },
     {
       id: "worktree-mappings",
@@ -72,7 +72,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.worktree_title(),
       description: m.worktree_description(),
       group: data,
-      keywords: "worktree mappings projects paths layouts",
+      keywords: m.settings_search_keywords_worktree_mappings(),
     },
     {
       id: "embeddings",
@@ -80,7 +80,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_embeddings_title(),
       description: m.settings_embeddings_description(),
       group: data,
-      keywords: "embeddings semantic search vectors index generations",
+      keywords: m.settings_search_keywords_embeddings(),
     },
     {
       id: "github",
@@ -88,7 +88,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_github_title(),
       description: m.settings_github_description(),
       group: connections,
-      keywords: "github gist token publish integration",
+      keywords: m.settings_search_keywords_github(),
     },
     {
       id: "remote-access",
@@ -96,7 +96,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
       title: m.settings_remote_title(),
       description: m.settings_remote_description(),
       group: connections,
-      keywords: "remote server connection auth token network",
+      keywords: m.settings_search_keywords_remote_access(),
     },
   ];
 }
