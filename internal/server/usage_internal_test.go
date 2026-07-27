@@ -441,3 +441,20 @@ func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
 	assert.True(t, required["right_dimension"])
 	assert.True(t, required["right_value"])
 }
+
+func TestUsagePairwiseComparisonOpenAPIAllowsNullCostPerSessionDelta(
+	t *testing.T,
+) {
+	spec := OpenAPISpec(VersionInfo{})
+	deltaSchema, ok := spec.Components.Schemas.Map()["ServiceUsagePairwiseComparisonDelta"]
+	require.True(t, ok, "pairwise comparison delta schema missing")
+	costPerSessionSchema, ok := deltaSchema.Properties["costPerSessionDelta"]
+	require.True(t, ok, "costPerSessionDelta schema missing")
+
+	require.Len(t, costPerSessionSchema.AnyOf, 2)
+	assert.Equal(t,
+		"#/components/schemas/MoneyMoney",
+		costPerSessionSchema.AnyOf[0].Ref,
+	)
+	assert.Equal(t, "null", costPerSessionSchema.AnyOf[1].Type)
+}

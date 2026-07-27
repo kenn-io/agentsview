@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
@@ -21,6 +23,19 @@ func (s *Server) registerUsageRoutes() {
 		s, group, "/pairwise-comparison",
 		"Get usage pairwise comparison", s.humaUsagePairwiseComparison,
 	)
+	deltaSchema := s.api.OpenAPI().Components.Schemas.Map()["ServiceUsagePairwiseComparisonDelta"]
+	if deltaSchema == nil {
+		panic("pairwise comparison delta OpenAPI schema is missing")
+	}
+	costPerSessionSchema := deltaSchema.Properties["costPerSessionDelta"]
+	if costPerSessionSchema == nil || costPerSessionSchema.Ref == "" {
+		panic("costPerSessionDelta OpenAPI reference is missing")
+	}
+	costPerSessionSchema.AnyOf = []*huma.Schema{
+		{Ref: costPerSessionSchema.Ref},
+		{Type: "null"},
+	}
+	costPerSessionSchema.Ref = ""
 	get(s, group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
 }
 

@@ -8,7 +8,7 @@ export type ServiceUsagePairwiseComparisonDelta = {
   cacheCreationDeltaRatio: number | null;
   cacheReadDelta: number;
   cacheReadDeltaRatio: number | null;
-  costPerSessionDelta: MoneyMoney;
+  costPerSessionDelta: (MoneyMoney | null);
   costPerSessionRatio: number | null;
   inputTokensDelta: number;
   inputTokensDeltaRatio: number | null;

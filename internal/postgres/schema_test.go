@@ -624,6 +624,39 @@ func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
 	assert.Contains(t, err.Error(), "sessions table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "cost_microdollars",
+		err: errors.New(
+			`ERROR: column "cost_microdollars" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"usage_events table missing required columns")
+}
+
+func TestCheckSchemaCompatRequiresModelPricingMicrodollarsWhenPresent(
+	t *testing.T,
+) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.existingTables = map[string]bool{"model_pricing": true}
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "input_microdollars_per_mtok",
+		err: errors.New(
+			`ERROR: column "input_microdollars_per_mtok" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"model_pricing table missing required columns")
+}
+
 func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.queryErrors = []schemaProbeQueryError{{
