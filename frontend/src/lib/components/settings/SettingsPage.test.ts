@@ -141,6 +141,7 @@ describe("SettingsPage", () => {
   it("groups settings and switches the visible panel", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
@@ -191,6 +192,7 @@ describe("SettingsPage", () => {
   it("filters settings by keywords and restores the selected panel", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
@@ -275,6 +277,7 @@ describe("SettingsPage", () => {
   it("preserves a terminal draft while switching panels", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
@@ -348,6 +351,7 @@ describe("SettingsPage", () => {
     setLocale("zh-CN");
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
@@ -394,6 +398,7 @@ describe("SettingsPage", () => {
     setLocale("fr");
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
