@@ -181,16 +181,15 @@
           size="sm"
           block
         />
-        {#if searchStatus}
-          <p
-            class="settings-search-status"
-            class:settings-search-empty={noSearchResults}
-            role="status"
-            aria-live="polite"
-          >
-            {searchStatus}
-          </p>
-        {/if}
+        <p
+          class="settings-search-status"
+          class:settings-search-empty={noSearchResults}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {searchStatus}
+        </p>
       {/snippet}
       {#snippet panel(activeId)}
         {#each panels as meta (meta.id)}

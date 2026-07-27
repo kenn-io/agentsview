@@ -160,6 +160,9 @@ describe("SettingsPage", () => {
 
     const nav = document.body.querySelector('nav[aria-label="Settings"]');
     expect(nav).not.toBeNull();
+    const searchStatus = document.body.querySelector('[role="status"]');
+    expect(searchStatus).not.toBeNull();
+    expect(searchStatus?.textContent?.trim()).toBe("");
     expect(nav!.textContent).toContain("Preferences");
     expect(nav!.textContent).toContain("Data");
     expect(nav!.textContent).toContain("Connections");
