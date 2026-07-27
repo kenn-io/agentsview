@@ -30,25 +30,6 @@ type omnigentParseCountingFactory struct {
 	failOnce *atomic.Bool
 }
 
-type omnigentForceFullFactory struct {
-	delegate parser.ProviderFactory
-}
-
-func (f omnigentForceFullFactory) Definition() parser.AgentDef {
-	return f.delegate.Definition()
-}
-
-func (f omnigentForceFullFactory) Capabilities() parser.Capabilities {
-	return f.delegate.Capabilities()
-}
-
-func (f omnigentForceFullFactory) NewProvider(
-	cfg parser.ProviderConfig,
-) parser.Provider {
-	cfg.ForceFullDiscovery = true
-	return f.delegate.NewProvider(cfg)
-}
-
 func (f omnigentParseCountingFactory) Definition() parser.AgentDef {
 	return f.delegate.Definition()
 }
@@ -118,6 +99,16 @@ func (p *omnigentParseCountingProvider) SourceSyncSemantics(
 		return parser.SourceSyncSemantics{}
 	}
 	return resolver.SourceSyncSemantics(source)
+}
+
+func (p *omnigentParseCountingProvider) PersistentArchiveSource(
+	path string, fullSessionID string,
+) (string, bool) {
+	resolver, ok := p.Provider.(parser.PersistentArchiveSourceResolver)
+	if !ok {
+		return "", false
+	}
+	return resolver.PersistentArchiveSource(path, fullSessionID)
 }
 
 func (p *omnigentParseCountingProvider) DependentSourceRootSessionID(
@@ -507,7 +498,7 @@ func TestSyncOmnigentInitialContainerFailureIsRetried(t *testing.T) {
 	assert.NotNil(t, session, "the failed physical source must remain retryable")
 }
 
-func TestSyncPathsOmnigentFailedMemberRetryReplaysContainer(t *testing.T) {
+func TestSyncOmnigentFailedMemberIsReplayedByScheduledContainerSync(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -551,16 +542,16 @@ func TestSyncPathsOmnigentFailedMemberRetryReplaysContainer(t *testing.T) {
 	assert.Equal(t, 1, engine.LastSyncStats().Failed)
 	require.True(t, failed.Load(), "the changed virtual member must fail once")
 
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
-	assert.Zero(t, engine.LastSyncStats().Failed)
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Failed)
 	updated, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, 2, updated.MessageCount,
-		"retrying the same watcher path must replay the stale member")
+		"the scheduled container pass must replay the failed member")
 }
 
-func TestSyncAllSinceOmnigentFailedMemberRetrySurvivesFutureCutoff(t *testing.T) {
+func TestSyncAllSinceOmnigentCutoffDefersStaleMemberUntilFullSync(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -606,18 +597,22 @@ func TestSyncAllSinceOmnigentFailedMemberRetrySurvivesFutureCutoff(t *testing.T)
 		t.Context(), time.Now().Add(time.Hour), nil,
 	)
 	require.Zero(t, stats.Failed)
+	deferred, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
+	require.NoError(t, err)
+	require.NotNil(t, deferred)
+	assert.Equal(t, 1, deferred.MessageCount,
+		"a cutoff newer than the container may defer the stale member")
+
+	stats = engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
 	updated, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, 2, updated.MessageCount,
-		"a pending full retry must bypass a cutoff newer than the container")
-
-	stats = engine.SyncAll(t.Context(), nil)
-	assert.Zero(t, stats.Synced,
-		"a successful forced retry must acknowledge its generation")
+		"the next full container pass must repair the stale member")
 }
 
-func TestOmnigentFailedRetrySurvivesUnrelatedScopedSync(t *testing.T) {
+func TestOmnigentStaleMemberSurvivesUnrelatedScopedSync(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -687,7 +682,7 @@ func TestOmnigentFailedRetrySurvivesUnrelatedScopedSync(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, repaired)
 			assert.Equal(t, 2, repaired.MessageCount,
-				"unrelated scoped work must not acknowledge root A's retry")
+				"the next full container pass must repair root A's stale member")
 		})
 	}
 }
@@ -784,9 +779,9 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 			assert.Equal(t, 1, engine.LastSyncStats().Synced,
 				"only the changed member may be rewritten")
 			assert.Equal(t, int64(1), parseCount.Load(),
-				"a changed container parses only the changed member")
-			assert.Equal(t, int64(1), resultCount.Load(),
-				"periodic work must stay constant as the archive grows")
+				"a changed container must be parsed once as a whole")
+			assert.Equal(t, int64(archiveSize), resultCount.Load(),
+				"a whole-container parse emits every member for unchanged dedup")
 		})
 	}
 }
@@ -838,9 +833,8 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 				restarted.SyncPathsContext(t.Context(), []string{dbPath}))
 			require.Zero(t, restarted.LastSyncStats().Failed)
 			assert.Equal(t, parseCount.Load(), resultCount.Load())
-			assert.LessOrEqual(t, resultCount.Load(), int64(129),
-				"restart replay must stay within the changed member plus "+
-					"the fixed recent-member window")
+			assert.Equal(t, int64(1), resultCount.Load(),
+				"the restart-warmed tracker must replay only the changed member")
 			watcherResultCounts = append(
 				watcherResultCounts, resultCount.Load(),
 			)
@@ -911,17 +905,7 @@ func TestSyncOmnigentCompleteContainerMissingConversationPreservesArchive(
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	forceEngine := sync.NewEngine(archive, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOmnigent: {root},
-		},
-		Machine: "local",
-		ProviderFactories: []parser.ProviderFactory{omnigentForceFullFactory{
-			delegate: omnigentDefaultProviderFactory(t),
-		}},
-	})
-	t.Cleanup(forceEngine.Close)
-	stats := forceEngine.SyncAll(t.Context(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
 	active, err := archive.GetSession(t.Context(), "omnigent:conv_0001")
 	require.NoError(t, err)
@@ -961,17 +945,7 @@ func TestSyncOmnigentCompleteEmptyContainerPreservesFinalConversation(
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	forceEngine := sync.NewEngine(archive, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOmnigent: {root},
-		},
-		Machine: "local",
-		ProviderFactories: []parser.ProviderFactory{omnigentForceFullFactory{
-			delegate: omnigentDefaultProviderFactory(t),
-		}},
-	})
-	t.Cleanup(forceEngine.Close)
-	stats := forceEngine.SyncAll(t.Context(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
 	active, err := archive.GetSession(t.Context(), "omnigent:conv_0000")
 	require.NoError(t, err)
@@ -1204,14 +1178,14 @@ func TestSyncOmnigentSameTimestampAppendIsReconciledByFullSync(t *testing.T) {
 		"fixture must preserve the container size to exercise hash freshness")
 
 	// An append that advances neither updated_at nor the container size is
-	// invisible to the changed-member sweep: the event stays bounded by the
+	// invisible to the changed-member scan: the event stays bounded by the
 	// changed set and defers the edit instead of probing every member.
 	engine.SyncPaths([]string{dbPath})
 	deferred, err := archive.GetSessionFull(context.Background(), "omnigent:conv_0000")
 	require.NoError(t, err)
 	require.NotNil(t, deferred)
 	assert.Equal(t, 1, deferred.MessageCount,
-		"the changed-path sweep must defer an edit it cannot see")
+		"the changed-path scan must defer an edit it cannot see")
 
 	engine = sync.NewEngine(archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -1224,7 +1198,7 @@ func TestSyncOmnigentSameTimestampAppendIsReconciledByFullSync(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, 2, updated.MessageCount,
-		"the scheduled full sync must reconcile edits the sweep deferred")
+		"the scheduled full sync must reconcile edits the scan deferred")
 }
 
 func TestSyncOmnigentArchiveAuditDetectsInPlaceItemEdit(t *testing.T) {
@@ -1323,7 +1297,7 @@ func TestAuditOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
 		"authoritative reconciliation must refresh multi-workspace metadata")
 }
 
-func TestOmnigentMetadataOnlyUsageNeedsAuthoritativeAudit(t *testing.T) {
+func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1360,28 +1334,31 @@ func TestOmnigentMetadataOnlyUsageNeedsAuthoritativeAudit(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
 
-			parseCount.Store(0)
-			for range 2 {
-				require.NoError(t, engine.ReconcileProviderRoots(
-					t.Context(), parser.AgentOmnigent, []string{root},
-				))
-			}
-			boundedParseCounts[archiveSize] = parseCount.Load()
-			assert.LessOrEqual(t, parseCount.Load(), int64(2*128),
-				"scheduled passes must stay within the fixed replay window")
+			engine.SyncPaths([]string{dbPath})
 			deferred, err := archive.GetUsageEvents(t.Context(), targetID)
 			require.NoError(t, err)
 			assert.Empty(t, deferred,
-				"an old metadata-only edit outside the replay window may remain deferred")
+				"the bounded watcher scan may defer a metadata-only edit")
 
-			require.NoError(t, engine.ReconcileWatchRoots(
-				t.Context(), []string{root}, false,
+			parseCount.Store(0)
+			require.NoError(t, engine.ReconcileProviderRoots(
+				t.Context(), parser.AgentOmnigent, []string{root},
 			))
+			assert.Equal(t, int64(1), parseCount.Load(),
+				"a metadata-only edit must cost one whole-container parse")
 			events, err := archive.GetUsageEvents(t.Context(), targetID)
 			require.NoError(t, err)
 			require.Len(t, events, 1)
 			assert.Equal(t, 321, events[0].InputTokens)
 			assert.Equal(t, 45, events[0].OutputTokens)
+			boundedParseCounts[archiveSize] = parseCount.Load()
+
+			parseCount.Store(0)
+			require.NoError(t, engine.ReconcileProviderRoots(
+				t.Context(), parser.AgentOmnigent, []string{root},
+			))
+			assert.Zero(t, parseCount.Load(),
+				"an unchanged container must cost the next scheduled pass nothing")
 		})
 	}
 	assert.Equal(t, boundedParseCounts[256], boundedParseCounts[1024],
@@ -1455,6 +1432,11 @@ func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
 				   SET workspace = '/work/after', git_branch = 'review'
 				 WHERE workspace_id = 0 AND id = 'conv_0000'`)
 			require.NoError(t, err)
+			_, err = writer.Exec(`INSERT INTO conversation_items
+				(workspace_id, conversation_id, id, position, type, data, search_text)
+				VALUES (0, 'conv_0000', 'conv_0000_refresh', 1, 1, ?, 'refresh')`,
+				`{"role":"assistant","content":[{"type":"output_text","text":"refresh"}]}`)
+			require.NoError(t, err)
 			require.NoError(t, writer.Close())
 
 			resultCount.Store(0)
@@ -1499,11 +1481,19 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 			t.Cleanup(engine.Close)
 			syncOmnigentArchive(t, engine, archive, archiveSize)
 
+			parseCount.Store(0)
+			require.NoError(t, engine.ReconcileProviderRoots(
+				t.Context(), parser.AgentOmnigent, []string{root},
+			))
+			assert.Zero(t, parseCount.Load(),
+				"an unchanged container must cost a scheduled pass zero parses")
+
+			changedID := fmt.Sprintf("conv_%04d", archiveSize/2)
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
 			_, err = writer.Exec(
 				`UPDATE conversations SET updated_at = ? WHERE id = ?`,
-				time.Now().Unix(), fmt.Sprintf("conv_%04d", archiveSize/2),
+				time.Now().Unix(), changedID,
 			)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
@@ -1514,7 +1504,7 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 			))
 			observed[archiveSize] = parseCount.Load()
 			assert.Equal(t, int64(1), parseCount.Load(),
-				"scheduled reconciliation should parse only the changed member")
+				"a changed container must cost one whole-container parse")
 
 			deletedID := fmt.Sprintf("conv_%04d", archiveSize-1)
 			writer, err = sql.Open("sqlite3", dbPath)
@@ -1533,12 +1523,26 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 			require.NoError(t, engine.ReconcileProviderRoots(
 				t.Context(), parser.AgentOmnigent, []string{root},
 			))
-			session, err := archive.GetSession(
+			active, err := archive.GetSession(
 				t.Context(), "omnigent:"+deletedID,
 			)
 			require.NoError(t, err)
-			assert.NotNil(t, session,
-				"bounded scheduled discovery cannot prove member deletion")
+			assert.Nil(t, active,
+				"the complete container parse must retire the deleted member")
+			archived, err := archive.GetSessionFull(
+				t.Context(), "omnigent:"+deletedID,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, archived,
+				"retiring a deleted member must preserve its archive row")
+			require.NotNil(t, archived.DeletionCause)
+			assert.Equal(t, "source_missing", *archived.DeletionCause)
+			assert.Equal(t, 1, archived.MessageCount)
+			survivor, err := archive.GetSession(
+				t.Context(), "omnigent:conv_0000",
+			)
+			require.NoError(t, err)
+			assert.NotNil(t, survivor)
 		})
 	}
 	assert.Equal(t, observed[256], observed[1024],
@@ -1603,7 +1607,7 @@ func TestSyncPathsOmnigentSchemaChangeHonorsLegacyDeletionState(t *testing.T) {
 	}
 }
 
-func TestReconcileOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.T) {
+func TestSyncOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1633,25 +1637,17 @@ func TestReconcileOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *tes
 	engine.SyncAll(context.Background(), nil)
 	deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0064")
 	require.NoError(t, err)
-	require.NotNil(t, deleted,
-		"routine discovery defers deletion proof to authoritative reconciliation")
-
-	require.NoError(t, engine.ReconcileWatchRoots(
-		t.Context(), []string{root}, false,
-	))
-	deleted, err = archive.GetSession(context.Background(), "omnigent:conv_0064")
-	require.NoError(t, err)
 	assert.Nil(t, deleted)
 	archived, err := archive.GetSessionFull(
 		context.Background(), "omnigent:conv_0064",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, archived,
-		"authoritative reconciliation must preserve the archived session row")
+		"retiring a deleted conversation must preserve the archived session row")
 	require.NotNil(t, archived.DeletionCause)
 	assert.Equal(t, "source_missing", *archived.DeletionCause)
 	assert.Equal(t, 1, archived.MessageCount,
-		"source-missing reconciliation must preserve archived messages")
+		"source-missing retirement must preserve archived messages")
 	survivor, err := archive.GetSession(context.Background(), "omnigent:conv_0000")
 	require.NoError(t, err)
 	assert.NotNil(t, survivor)

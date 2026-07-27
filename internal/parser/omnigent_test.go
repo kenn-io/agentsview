@@ -663,39 +663,28 @@ func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
 	}
 }
 
-func TestOmnigentWarmDiscoveryIsBoundedUnlessForced(t *testing.T) {
-	for _, archiveSize := range []int{100, 200} {
-		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			path := writeOmnigentCardinalityDB(t, archiveSize)
-			changedID := fmt.Sprintf("conv_%03d", archiveSize/2)
-			factory, ok := ProviderFactoryByType(AgentOmnigent)
-			require.True(t, ok)
-			cfg := ProviderConfig{
-				Roots: []string{filepath.Dir(path)}, Machine: "host",
-			}
-			initializeOmnigentProvider(t, factory.NewProvider(cfg), archiveSize)
+func TestOmnigentWarmDiscoveryYieldsContainer(t *testing.T) {
+	path := writeOmnigentCardinalityDB(t, 100)
+	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
+		Roots: []string{filepath.Dir(path)}, Machine: "host",
+	})
+	require.True(t, ok)
+	initializeOmnigentProvider(t, provider, 100)
 
-			writer, err := sql.Open("sqlite3", path)
-			require.NoError(t, err)
-			_, err = writer.Exec(
-				`UPDATE conversations SET updated_at = ? WHERE id = ?`,
-				time.Now().Unix(), changedID,
-			)
-			require.NoError(t, err)
-			require.NoError(t, writer.Close())
+	writer, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE conversations SET updated_at = ? WHERE id = 'conv_050'`,
+		time.Now().Unix(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
-			sources, err := factory.NewProvider(cfg).Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, VirtualSourcePath(path, changedID), sources[0].DisplayPath)
-
-			cfg.ForceFullDiscovery = true
-			sources, err = factory.NewProvider(cfg).Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, path, sources[0].DisplayPath)
-		})
-	}
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, path, sources[0].DisplayPath,
+		"scheduled discovery must yield the container even when warm")
 }
 
 func TestOmnigentColdEmptyChangedPathReconcilesAuthoritatively(t *testing.T) {
@@ -743,7 +732,7 @@ func TestOmnigentChangedPathCancellationDoesNotAdvanceFloor(t *testing.T) {
 	floor := tracker.containers[path].checkedAt
 	tracker.mu.Unlock()
 	assert.EqualValues(t, 5, floor,
-		"a failed sweep must not advance past unobserved changes")
+		"a failed scan must not advance past unobserved changes")
 }
 
 func TestOmnigentContainerParseHonorsCancellationAfterStart(t *testing.T) {
@@ -901,7 +890,7 @@ func TestOmnigentSplitWorkspaceChangedPathClassification(t *testing.T) {
 	assert.Equal(t, "99:conv", changed[0].MemberID)
 }
 
-func TestOmnigentSplitMetadataOnlyChangesAreDiscovered(t *testing.T) {
+func TestOmnigentSplitMetadataOnlyChangesDeferToContainerParse(t *testing.T) {
 	path := writeOmnigentSplitGenDB(t)
 	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
 		Roots: []string{filepath.Dir(path)}, Machine: "host",
@@ -931,58 +920,37 @@ func TestOmnigentSplitMetadataOnlyChangesAreDiscovered(t *testing.T) {
 		  WHERE workspace_id = 0 AND conversation_id = 'conv_root'`,
 	)
 	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	sources, err := provider.SourcesForChangedPath(
 		t.Context(), ChangedPathRequest{Path: path, EventKind: "write"},
 	)
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(sources), omnigentRecentMemberLimit,
-		"metadata fallback fan-out must stay capped")
-	sourceIndex := slices.IndexFunc(sources, func(source SourceRef) bool {
-		return strings.HasSuffix(source.Key, "#0:conv_root")
-	})
-	require.NotEqual(t, -1, sourceIndex,
-		"an in-place conversation update must identify its existing member")
+	assert.Empty(t, sources,
+		"a metadata-only edit adds no rows and defers to the scheduled "+
+			"container fingerprint pass")
+
+	containers, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, containers, 1)
 	outcome, err := provider.Parse(
-		t.Context(), ParseRequest{Source: sources[sourceIndex]},
+		t.Context(), ParseRequest{Source: containers[0]},
 	)
 	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	result := outcome.Results[0].Result
+	resultIndex := slices.IndexFunc(
+		outcome.Results, func(res ParseResultOutcome) bool {
+			return strings.HasSuffix(res.Result.Session.ID, ":conv_root")
+		},
+	)
+	require.NotEqual(t, -1, resultIndex)
+	result := outcome.Results[resultIndex].Result
 	assert.Equal(t, "renamed task", result.Session.SessionName)
 	assert.Equal(t, "/work/renamed", result.Session.Cwd)
 	assert.Equal(t, "review", result.Session.GitBranch)
 	require.Len(t, result.UsageEvents, 1)
 	assert.Equal(t, "metadata-model", result.UsageEvents[0].Model)
-
-	_, err = writer.Exec(
-		`UPDATE omnigent_conversation_metadata
-		    SET session_usage = ?
-		  WHERE workspace_id = 0 AND id = 'conv_root'`,
-		`{"input_tokens":9,"output_tokens":4}`,
-	)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
-
-	sources, err = provider.SourcesForChangedPath(
-		t.Context(), ChangedPathRequest{Path: path, EventKind: "write"},
-	)
-	require.NoError(t, err)
-	require.LessOrEqual(t, len(sources), omnigentRecentMemberLimit,
-		"metadata fallback fan-out must stay capped")
-	sourceIndex = slices.IndexFunc(sources, func(source SourceRef) bool {
-		return strings.HasSuffix(source.Key, "#0:conv_root")
-	})
-	require.NotEqual(t, -1, sourceIndex,
-		"a recent member must be replayed for metadata commits without a cursor")
-	outcome, err = provider.Parse(
-		t.Context(), ParseRequest{Source: sources[sourceIndex]},
-	)
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	require.Len(t, outcome.Results[0].Result.UsageEvents, 1)
-	assert.Equal(t, 9, outcome.Results[0].Result.UsageEvents[0].InputTokens)
-	assert.Equal(t, 4, outcome.Results[0].Result.UsageEvents[0].OutputTokens)
+	assert.Equal(t, 7, result.UsageEvents[0].InputTokens)
+	assert.Equal(t, 3, result.UsageEvents[0].OutputTokens)
 }
 
 func TestOmnigentSplitWorkspaceChangeWorkIsArchiveIndependent(t *testing.T) {
@@ -1024,569 +992,6 @@ func TestOmnigentSplitWorkspaceChangeWorkIsArchiveIndependent(t *testing.T) {
 			require.Len(t, changed, 1,
 				"one appended item must fan out one member at every archive size")
 			assert.Equal(t, fmt.Sprintf("%d:conv", workspaceID), changed[0].MemberID)
-		})
-	}
-}
-
-func TestOmnigentSplitMetadataChangeWorkIsArchiveIndependent(t *testing.T) {
-	for _, archiveSize := range []int{100, 600} {
-		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			path := writeOmnigentSplitSingleWorkspaceCardinalityDB(t, archiveSize)
-			conn, err := openOmnigentDB(path)
-			require.NoError(t, err)
-			schema, err := detectOmnigentSchema(conn)
-			require.NoError(t, err)
-			require.NoError(t, conn.Close())
-			tracker := omnigentTrackerAtCurrentHighWater(t, path, schema)
-
-			writer, err := sql.Open("sqlite3", path)
-			require.NoError(t, err)
-			target := fmt.Sprintf("conv_%03d", archiveSize/2)
-			_, err = writer.Exec(
-				`UPDATE conversations SET title = 'changed', updated_at = ?
-				  WHERE workspace_id = 0 AND id = ?`,
-				time.Now().Unix(), target,
-			)
-			require.NoError(t, err)
-			require.NoError(t, writer.Close())
-
-			changed, err := tracker.changedMembers(
-				t.Context(), filepath.Dir(path), ChangedPathRequest{
-					Path: path, EventKind: "write",
-				},
-			)
-			require.NoError(t, err)
-			require.Len(t, changed, 1,
-				"one metadata update must fan out one member at every archive size")
-			assert.Equal(t, "0:"+target, changed[0].MemberID)
-		})
-	}
-}
-
-func TestOmnigentSplitMultiWorkspaceMetadataUpdateOutsideRecentReplay(
-	t *testing.T,
-) {
-	for _, archiveSize := range []int{140, 600} {
-		for _, warmState := range []string{"full_parse", "cache_restore"} {
-			t.Run(fmt.Sprintf("%s/archive_%d", warmState, archiveSize),
-				func(t *testing.T) {
-					path := writeOmnigentSplitTwoWorkspaceCardinalityDB(
-						t, archiveSize,
-					)
-					provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-						Roots: []string{filepath.Dir(path)}, Machine: "host",
-					})
-					require.True(t, ok)
-					sources, err := provider.Discover(t.Context())
-					require.NoError(t, err)
-					require.Len(t, sources, 1)
-					if warmState == "full_parse" {
-						outcome, parseErr := provider.Parse(
-							t.Context(), ParseRequest{Source: sources[0]},
-						)
-						require.NoError(t, parseErr)
-						require.Len(t, outcome.Results, archiveSize)
-					} else {
-						restorer, ok := provider.(CachedSourceStateRestorer)
-						require.True(t, ok)
-						restored, restoreErr := restorer.RestoreCachedSourceState(
-							t.Context(), sources[0],
-						)
-						require.NoError(t, restoreErr)
-						require.True(t, restored)
-					}
-					ageOmnigentTrackerPastRecentReplay(t, provider, path)
-
-					writer, err := sql.Open("sqlite3", path)
-					require.NoError(t, err)
-					changedAt := time.Now().Unix()
-					targets := []struct {
-						workspaceID int64
-						id          string
-						title       string
-						model       string
-					}{
-						{
-							workspaceID: 0,
-							id:          "conv_000",
-							title:       "renamed workspace zero",
-							model:       "updated-model-zero",
-						},
-						{
-							workspaceID: 1,
-							id:          "conv_001",
-							title:       "renamed workspace one",
-							model:       "updated-model-one",
-						},
-					}
-					for _, target := range targets {
-						_, err = writer.Exec(
-							`UPDATE conversations
-							    SET title = ?,
-							        session_overrides = ?,
-							        updated_at = ?
-							  WHERE workspace_id = ? AND id = ?`,
-							target.title,
-							fmt.Sprintf(
-								`{"model_override":%q}`, target.model,
-							),
-							changedAt, target.workspaceID, target.id,
-						)
-						require.NoError(t, err)
-					}
-					require.NoError(t, writer.Close())
-
-					sources, err = provider.SourcesForChangedPath(
-						t.Context(), ChangedPathRequest{
-							Path: path, EventKind: "write",
-						},
-					)
-					require.NoError(t, err)
-					require.Len(t, sources, len(targets),
-						"two metadata updates must emit two members "+
-							"independently of conversation cardinality")
-					for _, target := range targets {
-						memberKey := fmt.Sprintf(
-							"#%d:%s", target.workspaceID, target.id,
-						)
-						targetIndex := slices.IndexFunc(
-							sources, func(source SourceRef) bool {
-								return strings.HasSuffix(
-									source.Key, memberKey,
-								)
-							},
-						)
-						require.NotEqual(t, -1, targetIndex,
-							"the workspace cursor must find metadata-only "+
-								"updates outside the capped recent replay")
-						outcome, err := provider.Parse(
-							t.Context(), ParseRequest{
-								Source: sources[targetIndex],
-							},
-						)
-						require.NoError(t, err)
-						require.Len(t, outcome.Results, 1)
-						result := outcome.Results[0].Result
-						assert.Equal(t, target.title,
-							result.Session.SessionName)
-						require.Len(t, result.UsageEvents, 1)
-						assert.Equal(t, target.model,
-							result.UsageEvents[0].Model)
-					}
-				},
-			)
-		}
-	}
-}
-
-func TestOmnigentSplitWorkspaceRoundRobinEventuallyFindsMetadataUpdate(
-	t *testing.T,
-) {
-	workspaceCount := 2*omnigentWorkspaceProbeLimit + 5
-	targetWorkspace := int64(2*omnigentWorkspaceProbeLimit + 1)
-	path := writeOmnigentSplitWorkspaceCardinalityDB(t, workspaceCount)
-	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-		Roots: []string{filepath.Dir(path)}, Machine: "host",
-	})
-	require.True(t, ok)
-	initializeOmnigentProvider(t, provider, workspaceCount)
-	ageOmnigentTrackerPastRecentReplay(t, provider, path)
-
-	writer, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = writer.Exec(
-		`UPDATE conversations
-		    SET title = 'eventually found', updated_at = ?
-		  WHERE workspace_id = ? AND id = 'conv'`,
-		time.Now().Unix(), targetWorkspace,
-	)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
-
-	cyclePasses := (workspaceCount + omnigentWorkspaceProbeLimit - 1) /
-		omnigentWorkspaceProbeLimit
-	foundPass := -1
-	for pass := range cyclePasses {
-		var probes []int64
-		ctx := withOmnigentWorkspaceProbeObserver(
-			t.Context(), func(workspaceID int64) {
-				probes = append(probes, workspaceID)
-			},
-		)
-		sources, changedErr := provider.SourcesForChangedPath(
-			ctx, ChangedPathRequest{Path: path, EventKind: "write"},
-		)
-		require.NoError(t, changedErr)
-		assert.LessOrEqual(t, len(probes), omnigentWorkspaceProbeLimit,
-			"every round-robin pass must have fixed workspace work")
-		targetIndex := slices.IndexFunc(sources, func(source SourceRef) bool {
-			return strings.HasSuffix(
-				source.Key, fmt.Sprintf("#%d:conv", targetWorkspace),
-			)
-		})
-		if pass == 0 {
-			assert.Equal(t, -1, targetIndex,
-				"a workspace beyond the first probe window must wait "+
-					"for a later bounded pass")
-		}
-		if targetIndex >= 0 && foundPass < 0 {
-			foundPass = pass
-		}
-	}
-	assert.Greater(t, foundPass, 0,
-		"the updated workspace must not be emitted by the first window")
-	assert.Less(t, foundPass, cyclePasses,
-		"the updated workspace must be emitted within one bounded cycle")
-}
-
-func TestOmnigentSplitWorkspaceSweepWrapsDespiteSustainedInsertion(
-	t *testing.T,
-) {
-	const initialWorkspaceCount = omnigentWorkspaceProbeLimit + 1
-	path := writeOmnigentSplitWorkspaceCardinalityDB(
-		t, initialWorkspaceCount,
-	)
-	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-		Roots: []string{filepath.Dir(path)}, Machine: "host",
-	})
-	require.True(t, ok)
-	initializeOmnigentProvider(t, provider, initialWorkspaceCount)
-	ageOmnigentTrackerPastRecentReplay(t, provider, path)
-
-	var firstProbes []int64
-	ctx := withOmnigentWorkspaceProbeObserver(
-		t.Context(), func(workspaceID int64) {
-			firstProbes = append(firstProbes, workspaceID)
-		},
-	)
-	sources, err := provider.SourcesForChangedPath(
-		ctx, ChangedPathRequest{Path: path, EventKind: "write"},
-	)
-	require.NoError(t, err)
-	assert.Empty(t, sources)
-	require.Len(t, firstProbes, omnigentWorkspaceProbeLimit)
-	assert.EqualValues(t, 0, firstProbes[0])
-	assert.EqualValues(t, omnigentWorkspaceProbeLimit-1,
-		firstProbes[len(firstProbes)-1])
-
-	writer, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = writer.Exec(
-		`UPDATE conversations
-		    SET title = 'must survive workspace churn', updated_at = ?
-		  WHERE workspace_id = 0 AND id = 'conv'`,
-		time.Now().Unix(),
-	)
-	require.NoError(t, err)
-
-	nextWorkspaceID := int64(initialWorkspaceCount)
-	foundPass := -1
-	for pass := range 4 {
-		for range omnigentWorkspaceProbeLimit {
-			workspaceID := nextWorkspaceID
-			nextWorkspaceID++
-			_, err = writer.Exec(`INSERT INTO conversations
-				(workspace_id, id, created_at, updated_at, title,
-				 root_conversation_id)
-				VALUES (?, 'conv', 1, ?, 'inserted', 'conv')`,
-				workspaceID, time.Now().Unix())
-			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO omnigent_conversation_metadata
-				(workspace_id, id, kind, workspace)
-				VALUES (?, 'conv', 1, ?)`,
-				workspaceID, fmt.Sprintf("/work/%d", workspaceID))
-			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO conversation_items
-				(workspace_id, conversation_id, id, position, type, data,
-				 search_text)
-				VALUES (?, 'conv', 'item', 0, 1,
-				 '{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
-				 'hi')`, workspaceID)
-			require.NoError(t, err)
-		}
-
-		var probes []int64
-		ctx = withOmnigentWorkspaceProbeObserver(
-			t.Context(), func(workspaceID int64) {
-				probes = append(probes, workspaceID)
-			},
-		)
-		sources, err = provider.SourcesForChangedPath(
-			ctx, ChangedPathRequest{Path: path, EventKind: "write"},
-		)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, len(probes), omnigentWorkspaceProbeLimit,
-			"pass %d must keep workspace probes bounded", pass)
-		if slices.ContainsFunc(sources, func(source SourceRef) bool {
-			return strings.HasSuffix(source.Key, "#0:conv")
-		}) {
-			foundPass = pass
-			break
-		}
-	}
-	require.NoError(t, writer.Close())
-	assert.NotEqual(t, -1, foundPass,
-		"a cycle boundary must revisit an already-probed workspace even "+
-			"when every later pass adds a full window of higher workspace IDs")
-}
-
-func TestOmnigentCurrentBinaryWorkspaceSweepAcrossCacheRestoreAndWrap(
-	t *testing.T,
-) {
-	const (
-		workspaceCount    = 2*omnigentWorkspaceProbeLimit + 3
-		archivedWorkspace = int64(17)
-		liveWorkspace     = int64(34)
-		deletedWorkspace  = int64(12)
-		insertedWorkspace = int64(100)
-	)
-	path := writeOmnigentCurrentWorkspaceSweepDB(t, workspaceCount)
-	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-		Roots: []string{filepath.Dir(path)}, Machine: "host",
-	})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	restorer, ok := provider.(CachedSourceStateRestorer)
-	require.True(t, ok)
-	restored, err := restorer.RestoreCachedSourceState(
-		t.Context(), sources[0],
-	)
-	require.NoError(t, err)
-	require.True(t, restored)
-	ageOmnigentTrackerPastRecentReplay(t, provider, path)
-
-	writer, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	for _, update := range []struct {
-		workspaceID int64
-		title       string
-	}{
-		{workspaceID: archivedWorkspace, title: "archived metadata update"},
-		{workspaceID: liveWorkspace, title: "live metadata update"},
-	} {
-		_, err = writer.Exec(
-			`UPDATE conversations
-			    SET title = ?, updated_at = ?
-			  WHERE workspace_id = ? AND id = ?`,
-			update.title, time.Now().Unix(), update.workspaceID,
-			omnigentHexBytes(
-				t, omnigentCurrentWorkspaceConversationHex(update.workspaceID),
-			),
-		)
-		require.NoError(t, err)
-	}
-	for _, table := range []string{
-		"conversation_items",
-		"omnigent_conversation_metadata",
-		"conversations",
-	} {
-		_, err = writer.Exec(
-			`DELETE FROM `+table+` WHERE workspace_id = ?`,
-			deletedWorkspace,
-		)
-		require.NoError(t, err)
-	}
-	insertOmnigentCurrentWorkspace(
-		t, writer, insertedWorkspace, true, time.Now().Unix(),
-		"inserted workspace",
-	)
-	require.NoError(t, writer.Close())
-
-	wantTitles := map[int64]string{
-		archivedWorkspace: "archived metadata update",
-		liveWorkspace:     "live metadata update",
-		insertedWorkspace: "inserted workspace",
-	}
-	deletedMemberSuffix := fmt.Sprintf(
-		"#%d:%s", deletedWorkspace,
-		omnigentCurrentWorkspaceConversationHex(deletedWorkspace),
-	)
-	found := make(map[int64]SourceRef, len(wantTitles))
-	var passProbes [][]int64
-	for pass := range 4 {
-		var probes []int64
-		ctx := withOmnigentWorkspaceProbeObserver(
-			t.Context(), func(workspaceID int64) {
-				probes = append(probes, workspaceID)
-			},
-		)
-		sources, err = provider.SourcesForChangedPath(
-			ctx, ChangedPathRequest{Path: path, EventKind: "write"},
-		)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, len(probes), omnigentWorkspaceProbeLimit,
-			"pass %d must keep current-schema probes bounded", pass)
-		assert.NotContains(t, probes, deletedWorkspace,
-			"deleted workspaces must leave the live sweep immediately")
-		passProbes = append(passProbes, probes)
-		assert.Equal(t, -1, slices.IndexFunc(
-			sources, func(source SourceRef) bool {
-				return strings.HasSuffix(source.Key, deletedMemberSuffix)
-			},
-		), "a warm bounded pass must not emit a deleted member as present")
-		for workspaceID := range wantTitles {
-			memberSuffix := fmt.Sprintf(
-				"#%d:%s", workspaceID,
-				omnigentCurrentWorkspaceConversationHex(workspaceID),
-			)
-			if index := slices.IndexFunc(
-				sources, func(source SourceRef) bool {
-					return strings.HasSuffix(source.Key, memberSuffix)
-				},
-			); index >= 0 {
-				found[workspaceID] = sources[index]
-			}
-		}
-	}
-
-	require.Len(t, passProbes, 4)
-	require.NotEmpty(t, passProbes[0])
-	require.NotEmpty(t, passProbes[3])
-	assert.EqualValues(t, 0, passProbes[0][0])
-	assert.EqualValues(t, 0, passProbes[3][0],
-		"the fourth pass must prove the workspace cursor wrapped")
-	for workspaceID, wantTitle := range wantTitles {
-		source, exists := found[workspaceID]
-		require.Truef(t, exists,
-			"workspace %d must be emitted by the bounded sweep", workspaceID)
-		outcome, parseErr := provider.Parse(
-			t.Context(), ParseRequest{Source: source},
-		)
-		require.NoError(t, parseErr)
-		require.Len(t, outcome.Results, 1)
-		assert.Equal(t, wantTitle,
-			outcome.Results[0].Result.Session.SessionName)
-	}
-}
-
-func TestOmnigentSplitWorkspaceProbeWorkIsCardinalityIndependent(
-	t *testing.T,
-) {
-	var probeCounts []int
-	for _, workspaceCount := range []int{40, 600} {
-		t.Run(fmt.Sprintf("workspaces_%d", workspaceCount), func(t *testing.T) {
-			path := writeOmnigentSplitWorkspaceCardinalityDB(t, workspaceCount)
-			provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-				Roots: []string{filepath.Dir(path)}, Machine: "host",
-			})
-			require.True(t, ok)
-			initializeOmnigentProvider(t, provider, workspaceCount)
-			ageOmnigentTrackerPastRecentReplay(t, provider, path)
-
-			var probes []int64
-			ctx := withOmnigentWorkspaceProbeObserver(
-				t.Context(), func(workspaceID int64) {
-					probes = append(probes, workspaceID)
-				},
-			)
-			sources, err := provider.SourcesForChangedPath(
-				ctx, ChangedPathRequest{Path: path, EventKind: "write"},
-			)
-			require.NoError(t, err)
-			assert.Empty(t, sources)
-			assert.LessOrEqual(t, len(probes), omnigentWorkspaceProbeLimit,
-				"unchanged event work must be capped as workspaces grow")
-			probeCounts = append(probeCounts, len(probes))
-		})
-	}
-	require.Len(t, probeCounts, 2)
-	assert.Equal(t, probeCounts[0], probeCounts[1],
-		"small and large current workspace sets must do equal bounded work")
-}
-
-func TestOmnigentSplitWorkspaceProbeDropsDeletedWorkspaces(t *testing.T) {
-	const workspaceCount = 300
-	remainingWorkspace := int64(workspaceCount - 1)
-	path := writeOmnigentSplitWorkspaceCardinalityDB(t, workspaceCount)
-	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-		Roots: []string{filepath.Dir(path)}, Machine: "host",
-	})
-	require.True(t, ok)
-	initializeOmnigentProvider(t, provider, workspaceCount)
-	ageOmnigentTrackerPastRecentReplay(t, provider, path)
-
-	writer, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	for _, table := range []string{
-		"conversation_items",
-		"omnigent_conversation_metadata",
-		"conversations",
-	} {
-		_, err = writer.Exec(
-			`DELETE FROM `+table+` WHERE workspace_id <> ?`,
-			remainingWorkspace,
-		)
-		require.NoError(t, err)
-	}
-	require.NoError(t, writer.Close())
-
-	for pass := range 3 {
-		var probes []int64
-		ctx := withOmnigentWorkspaceProbeObserver(
-			t.Context(), func(workspaceID int64) {
-				probes = append(probes, workspaceID)
-			},
-		)
-		_, err = provider.SourcesForChangedPath(
-			ctx, ChangedPathRequest{Path: path, EventKind: "write"},
-		)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, len(probes), omnigentWorkspaceProbeLimit,
-			"pass %d must not revisit the historical workspace archive", pass)
-		assert.Equal(t, 1, len(probes),
-			"pass %d must retain only the live workspace", pass)
-		if len(probes) > 0 {
-			assert.Equal(t, remainingWorkspace, probes[0])
-		}
-	}
-}
-
-func TestOmnigentSplitWorkspaceCacheRestoreProbeIsBounded(t *testing.T) {
-	const workspaceCount = 600
-	path := writeOmnigentSplitWorkspaceCardinalityDB(t, workspaceCount)
-	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-		Roots: []string{filepath.Dir(path)}, Machine: "host",
-	})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	restorer, ok := provider.(CachedSourceStateRestorer)
-	require.True(t, ok)
-
-	var probes []int64
-	ctx := withOmnigentWorkspaceProbeObserver(
-		t.Context(), func(workspaceID int64) {
-			probes = append(probes, workspaceID)
-		},
-	)
-	restored, err := restorer.RestoreCachedSourceState(ctx, sources[0])
-	require.NoError(t, err)
-	require.True(t, restored)
-	assert.LessOrEqual(t, len(probes), omnigentWorkspaceProbeLimit,
-		"cache restoration must not probe the whole workspace archive")
-}
-
-func TestOmnigentSplitRecentMetadataReplayIsCapped(t *testing.T) {
-	for _, archiveSize := range []int{200, 600} {
-		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			path := writeOmnigentSplitSingleWorkspaceCardinalityDB(t, archiveSize)
-			provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-				Roots: []string{filepath.Dir(path)}, Machine: "host",
-			})
-			require.True(t, ok)
-			initializeOmnigentProvider(t, provider, archiveSize)
-
-			sources, err := provider.SourcesForChangedPath(
-				t.Context(), ChangedPathRequest{
-					Path: path, EventKind: "write",
-				},
-			)
-			require.NoError(t, err)
-			assert.Len(t, sources, omnigentRecentMemberLimit,
-				"warm metadata fallback must stay fixed as the archive grows")
 		})
 	}
 }
@@ -1713,17 +1118,14 @@ func omnigentTrackerAtCurrentHighWater(
 	require.NoError(t, err)
 	itemRowID, itemTail, err := omnigentLatestItemRow(t.Context(), conn, schema)
 	require.NoError(t, err)
-	checkedAt := time.Now().Unix()
 	tracker := newOmnigentChangeTracker()
 	tracker.containers[path] = omnigentTrackedContainer{
-		schema:                  schema,
-		checkedAt:               checkedAt,
-		workspaceSweepFloor:     checkedAt,
-		workspaceSweepStartedAt: checkedAt,
-		conversationRowID:       conversationRowID,
-		conversationTail:        conversationTail,
-		itemRowID:               itemRowID,
-		itemTail:                itemTail,
+		schema:            schema,
+		checkedAt:         time.Now().Unix(),
+		conversationRowID: conversationRowID,
+		conversationTail:  conversationTail,
+		itemRowID:         itemRowID,
+		itemTail:          itemTail,
 	}
 	return tracker
 }
@@ -1754,46 +1156,6 @@ func TestOmnigentIncrementalQueriesUseSeekableIndexes(t *testing.T) {
 			args:       []any{int64(0), 128},
 			wantDetail: "INTEGER PRIMARY KEY",
 			wantItems:  "ix_conversation_items_conversation_id_position",
-		},
-		{
-			name:       "split schema updated_at range",
-			writeDB:    writeOmnigentSplitSingleWorkspaceCardinalityDB,
-			query:      omnigentSplitChangedMetaQuery,
-			args:       []any{int64(0), int64(1), int64(2)},
-			wantDetail: "ix_conversations_updated_at",
-			wantItems:  "ix_conversation_items_conversation_id_position",
-		},
-		{
-			name: "current split schema updated_at range",
-			writeDB: func(t *testing.T, _ int) string {
-				return writeOmnigentBinaryIDDB(t)
-			},
-			query: omnigentSplitChangedMetaQuery,
-			args: []any{
-				int64(0), int64(1), int64(2),
-				int64(0), int64(1), int64(2),
-			},
-			wantDetail: "ix_conversations_archived_updated",
-			wantItems:  "ix_conversation_items_conversation_id_position",
-		},
-		{
-			name: "current split schema workspace successor",
-			writeDB: func(t *testing.T, _ int) string {
-				return writeOmnigentBinaryIDDB(t)
-			},
-			query: func(schema omnigentSchema) string {
-				return omnigentNextWorkspaceIDQuery(schema, true)
-			},
-			args:       []any{int64(0), int64(100)},
-			wantDetail: "ix_conversations_archived_updated",
-		},
-		{
-			name: "current split schema workspace cycle ceiling",
-			writeDB: func(t *testing.T, _ int) string {
-				return writeOmnigentBinaryIDDB(t)
-			},
-			query:      omnigentWorkspaceCycleCeilingQuery,
-			wantDetail: "ix_conversations_archived_updated",
 		},
 		{
 			name:       "split schema new item rows",
@@ -1879,28 +1241,6 @@ func initializeOmnigentProvider(t *testing.T, provider Provider, want int) {
 	require.Len(t, outcome.Results, want)
 }
 
-func ageOmnigentTrackerPastRecentReplay(
-	t *testing.T, provider Provider, path string,
-) {
-	t.Helper()
-	wrapped, ok := provider.(*SourceSetProvider)
-	require.True(t, ok)
-	sourceSet, ok := wrapped.sources.(omnigentSourceSet)
-	require.True(t, ok)
-	tracker := sourceSet.tracker
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	tracked, ok := tracker.containers[path]
-	require.True(t, ok)
-	agedAt := time.Now().Unix() -
-		int64(omnigentRecentMemberTTL/time.Second) - 1
-	tracked.checkedAt = agedAt
-	for i := range tracked.recentMembers {
-		tracked.recentMembers[i].observedAt = agedAt
-	}
-	tracker.containers[path] = tracked
-}
-
 func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), omnigentDBName)
@@ -1926,148 +1266,6 @@ func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
 				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
 				'hi')`, workspaceID)
 		require.NoError(t, err)
-	}
-	require.NoError(t, database.Close())
-	return path
-}
-
-func writeOmnigentSplitSingleWorkspaceCardinalityDB(
-	t *testing.T, count int,
-) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	database, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	execOmnigentDDL(t, database, omnigentSplitGenDDL)
-	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('single-workspace-cardinality')`)
-	require.NoError(t, err)
-	for i := range count {
-		id := fmt.Sprintf("conv_%03d", i)
-		updatedAt := int64(1_700_000_000 + i)
-		_, err = database.Exec(`INSERT INTO conversations
-			(workspace_id, id, created_at, updated_at, title, root_conversation_id)
-			VALUES (0, ?, ?, ?, 'conversation', ?)`,
-			id, updatedAt-1, updatedAt, id)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
-			(workspace_id, id, kind, workspace)
-			VALUES (0, ?, 1, '/work/project')`, id)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO conversation_items
-			(workspace_id, conversation_id, id, position, type, data, search_text)
-			VALUES (0, ?, 'item', 0, 1,
-				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
-				'hi')`, id)
-		require.NoError(t, err)
-	}
-	require.NoError(t, database.Close())
-	return path
-}
-
-func writeOmnigentSplitTwoWorkspaceCardinalityDB(
-	t *testing.T, count int,
-) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	database, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	execOmnigentDDL(t, database, omnigentSplitGenDDL)
-	_, err = database.Exec(
-		`ALTER TABLE conversations ADD COLUMN session_overrides TEXT`,
-	)
-	require.NoError(t, err)
-	_, err = database.Exec(
-		`INSERT INTO alembic_version VALUES ('two-workspace-cardinality')`,
-	)
-	require.NoError(t, err)
-	for i := range count {
-		workspaceID := i % 2
-		id := fmt.Sprintf("conv_%03d", i)
-		updatedAt := int64(1_700_000_000 + i)
-		_, err = database.Exec(`INSERT INTO conversations
-			(workspace_id, id, created_at, updated_at, title,
-			 root_conversation_id, session_overrides)
-			VALUES (?, ?, ?, ?, 'conversation', ?, ?)`,
-			workspaceID, id, updatedAt-1, updatedAt, id,
-			`{"model_override":"original-model"}`)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
-			(workspace_id, id, kind, session_usage, workspace)
-			VALUES (?, ?, 1, ?, '/work/project')`,
-			workspaceID, id, `{"input_tokens":1,"output_tokens":2}`)
-		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO conversation_items
-			(workspace_id, conversation_id, id, position, type, data, search_text)
-			VALUES (?, ?, 'item', 0, 1,
-				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
-				'hi')`, workspaceID, id)
-		require.NoError(t, err)
-	}
-	require.NoError(t, database.Close())
-	return path
-}
-
-func omnigentCurrentWorkspaceConversationHex(workspaceID int64) string {
-	return fmt.Sprintf("%032x", workspaceID+1)
-}
-
-func omnigentCurrentWorkspaceItemHex(workspaceID int64) string {
-	return fmt.Sprintf("%032x", 1_000_000+workspaceID)
-}
-
-func insertOmnigentCurrentWorkspace(
-	t *testing.T,
-	database *sql.DB,
-	workspaceID int64,
-	archived bool,
-	updatedAt int64,
-	title string,
-) {
-	t.Helper()
-	conversationID := omnigentHexBytes(
-		t, omnigentCurrentWorkspaceConversationHex(workspaceID),
-	)
-	_, err := database.Exec(`INSERT INTO conversations
-		(workspace_id, id, created_at, updated_at, title,
-		 root_conversation_id, session_overrides, archived)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		workspaceID, conversationID, updatedAt-1, updatedAt, title,
-		conversationID, `{"model_override":"current-model"}`, archived)
-	require.NoError(t, err)
-	_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
-		(workspace_id, id, kind, workspace)
-		VALUES (?, ?, 1, ?)`,
-		workspaceID, conversationID, fmt.Sprintf("/work/%d", workspaceID))
-	require.NoError(t, err)
-	_, err = database.Exec(`INSERT INTO conversation_items
-		(workspace_id, id, conversation_id, response_id, created_at,
-		 position, type, status, data, search_text)
-		VALUES (?, ?, ?, 'response', ?, 0, 1, 1,
-		 '{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
-		 'hi')`,
-		workspaceID,
-		omnigentHexBytes(t, omnigentCurrentWorkspaceItemHex(workspaceID)),
-		conversationID, updatedAt)
-	require.NoError(t, err)
-}
-
-func writeOmnigentCurrentWorkspaceSweepDB(
-	t *testing.T, workspaceCount int,
-) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), omnigentDBName)
-	database, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	execOmnigentDDL(t, database, omnigentBinaryIDGenDDL)
-	_, err = database.Exec(
-		`INSERT INTO alembic_version VALUES ('current-workspace-sweep')`,
-	)
-	require.NoError(t, err)
-	for workspaceID := range workspaceCount {
-		insertOmnigentCurrentWorkspace(
-			t, database, int64(workspaceID), workspaceID%2 == 1,
-			int64(1_700_000_000+workspaceID), "original",
-		)
 	}
 	require.NoError(t, database.Close())
 	return path
@@ -2248,7 +1446,7 @@ func TestOmnigentMetaMessageIsHiddenButChangesFingerprint(t *testing.T) {
 	}
 }
 
-func TestOmnigentBinaryIDChangedPathSweepAndTombstones(t *testing.T) {
+func TestOmnigentBinaryIDChangedPathScanAndTombstones(t *testing.T) {
 	path := writeOmnigentBinaryIDDB(t)
 	conn, err := openOmnigentDB(path)
 	require.NoError(t, err)
@@ -2398,7 +1596,7 @@ func TestOmnigentShmEventDoesNotResolveToContainer(t *testing.T) {
 	_, ok := omnigentClassifyPath(root, path+"-shm", true)
 	assert.False(t, ok,
 		"-shm events come from the provider's own read connections and "+
-			"must not schedule a sweep")
+			"must not schedule a scan")
 	match, ok := omnigentClassifyPath(root, path+"-wal", true)
 	require.True(t, ok, "-wal events carry real commits")
 	assert.Equal(t, path, match.Container)

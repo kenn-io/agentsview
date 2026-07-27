@@ -289,11 +289,6 @@ type Engine struct {
 	lastSync                time.Time
 	lastSyncStats           SyncStats
 	currentProgress         *Progress
-	// discoveryRetries tracks providers with an incremental discovery
-	// cursor whose failed parse or write requires one forced-full
-	// discovery pass. Generations keep a failure that lands during an
-	// in-flight retry pending for the next pass.
-	discoveryRetries map[parser.AgentType]discoveryRetryState
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -1083,11 +1078,9 @@ func (e *Engine) classifyProviderChangedPath(
 		if !ok || factory == nil {
 			continue
 		}
-		retryPending, _ := e.fullDiscoveryRetry(agentType)
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:              roots,
-			Machine:            e.machine,
-			ForceFullDiscovery: retryPending,
+			Roots:   roots,
+			Machine: e.machine,
 		})
 		def := provider.Definition()
 		watchRoots, err := e.providerChangedPathWatchRoots(
@@ -1148,7 +1141,6 @@ func (e *Engine) classifyProviderChangedPath(
 				request,
 			)
 			if err != nil {
-				e.requestFullDiscoveryRetry(agentType)
 				if !errors.Is(err, parser.ErrUnsupportedProviderFeature) {
 					classificationErr = errors.Join(
 						classificationErr,
@@ -1164,7 +1156,6 @@ func (e *Engine) classifyProviderChangedPath(
 				ctx, provider, sources,
 			)
 			if err != nil {
-				e.requestFullDiscoveryRetry(agentType)
 				classificationErr = errors.Join(
 					classificationErr,
 					fmt.Errorf(
@@ -3294,30 +3285,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		stats.Aborted = true
 		return stats, metrics, 0, err
 	}
-	pendingStreamedCandidates := make(map[parser.AgentType]int)
-	streamedProviderRecovery := make(map[parser.AgentType]struct{})
-	markPendingStreamedProviderRecovery := func() {
-		for providerAgent, pending := range pendingStreamedCandidates {
-			if pending > 0 {
-				streamedProviderRecovery[providerAgent] = struct{}{}
-			}
-		}
-	}
-	completeStreamedCandidates := func(page []reconciliationCandidate) {
-		for _, candidate := range page {
-			pending := pendingStreamedCandidates[candidate.Provider]
-			if pending <= 1 {
-				delete(pendingStreamedCandidates, candidate.Provider)
-				continue
-			}
-			pendingStreamedCandidates[candidate.Provider] = pending - 1
-		}
-	}
-	defer func() {
-		for providerAgent := range streamedProviderRecovery {
-			e.requestFullDiscoveryRetry(providerAgent)
-		}
-	}()
 	defer func() {
 		if cleanupErr := closeProviderCache(); cleanupErr != nil {
 			stats.Aborted = true
@@ -3348,14 +3315,12 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		scope.agent = agent
 	}
 	preContainerStates := e.captureSQLiteContainerStates(nil)
-	retryAttempts := make(map[parser.AgentType]uint64)
-	providers, completedScopes, nonAuthoritativeProviders, failedRoots,
+	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
-		ctx, scope, spool, retryAttempts, pendingStreamedCandidates,
+		ctx, scope, spool,
 	)
 	stats.providerFailures = failures
 	if err != nil {
-		markPendingStreamedProviderRecovery()
 		stats.Aborted = true
 		metrics = mergeMetrics(spool.Metrics())
 		if cleanupErr := spool.CloseAndRemove(); cleanupErr != nil {
@@ -3364,18 +3329,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		cleaned = true
 		return stats, metrics, 0, err
 	}
-	uniquePendingCandidates, err := spool.CandidateCounts(ctx)
-	if err != nil {
-		markPendingStreamedProviderRecovery()
-		stats.Aborted = true
-		metrics = mergeMetrics(spool.Metrics())
-		if cleanupErr := spool.CloseAndRemove(); cleanupErr != nil {
-			err = errors.Join(err, cleanupErr)
-		}
-		cleaned = true
-		return stats, metrics, 0, err
-	}
-	pendingStreamedCandidates = uniquePendingCandidates
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
 		authoritativeProviders[completed.agent] = struct{}{}
@@ -3402,23 +3355,17 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	var cursor reconciliationCursor
 	for {
 		if err := ctx.Err(); err != nil {
-			markPendingStreamedProviderRecovery()
 			stats.Aborted = true
 			retErr = err
 			break
 		}
 		page, err := spool.Page(ctx, cursor, reconciliationPageSize)
 		if err != nil {
-			markPendingStreamedProviderRecovery()
 			stats.Aborted = true
 			retErr = err
 			break
 		}
 		if len(page) == 0 {
-			// An empty page is definitive proof that no cursor-discovered
-			// work remains, including for custom spool implementations whose
-			// initial count may have been conservative.
-			clear(pendingStreamedCandidates)
 			break
 		}
 		for _, candidate := range page {
@@ -3428,10 +3375,9 @@ func (e *Engine) reconcileWatchRootsStreamed(
 			})
 		}
 		files, err := e.rehydrateReconciliationPage(
-			ctx, page, providers, force, retryAttempts,
+			ctx, page, providers, force,
 		)
 		if err != nil {
-			markPendingStreamedProviderRecovery()
 			stats.Aborted = ctx.Err() != nil
 			stats.providerFailures++
 			retErr = err
@@ -3451,7 +3397,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		)
 		mergeReconciliationSyncStats(&stats, pageStats)
 		if pageStats.Aborted || pageStats.Failed > 0 {
-			markPendingStreamedProviderRecovery()
 			stats.Aborted = true
 			retErr = fmt.Errorf(
 				"watch root reconciliation failed processing page: %d failures",
@@ -3466,7 +3411,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		if err := e.baselineReconciliationCandidates(
 			ctx, baselineCandidates, baselineAdmitted,
 		); err != nil {
-			markPendingStreamedProviderRecovery()
 			e.rejectSkipCacheWrites(cacheWrites)
 			stats.RecordFailed()
 			stats.Aborted = true
@@ -3482,7 +3426,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 			e.clearSkip(write.key)
 		}
 		e.promoteSkipCacheWrites(eligibleCacheWrites)
-		completeStreamedCandidates(page)
 		cursor = page[len(page)-1].Cursor()
 	}
 
@@ -3529,7 +3472,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		}
 	}
 	if retErr == nil && stats.Failed > 0 {
-		markPendingStreamedProviderRecovery()
 		stats.Aborted = true
 		retErr = fmt.Errorf(
 			"watch root reconciliation failed: %d source or archive failures",
@@ -3546,13 +3488,8 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.Failed == 0 && stats.providerFailures == 0 {
 		tombstoned, retErr = e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, roots, agent, nonAuthoritativeProviders, spool,
+			ctx, roots, agent, spool,
 		)
-		if retErr != nil {
-			for providerAgent := range authoritativeProviders {
-				streamedProviderRecovery[providerAgent] = struct{}{}
-			}
-		}
 	} else if canTombstoneCompletedScopes && ctx.Err() == nil &&
 		!stats.Aborted && stats.Failed == 0 {
 		var incomplete *incompleteReconciliationError
@@ -3563,9 +3500,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 					ctx, spool, incomplete,
 				)
 			if tombstoneErr != nil {
-				for _, completed := range incomplete.completed {
-					streamedProviderRecovery[completed.agent] = struct{}{}
-				}
 				retErr = tombstoneErr
 			}
 		}
@@ -3576,12 +3510,6 @@ func (e *Engine) reconcileWatchRootsStreamed(
 		retErr = errors.Join(retErr, cleanupErr)
 	}
 	cleaned = true
-	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
-		stats.Failed == 0 && stats.providerFailures == 0 {
-		for retryAgent, generation := range retryAttempts {
-			e.completeFullDiscoveryRetry(retryAgent, generation)
-		}
-	}
 	return stats, metrics, tombstoned, retErr
 }
 
@@ -3592,7 +3520,7 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 ) (deleted int, retErr error) {
 	for _, scope := range incomplete.completed {
 		count, err := e.tombstoneMissingWatchSourcesForAgentLocked(
-			ctx, scope.roots, scope.agent, nil, spool,
+			ctx, scope.roots, scope.agent, spool,
 		)
 		deleted += count
 		if err == nil {
@@ -3658,23 +3586,15 @@ func (e *Engine) streamReconciliationCandidates(
 	ctx context.Context,
 	scope *rootSyncScope,
 	spool reconciliationSpoolStore,
-	retryAttempts map[parser.AgentType]uint64,
-	pendingCandidates map[parser.AgentType]int,
 ) (
 	map[parser.AgentType]parser.Provider,
 	[]reconciliationProviderScope,
-	map[parser.AgentType]struct{},
 	[]string,
 	int,
 	error,
 	error,
 ) {
-	// Only an unscoped pass demands complete coverage from every provider. A
-	// provider-scoped scheduled pass is bounded work: cursor-based discovery
-	// stays on its change cursor and is recorded as non-authoritative below.
-	authoritative := scope == nil || scope.agent == ""
 	providers := make(map[parser.AgentType]parser.Provider)
-	nonAuthoritativeProviders := make(map[parser.AgentType]struct{})
 	var completedScopes []reconciliationProviderScope
 	var failedRoots []string
 	var failures int
@@ -3703,20 +3623,8 @@ func (e *Engine) streamReconciliationCandidates(
 		if factory == nil {
 			continue
 		}
-		forceFullDiscovery := authoritative
-		retryPending, retryGeneration := e.fullDiscoveryRetry(agent)
-		if retryPending {
-			forceFullDiscovery = true
-			if scope == nil ||
-				reconciliationCoversConfiguredRoots(
-					roots, e.agentDirs[agent],
-				) {
-				retryAttempts[agent] = retryGeneration
-			}
-		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
-			ForceFullDiscovery: forceFullDiscovery,
 		})
 		providers[agent] = provider
 		if provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
@@ -3747,35 +3655,16 @@ func (e *Engine) streamReconciliationCandidates(
 				return nil
 			}
 			spoolErr = spool.Add(ctx, candidate)
-			if spoolErr != nil {
-				// Discovery cursors may advance as soon as a source is yielded.
-				// A failed spool write leaves this exact provider's source
-				// unrecorded, so it needs a cursor-bypassing recovery pass.
-				e.requestFullDiscoveryRetry(candidate.Provider)
-				return spoolErr
-			}
-			// During discovery only provider presence matters: no page can
-			// commit until discovery finishes. The spool deduplicates identity
-			// rows, so the caller replaces these markers with exact unique-row
-			// counts before paging.
-			pendingCandidates[candidate.Provider] = 1
 			return spoolErr
 		})
 		if err != nil {
 			if spoolErr != nil {
-				return providers, completedScopes, nonAuthoritativeProviders,
+				return providers, completedScopes,
 					failedRoots, failures, discoveryErr, spoolErr
 			}
 			if ctx.Err() != nil {
-				return providers, completedScopes, nonAuthoritativeProviders,
+				return providers, completedScopes,
 					failedRoots, failures, discoveryErr, ctx.Err()
-			}
-			e.requestFullDiscoveryRetry(agent)
-			var nonAuthoritative parser.DiscoveryNonAuthoritativeError
-			if errors.As(err, &nonAuthoritative) {
-				log.Printf("%s provider streaming discovery: %v", agent, err)
-				nonAuthoritativeProviders[agent] = struct{}{}
-				continue
 			}
 			log.Printf("%s provider streaming discovery: %v", agent, err)
 			failures++
@@ -3785,13 +3674,6 @@ func (e *Engine) streamReconciliationCandidates(
 			))
 			continue
 		}
-		if !authoritative &&
-			provider.Capabilities().Source.IncrementalDiscoveryCursor ==
-				parser.CapabilitySupported &&
-			retryAttempts[agent] == 0 {
-			nonAuthoritativeProviders[agent] = struct{}{}
-			continue
-		}
 		completedScopes = append(completedScopes, reconciliationProviderScope{
 			agent: agent,
 			roots: append([]string(nil), roots...),
@@ -3799,7 +3681,7 @@ func (e *Engine) streamReconciliationCandidates(
 	}
 	slices.Sort(failedRoots)
 	failedRoots = slices.Compact(failedRoots)
-	return providers, completedScopes, nonAuthoritativeProviders,
+	return providers, completedScopes,
 		failedRoots, failures, discoveryErr, nil
 }
 
@@ -3957,11 +3839,10 @@ func (e *Engine) rehydrateReconciliationPage(
 	ctx context.Context, page []reconciliationCandidate,
 	providers map[parser.AgentType]parser.Provider,
 	force bool,
-	retryAttempts map[parser.AgentType]uint64,
 ) ([]parser.DiscoveredFile, error) {
 	files := make([]parser.DiscoveredFile, 0, len(page))
 	for _, candidate := range page {
-		forceCandidate := force || retryAttempts[candidate.Provider] != 0
+		forceCandidate := force
 		provider := providers[candidate.Provider]
 		if provider == nil {
 			return nil, fmt.Errorf("rehydrate %s source: provider unavailable", candidate.Provider)
@@ -4151,7 +4032,7 @@ func (e *Engine) tombstoneMissingWatchSourcesLocked(
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
 	return e.tombstoneMissingWatchSourcesForAgentLocked(
-		ctx, roots, "", nil, spool,
+		ctx, roots, "", spool,
 	)
 }
 
@@ -4159,7 +4040,6 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 	ctx context.Context,
 	roots []string,
 	agentFilter parser.AgentType,
-	nonAuthoritativeProviders map[parser.AgentType]struct{},
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
 	if e.pathRewriter != nil {
@@ -4172,21 +4052,14 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		if agentFilter != "" && agent != agentFilter {
 			continue
 		}
-		if _, nonAuthoritative := nonAuthoritativeProviders[agent]; nonAuthoritative {
-			continue
-		}
 		var provider parser.Provider
 		var replacementIndex reconciliationSpoolStore
 		ownsReplacementIndex := false
 		allProviderRootsCovered := reconciliationCoversConfiguredRoots(roots, dirs)
 		if factory := e.providerFactories[agent]; factory != nil {
-			// The deletion audit runs only after an authoritative pass, so a
-			// cursor-based provider must resolve sources with its change
-			// cursor bypassed.
 			provider = factory.NewProvider(parser.ProviderConfig{
 				Roots: e.agentDirs[agent], Machine: e.machine,
-				PathRewriter:       e.pathRewriter,
-				ForceFullDiscovery: true,
+				PathRewriter: e.pathRewriter,
 			})
 		}
 		for _, root := range roots {
@@ -4346,6 +4219,25 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 										"lookup %s persistent member %s: %w",
 										agent, ownership.FilePath, lookupErr,
 									)
+								}
+								if !present {
+									// Container-granular discovery spools the
+									// still-present container itself rather than
+									// each member. A discovered container accounts
+									// for its members: deleting a member changes
+									// the container's bytes, so the
+									// fingerprint-gated complete-result parse
+									// already tombstoned it.
+									present, lookupErr = spool.ContainsSource(
+										ctx, agent,
+										canonicalReconciliationSourceIdentity(physicalPath),
+									)
+									if lookupErr != nil {
+										return deleted, fmt.Errorf(
+											"lookup %s persistent container %s: %w",
+											agent, physicalPath, lookupErr,
+										)
+									}
 								}
 								if present {
 									continue
@@ -4794,9 +4686,7 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures, retryAttempts := e.discoverProviderSources(
-		ctx, scope, forceDiscoveredFiles || writeMode == syncWriteBulk,
-	)
+	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
 	for _, file := range providerFound {
 		counts[file.Agent]++
 	}
@@ -4893,15 +4783,6 @@ func (e *Engine) syncAllLocked(
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
-	if scope == nil && !stats.Aborted && ctx.Err() == nil &&
-		stats.Failed == 0 && providerFailures == 0 {
-		// A retry generation is global across a provider's configured roots.
-		// Only an unscoped pass covers every root that may have advanced its
-		// change cursor before a failed parse.
-		for agent, generation := range retryAttempts {
-			e.completeFullDiscoveryRetry(agent, generation)
-		}
-	}
 	stats.providerFailures = providerFailures
 	for range providerFailures {
 		stats.RecordFailed()
@@ -5066,11 +4947,9 @@ const slowProviderDiscoveryThreshold = 100 * time.Millisecond
 func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
-	forceFullDiscovery bool,
-) ([]parser.DiscoveredFile, int, map[parser.AgentType]uint64) {
+) ([]parser.DiscoveredFile, int) {
 	var files []parser.DiscoveredFile
 	var failures int
-	retryAttempts := make(map[parser.AgentType]uint64)
 
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
@@ -5105,15 +4984,9 @@ func (e *Engine) discoverProviderSources(
 		if !ok || factory == nil {
 			continue
 		}
-		providerForceFullDiscovery := forceFullDiscovery
-		if pending, generation := e.fullDiscoveryRetry(agentType); pending {
-			providerForceFullDiscovery = true
-			retryAttempts[agentType] = generation
-		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:              filteredRoots,
-			Machine:            e.machine,
-			ForceFullDiscovery: providerForceFullDiscovery,
+			Roots:   filteredRoots,
+			Machine: e.machine,
 		})
 		// Shared-database providers are streamed source-by-source by their
 		// dedicated sync phase. Calling Discover here would build an archive-sized
@@ -5135,7 +5008,6 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
-			e.requestFullDiscoveryRetry(agentType)
 			continue
 		}
 		forceParseSource := func(string) bool { return false }
@@ -5172,13 +5044,6 @@ func (e *Engine) discoverProviderSources(
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
 			}
-			if retryAttempts[agentType] != 0 {
-				// A pending full retry is correctness work, not ordinary
-				// incremental discovery. Keep it through SyncAllSince's mtime
-				// cutoff and bypass stored freshness gates so the failed member
-				// is actually reparsed before the generation is acknowledged.
-				discovered.ForceParse = true
-			}
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
 			}
@@ -5203,67 +5068,7 @@ func (e *Engine) discoverProviderSources(
 			files = append(files, discovered)
 		}
 	}
-	return files, failures, retryAttempts
-}
-
-type discoveryRetryState struct {
-	generation uint64
-	pending    bool
-}
-
-// providerHasDiscoveryCursor reports whether the agent's provider declares
-// Source.IncrementalDiscoveryCursor: its default discovery follows a stored
-// change cursor that can permanently advance past a failed source.
-func (e *Engine) providerHasDiscoveryCursor(agent parser.AgentType) bool {
-	factory, ok := e.providerFactories[agent]
-	if !ok || factory == nil {
-		return false
-	}
-	provider := factory.NewProvider(parser.ProviderConfig{})
-	return provider.Capabilities().Source.IncrementalDiscoveryCursor ==
-		parser.CapabilitySupported
-}
-
-// requestFullDiscoveryRetry schedules one forced-full discovery pass for a
-// provider whose incremental discovery cursor may already have advanced past
-// a source whose parse or write failed. Providers without such a cursor
-// re-observe failed sources through mtime invalidation, so the request
-// no-ops for them.
-func (e *Engine) requestFullDiscoveryRetry(agent parser.AgentType) {
-	if !e.providerHasDiscoveryCursor(agent) {
-		return
-	}
-	e.mu.Lock()
-	if e.discoveryRetries == nil {
-		e.discoveryRetries = make(map[parser.AgentType]discoveryRetryState)
-	}
-	state := e.discoveryRetries[agent]
-	state.generation++
-	if state.generation == 0 {
-		state.generation++
-	}
-	state.pending = true
-	e.discoveryRetries[agent] = state
-	e.mu.Unlock()
-}
-
-func (e *Engine) fullDiscoveryRetry(agent parser.AgentType) (bool, uint64) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	state := e.discoveryRetries[agent]
-	return state.pending, state.generation
-}
-
-func (e *Engine) completeFullDiscoveryRetry(
-	agent parser.AgentType, generation uint64,
-) {
-	e.mu.Lock()
-	state := e.discoveryRetries[agent]
-	if state.pending && state.generation == generation {
-		state.pending = false
-		e.discoveryRetries[agent] = state
-	}
-	e.mu.Unlock()
+	return files, failures
 }
 
 func providerSourcePathSet(sources []parser.SourceRef) map[string]struct{} {
@@ -6588,13 +6393,6 @@ func (e *Engine) collectAndBatch(
 					e.promoteSkipCacheWrites(pendingCacheWrites)
 				}
 			}
-			if outcome.failedSessions > 0 {
-				for _, write := range pending {
-					e.requestFullDiscoveryRetry(
-						parser.AgentType(write.sess.Agent),
-					)
-				}
-			}
 			stats.RecordSynced(outcome.writtenSessions)
 			for range outcome.failedSessions {
 				stats.RecordFailed()
@@ -6651,7 +6449,6 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
-			e.requestFullDiscoveryRetry(r.agent)
 			e.noteSQLiteContainerResult(r.path, false)
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
@@ -6662,9 +6459,6 @@ func (e *Engine) collectAndBatch(
 		}
 		for range r.providerFailureCount {
 			stats.RecordFailed()
-		}
-		if r.providerFailureCount > 0 {
-			e.requestFullDiscoveryRetry(r.agent)
 		}
 		if r.skip {
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
@@ -6677,7 +6471,6 @@ func (e *Engine) collectAndBatch(
 				if err != nil {
 					log.Printf("check skipped source cwd admission: %v", err)
 					stats.RecordFailed()
-					e.requestFullDiscoveryRetry(r.agent)
 					e.poisonSQLiteContainerPass()
 				} else {
 					baselineProcessedSource(r, admitted)
@@ -6697,7 +6490,6 @@ func (e *Engine) collectAndBatch(
 		if err != nil {
 			log.Printf("delete parser-excluded sessions: %v", err)
 			stats.RecordFailed()
-			e.requestFullDiscoveryRetry(r.agent)
 			e.noteSQLiteContainerResult(r.path, false)
 			r.releaseRetention()
 			continue
@@ -6733,7 +6525,6 @@ func (e *Engine) collectAndBatch(
 					"tombstone source-missing members: %v", tombstoneErr,
 				)
 				stats.RecordFailed()
-				e.requestFullDiscoveryRetry(r.agent)
 				e.noteSQLiteContainerResult(r.path, false)
 				r.releaseRetention()
 				continue
@@ -6803,7 +6594,6 @@ func (e *Engine) collectAndBatch(
 			if err := e.writeIncremental(r.incremental); err != nil {
 				log.Printf("%v", err)
 				stats.RecordFailed()
-				e.requestFullDiscoveryRetry(r.agent)
 				r.releaseRetention()
 				continue
 			}
@@ -10119,7 +9909,6 @@ func (e *Engine) promoteSkipCacheWrites(writes []skipCacheWrite) {
 func (e *Engine) rejectSkipCacheWrites(writes []skipCacheWrite) {
 	for _, write := range writes {
 		e.clearSkip(write.key)
-		e.requestFullDiscoveryRetry(write.agent)
 	}
 }
 
