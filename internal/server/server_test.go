@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -3434,6 +3435,73 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 	assert.True(t, resp.GithubConfigured)
 }
 
+func TestSettingsChartPaletteRoundTrip(t *testing.T) {
+	te := setup(t)
+	putSettings := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var initial struct {
+		ChartPalette config.ChartPalette `json:"chart_palette"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &initial))
+	assert.Equal(t, config.ChartPaletteAgentsview, initial.ChartPalette)
+
+	w = putSettings(`{"chart_palette":"matplotlib"}`)
+	assertStatus(t, w, http.StatusOK)
+	var updated struct {
+		ChartPalette config.ChartPalette `json:"chart_palette"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, config.ChartPaletteMatplotlib, updated.ChartPalette)
+
+	var persisted struct {
+		ChartPalette config.ChartPalette `toml:"chart_palette"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
+}
+
+func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T) {
+	te := setup(t)
+	putSettings := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	w := putSettings(`{"chart_palette":"matplotlib"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	w = putSettings(`{"chart_palette":"neon"}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, `chart_palette must be`)
+	w = putSettings(`{"chart_palette":""}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, `chart_palette must be`)
+
+	w = te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		ChartPalette config.ChartPalette `json:"chart_palette"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, config.ChartPaletteMatplotlib, got.ChartPalette)
+}
+
 func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	te := setupPGMode(t)
 	te.srv.SetGithubToken("settings-test-token")
@@ -3447,7 +3515,7 @@ func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	assert.True(t, resp.ReadOnly)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
-		strings.NewReader(`{"require_auth":true}`))
+		strings.NewReader(`{"chart_palette":"matplotlib"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	w = httptest.NewRecorder()

@@ -24,4 +24,3 @@ export type SessionUsageResponse = {
   total_output_tokens: number;
   unpriced_models: any[] | null;
 };
-
