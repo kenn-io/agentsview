@@ -495,12 +495,24 @@ func parseCodebuffMessages(
 		}
 		// Only track prevHour for time-only timestamps to avoid
 		// incorrect rollover when formats are mixed. Reset prevHour
-		// when a non-time-only timestamp is encountered.
+		// when a non-time-only timestamp is encountered, and also
+		// anchor currentDate to the absolute timestamp's local
+		// calendar date so subsequent time-only messages don't get
+		// assigned to the previous session directory date across
+		// midnight.
 		if !ts.IsZero() {
 			if isTimeOnly {
 				prevHour = ts.Hour()
 			} else {
 				prevHour = -1
+				tsLocal := ts.In(currentDate.Location())
+				tsDate := time.Date(
+					tsLocal.Year(), tsLocal.Month(), tsLocal.Day(),
+					0, 0, 0, 0, currentDate.Location(),
+				)
+				if !tsDate.Equal(currentDate) {
+					currentDate = tsDate
+				}
 			}
 		}
 

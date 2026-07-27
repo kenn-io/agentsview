@@ -1,9 +1,12 @@
 // ABOUTME: Helpers for resolving a bare on-disk Codebuff/Freebuff
-// ABOUTME: timestamp directory name back to its canonical session
-// ABOUTME: ID. Used by the CLI session-get command to support
-// ABOUTME: `agentsview session get <timestamp>` without having to
-// ABOUTME: add a generic SourceSessionID lookup query to every
-// ABOUTME: storage backend.
+// ABOUTME: timestamp directory name to a session location.
+// ABOUTME: Codebuff and Freebuff share the same on-disk layout
+// ABOUTME: (<root>/<project>/chats/<timestamp>/); the caller
+// ABOUTME: decides which agent type owns each location because
+// ABOUTME: Freebuff is intentionally absent from parser.Registry
+// ABOUTME: and so cfg.ResolveDirs(parser.AgentFreebuff) is often
+// ABOUTME: empty, leaving the shared codebuff roots as the only
+// ABOUTME: location to interrogate on disk.
 package parser
 
 import (
@@ -52,6 +55,15 @@ func (c CodebuffFamilyMatch) CanonicalID() string {
 // Duplicate timestamps across projects return multiple matches
 // so the caller can surface an explicit ambiguity error listing
 // every candidate canonical ID instead of silently picking one.
+//
+// Note: Freebuff is intentionally absent from parser.Registry, so
+// cfg.ResolveDirs(parser.AgentFreebuff) is empty whenever the user
+// has not set FREEBUFF_DIR explicitly. In that case callers
+// (e.g. cmd/agentsview/session_get.go resolveBareCodebuffID) must
+// test both AgentCodebuff and AgentFreebuff prefixes against the
+// service per matched (project, rawID) location, because the
+// shared codebuff root list may contain freebuff sessions the
+// resolver cannot classify from the registry alone.
 func FindCodebuffFreebuffMatches(
 	pairs []CodebuffFamilyRoots,
 	rawID string,

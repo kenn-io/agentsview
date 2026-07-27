@@ -28,10 +28,32 @@ func newSessionGetCommand() *cobra.Command {
 			}
 			defer cleanup()
 
-			cfg := mustLoadConfig(cmd)
+			id := args[0]
+			// Pre-flight bare Codebuff/Freebuff timestamp resolution
+			// before handing id off to the standard resolver. The
+			// prefix loop in resolveServiceSessionID cannot build
+			// the right canonical ID for these agents (canonical is
+			// "<agent>:<project>:<timestamp>" with the project
+			// segment missing, and Freebuff is intentionally absent
+			// from parser.Registry). Walking the storage layer here
+			// localizes the fix to this command and keeps the
+			// resolver's signature unchanged so other commands and
+			// callers see no framework impact.
+			if !isCanonicalServiceSessionID(id) {
+				cfg := mustLoadConfig(cmd)
+				resolved, err := resolveBareCodebuffID(
+					cmd.Context(), svc, &cfg, id,
+				)
+				if err != nil {
+					return err
+				}
+				if resolved != "" {
+					id = resolved
+				}
+			}
 
 			detail, err := lookupSessionWithPrefixes(
-				cmd.Context(), svc, &cfg, args[0],
+				cmd.Context(), svc, id,
 			)
 			if err != nil {
 				return err
@@ -50,30 +72,18 @@ func newSessionGetCommand() *cobra.Command {
 // resolveServiceSessionID returns the canonical session ID matching id,
 // accommodating bare UUIDs by retrying with each registered agent
 // prefix (codex:, copilot:, gemini:, ...) when the exact lookup
-// misses, and walking the Codebuff/Freebuff storage layer when the
-// prefix loop misses for a bare timestamp. Stored IDs are prefixed
-// for non-Claude agents, so a user copying a UUID from a session
-// file name would otherwise see a confusing "not found" error.
+// misses. Stored IDs are prefixed for non-Claude agents, so a user
+// copying a UUID from a session file name would otherwise see a
+// confusing "not found" error. Returns an error whose message
+// begins with "session not found:" when no match exists — callers
+// get a clear failure instead of silent empty output.
 //
-// Codebuff and Freebuff share the directory layout
-// "<root>/<project>/chats/<timestamp>/" but the canonical ID is
-// "<agent>:<project>:<timestamp>" — a bare timestamp cannot be
-// resolved purely by the prefix loop (it would build
-// "codebuff:<timestamp>" without the project segment and miss
-// the canonical row, and Freebuff is intentionally absent from
-// parser.Registry). The bare-ID resolver walks codebuff/
-// freebuff roots to find candidate (agent, project) locations
-// for rawID and either selects the lone match, or surfaces an
-// explicit ambiguity error so the user can disambiguate.
-//
-// Returns an error whose message begins with "session not found:"
-// when no match exists — callers get a clear failure instead of
-// silent empty output. The ambiguity error wraps an explicit
-// list of candidate canonical IDs.
+// Bare Codebuff/Freebuff timestamps are pre-resolved by
+// resolveBareCodebuffID at the call site (see newSessionGetCommand),
+// so this function does not need to know about them.
 func resolveServiceSessionID(
 	ctx context.Context,
 	svc service.SessionService,
-	cfg *config.Config,
 	id string,
 ) (string, error) {
 	detail, err := svc.Get(ctx, id)
@@ -105,51 +115,32 @@ func resolveServiceSessionID(
 			return candidate, nil
 		}
 	}
-	// Prefix loop missed. Walk the codebuff/freebuff storage
-	// layer to map a bare timestamp back to its canonical ID.
-	// The prefix loop cannot build the right canonical ID for
-	// these agents (canonical is "<agent>:<project>:<timestamp>"
-	// with the project segment missing, and Freebuff is
-	// intentionally absent from parser.Registry). Walking the
-	// storage layer localizes the fix to the Codebuff/Freebuff
-	// agents and avoids adding a generic SourceSessionID lookup
-	// query to every storage backend.
-	candidates := resolveCodebuffFamilyCandidates(cfg, id)
-	switch len(candidates) {
-	case 0:
-		return "", fmt.Errorf("session not found: %s", id)
-	case 1:
-		return candidates[0].CanonicalID(), nil
-	default:
-		ids := make([]string, len(candidates))
-		for i, m := range candidates {
-			ids[i] = m.CanonicalID()
-		}
-		return "", fmt.Errorf(
-			"ambiguous session id %q: matches %d canonical sessions: %s. "+
-				"Re-run with one of the canonical IDs to disambiguate",
-			id, len(candidates), strings.Join(ids, ", "),
-		)
-	}
+	return "", fmt.Errorf("session not found: %s", id)
 }
 
-// resolveCodebuffFamilyCandidates walks the configured codebuff
-// and freebuff storage roots for a directory named rawID under
-// any project's chats/ subdirectory. Returns one match per
-// (agent, project) candidate; an empty list means the bare ID
-// is unknown to the on-disk storage.
-//
-// codebuffRoots / freebuffRoots come from cfg.ResolveDirs so env
-// vars (CODEBUFF_DIR / FREEBUFF_DIR) and config.toml overrides
-// are honored — cli callers see the same directories the parser
-// sees.
-func resolveCodebuffFamilyCandidates(
-	cfg *config.Config, rawID string,
-) []parser.CodebuffFamilyMatch {
+// resolveBareCodebuffID maps a bare on-disk Codebuff/Freebuff
+// timestamp to its canonical ID by walking the configured
+// codebuff/freebuff storage layer. For each candidate location on
+// disk, the helper tries BOTH AgentCodebuff and AgentFreebuff
+// prefixes against the session service; whichever yields a row
+// wins. The dual lookup is required because Freebuff is
+// intentionally absent from parser.Registry, so Freebuff's
+// storage is reachable only through the shared codebuff roots
+// list and a single-prefix probe would mis-classify Freebuff
+// sessions as Codebuff. Zero matches fall through to the standard
+// resolver path; one match returns its canonical ID; multiple
+// matches return an explicit ambiguity error listing every valid
+// canonical ID.
+func resolveBareCodebuffID(
+	ctx context.Context,
+	svc service.SessionService,
+	cfg *config.Config,
+	rawID string,
+) (string, error) {
 	if cfg == nil {
-		return nil
+		return "", nil
 	}
-	return parser.FindCodebuffFreebuffMatches(
+	locations := parser.FindCodebuffFreebuffMatches(
 		[]parser.CodebuffFamilyRoots{
 			{Agent: parser.AgentCodebuff,
 				Roots: cfg.ResolveDirs(parser.AgentCodebuff)},
@@ -158,6 +149,43 @@ func resolveCodebuffFamilyCandidates(
 		},
 		rawID,
 	)
+	tryBoth := func(project string) string {
+		for _, agent := range []parser.AgentType{
+			parser.AgentCodebuff, parser.AgentFreebuff,
+		} {
+			candidateID := strings.Join(
+				[]string{string(agent), project, rawID}, ":",
+			)
+			if detail, err := svc.Get(ctx, candidateID); err == nil &&
+				detail != nil {
+				return candidateID
+			}
+		}
+		return ""
+	}
+	switch len(locations) {
+	case 0:
+		return "", nil
+	case 1:
+		return tryBoth(locations[0].ProjectHint), nil
+	default:
+		var valid []string
+		for _, loc := range locations {
+			if v := tryBoth(loc.ProjectHint); v != "" {
+				valid = append(valid, v)
+			}
+		}
+		switch len(valid) {
+		case 1:
+			return valid[0], nil
+		default:
+			return "", fmt.Errorf(
+				"ambiguous session id %q: matches %d canonical sessions: %s. "+
+					"Re-run with one of the canonical IDs to disambiguate",
+				rawID, len(valid), strings.Join(valid, ", "),
+			)
+		}
+	}
 }
 
 func isCanonicalServiceSessionID(id string) bool {
@@ -177,17 +205,13 @@ func isCanonicalServiceSessionID(id string) bool {
 // prefixes for bare UUIDs. Preserved as a thin wrapper around
 // resolveServiceSessionID + svc.Get so `session get` can keep its
 // existing "return nil on not-found" semantics (which render the
-// "session %s not found" error at the command boundary). cfg
-// supplies the codebuff/freebuff storage roots so the resolver
-// can map a bare timestamp back to its canonical ID; nil cfg
-// disables the bare-ID fallback path.
+// "session %s not found" error at the command boundary).
 func lookupSessionWithPrefixes(
 	ctx context.Context,
 	svc service.SessionService,
-	cfg *config.Config,
 	id string,
 ) (*service.SessionDetail, error) {
-	resolved, err := resolveServiceSessionID(ctx, svc, cfg, id)
+	resolved, err := resolveServiceSessionID(ctx, svc, id)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "session not found:") {
 			return nil, nil
