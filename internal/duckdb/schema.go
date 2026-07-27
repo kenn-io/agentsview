@@ -11,10 +11,10 @@ import (
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
-// createSchema. Mirror schema v4 is create-only: there are no in-place
+// createSchema. Mirror schema v6 is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'.
-const SchemaVersion = 4
+const SchemaVersion = 6
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

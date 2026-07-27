@@ -17,6 +17,61 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_usage_fingerprint_money_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	ctx := context.Background()
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "exact-money", Project: "project", Machine: "machine", Agent: "codex",
+	}))
+	cost := money.Money{Microdollars: 9_007_199_254_740_993}
+	require.NoError(t, local.ReplaceSessionUsageEvents("exact-money", []db.UsageEvent{{
+		SessionID: "exact-money", Source: "provider", Model: "model",
+		InputTokens: 11, OutputTokens: 7, Cost: &cost,
+		CostStatus: "priced", CostSource: "provider",
+		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
+	}}))
+	want, err := local.UsageEventFingerprint("exact-money")
+	require.NoError(t, err)
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (id, machine, project, agent)
+		VALUES ('exact-money', 'machine', 'project', 'codex');
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
+		) VALUES (
+			'exact-money', 'provider', 'model', 11, 7,
+			9007199254740993, 'priced', 'provider',
+			'2026-07-22T12:00:00Z', 'exact-cost'
+		)`)
+	require.NoError(t, err)
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	got, err := pgUsageEventFingerprint(ctx, tx, "exact-money")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	batched := map[string]string{}
+	require.NoError(t, loadPushUsageEventFingerprints(
+		ctx, tx, []string{"exact-money"}, batched,
+	))
+	assert.Equal(t, want, batched["exact-money"])
+}
+
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {

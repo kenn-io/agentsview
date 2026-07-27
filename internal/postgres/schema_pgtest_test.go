@@ -229,6 +229,12 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			USING cache_read_microdollars_per_mtok / 1000000.0;
 		ALTER TABLE model_pricing
 			RENAME COLUMN cache_read_microdollars_per_mtok TO cache_read_per_mtok;
+
+		INSERT INTO usage_events (
+			session_id, source, model, cost_usd, dedup_key
+		) VALUES (
+			'legacy-money-session', 'provider', 'model', 0.0000005, 'midpoint'
+		);
 	`)
 	require.NoError(t, err, "simulate legacy money schema")
 
@@ -247,6 +253,11 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 		SELECT cost_microdollars FROM usage_events WHERE dedup_key = 'unpriced'
 	`).Scan(&cost))
 	assert.False(t, cost.Valid)
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT cost_microdollars FROM usage_events WHERE dedup_key = 'midpoint'
+	`).Scan(&cost))
+	require.True(t, cost.Valid)
+	assert.Equal(t, int64(1), cost.Int64)
 
 	var charged, fee int64
 	require.NoError(t, pg.QueryRowContext(ctx, `

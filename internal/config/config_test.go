@@ -1718,6 +1718,19 @@ output_microdollars_per_mtok = 1
 	assert.Contains(t, err.Error(), "rates must not be negative")
 }
 
+func TestLoadFileRejectsLegacyCustomModelPricingFields(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.model]
+input = 3.0
+output = 15.0
+`)
+
+	err := f.LoadMinimalErr(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_model_pricing.model.input")
+	assert.Contains(t, err.Error(), "input_microdollars_per_mtok")
+}
+
 func TestLoadFile_RemoteHosts(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `[[remote_hosts]]

@@ -2891,7 +2891,7 @@ func pgUsageEventFingerprint(
 		var inputTokens, outputTokens int
 		var cacheCreationInputTokens, cacheReadInputTokens int
 		var reasoningTokens int
-		var cost sql.NullFloat64
+		var cost sql.NullInt64
 		var occurredAt sql.NullTime
 		var dedupKey sql.NullString
 		if err := rows.Scan(
@@ -2908,7 +2908,7 @@ func pgUsageEventFingerprint(
 			occurred = FormatISO8601(occurredAt.Time)
 		}
 		fmt.Fprintf(&b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
+			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
 			len(source), source,
@@ -2919,7 +2919,7 @@ func pgUsageEventFingerprint(
 			cacheReadInputTokens,
 			reasoningTokens,
 			cost.Valid,
-			cost.Float64,
+			cost.Int64,
 			len(costStatus), costStatus,
 			len(costSource), costSource,
 			len(occurred), occurred,

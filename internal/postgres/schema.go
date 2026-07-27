@@ -430,39 +430,39 @@ func migrateMoneyColumnsPG(
 			ALTER TABLE usage_events
 			ALTER COLUMN cost_usd TYPE BIGINT
 			USING CASE WHEN cost_usd IS NULL THEN NULL
-			ELSE ROUND(cost_usd * 1000000)::BIGINT END;
+			ELSE ROUND((cost_usd::NUMERIC) * 1000000)::BIGINT END;
 			ALTER TABLE usage_events RENAME COLUMN cost_usd TO cost_microdollars`},
 		{"cursor_usage_events", "charged_cents", "922337203685477.5", `
 			ALTER TABLE cursor_usage_events
 			ALTER COLUMN charged_cents TYPE BIGINT
-			USING ROUND(charged_cents * 10000)::BIGINT;
+			USING ROUND((charged_cents::NUMERIC) * 10000)::BIGINT;
 			ALTER TABLE cursor_usage_events
 			RENAME COLUMN charged_cents TO charged_microdollars`},
 		{"cursor_usage_events", "cursor_token_fee", "922337203685477.5", `
 			ALTER TABLE cursor_usage_events
 			ALTER COLUMN cursor_token_fee TYPE BIGINT
-			USING ROUND(cursor_token_fee * 10000)::BIGINT;
+			USING ROUND((cursor_token_fee::NUMERIC) * 10000)::BIGINT;
 			ALTER TABLE cursor_usage_events
 			RENAME COLUMN cursor_token_fee TO cursor_token_fee_microdollars`},
 		{"model_pricing", "input_per_mtok", "9223372036854.775", `
 			ALTER TABLE model_pricing
 			ALTER COLUMN input_per_mtok TYPE BIGINT
-			USING ROUND(input_per_mtok * 1000000)::BIGINT;
+			USING ROUND((input_per_mtok::NUMERIC) * 1000000)::BIGINT;
 			ALTER TABLE model_pricing RENAME COLUMN input_per_mtok TO input_microdollars_per_mtok`},
 		{"model_pricing", "output_per_mtok", "9223372036854.775", `
 			ALTER TABLE model_pricing
 			ALTER COLUMN output_per_mtok TYPE BIGINT
-			USING ROUND(output_per_mtok * 1000000)::BIGINT;
+			USING ROUND((output_per_mtok::NUMERIC) * 1000000)::BIGINT;
 			ALTER TABLE model_pricing RENAME COLUMN output_per_mtok TO output_microdollars_per_mtok`},
 		{"model_pricing", "cache_creation_per_mtok", "9223372036854.775", `
 			ALTER TABLE model_pricing
 			ALTER COLUMN cache_creation_per_mtok TYPE BIGINT
-			USING ROUND(cache_creation_per_mtok * 1000000)::BIGINT;
+			USING ROUND((cache_creation_per_mtok::NUMERIC) * 1000000)::BIGINT;
 			ALTER TABLE model_pricing RENAME COLUMN cache_creation_per_mtok TO cache_creation_microdollars_per_mtok`},
 		{"model_pricing", "cache_read_per_mtok", "9223372036854.775", `
 			ALTER TABLE model_pricing
 			ALTER COLUMN cache_read_per_mtok TYPE BIGINT
-			USING ROUND(cache_read_per_mtok * 1000000)::BIGINT;
+			USING ROUND((cache_read_per_mtok::NUMERIC) * 1000000)::BIGINT;
 			ALTER TABLE model_pricing RENAME COLUMN cache_read_per_mtok TO cache_read_microdollars_per_mtok`},
 	}
 

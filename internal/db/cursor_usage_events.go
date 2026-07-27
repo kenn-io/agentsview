@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -122,7 +123,7 @@ func (db *DB) InsertCursorUsageEvents(
 func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	var b strings.Builder
 	b.Grow(256)
-	fmt.Fprintf(&b, "%s|%s|%s|%d|%d|%d|%d|%d|%d|%t|%s|%s",
+	fmt.Fprintf(&b, "%s|%s|%s|%d|%d|%d|%d|%s|%s|%t|%s|%s",
 		ev.OccurredAt,
 		SanitizeUTF8(ev.Model),
 		SanitizeUTF8(ev.Kind),
@@ -130,14 +131,38 @@ func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 		ev.OutputTokens,
 		ev.CacheWriteTokens,
 		ev.CacheReadTokens,
-		ev.Charged.Microdollars,
-		ev.CursorTokenFee.Microdollars,
+		formatMicrodollarsAsLegacyCents(ev.Charged.Microdollars),
+		formatMicrodollarsAsLegacyCents(ev.CursorTokenFee.Microdollars),
 		ev.IsHeadless,
 		SanitizeUTF8(ev.UserID),
 		SanitizeUTF8(ev.UserEmail),
 	)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
+}
+
+// formatMicrodollarsAsLegacyCents preserves the decimal text used by the
+// pre-microdollar Cursor dedup key. Migrated rows retain those existing keys,
+// so newly fetched copies of the same event must hash the exact cent value in
+// the same canonical form.
+func formatMicrodollarsAsLegacyCents(microdollars int64) string {
+	negative := microdollars < 0
+	magnitude := uint64(microdollars)
+	if negative {
+		magnitude = uint64(-(microdollars + 1)) + 1
+	}
+
+	whole := magnitude / 10_000
+	fraction := magnitude % 10_000
+	formatted := strconv.FormatUint(whole, 10)
+	if fraction != 0 {
+		fractional := strconv.FormatUint(fraction+10_000, 10)[1:]
+		formatted += "." + strings.TrimRight(fractional, "0")
+	}
+	if negative {
+		return "-" + formatted
+	}
+	return formatted
 }
 
 // GetCursorUsageEvents returns cursor usage rows with id greater than

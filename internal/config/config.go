@@ -1044,6 +1044,15 @@ func (c *Config) applyConfigTOML(data string) error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	for _, key := range meta.Undecoded() {
+		if len(key) != 3 || key[0] != "custom_model_pricing" {
+			continue
+		}
+		return fmt.Errorf(
+			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
+			key.String(),
+		)
+	}
 	var raw map[string]any
 	if _, err := toml.Decode(data, &raw); err != nil {
 		return fmt.Errorf("parsing config raw: %w", err)

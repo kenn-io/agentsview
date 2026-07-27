@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestMigrateMoneyColumnsConvertsLegacyFloatsTransactionally(t *testing.T) {
@@ -48,9 +50,11 @@ CREATE TABLE model_pricing (
 	_, err = d.rawWriter().Exec(`
 INSERT INTO usage_events (id, session_id, source, model, cost_usd, dedup_key)
 VALUES (41, 'money-migration', 'provider', 'model', 0.0123456, 'usage-key'),
-       (42, 'money-migration', 'provider', 'model', NULL, 'usage-null');
+       (42, 'money-migration', 'provider', 'model', NULL, 'usage-null'),
+       (43, 'money-migration', 'provider', 'model', 0.0000005, 'usage-half');
 INSERT INTO cursor_usage_events (id, occurred_at, model, charged_cents, cursor_token_fee, dedup_key)
-VALUES (51, '2026-07-21T12:00:00Z', 'model', 15.66, 3.32, 'cursor-key');
+VALUES (51, '2026-07-21T12:00:00Z', 'model', 15.66, 3.32,
+        '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187ba82');
 INSERT INTO model_pricing (model_pattern, input_per_mtok, output_per_mtok, cache_creation_per_mtok, cache_read_per_mtok, updated_at)
 VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	require.NoError(t, err)
@@ -70,6 +74,11 @@ VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	).Scan(&usageID, &usageCost))
 	assert.Equal(t, int64(41), usageID)
 	assert.Equal(t, int64(12_346), usageCost)
+	var halfCost int64
+	require.NoError(t, d.rawWriter().QueryRow(
+		`SELECT cost_microdollars FROM usage_events WHERE dedup_key = 'usage-half'`,
+	).Scan(&halfCost))
+	assert.Equal(t, int64(1), halfCost)
 	var nullCount int
 	require.NoError(t, d.rawWriter().QueryRow(
 		`SELECT count(*) FROM usage_events WHERE id = 42 AND cost_microdollars IS NULL`,
@@ -79,11 +88,24 @@ VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	var cursorID, charged, fee int64
 	require.NoError(t, d.rawWriter().QueryRow(`
 SELECT id, charged_microdollars, cursor_token_fee_microdollars
-FROM cursor_usage_events WHERE dedup_key = 'cursor-key'`,
+FROM cursor_usage_events
+WHERE dedup_key = '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187ba82'`,
 	).Scan(&cursorID, &charged, &fee))
 	assert.Equal(t, int64(51), cursorID)
 	assert.Equal(t, int64(156_600), charged)
 	assert.Equal(t, int64(33_200), fee)
+
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:     "2026-07-21T12:00:00Z",
+		Model:          "model",
+		Charged:        money.MustParseDollars("0.1566"),
+		CursorTokenFee: money.MustParseDollars("0.0332"),
+	}}))
+	var cursorCount int
+	require.NoError(t, d.rawWriter().QueryRow(
+		`SELECT count(*) FROM cursor_usage_events`,
+	).Scan(&cursorCount))
+	assert.Equal(t, 1, cursorCount, "refetched migrated event must deduplicate")
 
 	var input, output, creation, read int64
 	require.NoError(t, d.rawWriter().QueryRow(`
