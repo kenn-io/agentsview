@@ -94,7 +94,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=other": "{countLabel} 條訊息"
+        "countPlural=other": "{countLabel} 則訊息"
       }
     }
   ],
@@ -366,7 +366,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=other": "{count} 條訊息"
+        "countPlural=other": "{count} 則訊息"
       }
     }
   ],
@@ -644,7 +644,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=other": "{countLabel} 條訊息"
+        "countPlural=other": "{countLabel} 則訊息"
       }
     }
   ],
@@ -690,7 +690,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=other": "{day} {hour}:00 - {countLabel} 條訊息"
+        "countPlural=other": "{day} {hour}:00 - {countLabel} 則訊息"
       }
     }
   ],
@@ -996,7 +996,7 @@
   "analytics_output_tokens": "輸出 token",
   "analytics_showing_recent_year": "顯示最近一年",
   "analytics_no_data_period": "此時段無資料",
-  "analytics_messages_count": "{count} 條訊息",
+  "analytics_messages_count": "{count} 則訊息",
   "analytics_outcome_distribution": "結果分布",
   "analytics_no_data": "無資料",
   "analytics_projects": "專案",
@@ -1106,7 +1106,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=other": "{countLabel} 條訊息"
+        "countPlural=other": "{countLabel} 則訊息"
       }
     }
   ],
@@ -1500,8 +1500,8 @@
   "shortcuts_open_command_palette": "開啟命令面板",
   "shortcuts_find_in_session": "在對話中尋找",
   "shortcuts_close_palette": "關閉面板 / 視窗 / 尋找",
-  "shortcuts_next_message": "下一條訊息",
-  "shortcuts_prev_message": "上一條訊息",
+  "shortcuts_next_message": "下一則訊息",
+  "shortcuts_prev_message": "上一則訊息",
   "shortcuts_next_user_prompt": "下一個使用者提示",
   "shortcuts_prev_user_prompt": "上一個使用者提示",
   "shortcuts_next_session": "下一個對話",
@@ -1721,7 +1721,7 @@
         "countPlural"
       ],
       "match": {
-        "countPlural=other": "{countLabel} 條訊息"
+        "countPlural=other": "{countLabel} 則訊息"
       }
     }
   ],
@@ -1731,12 +1731,12 @@
   "trash_permanently_delete": "永久刪除",
   "trash_delete_forever": "永久刪除",
   "trends_term": "詞項",
-  "trends_per1k_messages": "每千條訊息",
+  "trends_per1k_messages": "每千則訊息",
   "trends_count": "數量",
-  "trends_occurrences_per1k": "每千條訊息出現次數",
+  "trends_occurrences_per1k": "每千則訊息出現次數",
   "trends_occurrences": "出現次數",
   "trends_no_trend_data": "無趨勢資料",
-  "trends_chart_aria_normalized": "每千條訊息的詞項出現趨勢",
+  "trends_chart_aria_normalized": "每千則訊息的詞項出現趨勢",
   "trends_chart_aria": "詞項出現趨勢",
   "trends_title": "趨勢",
   "trends_date_range": "{from} 至 {to}",
