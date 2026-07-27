@@ -1370,3 +1370,72 @@ func TestAgentByPrefix_FreebuffAlias(t *testing.T) {
 	assert.Equal(t, "freebuff:", def.IDPrefix,
 		"IDPrefix should match the freebuff: prefix for correct stripping")
 }
+
+// TestParseCodebuffMixedFormatMidnightRollover pins the regression
+// flagged by roborev review at internal/parser/codebuff.go:496: a
+// non-time-only (RFC3339) timestamp must anchor currentDate to
+// its local calendar date so subsequent time-only messages don't
+// get assigned to the previous session directory date across
+// midnight. Before this fix the non-time-only path reset
+// prevHour to -1 without advancing currentDate, causing the
+// parser to drift back to the session directory's original date
+// for any time-only message that followed a real boundary.
+func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
+	// Pin time.Local to UTC so the session-date parse and the
+	// time-only message reconstruction are deterministic regardless
+	// of the host TZ. t.Setenv only triggers a TZ reload on the next
+	// time.Local access, and earlier tests in the package can cache
+	// the location before this runs; assigning time.Local directly
+	// and restoring it on cleanup is the only reliable way to pin
+	// the state for this single test without touching package init.
+	origLocal := time.Local
+	t.Cleanup(func() { time.Local = origLocal })
+	time.Local = time.UTC
+
+	sessionID := "2026-07-15T22-00-00.000Z"
+	sessionDate := parseCodebuffSessionDate(sessionID)
+	require.Equal(t, 2026, sessionDate.Year())
+	require.Equal(t, time.July, sessionDate.Month())
+	require.Equal(t, 15, sessionDate.Day())
+	require.Equal(t, 22, sessionDate.Hour())
+
+	data := []byte(`[
+		{"id":"u1","variant":"user","content":"hello","timestamp":"2026-07-15T22:00:00Z"},
+		{"id":"u2","variant":"user","content":"ack","timestamp":"11:30 PM"},
+		{"id":"u3","variant":"user","content":"next","timestamp":"12:15 AM"},
+		{"id":"u4","variant":"user","content":"later","timestamp":"2026-07-17T09:00:00Z"},
+		{"id":"u5","variant":"user","content":"after","timestamp":"02:00 PM"}
+	]`)
+
+	msgs, _, _, err := parseCodebuffMessages(data, sessionDate, "")
+	require.NoError(t, err)
+	require.Len(t, msgs, 5)
+
+	// M1 — RFC3339 anchor; date must be 15, hour 22.
+	require.Equal(t, 2026, msgs[0].Timestamp.Year())
+	require.Equal(t, time.July, msgs[0].Timestamp.Month())
+	require.Equal(t, 15, msgs[0].Timestamp.Day())
+	require.Equal(t, 22, msgs[0].Timestamp.Hour())
+
+	// M2 — time-only on date 15; hour 23.
+	require.Equal(t, 15, msgs[1].Timestamp.Day())
+	require.Equal(t, 23, msgs[1].Timestamp.Hour())
+
+	// M3 — time-only after midnight rollover; date 16, hour 0.
+	// Before the fix currentDate would still be 15 here and M3
+	// would land on 15 00:15 instead of 16 00:15.
+	require.Equal(t, 16, msgs[2].Timestamp.Day(),
+		"time-only after a 23:xx anchor must advance to the next calendar date")
+	require.Equal(t, 0, msgs[2].Timestamp.Hour())
+
+	// M4 — RFC3339 anchor that crosses a real midnight; date 17.
+	require.Equal(t, 17, msgs[3].Timestamp.Day(),
+		"non-time-only timestamp must anchor currentDate to its local calendar date")
+
+	// M5 — time-only on date 17; hour 14. Before the fix
+	// currentDate could regress to 15 here because M4 only
+	// touched prevHour.
+	require.Equal(t, 17, msgs[4].Timestamp.Day(),
+		"time-only after an RFC3339 anchor that crossed a date boundary must stay on the new date")
+	require.Equal(t, 14, msgs[4].Timestamp.Hour())
+}
