@@ -1053,6 +1053,28 @@ test.describe('Settings', () => {
     await page.waitForTimeout(500);
   }
 
+  async function openSettingsPanel(
+    page: Page,
+    navigationLabel: string,
+    headingLabel: string = navigationLabel
+  ) {
+    const navigation = page.getByRole('navigation', {
+      name: 'Settings',
+    });
+    await navigation.getByRole('button', {
+      name: navigationLabel,
+    }).click();
+
+    const heading = page.getByRole('heading', {
+      level: 3,
+      name: headingLabel,
+      exact: true,
+    });
+    const section = page.locator('section').filter({ has: heading });
+    await expect(section).toBeVisible({ timeout: 5_000 });
+    return section;
+  }
+
   test('settings page', async ({ page }) => {
     await openSettings(page);
     await snap(page, 'settings');
@@ -1060,12 +1082,11 @@ test.describe('Settings', () => {
 
   test('settings remote access section', async ({ page }) => {
     await openSettings(page);
-
-    // Find the settings-section that contains "Remote Access"
-    const remoteSection = page.locator(
-      '.settings-section:has(.section-title:text("Remote Access"))'
+    const remoteSection = await openSettingsPanel(
+      page,
+      'Remote access',
+      'Remote Access'
     );
-    await expect(remoteSection).toBeVisible({ timeout: 5_000 });
     await remoteSection.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
 
@@ -1086,8 +1107,11 @@ test.describe('Settings', () => {
           build_id: 38,
           dimension: 256,
           done,
+          estimate_ready: true,
+          eta_milliseconds: 40_000,
           model: 'qwen3-embedding:0.6b',
           phase: 'embedding',
+          rate_per_second: 10,
           running: true,
           started_at: startedAt,
           total: 1000,
@@ -1118,10 +1142,10 @@ test.describe('Settings', () => {
     );
 
     await openSettings(page);
-    const embeddingsSection = page.locator(
-      '.settings-section:has(.section-title:text("Embeddings"))'
+    const embeddingsSection = await openSettingsPanel(
+      page,
+      'Embeddings'
     );
-    await expect(embeddingsSection).toBeVisible({ timeout: 5_000 });
     await embeddingsSection.scrollIntoViewIfNeeded();
     await expect(
       embeddingsSection.getByRole('progressbar', {
@@ -1137,23 +1161,17 @@ test.describe('Settings', () => {
 
   test('worktree project mappings section', async ({ page }) => {
     await openSettings(page);
-
-    // SettingsSection renders a heading with the title prop;
-    // match the section that contains the "Worktree mappings"
-    // header text, the same pattern used for Remote Access above.
-    const worktreeSection = page.locator(
-      '.settings-section:has-text("Worktree mappings")'
+    const worktreeSection = await openSettingsPanel(
+      page,
+      'Worktree mappings'
     );
-    await expect(worktreeSection.first()).toBeVisible({
-      timeout: 5_000,
-    });
-    await worktreeSection.first().scrollIntoViewIfNeeded();
-    const mappingPath = worktreeSection.first().getByRole('textbox').first();
+    await worktreeSection.scrollIntoViewIfNeeded();
+    const mappingPath = worktreeSection.getByRole('textbox').first();
     await mappingPath.fill('~/code/project.worktrees');
     await expect(mappingPath).toHaveValue('~/code/project.worktrees');
     await page.waitForTimeout(500);
 
-    await snapEl(worktreeSection.first(), 'worktree-mappings');
+    await snapEl(worktreeSection, 'worktree-mappings');
   });
 });
 
