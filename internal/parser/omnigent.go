@@ -463,20 +463,35 @@ func (m omnigentMeta) fingerprint() string {
 	return strconv.FormatUint(h.Sum64(), 16)
 }
 
+// omnigentConversationAggregateQuery builds the "conversation +
+// item-count/max-position aggregate" SELECT shared by every conversation-meta
+// query: an updated_at plus COUNT/MAX(position) rollup over
+// conversation_items, against a caller-supplied FROM source (the bare
+// conversations table, or a paginated CTE alias) and an optional WHERE
+// clause. Callers needing an ORDER BY append it to the returned string.
+func omnigentConversationAggregateQuery(schema omnigentSchema, from, where string) string {
+	idExpr := omnigentIDExpr(schema, "c.id")
+	query := `
+		SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
+		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
+		  FROM ` + from + ` c
+		  LEFT JOIN conversation_items ci
+		    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id`
+	if where != "" {
+		query += `
+		 ` + where
+	}
+	return query + `
+		 GROUP BY c.workspace_id, c.id`
+}
+
 // listOmnigentConversationMetas returns one meta per conversation with a cheap
 // aggregate fingerprint. The query touches only conversations and
 // conversation_items, which exist in every generation.
 func listOmnigentConversationMetas(
 	ctx context.Context, conn *sql.DB, schema omnigentSchema,
 ) ([]omnigentMeta, error) {
-	idExpr := omnigentIDExpr(schema, "c.id")
-	query := `
-		SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
-		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-		  FROM conversations c
-		  LEFT JOIN conversation_items ci
-		    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-		 GROUP BY c.workspace_id, c.id`
+	query := omnigentConversationAggregateQuery(schema, "conversations", "")
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("listing omnigent conversation metas: %w", err)

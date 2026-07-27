@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Shelley stores every conversation in one shared SQLite database
@@ -84,28 +83,9 @@ func shelleyWatchRoots(roots []string) []WatchRoot {
 func shelleyClassifyPath(
 	root, path string, allowMissing bool,
 ) (multiSessionMatch, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	requireRegular := !allowMissing
-	if dbPath, conversationID, ok := parseShelleyVirtualPath(path); ok {
-		if !shelleyDBUnderRoot(root, dbPath, requireRegular) {
-			return multiSessionMatch{}, false
-		}
-		return multiSessionMatch{
-			Path:      path,
-			Container: dbPath,
-			MemberID:  conversationID,
-		}, true
-	}
-	if shelleyDBUnderRoot(root, path, requireRegular) {
-		return multiSessionMatch{Path: path, Container: path}, true
-	}
-	if allowMissing {
-		if dbPath, ok := shelleyDBPathForEvent(root, path); ok {
-			return multiSessionMatch{Path: dbPath, Container: dbPath}, true
-		}
-	}
-	return multiSessionMatch{}, false
+	return classifySQLiteContainerPath(
+		root, path, shelleyDBName, allowMissing, false, parseShelleyVirtualPath,
+	)
 }
 
 // shelleyFindMember resolves a raw conversation ID to its virtual source path
@@ -139,7 +119,9 @@ func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error)
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 	if src.MemberID == "" {
-		if compositeMtime, err := sqliteDBCompositeMtime(src.Container); err == nil {
+		if compositeMtime, err := sqliteDBCompositeMtime(
+			src.Container, sqliteDBJournalSuffixes,
+		); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
 		fingerprint.Hash, err = hashJSONLSourceFile(src.Container)
@@ -250,31 +232,6 @@ func shelleyDBPath(root string) string {
 		return ""
 	}
 	return path
-}
-
-func shelleyDBUnderRoot(root, dbPath string, requireRegular bool) bool {
-	root = filepath.Clean(root)
-	dbPath = filepath.Clean(dbPath)
-	rel, ok := relUnder(root, dbPath)
-	if !ok || filepath.ToSlash(rel) != shelleyDBName {
-		return false
-	}
-	return !requireRegular || IsRegularFile(dbPath)
-}
-
-func shelleyDBPathForEvent(root, path string) (string, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, ok := relUnder(root, path)
-	if !ok {
-		return "", false
-	}
-	if filepath.ToSlash(rel) == shelleyDBName ||
-		(filepath.Dir(rel) == "." &&
-			strings.HasPrefix(filepath.Base(rel), shelleyDBName+"-")) {
-		return filepath.Join(root, shelleyDBName), true
-	}
-	return "", false
 }
 
 // parseShelleyVirtualPath splits a Shelley virtual source path into its

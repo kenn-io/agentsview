@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -305,31 +305,15 @@ func omnigentWatchRoots(roots []string) []WatchRoot {
 // omnigentClassifyPath maps a stored or changed path to its database container
 // and conversation. allowMissing relaxes the regular-file requirement so a
 // database delete (or its WAL/SHM sibling) still classifies for tombstones.
+// Unlike Zed and Shelley, Omnigent rejects a bare "-shm" sibling event: the
+// provider's own read connections update that file's mtime, so treating it as
+// a source change would make every scan trigger the next one.
 func omnigentClassifyPath(
 	root, path string, allowMissing bool,
 ) (multiSessionMatch, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	requireRegular := !allowMissing
-	if dbPath, conversationID, ok := parseOmnigentVirtualPath(path); ok {
-		if !omnigentDBUnderRoot(root, dbPath, requireRegular) {
-			return multiSessionMatch{}, false
-		}
-		return multiSessionMatch{
-			Path:      path,
-			Container: dbPath,
-			MemberID:  conversationID,
-		}, true
-	}
-	if omnigentDBUnderRoot(root, path, requireRegular) {
-		return multiSessionMatch{Path: path, Container: path}, true
-	}
-	if allowMissing {
-		if dbPath, ok := omnigentDBPathForEvent(root, path); ok {
-			return multiSessionMatch{Path: dbPath, Container: dbPath}, true
-		}
-	}
-	return multiSessionMatch{}, false
+	return classifySQLiteContainerPath(
+		root, path, omnigentDBName, allowMissing, true, parseOmnigentVirtualPath,
+	)
 }
 
 func omnigentFindMember(root, rawID string) (multiSessionMatch, bool) {
@@ -360,7 +344,9 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 	if src.MemberID == "" {
-		if compositeMtime, err := omnigentDBCompositeMtime(src.Container); err == nil {
+		if compositeMtime, err := sqliteDBCompositeMtime(
+			src.Container, omnigentDBMtimeSuffixes,
+		); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
 		fingerprint.Hash, err = hashJSONLSourceFile(src.Container)
@@ -403,15 +389,9 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 func loadOmnigentConversationMeta(
 	conn *sql.DB, schema omnigentSchema, member omnigentMemberID,
 ) (omnigentMeta, bool, error) {
-	idExpr := omnigentIDExpr(schema, "c.id")
-	query := `
-		SELECT c.rowid, c.workspace_id, ` + idExpr + `, COALESCE(c.updated_at, 0),
-		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-		  FROM conversations c
-		  LEFT JOIN conversation_items ci
-		    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-		 WHERE c.workspace_id = ? AND c.id = ?
-		 GROUP BY c.workspace_id, c.id`
+	query := omnigentConversationAggregateQuery(
+		schema, "conversations", "WHERE c.workspace_id = ? AND c.id = ?",
+	)
 	args := []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
 	var meta omnigentMeta
 	err := conn.QueryRow(query, args...).Scan(
@@ -476,14 +456,19 @@ func (t *omnigentChangeTracker) splitSchemaMatchesSince(
 	ctx context.Context, conn *sql.DB, schema omnigentSchema,
 	match multiSessionMatch, tracked omnigentTrackedContainer,
 ) ([]multiSessionMatch, error) {
+	conversationIDExprs := omnigentConversationIDExprs(schema)
 	conversationCursor, conversationTail, reconcile, err :=
 		normalizeOmnigentRowIDCursor(
 			ctx, conn, tracked.conversationRowID, tracked.conversationTail,
 			func(rowID int64) (string, bool, error) {
-				return omnigentConversationRowIdentity(ctx, conn, schema, rowID)
+				return omnigentRowIdentityAt(
+					ctx, conn, omnigentConversationsTable, conversationIDExprs, rowID,
+				)
 			},
 			func() (int64, string, error) {
-				return omnigentLatestConversationRow(ctx, conn, schema)
+				return omnigentLatestRowIdentity(
+					ctx, conn, omnigentConversationsTable, conversationIDExprs,
+				)
 			},
 		)
 	if err != nil {
@@ -499,13 +484,16 @@ func (t *omnigentChangeTracker) splitSchemaMatchesSince(
 	if err != nil {
 		return nil, err
 	}
+	itemIDExprs := omnigentItemIDExprs(schema)
 	itemCursor, itemTail, reconcile, err := normalizeOmnigentRowIDCursor(
 		ctx, conn, tracked.itemRowID, tracked.itemTail,
 		func(rowID int64) (string, bool, error) {
-			return omnigentItemRowIdentity(ctx, conn, schema, rowID)
+			return omnigentRowIdentityAt(
+				ctx, conn, omnigentItemsTable, itemIDExprs, rowID,
+			)
 		},
 		func() (int64, string, error) {
-			return omnigentLatestItemRow(ctx, conn, schema)
+			return omnigentLatestRowIdentity(ctx, conn, omnigentItemsTable, itemIDExprs)
 		},
 	)
 	if err != nil {
@@ -597,108 +585,105 @@ func normalizeOmnigentRowIDCursor(
 	return trackedRowID, trackedIdentity, false, nil
 }
 
-func omnigentConversationRowIdentity(
-	ctx context.Context, conn *sql.DB, schema omnigentSchema, rowID int64,
+// omnigentConversationsTable and omnigentItemsTable name the two tables the
+// bounded change tracker reads row identities from.
+const (
+	omnigentConversationsTable = "conversations"
+	omnigentItemsTable         = "conversation_items"
+)
+
+// omnigentConversationIDExprs and omnigentItemIDExprs give
+// omnigentRowIdentityAt/omnigentLatestRowIdentity the schema-resolved id
+// column list for each table: one column (id) for conversations, two
+// (conversation_id, id) for conversation_items.
+func omnigentConversationIDExprs(schema omnigentSchema) []string {
+	return []string{omnigentIDExpr(schema, "id")}
+}
+
+func omnigentItemIDExprs(schema omnigentSchema) []string {
+	return []string{
+		omnigentIDExpr(schema, "conversation_id"),
+		omnigentIDExpr(schema, "id"),
+	}
+}
+
+// omnigentRowIdentityAt resolves the bounded change-tracker identity string
+// ("workspaceID:id[:itemID]") for one row addressed by its SQLite rowid, in
+// either conversations or conversation_items. It reports false when the row
+// no longer exists (deleted, or not yet reused by a later insert).
+func omnigentRowIdentityAt(
+	ctx context.Context, conn *sql.DB, table string, idExprs []string, rowID int64,
 ) (string, bool, error) {
 	if rowID == 0 {
 		return "", false, nil
 	}
-	idExpr := omnigentIDExpr(schema, "id")
-	var member omnigentMemberID
-	err := conn.QueryRowContext(
-		ctx,
-		`SELECT workspace_id, `+idExpr+`
-		   FROM conversations
-		  WHERE rowid = ?`,
-		rowID,
-	).Scan(&member.workspaceID, &member.rawID)
+	query := `SELECT workspace_id, ` + strings.Join(idExprs, ", ") +
+		` FROM ` + table + ` WHERE rowid = ?`
+	workspaceID, ids, err := omnigentScanIdentityRow(
+		conn.QueryRowContext(ctx, query, rowID), idExprs,
+	)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, fmt.Errorf(
-			"reading omnigent conversation row identity: %w", err,
+			"reading omnigent %s row identity: %w", table, err,
 		)
 	}
-	return member.key(), true, nil
+	return omnigentRowIdentityKey(workspaceID, ids), true, nil
 }
 
-func omnigentLatestConversationRow(
-	ctx context.Context, conn *sql.DB, schema omnigentSchema,
+// omnigentLatestRowIdentity resolves the SQLite rowid and identity of the
+// most recently inserted row in either conversations or conversation_items.
+func omnigentLatestRowIdentity(
+	ctx context.Context, conn *sql.DB, table string, idExprs []string,
 ) (int64, string, error) {
-	idExpr := omnigentIDExpr(schema, "id")
+	query := `SELECT rowid, workspace_id, ` + strings.Join(idExprs, ", ") +
+		` FROM ` + table + ` ORDER BY rowid DESC LIMIT 1`
+	row := conn.QueryRowContext(ctx, query)
 	var rowID int64
-	var member omnigentMemberID
-	err := conn.QueryRowContext(
-		ctx,
-		`SELECT rowid, workspace_id, `+idExpr+`
-		   FROM conversations
-		  ORDER BY rowid DESC
-		  LIMIT 1`,
-	).Scan(&rowID, &member.workspaceID, &member.rawID)
+	var workspaceID int64
+	ids := make([]string, len(idExprs))
+	dest := append([]any{&rowID, &workspaceID}, omnigentStringDests(ids)...)
+	err := row.Scan(dest...)
 	if err == sql.ErrNoRows {
 		return 0, "", nil
 	}
 	if err != nil {
-		return 0, "", fmt.Errorf(
-			"reading latest omnigent conversation row: %w", err,
-		)
+		return 0, "", fmt.Errorf("reading latest omnigent %s row: %w", table, err)
 	}
-	return rowID, member.key(), nil
+	return rowID, omnigentRowIdentityKey(workspaceID, ids), nil
 }
 
-func omnigentItemRowIdentity(
-	ctx context.Context, conn *sql.DB, schema omnigentSchema, rowID int64,
-) (string, bool, error) {
-	if rowID == 0 {
-		return "", false, nil
-	}
-	conversationExpr := omnigentIDExpr(schema, "conversation_id")
-	itemExpr := omnigentIDExpr(schema, "id")
-	var member omnigentMemberID
-	var itemID string
-	err := conn.QueryRowContext(
-		ctx,
-		`SELECT workspace_id, `+conversationExpr+`, `+itemExpr+`
-		   FROM conversation_items
-		  WHERE rowid = ?`,
-		rowID,
-	).Scan(&member.workspaceID, &member.rawID, &itemID)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf(
-			"reading omnigent item row identity: %w", err,
-		)
-	}
-	return member.key() + ":" + itemID, true, nil
+// omnigentScanIdentityRow scans workspace_id plus len(idExprs) id columns
+// from one row.
+func omnigentScanIdentityRow(
+	row *sql.Row, idExprs []string,
+) (int64, []string, error) {
+	var workspaceID int64
+	ids := make([]string, len(idExprs))
+	dest := append([]any{&workspaceID}, omnigentStringDests(ids)...)
+	err := row.Scan(dest...)
+	return workspaceID, ids, err
 }
 
-func omnigentLatestItemRow(
-	ctx context.Context, conn *sql.DB, schema omnigentSchema,
-) (int64, string, error) {
-	conversationExpr := omnigentIDExpr(schema, "conversation_id")
-	itemExpr := omnigentIDExpr(schema, "id")
-	var rowID int64
-	var member omnigentMemberID
-	var itemID string
-	err := conn.QueryRowContext(
-		ctx,
-		`SELECT rowid, workspace_id, `+conversationExpr+`, `+itemExpr+`
-		   FROM conversation_items
-		  ORDER BY rowid DESC
-		  LIMIT 1`,
-	).Scan(&rowID, &member.workspaceID, &member.rawID, &itemID)
-	if err == sql.ErrNoRows {
-		return 0, "", nil
+// omnigentStringDests returns a pointer to each element of ids, in order, for
+// use as variadic sql.Row/sql.Rows Scan destinations.
+func omnigentStringDests(ids []string) []any {
+	dest := make([]any, len(ids))
+	for i := range ids {
+		dest[i] = &ids[i]
 	}
-	if err != nil {
-		return 0, "", fmt.Errorf(
-			"reading latest omnigent item row: %w", err,
-		)
-	}
-	return rowID, member.key() + ":" + itemID, nil
+	return dest
+}
+
+// omnigentRowIdentityKey joins a workspace ID with one or more id columns
+// into the tracker's colon-separated identity string.
+func omnigentRowIdentityKey(workspaceID int64, ids []string) string {
+	parts := make([]string, 0, len(ids)+1)
+	parts = append(parts, strconv.FormatInt(workspaceID, 10))
+	parts = append(parts, ids...)
+	return strings.Join(parts, ":")
 }
 
 func listOmnigentNewConversationMetas(
@@ -728,23 +713,21 @@ func listOmnigentNewConversationMetas(
 	}
 }
 
+// omnigentNewConversationQuery paginates newly inserted conversation rows by
+// rowid into a MATERIALIZED CTE before joining conversation_items for the
+// aggregate rollup: without the hint, SQLite's planner can flatten the CTE
+// into the join and fall back to scanning the whole item table for each page
+// (TestOmnigentIncrementalQueriesUseSeekableIndexes guards the plan).
 func omnigentNewConversationQuery(schema omnigentSchema) string {
-	idExpr := omnigentIDExpr(schema, "c.id")
-	return `
+	prefix := `
 		WITH selected AS MATERIALIZED (
-			SELECT rowid, workspace_id, id,
-			       COALESCE(updated_at, 0) AS updated_at
+			SELECT rowid, workspace_id, id, updated_at
 			  FROM conversations
 			 WHERE rowid > ?
 			 ORDER BY rowid
 			 LIMIT ?
-		)
-		SELECT c.rowid, c.workspace_id, ` + idExpr + `, c.updated_at,
-		       COUNT(ci.id), COALESCE(MAX(ci.position), -1)
-		  FROM selected c
-		  LEFT JOIN conversation_items ci
-		    ON ci.workspace_id = c.workspace_id AND ci.conversation_id = c.id
-		 GROUP BY c.workspace_id, c.id
+		)`
+	return prefix + omnigentConversationAggregateQuery(schema, "selected", "") + `
 		 ORDER BY c.rowid`
 }
 
@@ -871,12 +854,15 @@ func (t *omnigentChangeTracker) restoreCachedContainer(
 		}
 		return false, err
 	}
-	conversationRowID, conversationTail, err :=
-		omnigentLatestConversationRow(ctx, conn, schema)
+	conversationRowID, conversationTail, err := omnigentLatestRowIdentity(
+		ctx, conn, omnigentConversationsTable, omnigentConversationIDExprs(schema),
+	)
 	if err != nil {
 		return false, err
 	}
-	itemRowID, itemTail, err := omnigentLatestItemRow(ctx, conn, schema)
+	itemRowID, itemTail, err := omnigentLatestRowIdentity(
+		ctx, conn, omnigentItemsTable, omnigentItemIDExprs(schema),
+	)
 	if err != nil {
 		return false, err
 	}
@@ -923,24 +909,11 @@ func (t *omnigentChangeTracker) parseContainer(
 	return results, nil
 }
 
-// omnigentDBCompositeMtime tracks content-bearing SQLite files only. Opening a
-// read connection can update the shared-memory file, so including -shm would
-// turn the provider's own reads into apparent source changes and keep the
-// scheduled fingerprint pass reparsing forever.
-func omnigentDBCompositeMtime(dbPath string) (int64, error) {
-	var maxMtime int64
-	for _, suffix := range []string{"", "-wal"} {
-		info, err := os.Stat(dbPath + suffix)
-		if err != nil {
-			continue
-		}
-		maxMtime = max(maxMtime, info.ModTime().UnixNano())
-	}
-	if maxMtime == 0 {
-		return 0, &os.PathError{Op: "stat", Path: dbPath, Err: os.ErrNotExist}
-	}
-	return maxMtime, nil
-}
+// omnigentDBMtimeSuffixes tracks content-bearing SQLite files only, omitting
+// "-shm": opening a read connection can update the shared-memory file, so
+// including it would turn the provider's own reads into apparent source
+// changes and keep the scheduled fingerprint pass reparsing forever.
+var omnigentDBMtimeSuffixes = []string{"", "-wal"}
 
 func omnigentMemberPresent(src multiSessionSource) bool {
 	if src.MemberID == "" {
@@ -1011,8 +984,8 @@ func omnigentParseContainerData(
 	if err != nil {
 		return nil, omnigentSchema{}, nil, 0, "", err
 	}
-	itemRowID, itemTail, err := omnigentLatestItemRow(
-		ctx, conn, schema,
+	itemRowID, itemTail, err := omnigentLatestRowIdentity(
+		ctx, conn, omnigentItemsTable, omnigentItemIDExprs(schema),
 	)
 	if err != nil {
 		return nil, omnigentSchema{}, nil, 0, "", err
@@ -1040,38 +1013,6 @@ func omnigentParseContainerData(
 func omnigentSchemaUnsupported(err error) bool {
 	var unsupported ErrOmnigentUnsupportedSchema
 	return errors.As(err, &unsupported)
-}
-
-func omnigentDBUnderRoot(root, dbPath string, requireRegular bool) bool {
-	root = filepath.Clean(root)
-	dbPath = filepath.Clean(dbPath)
-	rel, ok := relUnder(root, dbPath)
-	if !ok || filepath.ToSlash(rel) != omnigentDBName {
-		return false
-	}
-	return !requireRegular || IsRegularFile(dbPath)
-}
-
-func omnigentDBPathForEvent(root, path string) (string, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	// The provider's own read connections update the WAL shared-memory
-	// file's mtime, so treating -shm events as source changes would make
-	// every scan trigger the next one, a permanent watcher loop. Real
-	// commits always touch the database file or -wal as well.
-	if strings.HasSuffix(path, "-shm") {
-		return "", false
-	}
-	rel, ok := relUnder(root, path)
-	if !ok {
-		return "", false
-	}
-	if filepath.ToSlash(rel) == omnigentDBName ||
-		(filepath.Dir(rel) == "." &&
-			strings.HasPrefix(filepath.Base(rel), omnigentDBName+"-")) {
-		return filepath.Join(root, omnigentDBName), true
-	}
-	return "", false
 }
 
 func parseOmnigentVirtualPath(path string) (string, string, bool) {

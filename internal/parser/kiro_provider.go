@@ -611,7 +611,9 @@ func (s kiroSourceSet) Fingerprint(
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 	if src.Kind == kiroSourceSQLiteDB {
-		if compositeMtime, err := sqliteDBCompositeMtime(src.DBPath); err == nil {
+		if compositeMtime, err := sqliteDBCompositeMtime(
+			src.DBPath, sqliteDBJournalSuffixes,
+		); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
 		return fingerprint, nil

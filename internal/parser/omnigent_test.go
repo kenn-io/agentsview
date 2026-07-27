@@ -1181,11 +1181,13 @@ func omnigentTrackerAtCurrentHighWater(
 	conn, err := openOmnigentDB(path)
 	require.NoError(t, err)
 	defer conn.Close()
-	conversationRowID, conversationTail, err := omnigentLatestConversationRow(
-		t.Context(), conn, schema,
+	conversationRowID, conversationTail, err := omnigentLatestRowIdentity(
+		t.Context(), conn, omnigentConversationsTable, omnigentConversationIDExprs(schema),
 	)
 	require.NoError(t, err)
-	itemRowID, itemTail, err := omnigentLatestItemRow(t.Context(), conn, schema)
+	itemRowID, itemTail, err := omnigentLatestRowIdentity(
+		t.Context(), conn, omnigentItemsTable, omnigentItemIDExprs(schema),
+	)
 	require.NoError(t, err)
 	tracker := newOmnigentChangeTracker()
 	tracker.containers[path] = omnigentTrackedContainer{
