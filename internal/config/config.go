@@ -2347,6 +2347,10 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		if err != nil {
 			return duck, fmt.Errorf("expanding path: %w", err)
 		}
+		expanded, err = expandLeadingTilde(expanded)
+		if err != nil {
+			return duck, fmt.Errorf("expanding path: %w", err)
+		}
 		duck.Path = expanded
 	}
 	if duck.URL != "" {
@@ -2374,6 +2378,23 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		duck.MachineName = h
 	}
 	return duck, nil
+}
+
+func expandLeadingTilde(path string) (string, error) {
+	if path == "" || path[0] != '~' {
+		return path, nil
+	}
+	if len(path) > 1 && path[1] != '/' && path[1] != '\\' {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determining home directory: %w", err)
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, filepath.FromSlash(path[2:])), nil
 }
 
 var (
