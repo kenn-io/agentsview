@@ -220,8 +220,11 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		cost, costSource, priced, contributes, sessionCost :=
+		cost, costSource, priced, contributes, sessionCost, priceErr :=
 			duckActivityUsageCost(r, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		out = append(out, activity.UsageRow{
 			SessionID:       r.sessionID,
 			Model:           r.model,
@@ -545,8 +548,11 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		cost, costSource, priced, contributes, sessionCost :=
+		cost, costSource, priced, contributes, sessionCost, priceErr :=
 			duckActivityUsageCost(o.scan, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		row := o.row
 		row.Cost = cost
 		row.CostSource = costSource
@@ -664,7 +670,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 // savings delta and the cost.
 func duckActivityReportRowStatus(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
-) (savings, cost money.Money, priced, contributes bool) {
+) (savings, cost money.Money, priced, contributes bool, err error) {
 	var explicitCost int64
 	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int
 	if r.cost != nil {
@@ -689,7 +695,7 @@ func duckActivityReportRowStatus(
 		billableCacheCr = r.cacheCr
 		billableCacheRd = r.cacheRd
 	}
-	cost, savings, _, _ = duckUsageAggregateCost(
+	cost, savings, _, _, err = duckUsageAggregateCost(
 		r.model,
 		r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 		billableInput, billableOutput, billableReasoning,
@@ -698,13 +704,13 @@ func duckActivityReportRowStatus(
 		r.cost != nil,
 		pricing,
 	)
-	return savings, cost, priced, contributes
+	return savings, cost, priced, contributes, err
 }
 
 func duckActivityUsageCost(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
 ) (cost money.Money, costSource export.CostSource, priced, contributes bool,
-	sessionCost *money.Money) {
+	sessionCost *money.Money, err error) {
 	costRow := r
 	if r.costSource == db.CopilotReportedCostSource && r.cost != nil {
 		v := money.Money{Microdollars: *r.cost}
@@ -712,7 +718,8 @@ func duckActivityUsageCost(
 		costRow.cost = nil
 		pricing.RecordUnattributedReported()
 	}
-	_, cost, priced, contributes = duckActivityReportRowStatus(costRow, pricing)
+	_, cost, priced, contributes, err =
+		duckActivityReportRowStatus(costRow, pricing)
 	costSource = export.CostSourceComputed
 	if costRow.cost != nil {
 		costSource = export.CostSourceReported

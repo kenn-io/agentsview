@@ -2107,19 +2107,20 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 
-	if pgHasTable(ctx, db, "model_pricing") {
-		rows, err = db.QueryContext(ctx,
-			`SELECT input_microdollars_per_mtok,
-				output_microdollars_per_mtok,
-				cache_creation_microdollars_per_mtok,
-				cache_read_microdollars_per_mtok
-			 FROM model_pricing LIMIT 0`)
-		if err != nil {
+	rows, err = db.QueryContext(ctx,
+		`SELECT input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok
+		 FROM model_pricing LIMIT 0`)
+	if err != nil {
+		if !isUndefinedTable(err) {
 			return fmt.Errorf(
 				"model_pricing table missing required columns: %w",
 				err,
 			)
 		}
+	} else {
 		rows.Close()
 	}
 

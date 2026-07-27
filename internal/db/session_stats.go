@@ -1107,9 +1107,11 @@ func (db *DB) accumulateCacheTotals(
 		); err != nil {
 			return fmt.Errorf("scanning cache tokens: %w", err)
 		}
-		addMessageToCacheTotals(
+		if err := addMessageToCacheTotals(
 			perSession, sessionID, model, tokenJSON, pricing,
-		)
+		); err != nil {
+			return err
+		}
 	}
 	return sqlRows.Err()
 }
@@ -1121,7 +1123,7 @@ func addMessageToCacheTotals(
 	perSession map[string]*sessionCacheTotals,
 	sessionID, model, tokenJSON string,
 	pricing *export.PricingResolver,
-) {
+) error {
 	inputTok, outputTok, cacheCrTok, cacheRdTok :=
 		clampedUsageTokenCounters(tokenJSON)
 
@@ -1135,22 +1137,31 @@ func addMessageToCacheTotals(
 	totals.cacheReadT += int64(cacheRdTok)
 
 	rates := pricing.Lookup(model).Rates
-	totals.dollarsSpent = money.MustAdd(
-		totals.dollarsSpent,
-		rates.CostForTokens(inputTok, outputTok, 0, cacheCrTok, cacheRdTok),
-	)
+	spent, err := rates.CostForTokens(
+		inputTok, outputTok, 0, cacheCrTok, cacheRdTok)
+	if err != nil {
+		return fmt.Errorf("pricing cache usage for model %q: %w", model, err)
+	}
+	totals.dollarsSpent, err = money.Add(totals.dollarsSpent, spent)
+	if err != nil {
+		return fmt.Errorf("summing cache usage for model %q: %w", model, err)
+	}
 	// Uncached counterfactual: cache_creation tokens would still
 	// have been sent as ordinary input (so they are billed at the
 	// input rate, not dropped), and cache_read tokens are re-billed
 	// at the input rate too. This matches the rest of the codebase
 	// (see internal/db/usage.go and the savings calculation in
 	// frontend/src/lib/utils/usageSavings.ts).
-	totals.dollarsNoCac = money.MustAdd(
-		totals.dollarsNoCac,
-		rates.CostForTokens(
-			inputTok+cacheCrTok+cacheRdTok, outputTok, 0, 0, 0,
-		),
-	)
+	uncached, err := rates.CostForTokens(
+		inputTok+cacheCrTok+cacheRdTok, outputTok, 0, 0, 0)
+	if err != nil {
+		return fmt.Errorf("pricing uncached usage for model %q: %w", model, err)
+	}
+	totals.dollarsNoCac, err = money.Add(totals.dollarsNoCac, uncached)
+	if err != nil {
+		return fmt.Errorf("summing uncached usage for model %q: %w", model, err)
+	}
+	return nil
 }
 
 // computeTemporal fills stats.Temporal.HourlyUTC and ReporterTimezone.

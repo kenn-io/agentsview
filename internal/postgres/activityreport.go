@@ -158,7 +158,7 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		_, outputTok, _, _, _, _ := pgDailyUsageAmounts(
+		_, outputTok, _, _, _, _, priceErr := pgDailyUsageAmounts(
 			pgDailyUsageScanRow{
 				usageSource:              r.usageSource,
 				tokenJSON:                r.tokenJSON,
@@ -173,6 +173,9 @@ func (s *Store) GetSessionUsageRows(
 			},
 			rateResolver,
 		)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		costRow := r
 		var sessionCost *money.Money
 		if r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
@@ -181,7 +184,11 @@ func (s *Store) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := pgSessionRowCost(costRow, rateResolver)
+		cost, priced, contributes, priceErr :=
+			pgSessionRowCost(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
@@ -476,7 +483,11 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _, _ := pgDailyUsageAmounts(o.scan, rateResolver)
+		_, outputTok, _, _, _, _, priceErr :=
+			pgDailyUsageAmounts(o.scan, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		costRow := o.scan
 		var sessionCost *money.Money
 		if o.scan.costSource == db.CopilotReportedCostSource && o.scan.cost.Valid {
@@ -485,7 +496,11 @@ func (s *Store) activityReportUsage(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := pgActivityReportRowStatus(costRow, rateResolver)
+		cost, priced, contributes, priceErr :=
+			pgActivityReportRowStatus(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
@@ -508,7 +523,7 @@ func (s *Store) activityReportUsage(
 
 func pgActivityReportRowStatus(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
-) (cost money.Money, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool, err error) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -527,19 +542,23 @@ func pgActivityReportRowStatus(
 
 	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return money.Money{Microdollars: r.cost.Int64}, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return money.Money{}, true, false
+		return money.Money{}, true, false, nil
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return money.Money{}, false, true
+		return money.Money{}, false, true, nil
 	}
-	cost = lookup.Rates.CostForTokens(
+	cost, err = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
+	if err != nil {
+		return money.Money{}, false, false,
+			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model, err)
+	}
 	pricing.RecordComputed(r.model, lookup)
-	return cost, true, true
+	return cost, true, true, nil
 }

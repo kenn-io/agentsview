@@ -149,6 +149,62 @@ VALUES ('invalid-money-migration', 'provider', 'model', -0.01)`)
 	assertSQLiteColumnAbsent(t, d, "usage_events", "cost_microdollars")
 }
 
+func TestMigrateMoneyColumnsRejectsMixedSchemaWithoutDiscardingMicrodollars(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "mixed-money-migration", "project")
+	_, err := d.rawWriter().Exec(`
+ALTER TABLE usage_events ADD COLUMN cost_usd REAL;
+INSERT INTO usage_events (
+    session_id, source, model, cost_microdollars, cost_usd, dedup_key
+) VALUES (
+    'mixed-money-migration', 'provider', 'model', 123, 0.999, 'mixed-money'
+)`)
+	require.NoError(t, err)
+
+	err = migrateMoneyColumnsLocked(d.getWriter())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous money schema for usage_events")
+	var cost int64
+	require.NoError(t, d.rawWriter().QueryRow(`
+SELECT cost_microdollars FROM usage_events WHERE dedup_key = 'mixed-money'`,
+	).Scan(&cost))
+	assert.Equal(t, int64(123), cost)
+}
+
+func TestMigrateMoneyColumnsRejectsPartialLegacyColumnSets(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		table string
+		alter string
+	}{
+		{
+			name:  "cursor usage",
+			table: "cursor_usage_events",
+			alter: "ALTER TABLE cursor_usage_events ADD COLUMN charged_cents REAL",
+		},
+		{
+			name:  "model pricing",
+			table: "model_pricing",
+			alter: "ALTER TABLE model_pricing ADD COLUMN input_per_mtok REAL",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			_, err := d.rawWriter().Exec(tt.alter)
+			require.NoError(t, err)
+
+			err = migrateMoneyColumnsLocked(d.getWriter())
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(),
+				"ambiguous money schema for "+tt.table)
+		})
+	}
+}
+
 func assertSQLiteMoneyColumn(t *testing.T, d *DB, table, column, wantType string) {
 	t.Helper()
 	var gotType string

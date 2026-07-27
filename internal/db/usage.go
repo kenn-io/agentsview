@@ -1442,7 +1442,11 @@ func clampedUsageTokenCountersWithReasoning(
 
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
-) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings money.Money) {
+) (
+	inputTok, outputTok, cacheCrTok, cacheRdTok int,
+	cost, savings money.Money,
+	err error,
+) {
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
@@ -1461,19 +1465,24 @@ func dailyUsageAmounts(
 		cost = money.Money{Microdollars: r.cost.Int64}
 		pricing.RecordReported(r.model, lookup)
 	} else {
-		cost = rates.CostForTokens(
+		cost, err = rates.CostForTokens(
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
+		if err != nil {
+			return 0, 0, 0, 0, money.Money{}, money.Money{},
+				fmt.Errorf("pricing usage row for model %q: %w", r.model, err)
+		}
 		pricing.RecordComputed(r.model, lookup)
 	}
 
 	readRate := money.MustSub(rates.InputPerMTok, rates.CacheReadPerMTok)
 	creationRate := money.MustSub(rates.InputPerMTok, rates.CacheWritePerMTok)
-	savings, err := money.SignedCostPerMillion([]money.RatedTokens{
+	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
 		{Tokens: int64(cacheRdTok), Rate: readRate},
 		{Tokens: int64(cacheCrTok), Rate: creationRate},
 	})
 	if err != nil {
-		panic(err)
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("pricing cache savings for model %q: %w", r.model, err)
 	}
 	return
 }
@@ -1941,8 +1950,11 @@ func (db *DB) GetDailyUsage(
 			projectLabels[r.project] = struct{}{}
 		}
 
-		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
+		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, priceErr :=
 			dailyUsageAmounts(r, rateResolver)
+		if priceErr != nil {
+			return DailyUsageResult{}, priceErr
+		}
 		totalSavings = money.MustAdd(totalSavings, savings)
 
 		key := accumKey{
@@ -2499,8 +2511,11 @@ func (db *DB) GetTopSessionsByCost(
 			seen[key] = struct{}{}
 		}
 
-		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _ :=
+		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr :=
 			dailyUsageAmounts(r, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 
 		sa, ok := accum[r.sessionID]
 		if !ok {
@@ -2616,7 +2631,7 @@ type SessionUsageBreakdownEntry struct {
 // "$0".
 func sessionRowCost(
 	r usageScanRow, pricing *export.PricingResolver,
-) (cost money.Money, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool, err error) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -2631,21 +2646,25 @@ func sessionRowCost(
 
 	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return money.Money{Microdollars: r.cost.Int64}, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return money.Money{}, true, false
+		return money.Money{}, true, false, nil
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return money.Money{}, false, true
+		return money.Money{}, false, true, nil
 	}
-	cost = lookup.Rates.CostForTokens(
+	cost, err = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
+	if err != nil {
+		return money.Money{}, false, false,
+			fmt.Errorf("pricing session usage for model %q: %w", r.model, err)
+	}
 	pricing.RecordComputed(r.model, lookup)
-	return cost, true, true
+	return cost, true, true, nil
 }
 
 func sessionUsageBreakdownEntry(
@@ -2769,7 +2788,10 @@ func (db *DB) GetSessionUsage(
 			authoritativeCost = &v
 			costRow.cost = sql.NullInt64{}
 		}
-		c, priced, contributes := sessionRowCost(costRow, rateResolver)
+		c, priced, contributes, priceErr := sessionRowCost(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		if !contributes {
 			continue
 		}

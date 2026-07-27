@@ -782,7 +782,10 @@ func (db *DB) attachSessionExportUsage(
 			costRow.cost = sql.NullInt64{}
 			resolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := sessionRowCost(costRow, resolver)
+		cost, priced, contributes, priceErr := sessionRowCost(costRow, resolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		if !contributes {
 			continue
 		}

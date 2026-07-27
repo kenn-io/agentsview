@@ -274,7 +274,7 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 		},
 	}})
 
-	inTok, outTok, _, _, cost, _ := pgDailyUsageAmounts(
+	inTok, outTok, _, _, cost, _, priceErr := pgDailyUsageAmounts(
 		pgDailyUsageScanRow{
 			usageSource:  "session",
 			model:        "gpt-5.4",
@@ -283,6 +283,7 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 		},
 		resolver,
 	)
+	require.NoError(t, priceErr)
 	assert.Equal(t, rawInput, inTok, "daily input")
 	assert.Equal(t, rawOutput, outTok, "daily output")
 	wantCost, err := money.CostPerMillion([]money.RatedTokens{
@@ -292,12 +293,13 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wantCost, cost, "daily cost")
 
-	cost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
+	cost, priced, contributes, priceErr := pgSessionRowCost(pgUsageScanRow{
 		usageSource:  "session",
 		model:        "gpt-5.4",
 		inputTokens:  rawInput,
 		outputTokens: rawOutput,
 	}, resolver)
+	require.NoError(t, priceErr)
 	require.True(t, priced, "priced")
 	require.True(t, contributes, "contributes")
 	assert.Equal(t, wantCost, cost, "session cost")
@@ -495,12 +497,13 @@ func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
 		}},
 	)
 
-	cost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
+	cost, priced, contributes, err := pgSessionRowCost(pgUsageScanRow{
 		usageSource:     "provider",
 		model:           "reasoning-model",
 		reasoningTokens: 25,
 	}, resolver)
 
+	require.NoError(t, err)
 	assert.True(t, contributes)
 	assert.True(t, priced)
 	assert.Equal(t, money.MustParseDollars("0.0005"), cost)
@@ -528,16 +531,18 @@ func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 			`"reasoning_tokens":500}`,
 	}
 
-	inTok, outTok, _, _, cost, _ := pgDailyUsageAmounts(row, resolver)
+	inTok, outTok, _, _, cost, _, err := pgDailyUsageAmounts(row, resolver)
+	require.NoError(t, err)
 	assert.Equal(t, 1000, inTok)
 	assert.Zero(t, outTok)
 	assert.Equal(t, money.MustParseDollars("0.002"), cost)
 
-	sessionCost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
+	sessionCost, priced, contributes, err := pgSessionRowCost(pgUsageScanRow{
 		usageSource: "message",
 		model:       "gpt-5.4",
 		tokenJSON:   row.tokenJSON,
 	}, resolver)
+	require.NoError(t, err)
 	assert.True(t, priced)
 	assert.True(t, contributes)
 	assert.Equal(t, money.MustParseDollars("0.002"), sessionCost)

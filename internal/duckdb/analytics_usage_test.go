@@ -239,7 +239,7 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 		},
 	}})
 
-	cost, _, priced, contributes := duckUsageAggregateCost(
+	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"mixed-model",
 		1000, 2000, 3000, 4000,
 		100, 200, 300, 400, 500,
@@ -247,6 +247,7 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 		true,
 		resolver,
 	)
+	require.NoError(t, err)
 	require.True(t, priced)
 	require.True(t, contributes)
 	assert.Equal(t, money.Money{Microdollars: 253_700}, cost)
@@ -260,7 +261,7 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testing.T) {
 	resolver := export.NewPricingResolver(nil)
 
-	cost, _, priced, contributes := duckUsageAggregateCost(
+	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"unknown-model",
 		1000, 2000, 0, 0,
 		1000, 2000, 0, 0, 0,
@@ -269,6 +270,7 @@ func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testi
 		resolver,
 	)
 
+	require.NoError(t, err)
 	require.True(t, contributes)
 	assert.False(t, priced)
 	assert.Equal(t, money.Money{Microdollars: 250_000}, cost)
@@ -291,7 +293,7 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 		},
 	}})
 
-	cost, _, priced, contributes := duckUsageAggregateCost(
+	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"reasoning-model",
 		0, 0, 0, 0,
 		0, 0, 300, 0, 0,
@@ -300,6 +302,7 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 		resolver,
 	)
 
+	require.NoError(t, err)
 	require.True(t, contributes)
 	assert.True(t, priced)
 	assert.Equal(t, money.MustParseDollars("0.0006"), cost)
@@ -320,7 +323,7 @@ func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
 		},
 	}})
 
-	cost, _, priced, contributes := duckUsageAggregateCost(
+	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"zero-model",
 		0, 0, 0, 0,
 		0, 0, 0, 0, 0,
@@ -329,6 +332,7 @@ func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
 		resolver,
 	)
 
+	require.NoError(t, err)
 	assert.True(t, priced)
 	assert.False(t, contributes)
 	assert.Zero(t, cost)

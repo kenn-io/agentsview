@@ -3718,6 +3718,8 @@ func TestDuckUsageQuantizesCostBeforeAggregation(t *testing.T) {
 	daily, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, money.Money{}, daily.Totals.TotalCost)
+	assert.Equal(t, 1, daily.SessionCounts.Total)
+	assert.Equal(t, 1, daily.SessionCounts.ByAgent["claude"])
 
 	top, err := store.GetTopSessionsByCost(ctx, filter, 1)
 	require.NoError(t, err)

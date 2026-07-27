@@ -2,6 +2,7 @@ package export
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -27,7 +28,9 @@ func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	lookup := resolver.Lookup("claude-test-20260703")
 	require.True(t, lookup.OK)
 	require.Equal(t, "claude-test", lookup.Pattern)
-	cost := lookup.Rates.CostForTokens(1_000_000, 2_000_000, 500_000, 3_000_000, 4_000_000)
+	cost, err := lookup.Rates.CostForTokens(
+		1_000_000, 2_000_000, 500_000, 3_000_000, 4_000_000)
+	require.NoError(t, err)
 
 	resolver.RecordComputed("claude-test-20260703", lookup)
 	block, err := resolver.BuildBlock()
@@ -50,7 +53,8 @@ func TestModelRatesCostForTokensTreatsReasoningAsOutputBreakdown(t *testing.T) {
 		OutputPerMTok: money.MustParseDollars("10"),
 	}
 
-	cost := rates.CostForTokens(1_000_000, 2_000_000, 500_000, 0, 0)
+	cost, err := rates.CostForTokens(1_000_000, 2_000_000, 500_000, 0, 0)
+	require.NoError(t, err)
 
 	assert.Equal(t, money.MustParseDollars("21"), cost)
 }
@@ -60,9 +64,20 @@ func TestModelRatesCostForTokensBillsReasoningOnlyRowsAsOutput(t *testing.T) {
 		OutputPerMTok: money.MustParseDollars("10"),
 	}
 
-	cost := rates.CostForTokens(0, 0, 500_000, 0, 0)
+	cost, err := rates.CostForTokens(0, 0, 500_000, 0, 0)
+	require.NoError(t, err)
 
 	assert.Equal(t, money.MustParseDollars("5"), cost)
+}
+
+func TestModelRatesCostForTokensReturnsOverflow(t *testing.T) {
+	rates := ModelRates{
+		InputPerMTok: money.Money{Microdollars: math.MaxInt64},
+	}
+
+	_, err := rates.CostForTokens(2_000_000, 0, 0, 0, 0)
+
+	require.ErrorIs(t, err, money.ErrOverflow)
 }
 
 func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {

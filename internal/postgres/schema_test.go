@@ -643,7 +643,6 @@ func TestCheckSchemaCompatRequiresModelPricingMicrodollarsWhenPresent(
 	t *testing.T,
 ) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.existingTables = map[string]bool{"model_pricing": true}
 	state.queryErrors = []schemaProbeQueryError{{
 		contains: "input_microdollars_per_mtok",
 		err: errors.New(
@@ -655,6 +654,33 @@ func TestCheckSchemaCompatRequiresModelPricingMicrodollarsWhenPresent(
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
 		"model_pricing table missing required columns")
+}
+
+func TestCheckSchemaCompatAllowsMissingOptionalModelPricing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from model_pricing",
+		err: errors.New(
+			`ERROR: relation "model_pricing" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	require.NoError(t, CheckSchemaCompat(t.Context(), pg))
+}
+
+func TestCheckSchemaCompatPropagatesModelPricingPermissionFailure(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from model_pricing",
+		err: errors.New(
+			`ERROR: permission denied for table model_pricing (SQLSTATE 42501)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"model_pricing table missing required columns")
+	assert.Contains(t, err.Error(), "permission denied")
 }
 
 func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {

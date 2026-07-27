@@ -29,23 +29,19 @@ type ModelRates struct {
 
 func (r ModelRates) CostForTokens(
 	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
-) money.Money {
+) (money.Money, error) {
 	// reasoningTokens is a breakdown of outputTokens for current sources, not
 	// additional billable output. Reasoning-only rows still bill at output rate.
 	billableOutputTokens := outputTokens
 	if billableOutputTokens == 0 {
 		billableOutputTokens = reasoningTokens
 	}
-	cost, err := money.CostPerMillion([]money.RatedTokens{
+	return money.CostPerMillion([]money.RatedTokens{
 		{Tokens: int64(inputTokens), Rate: r.InputPerMTok},
 		{Tokens: int64(billableOutputTokens), Rate: r.OutputPerMTok},
 		{Tokens: int64(cacheWriteTokens), Rate: r.CacheWritePerMTok},
 		{Tokens: int64(cacheReadTokens), Rate: r.CacheReadPerMTok},
 	})
-	if err != nil {
-		panic(err)
-	}
-	return cost
 }
 
 type EffectivePricingRow struct {

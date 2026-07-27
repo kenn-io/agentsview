@@ -7,18 +7,71 @@ import "fmt"
 // cannot change column types in place, so each affected table is rebuilt while
 // preserving row IDs, constraints, and indexes.
 func migrateMoneyColumnsLocked(w *writerHandle) error {
-	legacy, err := sqliteColumnExists(w, "usage_events", "cost_usd")
-	if err != nil {
-		return err
+	tableStates := map[string]bool{}
+	for _, table := range []struct {
+		name   string
+		legacy []string
+		final  []string
+	}{
+		{
+			name:   "usage_events",
+			legacy: []string{"cost_usd"},
+			final:  []string{"cost_microdollars"},
+		},
+		{
+			name:   "cursor_usage_events",
+			legacy: []string{"charged_cents", "cursor_token_fee"},
+			final: []string{
+				"charged_microdollars", "cursor_token_fee_microdollars",
+			},
+		},
+		{
+			name: "model_pricing",
+			legacy: []string{
+				"input_per_mtok", "output_per_mtok",
+				"cache_creation_per_mtok", "cache_read_per_mtok",
+			},
+			final: []string{
+				"input_microdollars_per_mtok", "output_microdollars_per_mtok",
+				"cache_creation_microdollars_per_mtok",
+				"cache_read_microdollars_per_mtok",
+			},
+		},
+	} {
+		legacyCount, finalCount := 0, 0
+		for _, column := range table.legacy {
+			exists, err := sqliteColumnExists(w, table.name, column)
+			if err != nil {
+				return err
+			}
+			if exists {
+				legacyCount++
+			}
+		}
+		for _, column := range table.final {
+			exists, err := sqliteColumnExists(w, table.name, column)
+			if err != nil {
+				return err
+			}
+			if exists {
+				finalCount++
+			}
+		}
+		switch {
+		case legacyCount == len(table.legacy) && finalCount == 0:
+			tableStates[table.name] = true
+		case legacyCount == 0 && finalCount == len(table.final):
+			tableStates[table.name] = false
+		default:
+			return fmt.Errorf(
+				"ambiguous money schema for %s: expected complete legacy or microdollar columns",
+				table.name,
+			)
+		}
 	}
-	legacyCursor, err := sqliteColumnExists(w, "cursor_usage_events", "charged_cents")
-	if err != nil {
-		return err
-	}
-	legacyPricing, err := sqliteColumnExists(w, "model_pricing", "input_per_mtok")
-	if err != nil {
-		return err
-	}
+	legacy := tableStates["usage_events"]
+	legacyCursor := tableStates["cursor_usage_events"]
+	legacyPricing := tableStates["model_pricing"]
 	if !legacy && !legacyCursor && !legacyPricing {
 		return nil
 	}

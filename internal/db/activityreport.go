@@ -173,7 +173,10 @@ func (db *DB) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := sessionRowCost(costRow, rateResolver)
+		cost, priced, contributes, priceErr := sessionRowCost(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
@@ -486,7 +489,11 @@ func (db *DB) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _, _ := dailyUsageAmounts(o.scan, rateResolver)
+		_, outputTok, _, _, _, _, priceErr :=
+			dailyUsageAmounts(o.scan, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		costRow := o.scan
 		var sessionCost *money.Money
 		if o.scan.costSource == CopilotReportedCostSource && o.scan.cost.Valid {
@@ -495,7 +502,11 @@ func (db *DB) activityReportUsage(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := sqliteActivityReportRowStatus(costRow, rateResolver)
+		cost, priced, contributes, priceErr :=
+			sqliteActivityReportRowStatus(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
@@ -518,7 +529,7 @@ func (db *DB) activityReportUsage(
 
 func sqliteActivityReportRowStatus(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
-) (cost money.Money, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool, err error) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -533,19 +544,23 @@ func sqliteActivityReportRowStatus(
 
 	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return money.Money{Microdollars: r.cost.Int64}, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return money.Money{}, true, false
+		return money.Money{}, true, false, nil
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return money.Money{}, false, true
+		return money.Money{}, false, true, nil
 	}
-	cost = lookup.Rates.CostForTokens(
+	cost, err = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
+	if err != nil {
+		return money.Money{}, false, false,
+			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
+	}
 	pricing.RecordComputed(r.model, lookup)
-	return cost, true, true
+	return cost, true, true, nil
 }
