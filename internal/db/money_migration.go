@@ -147,53 +147,61 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 }
 
 func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
-	rows, err := tx.Query(`
-		SELECT id, occurred_at, model, kind,
-			input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
-			charged_microdollars, cursor_token_fee_microdollars,
-			user_id, user_email, is_headless
-		FROM cursor_usage_events
-		ORDER BY id`)
-	if err != nil {
-		return fmt.Errorf("querying migrated cursor usage keys: %w", err)
-	}
 	type keyUpdate struct {
 		id  int64
 		key string
 	}
-	var updates []keyUpdate
-	for rows.Next() {
-		var id int64
-		var ev CursorUsageEvent
-		if err := rows.Scan(
-			&id, &ev.OccurredAt, &ev.Model, &ev.Kind,
-			&ev.InputTokens, &ev.OutputTokens,
-			&ev.CacheWriteTokens, &ev.CacheReadTokens,
-			&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
-			&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
-		); err != nil {
+	var lastID int64
+	for {
+		rows, err := tx.Query(`
+			SELECT id, occurred_at, model, kind,
+				input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
+				charged_microdollars, cursor_token_fee_microdollars,
+				user_id, user_email, is_headless
+			FROM cursor_usage_events
+			WHERE id > ?
+			ORDER BY id
+			LIMIT 1000`, lastID)
+		if err != nil {
+			return fmt.Errorf("querying migrated cursor usage keys: %w", err)
+		}
+		updates := make([]keyUpdate, 0, 1000)
+		for rows.Next() {
+			var id int64
+			var ev CursorUsageEvent
+			if err := rows.Scan(
+				&id, &ev.OccurredAt, &ev.Model, &ev.Kind,
+				&ev.InputTokens, &ev.OutputTokens,
+				&ev.CacheWriteTokens, &ev.CacheReadTokens,
+				&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
+				&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
+			); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning migrated cursor usage key: %w", err)
+			}
+			updates = append(updates, keyUpdate{
+				id: id, key: CursorUsageEventDedupKey(ev),
+			})
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
-			return fmt.Errorf("scanning migrated cursor usage key: %w", err)
+			return fmt.Errorf("iterating migrated cursor usage keys: %w", err)
 		}
-		updates = append(updates, keyUpdate{
-			id:  id,
-			key: cursorUsageEventDedupKey(ev),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterating migrated cursor usage keys: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("closing migrated cursor usage keys: %w", err)
-	}
-	for _, update := range updates {
-		if _, err := tx.Exec(
-			`UPDATE cursor_usage_events SET dedup_key = ? WHERE id = ?`,
-			update.key, update.id,
-		); err != nil {
-			return fmt.Errorf("updating migrated cursor usage key: %w", err)
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing migrated cursor usage keys: %w", err)
 		}
+		if len(updates) == 0 {
+			break
+		}
+		for _, update := range updates {
+			if _, err := tx.Exec(
+				`UPDATE cursor_usage_events SET dedup_key = ? WHERE id = ?`,
+				update.key, update.id,
+			); err != nil {
+				return fmt.Errorf("updating migrated cursor usage key: %w", err)
+			}
+		}
+		lastID = updates[len(updates)-1].id
 	}
 	if _, err := tx.Exec(`
 		DELETE FROM cursor_usage_events

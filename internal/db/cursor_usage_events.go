@@ -87,7 +87,7 @@ func (db *DB) InsertCursorUsageEvents(
 			return fmt.Errorf("cursor usage event timestamp is required")
 		}
 		if ev.DedupKey == "" {
-			ev.DedupKey = cursorUsageEventDedupKey(ev)
+			ev.DedupKey = CursorUsageEventDedupKey(ev)
 		}
 		if ev.DedupKey == "" {
 			return fmt.Errorf("cursor usage event dedup key is required")
@@ -120,7 +120,9 @@ func (db *DB) InsertCursorUsageEvents(
 	return tx.Commit()
 }
 
-func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
+// CursorUsageEventDedupKey returns the stable cross-backend identity for a
+// Cursor usage event.
+func CursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	var b strings.Builder
 	b.Grow(256)
 	fmt.Fprintf(&b, "%s|%s|%s|%d|%d|%d|%d|%s|%s|%t|%s|%s",
@@ -141,10 +143,9 @@ func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// formatMicrodollarsAsLegacyCents preserves the decimal text used by the
-// pre-microdollar Cursor dedup key. Migrated rows retain those existing keys,
-// so newly fetched copies of the same event must hash the exact cent value in
-// the same canonical form.
+// formatMicrodollarsAsLegacyCents preserves the canonical decimal text used by
+// the pre-microdollar Cursor fingerprint. Migrated rows are rekeyed after
+// quantization, so a newly fetched copy hashes the same representable value.
 func formatMicrodollarsAsLegacyCents(microdollars int64) string {
 	negative := microdollars < 0
 	magnitude := uint64(microdollars)

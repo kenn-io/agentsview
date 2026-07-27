@@ -628,7 +628,7 @@ func TestParseKiloLegacySessionQuantizesEachRequestCostBeforeSumming(
 	assert.Equal(t, money.Money{}, *sess.UsageEvents[0].Cost)
 }
 
-func TestParseKiloLegacySessionRejectsNegativeRequestCost(t *testing.T) {
+func TestParseKiloLegacySessionInvalidCostPreservesTokenUsage(t *testing.T) {
 	taskDir := writeKiloLegacyFixture(t)
 	msgs := []map[string]any{
 		{"ts": 1700000000000, "type": "say", "say": "text", "text": "first"},
@@ -637,9 +637,12 @@ func TestParseKiloLegacySessionRejectsNegativeRequestCost(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	_, _, err := parseKiloLegacySession(taskDir, "", "h")
+	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
 
-	require.ErrorIs(t, err, money.ErrNegative)
+	require.NoError(t, err)
+	require.Len(t, sess.UsageEvents, 1)
+	assert.Equal(t, 1, sess.UsageEvents[0].InputTokens)
+	assert.Nil(t, sess.UsageEvents[0].Cost)
 }
 
 func TestParseKiloLegacySessionModelFromAPIHistory(t *testing.T) {

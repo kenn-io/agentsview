@@ -592,13 +592,8 @@ func parseKiloLegacyMessages(
 		// accounting for peak context and aggregate totals.
 		if kiloIsMetadataSay(msg.Say) {
 			if msg.Say == "api_req_started" && msg.Text != "" {
-				ctx, in, out, cost, costPresent, prov, cr, cw, valid, costErr :=
+				ctx, in, out, cost, costPresent, prov, cr, cw, valid :=
 					kiloExtractAPIRequestStats(msg.Text)
-				if costErr != nil {
-					return nil, 0, 0, 0, money.Money{}, false, 0, 0, "",
-						time.Time{}, time.Time{}, 0, 0,
-						fmt.Errorf("parsing Kilo reported cost: %w", costErr)
-				}
 				if ctx > peakContext {
 					peakContext = ctx
 				}
@@ -620,6 +615,7 @@ func parseKiloLegacyMessages(
 				if costPresent {
 					hasCost = true
 					requestsWithCost++
+					var costErr error
 					totalCost, costErr = money.Add(totalCost, cost)
 					if costErr != nil {
 						return nil, 0, 0, 0, money.Money{}, false, 0, 0, "",
@@ -1520,18 +1516,17 @@ func kiloExtractAPIRequestStats(text string) (
 	cacheReads int,
 	cacheWrites int,
 	validPayload bool,
-	err error,
 ) {
 	var data struct {
-		TokensIn          float64      `json:"tokensIn"`
-		TokensOut         float64      `json:"tokensOut"`
-		Cost              *json.Number `json:"cost"`
-		InferenceProvider string       `json:"inferenceProvider"`
-		CacheReads        float64      `json:"cacheReads"`
-		CacheWrites       float64      `json:"cacheWrites"`
+		TokensIn          any             `json:"tokensIn"`
+		TokensOut         any             `json:"tokensOut"`
+		Cost              json.RawMessage `json:"cost"`
+		InferenceProvider string          `json:"inferenceProvider"`
+		CacheReads        any             `json:"cacheReads"`
+		CacheWrites       any             `json:"cacheWrites"`
 	}
 	if err := json.Unmarshal([]byte(text), &data); err != nil {
-		return 0, 0, 0, money.Money{}, false, "", 0, 0, false, nil
+		return 0, 0, 0, money.Money{}, false, "", 0, 0, false
 	}
 	validPayload = true
 	tokensIn := JSONFloatInt(data.TokensIn)
@@ -1548,22 +1543,20 @@ func kiloExtractAPIRequestStats(text string) (
 	// usageMissing only indicates that the request did not return
 	// usage data, but a recorded cost field stays reported.
 	if data.Cost != nil {
-		cost, err = money.ParseDollars(data.Cost.String())
-		if err != nil {
-			return 0, 0, 0, money.Money{}, false, "", 0, 0, true, err
+		parsed, err := money.ParseDollars(string(data.Cost))
+		// Invalid reported cost makes this request unpriced; it must not
+		// discard the independently valid token accounting.
+		if err == nil && parsed.Microdollars >= 0 {
+			cost = parsed
+			costPresent = true
 		}
-		if cost.Microdollars < 0 {
-			return 0, 0, 0, money.Money{}, false, "", 0, 0, true,
-				money.ErrNegative
-		}
-		costPresent = true
 	}
 	// Kilo records only the inference provider name on each
 	// request (e.g. "Z.AI", "Moonshot AI"); it is the closest
 	// thing to a model label the format exposes.
 	provider = data.InferenceProvider
 	return contextWindow, inputTokens, tokensOut, cost, costPresent, provider,
-		cacheReads, cacheWrites, validPayload, nil
+		cacheReads, cacheWrites, validPayload
 }
 
 // JSONFloatInt extracts a JSON-decoded numeric value as an int,

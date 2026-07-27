@@ -260,12 +260,14 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 	assert.Equal(t, int64(1), cost.Int64)
 
 	var charged, fee int64
+	var cursorDedupKey string
 	require.NoError(t, pg.QueryRowContext(ctx, `
-		SELECT charged_microdollars, cursor_token_fee_microdollars
-		FROM cursor_usage_events WHERE dedup_key = 'cursor-priced'
-	`).Scan(&charged, &fee))
+		SELECT charged_microdollars, cursor_token_fee_microdollars, dedup_key
+		FROM cursor_usage_events
+	`).Scan(&charged, &fee, &cursorDedupKey))
 	assert.Equal(t, int64(156600), charged)
 	assert.Equal(t, int64(33200), fee)
+	assert.NotEqual(t, "cursor-priced", cursorDedupKey)
 
 	var input, output, cacheCreation, cacheRead int64
 	require.NoError(t, pg.QueryRowContext(ctx, `

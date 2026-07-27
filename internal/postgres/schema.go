@@ -472,11 +472,15 @@ func migrateMoneyColumnsPG(
 		max    string
 		ddl    string
 	}, 0, len(legacyColumns))
+	migrateCursorKeys := false
 	for _, migration := range legacyColumns {
 		if !existingColumns[migration.table][migration.column] {
 			continue
 		}
 		pending = append(pending, migration)
+		if migration.table == "cursor_usage_events" {
+			migrateCursorKeys = true
+		}
 	}
 	if len(pending) == 0 {
 		return nil
@@ -507,8 +511,96 @@ func migrateMoneyColumnsPG(
 				migration.table, migration.column, err)
 		}
 	}
+	if migrateCursorKeys {
+		if err := rekeyMigratedCursorUsageEventsPG(ctx, tx); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing PG microdollar migration: %w", err)
+	}
+	return nil
+}
+
+func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
+	type keyUpdate struct {
+		id  int64
+		key string
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DROP INDEX IF EXISTS idx_cursor_usage_events_dedup`); err != nil {
+		return fmt.Errorf("dropping migrated PG cursor usage index: %w", err)
+	}
+	var lastID int64
+	for {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, occurred_at, model, kind,
+				input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
+				charged_microdollars, cursor_token_fee_microdollars,
+				user_id, user_email, is_headless
+			FROM cursor_usage_events
+			WHERE id > $1
+			ORDER BY id
+			LIMIT 1000`, lastID)
+		if err != nil {
+			return fmt.Errorf("querying migrated PG cursor usage keys: %w", err)
+		}
+		updates := make([]keyUpdate, 0, 1000)
+		for rows.Next() {
+			var id int64
+			var occurredAt time.Time
+			var ev db.CursorUsageEvent
+			if err := rows.Scan(
+				&id, &occurredAt, &ev.Model, &ev.Kind,
+				&ev.InputTokens, &ev.OutputTokens,
+				&ev.CacheWriteTokens, &ev.CacheReadTokens,
+				&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
+				&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
+			); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning migrated PG cursor usage key: %w", err)
+			}
+			ev.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
+			updates = append(updates, keyUpdate{
+				id: id, key: db.CursorUsageEventDedupKey(ev),
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating migrated PG cursor usage keys: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing migrated PG cursor usage keys: %w", err)
+		}
+		if len(updates) == 0 {
+			break
+		}
+		for _, update := range updates {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE cursor_usage_events SET dedup_key = $1 WHERE id = $2`,
+				update.key, update.id,
+			); err != nil {
+				return fmt.Errorf("updating migrated PG cursor usage key: %w", err)
+			}
+		}
+		lastID = updates[len(updates)-1].id
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM cursor_usage_events
+		WHERE id IN (
+			SELECT id FROM (
+				SELECT id, ROW_NUMBER() OVER (
+					PARTITION BY dedup_key ORDER BY id
+				) AS dedup_rank
+				FROM cursor_usage_events
+				WHERE dedup_key != ''
+			) ranked
+			WHERE dedup_rank > 1
+		);
+		CREATE UNIQUE INDEX idx_cursor_usage_events_dedup
+			ON cursor_usage_events (dedup_key)
+			WHERE dedup_key != ''`); err != nil {
+		return fmt.Errorf("deduplicating migrated PG cursor usage keys: %w", err)
 	}
 	return nil
 }

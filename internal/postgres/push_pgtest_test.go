@@ -1634,6 +1634,77 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
 }
 
+func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_cursor_usage_money_migration_push_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		ALTER TABLE cursor_usage_events
+			ALTER COLUMN charged_microdollars TYPE DOUBLE PRECISION
+			USING charged_microdollars / 10000.0;
+		ALTER TABLE cursor_usage_events
+			RENAME COLUMN charged_microdollars TO charged_cents;
+		ALTER TABLE cursor_usage_events
+			ALTER COLUMN cursor_token_fee_microdollars TYPE DOUBLE PRECISION
+			USING cursor_token_fee_microdollars / 10000.0;
+		ALTER TABLE cursor_usage_events
+			RENAME COLUMN cursor_token_fee_microdollars TO cursor_token_fee;
+		INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES (
+			'2026-05-14T10:05:00Z'::timestamptz,
+			'claude-4.6-opus-high-thinking',
+			'USAGE_EVENT_KIND_USAGE_BASED',
+			1234, 567, 12, 34,
+			15.66001, 3.32001,
+			'152683922', 'member@example.com', false,
+			'legacy-fractional-cent-key'
+		)`)
+	require.NoError(t, err, "seed legacy Cursor usage")
+	require.NoError(t, EnsureSchema(ctx, pg, schema),
+		"migrate legacy Cursor money")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err, "open local db")
+	defer localDB.Close()
+	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 12,
+		CacheReadTokens:  34,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+	}}), "insert refetched local Cursor usage")
+
+	sync := &Sync{
+		local: localDB, pg: pg, machine: "test-machine",
+		schema: schema, schemaDone: true,
+	}
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+
+	assert.Equal(t, 1, pgTableCount(t, ctx, pg, "cursor_usage_events"),
+		"refetched quantized event must not duplicate its migrated PG row")
+}
+
 func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 	pgURL := testPGURL(t)
 
