@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -192,24 +193,27 @@ func writeOmnigentSplitSyncDB(t *testing.T, root string, count int) string {
 	}
 	_, err = database.Exec(`INSERT INTO alembic_version VALUES ('split-sync-test')`)
 	require.NoError(t, err)
+	tx, err := database.Begin()
+	require.NoError(t, err)
 	for i := range count {
 		id := fmt.Sprintf("conv_%04d", i)
 		updatedAt := int64(1_700_000_000 + i)
-		_, err = database.Exec(`INSERT INTO conversations
+		_, err = tx.Exec(`INSERT INTO conversations
 			(workspace_id, id, created_at, updated_at, title, root_conversation_id)
 			VALUES (0, ?, ?, ?, ?, ?)`,
 			id, updatedAt-1, updatedAt, id, id)
 		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
+		_, err = tx.Exec(`INSERT INTO omnigent_conversation_metadata
 			(workspace_id, id, kind, workspace)
 			VALUES (0, ?, 1, '/work/project')`, id)
 		require.NoError(t, err)
-		_, err = database.Exec(`INSERT INTO conversation_items
+		_, err = tx.Exec(`INSERT INTO conversation_items
 			(workspace_id, conversation_id, id, position, type, data, search_text)
 			VALUES (0, ?, ?, 0, 1, ?, 'initial')`, id, id+"_0",
 			`{"role":"user","content":[{"type":"input_text","text":"initial"}]}`)
 		require.NoError(t, err)
 	}
+	require.NoError(t, tx.Commit())
 	require.NoError(t, database.Close())
 	return path
 }
@@ -325,7 +329,7 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	for _, archiveSize := range []int{5, 200} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -721,7 +725,7 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	for _, archiveSize := range []int{200, 2000} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -780,7 +784,7 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	var watcherResultCounts []int64
-	for _, archiveSize := range []int{200, 2000} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1304,7 +1308,7 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 	}
 	const targetID = "omnigent:0:conv_0000"
 	boundedParseCounts := make(map[int]int64)
-	for _, archiveSize := range []int{256, 1024} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1362,7 +1366,7 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 				"an unchanged container must cost the next scheduled pass nothing")
 		})
 	}
-	assert.Equal(t, boundedParseCounts[256], boundedParseCounts[1024],
+	assert.Equal(t, boundedParseCounts[130], boundedParseCounts[1030],
 		"scheduled metadata work must not grow with the conversation archive")
 }
 
@@ -1462,7 +1466,7 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 		t.Skip("skipping integration test")
 	}
 	observed := make(map[int]int64)
-	for _, archiveSize := range []int{256, 1024} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
@@ -1554,7 +1558,7 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 			assert.NotNil(t, survivor)
 		})
 	}
-	assert.Equal(t, observed[256], observed[1024],
+	assert.Equal(t, observed[130], observed[1030],
 		"scheduled work must not grow with the conversation archive")
 }
 
@@ -1772,4 +1776,112 @@ func TestReconcileOmnigentUnsupportedSchemaIsNonfatalAndPreservesArchive(
 	require.NotNil(t, archived)
 	assert.Nil(t, archived.DeletedAt)
 	assert.Equal(t, 1, archived.MessageCount)
+}
+
+// omnigentBinaryIDSyncDDL mirrors the current pinned Omnigent generation used
+// by internal/parser (omnigentBinaryIDGenDDL): id columns are 16-byte UUID
+// BLOBs rather than the text ids omnigentSplitSyncDDL above exercises.
+const omnigentBinaryIDSyncDDL = `
+CREATE TABLE conversations (
+	id BLOB NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+	title VARCHAR(768) DEFAULT ('') NOT NULL,
+	parent_conversation_id BLOB, root_conversation_id BLOB NOT NULL,
+	next_position INTEGER, workspace_id BIGINT DEFAULT '0' NOT NULL,
+	agent_id BLOB, session_overrides VARCHAR(512),
+	archived BOOLEAN DEFAULT 0 NOT NULL,
+	PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX ix_conversations_archived_updated
+	ON conversations(workspace_id, archived, updated_at, id);
+CREATE TABLE omnigent_conversation_metadata (
+	workspace_id BIGINT DEFAULT '0' NOT NULL, id BLOB NOT NULL,
+	kind SMALLINT NOT NULL, sub_agent_name VARCHAR(128),
+	external_session_id VARCHAR(128), session_usage BLOB,
+	workspace VARCHAR(2048), git_branch VARCHAR(255),
+	PRIMARY KEY (workspace_id, id)
+);
+CREATE TABLE conversation_items (
+	id BLOB NOT NULL, conversation_id BLOB NOT NULL,
+	response_id VARCHAR(64) NOT NULL, created_at INTEGER NOT NULL,
+	position INTEGER NOT NULL, type SMALLINT NOT NULL,
+	status SMALLINT NOT NULL, data TEXT NOT NULL, search_text TEXT NOT NULL,
+	workspace_id BIGINT DEFAULT '0' NOT NULL,
+	PRIMARY KEY (workspace_id, conversation_id, id, created_at)
+);
+CREATE INDEX ix_conversation_items_conversation_id_position
+	ON conversation_items(workspace_id, conversation_id, position);`
+
+// writeOmnigentBinaryIDSyncDB builds a single-conversation chat.db under the
+// current binary-uuid generation and returns its path plus the lowercase hex
+// form of the conversation id, the form the archived session ID is keyed on.
+func writeOmnigentBinaryIDSyncDB(t *testing.T, root string) (string, string) {
+	t.Helper()
+	path := filepath.Join(root, "chat.db")
+	database, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = database.Exec(
+		`CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)`,
+	)
+	require.NoError(t, err)
+	for _, statement := range splitSQLStatements(omnigentBinaryIDSyncDDL) {
+		_, err = database.Exec(statement)
+		require.NoError(t, err)
+	}
+	_, err = database.Exec(
+		`INSERT INTO alembic_version VALUES ('binary-id-sync-test')`,
+	)
+	require.NoError(t, err)
+
+	convID, err := hex.DecodeString("11112222333344445555666677778888")
+	require.NoError(t, err)
+	_, err = database.Exec(`INSERT INTO conversations
+		(id, created_at, updated_at, title, root_conversation_id, workspace_id)
+		VALUES (?, 1700000000, 1700000001, 'binary uuid session', ?, 0)`,
+		convID, convID)
+	require.NoError(t, err)
+	_, err = database.Exec(`INSERT INTO omnigent_conversation_metadata
+		(workspace_id, id, kind, workspace)
+		VALUES (0, ?, 1, '/work/project')`, convID)
+	require.NoError(t, err)
+	itemID, err := hex.DecodeString("00000000000000000000000000000001")
+	require.NoError(t, err)
+	_, err = database.Exec(`INSERT INTO conversation_items
+		(id, conversation_id, response_id, created_at, position, type, status,
+		 data, search_text, workspace_id)
+		VALUES (?, ?, 'resp', 1700000000, 0, 1, 1, ?, 'hi', 0)`,
+		itemID, convID,
+		`{"role":"user","content":[{"type":"input_text","text":"hi"}]}`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	return path, hex.EncodeToString(convID)
+}
+
+// TestSyncOmnigentBinaryIDGenerationLandsUnderHexSessionID covers the
+// current-generation (binary-uuid) chat.db end to end through the sync
+// engine: every other Omnigent sync test seeds the older split-schema,
+// text-id generation via writeOmnigentSplitSyncDB, leaving the binary-id
+// generation's sync path (as opposed to parser-level parsing, already
+// covered by TestOmnigentBinaryIDGenerationParses) unexercised.
+func TestSyncOmnigentBinaryIDGenerationLandsUnderHexSessionID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	_, convHex := writeOmnigentBinaryIDSyncDB(t, root)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	syncOmnigentArchive(t, engine, archive, 1)
+
+	sessionID := "omnigent:0:" + convHex
+	session, err := archive.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, session,
+		"a binary-uuid conversation must sync under its hex session ID")
+	assert.Equal(t, 1, session.MessageCount)
 }

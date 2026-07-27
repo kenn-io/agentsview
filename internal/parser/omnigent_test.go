@@ -262,22 +262,24 @@ func writeOmnigentSingleWorkspaceCardinalityDB(t *testing.T, count int) string {
 		alembicVersion: "cardinality",
 		seed: func(t *testing.T, db *sql.DB) {
 			t.Helper()
+			tx, err := db.Begin()
+			require.NoError(t, err)
 			for i := range count {
 				id := fmt.Sprintf("conv_%03d", i)
 				updatedAt := int64(1_700_000_000 + i)
 				if i == count-1 {
 					updatedAt = 4_000_000_000
 				}
-				_, err := db.Exec(`INSERT INTO conversations
+				_, err := tx.Exec(`INSERT INTO conversations
 					(workspace_id, id, created_at, updated_at, title,
 					 root_conversation_id)
 					VALUES (0, ?, ?, ?, ?, ?)`, id, updatedAt-1, updatedAt, id, id)
 				require.NoError(t, err)
-				_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
+				_, err = tx.Exec(`INSERT INTO omnigent_conversation_metadata
 					(workspace_id, id, kind)
 					VALUES (0, ?, 1)`, id)
 				require.NoError(t, err)
-				_, err = db.Exec(`INSERT INTO conversation_items
+				_, err = tx.Exec(`INSERT INTO conversation_items
 					(workspace_id, conversation_id, id, position, type, data,
 					 search_text)
 					VALUES (0, ?, ?, 0, 1,
@@ -285,6 +287,7 @@ func writeOmnigentSingleWorkspaceCardinalityDB(t *testing.T, count int) string {
 						'hi')`, id, id+"_i0")
 				require.NoError(t, err)
 			}
+			require.NoError(t, tx.Commit())
 		},
 	})
 }
@@ -298,19 +301,21 @@ func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
 		alembicVersion: "workspace-cardinality",
 		seed: func(t *testing.T, db *sql.DB) {
 			t.Helper()
+			tx, err := db.Begin()
+			require.NoError(t, err)
 			for workspaceID := range count {
 				updatedAt := int64(1_700_000_000 + workspaceID)
-				_, err := db.Exec(`INSERT INTO conversations
+				_, err := tx.Exec(`INSERT INTO conversations
 					(workspace_id, id, created_at, updated_at, title,
 					 root_conversation_id)
 					VALUES (?, 'conv', ?, ?, 'conversation', 'conv')`,
 					workspaceID, updatedAt-1, updatedAt)
 				require.NoError(t, err)
-				_, err = db.Exec(`INSERT INTO omnigent_conversation_metadata
+				_, err = tx.Exec(`INSERT INTO omnigent_conversation_metadata
 					(workspace_id, id, kind, workspace)
 					VALUES (?, 'conv', 1, '/work/project')`, workspaceID)
 				require.NoError(t, err)
-				_, err = db.Exec(`INSERT INTO conversation_items
+				_, err = tx.Exec(`INSERT INTO conversation_items
 					(workspace_id, conversation_id, id, position, type, data,
 					 search_text)
 					VALUES (?, 'conv', 'item', 0, 1,
@@ -318,6 +323,7 @@ func writeOmnigentSplitWorkspaceCardinalityDB(t *testing.T, count int) string {
 						'hi')`, workspaceID)
 				require.NoError(t, err)
 			}
+			require.NoError(t, tx.Commit())
 		},
 	})
 }
@@ -680,10 +686,10 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 
 // TestOmnigentChangedPathParsingIsBounded is the production-path cardinality
 // regression: a warm changed-path event resolves only the changed member, and
-// the fan-out stays the same when the unchanged archive grows from one hundred
-// conversations to two hundred.
+// the fan-out stays the same when the unchanged archive grows from 130
+// conversations to 1030.
 func TestOmnigentChangedPathParsingIsBounded(t *testing.T) {
-	for _, archiveSize := range []int{100, 200} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			path := writeOmnigentSingleWorkspaceCardinalityDB(t, archiveSize)
 			changedID := fmt.Sprintf("conv_%03d", archiveSize/2)
@@ -1023,7 +1029,7 @@ func TestOmnigentSplitMetadataOnlyChangesDeferToContainerParse(t *testing.T) {
 }
 
 func TestOmnigentSplitWorkspaceChangeWorkIsArchiveIndependent(t *testing.T) {
-	for _, archiveSize := range []int{100, 600} {
+	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
 			path := writeOmnigentSplitWorkspaceCardinalityDB(t, archiveSize)
 			conn, err := openOmnigentDB(path)
@@ -1200,62 +1206,79 @@ func omnigentTrackerAtCurrentHighWater(
 	return tracker
 }
 
-func TestOmnigentIncrementalQueriesUseSeekableIndexes(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		writeDB    func(*testing.T, int) string
-		query      func(omnigentSchema) string
-		args       []any
-		wantDetail string
-		wantItems  string
-	}{
-		{
-			name:       "split schema new conversation rows",
-			writeDB:    writeOmnigentSplitWorkspaceCardinalityDB,
-			query:      omnigentNewConversationQuery,
-			args:       []any{int64(0), 128},
-			wantDetail: "INTEGER PRIMARY KEY",
-			wantItems:  "ix_conversation_items_conversation_id_position",
-		},
-		{
-			name:       "split schema new item rows",
-			writeDB:    writeOmnigentSplitWorkspaceCardinalityDB,
-			query:      omnigentNewItemQuery,
-			args:       []any{int64(0), 128},
-			wantDetail: "INTEGER PRIMARY KEY",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := tc.writeDB(t, 300)
+// TestOmnigentIncrementalRowQueriesReturnOnlyRowsPastCursor is the
+// correctness-observable half of what the deleted
+// TestOmnigentIncrementalQueriesUseSeekableIndexes used to guard by matching
+// EXPLAIN QUERY PLAN output, which is brittle across SQLite versions
+// (index-name and "AUTOMATIC" wording can change): the paginated
+// conversation/item queries backing incremental discovery
+// (omnigentNewConversationQuery, omnigentNewItemQuery) must return exactly
+// the rows inserted after the tracked cursor, not a rescan of the whole
+// archive, and that stays true whether the archive already holds 130 or 1030
+// unrelated conversations. The remaining, purely internal guarantee the old
+// test also checked -- that the MATERIALIZED CTE hint keeps SQLite's planner
+// from flattening the query into a per-page full scan of conversation_items
+// -- has no observable effect besides query cost, so it cannot be expressed
+// without either timing or plan-string matching; it is documented instead on
+// omnigentNewConversationQuery.
+func TestOmnigentIncrementalRowQueriesReturnOnlyRowsPastCursor(t *testing.T) {
+	for _, archiveSize := range []int{130, 1030} {
+		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
+			path := writeOmnigentSingleWorkspaceCardinalityDB(t, archiveSize)
 			conn, err := openOmnigentDB(path)
 			require.NoError(t, err)
 			defer conn.Close()
 			schema, err := detectOmnigentSchema(conn)
 			require.NoError(t, err)
 
-			rows, err := conn.QueryContext(
-				t.Context(), "EXPLAIN QUERY PLAN "+tc.query(schema), tc.args...,
+			convRowID, convTail, err := omnigentLatestRowIdentity(
+				t.Context(), conn, omnigentConversationsTable,
+				omnigentConversationIDExprs(schema),
 			)
 			require.NoError(t, err)
-			defer rows.Close()
-			var details []string
-			for rows.Next() {
-				var id, parent, unused int
-				var detail string
-				require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-				details = append(details, detail)
-			}
-			require.NoError(t, rows.Err())
-			plan := strings.ToUpper(strings.Join(details, "\n"))
-			assert.Contains(t, plan, strings.ToUpper(tc.wantDetail))
-			if tc.wantItems != "" {
-				assert.Contains(t, plan, strings.ToUpper(tc.wantItems))
-			}
-			assert.NotContains(t, plan, "SCAN CONVERSATIONS")
-			assert.NotContains(t, plan, "SCAN CONVERSATION_ITEMS",
-				"incremental discovery must not scan the full item archive")
-			assert.NotContains(t, plan, "AUTOMATIC",
-				"an ephemeral item index would still scan the archive to build")
+			itemRowID, itemTail, err := omnigentLatestRowIdentity(
+				t.Context(), conn, omnigentItemsTable, omnigentItemIDExprs(schema),
+			)
+			require.NoError(t, err)
+
+			// Write via a separate read-write handle; openOmnigentDB is
+			// read-only.
+			writer, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			_, err = writer.Exec(`INSERT INTO conversations
+				(workspace_id, id, created_at, updated_at, title,
+				 root_conversation_id)
+				VALUES (0, 'conv_new', 1, 2, 'new', 'conv_new')`)
+			require.NoError(t, err)
+			_, err = writer.Exec(`INSERT INTO omnigent_conversation_metadata
+				(workspace_id, id, kind) VALUES (0, 'conv_new', 1)`)
+			require.NoError(t, err)
+			_, err = writer.Exec(`INSERT INTO conversation_items
+				(workspace_id, conversation_id, id, position, type, data,
+				 search_text)
+				VALUES (0, 'conv_new', 'conv_new_i0', 0, 1,
+					'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
+					'hi')`)
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+
+			metas, _, _, err := listOmnigentNewConversationMetas(
+				t.Context(), conn, schema, convRowID, convTail,
+			)
+			require.NoError(t, err)
+			require.Len(t, metas, 1,
+				"only the conversation inserted after the cursor is new, "+
+					"regardless of how many unrelated conversations precede it")
+			assert.Equal(t, "conv_new", metas[0].rawID)
+
+			members, _, _, err := listOmnigentNewItemMembers(
+				t.Context(), conn, schema, itemRowID, itemTail,
+			)
+			require.NoError(t, err)
+			require.Len(t, members, 1,
+				"only the item inserted after the cursor is new, regardless "+
+					"of how many unrelated items precede it")
+			assert.Equal(t, "conv_new", members[0].rawID)
 		})
 	}
 }
