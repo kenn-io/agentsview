@@ -248,7 +248,7 @@ type Client struct {
 	// APIKey is sent as a bearer token when non-empty. Keep credentials
 	// outside BaseURL so redacted endpoint logs stay useful.
 	APIKey string
-	Model   string
+	Model  string
 	// RetryBackoff seeds the exponential wait between transient retries;
 	// zero means 500ms. It shapes latency, not output, so it stays outside
 	// RequestShape and the fingerprint.

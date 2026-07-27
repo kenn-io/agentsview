@@ -150,7 +150,7 @@ func TestClientDistillSendsBearerToken(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		writeJSON(t, w, http.StatusOK, map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"finish_reason": "stop",
 				"message": map[string]any{
