@@ -858,7 +858,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	// matching the capture-before-discovery ordering of full syncs.
 	preContainerStates := e.captureSQLiteContainerStates(paths)
 	files, classificationErr := e.classifyPaths(ctx, paths)
-	missingPaths = e.omitMissingPersistentContainerPaths(missingPaths, files)
+	missingPaths = omitMissingPersistentContainerPaths(missingPaths, files)
 	if len(files) == 0 && len(missingPaths) == 0 {
 		return classificationErr
 	}
@@ -929,35 +929,20 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	return nil
 }
 
-func (e *Engine) omitMissingPersistentContainerPaths(
+// omitMissingPersistentContainerPaths drops missing changed paths that are
+// backed by an omnigent chat.db container: the database is a persistent
+// archive, so a vanished container (or one of its WAL/SHM siblings) must not
+// tombstone the stored virtual members.
+func omitMissingPersistentContainerPaths(
 	missingPaths []string, files []parser.DiscoveredFile,
 ) []string {
-	providers := make(map[parser.AgentType]parser.Provider)
 	return slices.DeleteFunc(missingPaths, func(missingPath string) bool {
 		for _, file := range files {
-			if file.ProviderSource == nil {
+			if file.ProviderSource == nil ||
+				!parser.IsOmnigentContainerSource(*file.ProviderSource) {
 				continue
 			}
-			provider, exists := providers[file.Agent]
-			if !exists {
-				factory, ok := e.providerFactories[file.Agent]
-				if !ok || factory == nil {
-					continue
-				}
-				provider = factory.NewProvider(parser.ProviderConfig{
-					Roots:   e.agentDirs[file.Agent],
-					Machine: e.machine,
-				})
-				providers[file.Agent] = provider
-			}
-			semantics := providerSourceSyncSemantics(
-				provider, *file.ProviderSource,
-			)
-			if !semantics.PersistentContainer ||
-				semantics.BackingContainerPath == "" {
-				continue
-			}
-			container := semantics.BackingContainerPath
+			container := providerDiscoveredPath(*file.ProviderSource)
 			if filepath.Clean(missingPath) == filepath.Clean(container) ||
 				providerVirtualSourceBackedByEvent(container, missingPath) {
 				return true
@@ -965,17 +950,6 @@ func (e *Engine) omitMissingPersistentContainerPaths(
 		}
 		return false
 	})
-}
-
-func providerSourceSyncSemantics(
-	provider parser.Provider,
-	source parser.SourceRef,
-) parser.SourceSyncSemantics {
-	resolver, ok := provider.(parser.SourceSyncSemanticsProvider)
-	if !ok {
-		return parser.SourceSyncSemantics{}
-	}
-	return resolver.SourceSyncSemantics(source)
 }
 
 // classifyPaths maps changed file system paths to
@@ -1152,18 +1126,20 @@ func (e *Engine) classifyProviderChangedPath(
 				}
 				continue
 			}
-			sources, err = e.expandProviderDependentSources(
-				ctx, provider, sources,
-			)
-			if err != nil {
-				classificationErr = errors.Join(
-					classificationErr,
-					fmt.Errorf(
-						"%s provider dependent-source classification for %q: %w",
-						def.Type, path, err,
-					),
+			if def.Type == parser.AgentOmnigent {
+				sources, err = e.expandOmnigentInheritedMetadataSources(
+					ctx, provider, sources,
 				)
-				continue
+				if err != nil {
+					classificationErr = errors.Join(
+						classificationErr,
+						fmt.Errorf(
+							"%s provider dependent-source classification for %q: %w",
+							def.Type, path, err,
+						),
+					)
+					continue
+				}
 			}
 			for _, source := range sources {
 				sourcePath := providerDiscoveredPath(source)
@@ -1178,19 +1154,10 @@ func (e *Engine) classifyProviderChangedPath(
 				if _, ok := seen[key]; ok {
 					continue
 				}
-				sourceSemantics := providerSourceSyncSemantics(
-					provider, source,
-				)
-				backingContainerPresent :=
-					sourceSemantics.BackingContainerPath != "" &&
-						parser.IsRegularFile(
-							sourceSemantics.BackingContainerPath,
-						)
 				if eventKind == "remove" &&
 					filepath.Clean(sourcePath) == filepath.Clean(path) &&
 					!parser.IsRegularFile(sourcePath) &&
-					!sourceSemantics.PersistentContainer &&
-					!backingContainerPresent &&
+					!parser.IsOmnigentContainerSource(source) &&
 					!providerDeletedPhysicalSQLiteSource(agent, sourcePath) &&
 					!providerVirtualSourceContainerExists(sourcePath) {
 					continue
@@ -1219,14 +1186,16 @@ func (e *Engine) classifyProviderChangedPath(
 	return files, classificationErr
 }
 
-func (e *Engine) expandProviderDependentSources(
+// expandOmnigentInheritedMetadataSources adds the still-archived descendant
+// (subagent) sources of each changed omnigent member so their inherited cwd
+// and branch metadata refresh alongside the changed root.
+func (e *Engine) expandOmnigentInheritedMetadataSources(
 	ctx context.Context,
 	provider parser.Provider,
 	sources []parser.SourceRef,
 ) ([]parser.SourceRef, error) {
-	dependent, ok := provider.(parser.DependentSourceResolver)
 	reconciler, exact := provider.(parser.ReconciliationSourceResolver)
-	if !ok || !exact || len(sources) == 0 {
+	if !exact || len(sources) == 0 {
 		return sources, nil
 	}
 	agent := provider.Definition().Type
@@ -1237,7 +1206,7 @@ func (e *Engine) expandProviderDependentSources(
 		if path := providerDiscoveredPath(source); path != "" {
 			seenSources[path] = struct{}{}
 		}
-		rawID, found := dependent.DependentSourceRootSessionID(source)
+		rawID, found := parser.OmnigentMemberSessionID(source)
 		if !found {
 			continue
 		}
@@ -6537,12 +6506,24 @@ func (e *Engine) collectAndBatch(
 				stats.parserExcludedFiles++
 			}
 			if r.cacheSkip && !r.noCacheSkip {
-				stageNoWriteCache(r, skipCacheWrite{
-					agent:             r.agent,
-					key:               r.skipCacheKey(),
-					mtime:             r.mtime,
-					sourceFingerprint: r.sourceFingerprint,
-				})
+				if r.agent == parser.AgentOmnigent {
+					// An omnigent rowless container entry can vouch for the
+					// source with no stored rows at all (see the
+					// whole-container clause in providerSkipCacheEntryFreshInDB),
+					// so it must wait for the ownership baseline to commit;
+					// a failed baseline rejects it. Every other provider keeps
+					// the immediate rowless cache write.
+					stageNoWriteCache(r, skipCacheWrite{
+						agent:             r.agent,
+						key:               r.skipCacheKey(),
+						mtime:             r.mtime,
+						sourceFingerprint: r.sourceFingerprint,
+					})
+				} else {
+					e.cacheSkip(
+						r.skipCacheKey(), r.mtime, r.sourceFingerprint,
+					)
+				}
 			}
 			e.noteSQLiteContainerResult(r.path, true)
 			if r.providerFailureCount == 0 &&
@@ -6611,16 +6592,15 @@ func (e *Engine) collectAndBatch(
 				needsRetry := r.providerFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
 				pending = append(pending, pendingWrite{
-					sess:                           pr.Session,
-					msgs:                           pr.Messages,
-					usageEvents:                    pr.UsageEvents,
-					needsRetry:                     needsRetry,
-					forceReplace:                   r.forceReplace,
-					demoteDataVersionOnFailedWrite: r.demoteDataVersionOnFailedWrite,
-					baselineEligible:               vetoed == 0 && r.providerFailureCount == 0 && !needsRetry,
-					storageTrustPath:               r.storageTrustPath,
-					storageTrustState:              r.storageTrustState,
-					storageTrustSnap:               r.storageTrustSnap,
+					sess:              pr.Session,
+					msgs:              pr.Messages,
+					usageEvents:       pr.UsageEvents,
+					needsRetry:        needsRetry,
+					forceReplace:      r.forceReplace,
+					baselineEligible:  vetoed == 0 && r.providerFailureCount == 0 && !needsRetry,
+					storageTrustPath:  r.storageTrustPath,
+					storageTrustState: r.storageTrustState,
+					storageTrustSnap:  r.storageTrustSnap,
 				})
 				if runtimeMetrics != nil {
 					runtimeMetrics.pendingWrites(len(pending))
@@ -6882,10 +6862,7 @@ type processResult struct {
 	// messages can reuse existing ordinals, so the default
 	// append-only writeMessages would silently drop the rewrite.
 	forceReplace bool
-	// demoteDataVersionOnFailedWrite requests that a failed full write mark the
-	// stored member stale so a later shared-container parse retries it.
-	demoteDataVersionOnFailedWrite bool
-	cacheKey                       string
+	cacheKey     string
 	// retrySessionIDs carries provider per-result data-version state.
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
@@ -7122,7 +7099,6 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 	providerSemantics := provider.Capabilities().Sync
-	sourceSemantics := providerSourceSyncSemantics(provider, source)
 
 	// SyncSingleSession resolves a single session by ID and carries the
 	// caller-preferred project (typically the DB-preserved value, so a
@@ -7205,7 +7181,7 @@ func (e *Engine) processProviderFile(
 		return processResult{err: err}, true
 	}
 	cacheKey := providerProcessCacheKey(
-		file, source, fingerprint, providerSemantics, sourceSemantics,
+		file, source, fingerprint, providerSemantics,
 	)
 	cacheSkip := e.shouldCacheSkip(file)
 	if cacheSkip && !e.forceParse && !file.ForceParse {
@@ -7222,7 +7198,6 @@ func (e *Engine) processProviderFile(
 				source,
 				fingerprint,
 				providerSemantics,
-				sourceSemantics,
 			) {
 				e.clearSkip(cacheKey)
 			} else if e.pathNeedsCachedSkipBypass(file.Path) {
@@ -7236,10 +7211,9 @@ func (e *Engine) processProviderFile(
 				e.clearSkip(cacheKey)
 			} else {
 				cacheStillFresh := true
-				restorer, ok := provider.(parser.CachedSourceStateRestorer)
-				if ok {
-					restored, err := restorer.RestoreCachedSourceState(
-						ctx, source,
+				if file.Agent == parser.AgentOmnigent {
+					restored, err := parser.RestoreOmnigentCachedSourceState(
+						ctx, provider, source,
 					)
 					if err != nil {
 						return processResult{
@@ -7264,7 +7238,6 @@ func (e *Engine) processProviderFile(
 								source,
 								fingerprint,
 								providerSemantics,
-								sourceSemantics,
 							)
 							cacheStillFresh = false
 						}
@@ -7432,18 +7405,15 @@ func (e *Engine) processProviderFile(
 					retentionLease: lease,
 				}, true
 			}
-			declaredContainerExists :=
-				sourceSemantics.CompleteResultOwnsMembers &&
-					sourceSemantics.BackingContainerPath != "" &&
-					parser.IsRegularFile(
-						sourceSemantics.BackingContainerPath,
-					)
+			omnigentContainerExists :=
+				parser.IsOmnigentContainerSource(source) &&
+					parser.IsRegularFile(providerDiscoveredPath(source))
 			if e.pathRewriter == nil &&
 				(providerVirtualSourceContainerExists(file.Path) ||
-					declaredContainerExists) {
+					omnigentContainerExists) {
 				// The provider re-resolved this exact virtual member against a
 				// still-present shared container, or authoritatively parsed an
-				// empty declared container. The member was removed from the
+				// empty omnigent container. The member was removed from the
 				// container, not the container from disk. Carry the stored
 				// ownership to the revivable tombstone seam.
 				missingMembers = owned
@@ -7478,7 +7448,7 @@ func (e *Engine) processProviderFile(
 	parsedCount := len(parsedResults)
 	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
 	var missingMembers []sourceMissingMember
-	if sourceSemantics.CompleteResultOwnsMembers && outcome.ForceReplace &&
+	if file.Agent == parser.AgentOmnigent && outcome.ForceReplace &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
 			e.providerSourceMissingSessionOwnershipsForCompleteResult(
@@ -7499,25 +7469,26 @@ func (e *Engine) processProviderFile(
 		file, parsedResults, providerSemantics.UnchangedResults,
 	)
 	res := processResult{
-		results:              filteredResults,
-		excludedSessionIDs:   excludedSessionIDs,
-		sourceMissingMembers: missingMembers,
-		mtime:                fingerprint.MTimeNS,
-		cacheSkip:            cacheSkip,
-		cacheKey:             cacheKey,
-		noCacheSkip:          !cleanCache,
-		forceReplace:         outcome.ForceReplace || incForceReplace,
-		demoteDataVersionOnFailedWrite: sourceSemantics.
-			DemoteDataVersionOnFailedWrite,
+		results:               filteredResults,
+		excludedSessionIDs:    excludedSessionIDs,
+		sourceMissingMembers:  missingMembers,
+		mtime:                 fingerprint.MTimeNS,
+		cacheSkip:             cacheSkip,
+		cacheKey:              cacheKey,
+		noCacheSkip:           !cleanCache,
+		forceReplace:          outcome.ForceReplace || incForceReplace,
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 		providerFailureCount:  providerFailureCount,
 		retentionLease:        lease,
 	}
-	if sourceSemantics.CacheAfterWrite && cacheSkip && cleanCache &&
+	if file.Agent == parser.AgentOmnigent && cacheSkip && cleanCache &&
 		!e.forceParse && !file.ForceParse &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 &&
 		fingerprint.Hash != "" {
-		res.cacheAfterWrite = true
+		// A whole-container omnigent parse may only be skip-cached after its
+		// member writes commit (cache-after-write); virtual member parses keep
+		// the immediate cache path.
+		res.cacheAfterWrite = parser.IsOmnigentContainerSource(source)
 	}
 	// Incremental-append providers (Claude and Codex) need the stored file
 	// identity so a later sync can detect an atomic file replacement
@@ -7895,7 +7866,6 @@ func providerProcessCacheKey(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 	providerSemantics parser.ProviderSyncSemantics,
-	sourceSemantics parser.SourceSyncSemantics,
 ) string {
 	key := plannedSkipKey(source, fingerprint)
 	if key == "" {
@@ -7904,7 +7874,10 @@ func providerProcessCacheKey(
 	key = providerProcessCacheKeyWithHash(
 		key, fingerprint, providerSemantics,
 	)
-	if sourceSemantics.CacheKeyIncludesDataVersion {
+	// A whole-container omnigent cache identity includes the parser data
+	// version: the container has no stored row of its own, so a restart must
+	// not accept an entry recorded by an older parser version.
+	if parser.IsOmnigentContainerSource(source) {
 		separator := "?"
 		if strings.Contains(key, "?") {
 			separator = "&"
@@ -7933,7 +7906,6 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 	providerSemantics parser.ProviderSyncSemantics,
-	sourceSemantics parser.SourceSyncSemantics,
 ) bool {
 	agent := file.Agent
 	if agent == "" {
@@ -7943,10 +7915,14 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 		!providerSemantics.FingerprintHashRequiredForFreshness {
 		return true
 	}
-	if sourceSemantics.SkipCacheFreshWithoutStoredRow {
-		// Whole-container sources have only virtual member rows in the archive.
-		// Their cache identity may include the physical container hash and
-		// parser data version, so no stored physical-path row is required.
+	if parser.IsOmnigentContainerSource(source) {
+		// A whole-container omnigent source has only virtual member rows in
+		// the archive, so its entry is fresh without ever finding a row for
+		// the physical container path: the cache identity already carries the
+		// container hash and parser data version. This is distinct from
+		// ProviderSyncSemantics.SkipCacheFreshWithoutStoredRow below, which
+		// trusts an entry only while NO row exists yet and resumes stored-row
+		// hash validation once the provider persists one.
 		return true
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
@@ -9871,9 +9847,6 @@ type pendingWrite struct {
 	usageEvents  []parser.ParsedUsageEvent
 	needsRetry   bool
 	forceReplace bool
-	// demoteDataVersionOnFailedWrite marks a failed shared-container member
-	// stale so its source is retried instead of remaining falsely current.
-	demoteDataVersionOnFailedWrite bool
 	// baselineEligible is set by collectAndBatch only when the complete source
 	// outcome is safe to make deletion-eligible after this write succeeds.
 	baselineEligible bool
@@ -9912,12 +9885,12 @@ func (e *Engine) rejectSkipCacheWrites(writes []skipCacheWrite) {
 	}
 }
 
-// markStaleFailedMemberWrite demotes the stored data version of a session
-// whose write failed. Shared-container members have no per-file mtime to
-// invalidate, so without the demotion a partial write (session row updated,
+// markStaleFailedMemberWrite demotes the stored data version of an omnigent
+// session whose write failed. Shared-container members have no per-file mtime
+// to invalidate, so without the demotion a partial write (session row updated,
 // messages not) would compare as unchanged and never be repaired.
 func (e *Engine) markStaleFailedMemberWrite(pw pendingWrite) {
-	if !pw.demoteDataVersionOnFailedWrite || pw.sess.ID == "" {
+	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
 		return
 	}
 	// Sessions are stored under the remote-sync prefixed ID
@@ -12981,8 +12954,6 @@ func (e *Engine) SyncSingleSessionContext(
 			usageEvents:  pr.UsageEvents,
 			needsRetry:   res.needsRetryForSession(pr.Session.ID),
 			forceReplace: res.forceReplace,
-			demoteDataVersionOnFailedWrite: res.
-				demoteDataVersionOnFailedWrite,
 		}
 		if err := e.writeSessionFull(write); err != nil &&
 			!isIntentionalSessionSkip(err) &&

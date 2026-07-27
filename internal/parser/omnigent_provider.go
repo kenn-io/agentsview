@@ -60,27 +60,118 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 		def,
 		omnigentProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet {
-			base := NewMultiSessionContainerSourceSet(
-				AgentOmnigent,
-				cfg.Roots,
-				WithContainerDiscovery(omnigentDiscoverContainers),
-				WithWatchRoots(omnigentWatchRoots),
-				WithChangedPathClassifier(omnigentClassifyPath),
-				WithChangedPathMembers(tracker.changedMembers),
-				WithMemberLookup(omnigentFindMember),
-				WithFingerprint(omnigentFingerprintSource),
-				WithContextContainerParse(tracker.parseContainer),
-				WithContextMemberParse(omnigentParseMember),
-				WithMemberResultHashPreservation(),
-				WithMemberPresence(omnigentMemberPresent),
-				WithUnsupportedSourceError(omnigentSchemaUnsupported),
-			)
-			return omnigentSourceSet{
-				multiSessionContainerSourceSet: base,
-				tracker:                        tracker,
-			}
+			return newOmnigentSourceSet(cfg, tracker)
 		},
 	)
+}
+
+// newOmnigentSourceSet fills the multi-session base config directly instead of
+// going through NewMultiSessionContainerSourceSet: omnigent implements Parse
+// and SourcesForChangedPath first-class below, so the option constructor's
+// parse-hook validation does not apply.
+func newOmnigentSourceSet(
+	cfg ProviderConfig, tracker *omnigentChangeTracker,
+) omnigentSourceSet {
+	return omnigentSourceSet{
+		multiSessionContainerSourceSet: multiSessionContainerSourceSet{
+			agent: AgentOmnigent,
+			roots: cleanJSONLRoots(cfg.Roots),
+			cfg: multiSessionConfig{
+				discoverContainers: omnigentDiscoverContainers,
+				watchRoots:         omnigentWatchRoots,
+				classifyPath:       omnigentClassifyPath,
+				findMember:         omnigentFindMember,
+				fingerprint:        omnigentFingerprintSource,
+				memberPresent:      omnigentMemberPresent,
+			},
+		},
+		tracker: tracker,
+	}
+}
+
+// SourcesForChangedPath resolves one filesystem event directly to the affected
+// members via the change tracker, so a shared container fans out a bounded
+// changed batch instead of reparsing every member per event.
+func (s omnigentSourceSet) SourcesForChangedPath(
+	ctx context.Context, req ChangedPathRequest,
+) ([]SourceRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, root := range s.roots {
+		matches, err := s.tracker.changedMembers(ctx, root, req)
+		if err != nil {
+			return nil, err
+		}
+		if len(matches) == 0 {
+			continue
+		}
+		sources := make([]SourceRef, 0, len(matches))
+		for _, match := range matches {
+			sources = append(sources, s.sourceRef(root, match))
+		}
+		return sources, nil
+	}
+	return nil, nil
+}
+
+// Parse parses one member source into one result, or fans a whole container
+// out into every conversation while seeding the change tracker's floor. Member
+// results keep the semantic per-conversation hash produced by the parser; the
+// container's file hash is never stamped over it. A schema the parser
+// deliberately does not support is a clean unsupported skip, not a failure.
+func (s omnigentSourceSet) Parse(
+	ctx context.Context, req ParseRequest,
+) (ParseOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return ParseOutcome{}, err
+	}
+	src, ok := s.sourceFromRef(req.Source)
+	if !ok {
+		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", s.agent)
+	}
+	if src.MemberID != "" {
+		result, err := omnigentParseMember(ctx, src, req)
+		if err != nil {
+			if omnigentSchemaUnsupported(err) {
+				return unsupportedMultiSessionOutcome(), nil
+			}
+			return ParseOutcome{}, err
+		}
+		if result == nil {
+			return s.skipOutcome(src), nil
+		}
+		return ParseOutcome{
+			Results: []ParseResultOutcome{{
+				Result:      *result,
+				DataVersion: DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+			ForceReplace:      true,
+		}, nil
+	}
+	results, err := s.tracker.parseContainer(ctx, src, req)
+	if err != nil {
+		if omnigentSchemaUnsupported(err) {
+			return unsupportedMultiSessionOutcome(), nil
+		}
+		return ParseOutcome{}, err
+	}
+	if len(results) == 0 {
+		return s.skipOutcome(src), nil
+	}
+	out := make([]ParseResultOutcome, 0, len(results))
+	for i := range results {
+		out = append(out, ParseResultOutcome{
+			Result:      results[i],
+			DataVersion: DataVersionCurrent,
+		})
+	}
+	return ParseOutcome{
+		Results:           out,
+		ResultSetComplete: true,
+		ForceReplace:      true,
+	}, nil
 }
 
 func (s omnigentSourceSet) RestoreCachedSourceState(
@@ -93,35 +184,77 @@ func (s omnigentSourceSet) RestoreCachedSourceState(
 	return s.tracker.restoreCachedContainer(ctx, src.Container)
 }
 
-func (s omnigentSourceSet) SourceSyncSemantics(
-	source SourceRef,
-) SourceSyncSemantics {
-	src, ok := s.sourceFromRef(source)
-	if !ok {
-		return SourceSyncSemantics{}
+// RestoreOmnigentCachedSourceState rebuilds omnigent's bounded change tracker
+// when the sync engine validates a persisted whole-container cache entry
+// without parsing, so the first watcher event after restart is not treated as
+// a cold whole-container discovery. It reports true when tracker state was
+// restored; the caller must then refingerprint the source to catch a commit
+// racing restoration. The engine calls this only for AgentOmnigent sources.
+// Provider decorators (test wrappers) are reached through the structural
+// fallback and forward here with the provider they wrap.
+func RestoreOmnigentCachedSourceState(
+	ctx context.Context, provider Provider, source SourceRef,
+) (bool, error) {
+	if sp, ok := provider.(*SourceSetProvider); ok {
+		set, ok := sp.sources.(omnigentSourceSet)
+		if !ok {
+			return false, nil
+		}
+		return set.RestoreCachedSourceState(ctx, source)
 	}
-	semantics := SourceSyncSemantics{
-		BackingContainerPath:           src.Container,
-		CompleteResultOwnsMembers:      true,
-		DemoteDataVersionOnFailedWrite: true,
+	if restorer, ok := provider.(interface {
+		RestoreCachedSourceState(context.Context, SourceRef) (bool, error)
+	}); ok {
+		return restorer.RestoreCachedSourceState(ctx, source)
 	}
-	if src.MemberID == "" {
-		semantics.PersistentContainer = true
-		semantics.CacheAfterWrite = true
-		semantics.CacheKeyIncludesDataVersion = true
-		semantics.SkipCacheFreshWithoutStoredRow = true
-	}
-	return semantics
+	return false, nil
 }
 
-func (s omnigentSourceSet) DependentSourceRootSessionID(
-	source SourceRef,
-) (string, bool) {
-	src, ok := s.sourceFromRef(source)
-	if !ok || src.MemberID == "" {
+// IsOmnigentContainerSource reports whether source addresses a whole omnigent
+// chat.db container rather than one "<db>#<conversationID>" virtual member.
+// The sync engine special-cases whole containers directly: they persist the
+// archive when the physical database vanishes, and a complete container parse
+// owns its member set.
+func IsOmnigentContainerSource(source SourceRef) bool {
+	if source.Provider != AgentOmnigent {
+		return false
+	}
+	path := providerSourcePath(source)
+	if path == "" {
+		return false
+	}
+	_, _, virtual := parseOmnigentVirtualPath(path)
+	return !virtual
+}
+
+// OmnigentMemberSessionID returns the raw archived session identity addressed
+// by a virtual omnigent member source. The sync engine uses it to look up
+// already archived descendants whose cwd and branch inherit from a changed
+// root; it applies any remote ID prefix before querying the archive.
+func OmnigentMemberSessionID(source SourceRef) (string, bool) {
+	if source.Provider != AgentOmnigent {
 		return "", false
 	}
-	return omnigentIDPrefix + src.MemberID, true
+	path := providerSourcePath(source)
+	if path == "" {
+		return "", false
+	}
+	_, member, ok := parseOmnigentVirtualPath(path)
+	if !ok {
+		return "", false
+	}
+	return omnigentIDPrefix + member, true
+}
+
+func providerSourcePath(source SourceRef) string {
+	for _, path := range []string{
+		source.DisplayPath, source.FingerprintKey, source.Key,
+	} {
+		if path != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 func omnigentProviderCapabilities() Capabilities {

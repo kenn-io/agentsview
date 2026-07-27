@@ -622,7 +622,6 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 	engine.cacheSkip(providerProcessCacheKey(
 		parser.DiscoveredFile{Path: sourcePath, Agent: parser.AgentClaude},
 		source, fingerprint, provider.Capabilities().Sync,
-		providerSourceSyncSemantics(provider, source),
 	), fingerprint.MTimeNS)
 
 	res := engine.processFile(context.Background(), parser.DiscoveredFile{
@@ -682,7 +681,6 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 			oldKey := providerProcessCacheKey(
 				parser.DiscoveredFile{Path: sourcePath, Agent: agent},
 				source, oldFingerprint, provider.Capabilities().Sync,
-				providerSourceSyncSemantics(provider, source),
 			)
 			engine.cacheSkip(oldKey, fingerprint.MTimeNS)
 

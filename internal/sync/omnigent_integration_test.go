@@ -84,21 +84,7 @@ func (p *omnigentParseCountingProvider) WatchRoots(
 func (p *omnigentParseCountingProvider) RestoreCachedSourceState(
 	ctx context.Context, source parser.SourceRef,
 ) (bool, error) {
-	restorer, ok := p.Provider.(parser.CachedSourceStateRestorer)
-	if !ok {
-		return false, nil
-	}
-	return restorer.RestoreCachedSourceState(ctx, source)
-}
-
-func (p *omnigentParseCountingProvider) SourceSyncSemantics(
-	source parser.SourceRef,
-) parser.SourceSyncSemantics {
-	resolver, ok := p.Provider.(parser.SourceSyncSemanticsProvider)
-	if !ok {
-		return parser.SourceSyncSemantics{}
-	}
-	return resolver.SourceSyncSemantics(source)
+	return parser.RestoreOmnigentCachedSourceState(ctx, p.Provider, source)
 }
 
 func (p *omnigentParseCountingProvider) PersistentArchiveSource(
@@ -109,16 +95,6 @@ func (p *omnigentParseCountingProvider) PersistentArchiveSource(
 		return "", false
 	}
 	return resolver.PersistentArchiveSource(path, fullSessionID)
-}
-
-func (p *omnigentParseCountingProvider) DependentSourceRootSessionID(
-	source parser.SourceRef,
-) (string, bool) {
-	resolver, ok := p.Provider.(parser.DependentSourceResolver)
-	if !ok {
-		return "", false
-	}
-	return resolver.DependentSourceRootSessionID(source)
 }
 
 func (p *omnigentParseCountingProvider) DiscoverEach(

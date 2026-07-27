@@ -45,20 +45,6 @@ type ProviderSyncSemantics struct {
 	UnchangedResults               UnchangedResultPolicy
 }
 
-// SourceSyncSemantics declares policies that depend on one resolved source's
-// shape. BackingContainerPath is the physical container for either a whole
-// container or one virtual member; it is empty for ordinary sources. The zero
-// value opts out of every specialized behavior.
-type SourceSyncSemantics struct {
-	BackingContainerPath           string
-	PersistentContainer            bool
-	CompleteResultOwnsMembers      bool
-	CacheAfterWrite                bool
-	CacheKeyIncludesDataVersion    bool
-	SkipCacheFreshWithoutStoredRow bool
-	DemoteDataVersionOnFailedWrite bool
-}
-
 // SourceCapabilities declares optional source mechanics implemented by a
 // provider.
 type SourceCapabilities struct {
