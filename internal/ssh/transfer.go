@@ -107,21 +107,13 @@ func filterForbiddenRoots(paths, forbiddenRoots []string) []string {
 	return filtered
 }
 
+// pathWithinForbiddenRoots reports whether remotePath is a forbidden root or
+// lies beneath one, treating remotePath and roots as remote POSIX paths. It
+// is a thin wrapper over remotesync.PathWithinForbiddenRoots, shared with
+// internal/remotesync's local-walk pruning so both call sites agree on
+// boundary matching (e.g. root "/a/b" must not match sibling path "/a/bc").
 func pathWithinForbiddenRoots(roots []string, remotePath string) bool {
-	remotePath = path.Clean(remotePath)
-	for _, root := range roots {
-		root = path.Clean(root)
-		if remotePath == root {
-			return true
-		}
-		if root == "/" && strings.HasPrefix(remotePath, "/") {
-			return true
-		}
-		if root != "/" && strings.HasPrefix(remotePath, root+"/") {
-			return true
-		}
-	}
-	return false
+	return remotesync.PathWithinForbiddenRoots(roots, remotePath, '/')
 }
 
 func buildPlainTarCommand(paths, forbiddenArchivePaths []string) string {

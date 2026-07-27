@@ -133,24 +133,56 @@ func validateTargetSetPaths(targets TargetSet) error {
 }
 
 // pathWithinForbiddenRoots reports whether path is a forbidden root or lies
-// beneath one. Roots are normalized when targets are resolved, and this check
-// deliberately uses filepath.Rel instead of a string prefix so sibling names
-// such as .forbidden-provider-backup do not get conflated with the protected
-// directory.
+// beneath one, treating path and roots as local OS filepaths. It is a thin
+// wrapper over PathWithinForbiddenRoots for this package's many same-package
+// callers, all of which operate on local filesystem paths.
 func pathWithinForbiddenRoots(roots []string, path string) bool {
-	path = filepath.Clean(path)
+	return PathWithinForbiddenRoots(roots, path, filepath.Separator)
+}
+
+// PathWithinForbiddenRoots reports whether path is a forbidden root or lies
+// beneath one. sep is the path separator of the caller's domain: '/' for
+// remote POSIX paths (see internal/ssh, which builds paths for the resolve
+// script and tar filter), or filepath.Separator for local OS paths. Roots
+// and path are normalized (dot segments resolved, redundant separators
+// collapsed) before comparison, and matching requires a full path-component
+// boundary so sibling names such as .forbidden-provider-backup do not get
+// conflated with a protected directory (root "/a/b" must not match path
+// "/a/bc").
+func PathWithinForbiddenRoots(roots []string, path string, sep byte) bool {
+	path = cleanPathWithSeparator(path, sep)
+	sepStr := string(sep)
 	for _, root := range roots {
-		root = filepath.Clean(root)
+		root = cleanPathWithSeparator(root, sep)
 		if path == root {
 			return true
 		}
-		rel, err := filepath.Rel(root, path)
-		if err == nil && rel != ".." &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if root == sepStr {
+			if strings.HasPrefix(path, sepStr) {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(path, root+sepStr) {
 			return true
 		}
 	}
 	return false
+}
+
+// cleanPathWithSeparator normalizes p (resolving "." and ".." components and
+// collapsing redundant separators) using sep as the path separator. path.Clean
+// implements this for '/'; for any other separator, p is translated to '/',
+// cleaned, and translated back so the same normalization rules apply
+// regardless of which OS is running the check.
+func cleanPathWithSeparator(p string, sep byte) string {
+	if sep == '/' {
+		return pathpkg.Clean(p)
+	}
+	sepStr := string(sep)
+	slashed := strings.ReplaceAll(p, sepStr, "/")
+	cleaned := pathpkg.Clean(slashed)
+	return strings.ReplaceAll(cleaned, "/", sepStr)
 }
 
 func tempPathToRemotePath(
