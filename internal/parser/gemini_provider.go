@@ -649,5 +649,8 @@ func geminiProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashRequiredForFreshness: true,
+		},
 	}
 }

@@ -836,5 +836,10 @@ func codexProviderCapabilities() Capabilities {
 			TerminationStatus:    CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+			SkipCacheFreshWithoutStoredRow:      true,
+		},
 	}
 }

@@ -707,5 +707,8 @@ func aiderProviderCapabilities() Capabilities {
 			ToolResults:          CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			UnchangedResults: UnchangedResultMTimeAndHash,
+		},
 	}
 }

@@ -1126,5 +1126,8 @@ func openCodeFormatProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			UnchangedResults: UnchangedResultMTimeAndHash,
+		},
 	}
 }

@@ -649,5 +649,10 @@ func claudeProviderCapabilities() Capabilities {
 			Model:                CapabilitySupported,
 			StopReason:           CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+			SkipCacheFreshWithoutStoredRow:      true,
+		},
 	}
 }
