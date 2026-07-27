@@ -1557,14 +1557,27 @@ func (db *DB) GetChildSessions(
 // A fork derives from the session it was forked from, so it always
 // starts later. Ordering candidates by start time therefore resolves to
 // the original spawner from any subset, and converges on the next sync.
+//
+// started_at has to be NORMALIZED before it is ordered, not compared
+// raw. It is TEXT written by timeutil.Format, i.e. time.RFC3339Nano,
+// which STRIPS trailing zeros from the fractional second: a whole-second
+// start is stored '...T00:00:00Z' while a later one is stored
+// '...T00:00:00.1Z', and '.' (0x2E) sorts before 'Z' (0x5A). Raw lexical
+// order is therefore not chronological in exactly the case that matters
+// here — it ranks a whole-second spawner behind every fractional one and
+// would hand the child to a copy. strftime re-renders each value as
+// fixed-width '...T00:00:00.000Z', for which lexical order IS
+// chronological (to the millisecond; anything closer than that falls
+// through to the id key below).
+//
 // The remaining keys keep that total order well defined:
-//   - started_at is nullable TEXT (the empty string is likewise treated
-//     as unset in this package), and SQLite sorts NULL first, so an
-//     unknown start time would otherwise outrank every real one — the
-//     leading IS NULL key pushes those candidates last instead.
+//   - strftime yields NULL for a started_at that is unset, empty or
+//     malformed, and SQLite sorts NULL first, so an unknown start time
+//     would otherwise outrank every real one — the leading IS NULL key
+//     pushes those candidates last instead.
 //   - the session id breaks ties, so a child whose candidates all lack a
-//     start time still resolves the same way on every sync instead of
-//     following whichever edge SQLite visited first.
+//     usable start time still resolves the same way on every sync
+//     instead of following whichever edge SQLite visited first.
 //
 // The LEFT JOIN keeps an edge whose spawner has no sessions row as a
 // last-resort candidate (it sorts with the unknown start times) rather
@@ -1575,10 +1588,52 @@ const subagentSpawnerExpr = `
 		LEFT JOIN sessions ps ON ps.id = tc.session_id
 		WHERE tc.subagent_session_id = s.id
 		ORDER BY
-			(NULLIF(ps.started_at, '') IS NULL),
-			NULLIF(ps.started_at, ''),
+			(strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at) IS NULL),
+			strftime('%Y-%m-%dT%H:%M:%fZ', ps.started_at),
 			tc.session_id
 		LIMIT 1`
+
+// linkSubagentSessionsQuery re-points every session that carries a spawn edge
+// at the spawner subagentSpawnerExpr resolves for it.
+//
+// The statement is driven from the edges rather than from sessions: `s.id IN
+// (SELECT tc.subagent_session_id ...)` lets SQLite seek the partial index
+// idx_tool_calls_subagent and then look each child up by primary key, so a
+// sync's linking cost scales with the number of spawn edges instead of with
+// the size of the archive. The equivalent EXISTS(...) form reads the same but
+// plans as a full scan of sessions with a correlated probe per row, which is
+// what makes linking on a large archive expensive even when nothing changed.
+// The IS NOT NULL filter keeps the candidate list free of NULLs, so the IN
+// comparison cannot go three-valued (the partial index carries exactly those
+// rows, so the filter is free).
+const linkSubagentSessionsQuery = `
+	UPDATE sessions AS s
+	SET parent_session_id = (` + subagentSpawnerExpr + `
+	),
+	relationship_type = 'subagent',
+	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	-- The tool_calls edge (from toolUseResult.agentId) records the actual
+	-- spawn, authoritative over the path-derived parent set at parse time.
+	-- Nested subagents (depth >= 2) live flat in <main>/subagents/, so path
+	-- derivation pins them to the main session AND tags them 'subagent';
+	-- the old relationship_type != 'subagent' guard skipped them, leaving
+	-- the hierarchy flat.
+	--
+	-- Update when EITHER the row is not yet 'subagent' (upgrade
+	-- continuation/fork/empty) OR the resolved spawner differs from the
+	-- stored parent (null-safe IS NOT, so a subagent with a NULL parent is
+	-- still linked). Because the resolved spawner depends only on the
+	-- stored edges, a row already pointing at it matches neither branch:
+	-- linking stays a no-op and does not churn local_modified_at.
+	WHERE s.id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.subagent_session_id IS NOT NULL
+	)
+	AND (
+		relationship_type != 'subagent'
+		OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
+		)
+	)`
 
 // LinkSubagentSessions sets parent_session_id and
 // relationship_type on sessions referenced by
@@ -1592,7 +1647,10 @@ const subagentSpawnerExpr = `
 // <main>/subagents/. Already-correct subagents are left untouched.
 //
 // See subagentSpawnerExpr for how a child claimed by more than one
-// spawner is resolved.
+// spawner is resolved, and linkSubagentSessionsQuery for why the
+// statement is driven from the spawn-edge index: every sync calls this,
+// so its cost has to track the number of spawn edges rather than the
+// size of the archive.
 func (db *DB) LinkSubagentSessions() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1604,34 +1662,7 @@ func (db *DB) LinkSubagentSessions() error {
 	// session after a mirror's cutoff would otherwise never re-push it
 	// (see updateSessionSignalsTx and ReplaceSessionUsageEvents for the
 	// same pattern).
-	_, err := db.getWriter().Exec(`
-		UPDATE sessions AS s
-		SET parent_session_id = (` + subagentSpawnerExpr + `
-		),
-		relationship_type = 'subagent',
-		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		-- The tool_calls edge (from toolUseResult.agentId) records the actual
-		-- spawn, authoritative over the path-derived parent set at parse time.
-		-- Nested subagents (depth >= 2) live flat in <main>/subagents/, so path
-		-- derivation pins them to the main session AND tags them 'subagent';
-		-- the old relationship_type != 'subagent' guard skipped them, leaving
-		-- the hierarchy flat.
-		--
-		-- Update when EITHER the row is not yet 'subagent' (upgrade
-		-- continuation/fork/empty) OR the resolved spawner differs from the
-		-- stored parent (null-safe IS NOT, so a subagent with a NULL parent is
-		-- still linked). Because the resolved spawner depends only on the
-		-- stored edges, a row already pointing at it matches neither branch:
-		-- linking stays a no-op and does not churn local_modified_at.
-		WHERE EXISTS (
-			SELECT 1 FROM tool_calls tc
-			WHERE tc.subagent_session_id = s.id
-		)
-		AND (
-			relationship_type != 'subagent'
-			OR parent_session_id IS NOT (` + subagentSpawnerExpr + `
-			)
-		)`)
+	_, err := db.getWriter().Exec(linkSubagentSessionsQuery)
 	if err != nil {
 		return fmt.Errorf("linking subagent sessions: %w", err)
 	}

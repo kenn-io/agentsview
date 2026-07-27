@@ -2,10 +2,15 @@ package db
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // TestLinkSubagentSessionsReParentsNestedGrandchild reproduces the
@@ -366,4 +371,122 @@ func TestLinkSubagentSessionsResolvesConflictingEdgesDeterministically(
 	assert.Equal(t, "p1", parentOfSession(t, d, "kid"),
 		"ties must break on session id so the parent does not depend on "+
 			"which edge was inserted first")
+}
+
+// TestLinkSubagentSessionsPlanScalesWithSpawnEdges pins the cost shape of the
+// linking statement. Every sync calls LinkSubagentSessions, and it must stay
+// cheap on a large archive in which nothing changed, so the row set has to be
+// driven from the spawn edges (the idx_tool_calls_subagent partial index)
+// rather than from a scan of sessions.
+//
+// The invariant is asserted on the query plan rather than on a wall-clock
+// comparison between a small and a large archive, because the plan is what
+// actually decides the scaling and it is deterministic in CI (see
+// TestListActiveSessionSourceOwnershipScopesUsesBoundedSeeks for the same
+// approach). The regression this guards is silent: swapping the IN back to
+// the equivalent-reading EXISTS(...) keeps every behavioural test green while
+// re-introducing a full sessions scan on every sync.
+//
+// Both archive sizes are exercised so the assertion cannot pass merely
+// because the planner had no statistics to work with.
+func TestLinkSubagentSessionsPlanScalesWithSpawnEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sessions int
+	}{
+		{name: "small archive", sessions: 4},
+		{name: "large archive", sessions: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			for i := range tc.sessions {
+				insertSession(t, d, "bulk-"+strconv.Itoa(i), "p",
+					func(s *Session) { s.MessageCount = 1 })
+			}
+			// Exactly one spawn edge, regardless of archive size.
+			insertSession(t, d, "spawner", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.StartedAt = Ptr("2026-01-01T00:00:00.000Z")
+			})
+			insertSession(t, d, "kid", "p", func(s *Session) {
+				s.MessageCount = 1
+				s.RelationshipType = "subagent"
+			})
+			insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+			require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+
+			plan := queryPlanOf(t, d, linkSubagentSessionsQuery)
+
+			assert.NotContains(t, plan, "SCAN s",
+				"linking must not scan sessions: its cost has to track the "+
+					"number of spawn edges, not the size of the archive\n"+plan)
+			assert.Contains(t, plan, "idx_tool_calls_subagent",
+				"linking must be driven from the spawn-edge partial index\n"+plan)
+		})
+	}
+}
+
+// queryPlanOf returns the EXPLAIN QUERY PLAN detail lines for sql.
+func queryPlanOf(t *testing.T, d *DB, sql string) string {
+	t.Helper()
+	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN " + sql)
+	requireNoError(t, err, "EXPLAIN QUERY PLAN")
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+		details = append(details, detail)
+	}
+	require.NoError(t, rows.Err())
+	return strings.Join(details, "\n")
+}
+
+// TestLinkSubagentSessionsOrdersStartTimesChronologically covers the
+// timestamp-ordering case raised in review. started_at is TEXT written by
+// timeutil.Format (time.RFC3339Nano), which strips trailing zeros from the
+// fractional second, so production values are NOT fixed width: a whole-second
+// start is stored '...T00:00:00Z' and a later one '...T00:00:00.1Z'. Because
+// '.' sorts before 'Z', raw lexical order puts the LATER timestamp FIRST —
+// which would resolve the child to the copy. The ordering must normalize
+// started_at so it compares chronologically.
+func TestLinkSubagentSessionsOrdersStartTimesChronologically(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	realStart := timeutil.Format(base)
+	copyStart := timeutil.Format(base.Add(100 * time.Millisecond))
+
+	// Pin the production shapes this test exists for: the real spawner starts
+	// 100ms EARLIER, yet its stored string sorts LATER lexically.
+	require.Equal(t, "2026-01-01T00:00:00Z", realStart, "whole-second form")
+	require.Equal(t, "2026-01-01T00:00:00.1Z", copyStart, "fractional form")
+	require.Less(t, copyStart, realStart,
+		"guard: raw lexical order must be inverted here, otherwise this test "+
+			"would pass even without normalizing started_at")
+
+	d := testDB(t)
+	insertSession(t, d, "real-spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr(realStart)
+	})
+	insertSession(t, d, "copied-spawner", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr(copyStart)
+	})
+	insertSession(t, d, "kid", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.RelationshipType = "subagent"
+	})
+
+	insertMessages(t, d,
+		spawnEdgeTo("copied-spawner", "kid", "copied spawn"),
+		spawnEdgeTo("real-spawner", "kid", "real spawn"),
+	)
+
+	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+
+	assert.Equal(t, "real-spawner", parentOfSession(t, d, "kid"),
+		"the chronologically earliest spawner must win; ordering the raw "+
+			"RFC3339Nano strings would pick the later copied spawner")
 }
