@@ -159,22 +159,48 @@ func pathWithinForbiddenRoots(roots []string, path string) bool {
 
 // localComparablePath canonicalizes a local OS path for forbidden-root
 // comparison: resolved to absolute against the process working directory
-// (so "." and other relative override spellings anchor to the same place as
-// their absolute aliases) and case-folded on Windows and macOS, whose
+// (so "." and other relative override spellings anchor to the same place
+// as their absolute aliases), symlink-resolved (so a root reached through
+// a symlinked ancestor compares by its physical location — the walkers
+// skip symlink entries, but they do follow symlinked ancestors of the
+// roots they are handed), and case-folded on Windows and macOS, whose
 // default filesystems are case-insensitive. Folding on a case-sensitive
 // APFS/NTFS variant can only over-prune — it never widens what leaves the
-// machine. Symlink aliases are intentionally not resolved here: the archive
-// and manifest walkers never traverse symlinks, so a symlinked spelling of
-// a forbidden root cannot smuggle its contents into an archive.
+// machine.
 func localComparablePath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		abs = filepath.Clean(p)
 	}
+	abs = resolveSymlinksBestEffort(abs)
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		abs = strings.ToLower(abs)
 	}
 	return abs
+}
+
+// resolveSymlinksBestEffort resolves symlinks in p, falling back to
+// resolving the longest existing ancestor and keeping the missing tail
+// literal (forbidden roots may name directories that do not exist yet;
+// their eventual contents still deserve the boundary). A path that cannot
+// be resolved at all is returned unchanged — comparisons then degrade to
+// the lexical behavior rather than failing open by returning nothing.
+func resolveSymlinksBestEffort(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	dir, tail := filepath.Dir(p), filepath.Base(p)
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, tail)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		tail = filepath.Join(filepath.Base(dir), tail)
+		dir = parent
+	}
 }
 
 // PathWithinForbiddenRoots reports whether path is a forbidden root or lies

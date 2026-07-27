@@ -82,10 +82,23 @@ func buildAiderResolveSnippet(envVar string) string {
 func buildResolveScript() string {
 	var b strings.Builder
 	b.WriteString(
-		"av_emit_agent_file() { " +
+		// av_phys_dir prints a directory's physical path (symlinked
+		// ancestors resolved). Every emitter canonicalizes through it so
+		// forbidden-root comparisons and tar exclusions on the Go side
+		// compare one spelling per location — a target aliased into an
+		// excluded provider's tree via a symlink resolves to the same
+		// prefix as the forbidden root itself. av_phys_file does the same
+		// for a file by resolving its parent directory.
+		"av_phys_dir() { CDPATH= cd -P -- \"$1\" 2>/dev/null && pwd; }\n" +
+			"av_phys_file() { " +
+			"[ -f \"$1\" ] || return 1; " +
+			"av_phys_parent=$(av_phys_dir \"${1%/*}\") || return 1; " +
+			"printf '%s' \"$av_phys_parent/${1##*/}\"; " +
+			"}\n" +
+			"av_emit_agent_file() { " +
 			"agent=\"$1\"; " +
-			"file=\"$2\"; " +
-			"[ -f \"$file\" ] && printf '%s\\000' \"" + resolveAgentFilePrefix + ":$agent:$file\"; " +
+			"file=$(av_phys_file \"$2\") || return 0; " +
+			"printf '%s\\000' \"" + resolveAgentFilePrefix + ":$agent:$file\"; " +
 			"}\n" +
 			"av_emit_windsurf_target() { " +
 			"target=\"$1\"; " +
@@ -171,12 +184,14 @@ func buildResolveScript() string {
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$target\";; " +
 			"*) av_poolside_traj=\"$target/trajectories\"; " +
 			"[ -d \"$av_poolside_traj\" ] && " +
+			"av_poolside_traj=$(av_phys_dir \"$av_poolside_traj\") && " +
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$av_poolside_traj\";; " +
 			"esac; " +
 			"}\n" +
 			"av_emit_target() { " +
 			"agent=\"$1\"; " +
 			"target=\"$2\"; " +
+			"if [ -d \"$target\" ]; then target=$(av_phys_dir \"$target\") || return 0; fi; " +
 			"if [ \"$agent\" = \"" + string(parser.AgentWindsurf) + "\" ]; then " +
 			"av_emit_windsurf_target \"$target\"; " +
 			"return; " +
@@ -196,12 +211,19 @@ func buildResolveScript() string {
 			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
 			"}\n" +
 			"av_emit_extra_file() { " +
-			"file=\"$1\"; " +
-			"[ -f \"$file\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
+			"file=$(av_phys_file \"$1\") || return 0; " +
+			"printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
 			"}\n" +
+			// A forbidden root that exists is emitted by its physical
+			// spelling so it shares a prefix with canonicalized targets;
+			// a missing one keeps its literal spelling — it has no
+			// contents to protect yet, and the boundary still guards the
+			// literal path.
 			"av_emit_forbidden_root() { " +
 			"dir=\"$1\"; [ -n \"$dir\" ] || dir=\"$2\"; " +
-			"[ -n \"$dir\" ] && printf '%s\\000' \"" + resolveForbiddenRootPrefix + ":$dir\"; " +
+			"[ -n \"$dir\" ] || return 0; " +
+			"if [ -d \"$dir\" ]; then dir=$(av_phys_dir \"$dir\") || return 0; fi; " +
+			"printf '%s\\000' \"" + resolveForbiddenRootPrefix + ":$dir\"; " +
 			"}\n" +
 			"av_has_hermes_transcript() { " +
 			"av_hermes_transcript_dir=\"$1\"; " +
@@ -228,7 +250,8 @@ func buildResolveScript() string {
 			"for av_hermes_file in \"$av_hermes_state\" \"$av_hermes_state-wal\" \"$av_hermes_state-shm\" \"$av_hermes_state-journal\"; do " +
 			"av_emit_extra_file \"$av_hermes_file\"; done; " +
 			"elif [ -f \"$av_hermes_state\" ]; then " +
-			"printf '%s\\000' \"" + string(parser.AgentHermes) + ":$av_hermes_state\"; " +
+			"av_hermes_state_phys=$(av_phys_file \"$av_hermes_state\") && " +
+			"printf '%s\\000' \"" + string(parser.AgentHermes) + ":$av_hermes_state_phys\"; " +
 			"for av_hermes_file in \"$av_hermes_state-wal\" \"$av_hermes_state-shm\" \"$av_hermes_state-journal\"; do " +
 			"av_emit_extra_file \"$av_hermes_file\"; done; " +
 			"elif [ \"$av_hermes_allow_flat\" -eq 1 ] && av_has_hermes_transcript \"$target\"; then " +
@@ -264,7 +287,7 @@ func buildResolveScript() string {
 			"}\n" +
 			"av_emit_codex_index() { " +
 			"idx=\"${dir%/*}/" + parser.CodexSessionIndexFilename + "\"; " +
-			"[ -f \"$idx\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$idx\"; " +
+			"av_emit_extra_file \"$idx\"; " +
 			"}\n",
 	)
 	for _, def := range parser.Registry {
@@ -395,12 +418,17 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 // resolveForbiddenRootPrefix). Generated resolver output is
 // NUL-delimited so remote paths containing newlines cannot inject extra
 // records; newline-delimited input is accepted only for older tests and
-// defensive compatibility. Most agent targets are directories; Aider
+// defensive compatibility, and only that legacy mode trims whitespace —
+// NUL-delimited records are preserved exactly, so a path with leading or
+// trailing whitespace keeps the spelling every downstream comparison and
+// tar exclusion depends on. Most agent targets are directories; Aider
 // targets are individual .aider.chat.history.md files. Skips empty
-// records, empty values, and values containing record separators.
+// records, empty values, and values containing record separators — except
+// forbidden-root records, which fail the parse instead: silently dropping
+// an exclusion boundary would archive the excluded provider's state.
 func parseResolvedTargets(
 	output string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string) {
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string, error) {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	var extraFiles []string
@@ -409,12 +437,30 @@ func parseResolvedTargets(
 	seenFile := make(map[string]struct{})
 	seenAgentFile := make(map[parser.AgentType]map[string]struct{})
 	seenForbiddenRoot := make(map[string]struct{})
+	nulDelimited := strings.Contains(output, resolveRecordSep)
 	for _, record := range resolveOutputRecords(output) {
-		record = strings.TrimSpace(record)
+		if !nulDelimited {
+			record = strings.TrimSpace(record)
+		}
 		if record == "" {
 			continue
 		}
 		key, value, ok := strings.Cut(record, ":")
+		if key == resolveForbiddenRootPrefix {
+			if !ok || invalidResolvedPath(value) {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"resolve output: forbidden-root record %q is empty or "+
+						"unrepresentable; refusing to sync without its "+
+						"exclusion boundary", record)
+			}
+			cleaned := path.Clean(value)
+			if _, dup := seenForbiddenRoot[cleaned]; dup {
+				continue
+			}
+			seenForbiddenRoot[cleaned] = struct{}{}
+			forbiddenRoots = append(forbiddenRoots, cleaned)
+			continue
+		}
 		if !ok || invalidResolvedPath(value) {
 			continue
 		}
@@ -424,14 +470,6 @@ func parseResolvedTargets(
 			}
 			seenFile[value] = struct{}{}
 			extraFiles = append(extraFiles, value)
-			continue
-		}
-		if key == resolveForbiddenRootPrefix {
-			if _, dup := seenForbiddenRoot[value]; dup {
-				continue
-			}
-			seenForbiddenRoot[value] = struct{}{}
-			forbiddenRoots = append(forbiddenRoots, path.Clean(value))
 			continue
 		}
 		if key == resolveAgentFilePrefix {
@@ -471,19 +509,21 @@ func parseResolvedTargets(
 		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
 	}
-	return dirs, files, extraFiles, forbiddenRoots
+	return dirs, files, extraFiles, forbiddenRoots, nil
 }
 
 func parseResolvedDirs(
 	output string,
-) (map[parser.AgentType][]string, []string) {
-	dirs, _, extraFiles, _ := parseResolvedTargets(output)
-	return dirs, extraFiles
+) (map[parser.AgentType][]string, []string, error) {
+	dirs, _, extraFiles, _, err := parseResolvedTargets(output)
+	return dirs, extraFiles, err
 }
 
 // ParseResolvedTargetsForTest exposes SSH resolver output parsing to
 // internal/remotesync parity tests.
-func ParseResolvedTargetsForTest(output string) (map[parser.AgentType][]string, []string) {
+func ParseResolvedTargetsForTest(
+	output string,
+) (map[parser.AgentType][]string, []string, error) {
 	return parseResolvedDirs(output)
 }
 
@@ -492,9 +532,9 @@ func ParseResolvedTargetsForTest(output string) (map[parser.AgentType][]string, 
 // those tests don't assert on.
 func ParseResolvedTargetsWithFilesForTest(
 	output string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string) {
-	dirs, files, extraFiles, _ := parseResolvedTargets(output)
-	return dirs, files, extraFiles
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, error) {
+	dirs, files, extraFiles, _, err := parseResolvedTargets(output)
+	return dirs, files, extraFiles, err
 }
 
 func resolveOutputRecords(output string) []string {
@@ -520,6 +560,9 @@ func resolveDirs(
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
 	}
-	dirs, files, extraFiles, forbiddenRoots := parseResolvedTargets(string(out))
+	dirs, files, extraFiles, forbiddenRoots, err := parseResolvedTargets(string(out))
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
+	}
 	return dirs, files, extraFiles, forbiddenRoots, nil
 }

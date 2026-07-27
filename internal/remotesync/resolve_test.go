@@ -446,7 +446,11 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("SSH resolver parity test compares Unix shell path dialects")
 	}
-	home := t.TempDir()
+	// The resolve script emits physical paths, so the parity fixture must
+	// live at a physical spelling (macOS t.TempDir() sits under the /var
+	// symlink).
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	claudeDir := filepath.Join(home, ".claude", "projects")
 	codexDir := filepath.Join(home, ".codex", "sessions")
 	devinDir := filepath.Join(home, ".local", "share", "devin")
@@ -476,7 +480,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + aiderRoot, "DEVIN_DIR=" + devinDir}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "ssh resolver output: %s", out)
-	sshDirs, sshFiles, sshExtra := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
+	sshDirs, sshFiles, sshExtra, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
 
 	goTargets := remotesync.ResolveTargets(config.Config{
 		AgentDirs: map[parser.AgentType][]string{

@@ -44,30 +44,30 @@ func resolveScriptMentionsAgent(script string, agent parser.AgentType) bool {
 }
 
 func TestResolveScriptExcludesDevinProviderRoot(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	devinRoot := filepath.Join(home, ".local", "share", "devin")
 	require.NoError(t, os.MkdirAll(devinRoot, 0o755))
 
 	out := runResolveScriptForTest(t, "HOME="+home, "DEVIN_DIR="+devinRoot)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.NotContains(t, dirs, parser.AgentDevin)
 }
 
 func TestResolveScriptExcludesTraeProfile(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	traeRoot := filepath.Join(home, "AppData", "Roaming", "TRAE", "User")
 	claudeRoot := filepath.Join(home, ".claude", "projects")
 	require.NoError(t, os.MkdirAll(traeRoot, 0o755))
 	require.NoError(t, os.MkdirAll(claudeRoot, 0o755))
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+traeRoot)
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.NotContains(t, dirs, parser.AgentTrae)
 }
 
 func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	root := filepath.Join(home, "claude personal")
 	projectsDir := filepath.Join(root, "projects")
 	require.NoError(t, os.MkdirAll(projectsDir, 0o755), "mkdir projects")
@@ -77,7 +77,7 @@ func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {
 		"CLAUDE_CONFIG_DIR="+root,
 	)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.Contains(t, dirs[parser.AgentClaude], root+"/projects")
 	assert.NotContains(t, dirs[parser.AgentClaude], home+"/.claude/projects")
 }
@@ -86,7 +86,7 @@ func TestResolveScriptTreatsEnvValuesAsData(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("resolve script runs on POSIX remote hosts; local Windows filepaths and MSYS shell parsing are not representative")
 	}
-	home := t.TempDir()
+	home := physTempDir(t)
 	projectsDir := filepath.Join(home, "config root", "projects")
 	require.NoError(t, os.MkdirAll(projectsDir, 0o755), "mkdir projects")
 
@@ -97,7 +97,7 @@ func TestResolveScriptTreatsEnvValuesAsData(t *testing.T) {
 		"CLAUDE_PROJECTS_DIR="+projectsDir,
 	)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.Contains(t, dirs[parser.AgentClaude], projectsDir)
 }
 
@@ -106,7 +106,7 @@ func TestResolveScriptExitsZero(t *testing.T) {
 	// dirs exist. Verify by running it against an empty
 	// HOME so no default dirs are found.
 	out := runResolveScriptForTest(t, "HOME=/nonexistent")
-	dirs, files, extraFiles, forbiddenRoots :=
+	dirs, files, extraFiles, forbiddenRoots, _ :=
 		parseResolvedTargets(string(out))
 	assert.Empty(t, dirs)
 	assert.Empty(t, files)
@@ -120,7 +120,7 @@ func TestResolveScriptExitsZero(t *testing.T) {
 // titles get transferred and imported during remote SSH sync. Runs the real
 // script through sh against a temp HOME rather than mocking it.
 func TestResolveScriptIncludesCodexIndex(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	sessionsDir := filepath.Join(home, ".codex", "sessions")
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o755), "mkdir sessions")
 	indexPath := filepath.Join(home, ".codex", "session_index.jsonl")
@@ -132,7 +132,7 @@ func TestResolveScriptIncludesCodexIndex(t *testing.T) {
 	// forward-slash paths that differ from native filepath.Join output.
 	// Match by POSIX suffix, which also guards against the parent
 	// expansion collapsing the index path to /session_index.jsonl.
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 	assert.Truef(t, hasSuffix(dirs[parser.AgentCodex], ".codex/sessions"),
 		"codex sessions dir should be resolved, got %v", dirs[parser.AgentCodex])
 	assert.Truef(t, hasSuffix(extraFiles, ".codex/session_index.jsonl"),
@@ -153,7 +153,7 @@ func hasSuffix(paths []string, suffix string) bool {
 // script discovers Hermes named-profile session dirs and database files, not
 // just the default profile.
 func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(home, ".hermes", "state.db"), []byte("sqlite"), 0o644,
@@ -173,7 +173,7 @@ func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
 	}
 
 	out := runResolveScriptForTest(t, "HOME="+home)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.Truef(t, hasSuffix(dirs[parser.AgentHermes], ".hermes/sessions"),
 		"default profile sessions dir should resolve, got %v", dirs[parser.AgentHermes])
@@ -190,7 +190,7 @@ func TestResolveScriptIncludesHermesNamedProfiles(t *testing.T) {
 }
 
 func TestResolveScriptExcludesRemoteSyncExcludedAgentState(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	for _, name := range []string{
@@ -207,37 +207,37 @@ func TestResolveScriptExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 	))
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
-	dirs, files, _, _ := parseResolvedTargets(string(out))
+	dirs, files, _, _, _ := parseResolvedTargets(string(out))
 
 	assert.NotContains(t, dirs, parser.AgentTrae)
 	assert.NotContains(t, files, parser.AgentTrae)
 }
 
 func TestResolveScriptCarriesTraeForbiddenRoot(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
 	require.NoError(t, os.MkdirAll(root, 0o755))
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
-	_, _, _, forbiddenRoots := parseResolvedTargets(string(out))
+	_, _, _, forbiddenRoots, _ := parseResolvedTargets(string(out))
 
 	assert.Contains(t, forbiddenRoots, root,
 		"the SSH resolver must preserve excluded roots as transfer boundaries")
 }
 
 func TestResolveScriptCarriesMissingExcludedRoot(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
 
 	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+root)
-	_, _, _, forbiddenRoots := parseResolvedTargets(string(out))
+	_, _, _, forbiddenRoots, _ := parseResolvedTargets(string(out))
 
 	assert.Contains(t, forbiddenRoots, root,
 		"the exclusion boundary must survive creation after remote resolution")
 }
 
 func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {
-	home := filepath.ToSlash(t.TempDir())
+	home := filepath.ToSlash(physTempDir(t))
 	profileSessions := path.Join(
 		home, ".hermes", "profiles", "research", "sessions",
 	)
@@ -253,14 +253,14 @@ func TestResolveScriptHermesOverrideReplacesNamedProfiles(t *testing.T) {
 		"HOME="+home,
 		"HERMES_SESSIONS_DIR="+customSessions,
 	)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.Equal(t, []string{customSessions}, dirs[parser.AgentHermes])
 	assert.Equal(t, []string{path.Join(customRoot, "state.db")}, extraFiles)
 }
 
 func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testing.T) {
-	home := filepath.ToSlash(t.TempDir())
+	home := filepath.ToSlash(physTempDir(t))
 	profilesRoot := path.Join(home, ".hermes", "profiles")
 	researchRoot := path.Join(profilesRoot, "research")
 	researchSessions := path.Join(researchRoot, "sessions")
@@ -272,7 +272,7 @@ func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testi
 	require.NoError(t, os.WriteFile(researchStateDB, []byte("sqlite"), 0o644))
 	require.NoError(t, os.WriteFile(databaseOnlyStateDB, []byte("sqlite"), 0o644))
 
-	outsideRoot := filepath.ToSlash(path.Join(t.TempDir(), "outside-profile"))
+	outsideRoot := filepath.ToSlash(path.Join(physTempDir(t), "outside-profile"))
 	require.NoError(t, os.MkdirAll(path.Join(outsideRoot, "sessions"), 0o755))
 	require.NoError(t, os.Symlink(outsideRoot, path.Join(profilesRoot, "linked")))
 
@@ -280,7 +280,7 @@ func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testi
 		"HOME="+home,
 		"HERMES_SESSIONS_DIR="+profilesRoot,
 	)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.ElementsMatch(t, []string{researchSessions, databaseOnlyStateDB},
 		dirs[parser.AgentHermes])
@@ -288,7 +288,7 @@ func TestResolveScriptHermesProfilesContainerOverrideEnumeratesProfiles(t *testi
 }
 
 func TestResolveScriptHermesTrailingSlashOverrideIncludesStateDB(t *testing.T) {
-	home := filepath.ToSlash(t.TempDir())
+	home := filepath.ToSlash(physTempDir(t))
 	customRoot := path.Join(home, "custom-hermes")
 	customSessions := path.Join(customRoot, "sessions")
 	require.NoError(t, os.MkdirAll(filepath.FromSlash(customSessions), 0o755))
@@ -299,14 +299,14 @@ func TestResolveScriptHermesTrailingSlashOverrideIncludesStateDB(t *testing.T) {
 		"HOME="+home,
 		"HERMES_SESSIONS_DIR="+customSessions+"/",
 	)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.Equal(t, []string{customSessions}, dirs[parser.AgentHermes])
 	assert.Equal(t, []string{stateDB}, extraFiles)
 }
 
 func TestResolveScriptIncludesFlatCustomHermesRoot(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	customRoot := filepath.Join(home, "custom", "hermes-archive")
 	require.NoError(t, os.MkdirAll(customRoot, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -317,21 +317,21 @@ func TestResolveScriptIncludesFlatCustomHermesRoot(t *testing.T) {
 		"HOME="+home,
 		"HERMES_SESSIONS_DIR="+customRoot,
 	)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.Equal(t, []string{customRoot}, dirs[parser.AgentHermes])
 	assert.Empty(t, extraFiles)
 }
 
 func TestResolveScriptIncludesHermesDatabaseOnlyProfile(t *testing.T) {
-	home := filepath.ToSlash(t.TempDir())
+	home := filepath.ToSlash(physTempDir(t))
 	profileRoot := path.Join(home, ".hermes", "profiles", "database-only")
 	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
 	stateDB := path.Join(profileRoot, "state.db")
 	require.NoError(t, os.WriteFile(stateDB, []byte("sqlite"), 0o644))
 
 	out := runResolveScriptForTest(t, "HOME="+home)
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 
 	assert.Truef(t, hasSuffix(
 		dirs[parser.AgentHermes], ".hermes/profiles/database-only/state.db",
@@ -339,7 +339,7 @@ func TestResolveScriptIncludesHermesDatabaseOnlyProfile(t *testing.T) {
 }
 
 func TestResolveScriptSkipsSessionlessHermesProfileCredentials(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	profileRoot := filepath.Join(home, ".hermes", "profiles", "sessions")
 	require.NoError(t, os.MkdirAll(profileRoot, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -353,7 +353,7 @@ func TestResolveScriptSkipsSessionlessHermesProfileCredentials(t *testing.T) {
 	))
 
 	out := runResolveScriptForTest(t, "HOME="+home)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.NotContains(t, dirs[parser.AgentHermes], profileRoot)
 	assert.NotContains(t, extraFiles, filepath.Join(profileRoot, ".env"))
@@ -361,10 +361,10 @@ func TestResolveScriptSkipsSessionlessHermesProfileCredentials(t *testing.T) {
 }
 
 func TestResolveScriptSkipsSymlinkedHermesProfile(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	profilesRoot := filepath.Join(home, ".hermes", "profiles")
 	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
-	outsideRoot := filepath.Join(t.TempDir(), "outside-profile")
+	outsideRoot := filepath.Join(physTempDir(t), "outside-profile")
 	outsideSessions := filepath.Join(outsideRoot, "sessions")
 	require.NoError(t, os.MkdirAll(outsideSessions, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -374,7 +374,7 @@ func TestResolveScriptSkipsSymlinkedHermesProfile(t *testing.T) {
 	require.NoError(t, os.Symlink(outsideRoot, profileLink))
 
 	out := runResolveScriptForTest(t, "HOME="+home)
-	dirs, extraFiles := parseResolvedDirs(string(out))
+	dirs, extraFiles, _ := parseResolvedDirs(string(out))
 
 	assert.NotContains(t, dirs[parser.AgentHermes], filepath.Join(profileLink, "sessions"))
 	assert.Empty(t, extraFiles)
@@ -384,11 +384,11 @@ func TestResolveScriptSkipsSymlinkedHermesProfile(t *testing.T) {
 // dir exists, the glob expands to nothing emittable (av_emit_target's [ -d ]
 // guard drops the non-existent path) — so only the default profile resolves.
 func TestResolveScriptSkipsMissingHermesProfiles(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
 
 	out := runResolveScriptForTest(t, "HOME="+home)
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 
 	assert.Truef(t, hasSuffix(dirs[parser.AgentHermes], ".hermes/sessions"),
 		"default profile sessions dir should resolve, got %v", dirs[parser.AgentHermes])
@@ -401,14 +401,14 @@ func TestResolveScriptSkipsMissingHermesProfiles(t *testing.T) {
 // produces no extra-file entry, so the transfer's tar command never names a
 // nonexistent path (which would be a fatal, non-benign error).
 func TestResolveScriptSkipsMissingCodexIndex(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	require.NoError(t,
 		os.MkdirAll(filepath.Join(home, ".codex", "sessions"), 0o755),
 		"mkdir sessions")
 
 	out := runResolveScriptForTest(t, "HOME="+home)
 
-	_, extraFiles := parseResolvedDirs(string(out))
+	_, extraFiles, _ := parseResolvedDirs(string(out))
 	assert.Empty(t, extraFiles,
 		"no extra files when session_index.jsonl is absent")
 }
@@ -418,7 +418,7 @@ func TestResolveScriptSkipsMissingCodexIndex(t *testing.T) {
 // target, so Aider must stay opt-in even when a history file exists at home
 // root. Runs the real script through sh against a temp HOME.
 func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(home, ".aider.chat.history.md"),
 		[]byte("# aider chat started at 2024-01-01 00:00:00\n"),
@@ -427,7 +427,7 @@ func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
 
 	out := runResolveScriptForTest(t, "HOME="+home)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.Empty(t, dirs[parser.AgentAider],
 		"aider bare-$HOME default must not be resolved for remote tar, got %v",
 		dirs[parser.AgentAider])
@@ -441,7 +441,7 @@ func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
 // treats resolved entries as tar targets, so emitting the code root would
 // archive the entire repository instead of just .aider.chat.history.md files.
 func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	codeRoot := filepath.Join(home, "code")
 	repoA := filepath.Join(codeRoot, "repo-a")
 	repoB := filepath.Join(codeRoot, "nested", "repo-b")
@@ -465,7 +465,7 @@ func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
 
 	out := runResolveScriptForTest(t, "HOME="+home, "AIDER_DIR="+codeRoot)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	aiderTargets := slashPaths(dirs[parser.AgentAider])
 	assert.ElementsMatch(t, []string{filepath.ToSlash(historyA), filepath.ToSlash(historyB)}, aiderTargets,
 		"explicit AIDER_DIR must resolve only aider history files")
@@ -481,7 +481,7 @@ func TestResolveScriptAiderNewlinePathCannotInjectTarget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows path APIs reject embedded newlines; this regression covers POSIX remote shell output")
 	}
-	home := t.TempDir()
+	home := physTempDir(t)
 	codeRoot := filepath.Join(home, "code")
 	injected := "/home/victim/" + parser.AiderHistoryFileName()
 	maliciousDir := filepath.Join(codeRoot, "repo\naider:", "home", "victim")
@@ -491,7 +491,7 @@ func TestResolveScriptAiderNewlinePathCannotInjectTarget(t *testing.T) {
 
 	out := runResolveScriptForTest(t, "HOME="+home, "AIDER_DIR="+codeRoot)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.NotContains(t, dirs[parser.AgentAider], injected,
 		"newline-bearing repository paths must not inject a second transfer target")
 	for _, target := range dirs[parser.AgentAider] {
@@ -512,12 +512,12 @@ func slashPaths(paths []string) []string {
 // to literal $HOME (the very thing the home-default skip prevents) is also
 // dropped, so an unscoped override cannot reintroduce a whole-home tar.
 func TestResolveScriptAiderRejectsHomeOverride(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 
 	for _, override := range []string{home, home + "/"} {
 		out := runResolveScriptForTest(t, "HOME="+home, "AIDER_DIR="+override)
 
-		dirs, _ := parseResolvedDirs(string(out))
+		dirs, _, _ := parseResolvedDirs(string(out))
 		assert.Empty(t, dirs[parser.AgentAider],
 			"AIDER_DIR=%q (== $HOME) must not resolve to a whole-home tar, got %v",
 			override, dirs[parser.AgentAider])
@@ -525,7 +525,7 @@ func TestResolveScriptAiderRejectsHomeOverride(t *testing.T) {
 }
 
 func TestResolveScriptWindsurfTargetsOnlySessionFiles(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	userRoot := filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")
 	workspaceRoot := filepath.Join(userRoot, "workspaceStorage")
 	workspaceDir := filepath.Join(workspaceRoot, "workspace-a")
@@ -590,7 +590,7 @@ func TestParseResolvedDirs(t *testing.T) {
 		"@file:/home/wes/.codex/session_index.jsonl\n" +
 		"\n"
 
-	dirs, extraFiles := parseResolvedDirs(input)
+	dirs, extraFiles, _ := parseResolvedDirs(input)
 
 	// codex has one valid dir and one empty (excluded) entry.
 	assert.Equal(t, []string{"/home/wes/.codex/sessions"}, dirs[parser.AgentCodex])
@@ -611,7 +611,7 @@ func TestParseResolvedDirsNULRecords(t *testing.T) {
 		"aider:/home/wes/code/repo/.aider.chat.history.md\x00" +
 		"@file:/home/wes/.codex/session_index.jsonl\x00"
 
-	dirs, extraFiles := parseResolvedDirs(input)
+	dirs, extraFiles, _ := parseResolvedDirs(input)
 
 	assert.Equal(t, []string{"/home/wes/.claude/projects"}, dirs[parser.AgentClaude])
 	assert.Equal(t,
@@ -628,7 +628,7 @@ func TestParseResolvedTargetsIncludesAgentFiles(t *testing.T) {
 		"@agentfile:windsurf:/home/wes/Windsurf/User/workspaceStorage/a/workspace.json\x00" +
 		"@file:/home/wes/.codex/session_index.jsonl\x00"
 
-	dirs, files, extraFiles, _ := parseResolvedTargets(input)
+	dirs, files, extraFiles, _, _ := parseResolvedTargets(input)
 
 	assert.Equal(t, []string{"/home/wes/Windsurf/User"}, dirs[parser.AgentWindsurf])
 	assert.Equal(t, []string{
@@ -640,7 +640,7 @@ func TestParseResolvedTargetsIncludesAgentFiles(t *testing.T) {
 }
 
 func TestResolveScriptRooCodeTargetsOnlySessionFiles(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	rooRoot := filepath.Join(home, ".config", "Code", "User",
 		"globalStorage", "rooveterinaryinc.roo-cline")
 	task1 := filepath.Join(rooRoot, "tasks", "task-1")
@@ -694,7 +694,7 @@ func TestResolveScriptRooCodeTargetsOnlySessionFiles(t *testing.T) {
 }
 
 func TestResolveScriptRooCodeSkipsRootWithoutSessions(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	rooRoot := filepath.Join(home, ".config", "Code", "User",
 		"globalStorage", "rooveterinaryinc.roo-cline")
 	settingsDir := filepath.Join(rooRoot, "settings")
@@ -715,7 +715,7 @@ func TestResolveScriptKiloLegacyRejectsSymlinkedTaskDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
-	home := t.TempDir()
+	home := physTempDir(t)
 	klRoot := filepath.Join(home, ".config", "Code", "User",
 		"globalStorage", "kilocode.kilo-code")
 	tasksDir := filepath.Join(klRoot, "tasks")
@@ -734,7 +734,7 @@ func TestResolveScriptKiloLegacyRejectsSymlinkedTaskDir(t *testing.T) {
 	))
 
 	// Symlinked task directory pointing outside root.
-	outsideDir := filepath.Join(t.TempDir(), "escaped-task")
+	outsideDir := filepath.Join(physTempDir(t), "escaped-task")
 	require.NoError(t, os.MkdirAll(outsideDir, 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(outsideDir, "task_metadata.json"),
@@ -762,7 +762,7 @@ func TestResolveScriptKiloLegacyRejectsSymlinkedTaskDir(t *testing.T) {
 // only the trajectories/ subdirectory, mirroring
 // remotesync.resolvePoolsideTarget.
 func TestResolveScriptPoolsideTargetsOnlyTrajectories(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	poolsideRoot := filepath.Join(home, ".local", "state", "poolside")
 	trajectoriesDir := filepath.Join(poolsideRoot, "trajectories")
 	settingsDir := filepath.Join(poolsideRoot, "settings")
@@ -795,7 +795,7 @@ func TestResolveScriptPoolsideTargetsOnlyTrajectories(t *testing.T) {
 // SSH resolver emits nothing when the trajectories/ subdirectory does
 // not exist.
 func TestResolveScriptPoolsideSkipsRootWithoutTrajectories(t *testing.T) {
-	home := t.TempDir()
+	home := physTempDir(t)
 	poolsideRoot := filepath.Join(home, ".local", "state", "poolside")
 	require.NoError(t, os.MkdirAll(poolsideRoot, 0o755))
 
@@ -814,7 +814,7 @@ func TestResolveScriptPoolsideTrajectoriesRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("resolve script runs on POSIX remote hosts; local Windows filepaths and MSYS shell parsing are not representative")
 	}
-	home := t.TempDir()
+	home := physTempDir(t)
 	// Set POOLSIDE_DIR directly to a trajectories/ directory.
 	trajectoriesDir := filepath.Join(home, "poolside", "trajectories")
 	require.NoError(t, os.MkdirAll(trajectoriesDir, 0o755))
@@ -824,7 +824,7 @@ func TestResolveScriptPoolsideTrajectoriesRoot(t *testing.T) {
 
 	out := runResolveScriptForTest(t, "HOME="+home, "POOLSIDE_DIR="+trajectoriesDir)
 
-	dirs, _ := parseResolvedDirs(string(out))
+	dirs, _, _ := parseResolvedDirs(string(out))
 	assert.Equal(t, []string{trajectoriesDir}, dirs[parser.AgentPoolside],
 		"the environment override must produce one transfer target")
 
@@ -838,4 +838,85 @@ func TestResolveScriptPoolsideTrajectoriesRoot(t *testing.T) {
 		assert.NotContains(t, record, "poolside/poolside",
 			"must not double-nest trajectories")
 	}
+}
+
+// physTempDir returns t.TempDir() with symlinks resolved. The resolve
+// script emits physical paths (see av_phys_dir), so fixtures must compare
+// against physical spellings — on macOS t.TempDir() lives under /var,
+// which is a symlink to /private/var.
+func physTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+func TestParseResolvedTargetsFailsClosedOnUnrepresentableForbiddenRoot(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			"newline_inside_forbidden_value",
+			"claude:/home/u/.claude\x00@forbidden:/home/u/evil\ndir\x00",
+		},
+		{
+			"empty_forbidden_value",
+			"claude:/home/u/.claude\x00@forbidden:\x00",
+		},
+		{
+			"bare_forbidden_record",
+			"claude:/home/u/.claude\x00@forbidden\x00",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, _, err := parseResolvedTargets(tc.input)
+			require.Error(t, err,
+				"a forbidden record that cannot be represented must fail the sync, not drop the boundary")
+			assert.Contains(t, err.Error(), "forbidden")
+		})
+	}
+}
+
+func TestParseResolvedTargetsPreservesNULDelimitedSpellingsExactly(
+	t *testing.T,
+) {
+	input := "@forbidden:/home/u/trae dir \x00" +
+		"claude:/home/u/.claude \x00"
+
+	dirs, _, _, forbiddenRoots, err := parseResolvedTargets(input)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/home/u/trae dir "}, forbiddenRoots,
+		"NUL-delimited forbidden roots must keep trailing whitespace — trimming changes the excluded path")
+	assert.Equal(t, []string{"/home/u/.claude "}, dirs[parser.AgentClaude],
+		"NUL-delimited target spellings must be preserved exactly")
+}
+
+func TestResolveScriptEmitsPhysicalPathsForSymlinkedRoots(t *testing.T) {
+	home := physTempDir(t)
+	physicalTrae := filepath.Join(home, "real-trae")
+	physicalClaude := filepath.Join(home, "real-claude")
+	require.NoError(t, os.MkdirAll(physicalTrae, 0o755))
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(physicalClaude, "projects"), 0o755))
+	traeAlias := filepath.Join(home, "trae-alias")
+	require.NoError(t, os.Symlink(physicalTrae, traeAlias))
+	// The default Claude root $HOME/.claude/projects is reached through a
+	// symlinked ancestor.
+	require.NoError(t, os.Symlink(
+		physicalClaude, filepath.Join(home, ".claude")))
+
+	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+traeAlias)
+	dirs, _, _, forbiddenRoots, err := parseResolvedTargets(string(out))
+	require.NoError(t, err)
+
+	assert.Contains(t, forbiddenRoots, physicalTrae,
+		"forbidden roots must be emitted by physical spelling so alias overlap cannot bypass them")
+	assert.NotContains(t, forbiddenRoots, traeAlias)
+	assert.Contains(t, dirs[parser.AgentClaude],
+		filepath.Join(physicalClaude, "projects"),
+		"targets must be emitted by physical spelling to share a namespace with forbidden roots")
 }

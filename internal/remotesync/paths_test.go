@@ -1,6 +1,7 @@
 package remotesync
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -182,6 +183,38 @@ func TestPathWithinForbiddenRootsLocalWrapperCanonicalizesRelativeSpellings(
 	assert.False(t, pathWithinForbiddenRoots(
 		[]string{"sessions"}, filepath.Join(base, "sessions2"),
 	), "canonicalization must preserve component-boundary matching")
+}
+
+// TestPathWithinForbiddenRootsLocalWrapperResolvesSymlinkAliases pins the
+// symlink half of alias handling: a path reached through a symlinked
+// ancestor must compare by its physical location, in both directions —
+// alias-spelled path against physical forbidden root, and alias-spelled
+// forbidden root against physical path.
+func TestPathWithinForbiddenRootsLocalWrapperResolvesSymlinkAliases(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses POSIX symlinks")
+	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	forbidden := filepath.Join(base, "trae")
+	require.NoError(t, os.MkdirAll(filepath.Join(forbidden, "sub"), 0o755))
+	alias := filepath.Join(base, "alias")
+	require.NoError(t, os.Symlink(forbidden, alias))
+
+	assert.True(t, pathWithinForbiddenRoots(
+		[]string{forbidden}, filepath.Join(alias, "sub", "chat.db"),
+	), "alias-spelled path must resolve into the physical forbidden root")
+	assert.True(t, pathWithinForbiddenRoots(
+		[]string{alias}, filepath.Join(forbidden, "sub", "chat.db"),
+	), "alias-spelled forbidden root must guard its physical children")
+	assert.True(t, pathWithinForbiddenRoots(
+		[]string{forbidden}, filepath.Join(alias, "sub", "missing", "x"),
+	), "missing tails resolve through their longest existing ancestor")
+	assert.False(t, pathWithinForbiddenRoots(
+		[]string{forbidden}, filepath.Join(base, "other"),
+	), "unrelated siblings stay outside the boundary")
 }
 
 // TestPathWithinForbiddenRootsLocalWrapperCaseFolding asserts the local
