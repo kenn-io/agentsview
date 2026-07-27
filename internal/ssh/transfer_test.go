@@ -551,3 +551,60 @@ func TestRemappedDir(t *testing.T) {
 	want := filepath.Join("tmp", "sync-123", "home", "wes", ".claude")
 	assert.Equal(t, want, got)
 }
+
+// TestBuildTarCommandPythonBranchPrunesForbiddenRootNestedInAllowedRoot
+// exercises the Python snapshot archive path (taken whenever a Hermes
+// state.db is present) against a forbidden root nested inside an allowed
+// root: archive_filter must drop the forbidden subtree while the allowed
+// session file and the Hermes snapshot still stream. This pins the
+// member-name/forbidden-root spelling agreement inside the Python script
+// end to end, independent of how tarfile spells arcnames.
+func TestBuildTarCommandPythonBranchPrunesForbiddenRootNestedInAllowedRoot(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote snapshot script uses POSIX paths; local Windows paths are not representative")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable; the script would take the plain-tar fallback")
+	}
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, ".forbidden-provider")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+	stateDB := filepath.Join(root, "hermes", "state.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
+	writer, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	_, err = writer.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{
+			parser.AgentClaude: {allowed},
+			parser.AgentHermes: {stateDB},
+		},
+		nil, nil, []string{forbidden},
+	)
+	require.Contains(t, script, "python3",
+		"a Hermes state.db must route through the Python snapshot branch")
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+	require.NoError(t, err, "archive command output: %s", archive)
+
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(keep))
+	assert.Contains(t, names, archivePathForTest(stateDB))
+	assert.NotContains(t, names, archivePathForTest(secret),
+		"the Python archive filter must drop forbidden content nested in an allowed root")
+	for _, name := range names {
+		assert.NotContains(t, name, ".forbidden-provider",
+			"no spelling of the forbidden subtree may enter the archive")
+	}
+}

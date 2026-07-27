@@ -224,7 +224,18 @@ paths = json.loads(%q)
 databases = json.loads(%q)
 forbidden = json.loads(%q)
 
+# Member names and forbidden roots are compared in one rootless form so
+# the match cannot depend on whether tarfile preserves the "./" arcname
+# spelling (current CPython does; both spellings normalize identically).
+def archive_name(name):
+    if name.startswith("./"):
+        name = name[2:]
+    return name.lstrip("/")
+
+forbidden = [root for root in (archive_name(f) for f in forbidden) if root]
+
 def is_forbidden(archive_path):
+    archive_path = archive_name(archive_path)
     for root in forbidden:
         if archive_path == root or archive_path.startswith(root.rstrip("/") + "/"):
             return True
