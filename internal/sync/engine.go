@@ -6574,7 +6574,6 @@ func (e *Engine) collectAndBatch(
 			} else {
 				outcome = e.writeBatchWithOutcome(pending, writeMode, false)
 			}
-			e.retireWrittenIdentityMigrations(pending, &outcome)
 			baselineErr := e.baselinePendingWriteSources(
 				ctx, pending, outcome.written,
 			)
@@ -6692,17 +6691,6 @@ func (e *Engine) collectAndBatch(
 		sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(
 			r.processResult,
 		)
-		e.applyProviderIdentityMigrationPolicies(&r.processResult)
-		if err := e.retireUnchangedIdentityMigrations(
-			r.processResult,
-		); err != nil {
-			log.Printf("%v", err)
-			stats.RecordFailed()
-			e.requestFullDiscoveryRetry(r.agent)
-			e.noteSQLiteContainerResult(r.path, false)
-			r.releaseRetention()
-			continue
-		}
 		excludedSessionIDs, err := e.deleteParserExcludedSessions(
 			r.processResult, sourceAllowsParserExclusions,
 		)
@@ -6753,7 +6741,6 @@ func (e *Engine) collectAndBatch(
 		}
 		if len(r.results) == 0 && r.incremental == nil {
 			if len(r.excludedSessionIDs) > 0 ||
-				len(r.migrationSuppressedSessionIDs) > 0 ||
 				len(r.sourceMissingMembers) > 0 {
 				stats.filesOK++
 				stats.parserExcludedFiles++
@@ -6834,12 +6821,9 @@ func (e *Engine) collectAndBatch(
 				needsRetry := r.providerFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
 				pending = append(pending, pendingWrite{
-					sess:        pr.Session,
-					msgs:        pr.Messages,
-					usageEvents: pr.UsageEvents,
-					retireSessionIDs: e.identityRetirementsForSession(
-						r.processResult, pr.Session.ID,
-					),
+					sess:                           pr.Session,
+					msgs:                           pr.Messages,
+					usageEvents:                    pr.UsageEvents,
 					needsRetry:                     needsRetry,
 					forceReplace:                   r.forceReplace,
 					demoteDataVersionOnFailedWrite: r.demoteDataVersionOnFailedWrite,
@@ -7068,18 +7052,6 @@ type sourceMissingMember struct {
 type processResult struct {
 	results            []parser.ParseResult
 	excludedSessionIDs []string
-	identityMigrations []parser.SessionIdentityMigration
-	// migrationSuppressedSessionIDs contains replacement identities whose
-	// parse results were suppressed because a predecessor was protected.
-	// Cleanup rechecks each replacement's own protection transactionally.
-	migrationSuppressedSessionIDs []string
-	// identityRetirements maps each replacement's stored ID to predecessor
-	// IDs whose retirement must wait for that replacement write to succeed.
-	identityRetirements map[string][]string
-	// unchangedSessionIDs records replacements whose exact stored rows were
-	// proven current while filtering unchanged shared-source parse results.
-	// Their predecessors can retire without another replacement write.
-	unchangedSessionIDs map[string]struct{}
 	// sourceMissingMembers carries stored sessions whose virtual member
 	// source no longer exists inside a still-present shared container
 	// (e.g. a Windsurf conversation deleted from state.vscdb). They must
@@ -7694,7 +7666,6 @@ func (e *Engine) processProviderFile(
 		skipRes := processResult{
 			skip:                  !outcome.ForceReplace,
 			excludedSessionIDs:    excludedSessionIDs,
-			identityMigrations:    outcome.SessionIdentityMigrations,
 			sourceMissingMembers:  missingMembers,
 			mtime:                 fingerprint.MTimeNS,
 			cacheSkip:             cacheSkip,
@@ -7734,15 +7705,12 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	}
-	filteredResults, unchangedSessionIDs :=
-		e.partitionUnchangedSharedSQLiteResults(
-			file, parsedResults, providerSemantics.UnchangedResults,
-		)
+	filteredResults := e.dropUnchangedSharedSQLiteResults(
+		file, parsedResults, providerSemantics.UnchangedResults,
+	)
 	res := processResult{
 		results:              filteredResults,
-		unchangedSessionIDs:  unchangedSessionIDs,
 		excludedSessionIDs:   excludedSessionIDs,
-		identityMigrations:   outcome.SessionIdentityMigrations,
 		sourceMissingMembers: missingMembers,
 		mtime:                fingerprint.MTimeNS,
 		cacheSkip:            cacheSkip,
@@ -7810,25 +7778,15 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 	results []parser.ParseResult,
 	policy parser.UnchangedResultPolicy,
 ) []parser.ParseResult {
-	kept, _ := e.partitionUnchangedSharedSQLiteResults(file, results, policy)
-	return kept
-}
-
-func (e *Engine) partitionUnchangedSharedSQLiteResults(
-	file parser.DiscoveredFile,
-	results []parser.ParseResult,
-	policy parser.UnchangedResultPolicy,
-) ([]parser.ParseResult, map[string]struct{}) {
 	if e.forceParse || file.ForceParse || len(results) == 0 {
-		return results, nil
+		return results
 	}
 	if policy == parser.UnchangedResultNone {
-		return results, nil
+		return results
 	}
 	compareHash := policy == parser.UnchangedResultMTimeAndHash
 
 	kept := results[:0]
-	var unchangedSessionIDs map[string]struct{}
 	for _, r := range results {
 		path := r.Session.File.Path
 		if path == "" {
@@ -7856,25 +7814,8 @@ func (e *Engine) partitionUnchangedSharedSQLiteResults(
 			continue
 		}
 		// Unchanged: drop so the write batch neither rewrites nor recounts it.
-		currentID := applyIDPrefixToID(e.idPrefix, r.Session.ID)
-		storedSize, storedMtime, exact := e.db.GetSessionFileInfo(currentID)
-		exact = exact &&
-			e.db.GetSessionFilePath(currentID) == lookupPath &&
-			storedSize == r.Session.File.Size &&
-			storedMtime == r.Session.File.Mtime &&
-			e.db.GetSessionDataVersion(currentID) >= db.CurrentDataVersion()
-		if exact && compareHash {
-			storedHash, ok := e.db.GetSessionFileHash(currentID)
-			exact = ok && storedHash == r.Session.File.Hash
-		}
-		if exact {
-			if unchangedSessionIDs == nil {
-				unchangedSessionIDs = make(map[string]struct{})
-			}
-			unchangedSessionIDs[currentID] = struct{}{}
-		}
 	}
-	return kept, unchangedSessionIDs
+	return kept
 }
 
 func (e *Engine) providerSourceSessionIDsForForceReplace(
@@ -8100,109 +8041,9 @@ func (e *Engine) applyProviderFilePathPolicies(
 	res.results = kept
 }
 
-// applyProviderIdentityMigrationPolicies preserves explicit user deletion
-// state when one provider identity supersedes another. Parser cleanup still
-// removes ordinary live legacy rows, but a trashed or permanently excluded
-// legacy identity suppresses its replacement. An unprotected qualified
-// replacement is parser-excluded to clean up rows imported by older binaries,
-// while protected current and legacy rows remain recoverable in the archive.
-func (e *Engine) applyProviderIdentityMigrationPolicies(
-	res *processResult,
-) {
-	if res == nil || len(res.identityMigrations) == 0 {
-		return
-	}
-
-	migrationsByCurrent := make(
-		map[string][]parser.SessionIdentityMigration,
-		len(res.identityMigrations),
-	)
-	for _, migration := range res.identityMigrations {
-		previousID := applyIDPrefixToID(e.idPrefix, migration.PreviousID)
-		currentID := applyIDPrefixToID(e.idPrefix, migration.CurrentID)
-		if previousID == "" || currentID == "" || previousID == currentID {
-			continue
-		}
-		migrationsByCurrent[currentID] = append(
-			migrationsByCurrent[currentID], migration,
-		)
-	}
-	if len(migrationsByCurrent) == 0 {
-		return
-	}
-
-	protectedPrevious := make(map[string]struct{})
-	deferredPrevious := make(map[string]struct{})
-	suppressedCurrent := make(map[string]string)
-	res.identityRetirements = make(map[string][]string, len(migrationsByCurrent))
-	for currentID, migrations := range migrationsByCurrent {
-		suppressed := false
-		for _, migration := range migrations {
-			previousID := applyIDPrefixToID(e.idPrefix, migration.PreviousID)
-			if e.db.IsSessionTrashed(previousID) ||
-				e.db.IsSessionExcluded(previousID) {
-				protectedPrevious[previousID] = struct{}{}
-				suppressed = true
-			}
-		}
-		if suppressed {
-			suppressedCurrent[currentID] = migrations[0].CurrentID
-			continue
-		}
-		seen := make(map[string]struct{}, len(migrations))
-		for _, migration := range migrations {
-			previousID := applyIDPrefixToID(e.idPrefix, migration.PreviousID)
-			if _, exists := seen[previousID]; exists {
-				continue
-			}
-			seen[previousID] = struct{}{}
-			deferredPrevious[previousID] = struct{}{}
-			res.identityRetirements[currentID] = append(
-				res.identityRetirements[currentID], previousID,
-			)
-		}
-	}
-
-	if len(suppressedCurrent) > 0 {
-		kept := res.results[:0]
-		for _, result := range res.results {
-			currentID := applyIDPrefixToID(e.idPrefix, result.Session.ID)
-			if _, suppressed := suppressedCurrent[currentID]; suppressed {
-				continue
-			}
-			kept = append(kept, result)
-		}
-		res.results = kept
-	}
-
-	exclusions := res.excludedSessionIDs[:0]
-	seen := make(map[string]struct{}, len(res.excludedSessionIDs))
-	for _, id := range res.excludedSessionIDs {
-		fullID := applyIDPrefixToID(e.idPrefix, id)
-		if _, protected := protectedPrevious[fullID]; protected {
-			continue
-		}
-		if _, deferred := deferredPrevious[fullID]; deferred {
-			continue
-		}
-		if _, exists := seen[fullID]; exists {
-			continue
-		}
-		seen[fullID] = struct{}{}
-		exclusions = append(exclusions, id)
-	}
-	for _, providerID := range suppressedCurrent {
-		res.migrationSuppressedSessionIDs = append(
-			res.migrationSuppressedSessionIDs, providerID,
-		)
-	}
-	res.excludedSessionIDs = exclusions
-}
-
-// deleteParserExcludedSessions preserves ordinary parser exclusion behavior
-// while applying the stronger transactional protection check required for
-// migration-suppressed replacement identities. The returned IDs are safe to
-// exclude from resync's orphan copy.
+// deleteParserExcludedSessions deletes rows the current parser deliberately
+// excludes, without recording a permanent user deletion. The returned IDs are
+// safe to exclude from resync's orphan copy.
 func (e *Engine) deleteParserExcludedSessions(
 	res processResult,
 	sourceAllowed bool,
@@ -8217,42 +8058,7 @@ func (e *Engine) deleteParserExcludedSessions(
 			return nil, err
 		}
 	}
-
-	suppressed := e.applyIDPrefixToSessionIDs(
-		res.migrationSuppressedSessionIDs,
-	)
-	approved, err := e.db.DeleteParserMigrationSuppressedSessions(suppressed)
-	if err != nil {
-		return nil, err
-	}
-	return append(excluded, approved...), nil
-}
-
-func (e *Engine) retireUnchangedIdentityMigrations(
-	res processResult,
-) error {
-	for currentID, predecessorIDs := range res.identityRetirements {
-		if _, unchanged := res.unchangedSessionIDs[currentID]; !unchanged {
-			continue
-		}
-		if _, _, err := e.db.RetireParserSupersededSessions(
-			currentID, predecessorIDs,
-		); err != nil {
-			return fmt.Errorf(
-				"retire superseded identities for unchanged %s: %w",
-				currentID, err,
-			)
-		}
-	}
-	return nil
-}
-
-func (e *Engine) identityRetirementsForSession(
-	res processResult,
-	sessionID string,
-) []string {
-	currentID := applyIDPrefixToID(e.idPrefix, sessionID)
-	return append([]string(nil), res.identityRetirements[currentID]...)
+	return excluded, nil
 }
 
 func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {
@@ -10270,12 +10076,11 @@ func (e *Engine) recomputeSignalsFromDB(
 }
 
 type pendingWrite struct {
-	sess             parser.ParsedSession
-	msgs             []parser.ParsedMessage
-	usageEvents      []parser.ParsedUsageEvent
-	retireSessionIDs []string
-	needsRetry       bool
-	forceReplace     bool
+	sess         parser.ParsedSession
+	msgs         []parser.ParsedMessage
+	usageEvents  []parser.ParsedUsageEvent
+	needsRetry   bool
+	forceReplace bool
 	// demoteDataVersionOnFailedWrite marks a failed shared-container member
 	// stale so its source is retried instead of remaining falsely current.
 	demoteDataVersionOnFailedWrite bool
@@ -10315,43 +10120,6 @@ func (e *Engine) rejectSkipCacheWrites(writes []skipCacheWrite) {
 	for _, write := range writes {
 		e.clearSkip(write.key)
 		e.requestFullDiscoveryRetry(write.agent)
-	}
-}
-
-func (e *Engine) retireWrittenIdentityMigrations(
-	pending []pendingWrite,
-	outcome *writeBatchOutcome,
-) {
-	if outcome == nil {
-		return
-	}
-	for i, write := range pending {
-		if i >= len(outcome.written) || !outcome.written[i] ||
-			len(write.retireSessionIDs) == 0 {
-			continue
-		}
-		_, suppressed, err := e.db.RetireParserSupersededSessions(
-			applyIDPrefixToID(e.idPrefix, write.sess.ID),
-			write.retireSessionIDs,
-		)
-		if err != nil {
-			log.Printf(
-				"retire parser-superseded identities for %s: %v",
-				write.sess.ID, err,
-			)
-			outcome.written[i] = false
-			if outcome.writtenSessions > 0 {
-				outcome.writtenSessions--
-			}
-			outcome.failedSessions++
-			continue
-		}
-		if suppressed {
-			outcome.written[i] = false
-			if outcome.writtenSessions > 0 {
-				outcome.writtenSessions--
-			}
-		}
 	}
 }
 
@@ -13369,10 +13137,6 @@ func (e *Engine) SyncSingleSessionContext(
 	}
 
 	sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(res)
-	e.applyProviderIdentityMigrationPolicies(&res)
-	if err := e.retireUnchangedIdentityMigrations(res); err != nil {
-		return err
-	}
 
 	// Delete parser-excluded sessions before writing the parsed
 	// results, mirroring collectAndBatch. Vibe promotes a session
@@ -13414,19 +13178,6 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.writeIncremental(res.incremental); err != nil {
 			return err
 		}
-		if retirements := e.identityRetirementsForSession(
-			res, res.incremental.sessionID,
-		); len(retirements) > 0 {
-			if _, _, err := e.db.RetireParserSupersededSessions(
-				applyIDPrefixToID(e.idPrefix, res.incremental.sessionID),
-				retirements,
-			); err != nil {
-				return fmt.Errorf(
-					"retire superseded identities for %s: %w",
-					res.incremental.sessionID, err,
-				)
-			}
-		}
 		return nil
 	}
 
@@ -13436,12 +13187,11 @@ func (e *Engine) SyncSingleSessionContext(
 
 	for _, pr := range res.results {
 		write := pendingWrite{
-			sess:             pr.Session,
-			msgs:             pr.Messages,
-			usageEvents:      pr.UsageEvents,
-			retireSessionIDs: e.identityRetirementsForSession(res, pr.Session.ID),
-			needsRetry:       res.needsRetryForSession(pr.Session.ID),
-			forceReplace:     res.forceReplace,
+			sess:         pr.Session,
+			msgs:         pr.Messages,
+			usageEvents:  pr.UsageEvents,
+			needsRetry:   res.needsRetryForSession(pr.Session.ID),
+			forceReplace: res.forceReplace,
 			demoteDataVersionOnFailedWrite: res.
 				demoteDataVersionOnFailedWrite,
 		}
@@ -13452,16 +13202,6 @@ func (e *Engine) SyncSingleSessionContext(
 				pr.Session.ID, err)
 		} else if errors.Is(err, errSessionPreserved) {
 			preserved = true
-		} else if err == nil && len(write.retireSessionIDs) > 0 {
-			if _, _, err := e.db.RetireParserSupersededSessions(
-				applyIDPrefixToID(e.idPrefix, pr.Session.ID),
-				write.retireSessionIDs,
-			); err != nil {
-				return fmt.Errorf(
-					"retire superseded identities for %s: %w",
-					pr.Session.ID, err,
-				)
-			}
 		}
 	}
 

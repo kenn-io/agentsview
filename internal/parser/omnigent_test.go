@@ -2205,58 +2205,6 @@ func TestOmnigentBinaryIDGenerationParses(t *testing.T) {
 		"parent linkage must survive the binary-id hex conversion")
 }
 
-func TestOmnigentBinaryIDParseOutcomeIncludesEveryTextPredecessor(t *testing.T) {
-	path := writeOmnigentBinaryIDDB(t)
-	provider, ok := NewProvider(AgentOmnigent, ProviderConfig{
-		Roots: []string{filepath.Dir(path)}, Machine: "host",
-	})
-	require.True(t, ok)
-
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	require.NoError(t, err)
-
-	wantExcluded := []string{
-		"omnigent:" + omnigentBinaryConvHex,
-		"omnigent:conv_" + omnigentBinaryConvHex,
-		"omnigent:0:conv_" + omnigentBinaryConvHex,
-		"omnigent:" + omnigentBinarySubHex,
-		"omnigent:conv_" + omnigentBinarySubHex,
-		"omnigent:0:conv_" + omnigentBinarySubHex,
-	}
-	assert.ElementsMatch(t, wantExcluded, outcome.ExcludedSessionIDs)
-
-	wantMigrations := []SessionIdentityMigration{
-		{
-			PreviousID: "omnigent:" + omnigentBinaryConvHex,
-			CurrentID:  "omnigent:0:" + omnigentBinaryConvHex,
-		},
-		{
-			PreviousID: "omnigent:conv_" + omnigentBinaryConvHex,
-			CurrentID:  "omnigent:0:" + omnigentBinaryConvHex,
-		},
-		{
-			PreviousID: "omnigent:0:conv_" + omnigentBinaryConvHex,
-			CurrentID:  "omnigent:0:" + omnigentBinaryConvHex,
-		},
-		{
-			PreviousID: "omnigent:" + omnigentBinarySubHex,
-			CurrentID:  "omnigent:0:" + omnigentBinarySubHex,
-		},
-		{
-			PreviousID: "omnigent:conv_" + omnigentBinarySubHex,
-			CurrentID:  "omnigent:0:" + omnigentBinarySubHex,
-		},
-		{
-			PreviousID: "omnigent:0:conv_" + omnigentBinarySubHex,
-			CurrentID:  "omnigent:0:" + omnigentBinarySubHex,
-		},
-	}
-	assert.ElementsMatch(t, wantMigrations, outcome.SessionIdentityMigrations)
-}
-
 func TestOmnigentMetaMessageIsHiddenButChangesFingerprint(t *testing.T) {
 	path := writeOmnigentOldGenDB(t)
 	before, err := ParseOmnigentDB(path, "host")

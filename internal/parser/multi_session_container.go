@@ -118,14 +118,6 @@ type multiSessionConfig struct {
 	// unsupportedSource identifies typed parse errors that mean the physical
 	// source is valid but its schema is intentionally unsupported.
 	unsupportedSource func(error) bool
-	// excludedSessionIDs reconciles legacy persisted identities replaced by the
-	// current parse result set.
-	excludedSessionIDs func(src multiSessionSource, results []ParseResult) []string
-	// sessionIdentityMigrations relates each retired identity to the current
-	// result that supersedes it so archive deletion state survives migration.
-	sessionIdentityMigrations func(
-		src multiSessionSource, results []ParseResult,
-	) []SessionIdentityMigration
 }
 
 type MultiSessionOption func(*multiSessionConfig)
@@ -275,20 +267,6 @@ func WithMemberResultHashPreservation() MultiSessionOption {
 
 func WithUnsupportedSourceError(fn func(error) bool) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.unsupportedSource = fn }
-}
-
-func WithExcludedSessionIDs(
-	fn func(src multiSessionSource, results []ParseResult) []string,
-) MultiSessionOption {
-	return func(c *multiSessionConfig) { c.excludedSessionIDs = fn }
-}
-
-func WithSessionIdentityMigrations(
-	fn func(
-		src multiSessionSource, results []ParseResult,
-	) []SessionIdentityMigration,
-) MultiSessionOption {
-	return func(c *multiSessionConfig) { c.sessionIdentityMigrations = fn }
 }
 
 func NewMultiSessionContainerSourceSet(
@@ -727,12 +705,6 @@ func (s multiSessionContainerSourceSet) parse(
 				Result:      *result,
 				DataVersion: DataVersionCurrent,
 			}},
-			ExcludedSessionIDs: s.excludedSessionIDs(
-				src, []ParseResult{*result},
-			),
-			SessionIdentityMigrations: s.sessionIdentityMigrations(
-				src, []ParseResult{*result},
-			),
 			ResultSetComplete: true,
 			ForceReplace:      true,
 		}, nil
@@ -778,30 +750,10 @@ func (s multiSessionContainerSourceSet) parse(
 		})
 	}
 	return ParseOutcome{
-		Results:                   out,
-		ExcludedSessionIDs:        s.excludedSessionIDs(src, results),
-		SessionIdentityMigrations: s.sessionIdentityMigrations(src, results),
-		ResultSetComplete:         true,
-		ForceReplace:              true,
+		Results:           out,
+		ResultSetComplete: true,
+		ForceReplace:      true,
 	}, nil
-}
-
-func (s multiSessionContainerSourceSet) excludedSessionIDs(
-	src multiSessionSource, results []ParseResult,
-) []string {
-	if s.cfg.excludedSessionIDs == nil {
-		return nil
-	}
-	return s.cfg.excludedSessionIDs(src, results)
-}
-
-func (s multiSessionContainerSourceSet) sessionIdentityMigrations(
-	src multiSessionSource, results []ParseResult,
-) []SessionIdentityMigration {
-	if s.cfg.sessionIdentityMigrations == nil {
-		return nil
-	}
-	return s.cfg.sessionIdentityMigrations(src, results)
 }
 
 func unsupportedMultiSessionOutcome() ParseOutcome {

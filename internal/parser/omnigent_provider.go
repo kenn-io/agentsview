@@ -5,12 +5,10 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -114,10 +112,6 @@ func newOmnigentProviderFactory(def AgentDef) ProviderFactory {
 				WithMemberResultHashPreservation(),
 				WithMemberPresence(omnigentMemberPresent),
 				WithUnsupportedSourceError(omnigentSchemaUnsupported),
-				WithExcludedSessionIDs(omnigentLegacySessionIDs),
-				WithSessionIdentityMigrations(
-					omnigentSessionIdentityMigrations,
-				),
 			)
 			return omnigentSourceSet{
 				multiSessionContainerSourceSet: base,
@@ -291,77 +285,6 @@ func streamOmnigentMemberMatches(
 		}
 	}
 	return rows.Err()
-}
-
-func omnigentLegacySessionIDs(
-	src multiSessionSource, results []ParseResult,
-) []string {
-	legacy := make(map[string]struct{})
-	add := func(memberKey string) {
-		for _, id := range omnigentPredecessorSessionIDs(memberKey) {
-			legacy[id] = struct{}{}
-		}
-	}
-	if src.MemberID != "" {
-		add(src.MemberID)
-	}
-	for _, result := range results {
-		add(strings.TrimPrefix(result.Session.ID, omnigentIDPrefix))
-	}
-	ids := make([]string, 0, len(legacy))
-	for id := range legacy {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
-}
-
-func omnigentPredecessorSessionIDs(memberKey string) []string {
-	workspace, rawID, qualified := strings.Cut(memberKey, ":")
-	if !qualified || !IsValidSessionID(rawID) {
-		return nil
-	}
-	ids := []string{omnigentIDPrefix + rawID}
-	if len(rawID) != 32 {
-		return ids
-	}
-	if _, err := hex.DecodeString(rawID); err != nil {
-		return ids
-	}
-	textID := "conv_" + rawID
-	return append(ids,
-		omnigentIDPrefix+textID,
-		omnigentIDPrefix+workspace+":"+textID,
-	)
-}
-
-func omnigentSessionIdentityMigrations(
-	_ multiSessionSource, results []ParseResult,
-) []SessionIdentityMigration {
-	var migrations []SessionIdentityMigration
-	seen := make(map[string]struct{})
-	for _, result := range results {
-		currentID := result.Session.ID
-		memberKey := strings.TrimPrefix(currentID, omnigentIDPrefix)
-		for _, previousID := range omnigentPredecessorSessionIDs(memberKey) {
-			key := previousID + "\x00" + currentID
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			migrations = append(migrations, SessionIdentityMigration{
-				PreviousID: previousID,
-				CurrentID:  currentID,
-			})
-		}
-	}
-	slices.SortFunc(migrations, func(a, b SessionIdentityMigration) int {
-		if cmp := strings.Compare(a.PreviousID, b.PreviousID); cmp != 0 {
-			return cmp
-		}
-		return strings.Compare(a.CurrentID, b.CurrentID)
-	})
-	return migrations
 }
 
 func omnigentProviderCapabilities() Capabilities {
