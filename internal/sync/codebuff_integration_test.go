@@ -342,3 +342,91 @@ func TestSyncCodebuffPerEventWorkIsCardinalityIndependent(t *testing.T) {
 	probe(createCodebuffArchive(t, 6), 6)
 	probe(createCodebuffArchive(t, 30), 30)
 }
+
+// codebuffMetaOnlySessionFiles creates a codebuff session
+// directory whose chat-messages.json is "[]" while chat-meta.json
+// reports a non-zero messageCount and firstPrompt. The parser
+// must set CountsAuthoritative=true for this fallback path so the
+// engine's per-message reconciliation cannot overwrite the meta
+// totals with zero derived from the empty parsed-message slice.
+func codebuffMetaOnlySessionFiles(
+	t *testing.T, dir string, metaCount int, firstPrompt string,
+) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "chat-messages.json"),
+		[]byte("[]"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "run-state.json"),
+		[]byte(`{
+			"sessionState": {
+				"mainAgentState": {"agentType": "base2-deepseek"},
+				"fileContext": {"cwd": "/initial/cwd"}
+			}
+		}`),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "chat-meta.json"),
+		fmt.Appendf(nil, `{
+			"messageCount": %d,
+			"firstPrompt": %q,
+			"messagesSize": 1024
+		}`, metaCount, firstPrompt),
+		0o644,
+	))
+}
+
+// TestSyncCodebuffMetaOnlySessionKeepsCounts pins the regression
+// the roborev review identified at internal/parser/codebuff.go:131:
+// when a codebuff session's chat-messages.json is empty but
+// chat-meta.json reports a non-zero messageCount, the sync engine
+// must preserve the meta-derived counts on the row. Without
+// CountsAuthoritative=true the engine's per-message
+// reconciliation recomputes counts from the empty parsed-message
+// slice and overwrites MessageCount with zero, hiding the session
+// from any UI that filters on nonzero counts.
+//
+// Exercise the full sync path (Parse -> db.Session write) so a
+// regression that touches any stage — the parser flag, the engine
+// reconciliation pass, or the db.Session write — surfaces as
+// MessageCount == 0 here.
+func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	project := "codebuff-meta"
+	ts := "2026-07-16T00-09-00.236Z"
+	sessionDir := filepath.Join(root, project, "chats", ts)
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	codebuffMetaOnlySessionFiles(t, sessionDir, 7, "Alpha prompt")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"meta-only session with non-zero chat-meta.json must sync")
+
+	canonicalID := "codebuff:codebuff-meta:" + ts
+	sess, err := database.GetSession(
+		context.Background(), canonicalID,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess,
+		"synced session must persist to the database")
+	require.Equal(t, 7, sess.MessageCount,
+		"meta-derived counts must survive sync; a 0 here means "+
+			"the engine recomputed from the empty parsed-message "+
+			"slice and overwrote chat-meta.json's count")
+}

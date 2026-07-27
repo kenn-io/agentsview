@@ -468,6 +468,73 @@ func TestParseCodebuffSessionFromChatMeta(t *testing.T) {
 	assert.Equal(t, 5, sess.MessageCount)
 	assert.Equal(t, 1, sess.UserMessageCount)
 	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+	// CountsAuthoritative must be set when chat-meta is the only count
+	// source. Without this, the sync engine's
+	// applySessionTokenTotalsFromMessages pass recomputes counts from
+	// the empty parsed-message slice and overwrites the meta totals
+	// with zero, hiding the session from any UI that filters on
+	// nonzero counts.
+	assert.True(t, sess.CountsAuthoritative,
+		"counts from the chat-meta fallback must be authoritative "+
+			"so sync does not zero them out")
+}
+
+// TestParseCodebuffSessionFromTranscriptLeavesCountsNonAuthoritative
+// confirms that CountsAuthoritative stays false when the transcript
+// itself supplies the counts. Marking it true in that case would
+// suppress the sync engine's reconciling pass for sessions with real
+// message rows, hiding any future transcript-driven count drift.
+func TestParseCodebuffSessionFromTranscriptLeavesCountsNonAuthoritative(
+	t *testing.T,
+) {
+	chatMessages := `[
+		{"id":"user-1","variant":"user","content":"hi","timestamp":"03:04 PM"}
+	]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-deepseek"}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, `{}`)
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.False(t, sess.CountsAuthoritative,
+		"counts derived from a non-empty transcript must remain "+
+			"non-authoritative so the sync engine can reconcile "+
+			"them from message rows")
+}
+
+// TestParseCodebuffSessionEmptyChatMetaLeavesCountsNonAuthoritative
+// covers the edge case where the transcript is empty (chat-messages.json
+// is `[]`) and chat-meta.json has no messageCount field, so the meta
+// fallback has nothing authoritative to offer. CountsAuthoritative
+// must stay false: the session is just unparseable for messaging, and
+// the sync engine should not be told to skip its count-recompute pass
+// for sessions like this (otherwise we'd silently drop zero-count
+// rows that other fields still rely on).
+func TestParseCodebuffSessionEmptyChatMetaLeavesCountsNonAuthoritative(
+	t *testing.T,
+) {
+	chatMessages := `[]`
+	runState := `{
+		"sessionState": {
+			"mainAgentState": {"agentType": "base2-deepseek"}
+		}
+	}`
+
+	dir := codebuffTestSession(t, chatMessages, runState, `{}`)
+	sess, _, err := parseCodebuffSession(dir, "p", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, 0, sess.MessageCount)
+	assert.False(t, sess.CountsAuthoritative,
+		"empty transcript and empty meta must keep counts "+
+			"non-authoritative so the sync engine sees a real "+
+			"zero rather than silently skipping its recompute")
 }
 
 func TestParseCodebuffSession_ProjectFromCwd(t *testing.T) {

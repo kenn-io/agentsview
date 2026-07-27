@@ -136,6 +136,18 @@ func parseCodebuffSession(
 		}
 	}
 
+	// Mark meta-derived counts authoritative. When the on-disk transcript is
+	// empty but chat-meta.json reports a count, the meta totals are the
+	// parser's only source for the session's user-visible counts. Without
+	// this flag the sync engine's applySessionTokenTotalsFromMessages pass
+	// would recompute counts from the empty parsed-message slice and
+	// overwrite the meta totals with zero, hiding the session from any UI
+	// that filters on nonzero counts. Set the flag only in the fallback case
+	// (not when the transcript already provided counts) so the sync engine
+	// keeps reconciling message-derived counts for sessions with real
+	// transcripts.
+	countsAuthoritative := len(msgs) == 0 && meta.MessageCount > 0
+
 	// Model extracted earlier (passed into message parser above).
 
 	// Source file identity: use chat-messages.json as the primary source.
@@ -170,21 +182,22 @@ func parseCodebuffSession(
 	}
 
 	sess := &ParsedSession{
-		ID:               fullID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            agent,
-		AgentLabel:       agentLabel,
-		Cwd:              rs.Cwd,
-		FirstMessage:     firstMsg,
-		SessionName:      sessionName,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     messageCount,
-		UserMessageCount: userMsgCount,
-		SourceSessionID:  sessionID,
-		SourceVersion:    "codebuff-chat-v1",
-		File:             fileInfo,
+		ID:                  fullID,
+		Project:             project,
+		Machine:             machine,
+		Agent:               agent,
+		AgentLabel:          agentLabel,
+		Cwd:                 rs.Cwd,
+		FirstMessage:        firstMsg,
+		SessionName:         sessionName,
+		StartedAt:           startedAt,
+		EndedAt:             endedAt,
+		MessageCount:        messageCount,
+		UserMessageCount:    userMsgCount,
+		CountsAuthoritative: countsAuthoritative,
+		SourceSessionID:     sessionID,
+		SourceVersion:       "codebuff-chat-v1",
+		File:                fileInfo,
 	}
 
 	// contextTokenCount from run-state.json is the final per-step context
@@ -210,13 +223,13 @@ func parseCodebuffSession(
 			occurredAt = time.Unix(0, fileInfo.Mtime)
 		}
 		sess.UsageEvents = []ParsedUsageEvent{{
-			SessionID:   fullID,
-			Source:      "session",
-			OccurredAt:  occurredAt.Format(time.RFC3339Nano),
-			CostUSD:     &cost,
-			CostStatus:  "reported",
-			CostSource:  "session",
-			DedupKey:    "session:" + fullID,
+			SessionID:  fullID,
+			Source:     "session",
+			OccurredAt: occurredAt.Format(time.RFC3339Nano),
+			CostUSD:    &cost,
+			CostStatus: "reported",
+			CostSource: "session",
+			DedupKey:   "session:" + fullID,
 		}}
 	}
 
@@ -583,8 +596,8 @@ func parseCodebuffAIMessage(
 
 	// textEntry tracks a text block with its type to preserve interleaving.
 	type textEntry struct {
-		content   string
-		isReason  bool
+		content  string
+		isReason bool
 	}
 	var (
 		out         []ParsedMessage
@@ -661,10 +674,10 @@ func parseCodebuffAIMessage(
 	flushTools := func() {
 		if len(toolCalls) > 0 {
 			out = append(out, ParsedMessage{
-				Role:          RoleAssistant,
-				Timestamp:     ts,
-				HasToolUse:    true,
-				ToolCalls:     toolCalls,
+				Role:       RoleAssistant,
+				Timestamp:  ts,
+				HasToolUse: true,
+				ToolCalls:  toolCalls,
 			})
 			toolCalls = nil
 		}

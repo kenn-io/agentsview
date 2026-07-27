@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -27,8 +28,10 @@ func newSessionGetCommand() *cobra.Command {
 			}
 			defer cleanup()
 
+			cfg := mustLoadConfig(cmd)
+
 			detail, err := lookupSessionWithPrefixes(
-				cmd.Context(), svc, args[0],
+				cmd.Context(), svc, &cfg, args[0],
 			)
 			if err != nil {
 				return err
@@ -47,14 +50,30 @@ func newSessionGetCommand() *cobra.Command {
 // resolveServiceSessionID returns the canonical session ID matching id,
 // accommodating bare UUIDs by retrying with each registered agent
 // prefix (codex:, copilot:, gemini:, ...) when the exact lookup
-// misses. Stored IDs are prefixed for non-Claude agents, so a user
-// copying a UUID from a session file name would otherwise see a
-// confusing "not found" error. Returns an error whose message
-// begins with "session not found:" when no match exists — callers
-// get a clear failure instead of silent empty output.
+// misses, and walking the Codebuff/Freebuff storage layer when the
+// prefix loop misses for a bare timestamp. Stored IDs are prefixed
+// for non-Claude agents, so a user copying a UUID from a session
+// file name would otherwise see a confusing "not found" error.
+//
+// Codebuff and Freebuff share the directory layout
+// "<root>/<project>/chats/<timestamp>/" but the canonical ID is
+// "<agent>:<project>:<timestamp>" — a bare timestamp cannot be
+// resolved purely by the prefix loop (it would build
+// "codebuff:<timestamp>" without the project segment and miss
+// the canonical row, and Freebuff is intentionally absent from
+// parser.Registry). The bare-ID resolver walks codebuff/
+// freebuff roots to find candidate (agent, project) locations
+// for rawID and either selects the lone match, or surfaces an
+// explicit ambiguity error so the user can disambiguate.
+//
+// Returns an error whose message begins with "session not found:"
+// when no match exists — callers get a clear failure instead of
+// silent empty output. The ambiguity error wraps an explicit
+// list of candidate canonical IDs.
 func resolveServiceSessionID(
 	ctx context.Context,
 	svc service.SessionService,
+	cfg *config.Config,
 	id string,
 ) (string, error) {
 	detail, err := svc.Get(ctx, id)
@@ -86,7 +105,59 @@ func resolveServiceSessionID(
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("session not found: %s", id)
+	// Prefix loop missed. Walk the codebuff/freebuff storage
+	// layer to map a bare timestamp back to its canonical ID.
+	// The prefix loop cannot build the right canonical ID for
+	// these agents (canonical is "<agent>:<project>:<timestamp>"
+	// with the project segment missing, and Freebuff is
+	// intentionally absent from parser.Registry). Walking the
+	// storage layer localizes the fix to the Codebuff/Freebuff
+	// agents and avoids adding a generic SourceSessionID lookup
+	// query to every storage backend.
+	candidates := resolveCodebuffFamilyCandidates(cfg, id)
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf("session not found: %s", id)
+	case 1:
+		return candidates[0].CanonicalID(), nil
+	default:
+		ids := make([]string, len(candidates))
+		for i, m := range candidates {
+			ids[i] = m.CanonicalID()
+		}
+		return "", fmt.Errorf(
+			"ambiguous session id %q: matches %d canonical sessions: %s. "+
+				"Re-run with one of the canonical IDs to disambiguate",
+			id, len(candidates), strings.Join(ids, ", "),
+		)
+	}
+}
+
+// resolveCodebuffFamilyCandidates walks the configured codebuff
+// and freebuff storage roots for a directory named rawID under
+// any project's chats/ subdirectory. Returns one match per
+// (agent, project) candidate; an empty list means the bare ID
+// is unknown to the on-disk storage.
+//
+// codebuffRoots / freebuffRoots come from cfg.ResolveDirs so env
+// vars (CODEBUFF_DIR / FREEBUFF_DIR) and config.toml overrides
+// are honored — cli callers see the same directories the parser
+// sees.
+func resolveCodebuffFamilyCandidates(
+	cfg *config.Config, rawID string,
+) []parser.CodebuffFamilyMatch {
+	if cfg == nil {
+		return nil
+	}
+	return parser.FindCodebuffFreebuffMatches(
+		[]parser.CodebuffFamilyRoots{
+			{Agent: parser.AgentCodebuff,
+				Roots: cfg.ResolveDirs(parser.AgentCodebuff)},
+			{Agent: parser.AgentFreebuff,
+				Roots: cfg.ResolveDirs(parser.AgentFreebuff)},
+		},
+		rawID,
+	)
 }
 
 func isCanonicalServiceSessionID(id string) bool {
@@ -106,13 +177,17 @@ func isCanonicalServiceSessionID(id string) bool {
 // prefixes for bare UUIDs. Preserved as a thin wrapper around
 // resolveServiceSessionID + svc.Get so `session get` can keep its
 // existing "return nil on not-found" semantics (which render the
-// "session %s not found" error at the command boundary).
+// "session %s not found" error at the command boundary). cfg
+// supplies the codebuff/freebuff storage roots so the resolver
+// can map a bare timestamp back to its canonical ID; nil cfg
+// disables the bare-ID fallback path.
 func lookupSessionWithPrefixes(
 	ctx context.Context,
 	svc service.SessionService,
+	cfg *config.Config,
 	id string,
 ) (*service.SessionDetail, error) {
-	resolved, err := resolveServiceSessionID(ctx, svc, id)
+	resolved, err := resolveServiceSessionID(ctx, svc, cfg, id)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "session not found:") {
 			return nil, nil
