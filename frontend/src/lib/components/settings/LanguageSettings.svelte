@@ -7,7 +7,6 @@
     type SupportedLocale,
   } from "../../i18n/index.js";
   import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
-  import SettingsSection from "./SettingsSection.svelte";
 
   function currentLocale(): SupportedLocale {
     return chooseInitialLocale();
@@ -46,23 +45,18 @@
   }
 </script>
 
-<SettingsSection
-  title={m.settings_language_title()}
-  description={m.settings_language_description()}
->
-  <div class="setting-row">
-    <span class="setting-label">🌐 {m.settings_language_label()}</span>
-    <Typeahead
-      options={localeOptions}
-      value={selectedLocale}
-      fallbackLabel={m.settings_language_english()}
-      placeholder={m.settings_language_label()}
-      title={m.settings_language_label()}
-      emptyLabel={m.settings_language_no_results()}
-      onselect={handleLocaleSelect}
-    />
-  </div>
-</SettingsSection>
+<div class="setting-row">
+  <span class="setting-label">{m.settings_language_label()}</span>
+  <Typeahead
+    options={localeOptions}
+    value={selectedLocale}
+    fallbackLabel={m.settings_language_english()}
+    placeholder={m.settings_language_label()}
+    title={m.settings_language_label()}
+    emptyLabel={m.settings_language_no_results()}
+    onselect={handleLocaleSelect}
+  />
+</div>
 
 <style>
   .setting-row {

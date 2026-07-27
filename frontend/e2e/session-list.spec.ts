@@ -151,6 +151,10 @@ test.describe("Session list", () => {
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page
+      .getByRole("navigation", { name: "Settings" })
+      .locator("button", { hasText: "Date ranges" })
+      .click();
+    await page
       .getByRole("switch", { name: "Link date ranges across pages" })
       .check();
 
@@ -205,6 +209,10 @@ test.describe("Session list", () => {
     await page.locator(".kit-date-range-picker__trigger").click();
     await page.getByRole("button", { name: "90d", exact: true }).click();
     await page.getByRole("button", { name: "Settings" }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .locator("button", { hasText: "Date ranges" })
+      .click();
     await page
       .getByRole("switch", { name: "Link date ranges across pages" })
       .check();
