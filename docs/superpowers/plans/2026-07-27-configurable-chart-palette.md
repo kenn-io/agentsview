@@ -22,7 +22,9 @@ Paraglide JS, kit-ui `SegmentedControl`, Vitest, Testing Library, and testify.
 
 - The only persisted values are `agentsview` and `matplotlib`; omission defaults
   to `agentsview`.
-- `agentsview` must preserve the existing Usage, Skill Trend, and Trends colors.
+- `agentsview` must preserve existing chart palettes and non-colliding Usage
+  colors; only collision-resolved Usage fallback slots may move when
+  allocation is shared across both panels.
 - `matplotlib` uses gray-free families of 9, 18, and 36 exact Matplotlib v3.10.5
   colors, selected at active-series counts 1–9, 10–18, and 19 or more.
 - Empty identifiers and `__other__` stay muted; more than 36 active identifiers
@@ -414,6 +416,24 @@ import {
 const ids = (count: number) =>
   Array.from({ length: count }, (_, i) => `series-${String(i).padStart(2, "0")}`);
 
+const EXPECTED_TAB20 = [
+  "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c",
+  "#98df8a", "#d62728", "#ff9896", "#9467bd", "#c5b0d5",
+  "#8c564b", "#c49c94", "#e377c2", "#f7b6d2", "#bcbd22",
+  "#dbdb8d", "#17becf", "#9edae5",
+] as const;
+
+const EXPECTED_TAB20B_AND_TAB20C = [
+  "#393b79", "#5254a3", "#6b6ecf", "#9c9ede", "#637939",
+  "#8ca252", "#b5cf6b", "#cedb9c", "#8c6d31", "#bd9e39",
+  "#e7ba52", "#e7cb94", "#843c39", "#ad494a", "#d6616b",
+  "#e7969c", "#7b4173", "#a55194", "#ce6dbd", "#de9ed6",
+  "#3182bd", "#6baed6", "#9ecae1", "#c6dbef", "#e6550d",
+  "#fd8d3c", "#fdae6b", "#fdd0a2", "#31a354", "#74c476",
+  "#a1d99b", "#c7e9c0", "#756bb1", "#9e9ac8", "#bcbddc",
+  "#dadaeb",
+] as const;
+
 it("uses gray-free tab10 in Matplotlib order", () => {
   const colors = chartSeriesColorMap(ids(9), "matplotlib");
   expect([...colors.values()]).toEqual([
@@ -423,9 +443,10 @@ it("uses gray-free tab10 in Matplotlib order", () => {
 });
 
 it("switches families at ten and nineteen active series", () => {
-  expect(new Set(chartSeriesColorMap(ids(10), "matplotlib").values()).size).toBe(10);
-  expect(chartSeriesColorMap(ids(10), "matplotlib").get("series-01")).toBe("#aec7e8");
-  expect(chartSeriesColorMap(ids(19), "matplotlib").get("series-00")).toBe("#393b79");
+  expect([...chartSeriesColorMap(ids(18), "matplotlib").values()])
+    .toEqual(EXPECTED_TAB20);
+  expect([...chartSeriesColorMap(ids(36), "matplotlib").values()])
+    .toEqual(EXPECTED_TAB20B_AND_TAB20C);
 });
 
 it("uses all 36 colors before cycling", () => {
@@ -703,6 +724,10 @@ ______________________________________________________________________
 
 **Files:**
 
+- Create: `frontend/src/lib/utils/usageChartColors.ts`
+- Create: `frontend/src/lib/utils/usageChartColors.test.ts`
+- Modify: `frontend/src/lib/components/usage/UsagePage.svelte`
+- Modify: `frontend/src/lib/components/usage/UsagePage.test.ts`
 - Modify: `frontend/src/lib/components/usage/CostTimeSeriesChart.svelte`
 - Modify: `frontend/src/lib/components/usage/CostTimeSeriesChart.test.ts`
 - Modify: `frontend/src/lib/components/usage/AttributionPanel.svelte`
@@ -712,16 +737,30 @@ ______________________________________________________________________
 
 - Consumes: `settings.chartPalette`
 
-- Consumes: `chartSeriesColorMap(ids, palette)` with no legacy callback, which
-  preserves Usage's current hashed allocator in `agentsview` mode
+- Consumes: `chartSeriesColorMap(ids, palette)` with no legacy callback
+
+- Produces: `usageChartColorMaps(summary, palette)`, containing one
+  full-universe map for each `GroupBy` value
 
 - Produces: matching colors across time-series paths/legend and attribution
   list/treemap/rail
 
 - [ ] **Step 1: Write failing Matplotlib rendering tests**
 
-In both component suites, reset `settings.chartPalette = "agentsview"` during
-cleanup. Add Matplotlib cases using the reported collision pair:
+In the new utility suite, construct a summary with ten model totals while the
+daily breakdown exposes only the five Cost Over Time leaders. Assert that
+`usageChartColorMaps(summary, "matplotlib").model` contains all ten identifiers
+and uses the 18-color Matplotlib family. This test fails if the family is chosen
+from the capped time-series list.
+
+In the Usage page suite, return that summary from the existing API mock and
+select Model for both panels. For each of `agentsview` and `matplotlib`, assert
+that the same model has the same rendered color in Cost Over Time and Cost
+Attribution. This is the cross-component regression: it must fail if either
+child computes a local active-set map.
+
+In both child component suites, reset `settings.chartPalette = "agentsview"`
+during cleanup. Add Matplotlib cases using the reported collision pair:
 
 ```ts
 settings.chartPalette = "matplotlib";
@@ -736,41 +775,60 @@ correspond to the exact first two Matplotlib colors after browser style
 normalization. Keep the existing agentsview collision tests unchanged so the
 default behavior remains protected.
 
-Add one reactive Cost Over Time assertion: mount in `agentsview` mode, capture
-the path fills, assign `settings.chartPalette = "matplotlib"`, await `tick()`,
-and assert the same mounted paths now use the Matplotlib colors. This is the
-observable guarantee that a successful Settings response updates an open chart
-without a reload.
+Add one reactive Usage page assertion: mount in `agentsview` mode, capture the
+Cost Over Time path fills and Cost Attribution dots, assign
+`settings.chartPalette = "matplotlib"`, await `tick()`, and assert both panels
+now use their shared Matplotlib map. This is the observable guarantee that a
+successful Settings response updates open charts without a reload.
 
 - [ ] **Step 2: Run the Usage component tests and verify RED**
 
 From `frontend/`, run:
 
 ```bash
-npm test -- src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts
+npm test -- src/lib/utils/usageChartColors.test.ts src/lib/components/usage/UsagePage.test.ts src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts
 ```
 
-Expected: Matplotlib tests receive the existing agentsview palette instead of
-the expected blue/orange pair.
+Expected: the utility is missing, child components do not accept a shared map,
+and the two Usage panels cannot maintain cross-panel color parity.
 
 - [ ] **Step 3: Route Usage through the shared resolver**
 
-Import `settings` and `chartSeriesColorMap` into both components. Replace each
-direct `seriesColorMap(...)` call with:
+Create `usageChartColorMaps(summary, palette)` in `usageChartColors.ts`. For
+each of `project`, `model`, and `agent`, union identifiers from the
+corresponding summary totals and every daily breakdown, then pass the sorted
+full universe to `chartSeriesColorMap`. Return:
 
-```ts
-chartSeriesColorMap(sortedActiveIds, settings.chartPalette)
+```typescript
+export interface UsageChartColorMaps {
+  project: ReadonlyMap<string, string>;
+  model: ReadonlyMap<string, string>;
+  agent: ReadonlyMap<string, string>;
+}
+
+export function usageChartColorMaps(
+  summary: UsageSummaryResponse | null,
+  palette: ChartPalette,
+): UsageChartColorMaps
 ```
 
-Continue passing that one map to paths, legend dots, treemap items, rails, and
-list fills. Keep `__other__` out of the active count and muted in rendering.
+In `UsagePage.svelte`, derive these maps once from `usage.summary` and
+`settings.chartPalette`. Pass the map matching
+`usage.toggles.timeSeries.groupBy` to Cost Over Time and the map matching
+`usage.toggles.attribution.groupBy` to Cost Attribution.
+
+Add a required `colorMap: ReadonlyMap<string, string>` prop to both child
+components. Remove their local allocator calls and use the supplied map for
+paths, legend dots, treemap items, rails, and list fills. Keep `__other__` out
+of the shared active universe and muted in rendering. Update isolated child
+tests to pass a map created by `usageChartColorMaps`.
 
 - [ ] **Step 4: Verify GREEN**
 
 From `frontend/`, run:
 
 ```bash
-npm test -- src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts src/lib/utils/projectColor.test.ts src/lib/utils/chartPalette.test.ts
+npm test -- src/lib/utils/usageChartColors.test.ts src/lib/components/usage/UsagePage.test.ts src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts src/lib/utils/projectColor.test.ts src/lib/utils/chartPalette.test.ts
 ```
 
 Expected: PASS in both palette modes.
@@ -778,7 +836,7 @@ Expected: PASS in both palette modes.
 - [ ] **Step 5: Commit Usage integration**
 
 ```bash
-git add frontend/src/lib/components/usage/CostTimeSeriesChart.svelte frontend/src/lib/components/usage/CostTimeSeriesChart.test.ts frontend/src/lib/components/usage/AttributionPanel.svelte frontend/src/lib/components/usage/AttributionPanel.test.ts
+git add frontend/src/lib/utils/usageChartColors.ts frontend/src/lib/utils/usageChartColors.test.ts frontend/src/lib/components/usage/UsagePage.svelte frontend/src/lib/components/usage/UsagePage.test.ts frontend/src/lib/components/usage/CostTimeSeriesChart.svelte frontend/src/lib/components/usage/CostTimeSeriesChart.test.ts frontend/src/lib/components/usage/AttributionPanel.svelte frontend/src/lib/components/usage/AttributionPanel.test.ts
 git commit -m "feat(usage): honor the selected chart palette"
 ```
 
@@ -926,7 +984,7 @@ Expected: no diff.
 From `frontend/`, run:
 
 ```bash
-npm test -- src/lib/utils/chartPalette.test.ts src/lib/utils/projectColor.test.ts src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts src/lib/components/analytics/SkillTrend.test.ts src/lib/components/trends/TrendsPage.test.ts
+npm test -- src/lib/utils/chartPalette.test.ts src/lib/utils/projectColor.test.ts src/lib/utils/usageChartColors.test.ts src/lib/stores/settings.test.ts src/lib/components/settings/AppearanceSettings.test.ts src/lib/components/usage/UsagePage.test.ts src/lib/components/usage/CostTimeSeriesChart.test.ts src/lib/components/usage/AttributionPanel.test.ts src/lib/components/analytics/SkillTrend.test.ts src/lib/components/trends/TrendsPage.test.ts
 npm run check
 npm run check:kit-ui
 ```

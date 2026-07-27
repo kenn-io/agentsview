@@ -15,8 +15,8 @@ highlighting.
 
 - Let an administrator select the chart palette once for every client of an
   agentsview server.
-- Preserve the current chart appearance unless the administrator explicitly
-  selects Matplotlib.
+- Preserve existing theme-aware palettes and each identifier's preferred hash;
+  only collided Usage fallback slots may move to enforce cross-panel parity.
 - Provide as many as 36 distinct, non-gray categorical colors before cycling.
 - Keep a series color consistent across its chart, legend, treemap, and
   attribution list.
@@ -62,14 +62,17 @@ The generated frontend API types are regenerated from the updated Huma schema.
 
 ### Agentsview
 
-`agentsview` preserves each chart's existing allocator and theme-aware tokens.
-In particular, Usage keeps its 12-color stable name hash with deterministic
-collision resolution, and Skill Trend keeps its existing six categorical series
-tokens. Trends keeps its existing 12-color term palette. `Other` remains the
+`agentsview` preserves each chart's existing palette and theme-aware tokens. In
+particular, Usage keeps its 12-color stable name hash with deterministic
+collision resolution, Skill Trend keeps its existing six categorical series
+tokens, and Trends keeps its existing 12-color term palette. `Other` remains the
 muted gray token.
 
-This mode deliberately does not consolidate current allocators. Its purpose is
-to make the new setting behavior-preserving by default.
+This mode deliberately does not consolidate the chart-specific palettes.
+Non-colliding Usage identifiers retain their current colors. A collided
+identifier's fallback slot may change because collisions are resolved once
+against the full shared Usage universe instead of independently inside each
+panel; that tradeoff is required for cross-panel consistency.
 
 ### Matplotlib
 
@@ -90,10 +93,19 @@ and colors are assigned in palette order. Sorting makes the result independent
 of API response order. Crossing the 9/10 or 18/19 thresholds intentionally
 selects a different Matplotlib family and may recolor the active set.
 
-Every visual representation in one component consumes the same computed color
-map. Paths, bars, legend dots, treemap tiles, rails, and list fills therefore
-cannot drift. A missing identifier and the synthetic `__other__` identifier use
-the muted fallback.
+Usage owns one color map per grouping dimension (project, model, and agent).
+Each map is computed from the full category universe in the Usage response,
+before Cost Over Time applies its five-series cap. Cost Over Time and Cost
+Attribution receive the same map for their selected dimension, so the same
+identifier cannot change color merely because attribution renders more rows or
+crosses a Matplotlib family threshold. The agentsview mode keeps its existing
+12-color hash preference and collision rules, but resolves collisions against
+that same shared universe for cross-panel consistency.
+
+Every visual representation consumes its owning surface's computed color map.
+Paths, bars, legend dots, treemap tiles, rails, and list fills therefore cannot
+drift. A missing identifier and the synthetic `__other__` identifier use the
+muted fallback.
 
 ## Frontend Data Flow
 
@@ -144,14 +156,16 @@ Backend tests will cover the observable configuration and HTTP contracts:
 
 Frontend tests will protect behavior users can see:
 
-- Matplotlib allocation uses the exact gray-free 9-color sequence;
+- Matplotlib allocation uses the complete exact ordered gray-free 9-, 18-, and
+  36-color sequences;
 - the allocator selects the 18- and 36-color families at the two boundaries;
 - each family remains unique through its advertised capacity and cycles only
   beyond 36;
 - allocation is deterministic for reordered and duplicate identifiers;
 - the reported colliding model names remain distinct in both modes;
-- Usage paths and legends, attribution views, and Skill Trend consume their
-  selected mode's colors;
+- Usage paths, legends, attribution lists, and treemaps use the same identifier
+  colors even when the two panels render different series counts;
+- Skill Trend consumes the selected mode's colors;
 - Trends chart lines, points, and table indicators share the selected mode's
   colors;
 - changing the Appearance control sends the server update and updates rendered
@@ -165,6 +179,10 @@ server tests must pass before the implementation is committed.
 ## Rollout and Compatibility
 
 No database migration is required. Existing configuration files omit the new key
-and retain current rendering. Selecting Matplotlib writes one top-level TOML
-value. Downgrading to a version that does not know the field leaves the value
-inert in the config file; upgrading again restores the selected mode.
+and remain in agentsview palette mode. Selecting Matplotlib writes one top-level
+TOML value. Downgrading to a version that does not know the field leaves the
+value inert in the config file; upgrading again restores the selected mode.
+
+The shared Usage universe can reassign only collision-resolved fallback colors
+in the default agentsview mode. Preferred hash colors for non-colliding
+identifiers and every non-Usage chart remain unchanged.
