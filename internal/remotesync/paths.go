@@ -149,6 +149,16 @@ func pathWithinForbiddenRoots(roots []string, path string) bool {
 // boundary so sibling names such as .forbidden-provider-backup do not get
 // conflated with a protected directory (root "/a/b" must not match path
 // "/a/bc").
+//
+// Unlike filepath.Clean/filepath.Rel on Windows, normalization here is not
+// volume-aware: it does not preserve a leading UNC "\\host\share" marker or
+// refuse to compare paths on different drives. Correctness for volume-scoped
+// paths therefore depends on root and path having passed through the same
+// cleanPathWithSeparator call with the same sep, which cancels out any
+// shared lossy transform (both current call sites satisfy this — see
+// cleanPathWithSeparator). This function does not independently reject a
+// root and path that name different volumes; do not call it with root and
+// path drawn from different normalization domains.
 func PathWithinForbiddenRoots(roots []string, path string, sep byte) bool {
 	path = cleanPathWithSeparator(path, sep)
 	sepStr := string(sep)
@@ -175,6 +185,15 @@ func PathWithinForbiddenRoots(roots []string, path string, sep byte) bool {
 // implements this for '/'; for any other separator, p is translated to '/',
 // cleaned, and translated back so the same normalization rules apply
 // regardless of which OS is running the check.
+//
+// This is lossy for Windows volume markers: path.Clean collapses a leading
+// "//" (translated from a UNC "\\host\share" prefix) down to a single
+// separator, whereas real filepath.Clean on Windows preserves it, and this
+// function has no equivalent of filepath.Rel's refusal to relate paths on
+// different drives (e.g. "C:\x" vs "D:\x"). PathWithinForbiddenRoots relies
+// on root and path always passing through this same lossy transform so the
+// collapse cancels out in the comparison; it does not restore true
+// volume-name awareness.
 func cleanPathWithSeparator(p string, sep byte) string {
 	if sep == '/' {
 		return pathpkg.Clean(p)

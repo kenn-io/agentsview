@@ -85,6 +85,53 @@ func toBackslash(roots []string) []string {
 	return out
 }
 
+// TestPathWithinForbiddenRootsWindowsStyleFixtures uses literal
+// backslash/UNC/drive-letter strings (not derived from forbiddenRootCases via
+// ReplaceAll) to document PathWithinForbiddenRoots' actual behavior on
+// Windows-shaped paths, including the volume-awareness gap called out on
+// PathWithinForbiddenRoots and cleanPathWithSeparator: normalization here is
+// not volume-aware the way real filepath.Clean/filepath.Rel are on Windows.
+// The UNC and drive-letter cases below happen to resolve correctly because
+// root and path pass through the same lossy transform (the leading "\\" of a
+// UNC path collapses to a single separator for both, and a differing drive
+// letter is still rejected because it's literally a different leading
+// string, not because this function understands volumes) — this is the
+// "collapse cancels out" property the doc comments describe, not general
+// volume awareness.
+func TestPathWithinForbiddenRootsWindowsStyleFixtures(t *testing.T) {
+	tests := []forbiddenRootCase{
+		{
+			"unc_root_matches_child",
+			[]string{`\\server\share\Secret`}, `\\server\share\Secret\file.txt`, true,
+		},
+		{
+			"unc_root_matches_itself",
+			[]string{`\\server\share\Secret`}, `\\server\share\Secret`, true,
+		},
+		{
+			"unc_prefix_not_boundary",
+			[]string{`\\server\share\Secret`}, `\\server\share\Secret2\file.txt`, false,
+		},
+		{
+			"drive_letter_root_matches_child",
+			[]string{`C:\Users\foo\Secret`}, `C:\Users\foo\Secret\file.txt`, true,
+		},
+		{
+			"drive_letter_mismatch_different_volume_rejected",
+			[]string{`C:\Users\foo\Secret`}, `D:\Users\foo\Secret\file.txt`, false,
+		},
+		{
+			"drive_letter_relative_traversal_resolves_to_sibling",
+			[]string{`C:\a\b`}, `C:\a\b\..\c`, false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, PathWithinForbiddenRoots(tc.roots, tc.path, '\\'))
+		})
+	}
+}
+
 // TestPathWithinForbiddenRootsLocalWrapper confirms the unexported
 // pathWithinForbiddenRoots wrapper used by this package's other files
 // (archive.go, manifest.go, resolve.go, types.go) matches the exported
