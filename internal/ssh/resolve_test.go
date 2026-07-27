@@ -25,10 +25,8 @@ func TestBuildResolveScript(t *testing.T) {
 	for _, def := range parser.Registry {
 		want := def.FileBased &&
 			parser.ProviderMigrationModes()[def.Type] ==
-				parser.ProviderMigrationProviderAuthoritative
-		if def.Type == parser.AgentTrae {
-			want = false
-		}
+				parser.ProviderMigrationProviderAuthoritative &&
+			!def.RemoteSyncExcluded
 		if want {
 			assert.True(t, resolveScriptMentionsAgent(script, def.Type),
 				"file-backed provider-authoritative agent %s missing from script", def.Type)

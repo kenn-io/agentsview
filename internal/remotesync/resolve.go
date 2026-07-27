@@ -180,7 +180,7 @@ func hermesStateFiles(stateDB string, includeDB bool) []string {
 }
 
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
-	if def.Type == parser.AgentTrae {
+	if def.RemoteSyncExcluded {
 		return false
 	}
 	if !def.FileBased {
