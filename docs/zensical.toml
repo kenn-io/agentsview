@@ -13,6 +13,7 @@ extra_javascript = ["javascripts/lightbox.js"]
 use_directory_urls = true
 nav = [
   {"Quick Start" = "quickstart.md"},
+  {"Contributing" = "contributing.md"},
   {"Configuration" = "configuration.md"},
   {"Usage Guide" = "usage.md"},
   {"Activity" = "activity.md"},
