@@ -11,11 +11,13 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SkillTrend from "./SkillTrend.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 
 describe("SkillTrend", () => {
   beforeEach(() => {
     setLocale("en");
+    settings.chartPalette = "agentsview";
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -30,6 +32,7 @@ describe("SkillTrend", () => {
     setLocale("en");
     analytics.skills = null;
     analytics.skillsGranularity = "week";
+    settings.chartPalette = "agentsview";
     // @ts-ignore
     analytics.errors = {
       ...analytics.errors,
@@ -137,6 +140,52 @@ describe("SkillTrend", () => {
     await unmount(component);
   });
 
+  it("assigns Matplotlib colors lexically while rendering by volume", async () => {
+    settings.chartPalette = "matplotlib";
+    const component = mountWithData();
+    await tick();
+
+    const legendColorBySkill = Object.fromEntries(
+      [...document.querySelectorAll<HTMLElement>(".legend-chip")]
+        .map((chip) => [
+          chip.querySelector(".legend-name")?.textContent?.trim(),
+          (chip.querySelector<HTMLElement>(".legend-key"))?.style.background,
+        ]),
+    );
+    const lineColors = [
+      ...document.querySelectorAll<SVGPathElement>(".series-line"),
+    ].map((line) => line.style.stroke);
+    expect(legendColorBySkill).toEqual({
+      commit: "rgb(31, 119, 180)",
+      review: "rgb(44, 160, 44)",
+      deploy: "rgb(255, 127, 14)",
+    });
+    expect(lineColors).toEqual([
+      "rgb(31, 119, 180)",
+      "rgb(44, 160, 44)",
+      "rgb(255, 127, 14)",
+    ]);
+
+    await unmount(component);
+  });
+
+  it("keeps a Matplotlib survivor color stable when a series is hidden", async () => {
+    settings.chartPalette = "matplotlib";
+    const component = mountWithData();
+    await tick();
+
+    const lineColors = () => [
+      ...document.querySelectorAll<SVGPathElement>(".series-line"),
+    ].map((line) => line.style.stroke);
+    expect(lineColors()[1]).toBe("rgb(44, 160, 44)");
+
+    document.querySelectorAll<HTMLButtonElement>(".legend-chip")[0]!.click();
+    await tick();
+
+    expect(lineColors()[0]).toBe("rgb(44, 160, 44)");
+    await unmount(component);
+  });
+
   it("folds skills past the series cap into Other", async () => {
     const bySkill: Record<string, number> = {};
     for (let i = 0; i < 8; i++) {
@@ -156,8 +205,13 @@ describe("SkillTrend", () => {
     expect(chips[6]!.textContent).toContain("Other");
     // skill-6 (2) + skill-7 (1) fold into Other in both buckets.
     expect(chips[6]!.textContent).toContain("6");
+    expect(
+      chips[6]!.querySelector<HTMLElement>(".legend-key")?.style.background,
+    ).toBe("var(--chart-series-other)");
 
-    expect(document.querySelectorAll(".series-line")).toHaveLength(7);
+    const lines = document.querySelectorAll<SVGPathElement>(".series-line");
+    expect(lines).toHaveLength(7);
+    expect(lines[6]!.style.stroke).toBe("var(--chart-series-other)");
 
     await unmount(component);
   });

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import GranularityPicker from "../shared/GranularityPicker.svelte";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { parseLocalDate } from "../../utils/dates.js";
+  import { chartSeriesColorMap } from "../../utils/chartPalette.js";
 
   // Soft cap from the series-count ladder: past six skills the tail folds
   // into "Other" instead of generating more hues.
@@ -49,18 +51,16 @@
     key: string;
     label: string;
     total: number;
-    colorIndex: number | null;
     values: number[];
   }
 
   // All series in fixed order (top skills then the "Other" fold), with a
   // value for every bucket so each series draws as a continuous line.
   const allSeries = $derived.by(() => {
-    const series: Series[] = topSkills.map((skill, i) => ({
+    const series: Series[] = topSkills.map((skill) => ({
       key: skill,
       label: skill,
       total: skillTotals.get(skill) ?? 0,
-      colorIndex: i,
       values: trendEntries.map(
         (entry) => entry.by_skill[skill] ?? 0,
       ),
@@ -71,7 +71,6 @@
         key: OTHER_KEY,
         label: m.analytics_skill_trend_other(),
         total: otherTotal,
-        colorIndex: null,
         values: trendEntries.map((entry) => {
           let sum = 0;
           for (const [skill, count] of Object.entries(
@@ -97,6 +96,13 @@
   const visibleSeries = $derived(
     allSeries.filter((s) => !hiddenKeys.includes(s.key)),
   );
+
+  const colorMap = $derived(chartSeriesColorMap(
+    allSeries.map((series) => series.key),
+    settings.chartPalette,
+    (_key, index) => `var(--chart-series-${index + 1})`,
+    "var(--chart-series-other)",
+  ));
 
   const maxValue = $derived.by(() => {
     let max = 1;
@@ -136,9 +142,8 @@
       .join(" ");
   }
 
-  function seriesColor(colorIndex: number | null): string {
-    if (colorIndex === null) return "var(--chart-series-other)";
-    return `var(--chart-series-${colorIndex + 1})`;
+  function seriesColor(key: string): string {
+    return colorMap.get(key) ?? "var(--text-muted)";
   }
 
   const labelStep = $derived(
@@ -241,7 +246,6 @@
       .map((series) => ({
         key: series.key,
         label: series.label,
-        colorIndex: series.colorIndex,
         value: series.values[index] ?? 0,
       }))
       .sort((a, b) => b.value - a.value);
@@ -285,7 +289,7 @@
         >
           <span
             class="legend-key"
-            style="background: {seriesColor(series.colorIndex)}"
+            style="background: {seriesColor(series.key)}"
           ></span>
           <span class="legend-name">{series.label}</span>
           <span class="legend-count">
@@ -333,7 +337,7 @@
             <path
               class="series-line"
               d={linePath(series.values)}
-              style="stroke: {seriesColor(series.colorIndex)}"
+              style="stroke: {seriesColor(series.key)}"
             />
           {:else}
             <circle
@@ -341,7 +345,7 @@
               cx={xAt(0)}
               cy={yAt(series.values[0] ?? 0)}
               r="4"
-              style="fill: {seriesColor(series.colorIndex)}"
+              style="fill: {seriesColor(series.key)}"
             />
           {/if}
         {/each}
@@ -360,7 +364,7 @@
               cx={xAt(hoverIndex)}
               cy={yAt(series.values[hoverIndex] ?? 0)}
               r="4"
-              style="fill: {seriesColor(series.colorIndex)}"
+              style="fill: {seriesColor(series.key)}"
             />
           {/each}
         {/if}
@@ -416,7 +420,7 @@
           <div class="tooltip-row">
             <span
               class="tip-key"
-              style="background: {seriesColor(row.colorIndex)}"
+              style="background: {seriesColor(row.key)}"
             ></span>
             <span class="tip-value">
               {row.value.toLocaleString()}

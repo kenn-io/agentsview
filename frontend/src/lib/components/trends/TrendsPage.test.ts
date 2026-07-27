@@ -9,6 +9,7 @@ import {
 } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { trends } from "../../stores/trends.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import type { TrendsTermsResponse } from "../../api/types.js";
 import source from "./TrendsPage.svelte?raw";
@@ -73,6 +74,7 @@ describe("TrendsPage", () => {
     trends.response = null;
     trends.loading.terms = false;
     trends.errors.terms = null;
+    settings.chartPalette = "agentsview";
     yokedDates.setEnabled(false);
     localStorage.clear();
     window.history.replaceState(null, "", "/trends");
@@ -88,6 +90,7 @@ describe("TrendsPage", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     yokedDates.setEnabled(false);
+    settings.chartPalette = "agentsview";
   });
 
   it("refreshes with the changed date value", async () => {
@@ -508,6 +511,57 @@ describe("TrendsPage", () => {
       "background: var(--trend-magenta);",
       "background: var(--trend-slate);",
       "background: var(--trend-red);",
+    ]);
+  });
+
+  it("shares lexical Matplotlib colors between chart lines and table terms", async () => {
+    settings.chartPalette = "matplotlib";
+    mocks.getApiV1TrendsTerms.mockResolvedValueOnce({
+      granularity: "week",
+      from: "2024-01-01",
+      to: "2024-01-31",
+      message_count: 10,
+      buckets: [
+        { date: "2024-01-01", message_count: 5 },
+        { date: "2024-01-08", message_count: 5 },
+      ],
+      series: [
+        {
+          term: "zeta",
+          variants: ["zeta"],
+          total: 3,
+          points: [
+            { date: "2024-01-01", count: 1 },
+            { date: "2024-01-08", count: 2 },
+          ],
+        },
+        {
+          term: "alpha",
+          variants: ["alpha"],
+          total: 4,
+          points: [
+            { date: "2024-01-01", count: 2 },
+            { date: "2024-01-08", count: 2 },
+          ],
+        },
+      ],
+    });
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    const strokes = Array.from(
+      document.querySelectorAll<SVGPathElement>(
+        '.chart path[fill="none"]:not([stroke="transparent"])',
+      ),
+    ).map((line) => line.getAttribute("stroke"));
+    const swatches = Array.from(
+      document.querySelectorAll<HTMLElement>(".swatch"),
+    ).map((swatch) => swatch.style.background);
+    expect(strokes).toEqual(["#ff7f0e", "#1f77b4"]);
+    expect(swatches).toEqual([
+      "rgb(255, 127, 14)",
+      "rgb(31, 119, 180)",
     ]);
   });
 });
