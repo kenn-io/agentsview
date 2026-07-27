@@ -705,11 +705,14 @@ func listOmnigentNewConversationMetas(
 // omnigentNewConversationQuery paginates newly inserted conversation rows by
 // rowid into a MATERIALIZED CTE before joining conversation_items for the
 // aggregate rollup: without the hint, SQLite's planner can flatten the CTE
-// into the join and fall back to scanning the whole item table for each page.
-// This is a pure query-cost concern with no correctness-observable symptom,
-// so it has no dedicated regression test; TestOmnigentChangedPathParsingIsBounded
-// and TestOmnigentIncrementalRowQueriesReturnOnlyRowsPastCursor exercise this
-// query at growing archive cardinality and guard its output correctness.
+// into the join and fall back to scanning the whole item table for each
+// page. TestOmnigentIncrementalQueriesAvoidFullTableScans guards against
+// that with EXPLAIN QUERY PLAN, restricted to SQLite's long-stable
+// "SCAN <table>" vocabulary rather than index names or the version-sensitive
+// "AUTOMATIC" marker. TestOmnigentChangedPathParsingIsBounded and
+// TestOmnigentIncrementalRowQueriesReturnOnlyRowsPastCursor separately
+// exercise this query at growing archive cardinality and guard its output
+// correctness.
 func omnigentNewConversationQuery(schema omnigentSchema) string {
 	prefix := `
 		WITH selected AS MATERIALIZED (

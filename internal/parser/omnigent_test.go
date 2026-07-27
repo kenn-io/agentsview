@@ -1215,12 +1215,13 @@ func omnigentTrackerAtCurrentHighWater(
 // (omnigentNewConversationQuery, omnigentNewItemQuery) must return exactly
 // the rows inserted after the tracked cursor, not a rescan of the whole
 // archive, and that stays true whether the archive already holds 130 or 1030
-// unrelated conversations. The remaining, purely internal guarantee the old
-// test also checked -- that the MATERIALIZED CTE hint keeps SQLite's planner
-// from flattening the query into a per-page full scan of conversation_items
-// -- has no observable effect besides query cost, so it cannot be expressed
-// without either timing or plan-string matching; it is documented instead on
-// omnigentNewConversationQuery.
+// unrelated conversations. The remaining guarantee the old test also
+// checked -- that the MATERIALIZED CTE hint keeps SQLite's planner from
+// flattening the query into a per-page full scan of conversation_items --
+// has no correctness-visible symptom at any archive size this suite
+// exercises, but it is still cheaply and stably checkable via EXPLAIN QUERY
+// PLAN's "SCAN <table>" vocabulary alone: see
+// TestOmnigentIncrementalQueriesAvoidFullTableScans below.
 func TestOmnigentIncrementalRowQueriesReturnOnlyRowsPastCursor(t *testing.T) {
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
@@ -1279,6 +1280,68 @@ func TestOmnigentIncrementalRowQueriesReturnOnlyRowsPastCursor(t *testing.T) {
 				"only the item inserted after the cursor is new, regardless "+
 					"of how many unrelated items precede it")
 			assert.Equal(t, "conv_new", members[0].rawID)
+		})
+	}
+}
+
+// TestOmnigentIncrementalQueriesAvoidFullTableScans is a minimal EXPLAIN
+// QUERY PLAN smoke test retained from the deleted
+// TestOmnigentIncrementalQueriesUseSeekableIndexes. That test was deleted for
+// asserting on SQLite-version-sensitive plan wording (specific index names,
+// the "AUTOMATIC" marker); the surviving check here only asserts the absence
+// of a full scan, using SQLite's long-stable "SCAN <table>" EXPLAIN
+// vocabulary. omnigentNewConversationQuery aliases both tables it touches
+// ("c" for the paginated conversation source, "ci" for conversation_items:
+// see omnigentConversationAggregateQuery), so EXPLAIN QUERY PLAN reports
+// those aliases rather than the bare table names -- "SCAN CONVERSATIONS" and
+// "SCAN CONVERSATION_ITEMS" can never appear for that query regardless of
+// plan quality, which would have made a naive reuse of the deleted test's
+// exact strings a silently vacuous assertion. "SCAN CI" is what a per-page
+// full scan of conversation_items (the regression the MATERIALIZED hint
+// guards against) would actually read as; omnigentNewItemQuery has no alias,
+// so its bare table name is checked directly.
+func TestOmnigentIncrementalQueriesAvoidFullTableScans(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		query      func(omnigentSchema) string
+		wantAbsent string
+	}{
+		{
+			name:       "new conversation rows",
+			query:      omnigentNewConversationQuery,
+			wantAbsent: "SCAN CI",
+		},
+		{
+			name:       "new item rows",
+			query:      omnigentNewItemQuery,
+			wantAbsent: "SCAN CONVERSATION_ITEMS",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeOmnigentSplitWorkspaceCardinalityDB(t, 300)
+			conn, err := openOmnigentDB(path)
+			require.NoError(t, err)
+			defer conn.Close()
+			schema, err := detectOmnigentSchema(conn)
+			require.NoError(t, err)
+
+			rows, err := conn.QueryContext(
+				t.Context(), "EXPLAIN QUERY PLAN "+tc.query(schema),
+				int64(0), 128,
+			)
+			require.NoError(t, err)
+			defer rows.Close()
+			var details []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+				details = append(details, detail)
+			}
+			require.NoError(t, rows.Err())
+			plan := strings.ToUpper(strings.Join(details, "\n"))
+			assert.NotContains(t, plan, tc.wantAbsent,
+				"incremental discovery must not scan the full item archive")
 		})
 	}
 }
