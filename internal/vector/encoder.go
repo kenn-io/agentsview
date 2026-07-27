@@ -128,12 +128,15 @@ func (e *HTTPStatusError) Permanent() bool {
 // media-type failure, and skip-stamping those would silently mark the whole
 // corpus embedded-with-no-vectors — so a size word must pair with an input
 // word, and "content" must pair with "policy".
+//
+// Empty and whitespace-only inputs are deliberately absent: kitvec.Split drops
+// blank windows and kitvec.EncodeBatched refuses blank chunks outright, so a
+// blank document is stamped without vectors and never becomes a request. That
+// removes the need to recognize each provider's phrasing for the rejection
+// (see isPermanentEncodeError for the structured signal kit raises instead).
 func hasDocumentSpecificEmbeddingError(body string) bool {
 	body = strings.ToLower(body)
 	if strings.Contains(body, "content") && strings.Contains(body, "policy") {
-		return true
-	}
-	if describesEmptyEmbeddingInput(body) {
 		return true
 	}
 	overLimit := strings.Contains(body, "too long") ||
@@ -151,15 +154,6 @@ func hasDocumentSpecificEmbeddingError(body string) bool {
 		strings.Contains(body, "context") ||
 		strings.Contains(body, "input") ||
 		strings.Contains(body, "text")
-}
-
-func describesEmptyEmbeddingInput(body string) bool {
-	hasWhitespaceRejection := strings.Contains(body, "whitespace-only") ||
-		strings.Contains(body, "whitespace only")
-	if !hasWhitespaceRejection || !strings.Contains(body, "empty") {
-		return false
-	}
-	return strings.Contains(body, "embedding input")
 }
 
 // embeddingsRequestBody is the OpenAI-compatible embeddings request.
