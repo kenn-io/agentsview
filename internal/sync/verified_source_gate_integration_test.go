@@ -337,10 +337,16 @@ func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T)
 				Type: parser.AgentClaude, DisplayName: "Claude",
 				IDPrefix: "claude:", FileBased: true,
 			},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				IncrementalAppend: parser.CapabilitySupported,
-				VerifiedLocalStat: parser.CapabilitySupported,
-			}},
+			Caps: parser.Capabilities{
+				Source: parser.SourceCapabilities{
+					IncrementalAppend: parser.CapabilitySupported,
+					VerifiedLocalStat: parser.CapabilitySupported,
+				},
+				Sync: parser.ProviderSyncSemantics{
+					FingerprintHashInCacheKey:           true,
+					FingerprintHashRequiredForFreshness: true,
+				},
+			},
 		},
 		root:    root,
 		sources: make(map[string]parser.SourceRef),

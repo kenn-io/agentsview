@@ -229,7 +229,7 @@ func TestProcessFileHermesArchiveSkipCacheUsesAggregateMtime(t *testing.T) {
 	require.Zero(t, failed)
 	engine.InjectSkipCache(map[string]int64{
 		providerProcessCacheKeyWithHash(
-			stateDB, parser.AgentHermes, fingerprint,
+			stateDB, fingerprint, provider.Capabilities().Sync,
 		): wantMtime,
 	})
 

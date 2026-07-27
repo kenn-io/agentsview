@@ -6853,6 +6853,7 @@ func (e *Engine) processProviderFile(
 			),
 		}, true
 	}
+	providerSemantics := provider.Capabilities().Sync
 
 	// SyncSingleSession resolves a single session by ID and carries the
 	// caller-preferred project (typically the DB-preserved value, so a
@@ -6927,7 +6928,7 @@ func (e *Engine) processProviderFile(
 		}
 		return processResult{err: err}, true
 	}
-	cacheKey := providerProcessCacheKey(file, source, fingerprint)
+	cacheKey := providerProcessCacheKey(file, source, fingerprint, providerSemantics)
 	cacheSkip := e.shouldCacheSkip(file)
 	if cacheSkip && !e.forceParse && !file.ForceParse {
 		e.skipMu.RLock()
@@ -6938,7 +6939,9 @@ func (e *Engine) processProviderFile(
 			// self-healing (e.g. a parser data-version bump or generated
 			// roborev CI worktree project): clear the entry and fall through
 			// to a full reparse, mirroring the legacy process arm.
-			if !e.providerSkipCacheEntryFreshInDB(file, source, fingerprint) {
+			if !e.providerSkipCacheEntryFreshInDB(
+				file, source, fingerprint, providerSemantics,
+			) {
 				e.clearSkip(cacheKey)
 			} else if e.pathNeedsCachedSkipBypass(file.Path) {
 				e.clearSkip(cacheKey)
@@ -6951,7 +6954,9 @@ func (e *Engine) processProviderFile(
 				e.clearSkip(cacheKey)
 			} else {
 				if verifiedStateOK &&
-					e.shouldSkipProviderSourceByDB(file, fingerprint) {
+					e.shouldSkipProviderSourceByDB(
+						file, fingerprint, providerSemantics,
+					) {
 					e.promoteVerifiedSource(verifiedCapture)
 				}
 				return processResult{
@@ -6963,7 +6968,9 @@ func (e *Engine) processProviderFile(
 			}
 		}
 	}
-	if cacheSkip && e.shouldSkipProviderSource(file, source, fingerprint) {
+	if cacheSkip && e.shouldSkipProviderSource(
+		file, source, fingerprint, providerSemantics,
+	) {
 		return processResult{
 			skip:      true,
 			mtime:     fingerprint.MTimeNS,
@@ -6996,7 +7003,9 @@ func (e *Engine) processProviderFile(
 	// a shared index mtime bump that did not change this session's title must
 	// not trigger a reparse.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
-		e.shouldSkipProviderSourceByDB(file, fingerprint) {
+		e.shouldSkipProviderSourceByDB(
+			file, fingerprint, providerSemantics,
+		) {
 		if verifiedStateOK {
 			e.promoteVerifiedSource(verifiedCapture)
 		}
@@ -7020,7 +7029,7 @@ func (e *Engine) processProviderFile(
 	// reparses, matching the prior behavior. Claude and Cowork have their own
 	// earlier freshness checks; this is the generic fallback for the rest.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
-		e.providerSourceUnchangedInDB(source, fingerprint) {
+		e.providerSourceUnchangedInDB(source, fingerprint, providerSemantics) {
 		return processResult{
 			skip:      true,
 			mtime:     fingerprint.MTimeNS,
@@ -7129,7 +7138,9 @@ func (e *Engine) processProviderFile(
 	parsedResults := parseOutcomeResults(outcome.Results)
 	parsedCount := len(parsedResults)
 	res := processResult{
-		results:               e.dropUnchangedSharedSQLiteResults(file, parsedResults),
+		results: e.dropUnchangedSharedSQLiteResults(
+			file, parsedResults, providerSemantics.UnchangedResults,
+		),
 		excludedSessionIDs:    append([]string(nil), outcome.ExcludedSessionIDs...),
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
@@ -7184,41 +7195,32 @@ func (e *Engine) processProviderFile(
 // fingerprint stored in file_hash already match, using the path rewriter so
 // remote stored paths resolve. Force-parse runs (parse-diff, single-session
 // resync) keep every result so they always re-emit.
+//
+// The comparison policy is declared per provider on Capabilities().Sync.
+// UnchangedResultNone opts a provider out entirely: every session is its own
+// source and has no shared-container siblings to drop (e.g. Claude, Codex).
+// UnchangedResultMTime compares only file_mtime: Zed and Kiro fan one
+// container DB out to a session per row with no per-row content hash, so
+// mtime plus data version matches their legacy container sync. Without Kiro
+// declaring it, every Kiro row would be reparsed and rewritten on every full
+// sync. UnchangedResultMTimeAndHash also compares file_hash: Shelley's and
+// Trae's per-session results share one container fingerprint hash, which
+// catches same-mtime rewrites; Aider's runs in a history file share the
+// file's content hash, so a same-mtime append/truncate is caught; and
+// OpenCode-family providers (OpenCode, Kilo, MiMoCode, Icodemate) use the
+// opencode storage fingerprint to catch same-mtime content changes.
 func (e *Engine) dropUnchangedSharedSQLiteResults(
 	file parser.DiscoveredFile,
 	results []parser.ParseResult,
+	policy parser.UnchangedResultPolicy,
 ) []parser.ParseResult {
 	if e.forceParse || file.ForceParse || len(results) == 0 {
 		return results
 	}
-	compareHash := false
-	switch file.Agent {
-	case parser.AgentShelley:
-		compareHash = true
-	case parser.AgentTrae:
-		// Trae fans one shared SQLite store out into virtual per-session paths.
-		// Every session shares the container fingerprint hash, which catches
-		// same-mtime rewrites while still letting unchanged sessions drop after
-		// the provider re-parses the container.
-		compareHash = true
-	case parser.AgentAider:
-		// Every aider run in a history file shares the file's content hash, so
-		// a same-mtime append/truncate is caught by the hash compare.
-		compareHash = true
-	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-		// OpenCode-family providers fan one shared container out to per-session
-		// results. The per-session mtime is the session's own updated time, and
-		// the hash compare uses the opencode storage fingerprint to catch
-		// same-mtime content changes.
-		compareHash = true
-	case parser.AgentZed, parser.AgentKiro:
-		// Zed and Kiro fan one container DB out to a session per row and have no
-		// per-row content hash, so unchanged rows are detected by mtime plus
-		// data version, matching their legacy container sync. Without Kiro here
-		// every Kiro row is reparsed and rewritten on every full sync.
-	default:
+	if policy == parser.UnchangedResultNone {
 		return results
 	}
+	compareHash := policy == parser.UnchangedResultMTimeAndHash
 
 	kept := results[:0]
 	for _, r := range results {
@@ -7482,78 +7484,60 @@ func providerProcessCacheKey(
 	file parser.DiscoveredFile,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) string {
-	agent := file.Agent
-	if agent == "" {
-		agent = source.Provider
+	key := plannedSkipKey(source, fingerprint)
+	if key == "" {
+		key = file.Path
 	}
-	key := ""
-	if key := plannedSkipKey(source, fingerprint); key != "" {
-		return providerProcessCacheKeyWithHash(key, agent, fingerprint)
-	}
-	key = file.Path
-	return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	return providerProcessCacheKeyWithHash(key, fingerprint, semantics)
 }
 
+// providerProcessCacheKeyWithHash appends the fingerprint hash to the skip
+// cache key when the provider declares FingerprintHashInCacheKey. Hermes
+// deliberately declares it false: its skip keys must stay plain paths so the
+// remote import's exact-file mapping (a profile's state.db in ExtraFiles) can
+// translate the persisted entry back to the remote path. Same-mtime content
+// changes are still caught by FingerprintHashRequiredForFreshness, which
+// compares the fingerprint hash against the stored row.
 func providerProcessCacheKeyWithHash(
 	key string,
-	agent parser.AgentType,
 	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) string {
 	if key == "" {
 		return ""
 	}
-	if fingerprint.Hash == "" || !providerFingerprintHashInCacheKey(agent) {
+	if fingerprint.Hash == "" || !semantics.FingerprintHashInCacheKey {
 		return key
 	}
 	return key + "?source_hash=" + fingerprint.Hash
 }
 
-// Hermes is deliberately absent: its skip keys must stay plain paths so the
-// remote import's exact-file mapping (a profile's state.db in ExtraFiles) can
-// translate the persisted entry back to the remote path. Same-mtime content
-// changes are still caught by providerFingerprintHashRequiredForFreshness,
-// which compares the fingerprint hash against the stored row.
-func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
-	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin,
-		parser.AgentQoder, parser.AgentWindsurf:
-		return true
-	default:
-		return false
-	}
-}
-
-// providerFingerprintHashRequiredForFreshness also protects stored rows. Hash
-// cache keys protect rowless parser exclusions and failures; cacheSkip removes
-// older hash siblings so hot append-only files retain only one content version.
-func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
-	switch agent {
-	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentHermes,
-		parser.AgentQoder, parser.AgentWindsurf, parser.AgentGemini:
-		return true
-	default:
-		return false
-	}
-}
-
+// providerSkipCacheEntryFreshInDB reports whether a cached skip entry remains
+// valid against the current DB state. FingerprintHashRequiredForFreshness
+// also protects stored rows: hash cache keys (FingerprintHashInCacheKey)
+// protect rowless parser exclusions and failures, while cacheSkip removes
+// older hash siblings so hot append-only files retain only one content
+// version.
 func (e *Engine) providerSkipCacheEntryFreshInDB(
 	file parser.DiscoveredFile,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) bool {
 	agent := file.Agent
 	if agent == "" {
 		agent = source.Provider
 	}
-	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
+	if fingerprint.Hash == "" || !semantics.FingerprintHashRequiredForFreshness {
 		return true
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
-	if agent == parser.AgentClaude || agent == parser.AgentCodex {
+	if semantics.SkipCacheFreshWithoutStoredRow {
 		storedIDs, err := e.db.ListSessionIDsByFilePath(
 			lookupPath, string(agent),
 		)
@@ -7566,7 +7550,9 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 			return true
 		}
 	}
-	return e.providerFingerprintHashMatchesDB(agent, lookupPath, fingerprint)
+	return e.providerFingerprintHashMatchesDB(
+		lookupPath, fingerprint, semantics.FingerprintHashRequiredForFreshness,
+	)
 }
 
 func processFileUsesProvider(agent parser.AgentType) bool {
@@ -7582,6 +7568,7 @@ func (e *Engine) shouldSkipProviderSource(
 	file parser.DiscoveredFile,
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) bool {
 	agent := file.Agent
 	if agent == "" {
@@ -7607,7 +7594,9 @@ func (e *Engine) shouldSkipProviderSource(
 	if storedMtime != fingerprint.MTimeNS {
 		return false
 	}
-	if !e.providerFingerprintHashMatchesDB(agent, lookupPath, fingerprint) {
+	if !e.providerFingerprintHashMatchesDB(
+		lookupPath, fingerprint, semantics.FingerprintHashRequiredForFreshness,
+	) {
 		return false
 	}
 	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
@@ -7964,6 +7953,7 @@ func (e *Engine) shouldSkipFile(
 func (e *Engine) providerSourceUnchangedInDB(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) bool {
 	if fingerprint.MTimeNS == 0 && fingerprint.Size == 0 {
 		return false
@@ -7985,7 +7975,9 @@ func (e *Engine) providerSourceUnchangedInDB(
 		) {
 			return false
 		}
-	} else if !e.providerFingerprintHashMatchesDB(source.Provider, lookupPath, fingerprint) {
+	} else if !e.providerFingerprintHashMatchesDB(
+		lookupPath, fingerprint, semantics.FingerprintHashRequiredForFreshness,
+	) {
 		return false
 	}
 	// A stale stored project (e.g. a generated roborev CI worktree name)
@@ -8000,11 +7992,11 @@ func (e *Engine) providerSourceUnchangedInDB(
 }
 
 func (e *Engine) providerFingerprintHashMatchesDB(
-	agent parser.AgentType,
 	lookupPath string,
 	fingerprint parser.SourceFingerprint,
+	required bool,
 ) bool {
-	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
+	if fingerprint.Hash == "" || !required {
 		return true
 	}
 	storedHash, ok := e.db.GetFileHashByPath(lookupPath)
@@ -8264,8 +8256,9 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// the session file's size and mtime would skip a session whose project
 	// metadata changed while the transcript did not, leaving a stale project
 	// on scheduled syncs. Gemini relies on the post-fingerprint DB hash check
-	// instead (providerFingerprintHashRequiredForFreshness), which catches a
-	// resolved-project change even when size and mtime are unchanged.
+	// instead (declared via FingerprintHashRequiredForFreshness), which
+	// catches a resolved-project change even when size and mtime are
+	// unchanged.
 	case parser.AgentCopilot:
 		mtime := copilotEffectiveMtime(path, info)
 		effectiveInfo := fakeSnapshotInfo{
@@ -8786,12 +8779,14 @@ func (e *Engine) tryIncrementalJSONL(
 // advanced but this session's name did not" semantics. Other providers keep
 // their existing in-memory skip-cache behavior unchanged.
 func (e *Engine) shouldSkipProviderSourceByDB(
-	file parser.DiscoveredFile, fingerprint parser.SourceFingerprint,
+	file parser.DiscoveredFile,
+	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) bool {
 	if file.Agent != parser.AgentCodex {
 		return false
 	}
-	return e.shouldSkipCodexFingerprint(file.Path, fingerprint)
+	return e.shouldSkipCodexFingerprint(file.Path, fingerprint, semantics)
 }
 
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
@@ -8803,7 +8798,9 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 //     (the raw transcript mtime is still at or below the stored mtime) skips
 //     unless this session's stored title differs from the current index title.
 func (e *Engine) shouldSkipCodexFingerprint(
-	path string, fingerprint parser.SourceFingerprint,
+	path string,
+	fingerprint parser.SourceFingerprint,
+	semantics parser.ProviderSyncSemantics,
 ) bool {
 	lookupPath := path
 	if e.pathRewriter != nil {
@@ -8814,7 +8811,7 @@ func (e *Engine) shouldSkipCodexFingerprint(
 		return false
 	}
 	if !e.providerFingerprintHashMatchesDB(
-		parser.AgentCodex, lookupPath, fingerprint,
+		lookupPath, fingerprint, semantics.FingerprintHashRequiredForFreshness,
 	) {
 		return false
 	}

@@ -604,6 +604,11 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 	)
 	provider.Def.Type = parser.AgentClaude
 	provider.Def.IDPrefix = "claude:"
+	provider.Caps.Sync = parser.ProviderSyncSemantics{
+		FingerprintHashInCacheKey:           true,
+		FingerprintHashRequiredForFreshness: true,
+		SkipCacheFreshWithoutStoredRow:      true,
+	}
 	engine := NewEngine(openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
@@ -616,7 +621,7 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 	})
 	engine.cacheSkip(providerProcessCacheKey(
 		parser.DiscoveredFile{Path: sourcePath, Agent: parser.AgentClaude},
-		source, fingerprint,
+		source, fingerprint, provider.Capabilities().Sync,
 	), fingerprint.MTimeNS)
 
 	res := engine.processFile(context.Background(), parser.DiscoveredFile{
@@ -656,6 +661,11 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 			)
 			provider.Def.Type = agent
 			provider.Def.IDPrefix = string(agent) + ":"
+			provider.Caps.Sync = parser.ProviderSyncSemantics{
+				FingerprintHashInCacheKey:           true,
+				FingerprintHashRequiredForFreshness: true,
+				SkipCacheFreshWithoutStoredRow:      true,
+			}
 			engine := NewEngine(openTestDB(t), EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{agent: {root}},
 				Machine:   "devbox",
@@ -670,7 +680,7 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 			oldFingerprint.Hash = "old-ignored-content"
 			oldKey := providerProcessCacheKey(
 				parser.DiscoveredFile{Path: sourcePath, Agent: agent},
-				source, oldFingerprint,
+				source, oldFingerprint, provider.Capabilities().Sync,
 			)
 			engine.cacheSkip(oldKey, fingerprint.MTimeNS)
 
@@ -736,6 +746,11 @@ func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 	)
 	provider.Def.Type = parser.AgentClaude
 	provider.Def.IDPrefix = "claude:"
+	provider.Caps.Sync = parser.ProviderSyncSemantics{
+		FingerprintHashInCacheKey:           true,
+		FingerprintHashRequiredForFreshness: true,
+		SkipCacheFreshWithoutStoredRow:      true,
+	}
 	engine := NewEngine(openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
