@@ -797,7 +797,11 @@ func (db *DB) attachSessionExportUsage(
 		a.cacheReadInputTokens += cacheRdTok
 		a.reasoningTokens += reasoningTok
 		if priced {
-			a.cost = money.MustAdd(a.cost, cost)
+			a.cost, priceErr = money.Add(a.cost, cost)
+			if priceErr != nil {
+				return nil, fmt.Errorf(
+					"summing session export cost: %w", priceErr)
+			}
 		} else {
 			a.allPriced = false
 		}
@@ -818,7 +822,11 @@ func (db *DB) attachSessionExportUsage(
 			ma.computed = true
 		}
 		if priced {
-			ma.cost = money.MustAdd(ma.cost, cost)
+			ma.cost, priceErr = money.Add(ma.cost, cost)
+			if priceErr != nil {
+				return nil, fmt.Errorf(
+					"summing session export model cost: %w", priceErr)
+			}
 		} else {
 			ma.allPriced = false
 		}

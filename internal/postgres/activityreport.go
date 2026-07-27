@@ -67,7 +67,7 @@ func (s *Store) GetActivityReport(
 		return activity.Report{}, err
 	}
 
-	report := activity.Aggregate(activity.Params{
+	report, err := activity.Aggregate(activity.Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -76,6 +76,9 @@ func (s *Store) GetActivityReport(
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
 	}, sessions, acts, usage)
+	if err != nil {
+		return activity.Report{}, fmt.Errorf("aggregating pg activity report: %w", err)
+	}
 	report.SchemaVersion = export.ActivityReportSchemaVersion
 	report.Pricing = pricing
 	projects, err := s.BuildProjectIdentityMap(ctx,

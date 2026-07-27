@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+)
 
 // migrateMoneyColumnsLocked performs the one-way, transactional conversion
 // from floating-point dollars/cents to signed 64-bit microdollars. SQLite
@@ -132,8 +135,76 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 			return fmt.Errorf("migrating %s to microdollars: %w", migration.name, err)
 		}
 	}
+	if legacyCursor {
+		if err := rekeyMigratedCursorUsageEvents(tx); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing microdollar migration: %w", err)
+	}
+	return nil
+}
+
+func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT id, occurred_at, model, kind,
+			input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
+			charged_microdollars, cursor_token_fee_microdollars,
+			user_id, user_email, is_headless
+		FROM cursor_usage_events
+		ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("querying migrated cursor usage keys: %w", err)
+	}
+	type keyUpdate struct {
+		id  int64
+		key string
+	}
+	var updates []keyUpdate
+	for rows.Next() {
+		var id int64
+		var ev CursorUsageEvent
+		if err := rows.Scan(
+			&id, &ev.OccurredAt, &ev.Model, &ev.Kind,
+			&ev.InputTokens, &ev.OutputTokens,
+			&ev.CacheWriteTokens, &ev.CacheReadTokens,
+			&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
+			&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
+		); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning migrated cursor usage key: %w", err)
+		}
+		updates = append(updates, keyUpdate{
+			id:  id,
+			key: cursorUsageEventDedupKey(ev),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterating migrated cursor usage keys: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("closing migrated cursor usage keys: %w", err)
+	}
+	for _, update := range updates {
+		if _, err := tx.Exec(
+			`UPDATE cursor_usage_events SET dedup_key = ? WHERE id = ?`,
+			update.key, update.id,
+		); err != nil {
+			return fmt.Errorf("updating migrated cursor usage key: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM cursor_usage_events
+		WHERE dedup_key != '' AND id NOT IN (
+			SELECT MIN(id) FROM cursor_usage_events
+			WHERE dedup_key != '' GROUP BY dedup_key
+		);
+		CREATE UNIQUE INDEX idx_cursor_usage_events_dedup
+			ON cursor_usage_events(dedup_key) WHERE dedup_key != '';
+	`); err != nil {
+		return fmt.Errorf("deduplicating migrated cursor usage keys: %w", err)
 	}
 	return nil
 }
@@ -219,8 +290,6 @@ SELECT id, occurred_at, model, kind, input_tokens, output_tokens,
     user_id, user_email, is_headless, dedup_key
 FROM cursor_usage_events_dollar_float_legacy;
 DROP TABLE cursor_usage_events_dollar_float_legacy;
-CREATE UNIQUE INDEX idx_cursor_usage_events_dedup
-    ON cursor_usage_events(dedup_key) WHERE dedup_key != '';
 CREATE INDEX idx_cursor_usage_events_occurred ON cursor_usage_events(occurred_at);
 CREATE INDEX idx_cursor_usage_events_model ON cursor_usage_events(model);
 `

@@ -723,6 +723,18 @@ func TestHermesUsageEvents_ActualCostTakesPrecedence(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 1_230_000}, *events[0].Cost)
 }
 
+func TestHermesUsageEvents_InvalidCostPreservesTokenUsage(t *testing.T) {
+	events := hermesUsageEvents(hermesStateSession{
+		model:       "gpt-5.5",
+		inputTokens: 123,
+		actualCost:  sql.NullFloat64{Float64: -0.01, Valid: true},
+	}, "hermes:invalid-cost")
+
+	require.Len(t, events, 1)
+	assert.Equal(t, 123, events[0].InputTokens)
+	assert.Nil(t, events[0].Cost)
+}
+
 func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
 	events := hermesUsageEvents(hermesStateSession{
 		model:         "gpt-5.5",

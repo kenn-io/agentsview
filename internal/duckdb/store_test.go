@@ -3732,6 +3732,44 @@ func TestDuckUsageQuantizesCostBeforeAggregation(t *testing.T) {
 	assert.Equal(t, money.Money{}, usage.Cost)
 }
 
+func TestDuckDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	large := money.Money{Microdollars: 1 << 62}
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"duck-overflow", "alpha", "overflow", "2026-02-01T12:00:00Z", 1,
+		),
+		Messages: []db.Message{syncMessage(
+			"duck-overflow", 0, "user", "overflow", "2026-02-01T12:00:00Z",
+		)},
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "provider", Model: "model", Cost: &large,
+				OccurredAt: "2026-02-01T12:01:00Z", DedupKey: "overflow-1",
+			},
+			{
+				Source: "provider", Model: "model", Cost: &large,
+				OccurredAt: "2026-02-01T12:02:00Z", DedupKey: "overflow-2",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	_, err = store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-02-01", To: "2026-02-01", Timezone: "UTC",
+	})
+
+	require.ErrorIs(t, err, money.ErrOverflow)
+}
+
 func TestDuckDBBranchDimension(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

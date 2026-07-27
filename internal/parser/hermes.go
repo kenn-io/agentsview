@@ -1080,19 +1080,17 @@ func hermesUsageEvents(
 	switch {
 	case ss.actualCost.Valid:
 		v, err := money.FromFloatDollars(ss.actualCost.Float64)
-		if err != nil {
-			return nil
+		if err == nil {
+			cost = &v
 		}
-		cost = &v
 	case ss.costStatus == "included" && hermesHasCostSource(ss.costSource):
 		zero := money.Money{}
 		cost = &zero
 	case ss.estimatedCost.Valid && ss.estimatedCost.Float64 > 0:
 		v, err := money.FromFloatDollars(ss.estimatedCost.Float64)
-		if err != nil {
-			return nil
+		if err == nil {
+			cost = &v
 		}
-		cost = &v
 	}
 	return []ParsedUsageEvent{{
 		SessionID:                sessionID,

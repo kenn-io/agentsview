@@ -48,6 +48,28 @@ func TestDailyUsageResultEmitsEmptyProjectsMap(t *testing.T) {
 	assert.Contains(t, string(b), `"projects":{}`)
 }
 
+func TestGetDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "usage-overflow", "project")
+	large := money.Money{Microdollars: 1 << 62}
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-overflow", []UsageEvent{
+		{
+			Source: "provider", Model: "model", Cost: &large,
+			OccurredAt: "2026-07-26T12:00:00Z", DedupKey: "overflow-1",
+		},
+		{
+			Source: "provider", Model: "model", Cost: &large,
+			OccurredAt: "2026-07-26T12:01:00Z", DedupKey: "overflow-2",
+		},
+	}))
+
+	_, err := d.GetDailyUsage(t.Context(), UsageFilter{
+		From: "2026-07-26", To: "2026-07-26", Timezone: "UTC",
+	})
+
+	require.ErrorIs(t, err, money.ErrOverflow)
+}
+
 func TestUsageDailyEmptyProjectsMapExcludesUnrelatedObservations(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"time"
@@ -69,7 +70,7 @@ type usageTopSessionsInput struct {
 
 type usageComparisonInput struct {
 	UsageFilterInput
-	CurrentMicrodollars int64 `query:"current_microdollars" required:"true" doc:"Current period total cost in microdollars"`
+	CurrentMicrodollars int64 `query:"current_microdollars" required:"true" minimum:"0" doc:"Current period total cost in microdollars"`
 }
 
 type usagePairwiseComparisonInput struct {
@@ -274,7 +275,10 @@ func (s *Server) computeUsageComparison(
 		PriorTotalCost: priorResult.Totals.TotalCost,
 	}
 	if c.PriorTotalCost.Microdollars > 0 {
-		delta := money.MustSub(currentCost, c.PriorTotalCost)
+		delta, err := money.Sub(currentCost, c.PriorTotalCost)
+		if err != nil {
+			return nil, fmt.Errorf("computing usage comparison delta: %w", err)
+		}
 		c.DeltaPct = float64(delta.Microdollars) /
 			float64(c.PriorTotalCost.Microdollars)
 	}

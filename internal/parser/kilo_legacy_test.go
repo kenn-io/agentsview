@@ -607,6 +607,41 @@ func TestParseKiloLegacySessionAPIRecordingTracksPeakAndCost(t *testing.T) {
 		"inferenceProvider is surfaced as the usage-event model label")
 }
 
+func TestParseKiloLegacySessionQuantizesEachRequestCostBeforeSumming(
+	t *testing.T,
+) {
+	taskDir := writeKiloLegacyFixture(t)
+	msgs := []map[string]any{
+		{"ts": 1700000000000, "type": "say", "say": "text", "text": "first"},
+		{"ts": 1700000000500, "type": "say", "say": "api_req_started",
+			"text": `{"tokensIn":1,"cost":0.0000004,"inferenceProvider":"Z.AI"}`},
+		{"ts": 1700000001000, "type": "say", "say": "api_req_started",
+			"text": `{"tokensIn":1,"cost":0.0000004,"inferenceProvider":"Z.AI"}`},
+	}
+	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
+
+	sess, _, err := parseKiloLegacySession(taskDir, "", "h")
+
+	require.NoError(t, err)
+	require.Len(t, sess.UsageEvents, 1)
+	require.NotNil(t, sess.UsageEvents[0].Cost)
+	assert.Equal(t, money.Money{}, *sess.UsageEvents[0].Cost)
+}
+
+func TestParseKiloLegacySessionRejectsNegativeRequestCost(t *testing.T) {
+	taskDir := writeKiloLegacyFixture(t)
+	msgs := []map[string]any{
+		{"ts": 1700000000000, "type": "say", "say": "text", "text": "first"},
+		{"ts": 1700000000500, "type": "say", "say": "api_req_started",
+			"text": `{"tokensIn":1,"cost":-0.01,"inferenceProvider":"Z.AI"}`},
+	}
+	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
+
+	_, _, err := parseKiloLegacySession(taskDir, "", "h")
+
+	require.ErrorIs(t, err, money.ErrNegative)
+}
+
 func TestParseKiloLegacySessionModelFromAPIHistory(t *testing.T) {
 	taskDir := writeKiloLegacyFixture(t)
 

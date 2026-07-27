@@ -3834,7 +3834,11 @@ func (s *Store) GetDailyUsage(
 					b = &duckUsageBucket{}
 					accum[key] = b
 				}
-				b.cost = money.MustAdd(b.cost, costs[i])
+				b.cost, err = money.Add(b.cost, costs[i])
+				if err != nil {
+					return db.DailyUsageResult{}, fmt.Errorf(
+						"summing allocated duckdb usage cost: %w", err)
+				}
 			}
 		} else {
 			for key, cost := range sc.estimated {
@@ -3843,7 +3847,11 @@ func (s *Store) GetDailyUsage(
 					b = &duckUsageBucket{}
 					accum[key] = b
 				}
-				b.cost = money.MustAdd(b.cost, cost)
+				b.cost, err = money.Add(b.cost, cost)
+				if err != nil {
+					return db.DailyUsageResult{}, fmt.Errorf(
+						"summing estimated duckdb usage cost: %w", err)
+				}
 			}
 		}
 	}
@@ -3867,12 +3875,24 @@ func (s *Store) GetDailyUsage(
 			}
 			days[key.date] = day
 		}
-		addUsageBucket(day.models, key.model, *b)
-		day.totalCost = money.MustAdd(day.totalCost, b.cost)
+		if err := addUsageBucket(day.models, key.model, *b); err != nil {
+			return db.DailyUsageResult{}, err
+		}
+		day.totalCost, err = money.Add(day.totalCost, b.cost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing duckdb daily cost: %w", err)
+		}
 		if f.Breakdowns {
-			addUsageBucket(day.projects, key.project, *b)
-			addUsageBucket(day.agents, key.agent, *b)
-			addUsageBucket(day.machines, key.machine, *b)
+			if err := addUsageBucket(day.projects, key.project, *b); err != nil {
+				return db.DailyUsageResult{}, err
+			}
+			if err := addUsageBucket(day.agents, key.agent, *b); err != nil {
+				return db.DailyUsageResult{}, err
+			}
+			if err := addUsageBucket(day.machines, key.machine, *b); err != nil {
+				return db.DailyUsageResult{}, err
+			}
 		}
 	}
 
@@ -3891,7 +3911,6 @@ func (s *Store) GetDailyUsage(
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
-			entry.TotalCost = money.MustAdd(entry.TotalCost, b.cost)
 			entry.ModelBreakdowns = append(entry.ModelBreakdowns, db.ModelBreakdown{
 				ModelName:           model,
 				InputTokens:         b.inputTok,
@@ -3945,7 +3964,12 @@ func (s *Store) GetDailyUsage(
 		result.Totals.OutputTokens += entry.OutputTokens
 		result.Totals.CacheCreationTokens += entry.CacheCreationTokens
 		result.Totals.CacheReadTokens += entry.CacheReadTokens
-		result.Totals.TotalCost = money.MustAdd(result.Totals.TotalCost, entry.TotalCost)
+		result.Totals.TotalCost, err = money.Add(
+			result.Totals.TotalCost, entry.TotalCost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing duckdb usage total: %w", err)
+		}
 	}
 	result.Totals.CacheSavings = totalSavings
 
@@ -3979,14 +4003,21 @@ func (s *Store) GetDailyUsage(
 	return result, nil
 }
 
-func addUsageBucket(m map[string]duckUsageBucket, key string, b duckUsageBucket) {
+func addUsageBucket(
+	m map[string]duckUsageBucket, key string, b duckUsageBucket,
+) error {
 	cur := m[key]
 	cur.inputTok += b.inputTok
 	cur.outputTok += b.outputTok
 	cur.cacheCr += b.cacheCr
 	cur.cacheRd += b.cacheRd
-	cur.cost = money.MustAdd(cur.cost, b.cost)
+	var err error
+	cur.cost, err = money.Add(cur.cost, b.cost)
+	if err != nil {
+		return fmt.Errorf("summing duckdb usage breakdown cost: %w", err)
+	}
 	m[key] = cur
+	return nil
 }
 
 func sortedUsageBucketKeys(m map[string]duckUsageBucket) []string {
@@ -4217,7 +4248,7 @@ func (s *Store) GetTopSessionsByCost(
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	cte, args := duckDailyUsageCTE(f)
+	cte, args := duckUsageCTE(f, "")
 	rows, err := s.queryContext(ctx, cte+`
 		SELECT DISTINCT session_id, project, agent
 		FROM usage_localized

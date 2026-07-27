@@ -272,6 +272,17 @@ func TestUsageComparisonAllowsZeroCurrentCost(t *testing.T) {
 	assertUsageQueryCalls(t, spy, 1, 0, 0)
 }
 
+func TestUsageComparisonRejectsNegativeCurrentCost(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_microdollars=-1")
+	assertRecorderStatus(t, w, http.StatusBadRequest)
+	assertUsageQueryCalls(t, spy, 0, 0, 0)
+}
+
 func TestUsageSummarySetsUnsupportedUsageForCopilotNoTokenData(t *testing.T) {
 	spy := &usageSummaryCountsSpy{
 		matchingSessionCount: 2,

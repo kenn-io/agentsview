@@ -72,6 +72,33 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 	assert.Len(t, result.Daily, 1)
 }
 
+func TestStoreGetDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_overflow_test")
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'usage-overflow', 'test-machine', 'proj', 'claude',
+			'2026-07-26T12:00:00Z'::timestamptz, 1, 1
+		);
+		INSERT INTO usage_events (
+			session_id, source, model, cost_microdollars, occurred_at, dedup_key
+		) VALUES
+			('usage-overflow', 'provider', 'model', 4611686018427387904,
+			 '2026-07-26T12:00:00Z'::timestamptz, 'overflow-1'),
+			('usage-overflow', 'provider', 'model', 4611686018427387904,
+			 '2026-07-26T12:01:00Z'::timestamptz, 'overflow-2')`)
+	require.NoError(t, err)
+
+	_, err = store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-07-26", To: "2026-07-26", Timezone: "UTC",
+	})
+
+	require.ErrorIs(t, err, money.ErrOverflow)
+}
+
 func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_breakdown_test")
 

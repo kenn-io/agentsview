@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
@@ -80,7 +81,10 @@ func GetSessionUsageRollup(
 					allPriced = false
 					continue
 				}
-				totalCost = money.MustAdd(totalCost, cost.Cost)
+				totalCost, err = money.Add(totalCost, cost.Cost)
+				if err != nil {
+					return nil, fmt.Errorf("summing session usage rollup: %w", err)
+				}
 				recordRollupCostSource(
 					cost.CostSource, &hasComputedCost, &hasReportedCost)
 			}
@@ -134,14 +138,22 @@ func sumRollupUsageFallback(
 		}
 		subagentContributing = true
 		if usage.HasCost {
-			totalCost = money.MustAdd(totalCost, usage.Cost)
+			totalCost, err = money.Add(totalCost, usage.Cost)
+			if err != nil {
+				return false, money.Money{}, false, false, false,
+					fmt.Errorf("summing subagent usage rollup: %w", err)
+			}
 			recordRollupCostSource(
 				usage.CostSource, &hasComputedCost, &hasReportedCost)
 		} else {
 			allPriced = false
 		}
 	}
-	totalCost = money.MustAdd(totalCost, root.Cost)
+	totalCost, err = money.Add(totalCost, root.Cost)
+	if err != nil {
+		return false, money.Money{}, false, false, false,
+			fmt.Errorf("summing root usage rollup: %w", err)
+	}
 	return subagentContributing, totalCost, allPriced,
 		hasComputedCost, hasReportedCost, nil
 }

@@ -974,8 +974,16 @@ func pgDailyUsageAmounts(
 		}
 		pricing.RecordComputed(r.model, lookup)
 	}
-	readRate := money.MustSub(rates.InputPerMTok, rates.CacheReadPerMTok)
-	creationRate := money.MustSub(rates.InputPerMTok, rates.CacheWritePerMTok)
+	readRate, err := money.Sub(rates.InputPerMTok, rates.CacheReadPerMTok)
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("deriving pg cache read rate for model %q: %w", r.model, err)
+	}
+	creationRate, err := money.Sub(rates.InputPerMTok, rates.CacheWritePerMTok)
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("deriving pg cache creation rate for model %q: %w", r.model, err)
+	}
 	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
 		{Tokens: int64(cacheRdTok), Rate: readRate},
 		{Tokens: int64(cacheCrTok), Rate: creationRate},
@@ -1261,7 +1269,10 @@ func (s *Store) GetSessionUsage(
 			}
 		}
 		if priced {
-			cost = money.MustAdd(cost, c)
+			cost, priceErr = money.Add(cost, c)
+			if priceErr != nil {
+				return nil, fmt.Errorf("summing pg session usage cost: %w", priceErr)
+			}
 		} else {
 			allPriced = false
 			unpricedSet[r.model] = struct{}{}
@@ -1421,7 +1432,11 @@ func (s *Store) GetDailyUsage(
 		if priceErr != nil {
 			return db.DailyUsageResult{}, priceErr
 		}
-		totalSavings = money.MustAdd(totalSavings, savings)
+		totalSavings, priceErr = money.Add(totalSavings, savings)
+		if priceErr != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg daily usage cache savings: %w", priceErr)
+		}
 
 		key := accumKey{
 			date: date, project: r.project,
@@ -1441,7 +1456,11 @@ func (s *Store) GetDailyUsage(
 		if sc.estimated == nil {
 			sc.estimated = make(map[accumKey]money.Money)
 		}
-		sc.estimated[key] = money.MustAdd(sc.estimated[key], cost)
+		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
+		if priceErr != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg daily usage session cost: %w", priceErr)
+		}
 		if useAuthoritativeCost &&
 			r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
 			v := money.Money{Microdollars: r.cost.Int64}
@@ -1494,7 +1513,11 @@ func (s *Store) GetDailyUsage(
 					b = &bucket{}
 					accum[key] = b
 				}
-				b.cost = money.MustAdd(b.cost, costs[i])
+				b.cost, err = money.Add(b.cost, costs[i])
+				if err != nil {
+					return db.DailyUsageResult{}, fmt.Errorf(
+						"summing allocated pg daily usage cost: %w", err)
+				}
 			}
 		} else {
 			for key, cost := range sc.estimated {
@@ -1503,7 +1526,11 @@ func (s *Store) GetDailyUsage(
 					b = &bucket{}
 					accum[key] = b
 				}
-				b.cost = money.MustAdd(b.cost, cost)
+				b.cost, err = money.Add(b.cost, cost)
+				if err != nil {
+					return db.DailyUsageResult{}, fmt.Errorf(
+						"summing estimated pg daily usage cost: %w", err)
+				}
 			}
 		}
 	}
@@ -1532,7 +1559,11 @@ func (s *Store) GetDailyUsage(
 			ma.outputTok += b.outputTok
 			ma.cacheCr += b.cacheCr
 			ma.cacheRd += b.cacheRd
-			ma.cost = money.MustAdd(ma.cost, b.cost)
+			ma.cost, err = money.Add(ma.cost, b.cost)
+			if err != nil {
+				return db.DailyUsageResult{}, fmt.Errorf(
+					"summing pg daily model cost: %w", err)
+			}
 		}
 
 		type dayData struct{ models map[string]*modelAccum }
@@ -1588,7 +1619,11 @@ func (s *Store) GetDailyUsage(
 				entry.OutputTokens += ma.outputTok
 				entry.CacheCreationTokens += ma.cacheCr
 				entry.CacheReadTokens += ma.cacheRd
-				entry.TotalCost = money.MustAdd(entry.TotalCost, ma.cost)
+				entry.TotalCost, err = money.Add(entry.TotalCost, ma.cost)
+				if err != nil {
+					return db.DailyUsageResult{}, fmt.Errorf(
+						"summing pg daily entry cost: %w", err)
+				}
 				mbd = append(mbd, db.ModelBreakdown{
 					ModelName:           m,
 					InputTokens:         ma.inputTok,
@@ -1605,7 +1640,11 @@ func (s *Store) GetDailyUsage(
 			totals.OutputTokens += entry.OutputTokens
 			totals.CacheCreationTokens += entry.CacheCreationTokens
 			totals.CacheReadTokens += entry.CacheReadTokens
-			totals.TotalCost = money.MustAdd(totals.TotalCost, entry.TotalCost)
+			totals.TotalCost, err = money.Add(totals.TotalCost, entry.TotalCost)
+			if err != nil {
+				return db.DailyUsageResult{}, fmt.Errorf(
+					"summing pg daily usage total: %w", err)
+			}
 		}
 		if daily == nil {
 			daily = []db.DailyUsageEntry{}
@@ -1671,7 +1710,11 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost = money.MustAdd(cur.cost, b.cost)
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg model breakdown cost: %w", err)
+		}
 		dm.models[key.model] = cur
 
 		cur = dm.projects[key.project]
@@ -1679,7 +1722,11 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost = money.MustAdd(cur.cost, b.cost)
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg project breakdown cost: %w", err)
+		}
 		dm.projects[key.project] = cur
 
 		cur = dm.agents[key.agent]
@@ -1687,7 +1734,11 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost = money.MustAdd(cur.cost, b.cost)
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg agent breakdown cost: %w", err)
+		}
 		dm.agents[key.agent] = cur
 
 		cur = dm.machines[key.machine]
@@ -1695,7 +1746,11 @@ func (s *Store) GetDailyUsage(
 		cur.outputTok += b.outputTok
 		cur.cacheCr += b.cacheCr
 		cur.cacheRd += b.cacheRd
-		cur.cost = money.MustAdd(cur.cost, b.cost)
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg machine breakdown cost: %w", err)
+		}
 		dm.machines[key.machine] = cur
 	}
 
@@ -1735,7 +1790,11 @@ func (s *Store) GetDailyUsage(
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
-			entry.TotalCost = money.MustAdd(entry.TotalCost, b.cost)
+			entry.TotalCost, err = money.Add(entry.TotalCost, b.cost)
+			if err != nil {
+				return db.DailyUsageResult{}, fmt.Errorf(
+					"summing pg breakdown entry cost: %w", err)
+			}
 			mbd = append(mbd, db.ModelBreakdown{
 				ModelName:           m,
 				InputTokens:         b.inputTok,
@@ -1811,7 +1870,11 @@ func (s *Store) GetDailyUsage(
 		totals.OutputTokens += entry.OutputTokens
 		totals.CacheCreationTokens += entry.CacheCreationTokens
 		totals.CacheReadTokens += entry.CacheReadTokens
-		totals.TotalCost = money.MustAdd(totals.TotalCost, entry.TotalCost)
+		totals.TotalCost, err = money.Add(totals.TotalCost, entry.TotalCost)
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing pg breakdown total: %w", err)
+		}
 	}
 
 	if daily == nil {
@@ -1934,7 +1997,10 @@ func (s *Store) GetTopSessionsByCost(
 			order = append(order, r.sessionID)
 		}
 		sa.totalTokens += inputTok + outputTok + cacheCrTok + cacheRdTok
-		sa.cost = money.MustAdd(sa.cost, cost)
+		sa.cost, priceErr = money.Add(sa.cost, cost)
+		if priceErr != nil {
+			return nil, fmt.Errorf("summing pg top-session cost: %w", priceErr)
+		}
 		if f.Model == "" && f.ExcludeModel == "" &&
 			r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
 			v := money.Money{Microdollars: r.cost.Int64}

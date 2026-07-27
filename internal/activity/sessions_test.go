@@ -48,7 +48,7 @@ func TestSessionsTable_TimedAndUntimed(t *testing.T) {
 		{SessionID: "a", Model: "opus", Timestamp: "2026-06-16T10:03:00Z",
 			OutputTokens: 50, Cost: money.MustParseDollars("0.5"), UsageDedupKey: "k1"},
 	}
-	r := Aggregate(p, sessions, act, usage)
+	r := mustAggregate(t, p, sessions, act, usage)
 
 	require.Len(t, r.BySession, 2)
 	bySid := map[string]SessionRow{}
@@ -84,7 +84,7 @@ func TestSessionsTable_UntimedKeepsCost(t *testing.T) {
 		{SessionID: "u", Model: "sonnet", Timestamp: "2026-06-16T11:00:00Z",
 			OutputTokens: 30, Cost: money.MustParseDollars("0.25"), UsageDedupKey: "k1"},
 	}
-	r := Aggregate(p, sessions, nil, usage)
+	r := mustAggregate(t, p, sessions, nil, usage)
 
 	require.Len(t, r.BySession, 1)
 	u := r.BySession[0]
@@ -128,7 +128,7 @@ func TestSessionsTable_MixedModelsAndUnknownDropped(t *testing.T) {
 		// gap 3->4 attributes to sonnet, 4 min.
 		{SessionID: "a", Ordinal: 4, Timestamp: "2026-06-16T10:08:00Z", Role: "assistant", Model: "sonnet"},
 	}
-	r := Aggregate(p, sessions, act, nil)
+	r := mustAggregate(t, p, sessions, act, nil)
 
 	require.Len(t, r.BySession, 1)
 	a := r.BySession[0]
@@ -160,7 +160,7 @@ func TestSessionsTable_SortByMinutesUntimedLast(t *testing.T) {
 		{SessionID: "big", Ordinal: 1, Timestamp: "2026-06-16T11:00:00Z", Role: "user"},
 		{SessionID: "big", Ordinal: 2, Timestamp: "2026-06-16T11:05:00Z", Role: "assistant", Model: "m"},
 	}
-	r := Aggregate(p, sessions, act, nil)
+	r := mustAggregate(t, p, sessions, act, nil)
 
 	require.Len(t, r.BySession, 3)
 	assert.Equal(t, "big", r.BySession[0].SessionID)

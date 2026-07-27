@@ -1031,8 +1031,14 @@ func (db *DB) computeCacheEconomics(
 		}
 		denom := totals.inputTok + totals.cacheReadT +
 			totals.cacheCreateT
-		dollarsSpent = money.MustAdd(dollarsSpent, totals.dollarsSpent)
-		dollarsNoCache = money.MustAdd(dollarsNoCache, totals.dollarsNoCac)
+		dollarsSpent, err = money.Add(dollarsSpent, totals.dollarsSpent)
+		if err != nil {
+			return fmt.Errorf("summing cache spending: %w", err)
+		}
+		dollarsNoCache, err = money.Add(dollarsNoCache, totals.dollarsNoCac)
+		if err != nil {
+			return fmt.Errorf("summing uncached spending: %w", err)
+		}
 		if denom <= 0 {
 			continue
 		}
@@ -1053,7 +1059,10 @@ func (db *DB) computeCacheEconomics(
 	// frontend/src/lib/utils/usageSavings.ts) surface that "costlier
 	// than uncached" state directly, so do not clamp it away here —
 	// hiding it would mask real cache-efficiency regressions.
-	ce.DollarsSavedVsUncached = money.MustSub(dollarsNoCache, dollarsSpent)
+	ce.DollarsSavedVsUncached, err = money.Sub(dollarsNoCache, dollarsSpent)
+	if err != nil {
+		return fmt.Errorf("computing cache savings: %w", err)
+	}
 
 	stats.CacheEconomics = ce
 	return nil

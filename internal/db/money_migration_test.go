@@ -54,7 +54,9 @@ VALUES (41, 'money-migration', 'provider', 'model', 0.0123456, 'usage-key'),
        (43, 'money-migration', 'provider', 'model', 0.0000005, 'usage-half');
 INSERT INTO cursor_usage_events (id, occurred_at, model, charged_cents, cursor_token_fee, dedup_key)
 VALUES (51, '2026-07-21T12:00:00Z', 'model', 15.66, 3.32,
-        '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187ba82');
+        '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187ba82'),
+       (52, '2026-07-21T12:01:00Z', 'model', 15.66001, 3.32001,
+        'legacy-fractional-cent-key');
 INSERT INTO model_pricing (model_pattern, input_per_mtok, output_per_mtok, cache_creation_per_mtok, cache_read_per_mtok, updated_at)
 VALUES ('model', 3, 15, 3.75, 0.3, '2026-07-21T12:00:00Z');`)
 	require.NoError(t, err)
@@ -101,11 +103,22 @@ WHERE dedup_key = '720d8f006c8bba8791ff4da76e520f1e7de38ffea7549e728fa351412187b
 		Charged:        money.MustParseDollars("0.1566"),
 		CursorTokenFee: money.MustParseDollars("0.0332"),
 	}}))
+	fractionalCharged, err := money.ParseCents("15.66001")
+	require.NoError(t, err)
+	fractionalFee, err := money.ParseCents("3.32001")
+	require.NoError(t, err)
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:     "2026-07-21T12:01:00Z",
+		Model:          "model",
+		Charged:        fractionalCharged,
+		CursorTokenFee: fractionalFee,
+	}}))
 	var cursorCount int
 	require.NoError(t, d.rawWriter().QueryRow(
 		`SELECT count(*) FROM cursor_usage_events`,
 	).Scan(&cursorCount))
-	assert.Equal(t, 1, cursorCount, "refetched migrated event must deduplicate")
+	assert.Equal(t, 2, cursorCount,
+		"refetched migrated events must deduplicate after cent quantization")
 
 	var input, output, creation, read int64
 	require.NoError(t, d.rawWriter().QueryRow(`
