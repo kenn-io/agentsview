@@ -33,8 +33,16 @@ var (
 
 var errIncompleteArtifact = errors.New("incomplete artifact")
 
-// formatVersion is the current artifact wire format version.
-const formatVersion = 1
+// Wire versions advance independently because each artifact kind has its own
+// schema and consumers. A change to one kind must not invalidate the others.
+const (
+	checkpointFormatVersion = 1
+	// Manifest v2 replaces usage_events[].cost_usd floats with exact
+	// integer-microdollar cost objects.
+	manifestFormatVersion       = 2
+	messageSegmentFormatVersion = 1
+	metadataEventFormatVersion  = 1
+)
 
 // metadataEventExtension is the file extension for metadata event artifacts.
 const metadataEventExtension = ".json"
@@ -237,7 +245,7 @@ var rawSourceMediaTypes = map[string]bool{
 const maxRawSourceSize = int64(1 << 30)
 
 // ValidateRawSource checks a manifest's optional raw_source reference
-// against the frozen v1 contract. A nil reference is valid (raw capture is
+// against the stable wire contract. A nil reference is valid (raw capture is
 // optional).
 func ValidateRawSource(raw *rawSourceRef) error {
 	if raw == nil {
@@ -282,7 +290,7 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 
 func segmentMessageFromDB(msg db.Message) segmentMessage {
 	record := segmentMessage{
-		Version:           formatVersion,
+		Version:           messageSegmentFormatVersion,
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,
