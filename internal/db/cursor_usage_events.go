@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -126,7 +127,7 @@ func CursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	var b strings.Builder
 	b.Grow(256)
 	fmt.Fprintf(&b, "%s|%s|%s|%d|%d|%d|%d|%s|%s|%t|%s|%s",
-		ev.OccurredAt,
+		cursorUsageEventFingerprintTimestamp(ev.OccurredAt),
 		SanitizeUTF8(ev.Model),
 		SanitizeUTF8(ev.Kind),
 		ev.InputTokens,
@@ -141,6 +142,14 @@ func CursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
+}
+
+func cursorUsageEventFingerprintTimestamp(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return parsed.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // formatMicrodollarsAsLegacyCents preserves the canonical decimal text used by

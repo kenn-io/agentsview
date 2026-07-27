@@ -825,11 +825,11 @@ func TestGetDailyUsageSkipsCursorUsageEventsForTerminationFilter(t *testing.T) {
 	assert.Equal(t, 1, result.SessionCounts.Total, "SessionCounts.Total")
 }
 
-func TestInsertCursorUsageEventsDedupesByFingerprint(t *testing.T) {
+func TestInsertCursorUsageEventsDedupesAtPostgresTimestampPrecision(t *testing.T) {
 	d := testDB(t)
 
 	event := CursorUsageEvent{
-		OccurredAt:       "2026-05-14T10:05:00Z",
+		OccurredAt:       "2026-05-14T10:05:00.123456789Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
 		InputTokens:      1234,
@@ -843,13 +843,15 @@ func TestInsertCursorUsageEventsDedupesByFingerprint(t *testing.T) {
 		IsHeadless:       false,
 	}
 	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{event}))
+	event.OccurredAt = "2026-05-14T10:05:00.123456Z"
 	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{event}))
 
 	var count int
 	require.NoError(t, d.getReader().QueryRow(
 		"SELECT count(*) FROM cursor_usage_events",
 	).Scan(&count))
-	assert.Equal(t, 1, count, "duplicate fingerprint should be ignored")
+	assert.Equal(t, 1, count,
+		"timestamps PostgreSQL stores identically must share one fingerprint")
 }
 
 // TestGetDailyUsage_CacheSavingsUsesPerModelRates pins down

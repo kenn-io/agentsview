@@ -1658,6 +1658,13 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 			USING cursor_token_fee_microdollars / 10000.0;
 		ALTER TABLE cursor_usage_events
 			RENAME COLUMN cursor_token_fee_microdollars TO cursor_token_fee;
+	`)
+	require.NoError(t, err, "restore legacy Cursor money columns")
+	legacyTimestamp, err := time.Parse(
+		time.RFC3339Nano, "2026-05-14T10:05:00.123456789Z",
+	)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `
 		INSERT INTO cursor_usage_events (
 			occurred_at, model, kind,
 			input_tokens, output_tokens,
@@ -1665,14 +1672,14 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 			charged_cents, cursor_token_fee,
 			user_id, user_email, is_headless, dedup_key
 		) VALUES (
-			'2026-05-14T10:05:00Z'::timestamptz,
+			$1,
 			'claude-4.6-opus-high-thinking',
 			'USAGE_EVENT_KIND_USAGE_BASED',
 			1234, 567, 12, 34,
 			15.66001, 3.32001,
 			'152683922', 'member@example.com', false,
 			'legacy-fractional-cent-key'
-		)`)
+		)`, legacyTimestamp)
 	require.NoError(t, err, "seed legacy Cursor usage")
 	require.NoError(t, EnsureSchema(ctx, pg, schema),
 		"migrate legacy Cursor money")
@@ -1681,7 +1688,7 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 	require.NoError(t, err, "open local db")
 	defer localDB.Close()
 	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
-		OccurredAt:       "2026-05-14T10:05:00Z",
+		OccurredAt:       "2026-05-14T10:05:00.123456789Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
 		InputTokens:      1234,
