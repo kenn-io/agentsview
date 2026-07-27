@@ -6,14 +6,15 @@
 > checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a server-wide Settings preference that switches all categorical
-charts between their current colors and a gray-free Matplotlib palette with up
-to 36 distinct colors.
+charts between the agentsview palette family and a gray-free Matplotlib palette
+with up to 36 distinct colors.
 
 **Architecture:** A typed top-level Go configuration value is persisted through
 the existing Settings API and loaded by the existing global frontend settings
 store. A focused frontend palette resolver selects either each chart's legacy
-allocator or the adaptive Matplotlib family, and Usage, Skill Trend, and Trends
-consume the same resolved map for every chart/legend representation.
+palette rules or the adaptive Matplotlib family. Usage centralizes allocation
+over its full category universe, while Skill Trend and Trends each consume one
+resolved map for every chart/legend representation.
 
 **Tech Stack:** Go, BurntSushi TOML, Huma/OpenAPI, Svelte 5 runes, TypeScript,
 Paraglide JS, kit-ui `SegmentedControl`, Vitest, Testing Library, and testify.
@@ -22,9 +23,10 @@ Paraglide JS, kit-ui `SegmentedControl`, Vitest, Testing Library, and testify.
 
 - The only persisted values are `agentsview` and `matplotlib`; omission defaults
   to `agentsview`, while an explicitly present empty string is invalid.
-- `agentsview` must preserve existing chart palettes and non-colliding Usage
-  colors; only collision-resolved Usage fallback slots may move when
-  allocation is shared across both panels.
+- `agentsview` must preserve existing chart palettes and Usage's preferred hash
+  plus linear-probing rules. Resolved Usage colors may move when allocation is
+  shared across both panels because probing depends on the full identifier
+  set.
 - `matplotlib` uses gray-free families of 9, 18, and 36 exact Matplotlib v3.10.5
   colors, selected at active-series counts 1–9, 10–18, and 19 or more.
 - Empty identifiers stay muted. In Matplotlib mode, `__other__` uses the general
@@ -826,17 +828,25 @@ ______________________________________________________________________
 
 - [ ] **Step 1: Write failing Matplotlib rendering tests**
 
-In the new utility suite, construct a summary with ten model totals while the
-daily breakdown exposes only the five Cost Over Time leaders. Assert that
+In the new utility suite, construct a summary with these ten model totals:
+`model-alpha`, `model-bravo`, `model-charlie`, `model-delta`, `model-echo`,
+`model-foxtrot`, `model-golf`, `model-hotel`, `model-india`, and `model-zulu`.
+Give the last five enough cost to become the Cost Over Time leaders. Assert that
 `usageChartColorMaps(summary, "matplotlib").model` contains all ten identifiers
 and uses the 18-color Matplotlib family. This test fails if the family is chosen
 from the capped time-series list.
 
 In the Usage page suite, return that summary from the existing API mock and
-select Model for both panels. For each of `agentsview` and `matplotlib`, assert
-that the same model has the same rendered color in Cost Over Time and Cost
-Attribution. This is the cross-component regression: it must fail if either
-child computes a local active-set map.
+select Model for both panels. Assert `model-zulu` has the expected shared color
+in both Cost Over Time and Cost Attribution:
+
+- agentsview: `var(--accent-sky)` from the full-universe collision allocation,
+  rather than the capped subset's `var(--accent-indigo)`;
+- matplotlib: `#c5b0d5` from full-universe `tab20`, rather than the capped
+  subset's `#9467bd` from `tab10`.
+
+This is the cross-component regression: both assertions fail if either child
+computes a local active-set map.
 
 In both child component suites, reset `settings.chartPalette = "agentsview"`
 during cleanup. Add Matplotlib cases using the reported collision pair:

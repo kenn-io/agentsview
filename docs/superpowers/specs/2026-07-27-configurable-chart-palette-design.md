@@ -3,7 +3,7 @@
 ## Summary
 
 agentsview will offer a server-wide choice between its existing categorical
-chart colors and a larger gray-free Matplotlib palette. The selection will be
+palette family and a larger gray-free Matplotlib palette. The selection will be
 persisted in `config.toml`, exposed through the existing Settings API, and
 editable from the Appearance section without restarting the server.
 
@@ -70,11 +70,11 @@ collision resolution, Skill Trend keeps its existing six categorical series
 tokens, and Trends keeps its existing 12-color term palette. `Other` remains the
 muted gray token.
 
-This mode deliberately does not consolidate the chart-specific palettes.
-Non-colliding Usage identifiers retain their current colors. A collided
-identifier's fallback slot may change because collisions are resolved once
-against the full shared Usage universe instead of independently inside each
-panel; that tradeoff is required for cross-panel consistency.
+This mode deliberately does not consolidate the chart-specific palettes. Usage
+keeps the same preferred hash and linear-probing rules, but any resolved slot
+may change when allocation moves from a panel-local subset to the full shared
+Usage universe: an earlier collision can occupy a later identifier's preferred
+slot. That tradeoff is required for cross-panel consistency.
 
 ### Matplotlib
 
@@ -201,6 +201,7 @@ and remain in agentsview palette mode. Selecting Matplotlib writes one top-level
 TOML value. Downgrading to a version that does not know the field leaves the
 value inert in the config file; upgrading again restores the selected mode.
 
-The shared Usage universe can reassign only collision-resolved fallback colors
-in the default agentsview mode. Preferred hash colors for non-colliding
-identifiers and every non-Usage chart remain unchanged.
+The shared Usage universe can reassign resolved colors in the default agentsview
+mode because linear-probing outcomes depend on the complete sorted identifier
+set. The preferred hash function, palette, and every non-Usage chart remain
+unchanged.
