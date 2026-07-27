@@ -111,12 +111,13 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 	if len(t.ForbiddenRoots) == 0 {
 		return t
 	}
+	forbidden := newForbiddenRootMatcher(t.ForbiddenRoots)
 	fileScoped := make(map[parser.AgentType]bool, len(t.Files))
 	for agent := range t.Files {
 		fileScoped[agent] = true
 	}
 	for agent, dirs := range t.Dirs {
-		kept := withoutForbidden(dirs, t.ForbiddenRoots)
+		kept := withoutForbidden(dirs, forbidden)
 		if len(kept) == 0 {
 			delete(t.Dirs, agent)
 			continue
@@ -124,7 +125,7 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		t.Dirs[agent] = kept
 	}
 	for agent, files := range t.Files {
-		kept := withoutForbidden(files, t.ForbiddenRoots)
+		kept := withoutForbidden(files, forbidden)
 		if len(kept) == 0 {
 			delete(t.Files, agent)
 			continue
@@ -142,14 +143,14 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 			delete(t.Files, agent)
 		}
 	}
-	t.ExtraFiles = withoutForbidden(t.ExtraFiles, t.ForbiddenRoots)
+	t.ExtraFiles = withoutForbidden(t.ExtraFiles, forbidden)
 	return t
 }
 
-func withoutForbidden(paths, forbiddenRoots []string) []string {
+func withoutForbidden(paths []string, forbidden forbiddenRootMatcher) []string {
 	var kept []string
 	for _, path := range paths {
-		if !pathWithinForbiddenRoots(forbiddenRoots, path) {
+		if !forbidden.within(path) {
 			kept = append(kept, path)
 		}
 	}
@@ -486,6 +487,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		Dirs:           make(map[parser.AgentType][]string),
 		ForbiddenRoots: append([]string(nil), allowed.ForbiddenRoots...),
 	}
+	forbidden := newForbiddenRootMatcher(selected.ForbiddenRoots)
 	for agent, dirs := range requested.Dirs {
 		allowedDirs := allowed.Dirs[agent]
 		if _, fileScoped := allowed.Files[agent]; fileScoped {
@@ -499,7 +501,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			if !ok {
 				return TargetSet{}, false
 			}
-			if pathWithinForbiddenRoots(selected.ForbiddenRoots, selectedDir) {
+			if forbidden.within(selectedDir) {
 				return TargetSet{}, false
 			}
 			selected.Dirs[agent] = append(selected.Dirs[agent], selectedDir)
@@ -528,7 +530,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			if selected.Files == nil {
 				selected.Files = make(map[parser.AgentType][]string)
 			}
-			if pathWithinForbiddenRoots(selected.ForbiddenRoots, selectedFile) {
+			if forbidden.within(selectedFile) {
 				return TargetSet{}, false
 			}
 			selected.Files[agent] = append(selected.Files[agent], selectedFile)
@@ -539,7 +541,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		if !ok {
 			return TargetSet{}, false
 		}
-		if pathWithinForbiddenRoots(selected.ForbiddenRoots, selectedFile) {
+		if forbidden.within(selectedFile) {
 			return TargetSet{}, false
 		}
 		selected.ExtraFiles = append(selected.ExtraFiles, selectedFile)
@@ -670,9 +672,10 @@ func isAiderUnsafeRoot(dir string) bool {
 // comparisons additionally require matching path dialects and reject
 // symlinked ancestors that would escape the allowed root.
 func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
+	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	selected := make([]string, 0, len(files))
 	for _, file := range files {
-		canonical, ok := selectAllowedFile(allowed, file)
+		canonical, ok := selectAllowedFile(allowed, forbidden, file)
 		if !ok {
 			return nil, false
 		}
@@ -681,12 +684,18 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 	return selected, true
 }
 
-func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
-	if pathWithinForbiddenRoots(allowed.ForbiddenRoots, file) {
-		return "", false
-	}
+// selectAllowedFile validates the request string against the allowed sets
+// first and checks forbidden roots only on a match. The forbidden check
+// canonicalizes its argument with filesystem access, which must never run
+// on an unmatched client-supplied path: on Windows a raw request naming
+// \\attacker\share would otherwise force an outbound SMB connection.
+// Every accept path below is either a server-derived string or anchored
+// under a trusted allowed root before the matcher sees it.
+func selectAllowedFile(
+	allowed TargetSet, forbidden forbiddenRootMatcher, file string,
+) (string, bool) {
 	if canonical, ok := selectAllowedString(allowed.ExtraFiles, file); ok {
-		return canonical, true
+		return canonical, !forbidden.within(canonical)
 	}
 	for agent, files := range allowed.Files {
 		if !verbatimFileScopedAgent(agent) {
@@ -700,10 +709,10 @@ func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
 		// skips it because its delta roots come from the same fresh
 		// resolution.
 		if canonical, ok := selectAllowedString(files, file); ok {
-			return canonical, true
+			return canonical, !forbidden.within(canonical)
 		}
 		if verbatimSessionFileUnderAllowedRoot(allowed, agent, file) {
-			return file, true
+			return file, !forbidden.within(file)
 		}
 	}
 	if !isAbsRemotePath(file) {
@@ -740,8 +749,10 @@ func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
 				// Exact root matches are allowed: file roots (Aider
 				// history files) must stream, and a directory root
 				// yields nothing because WriteArchiveFiles skips
-				// non-regular entries.
-				return file, true
+				// non-regular entries. The file is anchored under the
+				// trusted dir at this point, so the forbidden check may
+				// canonicalize it.
+				return file, !forbidden.within(file)
 			}
 		}
 	}

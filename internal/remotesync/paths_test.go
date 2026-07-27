@@ -231,3 +231,56 @@ func TestPathWithinForbiddenRootsLocalWrapperCaseFolding(t *testing.T) {
 			"case-sensitive hosts must not conflate case-variant paths")
 	}
 }
+
+// TestSelectAllowedFilesNeverCanonicalizesUnmatchedClientPaths pins the
+// validate-before-canonicalize order: forbidden-root comparison resolves
+// symlinks (filesystem access), so a client-supplied delta path that
+// matches no allowed root must be rejected without ever being touched —
+// on Windows, stat'ing a raw \\attacker\share path would force an
+// outbound SMB connection.
+func TestSelectAllowedFilesNeverCanonicalizesUnmatchedClientPaths(
+	t *testing.T,
+) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	forbiddenRoot := filepath.Join(base, "trae")
+	require.NoError(t, os.MkdirAll(forbiddenRoot, 0o755))
+	allowed := TargetSet{ForbiddenRoots: []string{forbiddenRoot}}
+
+	var touched []string
+	orig := evalSymlinksFn
+	evalSymlinksFn = func(p string) (string, error) {
+		if strings.Contains(p, "attacker") {
+			touched = append(touched, p)
+		}
+		return orig(p)
+	}
+	t.Cleanup(func() { evalSymlinksFn = orig })
+
+	for _, attacker := range []string{
+		`\\attacker\share\x`,
+		"/attacker/evil",
+	} {
+		_, ok := SelectAllowedFiles(allowed, []string{attacker})
+		assert.False(t, ok, "unmatched path %q must be rejected", attacker)
+	}
+	assert.Empty(t, touched,
+		"client paths matching no allowed root must never reach filesystem canonicalization")
+}
+
+// TestForbiddenRootMatcherEmptyDoesNoWork asserts the common
+// no-forbidden-roots case short-circuits before any canonicalization.
+func TestForbiddenRootMatcherEmptyDoesNoWork(t *testing.T) {
+	calls := 0
+	orig := evalSymlinksFn
+	evalSymlinksFn = func(p string) (string, error) {
+		calls++
+		return orig(p)
+	}
+	t.Cleanup(func() { evalSymlinksFn = orig })
+
+	m := newForbiddenRootMatcher(nil)
+	assert.False(t, m.within("/any/path"))
+	assert.Zero(t, calls,
+		"an empty matcher must not canonicalize candidate paths")
+}

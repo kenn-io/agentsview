@@ -143,7 +143,20 @@ func validateTargetSetPaths(targets TargetSet) error {
 // PathWithinForbiddenRoots for this package's many same-package callers,
 // all of which operate on local filesystem paths.
 func pathWithinForbiddenRoots(roots []string, path string) bool {
-	comparable := make([]string, 0, len(roots))
+	return newForbiddenRootMatcher(roots).within(path)
+}
+
+// forbiddenRootMatcher holds a forbidden-root set with spellings already
+// canonicalized into the local comparison domain. Archive and manifest
+// walks construct one per operation so each entry canonicalizes only the
+// candidate path instead of re-resolving every root for every entry; the
+// zero matcher matches nothing and does no work at all.
+type forbiddenRootMatcher struct {
+	comparable []string
+}
+
+func newForbiddenRootMatcher(roots []string) forbiddenRootMatcher {
+	var comparable []string
 	for _, root := range roots {
 		// filepath.Abs("") would resolve to the working directory,
 		// silently turning a blank root into a cwd-wide exclusion.
@@ -152,8 +165,21 @@ func pathWithinForbiddenRoots(roots []string, path string) bool {
 		}
 		comparable = append(comparable, localComparablePath(root))
 	}
+	return forbiddenRootMatcher{comparable: comparable}
+}
+
+// within reports whether path is a forbidden root or lies beneath one.
+// Canonicalizing the candidate touches the filesystem (Abs plus symlink
+// resolution), so callers must pass only trusted paths or client paths
+// already validated against an allowed root — never a raw request string,
+// which on Windows could name a UNC share and force an outbound
+// connection just by being stat'ed.
+func (m forbiddenRootMatcher) within(path string) bool {
+	if len(m.comparable) == 0 {
+		return false
+	}
 	return PathWithinForbiddenRoots(
-		comparable, localComparablePath(path), filepath.Separator,
+		m.comparable, localComparablePath(path), filepath.Separator,
 	)
 }
 
@@ -185,13 +211,17 @@ func localComparablePath(p string) string {
 // their eventual contents still deserve the boundary). A path that cannot
 // be resolved at all is returned unchanged — comparisons then degrade to
 // the lexical behavior rather than failing open by returning nothing.
+// evalSymlinksFn is swapped by tests that assert which paths reach
+// filesystem-touching canonicalization.
+var evalSymlinksFn = filepath.EvalSymlinks
+
 func resolveSymlinksBestEffort(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+	if resolved, err := evalSymlinksFn(p); err == nil {
 		return resolved
 	}
 	dir, tail := filepath.Dir(p), filepath.Base(p)
 	for {
-		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		if resolved, err := evalSymlinksFn(dir); err == nil {
 			return filepath.Join(resolved, tail)
 		}
 		parent := filepath.Dir(dir)

@@ -658,7 +658,7 @@ func TestResolveDeltaFilePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, ok := resolveDeltaFilePath(
-				fromSlashAll(tt.roots), nil, filepath.FromSlash(tt.path))
+				fromSlashAll(tt.roots), forbiddenRootMatcher{}, filepath.FromSlash(tt.path))
 			require.Equal(t, tt.ok, ok)
 			assert.Equal(t, filepath.FromSlash(tt.want), got)
 		})

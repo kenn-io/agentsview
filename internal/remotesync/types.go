@@ -104,6 +104,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 // never delta-streamed. WriteArchiveFiles uses these roots while
 // retaining the TargetSet's agent ownership information.
 func (t TargetSet) DeltaAllowedRoots() []string {
+	forbidden := newForbiddenRootMatcher(t.ForbiddenRoots)
 	roots := make([]string, 0, len(t.Dirs)+len(t.Files)+len(t.ExtraFiles))
 	for agent, dirs := range t.Dirs {
 		if parser.RemoteSyncExcludedAgent(agent) {
@@ -113,7 +114,7 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 			continue
 		}
 		for _, dir := range dirs {
-			if !pathWithinForbiddenRoots(t.ForbiddenRoots, dir) {
+			if !forbidden.within(dir) {
 				roots = append(roots, dir)
 			}
 		}
@@ -124,14 +125,14 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 		}
 		if verbatimFileScopedAgent(agent) {
 			for _, file := range files {
-				if !pathWithinForbiddenRoots(t.ForbiddenRoots, file) {
+				if !forbidden.within(file) {
 					roots = append(roots, file)
 				}
 			}
 		}
 	}
 	for _, file := range t.ExtraFiles {
-		if !pathWithinForbiddenRoots(t.ForbiddenRoots, file) {
+		if !forbidden.within(file) {
 			roots = append(roots, file)
 		}
 	}

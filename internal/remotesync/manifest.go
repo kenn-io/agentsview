@@ -43,6 +43,7 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			"manifest not supported for sanitized file-scoped agents")
 	}
 	m := Manifest{Files: []ManifestEntry{}}
+	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	hermesStateDBs := hermesStateDBTargets(targets)
 	hermesSQLite := make(map[string]struct{}, len(hermesStateDBs)*4)
 	for _, stateDB := range hermesStateDBs {
@@ -58,7 +59,7 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 		})
 	}
 	addLstat := func(path string) error {
-		if pathWithinForbiddenRoots(targets.ForbiddenRoots, path) {
+		if forbidden.within(path) {
 			return nil
 		}
 		info, err := os.Lstat(path)
@@ -84,7 +85,7 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			if _, ok := hermesSQLite[filepath.Clean(root)]; ok {
 				continue
 			}
-			if err := manifestWalk(root, targets.ForbiddenRoots, add); err != nil {
+			if err := manifestWalk(root, forbidden, add); err != nil {
 				return Manifest{}, err
 			}
 		}
@@ -111,7 +112,7 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 		}
 	}
 	for _, stateDB := range hermesStateDBs {
-		if pathWithinForbiddenRoots(targets.ForbiddenRoots, stateDB) {
+		if forbidden.within(stateDB) {
 			continue
 		}
 		size, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
@@ -128,9 +129,9 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 }
 
 func manifestWalk(
-	root string, forbiddenRoots []string, add func(string, os.FileInfo),
+	root string, forbidden forbiddenRootMatcher, add func(string, os.FileInfo),
 ) error {
-	if pathWithinForbiddenRoots(forbiddenRoots, root) {
+	if forbidden.within(root) {
 		return nil
 	}
 	info, err := os.Lstat(root)
@@ -156,7 +157,7 @@ func manifestWalk(
 			}
 			return err
 		}
-		if pathWithinForbiddenRoots(forbiddenRoots, path) {
+		if forbidden.within(path) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
