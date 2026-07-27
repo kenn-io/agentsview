@@ -45,7 +45,8 @@ func buildAiderResolveSnippet(envVar string) string {
 			"[ \"$av_aider_files\" -ge %d ] && return; "+
 			"[ \"$av_aider_dirs\" -ge %d ] && return; "+
 			"elif [ -f \"$av_entry\" ] && [ \"$av_base\" = '%s' ]; then "+
-			"printf '%%s\\000' \"%s:$av_entry\"; "+
+			"av_aider_phys=$(av_phys_file \"$av_entry\") || continue; "+
+			"printf '%%s\\000' \"%s:$av_aider_phys\"; "+
 			"av_aider_files=$((av_aider_files + 1)); "+
 			"[ \"$av_aider_files\" -ge %d ] && return; "+
 			"fi; "+
@@ -79,24 +80,35 @@ func buildAiderResolveSnippet(envVar string) string {
 // provider facade. For each agent with an EnvVar, the script checks the env var
 // first and falls back to the default dir. Dirs (and files) that don't exist on
 // the remote are skipped.
+// resolveScriptPhysHelpers defines the script's path-canonicalization
+// helpers. av_phys_dir prints a directory's physical path (symlinked
+// ancestors resolved); av_phys_file does the same for a file path by
+// physically resolving its dirname — including a bare filename (parent
+// ".") and a root-level "/file" (parent "/"). Every emitter canonicalizes
+// through them so forbidden-root comparisons and tar exclusions on the Go
+// side compare one spelling per location: a target aliased into an
+// excluded provider's tree via a symlink resolves to the same prefix as
+// the forbidden root itself. av_phys_file is a pure path transform —
+// existence checks stay with the emitters — so parents must exist but the
+// file itself need not.
+const resolveScriptPhysHelpers = "av_phys_dir() { " +
+	"CDPATH= cd -P -- \"$1\" 2>/dev/null && pwd; " +
+	"}\n" +
+	"av_phys_file() { " +
+	"av_phys_parent=$(av_phys_dir \"$(dirname -- \"$1\")\") || return 1; " +
+	"av_phys_base=$(basename -- \"$1\"); " +
+	"case \"$av_phys_parent\" in " +
+	"/) printf '%s' \"/$av_phys_base\";; " +
+	"*) printf '%s' \"$av_phys_parent/$av_phys_base\";; esac; " +
+	"}\n"
+
 func buildResolveScript() string {
 	var b strings.Builder
 	b.WriteString(
-		// av_phys_dir prints a directory's physical path (symlinked
-		// ancestors resolved). Every emitter canonicalizes through it so
-		// forbidden-root comparisons and tar exclusions on the Go side
-		// compare one spelling per location — a target aliased into an
-		// excluded provider's tree via a symlink resolves to the same
-		// prefix as the forbidden root itself. av_phys_file does the same
-		// for a file by resolving its parent directory.
-		"av_phys_dir() { CDPATH= cd -P -- \"$1\" 2>/dev/null && pwd; }\n" +
-			"av_phys_file() { " +
-			"[ -f \"$1\" ] || return 1; " +
-			"av_phys_parent=$(av_phys_dir \"${1%/*}\") || return 1; " +
-			"printf '%s' \"$av_phys_parent/${1##*/}\"; " +
-			"}\n" +
+		resolveScriptPhysHelpers +
 			"av_emit_agent_file() { " +
 			"agent=\"$1\"; " +
+			"[ -f \"$2\" ] || return 0; " +
 			"file=$(av_phys_file \"$2\") || return 0; " +
 			"printf '%s\\000' \"" + resolveAgentFilePrefix + ":$agent:$file\"; " +
 			"}\n" +
@@ -211,6 +223,7 @@ func buildResolveScript() string {
 			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
 			"}\n" +
 			"av_emit_extra_file() { " +
+			"[ -f \"$1\" ] || return 0; " +
 			"file=$(av_phys_file \"$1\") || return 0; " +
 			"printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
 			"}\n" +

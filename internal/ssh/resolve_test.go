@@ -920,3 +920,72 @@ func TestResolveScriptEmitsPhysicalPathsForSymlinkedRoots(t *testing.T) {
 		filepath.Join(physicalClaude, "projects"),
 		"targets must be emitted by physical spelling to share a namespace with forbidden roots")
 }
+
+// TestAvPhysFileEdgeCases exercises the script's file-canonicalization
+// helper directly (it is a pure path transform; existence checks live
+// with the emitters): a root-level "/file" keeps parent "/", a bare
+// filename resolves against the physical working directory, and a file
+// spelled through a symlinked parent resolves to its physical location.
+func TestAvPhysFileEdgeCases(t *testing.T) {
+	base := physTempDir(t)
+	physicalDir := filepath.Join(base, "real")
+	require.NoError(t, os.MkdirAll(physicalDir, 0o755))
+	alias := filepath.Join(base, "alias")
+	require.NoError(t, os.Symlink(physicalDir, alias))
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"root_level_file_keeps_root_parent", "/no-such-file", "/no-such-file"},
+		{"bare_filename_resolves_against_cwd", "bare.md",
+			filepath.Join(base, "bare.md")},
+		{"symlinked_parent_resolves_physically",
+			filepath.Join(alias, "history.md"),
+			filepath.Join(physicalDir, "history.md")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			script := resolveScriptPhysHelpers +
+				"av_phys_file \"$AV_TEST_INPUT\"\n"
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(script)
+			cmd.Dir = base
+			cmd.Env = []string{"AV_TEST_INPUT=" + tc.input}
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "helper failed: %s", out)
+			assert.Equal(t, tc.want, string(out))
+		})
+	}
+}
+
+// TestResolveScriptAiderSymlinkOverlapStaysForbidden is the regression
+// test for Aider results reached through a symlink into an excluded
+// provider's tree: the emitted history-file path must carry the physical
+// forbidden-root prefix so the transfer-side filter drops it.
+func TestResolveScriptAiderSymlinkOverlapStaysForbidden(t *testing.T) {
+	home := physTempDir(t)
+	physicalTrae := filepath.Join(home, "real-trae")
+	repoDir := filepath.Join(physicalTrae, "code", "repo")
+	require.NoError(t, os.MkdirAll(repoDir, 0o755))
+	history := filepath.Join(repoDir, parser.AiderHistoryFileName())
+	require.NoError(t, os.WriteFile(history, []byte("# aider"), 0o644))
+	aiderAlias := filepath.Join(home, "aider-alias")
+	require.NoError(t, os.Symlink(
+		filepath.Join(physicalTrae, "code"), aiderAlias))
+
+	out := runResolveScriptForTest(t,
+		"HOME="+home, "TRAE_DIR="+physicalTrae, "AIDER_DIR="+aiderAlias)
+	dirs, _, _, forbiddenRoots, err := parseResolvedTargets(string(out))
+	require.NoError(t, err)
+
+	require.Contains(t, forbiddenRoots, physicalTrae)
+	require.Len(t, dirs[parser.AgentAider], 1,
+		"the walk should still find the history file through the alias")
+	got := dirs[parser.AgentAider][0]
+	assert.Equal(t, history, got,
+		"aider results must be emitted by physical spelling")
+	assert.True(t, pathWithinForbiddenRoots(forbiddenRoots, got),
+		"physical spelling must fall inside the forbidden root so the transfer filter excludes it")
+}
