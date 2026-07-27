@@ -51,6 +51,53 @@ func setupTestEnv(t *testing.T) string {
 	return dir
 }
 
+func TestChartPaletteDefaultsAndLoads(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want ChartPalette
+	}{
+		{name: "omitted", want: ChartPaletteAgentsview},
+		{name: "agentsview", toml: `chart_palette = "agentsview"`, want: ChartPaletteAgentsview},
+		{name: "matplotlib", toml: `chart_palette = "matplotlib"`, want: ChartPaletteMatplotlib},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.ResolvedChartPalette())
+		})
+	}
+}
+
+func TestChartPaletteRejectsInvalidValue(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want string
+	}{
+		{
+			name: "unknown",
+			toml: `chart_palette = "neon"`,
+			want: `chart_palette must be "agentsview" or "matplotlib" (got "neon")`,
+		},
+		{
+			name: "explicit empty",
+			toml: `chart_palette = ""`,
+			want: `chart_palette must be "agentsview" or "matplotlib" (got "")`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			err = cfg.applyConfigTOML(tt.toml)
+			require.EqualError(t, err, tt.want)
+		})
+	}
+}
+
 func setTestHome(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("HOME", home)

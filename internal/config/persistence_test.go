@@ -20,6 +20,19 @@ func readConfigFile(t *testing.T, dir string) Config {
 	return fileCfg
 }
 
+func TestSaveSettingsPersistsChartPalette(t *testing.T) {
+	dir := setupTestEnv(t)
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.DataDir = dir
+	require.NoError(t, cfg.SaveSettings(map[string]any{
+		"chart_palette": ChartPaletteMatplotlib,
+	}))
+	assert.Equal(t, ChartPaletteMatplotlib, cfg.ChartPalette)
+	fileCfg := readConfigFile(t, dir)
+	assert.Equal(t, ChartPaletteMatplotlib, fileCfg.ChartPalette)
+}
+
 func TestCursorSecret_GeneratedAndPersisted(t *testing.T) {
 	dir := setupTestEnv(t)
 
