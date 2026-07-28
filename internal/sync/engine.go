@@ -5341,6 +5341,16 @@ func (e *Engine) discoveredFileEffectiveMtime(
 				}
 			}
 		}
+		// Also consider the session directory mtime as a local cutoff
+		// signal to detect companion-file deletions. Deleting a file
+		// changes the directory's mtime even though surviving files'
+		// mtimes are unchanged. This is a local-only signal that does
+		// not affect the persisted fingerprint.
+		if dirInfo, err := os.Stat(dir); err == nil {
+			if ts := dirInfo.ModTime().UnixNano(); ts > mtime {
+				mtime = ts
+			}
+		}
 		return mtime, nil
 	}
 	// Provider-authoritative sources resolve freshness through the provider

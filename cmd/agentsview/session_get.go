@@ -29,27 +29,10 @@ func newSessionGetCommand() *cobra.Command {
 			defer cleanup()
 
 			id := args[0]
-			// Pre-flight bare Codebuff/Freebuff timestamp resolution
-			// before handing id off to the standard resolver. The
-			// prefix loop in resolveServiceSessionID cannot build
-			// the right canonical ID for these agents (canonical is
-			// "<agent>:<project>:<timestamp>" with the project
-			// segment missing, and Freebuff is intentionally absent
-			// from parser.Registry). Walking the storage layer here
-			// localizes the fix to this command and keeps the
-			// resolver's signature unchanged so other commands and
-			// callers see no framework impact.
-			if !isCanonicalServiceSessionID(id) {
-				cfg := mustLoadConfig(cmd)
-				resolved, err := resolveBareCodebuffID(
-					cmd.Context(), svc, &cfg, id,
-				)
-				if err != nil {
-					return err
-				}
-				if resolved != "" {
-					id = resolved
-				}
+			if resolved, err := resolveCodebuffBareID(cmd, svc, id); err != nil {
+				return err
+			} else if resolved != "" {
+				id = resolved
 			}
 
 			detail, err := lookupSessionWithPrefixes(
@@ -188,6 +171,25 @@ func resolveBareCodebuffID(
 	}
 }
 
+// resolveCodebuffBareID attempts to resolve a bare Codebuff/Freebuff
+// timestamp to its canonical ID. Returns ("", nil) when the ID is
+// already canonical or no match is found.
+func resolveCodebuffBareID(
+	cmd *cobra.Command, svc service.SessionService, id string,
+) (string, error) {
+	if isCanonicalServiceSessionID(id) {
+		return "", nil
+	}
+	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
+		return resolveBareCodebuffIDRemote(cmd.Context(), svc, id)
+	}
+	cfg := mustLoadConfig(cmd)
+	return resolveBareCodebuffID(cmd.Context(), svc, &cfg, id)
+}
+
+// isCanonicalServiceSessionID reports whether id is already in the
+// canonical "agent:..." or "host~..." form that resolveServiceSessionID
+// can look up directly.
 func isCanonicalServiceSessionID(id string) bool {
 	if strings.Contains(id, "~") {
 		return true
@@ -199,6 +201,54 @@ func isCanonicalServiceSessionID(id string) bool {
 		}
 	}
 	return false
+}
+
+// codebuffRemoteLookupLimit is the maximum number of partial-ID
+// matches returned by FindSessionIDsByPartial when resolving a
+// bare Codebuff/Freebuff timestamp through the remote transport.
+const codebuffRemoteLookupLimit = 20
+
+// resolveBareCodebuffIDRemote resolves a bare Codebuff/Freebuff
+// timestamp to its canonical ID through the service layer without
+// walking the local filesystem. When --server is set the CLI has
+// no local configuration or archive, so it uses
+// FindSessionIDsByPartial with canonical-suffix filtering.
+// This mirrors the dual-prefix probe of resolveBareCodebuffID
+// but operates through the remote transport.
+func resolveBareCodebuffIDRemote(
+	ctx context.Context,
+	svc service.SessionService,
+	rawID string,
+) (string, error) {
+	// Search once for the bare ID as a substring, then filter
+	// to Codebuff/Freebuff canonical IDs that end with ":<rawID>".
+	matches, err := svc.FindSessionIDsByPartial(ctx, rawID, codebuffRemoteLookupLimit)
+	if err != nil {
+		return "", err
+	}
+	var candidates []string
+	for _, m := range matches {
+		if !strings.HasSuffix(m, ":"+rawID) {
+			continue
+		}
+		agentPrefix := strings.SplitN(m, ":", 2)[0]
+		switch parser.AgentType(agentPrefix) {
+		case parser.AgentCodebuff, parser.AgentFreebuff:
+			candidates = append(candidates, m)
+		}
+	}
+	switch len(candidates) {
+	case 0:
+		return "", nil
+	case 1:
+		return candidates[0], nil
+	default:
+		return "", fmt.Errorf(
+			"ambiguous session id %q: matches %d canonical sessions: %s. "+
+				"Re-run with one of the canonical IDs to disambiguate",
+		rawID, len(candidates), strings.Join(candidates, ", "),
+		)
+	}
 }
 
 // lookupSessionWithPrefixes fetches a session detail, trying agent

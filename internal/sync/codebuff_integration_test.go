@@ -610,3 +610,65 @@ func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) 
 			"above one means the composite double-counted the "+
 			"shared session")
 }
+
+// TestSyncCodebuffCompanionFileDeletionReparsesSession verifies the
+// directory-mtime cutoff signal for Codebuff sessions: when a companion
+// file (run-state.json or chat-meta.json) is deleted from a session
+// directory, the surviving files' mtimes may predate the cutoff, but the
+// directory mtime changes on deletion. The stat-only freshness gate must
+// observe the directory mtime bump and reparse exactly one session while
+// leaving the other five unchanged.
+//
+// This covers the fix at internal/sync/engine.go discoveredFileEffective-
+// Mtime: the Codebuff branch now considers the session directory mtime
+// as a local cutoff signal, consistent with the Kilo Legacy branch, to
+// detect companion-file deletions that would otherwise be invisible to
+// the individual-file mtime composite.
+func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := createCodebuffArchive(t, 6)
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 6,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"cold sync must parse every discovered session")
+
+	// Warm sync: all sessions unchanged, so all should be skipped.
+	assert.Equal(t, 0,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"warm sync must skip all unchanged sessions")
+
+	// Delete run-state.json from one session directory. Deleting a
+	// file changes the directory's mtime even though surviving files'
+	// mtimes are unchanged. The freshness gate must observe this
+	// directory mtime bump and reparse the session.
+	targetDir := filepath.Join(
+		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
+	)
+	runStatePath := filepath.Join(targetDir, "run-state.json")
+	require.NoError(t, os.Remove(runStatePath),
+		"deleting run-state.json must succeed")
+	time.Sleep(10 * time.Millisecond)
+
+	// Re-sync: exactly the session whose companion was deleted should
+	// be reparsed. A value of zero means the directory mtime signal
+	// was not picked up (the companion-file deletion was invisible to
+	// the freshness gate), and a value above one means the composite
+	// double-counted or other sessions were affected.
+	assert.Equal(t, 1,
+		engine.SyncAll(context.Background(), nil).Synced,
+		"deleting run-state.json must trigger reparse of exactly "+
+			"one session via the directory mtime cutoff signal; a "+
+			"zero means the freshness gate missed the deletion, and "+
+			"a value above one means it over-counted")
+}
