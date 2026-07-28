@@ -1012,3 +1012,45 @@ func TestResolveScriptAiderSymlinkOverlapStaysForbidden(t *testing.T) {
 	assert.True(t, pathWithinForbiddenRoots(forbiddenRoots, got),
 		"physical spelling must fall inside the forbidden root so the transfer filter excludes it")
 }
+
+// TestAvPhysHelpersRefuseNewlinePaths pins the fail-closed handling of
+// physical paths containing CR/LF: command substitution strips trailing
+// newlines from pwd output, so emitting such a path would produce a
+// clean-looking but wrong spelling that downstream exclusion would guard
+// instead of the real subtree. The helpers must refuse instead.
+func TestAvPhysHelpersRefuseNewlinePaths(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	base := physTempDir(t)
+	newlineDir := filepath.Join(base, "bad\ndir")
+	require.NoError(t, os.MkdirAll(newlineDir, 0o755))
+
+	script := resolveScriptPhysHelpers +
+		"if av_phys_dir \"$AV_TEST_INPUT\"; then echo ACCEPTED; else echo REFUSED; fi\n" +
+		"if av_phys_file \"$AV_TEST_INPUT/file\"; then echo ACCEPTED; else echo REFUSED; fi\n"
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = []string{"AV_TEST_INPUT=" + newlineDir}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helper harness failed: %s", out)
+	assert.Equal(t, "REFUSED\nREFUSED\n", string(out),
+		"newline-carrying physical paths must be refused, not emitted misspelled")
+}
+
+// TestResolveScriptAbortsOnUnrepresentableForbiddenRoot pins the
+// whole-script abort: when an excluded agent's root physically resolves
+// to a newline-carrying path, the resolve must fail (non-zero exit) so
+// the sync aborts, rather than emitting a mangled spelling that would
+// guard the wrong subtree.
+func TestResolveScriptAbortsOnUnrepresentableForbiddenRoot(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	home := physTempDir(t)
+	traeRoot := filepath.Join(home, "trae\nroot")
+	require.NoError(t, os.MkdirAll(traeRoot, 0o755))
+
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(buildResolveScript())
+	cmd.Env = []string{"HOME=" + home, "TRAE_DIR=" + traeRoot}
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err,
+		"an unrepresentable forbidden root must abort the resolve, got output: %s", out)
+}

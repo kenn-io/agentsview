@@ -91,10 +91,27 @@ func buildAiderResolveSnippet(envVar string) string {
 // the forbidden root itself. av_phys_file is a pure path transform —
 // existence checks stay with the emitters — so parents must exist but the
 // file itself need not.
-const resolveScriptPhysHelpers = "av_phys_dir() { " +
-	"CDPATH= cd -P -- \"$1\" 2>/dev/null && pwd; " +
+//
+// Physical paths containing CR or LF are refused (return 1) rather than
+// emitted: command substitution strips trailing newlines from pwd output,
+// so a directory name ending in a newline would otherwise be emitted with
+// a clean-looking but WRONG spelling that downstream exclusion would
+// guard instead of the real subtree. The sentinel dance (pwd && printf x)
+// preserves the true spelling long enough to detect the newline. Such
+// paths are unrepresentable end to end anyway — tar -T input is
+// newline-delimited and the record parser rejects them — so refusal here
+// makes targets fail closed per path, and av_emit_forbidden_root turns
+// refusal into a whole-script abort.
+const resolveScriptPhysHelpers = "av_nl='\n'\n" +
+	"av_cr=$(printf '\\r')\n" +
+	"av_phys_dir() { " +
+	"av_phys_out=$(CDPATH= cd -P -- \"$1\" 2>/dev/null && pwd && printf x) || return 1; " +
+	"av_phys_out=${av_phys_out%??}; " +
+	"case \"$av_phys_out\" in *\"$av_nl\"*|*\"$av_cr\"*) return 1;; esac; " +
+	"printf '%s' \"$av_phys_out\"; " +
 	"}\n" +
 	"av_phys_file() { " +
+	"case \"$1\" in *\"$av_nl\"*|*\"$av_cr\"*) return 1;; esac; " +
 	"av_phys_parent=$(av_phys_dir \"$(dirname -- \"$1\")\") || return 1; " +
 	"av_phys_base=$(basename -- \"$1\"); " +
 	"case \"$av_phys_parent\" in " +
@@ -232,10 +249,18 @@ func buildResolveScript() string {
 			// a missing one keeps its literal spelling — it has no
 			// contents to protect yet, and the boundary still guards the
 			// literal path.
+			// A forbidden root whose physical path cannot be represented
+			// (av_phys_dir refuses CR/LF spellings) aborts the whole
+			// resolve: skipping the record would silently drop the
+			// exclusion boundary, and emitting a newline path would let
+			// the record parser reject it later — aborting here fails
+			// closed at the source. Missing roots keep their literal
+			// spelling; a literal spelling containing a newline is
+			// rejected by the record parser, which also fails closed.
 			"av_emit_forbidden_root() { " +
 			"dir=\"$1\"; [ -n \"$dir\" ] || dir=\"$2\"; " +
 			"[ -n \"$dir\" ] || return 0; " +
-			"if [ -d \"$dir\" ]; then dir=$(av_phys_dir \"$dir\") || return 0; fi; " +
+			"if [ -d \"$dir\" ]; then dir=$(av_phys_dir \"$dir\") || exit 1; fi; " +
 			"printf '%s\\000' \"" + resolveForbiddenRootPrefix + ":$dir\"; " +
 			"}\n" +
 			"av_has_hermes_transcript() { " +
