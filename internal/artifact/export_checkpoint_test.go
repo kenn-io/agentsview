@@ -165,6 +165,17 @@ func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) 
 			wantFuture: true,
 		},
 		{
+			name: "valid future checkpoint with added canonical field",
+			body: `{"metadata":{"codec":"v2"},"origin":"contract-a1b2c3",` +
+				`"seq":1,"sessions":{},"v":2}` + "\n",
+			wantFuture: true,
+		},
+		{
+			name: "current checkpoint with added canonical field",
+			body: `{"metadata":{"codec":"v1"},"origin":"contract-a1b2c3",` +
+				`"seq":1,"sessions":{},"v":1}` + "\n",
+		},
+		{
 			name: "incomplete future checkpoint",
 			body: `{"origin":"contract-a1b2c3","seq":1,"sessions":{},"v":2`,
 		},
