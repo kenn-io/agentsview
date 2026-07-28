@@ -161,6 +161,7 @@ func decodeCanonicalCheckpointHead(
 	var sequence int
 	var version int
 	var mapDigest string
+	var sessionSchemaErr error
 	var originSeen bool
 	var sequenceSeen bool
 	var versionSeen bool
@@ -215,7 +216,7 @@ func decodeCanonicalCheckpointHead(
 			sequenceSeen = true
 			_, _ = io.WriteString(canonical, strconv.Itoa(sequence))
 		case "sessions":
-			mapDigest, err = decodeCanonicalCheckpointSessionMap(
+			mapDigest, sessionSchemaErr, err = decodeCanonicalCheckpointSessions(
 				decoder, origin, canonical,
 			)
 			if err != nil {
@@ -283,6 +284,9 @@ func decodeCanonicalCheckpointHead(
 			"checkpoint current-version fields are not canonical",
 		)
 	}
+	if sessionSchemaErr != nil {
+		return db.ArtifactCheckpointHead{}, sessionSchemaErr
+	}
 	return db.ArtifactCheckpointHead{
 		Origin: origin, Sequence: sequence,
 		SessionMapSHA256: mapDigest, CheckpointSHA256: identity.SHA256,
@@ -307,13 +311,22 @@ func writeCanonicalCheckpointValue(
 	writer io.Writer,
 	depth int,
 ) error {
-	const maxCheckpointJSONDepth = 1_000
-	if depth > maxCheckpointJSONDepth {
-		return errors.New("checkpoint JSON nesting is too deep")
-	}
 	token, err := decoder.Token()
 	if err != nil {
 		return err
+	}
+	return writeCanonicalCheckpointToken(decoder, writer, token, depth)
+}
+
+func writeCanonicalCheckpointToken(
+	decoder *json.Decoder,
+	writer io.Writer,
+	token json.Token,
+	depth int,
+) error {
+	const maxCheckpointJSONDepth = 1_000
+	if depth > maxCheckpointJSONDepth {
+		return errors.New("checkpoint JSON nesting is too deep")
 	}
 	switch value := token.(type) {
 	case nil:
@@ -390,14 +403,22 @@ func writeCanonicalCheckpointValue(
 	return nil
 }
 
-func decodeCanonicalCheckpointSessionMap(
+func decodeCanonicalCheckpointSessions(
 	decoder *json.Decoder,
 	origin string,
 	checkpointWriter io.Writer,
-) (string, error) {
+) (mapDigest string, schemaErr error, err error) {
 	token, err := decoder.Token()
-	if err != nil || token != json.Delim('{') {
-		return "", errors.New("checkpoint sessions is not an object")
+	if err != nil {
+		return "", nil, err
+	}
+	if token != json.Delim('{') {
+		if err := writeCanonicalCheckpointToken(
+			decoder, checkpointWriter, token, 0,
+		); err != nil {
+			return "", nil, err
+		}
+		return "", errors.New("checkpoint sessions is not an object"), nil
 	}
 	hasher := sha256.New()
 	writer := io.MultiWriter(hasher, checkpointWriter)
@@ -407,40 +428,54 @@ func decodeCanonicalCheckpointSessionMap(
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		gid, ok := token.(string)
-		if !ok || gid == "" || !strings.HasPrefix(gid, origin+"~") {
-			return "", errors.New("checkpoint session identity is invalid")
+		if !ok {
+			return "", nil, errors.New("checkpoint object key is invalid")
 		}
 		if !first && gid <= previous {
-			return "", errors.New("checkpoint sessions are not in canonical order")
+			return "", nil, errors.New("checkpoint sessions are not in canonical order")
 		}
-		var manifestHash string
-		if err := decoder.Decode(&manifestHash); err != nil {
-			return "", err
+		if schemaErr == nil &&
+			(gid == "" || !strings.HasPrefix(gid, origin+"~")) {
+			schemaErr = errors.New("checkpoint session identity is invalid")
 		}
-		if err := validateHashHex(manifestHash); err != nil {
-			return "", fmt.Errorf("checkpoint manifest hash is invalid: %w", err)
+		valueToken, err := decoder.Token()
+		if err != nil {
+			return "", nil, err
+		}
+		if schemaErr == nil {
+			manifestHash, ok := valueToken.(string)
+			if !ok {
+				schemaErr = errors.New("checkpoint manifest hash is invalid")
+			} else if err := validateHashHex(manifestHash); err != nil {
+				schemaErr = fmt.Errorf(
+					"checkpoint manifest hash is invalid: %w", err,
+				)
+			}
 		}
 		if !first {
 			_, _ = io.WriteString(writer, ",")
 		}
 		gidJSON, _ := json.Marshal(gid)
-		hashJSON, _ := json.Marshal(manifestHash)
 		_, _ = writer.Write(gidJSON)
 		_, _ = io.WriteString(writer, ":")
-		_, _ = writer.Write(hashJSON)
+		if err := writeCanonicalCheckpointToken(
+			decoder, writer, valueToken, 1,
+		); err != nil {
+			return "", nil, err
+		}
 		first = false
 		previous = gid
 	}
 	token, err = decoder.Token()
 	if err != nil || token != json.Delim('}') {
-		return "", errors.New("checkpoint sessions object is incomplete")
+		return "", nil, errors.New("checkpoint sessions object is incomplete")
 	}
 	_, _ = io.WriteString(writer, "}")
 	_, _ = io.WriteString(hasher, "\n")
-	return hex.EncodeToString(hasher.Sum(nil)), nil
+	return hex.EncodeToString(hasher.Sum(nil)), schemaErr, nil
 }
 
 // Export temporarily preserves the root-based API while canonical publication
