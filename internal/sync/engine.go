@@ -13248,7 +13248,9 @@ func pairToolResultEventSummaries(
 			tc.ResultContentLength = len(summary)
 			if blocked[tc.Category] {
 				tc.ResultContent = ""
-				tc.ResultEvents = nil
+				for k := range tc.ResultEvents {
+					tc.ResultEvents[k].Content = ""
+				}
 				continue
 			}
 			tc.ResultContent = summary

@@ -525,8 +525,33 @@ func (s *Store) queryCallRows(
 		SELECT tc.message_id, COALESCE(tc.tool_use_id, ''),
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, COALESCE(tc.input_json, ''),
+			(
+				SELECT tre.timestamp
+				FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+					AND tre.tool_call_message_ordinal = m.ordinal
+					AND tre.call_index = tc.call_index
+					AND tre.source = 'tool_execution'
+					AND tre.status = 'started'
+					AND tre.timestamp IS NOT NULL
+				ORDER BY tre.event_index ASC
+				LIMIT 1
+			) AS execution_started_at,
+			(
+				SELECT tre.timestamp
+				FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+					AND tre.tool_call_message_ordinal = m.ordinal
+					AND tre.call_index = tc.call_index
+					AND tre.source = 'tool_execution'
+					AND tre.status IN ('completed', 'errored')
+					AND tre.timestamp IS NOT NULL
+				ORDER BY tre.event_index DESC
+				LIMIT 1
+			) AS execution_completed_at,
 			s_sub.started_at, s_sub.ended_at
 		FROM tool_calls tc
+		JOIN messages m ON m.id = tc.message_id
 		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
 		WHERE tc.session_id = ?
 		ORDER BY tc.message_id, tc.call_index`,
@@ -542,10 +567,11 @@ func (s *Store) queryCallRows(
 	for rows.Next() {
 		var r db.CallRow
 		var skill, sub sql.NullString
-		var startedAt, endedAt any
+		var executionStarted, executionCompleted, startedAt, endedAt any
 		if err := rows.Scan(
 			&r.MessageID, &r.ToolUseID, &r.ToolName, &r.Category,
-			&skill, &sub, &r.InputJSON, &startedAt, &endedAt,
+			&skill, &sub, &r.InputJSON, &executionStarted, &executionCompleted,
+			&startedAt, &endedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb timing call: %w", err)
 		}
@@ -558,6 +584,11 @@ func (s *Store) queryCallRows(
 			r.SubagentSessionID = &value
 			if dur, ok := timingMillis(formatDBTime(startedAt), firstNonEmpty(formatDBTime(endedAt), now)); ok {
 				r.DurationMs = &dur
+			}
+		} else if completedAt := formatDBTime(executionCompleted); completedAt != "" {
+			if dur, ok := timingMillis(formatDBTime(executionStarted), completedAt); ok {
+				r.DurationMs = &dur
+				r.CompletedAt = completedAt
 			}
 		}
 		out = append(out, r)

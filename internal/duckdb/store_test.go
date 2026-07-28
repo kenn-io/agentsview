@@ -1532,8 +1532,8 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	local := newLocalDB(t)
 	sessionID := "duck-timing"
 	startedAt := "2026-01-20T00:00:00.000Z"
-	endedAt := "2026-01-20T00:03:00.000Z"
-	sess := syncSession(sessionID, "alpha", "timing first", startedAt, 2)
+	endedAt := "2026-01-20T12:38:06.000Z"
+	sess := syncSession(sessionID, "alpha", "timing first", startedAt, 3)
 	sess.EndedAt = &endedAt
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: sess,
@@ -1545,7 +1545,22 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 					Category:  "Read",
 					ToolUseID: "tool-timing",
 					InputJSON: `{"file_path":"README.md"}`,
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID: "tool-timing",
+							Source:    "tool_execution",
+							Status:    "started",
+							Timestamp: "2026-01-20T00:01:00.100Z",
+						},
+						{
+							ToolUseID: "tool-timing",
+							Source:    "tool_execution",
+							Status:    "completed",
+							Timestamp: "2026-01-20T00:01:03.825Z",
+						},
+					},
 				}),
+			syncMessage(sessionID, 2, "user", "next request", "2026-01-20T12:38:05.000Z"),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
@@ -1562,17 +1577,17 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, timing)
 	assert.Equal(t, sessionID, timing.SessionID)
-	assert.Equal(t, int64(180000), timing.TotalDurationMs)
+	assert.Equal(t, int64(45_486_000), timing.TotalDurationMs)
 	assert.Equal(t, 1, timing.TurnCount)
 	assert.Equal(t, 1, timing.ToolCallCount)
 	assert.False(t, timing.Running)
 	require.Len(t, timing.Turns, 1)
 	assert.Equal(t, 1, timing.Turns[0].Ordinal)
 	require.NotNil(t, timing.Turns[0].DurationMs)
-	assert.Equal(t, int64(120000), *timing.Turns[0].DurationMs)
+	assert.Equal(t, int64(3_825), *timing.Turns[0].DurationMs)
 	require.Len(t, timing.Turns[0].Calls, 1)
 	require.NotNil(t, timing.Turns[0].Calls[0].DurationMs)
-	assert.Equal(t, int64(120000), *timing.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, int64(3_725), *timing.Turns[0].Calls[0].DurationMs)
 }
 
 func TestGetAllMessagesDoesNotTruncateAtDefaultLimit(t *testing.T) {
