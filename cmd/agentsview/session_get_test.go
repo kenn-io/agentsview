@@ -327,9 +327,17 @@ func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
 	cmd.Flags().Bool("pg", false, "")
 	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
 	// svc.Get would panic because Get panics in stubGetService when
-	// the path is wrong. We must never reach it.
+	// the path is wrong. We must never reach it. The bare input is
+	// an ISO 8601 timestamp ("YYYY-MM-DDTHH-MM-SS.fffZ") — the
+	// shape parseCodebuffSessionDate accepts as a Codebuff/Freebuff
+	// session-dir name. A numeric-Unix-epoch like "1704067200" is
+	// NOT a Codebuff timestamp and would short-circuit before the
+	// remote-error branch (covered by
+	// TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent).
 	svc := &stubGetService{}
-	got, err := resolveCodebuffBareID(cmd, svc, "1704067200")
+	got, err := resolveCodebuffBareID(
+		cmd, svc, "2026-07-16T00-09-00.236Z",
+	)
 	require.Error(t, err)
 	assert.Empty(t, got)
 	assert.Contains(t, err.Error(), "session list")
@@ -355,8 +363,12 @@ func TestResolveCodebuffBareID_PGBareReturnsError(t *testing.T) {
 	cmd.Flags().String("machine", "local", "")
 	cmd.Flags().Bool("pg", false, "")
 	require.NoError(t, cmd.Flags().Set("pg", "true"))
+	// Same ISO-8601 shape as the --server variant — see comment
+	// on TestResolveCodebuffBareID_ServerBareReturnsError.
 	svc := &stubGetService{}
-	got, err := resolveCodebuffBareID(cmd, svc, "1704067200")
+	got, err := resolveCodebuffBareID(
+		cmd, svc, "2026-07-16T00-09-00.236Z",
+	)
 	require.Error(t, err)
 	assert.Empty(t, got)
 	assert.Contains(t, err.Error(), "session list")
@@ -364,6 +376,60 @@ func TestResolveCodebuffBareID_PGBareReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "freebuff:<project>:<ts>")
 	assert.Contains(t, err.Error(), "host~codebuff:<project>:<ts>")
 	assert.Contains(t, err.Error(), "host~freebuff:<project>:<ts>")
+	assert.Empty(t, svc.getCalls)
+}
+
+// TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent pins the
+// regression fix: a non-canonical but non-Codebuff input (e.g. a
+// bare Codex / Copilot / Gemini UUID) must NOT trigger the
+// Codebuff-specific error on remote stores. It must pass through
+// ("", nil) so the generic prefix resolver retries each registered
+// agent. Without this guard, every --pg / --server bare lookup
+// that previously fell through resolveServiceSessionID's prefix
+// loop would short-circuit to the Codebuff error.
+func TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().String("server", "", "")
+	cmd.Flags().String("machine", "local", "")
+	cmd.Flags().Bool("pg", false, "")
+	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
+	svc := &stubGetService{}
+	// 36-char hex with dashes — the shape of a real Codex /
+	// Copilot / Gemini bare UUID. Definitely not a
+	// Codebuff/Freebuff ISO timestamp.
+	got, err := resolveCodebuffBareID(
+		cmd, svc, "abcdef01-2345-6789-abcd-ef0123456789",
+	)
+	require.NoError(t, err,
+		"non-Codebuff bare input must NOT fire the Codebuff error "+
+			"on --server; it must fall through to the generic "+
+			"resolver so resolveServiceSessionID can retry the "+
+			"registered agent prefixes")
+	assert.Empty(t, got,
+		"resolveCodebuffBareID has no canonical ID to produce "+
+			"for a non-Codebuff-shape input; calling code "+
+			"preserves id for lookupSessionWithPrefixes")
+	assert.Empty(t, svc.getCalls,
+		"the early-exit path must not probe svc.Get")
+}
+
+// TestResolveCodebuffBareID_PGBareUUIDForOtherAgent mirrors the
+// previous test for the --pg transport. Symmetric coverage guards
+// against future divergence between --server and --pg paths.
+func TestResolveCodebuffBareID_PGBareUUIDForOtherAgent(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().String("server", "", "")
+	cmd.Flags().String("machine", "local", "")
+	cmd.Flags().Bool("pg", false, "")
+	require.NoError(t, cmd.Flags().Set("pg", "true"))
+	svc := &stubGetService{}
+	got, err := resolveCodebuffBareID(
+		cmd, svc, "abcdef01-2345-6789-abcd-ef0123456789",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, got)
 	assert.Empty(t, svc.getCalls)
 }
 

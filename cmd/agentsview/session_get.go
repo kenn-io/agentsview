@@ -228,10 +228,12 @@ func codebuffMachineMatches(
 
 // resolveCodebuffBareID attempts to resolve a bare Codebuff/Freebuff
 // timestamp to its canonical ID for the local archive. Returns
-// ("", nil) when the ID is already canonical or no local match is
-// found; returns an explicit error for non-canonical inputs on
-// remote stores so the user is pointed at `session list` and the
-// canonical ID formats.
+// ("", nil) when the ID is already canonical, when the input is
+// not a Codebuff/Freebuff timestamp shape (so the generic prefix
+// resolver still handles it), or when no local match is found;
+// returns an explicit error for Codebuff/Freebuff timestamp inputs
+// on remote stores so the user is pointed at `session list` and
+// the canonical ID formats.
 //
 // Remote stores (`--server`, `--pg`) cannot safely resolve a bare
 // timestamp back to a canonical ID: a timestamp is intrinsically
@@ -241,10 +243,26 @@ func codebuffMachineMatches(
 // `session list` anyway. The contract for remote reads is "pass
 // the canonical ID". A user with only a timestamp must run
 // `session list --machine=...` to find one first.
+//
+// Bare IDs that are NOT Codebuff/Freebuff timestamps (Codex /
+// Copilot / Gemini UUIDs, etc.) reach register-prefix retry via
+// resolveServiceSessionID unchanged — the Codebuff-specific error
+// is reserved for inputs whose shape identifies them as
+// Codebuff/Freebuff timestamps.
 func resolveCodebuffBareID(
 	cmd *cobra.Command, svc service.SessionService, id string,
 ) (string, error) {
 	if isCanonicalServiceSessionID(id) {
+		return "", nil
+	}
+	// Distinguish a Codebuff/Freebuff timestamp from a bare UUID
+	// for another agent. The Codebuff-specific remote error must
+	// fire ONLY on the timestamp shape; otherwise it short-
+	// circuits generic bare-ID resolution against --server/--pg.
+	// Syntactic (parseCodebuffSessionDate) — no FS walk, which
+	// keeps --server/--pg cheap and avoids depending on
+	// configured local codebuff roots.
+	if !parser.IsCodebuffTimestamp(id) {
 		return "", nil
 	}
 	remote, _ := cmd.Flags().GetString("server")

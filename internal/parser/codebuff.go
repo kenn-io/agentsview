@@ -441,6 +441,28 @@ func readCodebuffChatMeta(path string) codebuffChatMeta {
 	}
 }
 
+// IsCodebuffTimestamp reports whether s matches one of the
+// on-disk session-directory timestamp shapes that parseCodebuffSession
+// treats as the bare session ID suffix of the canonical
+// "agent:<project>:<ts>" id. Used by the session-get resolver to
+// distinguish a Codebuff/Freebuff timestamp from a bare UUID
+// (Codex, Copilot, Gemini, ...) that the generic prefix resolver
+// handles. Returns true when s parses as any of the four ISO-8601
+// forms accepted by parseCodebuffSessionDate:
+//
+//   - "2026-07-16T00-09-00.236Z"   (full ISO with millis and Z)
+//   - "2026-07-16T00-09-00Z"       (full ISO without millis)
+//   - "2026-07-16T00-09-00.123"    (full ISO without Z)
+//   - "2026-07-16"                 (basic ISO date only)
+//
+// Everything else (UUIDs, numeric Unix epochs, free-form strings)
+// returns false so the generic resolver path stays open. The
+// predicate is purely syntactic — no FS walk — so it is cheap on
+// --server and --pg transports where a FS scan is wasted work.
+func IsCodebuffTimestamp(s string) bool {
+	return !parseCodebuffSessionDate(s).IsZero()
+}
+
 // parseCodebuffSessionDate parses the session directory name as an ISO 8601
 // timestamp. The directory name format is "2026-07-16T00-09-00.236Z".
 // The returned time is always in the local timezone so that time-only

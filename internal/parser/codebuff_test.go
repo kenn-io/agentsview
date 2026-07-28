@@ -656,6 +656,33 @@ func TestParseCodebuffSession_TimestampVariants(t *testing.T) {
 	}
 }
 
+func TestIsCodebuffTimestamp(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// Four ISO-8601 shapes parseCodebuffSessionDate accepts.
+		{"Z millis", "2026-07-16T00-09-00.236Z", true},
+		{"Z no millis", "2026-07-16T00-09-00Z", true},
+		{"no Z millis", "2026-07-16T00-09-00.123", true},
+		{"date only", "2026-07-16", true},
+		// Non-Codebuff shapes the generic resolver must keep open.
+		{"Unix epoch numeric", "1704067200", false},
+		{"UUID with dashes", "abcdef01-2345-6789-abcd-ef0123456789", false},
+		{"empty", "", false},
+		{"garbage", "not-a-timestamp", false},
+		{"partial date", "2026-07", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsCodebuffTimestamp(tc.in))
+		})
+	}
+}
+
 func TestParseCodebuffSessionDate_Formats(t *testing.T) {
 	tests := []struct {
 		name    string

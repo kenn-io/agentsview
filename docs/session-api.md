@@ -158,11 +158,15 @@ agentsview session get <id> [--format json]
 (e.g. `2026-07-16T00-09-00.236Z`) is not a canonical ID. Against the
 local archive the CLI resolves a bare timestamp to its canonical ID
 by walking the configured codebuff/freebuff roots, gated by
-`--machine` (default `local`). Against a remote store (`--server`,
-`--pg`) a bare timestamp is rejected with an explicit error pointing
-at `session list`, because the timestamp direction is intrinsically
-ambiguous across machines and projects. Always pass the full
-canonical ID on remote reads:
+`--machine` (default `local`).Against a remote store (`--server`, `--pg`) a bare Codebuff/Freebuff timestamp is rejected with an
+explicit error pointing at `session list`, because a bare timestamp is
+intrinsically ambiguous across machines and projects.
+The rejection is scoped to the Codebuff/Freebuff timestamp shape;
+bare IDs that are not timestamps (Codex / Copilot / Gemini UUIDs,
+etc.) are unaffected and continue to resolve via the registered
+agent prefix retry on remote reads, the same way they do locally.
+Always pass the full canonical ID on remote reads when one is
+known:
 
 ```bash
 # Local reads: bare timestamp OK (--machine=local by default).
