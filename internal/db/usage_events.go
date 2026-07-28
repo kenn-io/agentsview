@@ -76,7 +76,7 @@ func (db *DB) ReplaceSessionUsageEvents(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSessionUsageEventsTx(tx, sessionID, events); err != nil {
+	if err := replaceSessionUsageEventsTx(tx, sessionID, events, true); err != nil {
 		return err
 	}
 
@@ -84,7 +84,7 @@ func (db *DB) ReplaceSessionUsageEvents(
 }
 
 func replaceSessionUsageEventsTx(
-	tx *sql.Tx, sessionID string, events []UsageEvent,
+	tx *sql.Tx, sessionID string, events []UsageEvent, enqueueArtifact bool,
 ) error {
 	if _, err := tx.Exec(
 		`DELETE FROM usage_events WHERE session_id = ?`,
@@ -148,6 +148,11 @@ func replaceSessionUsageEventsTx(
 			"bumping local_modified_at for %s after usage replace: %w",
 			sessionID, err,
 		)
+	}
+	if enqueueArtifact {
+		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -280,7 +285,13 @@ func (db *DB) UsageEventFingerprint(sessionID string) (string, error) {
 func (db *DB) GetUsageEvents(
 	ctx context.Context, sessionID string,
 ) ([]UsageEvent, error) {
-	rows, err := db.getReader().QueryContext(ctx, `
+	return usageEventsWithQuerier(ctx, db.getReader(), sessionID, 0)
+}
+
+func usageEventsWithQuerier(
+	ctx context.Context, q messageRowsQuerier, sessionID string, limit int,
+) ([]UsageEvent, error) {
+	query := `
 		SELECT id, session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
@@ -288,9 +299,13 @@ func (db *DB) GetUsageEvents(
 			occurred_at, dedup_key
 		FROM usage_events
 		WHERE session_id = ?
-		ORDER BY COALESCE(occurred_at, ''), id`,
-		sessionID,
-	)
+		ORDER BY COALESCE(occurred_at, ''), id`
+	args := []any{sessionID}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
 	}

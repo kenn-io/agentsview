@@ -1157,6 +1157,12 @@ func (db *DB) ReplaceSessionMessages(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
+		tx, sessionID,
+	)
+	if err != nil {
+		return err
+	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if useDiff {
@@ -1194,6 +1200,11 @@ func (db *DB) ReplaceSessionMessages(
 		return err
 	}
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
+		return err
+	}
+	if err := enqueueArtifactExportIfGenerationUnchangedTx(
+		tx, sessionID, queueGenerationBefore, queueExistedBefore,
+	); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1364,6 +1375,12 @@ func (db *DB) ReplaceSessionContent(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
+		tx, sessionID,
+	)
+	if err != nil {
+		return err
+	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if useDiff {
@@ -1401,6 +1418,11 @@ func (db *DB) ReplaceSessionContent(
 	// the count cannot diverge from the findings it summarizes.
 	if err := replaceSecretFindingsTx(tx, sessionID, findings,
 		signals.SecretLeakCount, signals.SecretsRulesVersion); err != nil {
+		return err
+	}
+	if err := enqueueArtifactExportIfGenerationUnchangedTx(
+		tx, sessionID, queueGenerationBefore, queueExistedBefore,
+	); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
