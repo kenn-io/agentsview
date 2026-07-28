@@ -456,7 +456,12 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO main.artifact_export_queue(session_id)
 		SELECT id FROM main.sessions
-		WHERE machine = 'local'
+		WHERE (
+			machine = 'local' OR machine = (
+				SELECT value FROM main.pg_sync_state
+				WHERE key = 'artifact_local_machine_name'
+			)
+		  )
 		  AND deleted_at IS NULL
 		  AND EXISTS (
 			SELECT 1 FROM main.pg_sync_state

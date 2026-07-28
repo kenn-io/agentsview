@@ -2870,7 +2870,12 @@ func sqliteLikeEscape(value string) string {
 func (db *DB) ListOwnedSessionIDsForExport(ctx context.Context) ([]string, error) {
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE machine = 'local' AND deleted_at IS NULL
+		 WHERE (
+			machine = 'local' OR machine = (
+				SELECT value FROM pg_sync_state
+				WHERE key = 'artifact_local_machine_name'
+			)
+		 ) AND deleted_at IS NULL
 		 ORDER BY id`,
 	)
 	if err != nil {

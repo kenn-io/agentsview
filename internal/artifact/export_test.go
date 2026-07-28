@@ -620,6 +620,26 @@ func TestExportKeepsAgentSessionNameSeparateFromUserDisplayName(t *testing.T) {
 	assert.Equal(t, agentName, *published.SessionName)
 }
 
+func TestExportToStorePublishesConfiguredHostnameSession(t *testing.T) {
+	database := testExportDB(t)
+	require.NoError(t, database.SetSyncState(
+		"artifact_local_machine_name", "workstation.example",
+	))
+	seedSession(t, database, "sess-hostname", "alpha", func(sess *db.Session) {
+		sess.Machine = "workstation.example"
+	})
+	store := newTestArtifactStore(t)
+
+	result, err := ExportToStore(
+		t.Context(), database, store,
+		ExportOptions{Origin: contractOrigin, Full: true},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ExportedSessions)
+	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
+	assert.Contains(t, checkpoint.Sessions, contractOrigin+"~sess-hostname")
+}
+
 func TestExportToStoreFullRepairsMissingDependencyWithoutNewCheckpoint(t *testing.T) {
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")

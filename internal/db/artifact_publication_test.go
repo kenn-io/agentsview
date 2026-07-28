@@ -614,6 +614,77 @@ func TestBootstrapArtifactExportQueueEnqueuesExistingLocalSessions(t *testing.T)
 	assert.Equal(t, firstEnqueuedAt, pendingAgain[0].EnqueuedAt)
 }
 
+func TestArtifactPublicationOwnsConfiguredHostnameSessions(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.SetSyncState(
+		"artifact_local_machine_name", "workstation.example",
+	))
+	seedArtifactOrigin(t, database)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "hostname-local", Project: "project",
+		Machine: "workstation.example", Agent: "claude",
+	}))
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "foreign", Project: "project",
+		Machine: "peer.example", Agent: "claude",
+	}))
+
+	pending, err := database.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "hostname-local", pending[0].SessionID)
+	owned, err := database.ListOwnedSessionIDsForExport(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"hostname-local"}, owned)
+
+	clearArtifactExportQueue(t, database)
+	require.NoError(t, database.ReplaceSessionUsageEvents(
+		"hostname-local", []UsageEvent{{
+			SessionID: "hostname-local", Source: "event",
+			Model: "model", DedupKey: "hostname",
+		}},
+	))
+	assert.Equal(t, []string{"hostname-local"}, artifactExportQueueIDs(t, database),
+		"child-row fallback uses the configured local machine")
+}
+
+func TestBootstrapArtifactExportQueueOwnsConfiguredHostname(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.SetSyncState(
+		"artifact_local_machine_name", "workstation.example",
+	))
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "existing-hostname", Project: "project",
+		Machine: "workstation.example", Agent: "claude",
+	}))
+
+	require.NoError(t, database.BootstrapArtifactExportQueue())
+	pending, err := database.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "existing-hostname", pending[0].SessionID)
+}
+
+func TestConfigureArtifactLocalMachineRequeuesExistingHostnameSession(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "existing-hostname", Project: "project",
+		Machine: "workstation.example", Agent: "claude",
+	}))
+	seedArtifactOrigin(t, database)
+	assert.Empty(t, artifactExportQueueIDs(t, database))
+
+	require.NoError(t, database.ConfigureArtifactLocalMachine("workstation.example"))
+
+	machine, err := database.ArtifactLocalMachineName(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "workstation.example", machine)
+	pending, err := database.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "existing-hostname", pending[0].SessionID)
+}
+
 func TestEnsureArtifactOriginPublishesOriginWithBootstrapQueue(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.UpsertSession(Session{

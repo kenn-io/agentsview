@@ -2179,7 +2179,12 @@ DROP TRIGGER IF EXISTS artifact_sessions_delete_queue;
 
 const artifactSessionQueueTriggerCreatesSQL = `
 CREATE TRIGGER IF NOT EXISTS artifact_sessions_insert_queue
-AFTER INSERT ON sessions WHEN NEW.machine = 'local' AND EXISTS (
+AFTER INSERT ON sessions WHEN (
+    NEW.machine = 'local' OR EXISTS (
+        SELECT 1 FROM pg_sync_state
+        WHERE key = 'artifact_local_machine_name' AND value = NEW.machine
+    )
+) AND EXISTS (
     SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
 ) BEGIN
     INSERT INTO artifact_export_queue(session_id) VALUES (NEW.id)
@@ -2195,7 +2200,13 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS artifact_sessions_update_queue
 AFTER UPDATE ON sessions
-WHEN (OLD.machine = 'local' OR NEW.machine = 'local') AND EXISTS (
+WHEN (
+    OLD.machine = 'local' OR NEW.machine = 'local' OR EXISTS (
+        SELECT 1 FROM pg_sync_state
+        WHERE key = 'artifact_local_machine_name'
+          AND (value = OLD.machine OR value = NEW.machine)
+    )
+) AND EXISTS (
     SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
 ) AND (
     OLD.project IS NOT NEW.project OR
@@ -2266,7 +2277,12 @@ WHEN (OLD.machine = 'local' OR NEW.machine = 'local') AND EXISTS (
 END;
 
 CREATE TRIGGER IF NOT EXISTS artifact_sessions_delete_queue
-BEFORE DELETE ON sessions WHEN OLD.machine = 'local' AND EXISTS (
+BEFORE DELETE ON sessions WHEN (
+    OLD.machine = 'local' OR EXISTS (
+        SELECT 1 FROM pg_sync_state
+        WHERE key = 'artifact_local_machine_name' AND value = OLD.machine
+    )
+) AND EXISTS (
     SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
 ) BEGIN
     INSERT INTO artifact_export_queue(session_id) VALUES (OLD.id)
@@ -2482,11 +2498,21 @@ const (
 	bootstrapArtifactExportQueueSQL = `
 		INSERT OR IGNORE INTO artifact_export_queue(session_id)
 		SELECT id FROM sessions
-		WHERE machine = 'local' AND deleted_at IS NULL`
+		WHERE (
+			machine = 'local' OR machine = (
+				SELECT value FROM pg_sync_state
+				WHERE key = 'artifact_local_machine_name'
+			)
+		) AND deleted_at IS NULL`
 	requeueArtifactExportsSQL = `
 		INSERT INTO artifact_export_queue(session_id)
 		SELECT id FROM sessions
-		WHERE machine = 'local' AND deleted_at IS NULL
+		WHERE (
+			machine = 'local' OR machine = (
+				SELECT value FROM pg_sync_state
+				WHERE key = 'artifact_local_machine_name'
+			)
+		) AND deleted_at IS NULL
 		ON CONFLICT(session_id) DO UPDATE SET
 			enqueued_at = CASE WHEN pending = 0
 				THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
@@ -2498,7 +2524,12 @@ const (
 	requeueArtifactOriginExportsSQL = `
 		INSERT INTO artifact_export_queue(session_id)
 		SELECT id FROM sessions
-		WHERE machine = 'local' AND deleted_at IS NULL
+		WHERE (
+			machine = 'local' OR machine = (
+				SELECT value FROM pg_sync_state
+				WHERE key = 'artifact_local_machine_name'
+			)
+		) AND deleted_at IS NULL
 		UNION
 		SELECT session_id FROM artifact_publications
 		WHERE origin = ?
