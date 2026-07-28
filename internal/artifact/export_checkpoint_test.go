@@ -3,6 +3,7 @@ package artifact
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -149,6 +150,105 @@ func TestExportCheckpointBootstrapSkipsMalformedCheckpointBeforeEOF(t *testing.T
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, 2, head.Sequence)
+}
+
+func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		corrupt    bool
+		wantFuture bool
+	}{
+		{
+			name:       "valid future checkpoint",
+			body:       `{"origin":"contract-a1b2c3","seq":1,"sessions":{},"v":2}` + "\n",
+			wantFuture: true,
+		},
+		{
+			name: "incomplete future checkpoint",
+			body: `{"origin":"contract-a1b2c3","seq":1,"sessions":{},"v":2`,
+		},
+		{
+			name: "future checkpoint with trailing JSON",
+			body: `{"origin":"contract-a1b2c3","seq":1,"sessions":{},"v":2}` + "\n{}",
+		},
+		{
+			name: "future checkpoint with mismatched filename sequence",
+			body: `{"origin":"contract-a1b2c3","seq":9,"sessions":{},"v":2}` + "\n",
+		},
+		{
+			name: "noncanonical future checkpoint",
+			body: `{"origin":"contract-a1b2c3","seq":1,"sessions":{},"v":2}`,
+		},
+		{
+			name:    "corrupt future checkpoint",
+			body:    `{"origin":"contract-a1b2c3","seq":1,"sessions":{},"v":2}` + "\n",
+			corrupt: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := testExportDB(t)
+			baseStore := newTestArtifactStore(t)
+			createCheckpointBody(t, baseStore, 1, []byte(tt.body))
+			var store ArtifactStore = baseStore
+			if tt.corrupt {
+				store = &checkpointVerifyErrorStore{
+					ArtifactStore: baseStore,
+					err:           ErrArtifactCorrupt,
+				}
+			}
+
+			result, err := ExportToStore(
+				t.Context(), database, store,
+				ExportOptions{Origin: contractOrigin},
+			)
+			if tt.wantFuture {
+				require.ErrorIs(t, err, errFutureArtifactVersion)
+				assert.False(t, result.CheckpointCreated)
+				page, listErr := firstStoreEntryPage(
+					t.Context(), baseStore, contractOrigin, KindCheckpoints, 10,
+				)
+				require.NoError(t, listErr)
+				assert.Len(t, page.Items, 1)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.True(t, result.CheckpointCreated)
+			assert.Equal(t, 2, result.CheckpointSequence)
+			head, ok, headErr := database.GetArtifactCheckpointHead(
+				t.Context(), contractOrigin,
+			)
+			require.NoError(t, headErr)
+			require.True(t, ok)
+			assert.Equal(t, 2, head.Sequence)
+		})
+	}
+}
+
+type verifyErrorReader struct {
+	VerifiedReader
+	err error
+}
+
+func (r *verifyErrorReader) Verify() error {
+	return errors.Join(r.VerifiedReader.Verify(), r.err)
+}
+
+type checkpointVerifyErrorStore struct {
+	ArtifactStore
+	err error
+}
+
+func (s *checkpointVerifyErrorStore) Open(
+	ctx context.Context, ref Ref,
+) (Entry, VerifiedReader, error) {
+	entry, reader, err := s.ArtifactStore.Open(ctx, ref)
+	if err != nil || ref.Kind != KindCheckpoints {
+		return entry, reader, err
+	}
+	return entry, &verifyErrorReader{VerifiedReader: reader, err: s.err}, nil
 }
 
 type maxReadReader struct {

@@ -124,10 +124,13 @@ func latestValidCheckpointHead(
 				return db.ArtifactCheckpointHead{}, false,
 					fmt.Errorf("verifying artifact checkpoint: %w", verifyErr)
 			}
+			if verifyErr != nil || closeErr != nil {
+				continue
+			}
 			if errors.Is(decodeErr, errFutureArtifactVersion) {
 				return db.ArtifactCheckpointHead{}, false, decodeErr
 			}
-			if decodeErr != nil || verifyErr != nil || closeErr != nil {
+			if decodeErr != nil {
 				continue
 			}
 			head = candidate
@@ -156,6 +159,7 @@ func decodeCanonicalCheckpointHead(
 	expectedFields := []string{"origin", "seq", "sessions", "v"}
 	var sequence int
 	var mapDigest string
+	var futureVersion int
 	for index, expected := range expectedFields {
 		token, err := decoder.Token()
 		if err != nil {
@@ -214,11 +218,9 @@ func decodeCanonicalCheckpointHead(
 				return db.ArtifactCheckpointHead{}, errors.New("checkpoint version is unsupported")
 			}
 			if version > checkpointFormatVersion {
-				return db.ArtifactCheckpointHead{}, fmt.Errorf(
-					"%w: checkpoint version %d", errFutureArtifactVersion, version,
-				)
+				futureVersion = version
 			}
-			if version != checkpointFormatVersion {
+			if version < checkpointFormatVersion {
 				return db.ArtifactCheckpointHead{}, errors.New("checkpoint version is unsupported")
 			}
 			_, _ = io.WriteString(canonical, strconv.Itoa(version))
@@ -244,6 +246,11 @@ func decodeCanonicalCheckpointHead(
 	if canonical.sha256() != identity.SHA256 || canonical.size != identity.Size {
 		return db.ArtifactCheckpointHead{}, errors.New(
 			"checkpoint stored identity differs from canonical encoding",
+		)
+	}
+	if futureVersion > 0 {
+		return db.ArtifactCheckpointHead{}, fmt.Errorf(
+			"%w: checkpoint version %d", errFutureArtifactVersion, futureVersion,
 		)
 	}
 	return db.ArtifactCheckpointHead{

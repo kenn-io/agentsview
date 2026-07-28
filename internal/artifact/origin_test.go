@@ -65,6 +65,17 @@ func TestAdoptOriginOverwritesDivergentDBOrigin(t *testing.T) {
 	assert.Equal(t, "desk-a1b2c3", stored)
 }
 
+func TestAdoptOriginRepairsInvalidPersistedOrigin(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.SetSyncState(originStateKey, "../outside"))
+
+	require.NoError(t, AdoptOrigin(database, "desk-a1b2c3"))
+
+	stored, err := StoredOrigin(database)
+	require.NoError(t, err)
+	assert.Equal(t, "desk-a1b2c3", stored)
+}
+
 func TestAdoptOriginRejectsInvalidOrigin(t *testing.T) {
 	database := testDB(t)
 

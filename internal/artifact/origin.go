@@ -45,9 +45,6 @@ func AdoptOrigin(database *db.DB, origin string) error {
 	if err := validateOriginID(origin); err != nil {
 		return fmt.Errorf("adopting artifact origin: %w", err)
 	}
-	if _, err := StoredOrigin(database); err != nil {
-		return err
-	}
 	if err := database.AdoptArtifactOrigin(origin); err != nil {
 		return fmt.Errorf("adopting artifact origin: %w", err)
 	}
