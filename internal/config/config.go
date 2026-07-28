@@ -2469,6 +2469,13 @@ func expandBracedEnv(s string) (string, error) {
 
 // SaveTerminalConfig persists terminal settings to the config file.
 func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
+	live := tc
+	expanded, err := pathutil.ExpandHome(live.CustomBin)
+	if err != nil {
+		return fmt.Errorf("expanding terminal custom binary: %w", err)
+	}
+	live.CustomBin = expanded
+
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {
@@ -2479,7 +2486,7 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 		if err := c.writeConfigMap(existing); err != nil {
 			return err
 		}
-		c.Terminal = tc
+		c.Terminal = live
 		return nil
 	})
 }
