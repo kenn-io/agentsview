@@ -228,6 +228,7 @@ func TestResolveScriptCarriesTraeForbiddenRoot(t *testing.T) {
 }
 
 func TestResolveScriptCarriesMissingExcludedRoot(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
 	home := physTempDir(t)
 	root := filepath.Join(home, "AppData", "Roaming", "Trae", "User")
 
@@ -890,6 +891,10 @@ func TestParseResolvedTargetsFailsClosedOnUnrepresentableForbiddenRoot(
 			"bare_forbidden_record",
 			"claude:/home/u/.claude\x00@forbidden\x00",
 		},
+		{
+			"non_utf8_forbidden_value",
+			"claude:/home/u/.claude\x00@forbidden:/home/u/\xff\xfe\x00",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1026,13 +1031,14 @@ func TestAvPhysHelpersRefuseNewlinePaths(t *testing.T) {
 
 	script := resolveScriptPhysHelpers +
 		"if av_phys_dir \"$AV_TEST_INPUT\"; then echo ACCEPTED; else echo REFUSED; fi\n" +
-		"if av_phys_file \"$AV_TEST_INPUT/file\"; then echo ACCEPTED; else echo REFUSED; fi\n"
+		"if av_phys_file \"$AV_TEST_INPUT/file\"; then echo ACCEPTED; else echo REFUSED; fi\n" +
+		"if av_phys_missing \"$AV_TEST_INPUT/missing\"; then echo ACCEPTED; else echo REFUSED; fi\n"
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Env = []string{"AV_TEST_INPUT=" + newlineDir}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "helper harness failed: %s", out)
-	assert.Equal(t, "REFUSED\nREFUSED\n", string(out),
+	assert.Equal(t, "REFUSED\nREFUSED\nREFUSED\n", string(out),
 		"newline-carrying physical paths must be refused, not emitted misspelled")
 }
 
@@ -1053,4 +1059,141 @@ func TestResolveScriptAbortsOnUnrepresentableForbiddenRoot(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err,
 		"an unrepresentable forbidden root must abort the resolve, got output: %s", out)
+}
+
+// TestResolveScriptPoolsideSymlinkedTrajectoriesOverride pins the
+// canonicalize-after-narrowing ordering: a POOLSIDE_DIR override that is
+// a symlink NAMED trajectories must be recognized by its literal
+// basename (used as-is), then emitted by physical spelling.
+// Canonicalizing before dispatch would rename the override to its
+// physical basename and make the resolver look for a nested
+// trajectories/ that does not exist.
+func TestResolveScriptPoolsideSymlinkedTrajectoriesOverride(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	home := physTempDir(t)
+	physicalDir := filepath.Join(home, "poolside-data")
+	require.NoError(t, os.MkdirAll(physicalDir, 0o755))
+	alias := filepath.Join(home, "trajectories")
+	require.NoError(t, os.Symlink(physicalDir, alias))
+
+	out := runResolveScriptForTest(t, "HOME="+home, "POOLSIDE_DIR="+alias)
+	dirs, _, _, _, err := parseResolvedTargets(string(out))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{physicalDir}, dirs[parser.AgentPoolside],
+		"a symlink named trajectories must narrow by its literal basename and emit its physical path")
+}
+
+// TestResolveScriptWindsurfSymlinkedWorkspaceStorageOverride is the
+// workspaceStorage analog: the override's literal basename decides
+// whether workspaceStorage is appended, and only the emitted root is
+// canonicalized.
+func TestResolveScriptWindsurfSymlinkedWorkspaceStorageOverride(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	home := physTempDir(t)
+	physicalDir := filepath.Join(home, "windsurf-data")
+	wsDir := filepath.Join(physicalDir, "ws1")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(wsDir, parser.WindsurfStateDBName), []byte("db"), 0o644))
+	alias := filepath.Join(home, "workspaceStorage")
+	require.NoError(t, os.Symlink(physicalDir, alias))
+
+	out := runResolveScriptForTest(t, "HOME="+home, "WINDSURF_DIR="+alias)
+	dirs, files, _, _, err := parseResolvedTargets(string(out))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{physicalDir}, dirs[parser.AgentWindsurf],
+		"a symlink named workspaceStorage must narrow by its literal basename and emit its physical path")
+	assert.Contains(t, files[parser.AgentWindsurf],
+		filepath.Join(wsDir, parser.WindsurfStateDBName),
+		"session files must carry the physical spelling")
+}
+
+// TestAvPhysMissingResolvesLongestExistingAncestor exercises the
+// missing-path canonicalization helper directly: the longest existing
+// ancestor resolves physically and the missing tail is rejoined
+// literally, so a forbidden root that does not exist yet still guards
+// the physical subtree where its contents would appear.
+func TestAvPhysMissingResolvesLongestExistingAncestor(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	base := physTempDir(t)
+	physicalDir := filepath.Join(base, "real")
+	require.NoError(t, os.MkdirAll(physicalDir, 0o755))
+	alias := filepath.Join(base, "alias")
+	require.NoError(t, os.Symlink(physicalDir, alias))
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"existing_dir_resolves_physically", alias, physicalDir},
+		{"missing_leaf_under_existing_parent",
+			filepath.Join(base, "missing"), filepath.Join(base, "missing")},
+		{"missing_tail_under_symlinked_ancestor",
+			filepath.Join(alias, "missing", "leaf"),
+			filepath.Join(physicalDir, "missing", "leaf")},
+		{"relative_spelling_anchors_to_cwd", "missing-rel/leaf",
+			filepath.Join(base, "missing-rel", "leaf")},
+		{"fully_missing_absolute_path_keeps_spelling",
+			"/nonexistent-av-test/a/b", "/nonexistent-av-test/a/b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			script := resolveScriptPhysHelpers +
+				"av_phys_missing \"$AV_TEST_INPUT\"\n"
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(script)
+			cmd.Dir = base
+			cmd.Env = []string{"AV_TEST_INPUT=" + tc.input}
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "helper failed: %s", out)
+			assert.Equal(t, tc.want, string(out))
+		})
+	}
+}
+
+// TestResolveScriptMissingForbiddenRootResolvesSymlinkedAncestor pins
+// av_emit_forbidden_root's missing-root handling: a TRAE_DIR that does
+// not exist but is spelled through a symlinked ancestor must be emitted
+// under the physical subtree where its contents would appear, so the
+// boundary matches canonicalized targets if the root is created later.
+func TestResolveScriptMissingForbiddenRootResolvesSymlinkedAncestor(
+	t *testing.T,
+) {
+	skipScriptPathEqualityOnWindows(t)
+	home := physTempDir(t)
+	physicalDir := filepath.Join(home, "real-apps")
+	require.NoError(t, os.MkdirAll(physicalDir, 0o755))
+	alias := filepath.Join(home, "apps-alias")
+	require.NoError(t, os.Symlink(physicalDir, alias))
+	missingRoot := filepath.Join(alias, "Trae", "User")
+
+	out := runResolveScriptForTest(t, "HOME="+home, "TRAE_DIR="+missingRoot)
+	_, _, _, forbiddenRoots, err := parseResolvedTargets(string(out))
+	require.NoError(t, err)
+
+	assert.Contains(t, forbiddenRoots,
+		filepath.Join(physicalDir, "Trae", "User"),
+		"a missing forbidden root must resolve through its longest existing ancestor")
+	assert.NotContains(t, forbiddenRoots, missingRoot)
+}
+
+// TestParseResolvedTargetsDropsNonUTF8TargetRecords: non-UTF-8 spellings
+// are unrepresentable downstream (glob escaping iterates runes, the
+// Python snapshot filter round-trips JSON), so target records carrying
+// them are dropped rather than mangled. Forbidden records with non-UTF-8
+// bytes fail the sync instead, covered by the fail-closed test above.
+func TestParseResolvedTargetsDropsNonUTF8TargetRecords(t *testing.T) {
+	input := "claude:/home/u/\xff\x00codex:/home/u/.codex/sessions\x00"
+
+	dirs, _, _, _, err := parseResolvedTargets(input)
+	require.NoError(t, err)
+
+	assert.Empty(t, dirs[parser.AgentClaude],
+		"a non-UTF-8 target spelling must be dropped, not passed downstream")
+	assert.Equal(t, []string{"/home/u/.codex/sessions"},
+		dirs[parser.AgentCodex],
+		"valid records in the same output must survive")
 }

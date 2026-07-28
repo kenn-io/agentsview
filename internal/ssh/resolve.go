@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -84,13 +85,17 @@ func buildAiderResolveSnippet(envVar string) string {
 // helpers. av_phys_dir prints a directory's physical path (symlinked
 // ancestors resolved); av_phys_file does the same for a file path by
 // physically resolving its dirname — including a bare filename (parent
-// ".") and a root-level "/file" (parent "/"). Every emitter canonicalizes
-// through them so forbidden-root comparisons and tar exclusions on the Go
-// side compare one spelling per location: a target aliased into an
-// excluded provider's tree via a symlink resolves to the same prefix as
-// the forbidden root itself. av_phys_file is a pure path transform —
-// existence checks stay with the emitters — so parents must exist but the
-// file itself need not.
+// ".") and a root-level "/file" (parent "/"). av_phys_missing handles a
+// path that need not exist at all: it physically resolves the longest
+// existing ancestor and rejoins the missing tail literally, so a missing
+// forbidden root under a symlinked (or relative) prefix still lands on
+// the same spelling canonicalized targets use. Every emitter
+// canonicalizes through them so forbidden-root comparisons and tar
+// exclusions on the Go side compare one spelling per location: a target
+// aliased into an excluded provider's tree via a symlink resolves to the
+// same prefix as the forbidden root itself. av_phys_file is a pure path
+// transform — existence checks stay with the emitters — so parents must
+// exist but the file itself need not.
 //
 // Physical paths containing CR or LF are refused (return 1) rather than
 // emitted: command substitution strips trailing newlines from pwd output,
@@ -117,6 +122,23 @@ const resolveScriptPhysHelpers = "av_nl='\n'\n" +
 	"case \"$av_phys_parent\" in " +
 	"/) printf '%s' \"/$av_phys_base\";; " +
 	"*) printf '%s' \"$av_phys_parent/$av_phys_base\";; esac; " +
+	"}\n" +
+	"av_phys_missing() { " +
+	"case \"$1\" in *\"$av_nl\"*|*\"$av_cr\"*) return 1;; esac; " +
+	"av_pm_path=\"$1\"; av_pm_tail=\"\"; " +
+	"while [ ! -d \"$av_pm_path\" ]; do " +
+	"av_pm_base=$(basename -- \"$av_pm_path\"); " +
+	"if [ -n \"$av_pm_tail\" ]; then av_pm_tail=\"$av_pm_base/$av_pm_tail\"; " +
+	"else av_pm_tail=\"$av_pm_base\"; fi; " +
+	"av_pm_parent=$(dirname -- \"$av_pm_path\"); " +
+	"[ \"$av_pm_parent\" = \"$av_pm_path\" ] && return 1; " +
+	"av_pm_path=\"$av_pm_parent\"; " +
+	"done; " +
+	"av_pm_phys=$(av_phys_dir \"$av_pm_path\") || return 1; " +
+	"if [ -z \"$av_pm_tail\" ]; then printf '%s' \"$av_pm_phys\"; return 0; fi; " +
+	"case \"$av_pm_phys\" in " +
+	"/) printf '%s' \"/$av_pm_tail\";; " +
+	"*) printf '%s' \"$av_pm_phys/$av_pm_tail\";; esac; " +
 	"}\n"
 
 func buildResolveScript() string {
@@ -142,6 +164,7 @@ func buildResolveScript() string {
 			"av_windsurf_db=\"$av_windsurf_ws/" + parser.WindsurfStateDBName + "\"; " +
 			"[ -f \"$av_windsurf_db\" ] || continue; " +
 			"if [ \"$av_windsurf_root_emitted\" -eq 0 ]; then " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentWindsurf) + ":$target\"; " +
 			"av_windsurf_root_emitted=1; " +
 			"fi; " +
@@ -167,6 +190,7 @@ func buildResolveScript() string {
 			"av_roo_history=\"$av_roo_task/history_item.json\"; " +
 			"[ -f \"$av_roo_history\" ] || continue; " +
 			"if [ \"$av_roocode_root_emitted\" -eq 0 ]; then " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentRooCode) + ":$target\"; " +
 			"av_roocode_root_emitted=1; " +
 			"fi; " +
@@ -192,6 +216,7 @@ func buildResolveScript() string {
 			"av_kl_metadata=\"$av_kl_task/task_metadata.json\"; " +
 			"[ -f \"$av_kl_metadata\" ] || continue; " +
 			"if [ \"$av_kilo_legacy_root_emitted\" -eq 0 ]; then " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentKiloLegacy) + ":$target\"; " +
 			"av_kilo_legacy_root_emitted=1; " +
 			"fi; " +
@@ -210,6 +235,7 @@ func buildResolveScript() string {
 			"case \"$target\" in */) target=\"${target%/}\";; esac; " +
 			"case \"${target##*/}\" in " +
 			"trajectories) [ -d \"$target\" ] && " +
+			"target=$(av_phys_dir \"$target\") && " +
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$target\";; " +
 			"*) av_poolside_traj=\"$target/trajectories\"; " +
 			"[ -d \"$av_poolside_traj\" ] && " +
@@ -217,10 +243,14 @@ func buildResolveScript() string {
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$av_poolside_traj\";; " +
 			"esac; " +
 			"}\n" +
+			// Provider-specific narrowing keys on the override's literal
+			// basename (a symlink named "trajectories" or
+			// "workspaceStorage" is meaningful as spelled), so
+			// canonicalization happens after narrowing, at each
+			// emitter's root-emission printf — never before dispatch.
 			"av_emit_target() { " +
 			"agent=\"$1\"; " +
 			"target=\"$2\"; " +
-			"if [ -d \"$target\" ]; then target=$(av_phys_dir \"$target\") || return 0; fi; " +
 			"if [ \"$agent\" = \"" + string(parser.AgentWindsurf) + "\" ]; then " +
 			"av_emit_windsurf_target \"$target\"; " +
 			"return; " +
@@ -237,7 +267,9 @@ func buildResolveScript() string {
 			"av_emit_poolside_target \"$target\"; " +
 			"return; " +
 			"fi; " +
-			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
+			"[ -d \"$target\" ] || return 0; " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
+			"printf '%s\\000' \"$agent:$target\"; " +
 			"}\n" +
 			"av_emit_extra_file() { " +
 			"[ -f \"$1\" ] || return 0; " +
@@ -246,21 +278,21 @@ func buildResolveScript() string {
 			"}\n" +
 			// A forbidden root that exists is emitted by its physical
 			// spelling so it shares a prefix with canonicalized targets;
-			// a missing one keeps its literal spelling — it has no
-			// contents to protect yet, and the boundary still guards the
-			// literal path.
+			// a missing one resolves through its longest existing
+			// ancestor (av_phys_missing) so a root spelled via a
+			// symlinked or relative prefix still guards the physical
+			// subtree where its contents would appear.
 			// A forbidden root whose physical path cannot be represented
-			// (av_phys_dir refuses CR/LF spellings) aborts the whole
-			// resolve: skipping the record would silently drop the
-			// exclusion boundary, and emitting a newline path would let
-			// the record parser reject it later — aborting here fails
-			// closed at the source. Missing roots keep their literal
-			// spelling; a literal spelling containing a newline is
-			// rejected by the record parser, which also fails closed.
+			// (av_phys_dir and av_phys_missing refuse CR/LF spellings)
+			// aborts the whole resolve: skipping the record would
+			// silently drop the exclusion boundary, and emitting a
+			// newline path would let the record parser reject it later —
+			// aborting here fails closed at the source.
 			"av_emit_forbidden_root() { " +
 			"dir=\"$1\"; [ -n \"$dir\" ] || dir=\"$2\"; " +
 			"[ -n \"$dir\" ] || return 0; " +
-			"if [ -d \"$dir\" ]; then dir=$(av_phys_dir \"$dir\") || exit 1; fi; " +
+			"if [ -d \"$dir\" ]; then dir=$(av_phys_dir \"$dir\") || exit 1; " +
+			"else dir=$(av_phys_missing \"$dir\") || exit 1; fi; " +
 			"printf '%s\\000' \"" + resolveForbiddenRootPrefix + ":$dir\"; " +
 			"}\n" +
 			"av_has_hermes_transcript() { " +
@@ -582,8 +614,17 @@ func resolveOutputRecords(output string) []string {
 	return strings.Split(output, "\n")
 }
 
+// invalidResolvedPath rejects resolved-path spellings that downstream
+// exclusion machinery cannot represent faithfully: NUL/CR/LF collide
+// with the record and tar -T framings, and non-UTF-8 bytes are mangled
+// by both escapeTarExcludeGlob's rune iteration and the Python
+// snapshot's JSON marshaling, so a boundary spelled with them would
+// silently guard the wrong subtree. Target records are dropped per
+// path; forbidden-root records fail the whole sync.
 func invalidResolvedPath(value string) bool {
-	return value == "" || strings.ContainsAny(value, "\x00\r\n")
+	return value == "" ||
+		strings.ContainsAny(value, "\x00\r\n") ||
+		!utf8.ValidString(value)
 }
 
 // resolveDirs runs the resolve script on the remote host via SSH and
