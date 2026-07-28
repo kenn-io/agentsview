@@ -528,18 +528,18 @@ func (s *Store) queryCallRows(
 		    call_index,
 		    MIN(CASE WHEN status = 'started' THEN timestamp END)
 		      AS started_at,
-		    MAX(CASE WHEN status = 'completed' THEN timestamp END)
-		      AS completed_at
+		    MAX(CASE WHEN status IN ('completed', 'errored')
+		      THEN timestamp END) AS terminal_at
 		  FROM tool_result_events
 		  WHERE session_id = ?
 		    AND source = 'copilot-cli'
-		    AND status IN ('started', 'completed')
+		    AND status IN ('started', 'completed', 'errored')
 		  GROUP BY tool_call_message_ordinal, call_index
 		)
 		SELECT tc.message_id, COALESCE(tc.tool_use_id, ''),
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, COALESCE(tc.input_json, ''),
-			ce.started_at, ce.completed_at,
+			ce.started_at, ce.terminal_at,
 			s_sub.started_at, s_sub.ended_at
 		FROM tool_calls tc
 		LEFT JOIN messages m ON m.id = tc.message_id

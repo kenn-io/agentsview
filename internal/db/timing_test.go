@@ -323,7 +323,7 @@ func TestGetSessionTiming_CopilotParallelExactEvents(t *testing.T) {
 	timingInsertToolResultEvent(t, d, sessionID, 1, 1,
 		"call-b", "started", "2026-07-28T10:00:02Z")
 	timingInsertToolResultEvent(t, d, sessionID, 1, 1,
-		"call-b", "completed", "2026-07-28T10:00:06Z")
+		"call-b", "errored", "2026-07-28T10:00:06Z")
 	timingInsertMessage(t, d, sessionID, 2, "user",
 		"next", "2026-07-28T10:01:00Z", false)
 

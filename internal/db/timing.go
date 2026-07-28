@@ -174,12 +174,12 @@ func (db *DB) queryCallRows(
 		    call_index,
 		    MIN(CASE WHEN status = 'started' THEN timestamp END)
 		      AS started_at,
-		    MAX(CASE WHEN status = 'completed' THEN timestamp END)
-		      AS completed_at
+		    MAX(CASE WHEN status IN ('completed', 'errored')
+		      THEN timestamp END) AS terminal_at
 		  FROM tool_result_events
 		  WHERE session_id = ?
 		    AND source = 'copilot-cli'
-		    AND status IN ('started', 'completed')
+		    AND status IN ('started', 'completed', 'errored')
 		  GROUP BY session_id, tool_call_message_ordinal, call_index
 		)
 		SELECT
@@ -191,14 +191,14 @@ func (db *DB) queryCallRows(
 		  tc.subagent_session_id,
 		  tc.input_json,
 		  ce.started_at,
-		  ce.completed_at,
+		  ce.terminal_at,
 		  CASE
 		    WHEN ce.started_at IS NOT NULL
-		         AND ce.completed_at IS NOT NULL
-		         AND julianday(ce.completed_at) >= julianday(ce.started_at) THEN
+		         AND ce.terminal_at IS NOT NULL
+		         AND julianday(ce.terminal_at) >= julianday(ce.started_at) THEN
 		      CAST(
 		        ROUND(
-		          (julianday(ce.completed_at) - julianday(ce.started_at))
+		          (julianday(ce.terminal_at) - julianday(ce.started_at))
 		          * 86400000
 		        ) AS INTEGER
 		      )

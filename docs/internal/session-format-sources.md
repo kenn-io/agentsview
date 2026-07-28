@@ -167,6 +167,9 @@ Grok section and remove the explicit registry exception in the coverage test.
   [#1288](https://github.com/kenn-io/agentsview/issues/1288): `events.jsonl`
   emits matching `tool.execution_start` and `tool.execution_complete` records
   keyed by `toolCallId`, whose timestamps provide the exact execution interval.
+  Reverified 2026-07-28 against current local session artifacts that completion
+  records can include a boolean `success`; explicit `false` marks a failed
+  terminal execution, while older records may omit the field.
   For independent legacy CLI and sibling Copilot-store observations, clone
   `https://github.com/getagentseal/codeburn.git` at
   `3472885629c41725b40c19c0780ecce148b067bf` and inspect its

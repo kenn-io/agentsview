@@ -236,7 +236,12 @@ func (b *copilotSessionBuilder) handleToolComplete(
 	if toolCallID == "" {
 		return
 	}
-	b.appendToolEvent(toolCallID, ts, "completed")
+	status := "completed"
+	success := data.Get("success")
+	if success.Exists() && success.Type == gjson.False {
+		status = "errored"
+	}
+	b.appendToolEvent(toolCallID, ts, status)
 
 	r := data.Get("result")
 	content := r.Str

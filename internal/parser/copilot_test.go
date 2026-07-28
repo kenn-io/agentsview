@@ -171,6 +171,35 @@ func TestParseCopilotSession_ToolCalls(t *testing.T) {
 	assertEqual(t, wantTS, trMsg.Timestamp, "tool result timestamp")
 }
 
+func TestParseCopilotSession_ToolCompleteStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		successJSON string
+		wantStatus  string
+	}{
+		{name: "success", successJSON: `,"success":true`, wantStatus: "completed"},
+		{name: "failure", successJSON: `,"success":false`, wantStatus: "errored"},
+		{name: "missing success", wantStatus: "completed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeCopilotJSONL(t,
+				`{"type":"session.start","data":{"sessionId":"tool-status"},"timestamp":"2025-01-15T10:00:00Z"}`,
+				`{"type":"user.message","data":{"content":"Run the tool"},"timestamp":"2025-01-15T10:00:01Z"}`,
+				`{"type":"assistant.message","data":{"toolRequests":[{"toolCallId":"tc-1","name":"shell","arguments":"{}"}]},"timestamp":"2025-01-15T10:00:02Z"}`,
+				`{"type":"tool.execution_complete","data":{"toolCallId":"tc-1"`+tt.successJSON+`},"timestamp":"2025-01-15T10:00:03Z"}`,
+			)
+
+			_, msgs := parseAndValidateHelper(t, path, "m", 3)
+			require.Len(t, msgs[1].ToolCalls, 1)
+			require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+			assert.Equal(t, tt.wantStatus,
+				msgs[1].ToolCalls[0].ResultEvents[0].Status)
+		})
+	}
+}
+
 func TestParseCopilotSession_ToolResultTypes(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -112,10 +112,16 @@ func TestPGGetSessionTiming_CopilotExactToolEventsExcludeIdleGap(t *testing.T) {
 		"task_complete", "2026-07-24T11:56:24.189Z", true)
 	timingInsertToolCallPG(t, pg, "timing-copilot-exact", 1, 0,
 		"call_example", "task_complete", "Other", "")
+	timingInsertToolCallPG(t, pg, "timing-copilot-exact", 1, 1,
+		"call_failed", "shell", "Bash", "")
 	timingInsertToolResultEventPG(t, pg, "timing-copilot-exact", 1, 0,
 		"call_example", "started", "2026-07-24T11:56:24.198Z")
 	timingInsertToolResultEventPG(t, pg, "timing-copilot-exact", 1, 0,
 		"call_example", "completed", "2026-07-24T11:56:27.923Z")
+	timingInsertToolResultEventPG(t, pg, "timing-copilot-exact", 1, 1,
+		"call_failed", "started", "2026-07-24T11:56:24.198Z")
+	timingInsertToolResultEventPG(t, pg, "timing-copilot-exact", 1, 1,
+		"call_failed", "errored", "2026-07-24T11:56:27.923Z")
 	timingInsertMessagePG(t, pg, "timing-copilot-exact", 2, "user",
 		"next request", "2026-07-25T00:34:49.483Z", false)
 
@@ -128,11 +134,13 @@ func TestPGGetSessionTiming_CopilotExactToolEventsExcludeIdleGap(t *testing.T) {
 	)
 	require.NoError(t, err, "GetSessionTiming")
 	require.Len(t, got.Turns, 1)
-	require.Len(t, got.Turns[0].Calls, 1)
+	require.Len(t, got.Turns[0].Calls, 2)
 	require.NotNil(t, got.Turns[0].DurationMs)
 	assert.Equal(t, int64(3_725), *got.Turns[0].DurationMs)
 	require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
 	assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs)
+	require.NotNil(t, got.Turns[0].Calls[1].DurationMs)
+	assert.Equal(t, int64(3_725), *got.Turns[0].Calls[1].DurationMs)
 }
 
 func TestPGGetSessionTiming_Solo(t *testing.T) {

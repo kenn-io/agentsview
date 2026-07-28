@@ -1608,6 +1608,18 @@ func TestGetSessionTimingUsesCopilotEventsForExactDuration(t *testing.T) {
 			},
 		},
 	}
+	failedCall := call
+	failedCall.CallIndex = 1
+	failedCall.ToolName = "shell"
+	failedCall.Category = "Bash"
+	failedCall.ToolUseID = "call_failed"
+	failedCall.ResultEvents = append(
+		[]db.ToolResultEvent(nil), call.ResultEvents...,
+	)
+	for i := range failedCall.ResultEvents {
+		failedCall.ResultEvents[i].ToolUseID = failedCall.ToolUseID
+	}
+	failedCall.ResultEvents[1].Status = "errored"
 
 	sess := syncSession(
 		sessionID, "alpha", "copilot timing", sessionStartedAt, 3,
@@ -1620,7 +1632,7 @@ func TestGetSessionTimingUsesCopilotEventsForExactDuration(t *testing.T) {
 			syncMessage(sessionID, 0, "user", "finish the task",
 				sessionStartedAt),
 			syncMessage(sessionID, 1, "assistant", "task_complete",
-				"2026-07-24T11:56:24.189Z", call),
+				"2026-07-24T11:56:24.189Z", call, failedCall),
 			syncMessage(sessionID, 2, "user", "next request",
 				nextUserAt),
 		},
@@ -1640,7 +1652,7 @@ func TestGetSessionTimingUsesCopilotEventsForExactDuration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Len(t, got.Turns, 1)
-	require.Len(t, got.Turns[0].Calls, 1)
+	require.Len(t, got.Turns[0].Calls, 2)
 	require.NotNil(t, got.Turns[0].DurationMs,
 		"turn duration must not be the idle-gap; copilot events must provide exact timing")
 	assert.Equal(t, int64(3_725), *got.Turns[0].DurationMs,
@@ -1650,6 +1662,10 @@ func TestGetSessionTimingUsesCopilotEventsForExactDuration(t *testing.T) {
 		"call duration must not be nil")
 	assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs,
 		"call duration should be copilot event span (3725ms)")
+	require.NotNil(t, got.Turns[0].Calls[1].DurationMs,
+		"errored call duration must not be nil")
+	assert.Equal(t, int64(3_725), *got.Turns[0].Calls[1].DurationMs,
+		"errored call should use the same terminal event timing")
 }
 
 func TestGetAllMessagesDoesNotTruncateAtDefaultLimit(t *testing.T) {

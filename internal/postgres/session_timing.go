@@ -111,12 +111,12 @@ func (s *Store) queryCallRows(
 		      WHERE status = 'started'
 		    ) AS started_at,
 		    MAX(timestamp) FILTER (
-		      WHERE status = 'completed'
-		    ) AS completed_at
+		      WHERE status IN ('completed', 'errored')
+		    ) AS terminal_at
 		  FROM tool_result_events
 		  WHERE session_id = $1
 		    AND source = 'copilot-cli'
-		    AND status IN ('started', 'completed')
+		    AND status IN ('started', 'completed', 'errored')
 		  GROUP BY session_id, tool_call_message_ordinal, call_index
 		)
 		SELECT
@@ -128,13 +128,13 @@ func (s *Store) queryCallRows(
 		  tc.subagent_session_id,
 		  tc.input_json,
 		  ce.started_at,
-		  ce.completed_at,
+		  ce.terminal_at,
 		  CASE
 		    WHEN ce.started_at IS NOT NULL
-		         AND ce.completed_at IS NOT NULL
-		         AND ce.completed_at >= ce.started_at THEN
+		         AND ce.terminal_at IS NOT NULL
+		         AND ce.terminal_at >= ce.started_at THEN
 		      (round(EXTRACT(EPOCH FROM (
-		        ce.completed_at - ce.started_at
+		        ce.terminal_at - ce.started_at
 		      )) * 1000))::bigint
 		    WHEN tc.subagent_session_id IS NOT NULL
 		         AND s_sub.started_at IS NOT NULL THEN
