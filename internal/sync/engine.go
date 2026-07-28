@@ -12773,9 +12773,9 @@ func pairToolResultEventSummaries(
 			if blocked[tc.Category] {
 				if summary != "" {
 					tc.ResultContentLength = len(summary)
+					tc.ResultEvents = nil
 				}
 				tc.ResultContent = ""
-				tc.ResultEvents = nil
 				continue
 			}
 			if summary == "" {

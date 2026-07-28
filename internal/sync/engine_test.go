@@ -3608,6 +3608,52 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 			}},
 		},
 		{
+			name: "blocked category preserves timestamp-only events",
+			msgs: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "call_view",
+					ToolName:  "view",
+					Category:  "Read",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID: "call_view",
+							Source:    "copilot-cli",
+							Status:    "started",
+							Timestamp: "2026-07-24T11:56:24.198Z",
+						},
+						{
+							ToolUseID: "call_view",
+							Source:    "copilot-cli",
+							Status:    "completed",
+							Timestamp: "2026-07-24T11:56:27.923Z",
+						},
+					},
+				}},
+			}},
+			blocked: map[string]bool{"Read": true},
+			want: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "call_view",
+					ToolName:  "view",
+					Category:  "Read",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID: "call_view",
+							Source:    "copilot-cli",
+							Status:    "started",
+							Timestamp: "2026-07-24T11:56:24.198Z",
+						},
+						{
+							ToolUseID: "call_view",
+							Source:    "copilot-cli",
+							Status:    "completed",
+							Timestamp: "2026-07-24T11:56:27.923Z",
+						},
+					},
+				}},
+			}},
+		},
+		{
 			name: "single event becomes summary",
 			msgs: []db.Message{{
 				ToolCalls: []db.ToolCall{{
