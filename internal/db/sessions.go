@@ -1084,6 +1084,32 @@ func (db *DB) GetSession(
 func (db *DB) GetSessionFull(
 	ctx context.Context, id string,
 ) (*Session, error) {
+	s, err := db.getSessionFullUncoalesced(ctx, id)
+	if err != nil || s == nil {
+		return s, err
+	}
+	// Expose the visible name (user rename, else agent session name)
+	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
+	// The coalesce happens post-scan because sessionFullCols is shared
+	// with ListSessionsModifiedBetween, whose push consumers must see
+	// display_name and session_name unmerged.
+	if s.DisplayName == nil {
+		s.DisplayName = s.SessionName
+	}
+	return s, nil
+}
+
+// GetArtifactExportSession returns raw user- and agent-owned session names so
+// canonical manifests do not publish session_name as a user display_name.
+func (db *DB) GetArtifactExportSession(
+	ctx context.Context, id string,
+) (*Session, error) {
+	return db.getSessionFullUncoalesced(ctx, id)
+}
+
+func (db *DB) getSessionFullUncoalesced(
+	ctx context.Context, id string,
+) (*Session, error) {
 	row := db.getReader().QueryRowContext(
 		ctx,
 		"SELECT "+sessionFullCols+" FROM sessions WHERE id = ?",
@@ -1133,14 +1159,6 @@ func (db *DB) GetSessionFull(
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting session full %s: %w", id, err)
-	}
-	// Expose the visible name (user rename, else agent session name)
-	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
-	// The coalesce happens post-scan because sessionFullCols is shared
-	// with ListSessionsModifiedBetween, whose push consumers must see
-	// display_name and session_name unmerged.
-	if s.DisplayName == nil {
-		s.DisplayName = s.SessionName
 	}
 	return &s, nil
 }

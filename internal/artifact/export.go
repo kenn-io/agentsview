@@ -22,7 +22,7 @@ type artifactExportStore interface {
 	CountPendingArtifactExports(context.Context) (int, error)
 	PendingArtifactExports(context.Context, int) ([]db.ArtifactExportQueueItem, error)
 	ArtifactExportClaims(context.Context, []string) ([]db.ArtifactExportQueueItem, error)
-	GetSessionFull(context.Context, string) (*db.Session, error)
+	GetArtifactExportSession(context.Context, string) (*db.Session, error)
 	LoadArtifactExportData(
 		context.Context, string, db.ArtifactExportLoadLimits,
 	) (db.ArtifactExportData, error)
@@ -131,7 +131,7 @@ func exportToStoreWithLimits(
 			return result, err
 		}
 		claim, claimed := claimByID[sessionID]
-		sess, err := database.GetSessionFull(ctx, sessionID)
+		sess, err := database.GetArtifactExportSession(ctx, sessionID)
 		if err != nil {
 			return result, fmt.Errorf("loading artifact export session %s: %w", sessionID, err)
 		}
@@ -382,7 +382,7 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 		if _, ok := processed[sessionID]; ok {
 			continue
 		}
-		sess, err := database.GetSessionFull(ctx, sessionID)
+		sess, err := database.GetArtifactExportSession(ctx, sessionID)
 		if err != nil {
 			return result, fmt.Errorf("loading full artifact export session %s: %w", sessionID, err)
 		}

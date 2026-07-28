@@ -2570,7 +2570,7 @@ func (db *DB) setArtifactOrigin(origin string, adopt bool) (string, error) {
 		); err != nil {
 			return fmt.Errorf("persisting artifact origin: %w", err)
 		}
-		if err := populateArtifactOriginQueueTx(tx, origin, existing != ""); err != nil {
+		if err := populateArtifactOriginQueueTx(tx, origin, true); err != nil {
 			return err
 		}
 		resolved = origin

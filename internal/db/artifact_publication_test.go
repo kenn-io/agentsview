@@ -659,6 +659,91 @@ func TestEnsureArtifactOriginPublishesOriginWithBootstrapQueue(t *testing.T) {
 	assert.Equal(t, "session-a", pending[0].SessionID)
 }
 
+func TestEnsureArtifactOriginRequeuesExistingLedgerWhenOriginStateIsEmpty(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		clearOrigin func(*testing.T, *DB)
+	}{
+		{
+			name: "missing row",
+			clearOrigin: func(t *testing.T, database *DB) {
+				t.Helper()
+				require.NoError(t, database.Update(func(tx *sql.Tx) error {
+					_, err := tx.Exec(
+						`DELETE FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
+					)
+					return err
+				}))
+			},
+		},
+		{
+			name: "empty value",
+			clearOrigin: func(t *testing.T, database *DB) {
+				t.Helper()
+				require.NoError(t, database.SetSyncState("artifact_origin_id", ""))
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			database := testDB(t)
+			ctx := t.Context()
+			for _, session := range []Session{
+				{ID: "accepted", Project: "project", Machine: "local", Agent: "claude"},
+				{ID: "rejected", Project: "project", Machine: "local", Agent: "claude"},
+				{ID: "foreign", Project: "project", Machine: "peer-a1b2c3", Agent: "claude"},
+				{ID: "deleted", Project: "project", Machine: "local", Agent: "claude"},
+			} {
+				require.NoError(t, database.UpsertSession(session))
+			}
+			require.NoError(t, database.SoftDeleteSession("deleted"))
+			require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
+
+			claims, err := database.PendingArtifactExports(ctx, 10)
+			require.NoError(t, err)
+			require.Len(t, claims, 2)
+			claimByID := map[string]ArtifactExportQueueItem{
+				claims[0].SessionID: claims[0],
+				claims[1].SessionID: claims[1],
+			}
+			require.NoError(t, database.FinalizeArtifactExports(
+				ctx, []ArtifactExportOutcome{
+					{Item: claimByID["accepted"]},
+					{Item: claimByID["rejected"], Rejection: "message limit exceeded"},
+				},
+			))
+			drained, err := database.PendingArtifactExports(ctx, 10)
+			require.NoError(t, err)
+			require.Empty(t, drained)
+			_, rejected, err := database.GetArtifactExportRejection(ctx, "rejected")
+			require.NoError(t, err)
+			require.True(t, rejected)
+
+			tt.clearOrigin(t, database)
+			origin, err := database.EnsureArtifactOrigin("origin-d4e5f6")
+			require.NoError(t, err)
+			assert.Equal(t, "origin-d4e5f6", origin)
+
+			pending, err := database.PendingArtifactExports(ctx, 10)
+			require.NoError(t, err)
+			require.Len(t, pending, 2)
+			assert.ElementsMatch(t, []string{"accepted", "rejected"}, []string{
+				pending[0].SessionID, pending[1].SessionID,
+			})
+			for _, item := range pending {
+				assert.Greater(t, item.Generation, claimByID[item.SessionID].Generation)
+			}
+			_, rejected, err = database.GetArtifactExportRejection(ctx, "rejected")
+			require.NoError(t, err)
+			assert.False(t, rejected)
+			excluded, err := database.ArtifactExportClaims(
+				ctx, []string{"foreign", "deleted"},
+			)
+			require.NoError(t, err)
+			assert.Empty(t, excluded)
+		})
+	}
+}
+
 func TestArtifactOriginTransactionRollsBackQueuePopulationFailure(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.AdoptArtifactOrigin("before-a1b2c3"))

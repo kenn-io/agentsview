@@ -123,11 +123,11 @@ type countingCanonicalExportDB struct {
 	usageLoads   int
 }
 
-func (s *countingCanonicalExportDB) GetSessionFull(
+func (s *countingCanonicalExportDB) GetArtifactExportSession(
 	ctx context.Context, id string,
 ) (*db.Session, error) {
 	s.sessionLoads++
-	return s.DB.GetSessionFull(ctx, id)
+	return s.DB.GetArtifactExportSession(ctx, id)
 }
 
 func (s *countingCanonicalExportDB) LoadArtifactExportData(
@@ -583,6 +583,41 @@ func TestExportToStorePublishesDependenciesBeforeCheckpointAndSkipsUnchanged(t *
 	assert.Equal(t, Kind(KindManifests), store.creates[1].Ref.Kind)
 	assert.False(t, store.creates[0].Created)
 	assert.False(t, store.creates[1].Created)
+}
+
+func TestExportKeepsAgentSessionNameSeparateFromUserDisplayName(t *testing.T) {
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	agentName := "Agent-provided title"
+	seedSession(t, database, "sess-1", "alpha", func(sess *db.Session) {
+		sess.SessionName = &agentName
+	})
+	var storedDisplayName, storedSessionName *string
+	require.NoError(t, database.Reader().QueryRow(
+		`SELECT display_name, session_name FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&storedDisplayName, &storedSessionName))
+	assert.Nil(t, storedDisplayName)
+	require.NotNil(t, storedSessionName)
+	assert.Equal(t, agentName, *storedSessionName)
+
+	result, err := ExportToStore(
+		t.Context(), database, store, ExportOptions{Origin: contractOrigin},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ExportedSessions)
+
+	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
+	manifestHash := checkpoint.Sessions[contractOrigin+"~sess-1"]
+	require.NotEmpty(t, manifestHash)
+	ref, err := NewRef(contractOrigin, KindManifests, manifestHash+".json")
+	require.NoError(t, err)
+	published, err := decodeManifestWithLimits(
+		readContractArtifact(t, store, ref), productionArtifactLimits(),
+	)
+	require.NoError(t, err)
+	assert.Nil(t, published.Session.DisplayName)
+	require.NotNil(t, published.SessionName)
+	assert.Equal(t, agentName, *published.SessionName)
 }
 
 func TestExportToStoreFullRepairsMissingDependencyWithoutNewCheckpoint(t *testing.T) {
@@ -1045,7 +1080,7 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	claimA, err := first.ArtifactExportClaims(ctx, []string{"session-a"})
 	require.NoError(t, err)
 	require.Len(t, claimA, 1)
-	sessionA, err := first.GetSessionFull(ctx, "session-a")
+	sessionA, err := first.GetArtifactExportSession(ctx, "session-a")
 	require.NoError(t, err)
 	messagesA, err := first.GetAllMessages(ctx, "session-a")
 	require.NoError(t, err)
@@ -1071,7 +1106,7 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	claimB, err := second.ArtifactExportClaims(ctx, []string{"session-b"})
 	require.NoError(t, err)
 	require.Len(t, claimB, 1)
-	sessionB, err := second.GetSessionFull(ctx, "session-b")
+	sessionB, err := second.GetArtifactExportSession(ctx, "session-b")
 	require.NoError(t, err)
 	messagesB, err := second.GetAllMessages(ctx, "session-b")
 	require.NoError(t, err)
