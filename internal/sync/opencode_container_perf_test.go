@@ -136,12 +136,14 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 }
 
 // TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery documents the
-// staleness contract the watermark-only watcher pass trades on: a child
-// write that stays below the stored composite watermark without touching the
-// session or project row is invisible to the session-row watermark and stays
-// archived as-is until the next full-discovery pass, whose child digest
-// still reconciles it. Actively watched sessions do not rely on this path;
-// the per-session watcher poll resolves the composite directly.
+// staleness contract the watermark-only watcher pass trades on: a child-only
+// write that leaves the session and project rows untouched is invisible to
+// the session-row watermark — wherever its timestamps land relative to the
+// stored composite — and stays archived as-is until the next full-discovery
+// pass, whose child digest still reconciles it. Both variants are pinned
+// here: a replacement below the stored composite and an append above it.
+// Actively watched sessions do not rely on this path; the per-session
+// watcher poll resolves the composite directly.
 func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
@@ -181,6 +183,40 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 	assertMessageContent(
 		t, env.db, "opencode:below-mark",
 		"swapped prompt", "swapped answer",
+	)
+
+	// Same deferral when the child write lands ABOVE the stored composite:
+	// a new message appended with a fresh timestamp while the session row
+	// stays untouched still cannot move the session-row watermark.
+	oc.addMessage(
+		t, "below-mark-msg-late", "below-mark", "assistant", 1779200000000,
+	)
+	oc.addTextPart(
+		t, "below-mark-part-late", "below-mark", "below-mark-msg-late",
+		"late answer", 1779200000000,
+	)
+
+	scansBefore = parser.OpenCodeContainerChildScans()
+	lookupsBefore = parser.OpenCodeSessionChildLookups()
+	require.NoError(t, env.engine.SyncPathsContext(
+		context.Background(), []string{oc.path},
+	))
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"the watcher pass must not scan child tables for an above-composite "+
+			"child append")
+	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
+		"an above-composite child-only append yields no candidates")
+	assertMessageContent(
+		t, env.db, "opencode:below-mark",
+		"swapped prompt", "swapped answer",
+	)
+
+	fullStats = env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, fullStats.Synced,
+		"full discovery must reconcile the deferred above-composite append")
+	assertMessageContent(
+		t, env.db, "opencode:below-mark",
+		"swapped prompt", "swapped answer", "late answer",
 	)
 }
 

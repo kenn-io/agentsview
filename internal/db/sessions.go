@@ -2170,9 +2170,13 @@ type VirtualContainerMemberFreshness struct {
 // tombstones, keyed by file_path. Changed-path classification compares a
 // watermark-only listing against it in one indexed range query, so a
 // one-session write flows one candidate into the sync pipeline instead of
-// every session in the container. The range predicate rides
-// idx_sessions_file_path; '$' is the ASCII successor of '#', so the
-// half-open range covers exactly the "<containerPath>#" prefix.
+// every session in the container. Returning one small row per stored member
+// is O(member count) by design and is the point: per-session freshness needs
+// per-session stored state, and this single batched index-range read
+// replaces the two point queries per session the pipeline would otherwise
+// pay. The range predicate rides idx_sessions_file_path; '$' is the ASCII
+// successor of '#', so the half-open range covers exactly the
+// "<containerPath>#" prefix.
 func (db *DB) ListVirtualContainerMemberFreshness(
 	ctx context.Context, containerPath string,
 ) (map[string]VirtualContainerMemberFreshness, error) {

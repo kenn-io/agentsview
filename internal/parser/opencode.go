@@ -138,12 +138,24 @@ func ListOpenCodeSessionWatermarkMeta(
 // changed-path classification lists sessions through this bounded form and
 // leaves the full composite and child digest to the indexed per-session
 // lookup, which the engine runs only for sessions it cannot skip against
-// their stored watermark. What this signal cannot see — a child write that
-// stays at or below the stored composite without touching the session or
-// project row — is reconciled by the next full-discovery pass, which still
-// carries the complete child digest. Legacy containers without composite
-// support keep the full listing; their conservative container-size
-// fingerprint must not be bypassed by a watermark-only skip.
+// their stored watermark. What this signal cannot see — a child-only write
+// that leaves the session and project rows untouched, wherever its
+// timestamps land relative to the stored composite — is a known, deliberate
+// deferral reconciled by the next full-discovery pass, which still carries
+// the complete child digest (see the change-detection entry in
+// docs/internal/session-format-sources.md). Legacy containers without
+// composite support keep the full listing; their conservative
+// container-size fingerprint must not be bypassed by a watermark-only skip.
+//
+// This listing scans the session table once and that scan is O(session
+// count) by design: OpenCode's schema indexes neither time_updated column,
+// and the schema is not ours to alter, so any sound candidate selection
+// must read every session row. The rows are few and fixed-width (one per
+// session, no transcript bytes), which is what makes this the bounded form
+// — the quantities that previously scaled with the archive were the child
+// tables (two orders of magnitude more rows) and the per-event
+// materialization downstream, and both are now bounded by the changed
+// batch.
 func ForEachOpenCodeSessionWatermarkMeta(
 	ctx context.Context,
 	dbPath string,

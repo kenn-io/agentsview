@@ -169,10 +169,21 @@ func openCodeContainerPathForChangedPathEvent(
 // pipeline instead of every session in the container. The comparison is
 // per-session — a watermark that advances past its own stored composite is
 // always kept, wherever other sessions' watermarks sit — and sessions with
-// no stored row or a stale data version are kept unconditionally. Child
-// writes at or below the stored composite are invisible here by design and
-// reconcile on the next full-discovery pass. Fails open: on a query error
-// every source is kept and the per-file gate decides instead.
+// no stored row or a stale data version are kept unconditionally.
+//
+// Known, deliberate deferral (not a detection gap to "fix" here): a
+// child-only write that leaves the session and project rows untouched is
+// invisible to the session-row watermark wherever its timestamps land —
+// above or below the stored composite alike. Detecting it per event would
+// require reading child rows, which is exactly the archive-sized work this
+// path exists to avoid. Such writes reconcile on the next full-discovery
+// pass, whose digest still catches them (the write itself broke container
+// trust, so that pass carries the full digest); actively watched sessions
+// bypass this path entirely via the per-session composite poll. The
+// contract is documented in docs/internal/session-format-sources.md and
+// pinned by TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery.
+// Fails open: on a query error every source is kept and the per-file gate
+// decides instead.
 func (e *Engine) filterFreshWatermarkOnlySources(
 	ctx context.Context,
 	agent parser.AgentType,
@@ -387,11 +398,13 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 // already covered by its stored composite watermark. The stored MTimeNS is
 // MAX(session, project, child times) from the last parse, so a session-row
 // watermark at or below it proves the session and project rows did not
-// advance; the parse is skipped without resolving the child digest. What the
-// watermark cannot see — a child write at or below the stored composite that
-// leaves the session row untouched — is deliberately deferred to the next
-// full-discovery pass, whose carried digest still catches it. That keeps
-// per-event work bounded by the changed batch instead of the archive.
+// advance; the parse is skipped without resolving the child digest. What
+// the watermark cannot see — any child-only write that leaves the session
+// and project rows untouched, above or below the stored composite alike —
+// is deliberately deferred to the next full-discovery pass, whose carried
+// digest still catches it (see filterFreshWatermarkOnlySources for the full
+// contract). That keeps per-event work bounded by the changed batch instead
+// of the archive.
 func (e *Engine) watermarkOnlySQLiteSourceFresh(
 	source parser.SourceRef,
 	file parser.DiscoveredFile,

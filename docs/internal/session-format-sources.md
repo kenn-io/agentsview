@@ -300,13 +300,18 @@ Grok section and remove the explicit registry exception in the coverage test.
   the watermark form (`SQLiteContainerUnchangedSinceTrust`): every member
   gate-skips before fingerprinting, so the child identity scan would be
   archive-sized work nothing reads; any write breaks that trust and the next
-  full pass carries the complete digest again. The trade is explicit: a child
-  write at or below the stored composite that leaves the session and project
-  rows untouched is invisible to a watcher pass and is reconciled by the next
-  full-discovery pass over the now-untrusted container, whose digest still
-  catches it; on the production container above, 96% of sessions carry a
-  session/project timestamp at or above every child, and actively watched
-  sessions bypass this entirely via the per-session composite poll.
+  full pass carries the complete digest again. The trade is explicit: any
+  child-only write that leaves the session and project rows untouched —
+  wherever its timestamps land relative to the stored composite — is
+  invisible to a watcher pass and is reconciled by the next full-discovery
+  pass over the now-untrusted container, whose digest still catches it; on
+  the production container above, 96% of sessions carry a session/project
+  timestamp at or above every child, and actively watched sessions bypass
+  this entirely via the per-session composite poll. Per-event work is
+  bounded by the changed batch plus one O(session-count) scan of small
+  fixed-width rows (the session table and the stored-member range query);
+  that floor is irreducible without a watermark index, which OpenCode's
+  schema does not have and which is not agentsview's to add.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
