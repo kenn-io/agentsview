@@ -167,6 +167,11 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_floors (
     sequence INTEGER NOT NULL
 );
 
+INSERT INTO artifact_checkpoint_floors(origin, sequence)
+SELECT origin, sequence FROM artifact_checkpoint_heads WHERE true
+ON CONFLICT(origin) DO UPDATE SET
+    sequence = max(artifact_checkpoint_floors.sequence, excluded.sequence);
+
 -- Stats table maintained by triggers
 CREATE TABLE IF NOT EXISTS stats (
     key   TEXT PRIMARY KEY,

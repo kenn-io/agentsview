@@ -422,6 +422,15 @@ func (db *DB) RecordArtifactCheckpointHeadOutcomes(
 			head.Origin, head.Sequence,
 		)
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO artifact_checkpoint_floors(origin, sequence)
+		VALUES (?, ?)
+		ON CONFLICT(origin) DO UPDATE SET
+			sequence = max(artifact_checkpoint_floors.sequence, excluded.sequence)`,
+		head.Origin, head.Sequence,
+	); err != nil {
+		return fmt.Errorf("advancing artifact checkpoint floor from head: %w", err)
+	}
 	if err := finalizeArtifactExportOutcomesTx(ctx, tx, outcomes); err != nil {
 		return err
 	}

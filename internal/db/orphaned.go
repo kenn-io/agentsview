@@ -444,6 +444,16 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_checkpoint_floors(origin, sequence)
+		SELECT origin, sequence FROM main.artifact_checkpoint_heads WHERE true
+		ON CONFLICT(origin) DO UPDATE SET
+			sequence = max(
+				artifact_checkpoint_floors.sequence,
+				excluded.sequence
+			)`); err != nil {
+		return fmt.Errorf("advancing copied artifact checkpoint floors: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO main.artifact_export_queue(session_id)
 		SELECT id FROM main.sessions
 		WHERE machine = 'local'

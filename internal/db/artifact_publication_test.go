@@ -1213,6 +1213,63 @@ func TestArtifactCheckpointFloorReservationIsConcurrentAndNeverLowers(t *testing
 	assert.Equal(t, 11+reservations, next)
 }
 
+func TestArtifactCheckpointHeadAdvancesSequenceFloor(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, database.RecordArtifactCheckpointHead(
+		ctx, ArtifactCheckpointHead{
+			Origin: "desktop-a1b2c3", Sequence: 7,
+			SessionMapSHA256: "map", CheckpointSHA256: "checkpoint",
+		}, nil,
+	))
+
+	floor, ok, err := database.GetArtifactCheckpointFloor(
+		ctx, "desktop-a1b2c3",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 7, floor)
+	next, err := database.ReserveArtifactCheckpointSequence(
+		ctx, "desktop-a1b2c3", 0,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 8, next)
+}
+
+func TestOpenBackfillsCheckpointFloorFromLegacyHeadWhenStoreIsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-head.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, database.RecordArtifactCheckpointHead(
+		t.Context(), ArtifactCheckpointHead{
+			Origin: "desktop-a1b2c3", Sequence: 7,
+			SessionMapSHA256: "map", CheckpointSHA256: "checkpoint",
+		}, nil,
+	))
+	_, err = database.getWriter().Exec(`
+		DELETE FROM artifact_checkpoint_floors
+		WHERE origin = 'desktop-a1b2c3'`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	floor, ok, err := reopened.GetArtifactCheckpointFloor(
+		t.Context(), "desktop-a1b2c3",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 7, floor)
+	// observedFloor=0 models recovery against an empty or reset artifact
+	// store: the migrated database head remains the sequence authority.
+	next, err := reopened.ReserveArtifactCheckpointSequence(
+		t.Context(), "desktop-a1b2c3", 0,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 8, next)
+}
+
 func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
@@ -1487,6 +1544,17 @@ func TestArtifactPublicationStateCopyAcceptsPreRevisionCheckpointHead(t *testing
 	assert.Equal(t, 4, head.Sequence)
 	assert.Zero(t, head.PublicationRevision)
 	assert.Zero(t, head.CheckpointSize)
+	floor, ok, err := target.GetArtifactCheckpointFloor(
+		t.Context(), "desktop-a1b2c3",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 4, floor)
+	next, err := target.ReserveArtifactCheckpointSequence(
+		t.Context(), "desktop-a1b2c3", 0,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 5, next)
 }
 
 func TestArtifactPublicationExportCardinalityIsQueueBounded(t *testing.T) {
