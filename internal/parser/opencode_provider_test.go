@@ -1159,8 +1159,36 @@ func TestOpenCodeWatermarkOnlyQuerySkipsDigestScans(t *testing.T) {
 
 	assert.NotContains(t, watermarkOnly, "COUNT(",
 		"the mtime-only query must not compute child counts")
-	assert.NotContains(t, watermarkOnly, "SUM(",
-		"the mtime-only query must not compute child time sums")
+	assert.NotContains(t, watermarkOnly, "group_concat(",
+		"the mtime-only query must not build child identities")
 	assert.Contains(t, full, "COUNT(",
 		"the fingerprint query must still compute the digest aggregates")
+
+	// Both must be executable, not merely string-shaped: assert against a real
+	// container so a query that only looks right still fails here.
+	root := t.TempDir()
+	_, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	var watermark int64
+	require.NoError(t,
+		db.QueryRow(watermarkOnly, "ses_a").Scan(&watermark),
+		"the mtime-only query must execute")
+	assert.Equal(t, int64(1700000010000), watermark)
+
+	var (
+		w, st, pt, mn, pn int64
+		mIdent, pIdent    string
+	)
+	require.NoError(t,
+		db.QueryRow(full, "ses_a").Scan(
+			&w, &st, &pt, &mn, &pn, &mIdent, &pIdent,
+		),
+		"the fingerprint query must execute")
+	assert.Equal(t, watermark, w,
+		"both queries must agree on the watermark")
 }

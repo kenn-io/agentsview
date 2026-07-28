@@ -732,7 +732,11 @@ func (s openCodeFormatSourceSet) Fingerprint(
 	mtime := sourceCarriedMTimeNS(source)
 	composite := sourceCarriedCompositeMTime(source)
 	digest := sourceCarriedChildDigest(source)
-	if mtime == 0 || digest == "" {
+	// Only re-open the container when a digest is actually expected. A legacy
+	// container reports composite=false and carries an empty digest by design,
+	// so treating "empty" alone as "missing" would reopen and re-query the
+	// shared database once per session on every cold or changed-container pass.
+	if mtime == 0 || (composite && digest == "") {
 		// Sources rebuilt by FindSource or reconciliation carry no discovery
 		// metadata. Without this the hash would be empty, and an empty hash is
 		// treated as no constraint by the freshness gate — so a deletion-only
