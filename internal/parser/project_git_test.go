@@ -643,6 +643,22 @@ func TestExtractProjectFromCwd_HostingWorktreeLayouts(t *testing.T) {
 	}
 }
 
+func TestExtractProjectFromCwd_HostingLayoutInsideGitRepoPrefersRepo(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "outer-repo")
+	cwd := filepath.Join(
+		repo, "worktrees", "github.com", "example-org",
+		"sample-repo", "fixture",
+	)
+
+	mustMkdirAll(t, filepath.Join(repo, ".git"))
+	mustMkdirAll(t, cwd)
+
+	assert.Equal(t, "outer_repo", ExtractProjectFromCwd(cwd))
+}
+
 func TestProjectFromWorktreeLayoutRequiresWorktreeLeaf(t *testing.T) {
 	root := t.TempDir()
 	tests := []string{

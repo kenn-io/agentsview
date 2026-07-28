@@ -115,10 +115,10 @@ func extractProjectFromCwdWithBranch(
 	}
 	cleaned := filepath.Clean(norm)
 
-	// Recognize worktree manager layouts before walking git roots.
-	// These layouts encode the owning project in the path even when
+	// Recognize tool-anchored worktree manager layouts before walking git
+	// roots. These layouts encode the owning project in the path even when
 	// the git root basename is a branch or generated worktree id.
-	if p := projectFromWorktreeLayout(cleaned); p != "" {
+	if p := projectFromAnchoredWorktreeLayout(cleaned); p != "" {
 		return NormalizeName(p)
 	}
 
@@ -135,6 +135,13 @@ func extractProjectFromCwdWithBranch(
 			}
 			return NormalizeName(name)
 		}
+	}
+
+	// Generic hosting layouts are intentionally a fallback after live Git
+	// metadata. Otherwise a normal repository containing a matching fixture
+	// path would be attributed to the fixture's repository component.
+	if p := projectFromWorktreeLayout(cleaned); p != "" {
+		return NormalizeName(p)
 	}
 
 	name := filepath.Base(cleaned)
@@ -156,6 +163,7 @@ type worktreeLayout struct {
 	projectPart         int
 	minParts            int
 	roborevCIBareLayout bool
+	gitFallbackOnly     bool
 }
 
 var worktreeLayouts []worktreeLayout
@@ -173,14 +181,16 @@ func init() {
 		{
 			marker: sep + "worktrees" + sep + "github" + sep +
 				"github.com" + sep,
-			projectPart: 1,
-			minParts:    3,
+			projectPart:     1,
+			minParts:        3,
+			gitFallbackOnly: true,
 		},
 		// .../worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
 		{
-			marker:      sep + "worktrees" + sep + "github.com" + sep,
-			projectPart: 1,
-			minParts:    3,
+			marker:          sep + "worktrees" + sep + "github.com" + sep,
+			projectPart:     1,
+			minParts:        3,
+			gitFallbackOnly: true,
 		},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
@@ -201,7 +211,18 @@ func init() {
 // directory layouts and extracts the project name component.
 // Returns "" if the path does not match any known layout.
 func projectFromWorktreeLayout(path string) string {
+	return projectFromWorktreeLayouts(path, true)
+}
+
+func projectFromAnchoredWorktreeLayout(path string) string {
+	return projectFromWorktreeLayouts(path, false)
+}
+
+func projectFromWorktreeLayouts(path string, includeGitFallbacks bool) string {
 	for _, layout := range worktreeLayouts {
+		if layout.gitFallbackOnly && !includeGitFallbacks {
+			continue
+		}
 		_, rest, found := strings.Cut(path, layout.marker)
 		if !found {
 			continue
