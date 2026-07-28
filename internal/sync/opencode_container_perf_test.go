@@ -28,7 +28,7 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
-	unchangedSkips := make(map[int]int)
+	rewritten := make(map[int]int)
 	for _, n := range []int{20, 200} {
 		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
@@ -59,10 +59,11 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 				"only the changed session may be rewritten")
 			assert.Equal(t, n-1, stats.Skipped,
 				"every unchanged session in the shared container must skip")
-			unchangedSkips[n] = stats.Synced
+			rewritten[n] = stats.Synced
 		})
 	}
 
-	assert.Equal(t, unchangedSkips[20], unchangedSkips[200],
-		"work for one changed session must not grow with container size")
+	assert.Equal(t, rewritten[20], rewritten[200],
+		"sessions rewritten for one changed session must not grow with "+
+			"container size")
 }

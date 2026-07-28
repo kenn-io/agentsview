@@ -1103,3 +1103,43 @@ func newTestDBAt(
 	require.NoError(t, err, "open test db")
 	return dbPath, &OpenCodeSeeder{db: db, t: t}, db
 }
+
+// TestOpenCodeSingleSessionMtimeDoesNotScanContainer pins the query shape of
+// the single-session composite lookup. Reusing the streaming form's grouped
+// subqueries here materializes an aggregate over every message and part in the
+// container before the outer WHERE narrows to one session, so each per-session
+// lookup would scan the whole archive. Assert the plan touches the child tables
+// through their session_id indexes rather than a full scan.
+func TestOpenCodeSingleSessionMtimeDoesNotScanContainer(t *testing.T) {
+	root := t.TempDir()
+	_, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	query := "SELECT " + openCodeSessionCompositeMtimeExpr +
+		" FROM session s" + openCodeSessionCompositeMtimeJoins +
+		" WHERE s.id = ?"
+	rows, err := db.Query("EXPLAIN QUERY PLAN "+query, "ses_a")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		plan.WriteString(detail)
+		plan.WriteString("\n")
+	}
+	require.NoError(t, rows.Err())
+
+	got := plan.String()
+	for _, table := range []string{"message", "part"} {
+		assert.NotContains(t, got, "SCAN "+table,
+			"single-session composite mtime must not full-scan %s; plan:\n%s",
+			table, got)
+	}
+}

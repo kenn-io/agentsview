@@ -152,8 +152,8 @@ func openCodeSessionCompositeMtime(
 	}
 	query := "SELECT s.time_updated FROM session s WHERE s.id = ?"
 	if composite {
-		query = "SELECT " + openCodeCompositeMtimeExpr +
-			" FROM session s" + openCodeCompositeMtimeJoins +
+		query = "SELECT " + openCodeSessionCompositeMtimeExpr +
+			" FROM session s" + openCodeSessionCompositeMtimeJoins +
 			" WHERE s.id = ?"
 	}
 	var timeUpdated int64
@@ -489,6 +489,8 @@ func openCodeSessionHasDirectoryCached(
 //
 // The child scans read only small columns; OpenCode keeps each part's `data`
 // in SQLite overflow pages, so this does not read transcript bytes.
+// The streaming form groups the child tables once for the whole container, so
+// listing every session costs a single pass over each child table.
 const openCodeCompositeMtimeExpr = `MAX(s.time_updated,
 		COALESCE(pr.time_updated, 0),
 		COALESCE(m.mx, 0),
@@ -502,6 +504,24 @@ const openCodeCompositeMtimeJoins = `
 	LEFT JOIN (
 		SELECT session_id, MAX(time_updated) mx FROM part GROUP BY session_id
 	) p ON p.session_id = s.id`
+
+// The single-session form must NOT reuse the grouped subqueries above: a
+// GROUP BY subquery is materialized over the whole container before the outer
+// WHERE narrows to one session, so every per-session lookup would scan every
+// message and part in the container. Correlated aggregates filtered by
+// session_id ride the message/part session_id indexes instead, which is the
+// difference between an index seek and an archive-wide scan on every call.
+const openCodeSessionCompositeMtimeExpr = `MAX(s.time_updated,
+		COALESCE(pr.time_updated, 0),
+		COALESCE((
+			SELECT MAX(time_updated) FROM message WHERE session_id = s.id
+		), 0),
+		COALESCE((
+			SELECT MAX(time_updated) FROM part WHERE session_id = s.id
+		), 0))`
+
+const openCodeSessionCompositeMtimeJoins = `
+	LEFT JOIN project pr ON pr.id = s.project_id`
 
 // openCodeCompositeMtimeSupportedCached reports whether this container's schema
 // carries every column openCodeCompositeMtimeExpr needs. Older OpenCode-family

@@ -31,9 +31,15 @@ func ComputeFileHash(path string) (string, error) {
 }
 
 // computeFileHashPrefix indirects ComputeFileHashPrefix so cardinality-scaling
-// tests can count how many source-content reads one sync pass performs. Every
-// freshness-gate caller must go through this var rather than calling
-// ComputeFileHashPrefix directly, or the scaling regression test goes blind.
+// tests can count the source-content reads a sync pass performs *to decide
+// freshness*. Only providerIncrementalContentChanged goes through it today.
+//
+// The incremental-append path also hashes (to refresh a stored fingerprint
+// after consuming new bytes) and deliberately calls ComputeFileHashPrefix
+// directly: that read is write-side work proportional to data that genuinely
+// changed, not a per-session freshness probe, so counting it would blur the
+// invariant TestWarmFullSyncDoesNotRehashClaudeArchive pins. Route a new
+// freshness gate through this var; leave write-side hashing on the direct call.
 var computeFileHashPrefix = ComputeFileHashPrefix
 
 // ComputeFileHashPrefix returns the SHA-256 hex digest of the first size bytes
