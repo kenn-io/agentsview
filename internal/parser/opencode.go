@@ -106,8 +106,8 @@ func ForEachOpenCodeSessionMeta(
 	if err != nil {
 		return err
 	}
-	query := "SELECT s.id, s.time_updated, 0, 0, 0, 0, '', '', '', '' " +
-		"FROM session s"
+	query := "SELECT s.id, s.time_updated, s.time_updated, 0, " +
+		"0, 0, 0, 0, '', '', '', '' FROM session s"
 	if composite {
 		query = "SELECT s.id, " + openCodeCompositeMtimeExpr + ", " +
 			openCodeCompositeCountsExpr +
@@ -126,7 +126,8 @@ func ForEachOpenCodeSessionMeta(
 		var id string
 		var agg openCodeChildAggregate
 		if err := rows.Scan(
-			&id, &agg.watermark, &agg.messages, &agg.parts,
+			&id, &agg.watermark, &agg.sessionTime, &agg.projectTime,
+			&agg.messages, &agg.parts,
 			&agg.messageTimeSum, &agg.partTimeSum,
 			&agg.messageLoID, &agg.messageHiID,
 			&agg.partLoID, &agg.partHiID,
@@ -161,8 +162,8 @@ func openCodeSessionCompositeMtime(
 	if err != nil {
 		return 0, "", false, err
 	}
-	query := "SELECT s.time_updated, 0, 0, 0, 0, '', '', '', '' " +
-		"FROM session s WHERE s.id = ?"
+	query := "SELECT s.time_updated, s.time_updated, 0, 0, " +
+		"0, 0, 0, '', '', '', '' FROM session s WHERE s.id = ?"
 	if composite {
 		query = "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
 			openCodeSessionCompositeCountsExpr +
@@ -171,7 +172,8 @@ func openCodeSessionCompositeMtime(
 	}
 	var agg openCodeChildAggregate
 	if err := db.QueryRow(query, sessionID).Scan(
-		&agg.watermark, &agg.messages, &agg.parts,
+		&agg.watermark, &agg.sessionTime, &agg.projectTime,
+		&agg.messages, &agg.parts,
 		&agg.messageTimeSum, &agg.partTimeSum,
 		&agg.messageLoID, &agg.messageHiID,
 		&agg.partLoID, &agg.partHiID,
@@ -187,10 +189,44 @@ func openCodeSessionCompositeMtime(
 	return agg.watermark, agg.digest(composite), composite, nil
 }
 
+// openCodeSessionWatermark resolves only the composite watermark, skipping the
+// eight child COUNT/SUM/MIN/MAX subqueries that make up the digest. Callers
+// that stamp or compare an mtime do not need the digest, and one of them
+// (OpenCodeSourceMtime) backs the session watcher's 1.5s poll, so computing a
+// digest there would burn eight child-range scans per tick per watched session
+// for a value the caller discards.
+func openCodeSessionWatermark(
+	db *sql.DB, dbPath, sessionID string,
+) (int64, bool, error) {
+	composite, err := openCodeCompositeMtimeSupportedCached(db, dbPath)
+	if err != nil {
+		return 0, false, err
+	}
+	query := "SELECT s.time_updated FROM session s WHERE s.id = ?"
+	if composite {
+		query = "SELECT " + openCodeSessionCompositeMtimeExpr +
+			" FROM session s" + openCodeSessionCompositeMtimeJoins +
+			" WHERE s.id = ?"
+	}
+	var watermark int64
+	if err := db.QueryRow(query, sessionID).Scan(&watermark); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, composite, nil
+		}
+		return 0, composite, fmt.Errorf(
+			"loading opencode session mtime %s#%s: %w",
+			dbPath, sessionID, err,
+		)
+	}
+	return watermark, composite, nil
+}
+
 // openCodeChildAggregate is the cheap per-session identity read alongside the
 // watermark. Each component covers a change the others cannot:
 //
 //   - watermark: an edit or insert that advances a timestamp
+//   - session/project times: a metadata update, including a worktree rename,
+//     that lands below an already-higher child watermark
 //   - counts: a deletion, which never moves a MAX
 //   - time sums: an edit whose new timestamp still sits below the watermark
 //   - id range: a same-count replacement that reuses the old timestamps
@@ -199,6 +235,8 @@ func openCodeSessionCompositeMtime(
 // not read the transcript text held in overflow pages.
 type openCodeChildAggregate struct {
 	watermark      int64
+	sessionTime    int64
+	projectTime    int64
 	messages       int64
 	parts          int64
 	messageTimeSum int64
@@ -214,9 +252,10 @@ func (a openCodeChildAggregate) digest(composite bool) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"%s%d:%d:%d:%d:%d:%s:%s:%s:%s",
+		"%s%d:%d:%d:%d:%d:%d:%d:%s:%s:%s:%s",
 		openCodeChildDigestPrefix,
-		a.watermark, a.messages, a.parts,
+		a.watermark, a.sessionTime, a.projectTime,
+		a.messages, a.parts,
 		a.messageTimeSum, a.partTimeSum,
 		a.messageLoID, a.messageHiID, a.partLoID, a.partHiID,
 	)
@@ -569,12 +608,16 @@ const openCodeCompositeMtimeJoins = `
 // real container the session or project row usually already holds the higher
 // value, so removing a message or part leaves the max untouched and the
 // session would look fresh with the deleted content still archived.
-const openCodeCompositeCountsExpr = `COALESCE(m.n, 0), COALESCE(p.n, 0),
+const openCodeCompositeCountsExpr = `s.time_updated,
+	COALESCE(pr.time_updated, 0),
+	COALESCE(m.n, 0), COALESCE(p.n, 0),
 	COALESCE(m.sm, 0), COALESCE(p.sm, 0),
 	COALESCE(m.lo, ''), COALESCE(m.hi, ''),
 	COALESCE(p.lo, ''), COALESCE(p.hi, '')`
 
 const openCodeSessionCompositeCountsExpr = `
+	s.time_updated,
+	COALESCE(pr.time_updated, 0),
 	(SELECT COUNT(*) FROM message WHERE session_id = s.id),
 	(SELECT COUNT(*) FROM part WHERE session_id = s.id),
 	(SELECT COALESCE(SUM(time_updated), 0) FROM message WHERE session_id = s.id),
@@ -888,7 +931,7 @@ func buildOpenCodeSession(
 	// file_mtime is directly comparable to it. Falling back to the session
 	// row's own time_updated keeps legacy containers on their prior value.
 	fileMtime := s.timeUpdated
-	if composite, _, _, err := openCodeSessionCompositeMtime(
+	if composite, _, err := openCodeSessionWatermark(
 		db, dbPath, s.id,
 	); err != nil {
 		return nil, nil, err
@@ -1728,7 +1771,7 @@ func openCodeSQLiteSessionMtime(
 	}
 	defer db.Close()
 
-	timeUpdated, _, _, err := openCodeSessionCompositeMtime(db, dbPath, sessionID)
+	timeUpdated, _, err := openCodeSessionWatermark(db, dbPath, sessionID)
 	if err != nil {
 		return 0, err
 	}

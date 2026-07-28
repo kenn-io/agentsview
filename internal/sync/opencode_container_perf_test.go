@@ -168,3 +168,33 @@ func TestOpenCodeSameCountChildReplacementIsDetected(t *testing.T) {
 		"a same-count child replacement below the session watermark must "+
 			"still change the fingerprint")
 }
+
+// TestOpenCodeMetadataUpdateBelowWatermarkIsDetected covers a project worktree
+// rename whose timestamp lands below an already-higher child watermark. The
+// composite MAX cannot move in that case, so the digest has to carry the
+// session and project timestamps in their own right.
+func TestOpenCodeMetadataUpdateBelowWatermarkIsDetected(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/original-app")
+	// Children hold the highest timestamp, so a later project rename below
+	// that value leaves MAX(...) unchanged.
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "below-watermark",
+		1779012000000, 1779012030000,
+		"stable prompt", "stable answer",
+	)
+	oc.mustExec(t, "raise child watermark",
+		"UPDATE part SET time_updated = ? WHERE session_id = ?",
+		1779099999000, "below-watermark")
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	// Rename below the child watermark.
+	oc.updateProjectWorktree(
+		t, "proj", "/home/user/code/renamed-app", 1779013000000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced,
+		"a metadata update below the child watermark must still be detected")
+}

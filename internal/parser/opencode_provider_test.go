@@ -1143,3 +1143,24 @@ func TestOpenCodeSingleSessionMtimeDoesNotScanContainer(t *testing.T) {
 			table, got)
 	}
 }
+
+// TestOpenCodeWatermarkOnlyQuerySkipsDigestScans pins that the mtime-only path
+// does not compute the digest aggregates. OpenCodeSourceMtime backs the session
+// watcher's 1.5s poll, so pulling the eight child COUNT/SUM/MIN/MAX subqueries
+// in there would burn child-range scans per tick for a discarded value.
+func TestOpenCodeWatermarkOnlyQuerySkipsDigestScans(t *testing.T) {
+	watermarkOnly := "SELECT " + openCodeSessionCompositeMtimeExpr +
+		" FROM session s" + openCodeSessionCompositeMtimeJoins +
+		" WHERE s.id = ?"
+	full := "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
+		openCodeSessionCompositeCountsExpr +
+		" FROM session s" + openCodeSessionCompositeMtimeJoins +
+		" WHERE s.id = ?"
+
+	assert.NotContains(t, watermarkOnly, "COUNT(",
+		"the mtime-only query must not compute child counts")
+	assert.NotContains(t, watermarkOnly, "SUM(",
+		"the mtime-only query must not compute child time sums")
+	assert.Contains(t, full, "COUNT(",
+		"the fingerprint query must still compute the digest aggregates")
+}
