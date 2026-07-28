@@ -98,6 +98,13 @@ func assertEqual[T comparable](t *testing.T, want, got T, name string) {
 	assert.Equal(t, want, got, name)
 }
 
+func TestCopilotProviderCapabilities(t *testing.T) {
+	caps := copilotProviderCapabilities()
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResultEvents)
+}
+
 func TestParseCopilotSession_Basic(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"abc-123","context":{"cwd":"/home/alice/code/myproject","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
@@ -192,6 +199,26 @@ func TestParseCopilotSession_ToolResultTypes(t *testing.T) {
 			assertEqual(t, tt.expectedLen, trMsg.ToolResults[0].ContentLength, "tool result ContentLength")
 		})
 	}
+}
+
+func TestParseCopilotSession_ToolEventsUseLatestMatchingCall(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"reused-call-id"},"timestamp":"2026-07-28T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Run both checks"},"timestamp":"2026-07-28T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"toolRequests":[{"toolCallId":"shared","name":"first","arguments":"{}"}]},"timestamp":"2026-07-28T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"toolRequests":[{"toolCallId":"shared","name":"second","arguments":"{}"}]},"timestamp":"2026-07-28T10:00:03Z"}`,
+		`{"type":"tool.execution_start","data":{"toolCallId":"unknown"},"timestamp":"2026-07-28T10:00:03.500Z"}`,
+		`{"type":"tool.execution_start","data":{"toolCallId":"shared"},"timestamp":"2026-07-28T10:00:04Z"}`,
+		`{"type":"tool.execution_complete","data":{"toolCallId":"shared","result":"done"},"timestamp":"2026-07-28T10:00:05Z"}`,
+	)
+
+	_, msgs := parseAndValidateHelper(t, path, "m", 4)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents)
+	require.Len(t, msgs[2].ToolCalls, 1)
+	require.Len(t, msgs[2].ToolCalls[0].ResultEvents, 2)
+	assert.Equal(t, "started", msgs[2].ToolCalls[0].ResultEvents[0].Status)
+	assert.Equal(t, "completed", msgs[2].ToolCalls[0].ResultEvents[1].Status)
 }
 
 func TestParseCopilotSession_Reasoning(t *testing.T) {

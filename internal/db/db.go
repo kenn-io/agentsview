@@ -333,7 +333,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (74: Claude Code IDE context reparse. Standalone ide_opened_file and
 // ide_selection wrappers are promoted to system metadata so existing
 // VS Code sessions no longer use them as titles or user turns.)
-const dataVersion = 74
+// (75: GitHub Copilot CLI tool execution events now provide exact tool
+// durations. Existing Copilot sessions need re-parsing to populate those
+// events and replace idle-gap timing with execution intervals.)
+const dataVersion = 75
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

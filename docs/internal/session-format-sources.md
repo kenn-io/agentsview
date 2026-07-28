@@ -162,8 +162,12 @@ Grok section and remove the explicit registry exception in the coverage test.
   including reindex behavior, but not the event or database schema. The
   [configuration-directory reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)
   further identifies `events.jsonl` and workspace artifacts. No
-  producer-side serializer is public. For independent legacy CLI and sibling
-  Copilot-store observations, clone
+  producer-side serializer is public. Reverified 2026-07-28 against the
+  sanitized session shape reported in
+  [#1288](https://github.com/kenn-io/agentsview/issues/1288): `events.jsonl`
+  emits matching `tool.execution_start` and `tool.execution_complete` records
+  keyed by `toolCallId`, whose timestamps provide the exact execution interval.
+  For independent legacy CLI and sibling Copilot-store observations, clone
   `https://github.com/getagentseal/codeburn.git` at
   `3472885629c41725b40c19c0780ecce148b067bf` and inspect its
   [Copilot format notes](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/docs/providers/copilot.md)

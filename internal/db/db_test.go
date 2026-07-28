@@ -1008,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionClaudeIDEContext(t *testing.T) {
-	assert.Equal(t, 74, CurrentDataVersion(),
-		"Claude IDE context parsing requires a data version bump")
+func TestCurrentDataVersionCopilotExactToolTiming(t *testing.T) {
+	assert.Equal(t, 75, CurrentDataVersion(),
+		"Copilot exact tool timing requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

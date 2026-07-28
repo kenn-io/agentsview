@@ -32,11 +32,17 @@ var copilotUsageBasedPricingStartedAt = time.Date(
 	2026, time.June, 1, 0, 0, 0, 0, time.UTC,
 )
 
+type copilotToolCallRef struct {
+	messageIndex int
+	callIndex    int
+}
+
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
 	messages     []ParsedMessage
 	usageEvents  []ParsedUsageEvent
+	toolCallRefs map[string]copilotToolCallRef
 	firstMessage string
 	startedAt    time.Time
 	endedAt      time.Time
@@ -48,7 +54,8 @@ type copilotSessionBuilder struct {
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
 	return &copilotSessionBuilder{
-		project: "unknown",
+		project:      "unknown",
+		toolCallRefs: make(map[string]copilotToolCallRef),
 	}
 }
 
@@ -208,6 +215,17 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 		OutputTokens:    outputTokens,
 		HasOutputTokens: hasOutputTokens,
 	})
+	messageIndex := len(b.messages) - 1
+	for callIndex := range b.messages[messageIndex].ToolCalls {
+		toolCallID := b.messages[messageIndex].ToolCalls[callIndex].ToolUseID
+		if toolCallID == "" {
+			continue
+		}
+		b.toolCallRefs[toolCallID] = copilotToolCallRef{
+			messageIndex: messageIndex,
+			callIndex:    callIndex,
+		}
+	}
 	b.ordinal++
 }
 
@@ -254,24 +272,21 @@ func (b *copilotSessionBuilder) handleToolEvent(
 func (b *copilotSessionBuilder) appendToolEvent(
 	toolCallID string, ts time.Time, status string,
 ) {
-	for i := len(b.messages) - 1; i >= 0; i-- {
-		for j := range b.messages[i].ToolCalls {
-			call := &b.messages[i].ToolCalls[j]
-			if call.ToolUseID != toolCallID {
-				continue
-			}
-			call.ResultEvents = append(
-				call.ResultEvents,
-				ParsedToolResultEvent{
-					ToolUseID: toolCallID,
-					Source:    copilotToolEventSource,
-					Status:    status,
-					Timestamp: ts,
-				},
-			)
-			return
-		}
+	ref, ok := b.toolCallRefs[toolCallID]
+	if !ok || ref.messageIndex < 0 || ref.messageIndex >= len(b.messages) {
+		return
 	}
+	if ref.callIndex < 0 ||
+		ref.callIndex >= len(b.messages[ref.messageIndex].ToolCalls) {
+		return
+	}
+	call := &b.messages[ref.messageIndex].ToolCalls[ref.callIndex]
+	call.ResultEvents = append(call.ResultEvents, ParsedToolResultEvent{
+		ToolUseID: toolCallID,
+		Source:    copilotToolEventSource,
+		Status:    status,
+		Timestamp: ts,
+	})
 }
 
 func (b *copilotSessionBuilder) handleAssistantReasoning() {

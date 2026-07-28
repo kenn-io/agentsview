@@ -220,6 +220,213 @@ func TestActiveGapCapConstantsAgree(t *testing.T) {
 	)
 }
 
+func TestExactTurnDuration(t *testing.T) {
+	exact := func(started, ended string) CallRow {
+		return CallRow{
+			ExactStartedAt: &started,
+			ExactEndedAt:   &ended,
+		}
+	}
+	startOnly := func(started string) CallRow {
+		return CallRow{ExactStartedAt: &started}
+	}
+	endOnly := func(ended string) CallRow {
+		return CallRow{ExactEndedAt: &ended}
+	}
+
+	tests := []struct {
+		name  string
+		calls []CallRow
+		want  *int64
+	}{
+		{
+			name: "single exact interval",
+			calls: []CallRow{exact(
+				"2026-07-28T10:00:00.125Z",
+				"2026-07-28T10:00:03.850Z",
+			)},
+			want: timingInt64Ptr(3_725),
+		},
+		{
+			name:  "completion without start",
+			calls: []CallRow{endOnly("2026-07-28T10:00:03Z")},
+		},
+		{
+			name:  "start without completion",
+			calls: []CallRow{startOnly("2026-07-28T10:00:00Z")},
+		},
+		{
+			name: "completion before start",
+			calls: []CallRow{exact(
+				"2026-07-28T10:00:03Z",
+				"2026-07-28T10:00:02Z",
+			)},
+		},
+		{
+			name: "invalid timestamp",
+			calls: []CallRow{exact(
+				"not-a-timestamp",
+				"2026-07-28T10:00:02Z",
+			)},
+		},
+		{
+			name: "parallel interval spans earliest start to latest completion",
+			calls: []CallRow{
+				exact(
+					"2026-07-28T10:00:01Z",
+					"2026-07-28T10:00:04Z",
+				),
+				exact(
+					"2026-07-28T10:00:02Z",
+					"2026-07-28T10:00:06Z",
+				),
+			},
+			want: timingInt64Ptr(5_000),
+		},
+		{
+			name: "one incomplete parallel call keeps fallback",
+			calls: []CallRow{
+				exact(
+					"2026-07-28T10:00:01Z",
+					"2026-07-28T10:00:04Z",
+				),
+				startOnly("2026-07-28T10:00:02Z"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, exactTurnDuration(tt.calls))
+		})
+	}
+}
+
+func TestGetSessionTiming_CopilotParallelExactEvents(t *testing.T) {
+	d := testDB(t)
+	const sessionID = "copilot-parallel-exact"
+	timingInsertSession(t, d, sessionID,
+		"2026-07-28T10:00:00Z", "2026-07-28T10:01:00Z")
+	timingInsertMessage(t, d, sessionID, 0, "user",
+		"run checks", "2026-07-28T10:00:00Z", false)
+	timingInsertMessage(t, d, sessionID, 1, "assistant",
+		"running checks", "2026-07-28T10:00:00Z", true)
+	messageID := timingMsgID(t, d, sessionID, 1)
+	timingInsertToolCallAtIndex(t, d, sessionID, messageID, 0,
+		"call-a", "first", "Other", "")
+	timingInsertToolCallAtIndex(t, d, sessionID, messageID, 1,
+		"call-b", "second", "Other", "")
+	timingInsertToolResultEvent(t, d, sessionID, 1, 0,
+		"call-a", "started", "2026-07-28T10:00:01Z")
+	timingInsertToolResultEvent(t, d, sessionID, 1, 0,
+		"call-a", "completed", "2026-07-28T10:00:04Z")
+	timingInsertToolResultEvent(t, d, sessionID, 1, 1,
+		"call-b", "started", "2026-07-28T10:00:02Z")
+	timingInsertToolResultEvent(t, d, sessionID, 1, 1,
+		"call-b", "completed", "2026-07-28T10:00:06Z")
+	timingInsertMessage(t, d, sessionID, 2, "user",
+		"next", "2026-07-28T10:01:00Z", false)
+
+	got, err := d.GetSessionTiming(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, got.Turns, 1)
+	assert.Equal(t, timingInt64Ptr(5_000), got.Turns[0].DurationMs)
+	require.Len(t, got.Turns[0].Calls, 2)
+	assert.Equal(t, timingInt64Ptr(3_000), got.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, timingInt64Ptr(4_000), got.Turns[0].Calls[1].DurationMs)
+	assert.True(t, got.Turns[0].Calls[0].IsParallel)
+	assert.True(t, got.Turns[0].Calls[1].IsParallel)
+	assert.Equal(t, int64(5_000), got.ToolDurationMs)
+	require.NotNil(t, got.SlowestCall)
+	assert.Equal(t, "call-b", got.SlowestCall.ToolUseID)
+}
+
+func TestGetSessionTiming_CopilotInvalidExactEventsFallBack(t *testing.T) {
+	type timingEvent struct {
+		source    string
+		status    string
+		timestamp string
+	}
+	tests := []struct {
+		name   string
+		id     string
+		events []timingEvent
+	}{
+		{
+			name: "completion without start",
+			id:   "completion-only",
+			events: []timingEvent{
+				{"copilot-cli", "completed", "2026-07-28T10:00:04Z"},
+			},
+		},
+		{
+			name: "start without completion",
+			id:   "start-only",
+			events: []timingEvent{
+				{"copilot-cli", "started", "2026-07-28T10:00:01Z"},
+			},
+		},
+		{
+			name: "completion before start",
+			id:   "reversed",
+			events: []timingEvent{
+				{"copilot-cli", "started", "2026-07-28T10:00:04Z"},
+				{"copilot-cli", "completed", "2026-07-28T10:00:03Z"},
+			},
+		},
+		{
+			name: "other source",
+			id:   "other-source",
+			events: []timingEvent{
+				{"other", "started", "2026-07-28T10:00:01Z"},
+				{"other", "completed", "2026-07-28T10:00:04Z"},
+			},
+		},
+		{
+			name: "other statuses",
+			id:   "other-status",
+			events: []timingEvent{
+				{"copilot-cli", "queued", "2026-07-28T10:00:01Z"},
+				{"copilot-cli", "finished", "2026-07-28T10:00:04Z"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			sessionID := "copilot-fallback-" + tt.id
+			timingInsertSession(t, d, sessionID,
+				"2026-07-28T10:00:00Z", "2026-07-28T10:00:12Z")
+			timingInsertMessage(t, d, sessionID, 0, "user",
+				"run", "2026-07-28T10:00:00Z", false)
+			timingInsertMessage(t, d, sessionID, 1, "assistant",
+				"running", "2026-07-28T10:00:02Z", true)
+			messageID := timingMsgID(t, d, sessionID, 1)
+			timingInsertToolCall(t, d, sessionID, messageID,
+				"call", "check", "Other", "")
+			for _, event := range tt.events {
+				timingInsertToolResultEventWithSource(
+					t, d, sessionID, 1, 0, "call",
+					event.source, event.status, event.timestamp,
+				)
+			}
+			timingInsertMessage(t, d, sessionID, 2, "user",
+				"next", "2026-07-28T10:00:12Z", false)
+
+			got, err := d.GetSessionTiming(context.Background(), sessionID)
+			require.NoError(t, err)
+			require.Len(t, got.Turns, 1)
+			assert.Equal(t, timingInt64Ptr(10_000), got.Turns[0].DurationMs)
+			require.Len(t, got.Turns[0].Calls, 1)
+			assert.Equal(t,
+				timingInt64Ptr(10_000),
+				got.Turns[0].Calls[0].DurationMs,
+			)
+		})
+	}
+}
+
 func TestMakeInputPreview(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -363,6 +570,18 @@ func timingInsertToolCall(
 	toolUseID, toolName, category, subagentSessionID string,
 ) {
 	t.Helper()
+	timingInsertToolCallAtIndex(
+		t, d, sessionID, messageID, 0,
+		toolUseID, toolName, category, subagentSessionID,
+	)
+}
+
+func timingInsertToolCallAtIndex(
+	t *testing.T, d *DB,
+	sessionID string, messageID int64, callIndex int,
+	toolUseID, toolName, category, subagentSessionID string,
+) {
+	t.Helper()
 	var sub any = nil
 	if subagentSessionID != "" {
 		sub = subagentSessionID
@@ -371,9 +590,13 @@ func timingInsertToolCall(
 		INSERT INTO tool_calls
 			(session_id, message_id, tool_use_id, tool_name,
 			 category, input_json, subagent_session_id, call_index)
-		VALUES (?, ?, ?, ?, ?, '{}', ?, 0)
-	`, sessionID, messageID, toolUseID, toolName, category, sub)
+		VALUES (?, ?, ?, ?, ?, '{}', ?, ?)
+	`, sessionID, messageID, toolUseID, toolName, category, sub, callIndex)
 	require.NoError(t, err, "timingInsertToolCall %s/%d", sessionID, messageID)
+}
+
+func timingInt64Ptr(v int64) *int64 {
+	return &v
 }
 
 func timingInsertToolResultEvent(
@@ -382,15 +605,27 @@ func timingInsertToolResultEvent(
 	toolUseID, status, timestamp string,
 ) {
 	t.Helper()
+	timingInsertToolResultEventWithSource(
+		t, d, sessionID, messageOrdinal, callIndex,
+		toolUseID, "copilot-cli", status, timestamp,
+	)
+}
+
+func timingInsertToolResultEventWithSource(
+	t *testing.T, d *DB,
+	sessionID string, messageOrdinal, callIndex int,
+	toolUseID, source, status, timestamp string,
+) {
+	t.Helper()
 	_, err := d.getWriter().ExecContext(context.Background(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, source, status, content, content_length,
 			 timestamp, event_index)
-		VALUES (?, ?, ?, ?, 'copilot-cli', ?, '', 0, ?,
+		VALUES (?, ?, ?, ?, ?, ?, '', 0, ?,
 		        CASE WHEN ? = 'started' THEN 0 ELSE 1 END)
-	`, sessionID, messageOrdinal, callIndex, toolUseID, status,
-		timestamp, status)
+	`, sessionID, messageOrdinal, callIndex, toolUseID, source,
+		status, timestamp, status)
 	require.NoError(t, err,
 		"timingInsertToolResultEvent %s/%d", sessionID, messageOrdinal)
 }

@@ -172,16 +172,14 @@ func (db *DB) queryCallRows(
 		    session_id,
 		    tool_call_message_ordinal,
 		    call_index,
-		    MIN(CASE
-		      WHEN source = 'copilot-cli' AND status = 'started'
-		      THEN timestamp
-		    END) AS started_at,
-		    MAX(CASE
-		      WHEN source = 'copilot-cli' AND status = 'completed'
-		      THEN timestamp
-		    END) AS completed_at
+		    MIN(CASE WHEN status = 'started' THEN timestamp END)
+		      AS started_at,
+		    MAX(CASE WHEN status = 'completed' THEN timestamp END)
+		      AS completed_at
 		  FROM tool_result_events
 		  WHERE session_id = ?
+		    AND source = 'copilot-cli'
+		    AND status IN ('started', 'completed')
 		  GROUP BY session_id, tool_call_message_ordinal, call_index
 		)
 		SELECT

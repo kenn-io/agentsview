@@ -108,13 +108,15 @@ func (s *Store) queryCallRows(
 		    tool_call_message_ordinal,
 		    call_index,
 		    MIN(timestamp) FILTER (
-		      WHERE source = 'copilot-cli' AND status = 'started'
+		      WHERE status = 'started'
 		    ) AS started_at,
 		    MAX(timestamp) FILTER (
-		      WHERE source = 'copilot-cli' AND status = 'completed'
+		      WHERE status = 'completed'
 		    ) AS completed_at
 		  FROM tool_result_events
 		  WHERE session_id = $1
+		    AND source = 'copilot-cli'
+		    AND status IN ('started', 'completed')
 		  GROUP BY session_id, tool_call_message_ordinal, call_index
 		)
 		SELECT
