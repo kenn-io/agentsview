@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -30,9 +31,10 @@ var (
 )
 
 const (
-	initialScanBufSize = 64 * 1024        // 64KB
-	maxLineSize        = 64 * 1024 * 1024 // 64MB
-	forkThreshold      = 3
+	initialScanBufSize         = 64 * 1024        // 64KB
+	maxLineSize                = 64 * 1024 * 1024 // 64MB
+	maxPersistedToolResultSize = 16 * 1024 * 1024 // 16MB
+	forkThreshold              = 3
 )
 
 // dagEntry holds metadata for a single JSONL entry participating
@@ -1944,9 +1946,18 @@ func readClaudePersistedToolResult(
 		if !pathWithinDir(cleanResult, dir) {
 			continue
 		}
-		b, err := os.ReadFile(cleanResult)
+		f, err := os.Open(cleanResult)
 		if err != nil {
 			return "", false
+		}
+		b, readErr := io.ReadAll(io.LimitReader(f, maxPersistedToolResultSize+1))
+		closeErr := f.Close()
+		if readErr != nil || closeErr != nil {
+			return "", false
+		}
+		if len(b) > maxPersistedToolResultSize {
+			b = b[:maxPersistedToolResultSize]
+			b = append(b, "\n\n[agentsview: persisted tool result truncated at 16 MiB]"...)
 		}
 		return string(b), true
 	}

@@ -1431,6 +1431,33 @@ func TestParseClaudeSession_ResolvesPersistedToolResultOutput(
 	assert.Equal(t, fullOutput, DecodeContent(got.ContentRaw))
 }
 
+func TestReadClaudePersistedToolResultTruncatesOversizedFile(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "project", "parent-session")
+	resultPath := filepath.Join(sessionDir, "tool-results", "oversized.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	require.NoError(t, os.WriteFile(resultPath, []byte("prefix"), 0o644))
+	require.NoError(t, os.Truncate(resultPath, maxPersistedToolResultSize+1))
+
+	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
+	got, ok := readClaudePersistedToolResult(sessionPath, resultPath)
+	require.True(t, ok)
+	assert.True(t, strings.HasPrefix(got, "prefix"))
+	assert.Equal(
+		t,
+		maxPersistedToolResultSize+len("\n\n[agentsview: persisted tool result truncated at 16 MiB]"),
+		len(got),
+	)
+	assert.True(t, strings.HasSuffix(
+		got,
+		"[agentsview: persisted tool result truncated at 16 MiB]",
+	))
+}
+
 func TestParseClaudeSession_PersistedToolResultDoesNotOverwriteSiblings(
 	t *testing.T,
 ) {
