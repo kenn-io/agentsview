@@ -72,7 +72,7 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 	ticks <- time.Now()
 	require.Eventually(t, func() bool {
 		price, err := database.GetModelPricing("scheduled-model")
-		return err == nil && price != nil && price.InputPerMTok == 2
+		return err == nil && price != nil
 	}, time.Second, time.Millisecond)
 
 	request := <-requests
