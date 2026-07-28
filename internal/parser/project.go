@@ -169,8 +169,19 @@ func init() {
 		{marker: sep + ".superset" + sep + "worktrees" + sep, projectPart: 0, minParts: 2},
 		// conductor/workspaces/$PROJECT/$BRANCH[/...]
 		{marker: sep + "conductor" + sep + "workspaces" + sep, projectPart: 0, minParts: 2},
-		// ~/.config/middleman/worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
-		{marker: sep + ".config" + sep + "middleman" + sep + "worktrees" + sep + "github.com" + sep, projectPart: 1, minParts: 3},
+		// .../worktrees/github/github.com/$OWNER/$REPO/$WORKTREE[/...]
+		{
+			marker: sep + "worktrees" + sep + "github" + sep +
+				"github.com" + sep,
+			projectPart: 1,
+			minParts:    3,
+		},
+		// .../worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
+		{
+			marker:      sep + "worktrees" + sep + "github.com" + sep,
+			projectPart: 1,
+			minParts:    3,
+		},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
 		// roborev CI: ~/.roborev/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].
@@ -702,6 +713,15 @@ func repoRootFromGitFile(repoDir, gitFilePath string) string {
 		if filepath.Base(commonDir) == ".git" {
 			return filepath.Dir(commonDir)
 		}
+		if gitConfigCoreBare(commonDir) {
+			// Bare repositories have no main checkout root. Return a
+			// conceptual sibling path so the caller can use its basename
+			// as the stable repository name.
+			name := strings.TrimSuffix(filepath.Base(commonDir), ".git")
+			if !isInvalidPathBase(name) {
+				return filepath.Join(filepath.Dir(commonDir), name)
+			}
+		}
 	}
 
 	// Fallback for linked worktrees if commondir is missing.
@@ -748,6 +768,52 @@ func readCommonDir(gitDir string) string {
 		return filepath.Clean(value)
 	}
 	return filepath.Clean(filepath.Join(gitDir, value))
+}
+
+func gitConfigCoreBare(gitDir string) bool {
+	b, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	if err != nil {
+		return false
+	}
+
+	inCore := false
+	for raw := range strings.SplitSeq(string(b), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" ||
+			strings.HasPrefix(line, "#") ||
+			strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.IndexByte(line, ']')
+			if end < 0 {
+				inCore = false
+				continue
+			}
+			section := strings.TrimSpace(line[1:end])
+			section, _, _ = strings.Cut(section, " ")
+			inCore = strings.EqualFold(section, "core")
+			continue
+		}
+		if !inCore {
+			continue
+		}
+
+		key, value, hasValue := strings.Cut(line, "=")
+		if !strings.EqualFold(strings.TrimSpace(key), "bare") {
+			continue
+		}
+		if !hasValue {
+			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "yes", "on", "1":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func trimBranchSuffix(name, gitBranch string) string {
