@@ -4,6 +4,7 @@ package pricingrefresh
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -14,6 +15,42 @@ const (
 	fallbackVersionMetaKey = "_fallback_version"
 	refreshAttemptMetaKey  = "_litellm_last_attempt"
 )
+
+type refreshGate struct {
+	slot chan struct{}
+	refs int
+}
+
+var currentRefreshGates = struct {
+	sync.Mutex
+	byDatabase map[*db.DB]*refreshGate
+}{
+	byDatabase: make(map[*db.DB]*refreshGate),
+}
+
+func retainRefreshGate(database *db.DB) *refreshGate {
+	currentRefreshGates.Lock()
+	defer currentRefreshGates.Unlock()
+
+	gate := currentRefreshGates.byDatabase[database]
+	if gate == nil {
+		gate = &refreshGate{slot: make(chan struct{}, 1)}
+		gate.slot <- struct{}{}
+		currentRefreshGates.byDatabase[database] = gate
+	}
+	gate.refs++
+	return gate
+}
+
+func releaseRefreshGateReference(database *db.DB, gate *refreshGate) {
+	currentRefreshGates.Lock()
+	defer currentRefreshGates.Unlock()
+
+	gate.refs--
+	if gate.refs == 0 {
+		delete(currentRefreshGates.byDatabase, database)
+	}
+}
 
 // RefreshCooldown is the minimum interval between upstream fetch attempts.
 // Attempts are recorded before fetching, so failures observe the same cooldown.
@@ -161,6 +198,27 @@ func runCurrent(
 	now time.Time,
 	force bool,
 ) error {
+	gate := retainRefreshGate(database)
+	if force {
+		select {
+		case <-gate.slot:
+		default:
+			releaseRefreshGateReference(database, gate)
+			return nil
+		}
+	} else {
+		select {
+		case <-gate.slot:
+		case <-ctx.Done():
+			releaseRefreshGateReference(database, gate)
+			return ctx.Err()
+		}
+	}
+	defer func() {
+		gate.slot <- struct{}{}
+		releaseRefreshGateReference(database, gate)
+	}()
+
 	previousAttempt, err := database.GetPricingMeta(refreshAttemptMetaKey)
 	if err != nil {
 		return fmt.Errorf("reading pricing refresh meta: %w", err)
