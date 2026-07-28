@@ -175,55 +175,63 @@ func (p *openCodeFormatProvider) Parse(
 // the OpenCode storage and SQLite readers, then relabel the result onto
 // their own agent and ID prefix.
 type openCodeProviderSpec struct {
-	agent        AgentType
-	format       openCodeFormat
-	dbName       string
-	listSQLite   func(string) ([]OpenCodeSessionMeta, error)
-	streamSQLite func(context.Context, string, func(OpenCodeSessionMeta) error) error
-	sourceMtime  func(string) (int64, error)
-	relabel      func(*ParsedSession)
+	agent      AgentType
+	format     openCodeFormat
+	dbName     string
+	listSQLite func(string) ([]OpenCodeSessionMeta, error)
+	// listSQLiteWatermark is the bounded changed-path form of listSQLite: it
+	// carries only the session-row watermark and no child digest, so a
+	// watcher event on the shared container never scans the child tables.
+	listSQLiteWatermark func(string) ([]OpenCodeSessionMeta, error)
+	streamSQLite        func(context.Context, string, func(OpenCodeSessionMeta) error) error
+	sourceMtime         func(string) (int64, error)
+	relabel             func(*ParsedSession)
 }
 
 func openCodeProviderSpecForAgent(agent AgentType) openCodeProviderSpec {
 	switch agent {
 	case AgentOpenCode:
 		return openCodeProviderSpec{
-			agent:        AgentOpenCode,
-			format:       openCodeFmt,
-			dbName:       openCodeFmt.dbName,
-			listSQLite:   ListOpenCodeSessionMeta,
-			streamSQLite: ForEachOpenCodeSessionMeta,
-			sourceMtime:  OpenCodeSourceMtime,
+			agent:               AgentOpenCode,
+			format:              openCodeFmt,
+			dbName:              openCodeFmt.dbName,
+			listSQLite:          ListOpenCodeSessionMeta,
+			listSQLiteWatermark: ListOpenCodeSessionWatermarkMeta,
+			streamSQLite:        ForEachOpenCodeSessionMeta,
+			sourceMtime:         OpenCodeSourceMtime,
 		}
 	case AgentKilo:
 		return openCodeProviderSpec{
-			agent:        AgentKilo,
-			format:       kiloFmt,
-			dbName:       kiloFmt.dbName,
-			listSQLite:   ListKiloSessionMeta,
-			streamSQLite: streamOpenCodeSessionMetaAs(KiloSQLiteVirtualPath),
-			sourceMtime:  KiloSourceMtime,
-			relabel:      relabelOpenCodeSessionAsKilo,
+			agent:               AgentKilo,
+			format:              kiloFmt,
+			dbName:              kiloFmt.dbName,
+			listSQLite:          ListKiloSessionMeta,
+			listSQLiteWatermark: listOpenCodeSessionWatermarkMetaAs(KiloSQLiteVirtualPath),
+			streamSQLite:        streamOpenCodeSessionMetaAs(KiloSQLiteVirtualPath),
+			sourceMtime:         KiloSourceMtime,
+			relabel:             relabelOpenCodeSessionAsKilo,
 		}
 	case AgentMiMoCode:
 		return openCodeProviderSpec{
-			agent:        AgentMiMoCode,
-			format:       mimoFmt,
-			dbName:       mimoFmt.dbName,
-			listSQLite:   ListMiMoCodeSessionMeta,
-			streamSQLite: streamOpenCodeSessionMetaAs(MiMoCodeSQLiteVirtualPath),
-			sourceMtime:  MiMoCodeSourceMtime,
-			relabel:      relabelOpenCodeSessionAsMiMoCode,
+			agent:               AgentMiMoCode,
+			format:              mimoFmt,
+			dbName:              mimoFmt.dbName,
+			listSQLite:          ListMiMoCodeSessionMeta,
+			listSQLiteWatermark: listOpenCodeSessionWatermarkMetaAs(MiMoCodeSQLiteVirtualPath),
+			streamSQLite:        streamOpenCodeSessionMetaAs(MiMoCodeSQLiteVirtualPath),
+			sourceMtime:         MiMoCodeSourceMtime,
+			relabel:             relabelOpenCodeSessionAsMiMoCode,
 		}
 	case AgentIcodemate:
 		return openCodeProviderSpec{
-			agent:        AgentIcodemate,
-			format:       icodemateFmt,
-			dbName:       icodemateFmt.dbName,
-			listSQLite:   ListIcodemateSessionMeta,
-			streamSQLite: streamOpenCodeSessionMetaAs(IcodemateSQLiteVirtualPath),
-			sourceMtime:  IcodemateSourceMtime,
-			relabel:      relabelOpenCodeSessionAsIcodemate,
+			agent:               AgentIcodemate,
+			format:              icodemateFmt,
+			dbName:              icodemateFmt.dbName,
+			listSQLite:          ListIcodemateSessionMeta,
+			listSQLiteWatermark: listOpenCodeSessionWatermarkMetaAs(IcodemateSQLiteVirtualPath),
+			streamSQLite:        streamOpenCodeSessionMetaAs(IcodemateSQLiteVirtualPath),
+			sourceMtime:         IcodemateSourceMtime,
+			relabel:             relabelOpenCodeSessionAsIcodemate,
 		}
 	default:
 		return openCodeProviderSpec{}
@@ -240,6 +248,21 @@ func streamOpenCodeSessionMetaAs(
 			meta.VirtualPath = virtualPath(dbPath, meta.SessionID)
 			return yield(meta)
 		})
+	}
+}
+
+func listOpenCodeSessionWatermarkMetaAs(
+	virtualPath func(string, string) string,
+) func(string) ([]OpenCodeSessionMeta, error) {
+	return func(dbPath string) ([]OpenCodeSessionMeta, error) {
+		metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+		if err != nil {
+			return nil, err
+		}
+		for i := range metas {
+			metas[i].VirtualPath = virtualPath(dbPath, metas[i].SessionID)
+		}
+		return metas, nil
 	}
 }
 
@@ -325,6 +348,11 @@ type openCodeFormatSource struct {
 	// ChildDigest carries the deletion-sensitive per-session identity into
 	// Fingerprint.Hash.
 	ChildDigest string
+	// WatermarkOnly marks MTimeNS as only the session-row watermark from a
+	// bounded changed-path listing (see OpenCodeSessionMeta.WatermarkOnly).
+	// The engine may skip such a source against its stored composite
+	// watermark without resolving the child digest.
+	WatermarkOnly bool
 }
 
 type openCodeFormatSourceSet struct {
@@ -365,7 +393,7 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		if src.DBPath == "" || !IsRegularFile(src.DBPath) {
 			continue
 		}
-		dbSources, err := s.sqliteSources(ctx, root, src.DBPath, storageIDs)
+		dbSources, err := s.sqliteSources(ctx, root, src.DBPath, storageIDs, false)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, err
@@ -611,7 +639,7 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 	}
 	for _, root := range s.roots {
 		sources, ok, err := s.sourcesForChangedPathInRoot(
-			ctx, root, req.Path, pathExists,
+			ctx, root, req.Path, pathExists, req.AllowWatermarkOnlySources,
 		)
 		if err != nil || ok {
 			return sources, err
@@ -738,16 +766,25 @@ func (s openCodeFormatSourceSet) Fingerprint(
 	// shared database once per session on every cold or changed-container pass.
 	if mtime == 0 || (composite && digest == "") {
 		// Sources rebuilt by FindSource or reconciliation carry no discovery
-		// metadata. Without this the hash would be empty, and an empty hash is
-		// treated as no constraint by the freshness gate — so a deletion-only
-		// change would pass unnoticed on every non-discovery path.
+		// metadata, and watermark-only changed-path sources carry a
+		// deliberately unresolved digest. Without this the hash would be
+		// empty, and an empty hash is treated as no constraint by the
+		// freshness gate — so a deletion-only change would pass unnoticed on
+		// every non-discovery path.
 		lookupMtime, lookupDigest, lookupComposite, err :=
 			s.sourceMtimeWithComposite(path)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
-		if mtime == 0 {
+		// Adopt the looked-up watermark alongside the digest: a
+		// watermark-only source carries the session-row watermark, which can
+		// sit below the composite the digest folds in. The stored MTimeNS
+		// must always be the composite, or the next full-discovery pass
+		// would see a mismatched watermark and re-parse an unchanged session.
+		if lookupMtime != 0 {
 			mtime, composite = lookupMtime, lookupComposite
+		} else if mtime == 0 {
+			composite = lookupComposite
 		}
 		if digest == "" {
 			digest = lookupDigest
@@ -816,6 +853,25 @@ func sourceCarriedChildDigest(source SourceRef) string {
 	return ""
 }
 
+// SourceWatermarkOnlyMTimeNS returns the carried session-row watermark for a
+// shared-container source listed by a watermark-only changed-path scan, and
+// whether the source is such a listing. Full-discovery sources carry the
+// composite watermark and child digest instead and report false, as do
+// legacy containers without composite support.
+func SourceWatermarkOnlyMTimeNS(source SourceRef) (int64, bool) {
+	switch src := source.Opaque.(type) {
+	case openCodeFormatSource:
+		if src.WatermarkOnly {
+			return src.MTimeNS, true
+		}
+	case *openCodeFormatSource:
+		if src != nil && src.WatermarkOnly {
+			return src.MTimeNS, true
+		}
+	}
+	return 0, false
+}
+
 func sourceCarriedCompositeMTime(source SourceRef) bool {
 	switch src := source.Opaque.(type) {
 	case openCodeFormatSource:
@@ -869,11 +925,16 @@ func (s openCodeFormatSourceSet) sqliteSources(
 	root string,
 	dbPath string,
 	storageIDs map[string]struct{},
+	watermarkOnly bool,
 ) ([]SourceRef, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	metas, err := s.spec.listSQLite(dbPath)
+	lister := s.spec.listSQLite
+	if watermarkOnly && s.spec.listSQLiteWatermark != nil {
+		lister = s.spec.listSQLiteWatermark
+	}
+	metas, err := lister(dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -920,6 +981,7 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 		src.MTimeNS = meta.FileMtime
 		src.CompositeMTime = meta.CompositeMtime
 		src.ChildDigest = meta.ChildDigest
+		src.WatermarkOnly = meta.WatermarkOnly
 		ref.Opaque = src
 	}
 	return ref, true
@@ -930,6 +992,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 	root string,
 	path string,
 	pathExists bool,
+	watermarkOnly bool,
 ) ([]SourceRef, bool, error) {
 	rel, ok := relUnder(root, path)
 	if !ok {
@@ -964,7 +1027,9 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		if s.spec.resolve(root).Mode == OpenCodeSourceStorage {
 			storageIDs = s.spec.storageIDs(root)
 		}
-		sources, err := s.sqliteSources(ctx, root, dbPath, storageIDs)
+		sources, err := s.sqliteSources(
+			ctx, root, dbPath, storageIDs, watermarkOnly,
+		)
 		return sources, true, err
 	}
 

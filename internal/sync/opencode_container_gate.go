@@ -277,6 +277,44 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 		e.db.GetSessionFilePath(fullID) == e.effectiveSourcePath(file.Path)
 }
 
+// watermarkOnlySQLiteSourceFresh reports whether a shared-container session
+// whose changed-path source carries only the session-row watermark is
+// already covered by its stored composite watermark. The stored MTimeNS is
+// MAX(session, project, child times) from the last parse, so a session-row
+// watermark at or below it proves the session and project rows did not
+// advance; the parse is skipped without resolving the child digest. What the
+// watermark cannot see — a child write at or below the stored composite that
+// leaves the session row untouched — is deliberately deferred to the next
+// full-discovery pass, whose carried digest still catches it. That keeps
+// per-event work bounded by the changed batch instead of the archive.
+func (e *Engine) watermarkOnlySQLiteSourceFresh(
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+) (int64, bool) {
+	if e.forceParse || file.ForceParse {
+		return 0, false
+	}
+	watermark, ok := parser.SourceWatermarkOnlyMTimeNS(source)
+	if !ok {
+		return 0, false
+	}
+	lookupPath := providerDiscoveredPath(source)
+	if lookupPath == "" {
+		return 0, false
+	}
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	_, storedMtime, found := e.db.GetFileInfoByPath(lookupPath)
+	if !found || storedMtime < watermark {
+		return 0, false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion() {
+		return 0, false
+	}
+	return storedMtime, true
+}
+
 // noteSQLiteContainerResult records a processed file's outcome for
 // promotion bookkeeping. Skips count as completions: a skipped session was
 // either gate-skipped against an already-trusted state or individually

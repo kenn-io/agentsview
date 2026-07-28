@@ -1509,6 +1509,74 @@ func TestListOpenCodeSessionMeta_NonexistentDB(t *testing.T) {
 	assertEq(t, "metas len", len(metas), 0)
 }
 
+// TestListOpenCodeSessionWatermarkMeta pins the bounded changed-path listing:
+// on a composite-capable container it carries only the session-row watermark
+// (session and project time_updated, never child times) with no digest, so
+// listing every session touches no message or part rows.
+func TestListOpenCodeSessionWatermarkMeta(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_wm", "prj_1", "", "Watermark", 1700000000000, 1700000060000,
+	)
+	seeder.AddMessage(
+		"msg_1", "ses_wm", 1700000000000, 1700099999000, `{"role":"user"}`,
+	)
+	seeder.AddPart(
+		"prt_1", "msg_1", "ses_wm", 1700000000000, 1700099999000,
+		`{"type":"text","text":"hi"}`,
+	)
+	// Project row above the session row: the watermark is MAX(session,
+	// project). Child rows sit above both and must NOT be reflected.
+	_, err := db.Exec(
+		"UPDATE project SET time_updated = ? WHERE id = ?",
+		1700000070000, "prj_1",
+	)
+	require.NoError(t, err, "raise project time")
+
+	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta")
+	require.Len(t, metas, 1)
+
+	m := metas[0]
+	assert.Equal(t, "ses_wm", m.SessionID)
+	assert.Equal(t, dbPath+"#ses_wm", m.VirtualPath)
+	assert.True(t, m.WatermarkOnly, "composite container must list watermark-only")
+	assert.True(t, m.CompositeMtime)
+	assert.Empty(t, m.ChildDigest, "watermark listing must not resolve the child digest")
+	assert.Equal(t, int64(1700000070000)*1_000_000, m.FileMtime,
+		"watermark must be MAX(session, project) and exclude child times")
+}
+
+// TestListOpenCodeSessionWatermarkMeta_LegacySchema pins that containers
+// without composite support keep the full listing's shape: session-only
+// mtime, no composite, and no watermark-only marker, so the engine never
+// watermark-skips a session whose only change signal is the container size.
+func TestListOpenCodeSessionWatermarkMeta_LegacySchema(t *testing.T) {
+	dbPath, seeder, db := newLegacyOpenCodeTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_legacy", "/home/user/code/legacy-app")
+	seeder.AddSession(
+		"ses_legacy", "prj_legacy", "", "Legacy", 1700000000000, 1700000060000,
+	)
+
+	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
+	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta legacy")
+	require.Len(t, metas, 1)
+
+	full, err := ListOpenCodeSessionMeta(dbPath)
+	require.NoError(t, err, "ListOpenCodeSessionMeta legacy")
+	require.Len(t, full, 1)
+
+	assert.False(t, metas[0].WatermarkOnly,
+		"legacy containers must not be marked watermark-only")
+	assert.Equal(t, full[0], metas[0],
+		"legacy watermark listing must match the full listing")
+}
+
 // TestParseOpenCodeDB_TokenUsage verifies that an assistant
 // message with modelID and tokens populates ParsedMessage.Model
 // and TokenUsage in the agentsview-native key shape, and that

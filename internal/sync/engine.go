@@ -1036,6 +1036,11 @@ func (e *Engine) classifyProviderChangedPath(
 				Path:      path,
 				EventKind: eventKind,
 				WatchRoot: watchRoot,
+				// processProviderFile skips watermark-only shared-container
+				// sources against their stored composite watermark, so
+				// providers may answer with the bounded session-row listing
+				// instead of a whole-container child digest scan.
+				AllowWatermarkOnlySources: true,
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				if resolver, ok := provider.(parser.StoredSourceHintScopeProvider); ok {
@@ -6907,6 +6912,19 @@ func (e *Engine) processProviderFile(
 		sourceForceReplace = true
 	}
 	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(source, file); fresh {
+		return processResult{
+			skip:  true,
+			mtime: freshMtime,
+		}, true
+	}
+
+	// Watermark-only shared-container sources (changed-path classification)
+	// carry just the session-row watermark. When it does not advance past
+	// the stored composite watermark, the session and project rows provably
+	// did not change, so skip before Fingerprint pays the per-session child
+	// lookup; a child-only edit this cannot see is reconciled by the next
+	// full-discovery pass, whose digest comparison still catches it.
+	if freshMtime, fresh := e.watermarkOnlySQLiteSourceFresh(source, file); fresh {
 		return processResult{
 			skip:  true,
 			mtime: freshMtime,

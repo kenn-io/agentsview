@@ -68,6 +68,158 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 			"container size")
 }
 
+// TestOpenCodeWatcherEventIsWatermarkBounded pins the same rule for the
+// watcher's changed-path pass, one level deeper: not only must a one-session
+// write leave every other session skipped, the pass must decide those skips
+// without reading the container's child tables at all. Changed-path
+// classification lists sessions through the bounded session-row watermark
+// (no message/part aggregation), and only sessions whose watermark advances
+// past their stored composite pay the indexed per-session digest lookup, so
+// the child rows examined per event scale with the changed batch and not
+// with the archive.
+func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	lookups := make(map[int]int64)
+	for _, n := range []int{20, 200} {
+		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+			oc := createOpenCodeDB(t, env.opencodeDir)
+			oc.addProject(t, "proj", "/home/user/code/app")
+			for i := range n {
+				seedOpenCodeSQLiteTextSession(
+					t, oc, "proj", fmt.Sprintf("ses%05d", i),
+					1779012000000, 1779012030000,
+					"prompt", "answer",
+				)
+			}
+			require.Equal(t, n,
+				env.engine.SyncAll(context.Background(), nil).Synced)
+
+			oc.updateSessionTime(t, "ses00000", 1779015630000)
+			oc.replaceTextContent(
+				t, "ses00000", "changed prompt", "changed answer",
+				1779015600000,
+			)
+
+			scansBefore := parser.OpenCodeContainerChildScans()
+			lookupsBefore := parser.OpenCodeSessionChildLookups()
+			require.NoError(t, env.engine.SyncPathsContext(
+				context.Background(), []string{oc.path},
+			))
+			stats := env.engine.LastSyncStats()
+			assert.Equal(t, 1, stats.Synced,
+				"only the changed session may be rewritten")
+			assert.Equal(t, n-1, stats.Skipped,
+				"every unchanged session must skip on the watcher pass")
+			assert.Zero(t,
+				parser.OpenCodeContainerChildScans()-scansBefore,
+				"a watcher event must not aggregate the whole container's "+
+					"child tables")
+			lookups[n] = parser.OpenCodeSessionChildLookups() - lookupsBefore
+			assertMessageContent(
+				t, env.db, "opencode:ses00000",
+				"changed prompt", "changed answer",
+			)
+		})
+	}
+
+	assert.Equal(t, lookups[20], lookups[200],
+		"per-session child lookups for one changed session must not grow "+
+			"with container size")
+}
+
+// TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery documents the
+// staleness contract the watermark-only watcher pass trades on: a child
+// write that stays below the stored composite watermark without touching the
+// session or project row is invisible to the session-row watermark and stays
+// archived as-is until the next full-discovery pass, whose child digest
+// still reconciles it. Actively watched sessions do not rely on this path;
+// the per-session watcher poll resolves the composite directly.
+func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	// Session row far ahead of every child, so the replacement below stays
+	// under the stored composite.
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "below-mark",
+		1779012000000, 1779099999000,
+		"original prompt", "original answer",
+	)
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	// Child-only replacement: same counts, new rows and content, timestamps
+	// below the session row's watermark, session and project rows untouched.
+	oc.replaceTextContent(
+		t, "below-mark", "swapped prompt", "swapped answer", 1779012500000,
+	)
+
+	require.NoError(t, env.engine.SyncPathsContext(
+		context.Background(), []string{oc.path},
+	))
+	stats := env.engine.LastSyncStats()
+	assert.Zero(t, stats.Synced,
+		"the watcher pass defers child-only edits below the stored watermark")
+	assert.Equal(t, 1, stats.Skipped)
+	assertMessageContent(
+		t, env.db, "opencode:below-mark",
+		"original prompt", "original answer",
+	)
+
+	fullStats := env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, fullStats.Synced,
+		"full discovery must reconcile the deferred child-only edit")
+	assertMessageContent(
+		t, env.db, "opencode:below-mark",
+		"swapped prompt", "swapped answer",
+	)
+}
+
+// TestOpenCodeFullPassSkipsAfterWatcherPassParse pins that a session parsed
+// through the watermark-only watcher pass stores the full composite
+// watermark and digest, not the cheap session-row watermark it was
+// discovered with. The children deliberately end above the session row so
+// the two values differ; if the cheap watermark leaked into the stored
+// fingerprint, the next full pass would see a mismatch and re-parse an
+// unchanged session with a fresh child lookup.
+func TestOpenCodeFullPassSkipsAfterWatcherPassParse(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	for i := range 3 {
+		seedOpenCodeSQLiteTextSession(
+			t, oc, "proj", fmt.Sprintf("ses%05d", i),
+			1779012000000, 1779012030000,
+			"prompt", "answer",
+		)
+	}
+	require.Equal(t, 3, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	oc.updateSessionTime(t, "ses00000", 1779015630000)
+	oc.replaceTextContent(
+		t, "ses00000", "changed prompt", "changed answer", 1779015600000,
+	)
+	oc.mustExec(t, "raise children above the session row",
+		"UPDATE part SET time_updated = ? WHERE session_id = ?",
+		1779099999000, "ses00000")
+
+	require.NoError(t, env.engine.SyncPathsContext(
+		context.Background(), []string{oc.path},
+	))
+	require.Equal(t, 1, env.engine.LastSyncStats().Synced)
+
+	lookupsBefore := parser.OpenCodeSessionChildLookups()
+	stats := env.engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, stats.Synced,
+		"the full pass must not rewrite sessions the watcher pass stored")
+	assert.Equal(t, 3, stats.Skipped)
+	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
+		"full-pass skips must not pay per-session child lookups")
+}
+
 // TestOpenCodeDeletedChildIsDetected pins deletion sensitivity. The composite
 // mtime is a MAX over session/project/child timestamps, so when the session or
 // project row already holds the higher value — the common case on a real

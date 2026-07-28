@@ -366,6 +366,14 @@ type ChangedPathRequest struct {
 	// still validate ownership against the changed path/watch root before
 	// emitting them.
 	StoredSourcePaths []string
+	// AllowWatermarkOnlySources tells providers that fan a shared container
+	// out to per-session virtual sources that the caller's downstream
+	// freshness gate can cheaply skip watermark-only sources, so the provider
+	// may answer with a bounded session-row listing instead of computing
+	// every session's full child digest. Callers that consume the returned
+	// sources directly (reconciliation, tombstoning) must leave this unset to
+	// keep full-fidelity fingerprint metadata.
+	AllowWatermarkOnlySources bool
 }
 
 // FindSourceRequest contains lookup inputs and persisted source hints for

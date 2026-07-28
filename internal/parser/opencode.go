@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -36,6 +37,14 @@ type OpenCodeSessionMeta struct {
 	// child row counts, so a deletion that leaves the watermark untouched
 	// still changes it. Empty when the container has no composite support.
 	ChildDigest string
+	// WatermarkOnly reports that FileMtime is only the session-row watermark
+	// (session and project time_updated, no child tables) and ChildDigest is
+	// deliberately unresolved. Changed-path listings use this bounded form so
+	// a watcher event does not scan every child row in the container; the
+	// engine skips such a source when its stored composite watermark already
+	// covers the carried value, and resolves the full composite and digest
+	// through the indexed per-session lookup otherwise.
+	WatermarkOnly bool
 }
 
 // OpenCodeSQLiteSessionExists reports whether a session row with
@@ -84,6 +93,112 @@ func ListOpenCodeSessionMeta(
 	return metas, err
 }
 
+// The two container freshness query shapes, counted so tests can pin that
+// watcher-driven passes stay bounded by the changed batch: the grouped
+// whole-container child scan must not run on a changed-path pass, and
+// per-session child lookups must scale with the number of changed sessions,
+// not the archive.
+var (
+	openCodeContainerChildScans atomic.Int64
+	openCodeSessionChildLookups atomic.Int64
+)
+
+// OpenCodeContainerChildScans returns how many whole-container child-table
+// identity scans (grouped message/part aggregation) have run.
+func OpenCodeContainerChildScans() int64 {
+	return openCodeContainerChildScans.Load()
+}
+
+// OpenCodeSessionChildLookups returns how many single-session indexed child
+// digest lookups have run.
+func OpenCodeSessionChildLookups() int64 {
+	return openCodeSessionChildLookups.Load()
+}
+
+// ListOpenCodeSessionWatermarkMeta is the materialized form of
+// ForEachOpenCodeSessionWatermarkMeta.
+func ListOpenCodeSessionWatermarkMeta(
+	dbPath string,
+) ([]OpenCodeSessionMeta, error) {
+	var metas []OpenCodeSessionMeta
+	err := ForEachOpenCodeSessionWatermarkMeta(
+		context.Background(), dbPath,
+		func(meta OpenCodeSessionMeta) error {
+			metas = append(metas, meta)
+			return nil
+		},
+	)
+	return metas, err
+}
+
+// ForEachOpenCodeSessionWatermarkMeta streams session rows carrying only the
+// session-row watermark: MAX(session.time_updated, project.time_updated),
+// touching no child tables. A watcher event on a shared container must not
+// pay a whole-archive child scan to find the one session that changed, so
+// changed-path classification lists sessions through this bounded form and
+// leaves the full composite and child digest to the indexed per-session
+// lookup, which the engine runs only for sessions it cannot skip against
+// their stored watermark. What this signal cannot see — a child write that
+// stays at or below the stored composite without touching the session or
+// project row — is reconciled by the next full-discovery pass, which still
+// carries the complete child digest. Legacy containers without composite
+// support keep the full listing; their conservative container-size
+// fingerprint must not be bypassed by a watermark-only skip.
+func ForEachOpenCodeSessionWatermarkMeta(
+	ctx context.Context,
+	dbPath string,
+	yield func(OpenCodeSessionMeta) error,
+) error {
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	composite, err := openCodeCompositeMtimeSupportedCached(db, dbPath)
+	if err != nil {
+		return err
+	}
+	query := "SELECT s.id, s.time_updated FROM session s"
+	if composite {
+		query = "SELECT s.id, " + openCodeSessionRowWatermarkExpr +
+			" FROM session s" + openCodeSessionCompositeMtimeJoins
+	}
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf(
+			"listing opencode session watermarks: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var watermark int64
+		if err := rows.Scan(&id, &watermark); err != nil {
+			return fmt.Errorf(
+				"scanning opencode session watermark: %w", err,
+			)
+		}
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(OpenCodeSessionMeta{
+			SessionID:      id,
+			VirtualPath:    dbPath + "#" + id,
+			FileMtime:      watermark * 1_000_000,
+			CompositeMtime: composite,
+			WatermarkOnly:  composite,
+		}); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // ForEachOpenCodeSessionMeta streams lightweight session rows directly from
 // SQLite. The callback runs while the read-only query is open and receives one
 // row at a time; callers must not retain database-owned values.
@@ -109,6 +224,7 @@ func ForEachOpenCodeSessionMeta(
 	query := "SELECT s.id, s.time_updated, s.time_updated, 0, 0, 0, '', '' " +
 		"FROM session s"
 	if composite {
+		openCodeContainerChildScans.Add(1)
 		query = "SELECT s.id, " + openCodeCompositeMtimeExpr + ", " +
 			openCodeCompositeCountsExpr +
 			" FROM session s" + openCodeCompositeMtimeJoins
@@ -163,6 +279,7 @@ func openCodeSessionCompositeMtime(
 	query := "SELECT s.time_updated, s.time_updated, 0, 0, 0, '', '' " +
 		"FROM session s WHERE s.id = ?"
 	if composite {
+		openCodeSessionChildLookups.Add(1)
 		query = "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
 			openCodeSessionCompositeCountsExpr +
 			" FROM session s" + openCodeSessionCompositeMtimeJoins +
@@ -640,6 +757,14 @@ const openCodeSessionCompositeMtimeExpr = `MAX(s.time_updated,
 
 const openCodeSessionCompositeMtimeJoins = `
 	LEFT JOIN project pr ON pr.id = s.project_id`
+
+// openCodeSessionRowWatermarkExpr is the bounded change signal used by
+// watermark-only changed-path listings: the session and project rows alone,
+// no child aggregation. The session table holds one small row per session, so
+// listing every session through this costs a scan of the session and project
+// tables only — bounded by session count, never by message/part volume.
+const openCodeSessionRowWatermarkExpr = `MAX(s.time_updated,
+		COALESCE(pr.time_updated, 0))`
 
 // openCodeCompositeMtimeSupportedCached reports whether this container's schema
 // carries every column openCodeCompositeMtimeExpr needs. Older OpenCode-family
