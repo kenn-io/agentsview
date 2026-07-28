@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -431,6 +432,40 @@ func TestExportContinuesPastInvalidTokenUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, rejection.Error, "encoding message segment at ordinal 0")
+}
+
+func TestExportContinuesPastInvalidManifestValue(t *testing.T) {
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	seedSession(t, database, "invalid", "alpha")
+	require.NoError(t, database.UpdateSessionSignals(
+		"invalid", db.SessionSignalUpdate{
+			ContextPressureMax: new(math.Inf(1)),
+		},
+	))
+	stored, err := database.GetSessionFull(t.Context(), "invalid")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.ContextPressureMax)
+	require.True(t, math.IsInf(*stored.ContextPressureMax, 1))
+	seedSession(t, database, "valid", "alpha")
+
+	result, err := ExportToStore(
+		t.Context(), database, store, ExportOptions{Origin: contractOrigin},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ExportedSessions)
+	assert.Equal(t, 1, result.RejectedSessions)
+	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
+	assert.NotContains(t, checkpoint.Sessions, contractOrigin+"~invalid")
+	assert.Contains(t, checkpoint.Sessions, contractOrigin+"~valid")
+	pending, err := database.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+	rejection, ok, err := database.GetArtifactExportRejection(t.Context(), "invalid")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Contains(t, rejection.Error, "encoding manifest for invalid")
 }
 
 func TestExportTransientFailureDoesNotReject(t *testing.T) {

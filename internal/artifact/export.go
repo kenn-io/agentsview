@@ -520,7 +520,10 @@ func exportLoadedSessionToStore(
 	}
 	data, err := canonicalJSON(m)
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf(
+			"%w: encoding manifest for %s: %w",
+			ErrArtifactExportRejected, sess.ID, err,
+		)
 	}
 	if int64(len(data)) > manifestDecodedLimit {
 		return "", false, rejectArtifactExportf(
