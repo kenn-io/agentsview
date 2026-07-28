@@ -10923,6 +10923,10 @@ func shouldReplaceFullParseMessages(
 		revivingSourceMissing ||
 		pw.sess.Agent == parser.AgentCowork ||
 		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
+		// Copilot pairs later execution events back to an earlier
+		// assistant tool call. Appending only new ordinals would leave
+		// the stored call without its exact timing metadata.
+		pw.sess.Agent == parser.AgentCopilot ||
 		pw.sess.Agent == parser.AgentVSCopilot ||
 		pw.sess.Agent == parser.AgentAntigravity ||
 		pw.sess.Agent == parser.AgentAntigravityCLI ||

@@ -522,15 +522,34 @@ func (s *Store) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]db.CallRow, error) {
 	rows, err := s.queryContext(ctx, `
+		WITH copilot_events AS (
+		  SELECT
+		    tool_call_message_ordinal,
+		    call_index,
+		    MIN(CASE WHEN status = 'started' THEN timestamp END)
+		      AS started_at,
+		    MAX(CASE WHEN status = 'completed' THEN timestamp END)
+		      AS completed_at
+		  FROM tool_result_events
+		  WHERE session_id = ?
+		    AND source = 'copilot-cli'
+		    AND status IN ('started', 'completed')
+		  GROUP BY tool_call_message_ordinal, call_index
+		)
 		SELECT tc.message_id, COALESCE(tc.tool_use_id, ''),
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, COALESCE(tc.input_json, ''),
+			ce.started_at, ce.completed_at,
 			s_sub.started_at, s_sub.ended_at
 		FROM tool_calls tc
+		LEFT JOIN messages m ON m.id = tc.message_id
+		LEFT JOIN copilot_events ce
+		  ON m.ordinal = ce.tool_call_message_ordinal
+		  AND tc.call_index = ce.call_index
 		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
 		WHERE tc.session_id = ?
 		ORDER BY tc.message_id, tc.call_index`,
-		sessionID,
+		sessionID, sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb timing calls: %w", err)
@@ -541,13 +560,19 @@ func (s *Store) queryCallRows(
 	now := time.Now().UTC().Format(time.RFC3339)
 	for rows.Next() {
 		var r db.CallRow
+		var toolUseID, inputJSON sql.NullString
 		var skill, sub sql.NullString
-		var startedAt, endedAt any
+		var exactStartedAt, exactEndedAt any
+		var subStartedAt, subEndedAt any
 		if err := rows.Scan(
-			&r.MessageID, &r.ToolUseID, &r.ToolName, &r.Category,
-			&skill, &sub, &r.InputJSON, &startedAt, &endedAt,
+			&r.MessageID, &toolUseID, &r.ToolName, &r.Category,
+			&skill, &sub, &inputJSON, &exactStartedAt, &exactEndedAt,
+			&subStartedAt, &subEndedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb timing call: %w", err)
+		}
+		if toolUseID.Valid {
+			r.ToolUseID = toolUseID.String
 		}
 		if skill.Valid {
 			value := skill.String
@@ -556,7 +581,25 @@ func (s *Store) queryCallRows(
 		if sub.Valid {
 			value := sub.String
 			r.SubagentSessionID = &value
-			if dur, ok := timingMillis(formatDBTime(startedAt), firstNonEmpty(formatDBTime(endedAt), now)); ok {
+		}
+		if inputJSON.Valid {
+			r.InputJSON = inputJSON.String
+		}
+		exactStart := formatDBTime(exactStartedAt)
+		exactEnd := formatDBTime(exactEndedAt)
+		if exactStart != "" {
+			r.ExactStartedAt = &exactStart
+		}
+		if exactEnd != "" {
+			r.ExactEndedAt = &exactEnd
+		}
+		if dur, ok := timingMillis(exactStart, exactEnd); ok {
+			r.DurationMs = &dur
+		} else if sub.Valid {
+			if dur, ok := timingMillis(
+				formatDBTime(subStartedAt),
+				firstNonEmpty(formatDBTime(subEndedAt), now),
+			); ok {
 				r.DurationMs = &dur
 			}
 		}

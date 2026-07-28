@@ -1575,6 +1575,83 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	assert.Equal(t, int64(120000), *timing.Turns[0].Calls[0].DurationMs)
 }
 
+func TestGetSessionTimingUsesCopilotEventsForExactDuration(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+
+	sessionID := "duck-copilot-timing"
+	sessionStartedAt := "2026-07-24T11:56:20.000Z"
+	startedAt := "2026-07-24T11:56:24.198Z"
+	completedAt := "2026-07-24T11:56:27.923Z"
+	nextUserAt := "2026-07-25T00:34:49.483Z"
+
+	call := db.ToolCall{
+		CallIndex: 0,
+		ToolName:  "task_complete",
+		Category:  "Other",
+		ToolUseID: "call_example",
+		InputJSON: `{"task":"finish"}`,
+		ResultEvents: []db.ToolResultEvent{
+			{
+				ToolUseID:  "call_example",
+				Source:     "copilot-cli",
+				Status:     "started",
+				Timestamp:  startedAt,
+				EventIndex: 0,
+			},
+			{
+				ToolUseID:  "call_example",
+				Source:     "copilot-cli",
+				Status:     "completed",
+				Timestamp:  completedAt,
+				EventIndex: 1,
+			},
+		},
+	}
+
+	sess := syncSession(
+		sessionID, "alpha", "copilot timing", sessionStartedAt, 3,
+	)
+	sess.Agent = "copilot"
+	sess.EndedAt = &nextUserAt
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		Messages: []db.Message{
+			syncMessage(sessionID, 0, "user", "finish the task",
+				sessionStartedAt),
+			syncMessage(sessionID, 1, "assistant", "task_complete",
+				"2026-07-24T11:56:24.189Z", call),
+			syncMessage(sessionID, 2, "user", "next request",
+				nextUserAt),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetSessionTiming(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Turns, 1)
+	require.Len(t, got.Turns[0].Calls, 1)
+	require.NotNil(t, got.Turns[0].DurationMs,
+		"turn duration must not be the idle-gap; copilot events must provide exact timing")
+	assert.Equal(t, int64(3_725), *got.Turns[0].DurationMs,
+		"turn duration should be copilot event span (3725ms), not idle gap")
+	assert.Equal(t, int64(3_725), got.ToolDurationMs)
+	require.NotNil(t, got.Turns[0].Calls[0].DurationMs,
+		"call duration must not be nil")
+	assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs,
+		"call duration should be copilot event span (3725ms)")
+}
+
 func TestGetAllMessagesDoesNotTruncateAtDefaultLimit(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
