@@ -76,6 +76,14 @@ CREATE TABLE part (
 	data TEXT NOT NULL,
 	FOREIGN KEY (message_id) REFERENCES message(id)
 );
+
+-- SQLite does not index a foreign key automatically. Production OpenCode
+-- declares these, and the per-session freshness lookups depend on them, so the
+-- fixture must carry them or plan assertions prove nothing.
+CREATE INDEX message_session_time_created_id_idx
+	ON message (session_id, time_created, id);
+CREATE INDEX part_session_idx ON part (session_id);
+CREATE INDEX part_message_id_id_idx ON part (message_id, id);
 `
 
 func assertEq[T comparable](t *testing.T, name string, got, want T) {

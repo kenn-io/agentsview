@@ -687,7 +687,41 @@ func openCodeSupportsCompositeMtime(db *sql.DB) (bool, error) {
 			return false, err
 		}
 	}
+	// The per-session lookups are correlated aggregates keyed on session_id.
+	// SQLite does not index a foreign key automatically, so without a
+	// session_id index each one degrades to a full child-table scan — and one
+	// of these backs the session watcher's 1.5s poll. Fall back to the
+	// session-only mtime rather than put an archive scan on that path.
+	for _, table := range []string{"message", "part"} {
+		indexed, err := openCodeTableIndexesColumn(db, table, "session_id")
+		if err != nil || !indexed {
+			return false, err
+		}
+	}
 	return true, nil
+}
+
+// openCodeTableIndexesColumn reports whether table has an index whose leftmost
+// column is column, which is what makes a WHERE column = ? lookup a seek.
+func openCodeTableIndexesColumn(
+	db *sql.DB, table, column string,
+) (bool, error) {
+	rows, err := db.Query(
+		`SELECT 1 FROM pragma_index_list(?) il
+		 JOIN pragma_index_info(il.name) ii
+		 WHERE ii.seqno = 0 AND ii.name = ?`,
+		table, column,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"listing opencode %s indexes: %w", table, err,
+		)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return true, rows.Err()
+	}
+	return false, rows.Err()
 }
 
 // openCodeTableHasColumn reports whether table carries column. An unknown

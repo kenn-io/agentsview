@@ -1141,6 +1141,13 @@ func TestOpenCodeSingleSessionMtimeDoesNotScanContainer(t *testing.T) {
 		assert.NotContains(t, got, "SCAN "+table,
 			"single-session composite mtime must not full-scan %s; plan:\n%s",
 			table, got)
+		// SEARCH alone is not proof of a seek: SQLite reports SEARCH for some
+		// aggregate plans without an index, so require the index explicitly.
+		assert.Regexp(t,
+			`(?s)(SEARCH|SCAN) `+table+`[^\n]*USING (COVERING )?INDEX`,
+			got,
+			"single-session composite mtime must reach %s through an index; "+
+				"plan:\n%s", table, got)
 	}
 }
 
