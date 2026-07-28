@@ -1008,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionClaudeIDEContext(t *testing.T) {
-	assert.Equal(t, 74, CurrentDataVersion(),
-		"Claude IDE context parsing requires a data version bump")
+func TestCurrentDataVersionGitWorktreeProjectAttribution(t *testing.T) {
+	assert.Equal(t, 75, CurrentDataVersion(),
+		"git worktree project attribution requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
