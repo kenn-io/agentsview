@@ -21,6 +21,28 @@ const (
 type Capabilities struct {
 	Source  SourceCapabilities
 	Content ContentCapabilities
+	Sync    ProviderSyncSemantics
+}
+
+// UnchangedResultPolicy controls how the engine compares parsed members from a
+// shared source with their stored rows. The zero value keeps every result.
+type UnchangedResultPolicy uint8
+
+const (
+	UnchangedResultNone UnchangedResultPolicy = iota
+	UnchangedResultMTime
+	UnchangedResultMTimeAndHash
+)
+
+// ProviderSyncSemantics declares stable provider-wide cache and result
+// freshness policy. Its zero value opts out of every specialized behavior.
+type ProviderSyncSemantics struct {
+	FingerprintHashInCacheKey           bool
+	FingerprintHashRequiredForFreshness bool
+	// SkipCacheFreshWithoutStoredRow permits a matching skip-cache entry to
+	// remain fresh before this provider has persisted a row for the source.
+	SkipCacheFreshWithoutStoredRow bool
+	UnchangedResults               UnchangedResultPolicy
 }
 
 // SourceCapabilities declares optional source mechanics implemented by a

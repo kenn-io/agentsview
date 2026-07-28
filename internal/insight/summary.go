@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // RangeSummary is the deterministic, prompt-input contract derived from
@@ -18,7 +19,7 @@ type RangeSummary struct {
 	DistinctProjects int
 	DistinctModels   int
 	OutputTokens     int
-	Cost             float64
+	Cost             money.Money
 	PeakAgents       int
 	PeakAt           string       // "" when nil
 	TopProjects      []KeyMinutes // top-N by agent-minutes, deterministic order
@@ -85,7 +86,7 @@ func (s RangeSummary) WriteTo(b *strings.Builder) {
 	fmt.Fprintf(b, "- Distinct projects: %d\n", s.DistinctProjects)
 	fmt.Fprintf(b, "- Distinct models: %d\n", s.DistinctModels)
 	fmt.Fprintf(b, "- Output tokens: %d\n", s.OutputTokens)
-	fmt.Fprintf(b, "- Cost: %.2f\n", s.Cost)
+	fmt.Fprintf(b, "- Cost: %s\n", money.FormatUSD(s.Cost, money.DisplayCents))
 	fmt.Fprintf(b, "- Peak concurrency: %d", s.PeakAgents)
 	if s.PeakAt != "" {
 		fmt.Fprintf(b, " at %s", s.PeakAt)

@@ -6,6 +6,7 @@ import type { TerminalResponse } from './TerminalResponse';
 export type SettingsResponse = {
   agent_dirs: Record<string, any[] | null>;
   auth_token?: string;
+  chart_palette: string;
   github_configured: boolean;
   host: string;
   port: number;

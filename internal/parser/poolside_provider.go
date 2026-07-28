@@ -45,7 +45,7 @@ func newPoolsideProviderFactory(def AgentDef) ProviderFactory {
 
 // poolsideTrajectoriesDir resolves the trajectories directory from a
 // provider root. The root may be either the application-data directory
-// (e.g. ~/.local/share/poolside) or the trajectories/ subdirectory
+// (e.g. ~/.local/state/poolside) or the trajectories/ subdirectory
 // itself (e.g. when passed by remote sync). When the root already
 // ends with a "trajectories" path component, it is returned as-is;
 // otherwise <root>/trajectories is appended.

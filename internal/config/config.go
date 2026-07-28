@@ -417,10 +417,10 @@ type AgentConfig struct {
 }
 
 type CustomModelRate struct {
-	Input         float64 `json:"input" toml:"input"`
-	Output        float64 `json:"output" toml:"output"`
-	CacheCreation float64 `json:"cache_creation,omitempty" toml:"cache_creation"`
-	CacheRead     float64 `json:"cache_read,omitempty" toml:"cache_read"`
+	InputMicrodollarsPerMTok         int64 `json:"input_microdollars_per_mtok" toml:"input_microdollars_per_mtok"`
+	OutputMicrodollarsPerMTok        int64 `json:"output_microdollars_per_mtok" toml:"output_microdollars_per_mtok"`
+	CacheCreationMicrodollarsPerMTok int64 `json:"cache_creation_microdollars_per_mtok,omitempty" toml:"cache_creation_microdollars_per_mtok"`
+	CacheReadMicrodollarsPerMTok     int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
 }
 
 type RemoteTransport string
@@ -431,6 +431,27 @@ const (
 	RemoteTransportSSH  RemoteTransport = "ssh"
 	RemoteTransportHTTP RemoteTransport = "http"
 )
+
+type ChartPalette string
+
+const (
+	ChartPaletteAgentsview ChartPalette = "agentsview"
+	ChartPaletteMatplotlib ChartPalette = "matplotlib"
+	DefaultChartPalette                 = ChartPaletteAgentsview
+)
+
+func ParseChartPalette(value string) (ChartPalette, error) {
+	palette := ChartPalette(value)
+	switch palette {
+	case ChartPaletteAgentsview, ChartPaletteMatplotlib:
+		return palette, nil
+	default:
+		return "", fmt.Errorf(
+			`chart_palette must be "agentsview" or "matplotlib" (got %q)`,
+			value,
+		)
+	}
+}
 
 // RemoteHost describes one target for config-driven `agentsview sync`
 // fan-out. Host is required. Deprecated SSH remotes may set User and Port
@@ -451,6 +472,7 @@ type RemoteHost struct {
 type Config struct {
 	Host                 string                 `json:"host" toml:"host"`
 	Port                 int                    `json:"port" toml:"port"`
+	ChartPalette         ChartPalette           `json:"chart_palette" toml:"chart_palette"`
 	DataDir              string                 `json:"data_dir" toml:"data_dir"`
 	DBPath               string                 `json:"-" toml:"-"`
 	PublicURL            string                 `json:"public_url,omitempty" toml:"public_url"`
@@ -526,6 +548,13 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 
 	pgEnvOverrides pgEnvOverrides
+}
+
+func (c Config) ResolvedChartPalette() ChartPalette {
+	if c.ChartPalette == "" {
+		return DefaultChartPalette
+	}
+	return c.ChartPalette
 }
 
 type dirSource int
@@ -728,6 +757,7 @@ func Default() (Config, error) {
 	return Config{
 		Host:                           "127.0.0.1",
 		Port:                           8080,
+		ChartPalette:                   DefaultChartPalette,
 		DataDir:                        dataDir,
 		DBPath:                         filepath.Join(dataDir, "sessions.db"),
 		WriteTimeout:                   30 * time.Second,
@@ -1017,6 +1047,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
 		Host                           string                     `toml:"host"`
 		Port                           int                        `toml:"port"`
+		ChartPalette                   ChartPalette               `toml:"chart_palette"`
 		PublicURL                      string                     `toml:"public_url"`
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
@@ -1044,6 +1075,15 @@ func (c *Config) applyConfigTOML(data string) error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	for _, key := range meta.Undecoded() {
+		if len(key) != 3 || key[0] != "custom_model_pricing" {
+			continue
+		}
+		return fmt.Errorf(
+			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
+			key.String(),
+		)
+	}
 	var raw map[string]any
 	if _, err := toml.Decode(data, &raw); err != nil {
 		return fmt.Errorf("parsing config raw: %w", err)
@@ -1068,6 +1108,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Port != 0 {
 		c.Port = file.Port
+	}
+	if meta.IsDefined("chart_palette") {
+		palette, err := ParseChartPalette(string(file.ChartPalette))
+		if err != nil {
+			return err
+		}
+		c.ChartPalette = palette
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL
@@ -1239,6 +1286,14 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 	}
 	if len(file.CustomModelPricing) > 0 {
+		for model, rate := range file.CustomModelPricing {
+			if rate.InputMicrodollarsPerMTok < 0 ||
+				rate.OutputMicrodollarsPerMTok < 0 ||
+				rate.CacheCreationMicrodollarsPerMTok < 0 ||
+				rate.CacheReadMicrodollarsPerMTok < 0 {
+				return fmt.Errorf("custom_model_pricing.%s: rates must not be negative", model)
+			}
+		}
 		c.CustomModelPricing = file.CustomModelPricing
 	}
 	if len(file.RemoteHosts) > 0 {
@@ -2468,6 +2523,15 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
+	if value, ok := patch["chart_palette"]; ok {
+		palette, ok := value.(ChartPalette)
+		if !ok {
+			return fmt.Errorf("chart_palette must use the typed configuration value")
+		}
+		if _, err := ParseChartPalette(string(palette)); err != nil {
+			return err
+		}
+	}
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {
@@ -2515,6 +2579,11 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
+			}
+		}
+		if v, ok := patch["chart_palette"]; ok {
+			if palette, ok := v.(ChartPalette); ok {
+				c.ChartPalette = palette
 			}
 		}
 		return nil

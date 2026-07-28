@@ -11,14 +11,23 @@ import {
   setAuthToken,
   isRemoteConnection,
 } from "../api/runtime.js";
+import {
+  DEFAULT_CHART_PALETTE,
+  isChartPalette,
+  type ChartPalette,
+} from "../utils/chartPalette.js";
 
 type TerminalConfig = TerminalResponse & {
   mode: "auto" | "custom" | "clipboard";
 };
 
-interface AppSettings extends Omit<SettingsResponse, "terminal" | "agent_dirs"> {
+interface AppSettings extends Omit<
+  SettingsResponse,
+  "terminal" | "agent_dirs" | "chart_palette"
+> {
   agent_dirs: Record<string, string[]>;
   terminal: TerminalConfig;
+  chart_palette: ChartPalette;
 }
 
 /** Build an actionable message for a 403 from the settings API. A
@@ -51,6 +60,7 @@ class SettingsStore {
   authToken: string = $state("");
   requireAuth: boolean = $state(false);
   readOnly: boolean = $state(false);
+  chartPalette: ChartPalette = $state(DEFAULT_CHART_PALETTE);
   loaded: boolean = $state(false);
   loading: boolean = $state(false);
   saving: boolean = $state(false);
@@ -68,6 +78,11 @@ class SettingsStore {
       configureGeneratedClient();
       const data =
         await SettingsService.getApiV1Settings() as unknown as AppSettings;
+      if (!isChartPalette(data.chart_palette)) {
+        throw new Error(
+          `Invalid chart_palette in settings response: ${String(data.chart_palette)}`,
+        );
+      }
       this.agentDirs = data.agent_dirs;
       this.githubConfigured = data.github_configured;
       this.terminal = data.terminal;
@@ -76,6 +91,7 @@ class SettingsStore {
       this.authToken = data.auth_token ?? "";
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
+      this.chartPalette = data.chart_palette;
       // When the server returns an auth token (localhost only), persist
       // it so the client stays authenticated after remote access is
       // toggled on (which starts requiring auth for all requests).
@@ -106,6 +122,11 @@ class SettingsStore {
         await SettingsService.putApiV1Settings({
           requestBody: patch as SettingsUpdateRequest,
         }) as unknown as AppSettings;
+      if (!isChartPalette(data.chart_palette)) {
+        throw new Error(
+          `Invalid chart_palette in settings response: ${String(data.chart_palette)}`,
+        );
+      }
       this.agentDirs = data.agent_dirs;
       this.githubConfigured = data.github_configured;
       this.terminal = data.terminal;
@@ -114,6 +135,7 @@ class SettingsStore {
       this.authToken = data.auth_token ?? "";
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
+      this.chartPalette = data.chart_palette;
       if (data.auth_token && !isRemoteConnection()) {
         setAuthToken(data.auth_token);
       }

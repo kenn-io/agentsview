@@ -384,8 +384,10 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 				engine.cacheSkip(
 					providerProcessCacheKeyWithHash(
 						virtualPath,
-						parser.AgentWindsurf,
 						parser.SourceFingerprint{Hash: initialHash},
+						parser.ProviderSyncSemantics{
+							FingerprintHashInCacheKey: true,
+						},
 					),
 					initialMtime,
 				)

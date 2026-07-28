@@ -1,8 +1,9 @@
 name: Desktop Artifacts
 
 on:
-  # Keep this workflow GitHub-hosted so pull requests cannot select a
-  # persistent runner. macOS builds live in desktop-macos-main.yml.
+  workflow_call:
+  # Linux builds use the managed public fleet for main and same-repository PRs.
+  # macOS builds live in desktop-macos-main.yml.
   push:
     branches: [main]
     paths:
@@ -12,16 +13,6 @@ on:
       - 'go.sum'
       - '.github/workflows/desktop-artifacts.yml'
       - '.github/actions/build-desktop-artifact/**'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'desktop/**'
-      - 'frontend/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/desktop-artifacts.yml'
-      - '.github/actions/build-desktop-artifact/**'
-
 permissions:
   contents: read
 
@@ -32,7 +23,7 @@ concurrency:
 jobs:
   build:
     name: Desktop Build (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ contains(fromJSON('["ubuntu-latest","ubuntu-24.04","ubuntu-22.04"]'), matrix.os) && github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:

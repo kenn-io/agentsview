@@ -128,6 +128,13 @@ func (e *HTTPStatusError) Permanent() bool {
 // media-type failure, and skip-stamping those would silently mark the whole
 // corpus embedded-with-no-vectors — so a size word must pair with an input
 // word, and "content" must pair with "policy".
+//
+// Blank inputs are deliberately absent: kitvec.Split drops blank windows and
+// kitvec.EncodeBatched refuses blank chunks outright — counting whitespace,
+// invisible formatting runes, and control characters as blank — so a blank
+// document is stamped without vectors and never becomes a request. That
+// removes the need to recognize each provider's phrasing for the rejection
+// (see isPermanentEncodeError for the structured signal kit raises instead).
 func hasDocumentSpecificEmbeddingError(body string) bool {
 	body = strings.ToLower(body)
 	if strings.Contains(body, "content") && strings.Contains(body, "policy") {

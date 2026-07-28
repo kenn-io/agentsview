@@ -65,9 +65,10 @@ Most shared controls come from the `@kenn-io/kit-ui` library (imported as
 `import { ... } from "@kenn-io/kit-ui"`): Button, Chip, CopyButton, EmptyState,
 FilterDropdown, FindBar, IconButton, KbdBadge, Modal, RangePicker,
 RefreshControl, SegmentedControl, Spinner, StatusBar, StatusDot,
-Table/TableHeaderCell, TextInput/SearchInput, Tooltip, TopBar, and Typeahead.
-Shared components take pre-translated strings as props — call `m.*()` at the
-call site (or in a thin app wrapper) and pass the result.
+SettingsLayout/SettingsSection, Table/TableHeaderCell, TextInput/SearchInput,
+Tooltip, TopBar, and Typeahead. Shared components take pre-translated strings as
+props — call `m.*()` at the call site (or in a thin app wrapper) and pass the
+result.
 
 App-level glue that remains local:
 
@@ -86,8 +87,14 @@ App-level glue that remains local:
   browser locale; the shared wrappers above do this.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
-- `frontend/src/lib/components/settings/SettingsSection.svelte` owns settings
-  section framing.
+- kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;
+  kit-ui `SettingsSection` owns settings section framing.
+  `SettingsPage.svelte` intentionally integrates with the pinned layout's
+  `.kit-settings__nav`, `.kit-settings__panel`, and `.kit-settings__scroll`
+  elements to hide zero-result content and reset panel scroll. Treat these
+  selectors as a version-pinned integration contract: kit-ui dependency bumps
+  that touch settings must pass the settings browser coverage in CI before
+  adoption.
 
 Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
 days inclusive of today. `presetRange()` (dateRangeSelector.ts) and

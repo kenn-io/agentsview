@@ -18,15 +18,15 @@ warnings as entries that can be listed, queried, and packed into a task brief.
 This is different from [semantic search](/semantic-search/). Semantic search
 finds relevant passages in the transcript archive. Recall searches a separate
 set of distilled entries and keeps the transcript region supporting each entry
-as evidence. Recall entry retrieval is lexical today; it does not use the
-embedding index.
+as evidence. Recall queries support lexical, vector, and hybrid retrieval; the
+default remains lexical while this feature is experimental.
 
 ## Current surface
 
 The current implementation is local and SQLite-only. The CLI provides:
 
 - `recall list`, `get`, and `stats` for inspection;
-- `recall query` for ranked lexical retrieval;
+- `recall query` for ranked lexical, vector, or hybrid retrieval;
 - `recall brief` for a packed, trusted task briefing;
 - `recall extract` for opt-in model-backed extraction (see
   [Automatic extraction](#automatic-extraction)), including
@@ -38,12 +38,47 @@ end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The
 import command refuses the default data directory unless the operator explicitly
 overrides that guard.
 
-Recall is not available through PostgreSQL or DuckDB stores. It also has no web
-UI and no semantic retrieval over Recall entries.
+Recall is not available through PostgreSQL or DuckDB stores. The web UI is
+limited to a read-only panel in Session Vital Signs: it lists entries sourced
+from the open session and links their evidence ranges back to the transcript.
+Recall population, corpus management, and general querying remain CLI and HTTP
+API workflows.
 
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but
 read-only archives remain queryable without recording.
+
+## Vector and hybrid retrieval
+
+`recall query` and `recall brief` accept `--mode lexical`, `--mode vector`, or
+`--mode hybrid`. Lexical is the default. Vector search ranks the separate Recall
+embedding store, while hybrid search combines lexical and vector ranks.
+
+Recall uses the same `[vector]` model and embeddings servers as session semantic
+search, but it has an independent index generation. Build it explicitly with:
+
+```bash
+agentsview embeddings build --store recall
+```
+
+Automatic Recall embedding requires separate consent because accepted entries
+may contain distilled private content:
+
+```toml
+[vector.embed]
+recall = true
+```
+
+That setting permits startup, corpus-mutation, and periodic refresh work to send
+accepted Recall entry titles, bodies, and triggers to the configured embeddings
+endpoint. It is off by default; manually running the build command is treated as
+one-time consent for that invocation.
+
+Vector and hybrid queries fail closed when the active Recall corpus is newer
+than its last completed vector build. Rebuild the Recall store, or continue
+using lexical mode while an automatic refresh catches up. See
+[Semantic Search](/semantic-search/#enabling-vector) for the shared embedding
+configuration and endpoint privacy considerations.
 
 ## Automatic extraction
 
@@ -63,13 +98,28 @@ model = "your-model-name"
 endpoint = "http://127.0.0.1:30000/v1"
 ```
 
+For a remote OpenAI-compatible provider such as Atlas Cloud, keep the key in the
+environment and point the server entry at the provider's `/v1` base URL:
+
+```toml
+[recall.extract]
+enabled = true
+model = "deepseek-ai/deepseek-v4-pro"
+server = "atlascloud"
+
+[recall.extract.servers.atlascloud]
+endpoint = "https://api.atlascloud.ai/v1"
+api_key_env = "ATLASCLOUD_API_KEY"
+timeout = "120s"
+```
+
 Optional keys: `deployment` (labels which serving instance produced the corpus),
 `server` (selects among multiple named servers), `quiet_period` (default `"30m"`
 — how long a session must have been ended before extraction),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
-`max_window_chars` (default 50000), `max_tokens`, a `[recall.extract.prompts]`
-table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
-`extra_body`).
+`max_window_chars` (default 50000), `max_tokens`, per-server `api_key_env`, a
+`[recall.extract.prompts]` table (`profile`, `dir`), and a
+`[recall.extract.request]` table (`temperature`, `extra_body`).
 
 Non-loopback endpoints must use HTTPS: extraction sends transcript content to
 the endpoint, and plaintext HTTP off the machine could be intercepted. A server
@@ -180,65 +230,10 @@ rebuilt when schemas, parsers, scoring, or extraction policies change. Reset
 only the experimental Recall corpus through an explicit future workflow. Never
 delete or recreate the session archive as a Recall reset strategy.
 
-## Research direction
+## Experimental limits
 
-The Recall substrate introduced in 0.38.0 is the population foundation. It
-deliberately does not ship a model runner, automatic write-through, bulk
-extraction, automatic promotion, or per-session generated summaries. The next
-work is intended to earn those capabilities in stages.
-
-### Local extractor calibration
-
-Calibration will run against isolated laboratory copies of real session rows and
-exact host-built ordinal windows. One frozen, tools-disabled local model
-configuration will extract structured candidates at a time. Each run should
-record model and prompt versions, schema and decoding settings, input digests,
-latency, and token or resource cost.
-
-Independent judge models will evaluate correctness, semantic evidence support,
-scope, transferability, harmfulness, and candidate duplication. Judges are local
-by default, preferably from a different model family than the extractor. Small
-blind human audits estimate judge error; the user is not expected to hand-label
-the primary evaluation corpus.
-
-A remote frontier judge is permitted only after an explicit per-run opt-in names
-the endpoint and model and states that candidate text and supporting transcript
-material will leave the machine. There is no automatic cloud fallback. Synthetic
-or otherwise non-sensitive sessions can be selected for remote runs.
-
-Calibration reports yield and abstention alongside keeper precision, harmful
-output, transferability, semantic provenance, duplicate detection quality, and
-local resource cost. Exposure records alone are not usefulness labels. Model
-generation or judging never confers `human_reviewed`; automated entries remain
-outside trusted Recall until a separate promotion policy is approved.
-
-### Explicit write-through pilot
-
-The first population pilot is an explicit callback after an answered Recall
-miss, not an invisible side effect of reading:
-
-1. `recall query` or `recall brief` returns a query ID and mechanical miss
-   reason.
-1. The agent or user finds supporting transcript regions with archive search and
-   message reads.
-1. A future proposal command submits the query ID and selected ordinal windows.
-1. The host rebuilds and verifies those windows, runs the local distiller, and
-   applies calibrated duplicate detection.
-1. Candidates are stored as `unreviewed_auto`; the pilot requires an explicit
-   promotion decision before they enter trusted Recall.
-
-This bounds model cost to explicitly answered misses and keeps the actor, input,
-evidence, and output auditable.
-
-### Earned automation and benchmarks
-
-Demand-driven backfill over sessions surfaced by recorded misses comes before
-end-of-session extraction. Broad extraction is deferred until measured
-precision, provenance, duplicate control, yield, cost, and explicit helpfulness
-outcomes justify it. Semantic or hybrid retrieval over Recall entries is a
-separate later experiment rather than part of population.
-
-LongMemEval-v2 is planned as a complementary long-horizon benchmark once the
-local extraction and population interfaces stabilize. It can measure whether a
-populated corpus answers questions over time, but it does not replace
-candidate-level provenance, harmfulness, and duplication evaluation.
+Recall remains an opt-in research feature. Automatic extraction never promotes
+entries into trusted Recall, and the session panel is inspection-only. There is
+no PostgreSQL or DuckDB Recall backend, no stable end-user import workflow, and
+no pruning policy for the measurement ledger yet. Expect corpus rebuilds as the
+schema, scoring, extraction policy, and trust model evolve.

@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
 
@@ -947,7 +948,7 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 13, usage.Totals.InputTokens)
 	assert.Equal(t, 11, usage.Totals.OutputTokens)
-	assert.InDelta(t, 0.000204, usage.Totals.TotalCost, 0.000001)
+	assert.Equal(t, money.MustParseDollars("0.000204"), usage.Totals.TotalCost)
 
 	topCost, err := store.GetTopSessionsByCost(ctx, usageFilter, 10)
 	require.NoError(t, err)
@@ -973,16 +974,16 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 	store := NewStoreFromDB(conn)
 	store.SetCustomPricing(map[string]config.CustomModelRate{
 		"custom-model": {
-			Input: 9, Output: 10, CacheCreation: 11, CacheRead: 12,
+			InputMicrodollarsPerMTok: money.MustParseDollars("9").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("10").Microdollars, CacheCreationMicrodollarsPerMTok: money.MustParseDollars("11").Microdollars, CacheReadMicrodollarsPerMTok: money.MustParseDollars("12").Microdollars,
 		},
 	})
 
 	_, err := conn.ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('claude-sonnet-4-6', 30, 150, 37.5, 3.0, '2026-06-08T12:00:00Z'),
+			('claude-sonnet-4-6', 30000000, 150000000, 37500000, 3000000, '2026-06-08T12:00:00Z'),
 			('_fallback_version', 999, 999, 999, 999, '')`)
 	require.NoError(t, err)
 
@@ -991,13 +992,13 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 
 	assert.NotContains(t, got, "gpt-5.5")
 	assert.Equal(t, duckRates{
-		input: 30, output: 150, cacheCreation: 37.5, cacheRead: 3.0,
+		input: money.MustParseDollars("30"), output: money.MustParseDollars("150"), cacheCreation: money.MustParseDollars("37.5"), cacheRead: money.MustParseDollars("3"),
 		updatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
 		source:    export.PricingRowSourceFetched,
 	}, got["claude-sonnet-4-6"])
 	assert.NotContains(t, got, "_fallback_version")
 	assert.Equal(t, duckRates{
-		input: 9, output: 10, cacheCreation: 11, cacheRead: 12,
+		input: money.MustParseDollars("9"), output: money.MustParseDollars("10"), cacheCreation: money.MustParseDollars("11"), cacheRead: money.MustParseDollars("12"),
 		source: export.PricingRowSourceCustom,
 	}, got["custom-model"])
 }
@@ -1161,10 +1162,10 @@ func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
 	fallback := pricingByPattern(t, pricingpkg.FallbackPricing(), "gpt-5.5")
 	store.SetCustomPricing(map[string]config.CustomModelRate{
 		"gpt-5.5": {
-			Input:         fallback.InputPerMTok,
-			Output:        fallback.OutputPerMTok,
-			CacheCreation: fallback.CacheCreationPerMTok,
-			CacheRead:     fallback.CacheReadPerMTok,
+			InputMicrodollarsPerMTok:         fallback.InputPerMTok.Microdollars,
+			OutputMicrodollarsPerMTok:        fallback.OutputPerMTok.Microdollars,
+			CacheCreationMicrodollarsPerMTok: fallback.CacheCreationPerMTok.Microdollars,
+			CacheReadMicrodollarsPerMTok:     fallback.CacheReadPerMTok.Microdollars,
 		},
 	})
 
@@ -2351,8 +2352,8 @@ func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "claude-test",
-		InputPerMTok:  3,
-		OutputPerMTok: 15,
+		InputPerMTok:  money.MustParseDollars("3"),
+		OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 	sessionID := "duck-usage-local-day"
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
@@ -2484,8 +2485,8 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "claude-test",
-		InputPerMTok:  3,
-		OutputPerMTok: 15,
+		InputPerMTok:  money.MustParseDollars("3"),
+		OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 
 	first := syncMessage("duck-usage-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
@@ -2538,7 +2539,7 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
-	assert.InDelta(t, 0.000033, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, money.MustParseDollars("0.000033"), sessionUsage.Cost)
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 	require.Len(t, sessionUsage.Breakdown, 1)
 	entry := sessionUsage.Breakdown[0]
@@ -2552,7 +2553,7 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	assert.Equal(t, 1, entry.InputTokens)
 	assert.Equal(t, 2, entry.OutputTokens)
 	assert.True(t, entry.HasCost)
-	assert.InDelta(t, 0.000033, entry.CostUSD, 0.000001)
+	assert.Equal(t, money.MustParseDollars("0.000033"), entry.Cost)
 }
 
 func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -2560,8 +2561,8 @@ func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "claude-test",
-		InputPerMTok:  3,
-		OutputPerMTok: 15,
+		InputPerMTok:  money.MustParseDollars("3"),
+		OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 
 	first := syncMessage("duck-usage-source-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
@@ -2614,7 +2615,7 @@ func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
-	assert.InDelta(t, 0.000033, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, money.MustParseDollars("0.000033"), sessionUsage.Cost)
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 	require.Len(t, sessionUsage.Breakdown, 1)
 	require.NotNil(t, sessionUsage.Breakdown[0].MessageOrdinal)
@@ -2626,8 +2627,8 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "summary-model",
-		InputPerMTok:  1,
-		OutputPerMTok: 2,
+		InputPerMTok:  money.MustParseDollars("1"),
+		OutputPerMTok: money.MustParseDollars("2"),
 	}}))
 
 	rawInput := db.MaxPlausibleTokens + 250_000
@@ -2672,8 +2673,12 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	require.Len(t, top, 1)
 	assert.Equal(t, sessionID, top[0].SessionID)
 	assert.Equal(t, rawInput+rawOutput, top[0].TotalTokens)
-	wantCost := (float64(rawInput)*1 + float64(rawOutput)*2) / 1_000_000
-	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+	wantCost, err := money.CostPerMillion([]money.RatedTokens{
+		{Tokens: int64(rawInput), Rate: money.MustParseDollars("1")},
+		{Tokens: int64(rawOutput), Rate: money.MustParseDollars("2")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, wantCost, top[0].Cost)
 
 	sessionUsage, err := store.GetSessionUsage(ctx, sessionID, true)
 	require.NoError(t, err)
@@ -2681,7 +2686,7 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.Equal(t, rawOutput, sessionUsage.TotalOutputTokens)
 	assert.Equal(t, rawInput, sessionUsage.PeakContextTokens)
 	assert.True(t, sessionUsage.HasCost)
-	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, wantCost, sessionUsage.Cost)
 	assert.Equal(t, []string{"summary-model"}, sessionUsage.Models)
 	require.Len(t, sessionUsage.Breakdown, 1)
 	entry := sessionUsage.Breakdown[0]
@@ -2691,16 +2696,16 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.Equal(t, rawInput, entry.InputTokens)
 	assert.Equal(t, rawOutput, entry.OutputTokens)
 	assert.True(t, entry.HasCost)
-	assert.InDelta(t, wantCost, entry.CostUSD, 0.000001)
+	assert.Equal(t, wantCost, entry.Cost)
 }
 
 func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "claude-opus-4-6", InputPerMTok: 10, OutputPerMTok: 15,
+		ModelPattern: "claude-opus-4-6", InputPerMTok: money.MustParseDollars("10"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
-	reportedCost := 0.035
+	reportedCost := money.MustParseDollars("0.035")
 	sess := syncSession(
 		"copilot:duck-reported", "alpha", "reported cost",
 		"2026-01-18T00:00:00.000Z", 0)
@@ -2717,7 +2722,7 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 			{
 				Source: "shutdown", Model: "claude-opus-4-6",
 				InputTokens: 1000, OutputTokens: 500,
-				CostUSD: &reportedCost, CostStatus: "exact",
+				Cost: &reportedCost, CostStatus: "exact",
 				CostSource: db.CopilotReportedCostSource,
 				OccurredAt: "2026-01-19T00:01:00.000Z",
 				DedupKey:   "shutdown-2",
@@ -2736,26 +2741,26 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	usage, err := store.GetSessionUsage(ctx, sess.ID, true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	assert.InDelta(t, reportedCost, usage.CostUSD, 1e-12)
-	assert.InDelta(t, reportedCost/0.01, usage.AICredits, 1e-9)
+	assert.Equal(t, reportedCost, usage.Cost)
+	assert.InDelta(t, 3.5, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
-	assert.InDelta(t, 0.0175, usage.Breakdown[0].CostUSD, 1e-12)
-	assert.InDelta(t, 0.0175, usage.Breakdown[1].CostUSD, 1e-12)
-	assert.Equal(t, usage.CostUSD,
-		usage.Breakdown[0].CostUSD+usage.Breakdown[1].CostUSD)
+	assert.Equal(t, money.MustParseDollars("0.0175"), usage.Breakdown[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.0175"), usage.Breakdown[1].Cost)
+	assert.Equal(t, usage.Cost,
+		money.MustAdd(usage.Breakdown[0].Cost, usage.Breakdown[1].Cost))
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-01-18", To: "2026-01-19", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.InDelta(t, 0.0175, daily.Daily[0].TotalCost, 1e-12)
-	assert.InDelta(t, 0.0175, daily.Daily[1].TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0175"), daily.Daily[0].TotalCost)
+	assert.Equal(t, money.MustParseDollars("0.0175"), daily.Daily[1].TotalCost)
 	for _, day := range daily.Daily {
 		require.Len(t, day.ModelBreakdowns, 1)
 		assert.Equal(t, day.TotalCost, day.ModelBreakdowns[0].Cost)
 	}
-	assert.InDelta(t, reportedCost, daily.Totals.TotalCost, 1e-12)
+	assert.Equal(t, reportedCost, daily.Totals.TotalCost)
 	require.NotNil(t, daily.Pricing)
 	assert.Equal(t, export.CostSourceMixed, daily.Pricing.CostSource,
 		"authoritative reported cost must surface in pricing provenance")
@@ -2768,10 +2773,10 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "claude-sonnet-4-6",
-		InputPerMTok:  10,
-		OutputPerMTok: 20,
+		InputPerMTok:  money.MustParseDollars("10"),
+		OutputPerMTok: money.MustParseDollars("20"),
 	}}))
-	reportedCost := 0.035
+	reportedCost := money.MustParseDollars("0.035")
 	authoritative := syncSession(
 		"copilot:authoritative", "alpha", "reported",
 		"2026-01-18T00:00:00.000Z", 1,
@@ -2788,7 +2793,7 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 			UsageEvents: []db.UsageEvent{{
 				Source: "shutdown", Model: "claude-sonnet-4-6",
 				InputTokens: 1000, OutputTokens: 500,
-				CostUSD: &reportedCost, CostStatus: "exact",
+				Cost: &reportedCost, CostStatus: "exact",
 				CostSource: db.CopilotReportedCostSource,
 				OccurredAt: "2026-01-18T00:01:00.000Z",
 				DedupKey:   "authoritative",
@@ -2820,8 +2825,8 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 	got, err := NewStoreFromDB(syncer.DB()).GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 
-	assert.InDelta(t, 0.055, want.Totals.TotalCost, 1e-12)
-	assert.InDelta(t, want.Totals.TotalCost, got.Totals.TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.055"), want.Totals.TotalCost)
+	assert.Equal(t, want.Totals.TotalCost, got.Totals.TotalCost)
 	assert.InDelta(t, 5.5, want.Totals.CopilotAICredits, 1e-9,
 		"credits derive from the authoritative-substituted totals")
 	assert.InDelta(t, want.Totals.CopilotAICredits,
@@ -2832,19 +2837,19 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 	assert.Equal(t, want.Daily[0].InputTokens, got.Daily[0].InputTokens)
 	assert.Equal(t, want.Daily[0].OutputTokens, got.Daily[0].OutputTokens)
 	assert.Equal(t, want.Daily[0].ModelsUsed, got.Daily[0].ModelsUsed)
-	assert.InDelta(t, want.Daily[0].TotalCost, got.Daily[0].TotalCost, 1e-12)
+	assert.Equal(t, want.Daily[0].TotalCost, got.Daily[0].TotalCost)
 	require.Len(t, got.Daily[0].ModelBreakdowns, 1)
 	require.Len(t, want.Daily[0].ModelBreakdowns, 1)
 	assert.Equal(t, want.Daily[0].ModelBreakdowns[0].ModelName,
 		got.Daily[0].ModelBreakdowns[0].ModelName)
-	assert.InDelta(t, want.Daily[0].ModelBreakdowns[0].Cost,
-		got.Daily[0].ModelBreakdowns[0].Cost, 1e-12)
+	assert.Equal(t, want.Daily[0].ModelBreakdowns[0].Cost,
+		got.Daily[0].ModelBreakdowns[0].Cost)
 }
 
 func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
-	reportedCost := 0.0175
+	reportedCost := money.MustParseDollars("0.0175")
 	sess := syncSession(
 		"copilot:cost-only", "alpha", "cost only",
 		"2026-01-18T00:00:00.000Z", 0)
@@ -2853,7 +2858,7 @@ func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 		Session: sess,
 		UsageEvents: []db.UsageEvent{{
 			Source: "shutdown", Model: "copilot",
-			CostUSD: &reportedCost, CostStatus: "exact",
+			Cost: &reportedCost, CostStatus: "exact",
 			CostSource: db.CopilotReportedCostSource,
 			OccurredAt: "2026-01-18T00:01:00.000Z",
 			DedupKey:   "cost-only",
@@ -2876,7 +2881,7 @@ func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.True(t, got.HasCost)
-	assert.InDelta(t, reportedCost, got.CostUSD, 1e-12)
+	assert.Equal(t, reportedCost, got.Cost)
 	assert.False(t, got.HasTokenData,
 		"a cost-only reported row is not token data")
 	assert.Empty(t, got.Models,
@@ -2886,7 +2891,7 @@ func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 	assert.Equal(t, want.HasTokenData, got.HasTokenData)
 	assert.Equal(t, want.Models, got.Models)
 	assert.Equal(t, want.BreakdownCount, got.BreakdownCount)
-	assert.InDelta(t, want.CostUSD, got.CostUSD, 1e-12)
+	assert.Equal(t, want.Cost, got.Cost)
 
 	gotNoBreakdown, err := store.GetSessionUsage(ctx, sess.ID, false)
 	require.NoError(t, err)
@@ -2900,7 +2905,7 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "reasoning-only",
-		OutputPerMTok: 2,
+		OutputPerMTok: money.MustParseDollars("2"),
 	}}))
 
 	sessionID := "duck-reasoning-only"
@@ -2926,24 +2931,24 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
-	wantCost := float64(300) * 2 / 1_000_000
+	wantCost := money.MustParseDollars("0.0006")
 
 	daily, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Zero(t, daily.Totals.OutputTokens,
 		"reasoning-only rows do not change reported output-token totals")
-	assert.InDelta(t, wantCost, daily.Totals.TotalCost, 0.000001)
+	assert.Equal(t, wantCost, daily.Totals.TotalCost)
 
 	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
 	require.NoError(t, err)
 	require.Len(t, top, 1)
-	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+	assert.Equal(t, wantCost, top[0].Cost)
 
 	sessionUsage, err := store.GetSessionUsage(ctx, sessionID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
-	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, wantCost, sessionUsage.Cost)
 	require.Len(t, sessionUsage.Breakdown, 1,
 		"reasoning-only rows must appear in the breakdown")
 	entry := sessionUsage.Breakdown[0]
@@ -2951,7 +2956,7 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	assert.Zero(t, entry.OutputTokens,
 		"reasoning stays out of reported output tokens")
 	assert.True(t, entry.HasCost)
-	assert.InDelta(t, wantCost, entry.CostUSD, 0.000001,
+	assert.Equal(t, wantCost, entry.Cost,
 		"reasoning-only breakdown row bills at the output rate")
 }
 
@@ -2960,8 +2965,8 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "gpt-5.4",
-		InputPerMTok:  1,
-		OutputPerMTok: 2,
+		InputPerMTok:  money.MustParseDollars("1"),
+		OutputPerMTok: money.MustParseDollars("2"),
 	}}))
 
 	msg := syncMessage(
@@ -2991,13 +2996,13 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1000, daily.Totals.InputTokens)
 	assert.Zero(t, daily.Totals.OutputTokens)
-	assert.InDelta(t, 0.002, daily.Totals.TotalCost, 0.000001)
+	assert.Equal(t, money.MustParseDollars("0.002"), daily.Totals.TotalCost)
 
 	sessionUsage, err := store.GetSessionUsage(ctx, "duck-message-reasoning", true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
-	assert.InDelta(t, 0.002, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, money.MustParseDollars("0.002"), sessionUsage.Cost)
 	require.Len(t, sessionUsage.Breakdown, 1,
 		"reasoning-bearing message must appear in the breakdown")
 	entry := sessionUsage.Breakdown[0]
@@ -3005,7 +3010,7 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	assert.Equal(t, 1000, entry.InputTokens)
 	assert.Zero(t, entry.OutputTokens)
 	assert.True(t, entry.HasCost)
-	assert.InDelta(t, 0.002, entry.CostUSD, 0.000001,
+	assert.Equal(t, money.MustParseDollars("0.002"), entry.Cost,
 		"breakdown cost must include reasoning billed as output")
 }
 
@@ -3014,7 +3019,7 @@ func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "reasoning-mix",
-		OutputPerMTok: 2,
+		OutputPerMTok: money.MustParseDollars("2"),
 	}}))
 
 	sessionID := "duck-reasoning-mixed"
@@ -3050,13 +3055,13 @@ func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
-	wantCost := float64(100+300) * 2 / 1_000_000
+	wantCost := money.MustParseDollars("0.0008")
 
 	daily, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 100, daily.Totals.OutputTokens,
 		"reasoning-only rows do not change reported output-token totals")
-	assert.InDelta(t, wantCost, daily.Totals.TotalCost, 0.000001)
+	assert.Equal(t, wantCost, daily.Totals.TotalCost)
 	require.NotNil(t, daily.Pricing)
 	assert.Equal(t, export.CostSourceComputed,
 		daily.Pricing.Models["reasoning-mix"].CostSource)
@@ -3064,21 +3069,21 @@ func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
 	require.NoError(t, err)
 	require.Len(t, top, 1)
-	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+	assert.Equal(t, wantCost, top[0].Cost)
 
 	sessionUsage, err := store.GetSessionUsage(ctx, sessionID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
-	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, wantCost, sessionUsage.Cost)
 	require.Len(t, sessionUsage.Breakdown, 2,
 		"both output and reasoning-only rows must appear in the breakdown")
-	breakdownCost := 0.0
+	breakdownCost := money.Money{}
 	for _, entry := range sessionUsage.Breakdown {
 		assert.True(t, entry.HasCost)
-		breakdownCost += entry.CostUSD
+		breakdownCost = money.MustAdd(breakdownCost, entry.Cost)
 	}
-	assert.InDelta(t, wantCost, breakdownCost, 0.000001,
+	assert.Equal(t, sessionUsage.Cost, breakdownCost,
 		"breakdown costs must sum to the session cost")
 }
 
@@ -3087,8 +3092,8 @@ func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "claude-test",
-		InputPerMTok:  3,
-		OutputPerMTok: 15,
+		InputPerMTok:  money.MustParseDollars("3"),
+		OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 
 	before := syncMessage("duck-usage-edge-a", 0, "assistant", "before midnight", "2026-01-12T23:30:00.000Z")
@@ -3142,8 +3147,8 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 		OutputTokens:     567,
 		CacheWriteTokens: 12,
 		CacheReadTokens:  34,
-		ChargedCents:     15.66,
-		CursorTokenFee:   3.32,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
 		UserEmail:        "member@example.com",
 		IsHeadless:       false,
@@ -3168,7 +3173,7 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 	assert.Equal(t, 567, result.Daily[0].OutputTokens)
 	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
 	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
-	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.1566"), result.Daily[0].TotalCost)
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total)
@@ -3224,10 +3229,10 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-test",
-		InputPerMTok:         3,
-		OutputPerMTok:        15,
-		CacheCreationPerMTok: 1,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("3"),
+		OutputPerMTok:        money.MustParseDollars("15"),
+		CacheCreationPerMTok: money.MustParseDollars("1"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}))
 	sessionID := "duck-usage-breakdowns"
 	primarySession := syncSession(
@@ -3299,9 +3304,9 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	assert.Equal(t, "claude", day.AgentBreakdowns[0].Agent)
 	assert.Equal(t, "host-a", day.MachineBreakdowns[0].MachineName)
 	assert.Equal(t, "host-b", day.MachineBreakdowns[1].MachineName)
-	assert.InDelta(t, day.TotalCost,
-		day.MachineBreakdowns[0].Cost+day.MachineBreakdowns[1].Cost, 0.000001)
-	assert.InDelta(t, 0.00001, got.Totals.CacheSavings, 0.000001)
+	assert.Equal(t, day.TotalCost,
+		money.MustAdd(day.MachineBreakdowns[0].Cost, day.MachineBreakdowns[1].Cost))
+	assert.Equal(t, money.MustParseDollars("0.00001"), got.Totals.CacheSavings)
 
 	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From:              "2026-01-01",
@@ -3359,7 +3364,7 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 	root := syncSession("duck-rollup-root", "alpha", "root", "2026-01-10T00:00:00.000Z", 1)
 	continuation := syncSession("duck-rollup-continuation", "alpha", "continuation", "2026-01-10T00:30:00.000Z", 0)
@@ -3392,14 +3397,14 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, rollup.SubagentCount)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.000066"), rollup.Cost)
 }
 
 func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "gpt-5.1", InputPerMTok: 3, OutputPerMTok: 15,
+		ModelPattern: "gpt-5.1", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 	root := syncSession(
 		"duck-copilot-rollup-root", "alpha", "root",
@@ -3412,8 +3417,8 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	parentID := root.ID
 	child.ParentSessionID = &parentID
 	child.RelationshipType = "subagent"
-	reportedRootCost := 0.03
-	reportedChildCost := 0.02
+	reportedRootCost := money.MustParseDollars("0.03")
+	reportedChildCost := money.MustParseDollars("0.02")
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
 		{
 			Session: root,
@@ -3426,7 +3431,7 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 				{
 					Source: "shutdown", Model: "gpt-5.1",
 					InputTokens: 1000, OutputTokens: 500,
-					CostUSD: &reportedRootCost, CostStatus: "exact",
+					Cost: &reportedRootCost, CostStatus: "exact",
 					CostSource: db.CopilotReportedCostSource,
 					OccurredAt: "2026-01-10T00:02:00.000Z", DedupKey: "final",
 				},
@@ -3437,7 +3442,7 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 			Session: child,
 			UsageEvents: []db.UsageEvent{{
 				Source: "provider", Model: "gpt-5.1",
-				CostUSD: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
+				Cost: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
 				OccurredAt: "2026-01-10T01:01:00.000Z", DedupKey: "child",
 			}},
 			DataVersion: 1, ReplaceMessages: true,
@@ -3453,15 +3458,15 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 		ctx, NewStoreFromDB(syncer.DB()), root.ID, false)
 	require.NoError(t, err)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, reportedRootCost+reportedChildCost,
-		rollup.CostUSD, 1e-12)
+	assert.Equal(t, money.MustAdd(reportedRootCost, reportedChildCost),
+		rollup.Cost)
 }
 
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 	root := syncSession("duck-rollup-untimed-root", "alpha", "root", "2026-01-10T00:00:00.000Z", 1)
 	child := syncSession("duck-rollup-untimed-child", "alpha", "child", "2026-01-10T01:00:00.000Z", 1)
@@ -3496,14 +3501,14 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, rollup.SubagentCount)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.000066"), rollup.Cost)
 }
 
 func TestStoreSessionUsageRollupHandlesNullMessageAndSessionTimestamps(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 	root := syncSession("duck-rollup-null-ts-root", "alpha", "root", "2026-01-10T00:00:00.000Z", 1)
 	child := syncSession("duck-rollup-null-ts-child", "alpha", "child", "2026-01-10T01:00:00.000Z", 1)
@@ -3539,7 +3544,7 @@ func TestStoreSessionUsageRollupHandlesNullMessageAndSessionTimestamps(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 1, rollup.SubagentCount)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.000066, rollup.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.000066"), rollup.Cost)
 }
 
 // TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks exercises the SQL
@@ -3671,11 +3676,105 @@ func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	return NewStoreFromDB(syncer.DB()), fixture
 }
 
+func TestDuckUsageQuantizesCostBeforeAggregation(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "sub-micro-model",
+		InputPerMTok: money.Money{Microdollars: 400_000},
+	}}))
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"sub-micro-session", "alpha", "sub-micro", "2026-02-01T12:00:00Z", 1,
+		),
+		Messages: []db.Message{{
+			SessionID: "sub-micro-session", Ordinal: 0, Role: "user",
+			Content: "sub-micro", ContentLength: len("sub-micro"),
+			Timestamp: "2026-02-01T12:00:00Z",
+		}},
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "session", Model: "sub-micro-model", InputTokens: 1,
+				OccurredAt: "2026-02-01T12:01:00Z", DedupKey: "sub-micro-1",
+			},
+			{
+				Source: "session", Model: "sub-micro-model", InputTokens: 1,
+				OccurredAt: "2026-02-01T12:02:00Z", DedupKey: "sub-micro-2",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	filter := db.UsageFilter{
+		From: "2026-02-01", To: "2026-02-01", Timezone: "UTC",
+	}
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, money.Money{}, daily.Totals.TotalCost)
+	assert.Equal(t, 1, daily.SessionCounts.Total)
+	assert.Equal(t, 1, daily.SessionCounts.ByAgent["claude"])
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 1)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, money.Money{}, top[0].Cost)
+
+	usage, err := store.GetSessionUsage(ctx, "sub-micro-session", false)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, money.Money{}, usage.Cost)
+}
+
+func TestDuckDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	large := money.Money{Microdollars: 1 << 62}
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"duck-overflow", "alpha", "overflow", "2026-02-01T12:00:00Z", 1,
+		),
+		Messages: []db.Message{syncMessage(
+			"duck-overflow", 0, "user", "overflow", "2026-02-01T12:00:00Z",
+		)},
+		UsageEvents: []db.UsageEvent{
+			{
+				Source: "provider", Model: "model", Cost: &large,
+				OccurredAt: "2026-02-01T12:01:00Z", DedupKey: "overflow-1",
+			},
+			{
+				Source: "provider", Model: "model", Cost: &large,
+				OccurredAt: "2026-02-01T12:02:00Z", DedupKey: "overflow-2",
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	_, err = store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-02-01", To: "2026-02-01", Timezone: "UTC",
+	})
+
+	require.ErrorIs(t, err, money.ErrOverflow)
+}
+
 func TestDuckDBBranchDimension(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
 	}}))
 
 	seed := []struct {

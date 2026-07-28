@@ -1,11 +1,11 @@
 import { formatTokenCount } from "@kenn-io/kit-ui/utils/format";
 import { formatDateTime, m } from "../i18n/index.js";
+export { formatMoney as formatCost } from "../money.js";
 
 // These four helpers are byte-identical to kit-ui's implementations; the
 // locale-aware / app-specific formatters below stay local. Note kit-ui keeps
 // `truncate` in its time module, not format.
 export {
-  formatCost,
   formatNumber,
   formatTokenCount,
 } from "@kenn-io/kit-ui/utils/format";

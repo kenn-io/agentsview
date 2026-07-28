@@ -4,10 +4,7 @@
   import { formatTokenCount } from "../../utils/format.js";
   import { formatAgentName, truncate } from "../../utils/format.js";
   import { m } from "../../i18n/index.js";
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
-  }
+  import { formatMoney } from "../../money.js";
 
   function handleRowClick(sessionId: string) {
     router.navigateToSession(sessionId);
@@ -52,7 +49,7 @@
             {formatTokenCount(row.totalTokens)}
           </span>
           <span class="session-cost">
-            {fmtCost(row.cost)}
+            {formatMoney(row.cost)}
           </span>
         </div>
       {/each}

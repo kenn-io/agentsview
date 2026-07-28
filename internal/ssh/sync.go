@@ -42,7 +42,7 @@ func (rs *RemoteSync) Run(
 	fmt.Printf(
 		"Resolving agent directories on %s...\n", rs.Host,
 	)
-	dirs, files, extraFiles, err := resolveDirs(
+	dirs, files, extraFiles, forbiddenRoots, err := resolveDirs(
 		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
 	)
 	if err != nil {
@@ -65,7 +65,8 @@ func (rs *RemoteSync) Run(
 		rs.Host, len(dirs),
 	)
 	tmpDir, err := downloadAndExtract(
-		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts, dirs, files, extraFiles,
+		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
+		dirs, files, extraFiles, forbiddenRoots,
 	)
 	if err != nil {
 		return stats, fmt.Errorf(
@@ -109,6 +110,10 @@ func (rs *RemoteSync) Run(
 		Dirs:       dirs,
 		Files:      files,
 		ExtraFiles: extraFiles,
+		// ForbiddenRoots is intentionally omitted: the tar script already
+		// pruned forbidden content before it reached tmpDir, and these
+		// values are remote POSIX paths, not paths in the local-path
+		// domain ImportExtracted operates in.
 	}, tmpDir)
 	if lastProgress.SessionsTotal > 0 {
 		elapsed := time.Since(t0).Truncate(time.Millisecond)

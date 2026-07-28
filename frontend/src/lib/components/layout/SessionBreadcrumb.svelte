@@ -35,6 +35,7 @@
     entrypointBadge,
   } from "../../utils/agents.js";
   import { formatCost, formatTokenUsage } from "../../utils/format.js";
+  import type { Money } from "../../money.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
@@ -104,7 +105,7 @@
     output_tokens: number;
     cache_creation_input_tokens: number;
     cache_read_input_tokens: number;
-    cost_usd: number;
+    cost: Money;
     has_cost: boolean;
   }
 
@@ -164,7 +165,7 @@
       });
   });
 
-  let sessionCost = $state<number | null>(null);
+  let sessionCost = $state<Money | null>(null);
   let sessionCostIsRollup = $state(false);
   let sessionRollupSubagentCount = $state(0);
   let sessionUsageBreakdownCount = $state(0);
@@ -261,9 +262,9 @@
         sessionCostIsRollup =
           sessionRollupSubagentCount > 0 && res.has_rollup_cost === true;
         sessionCost = sessionCostIsRollup
-          ? (res.rollup_cost_usd ?? null)
+          ? (res.rollup_cost ?? null)
           : res.has_cost
-            ? res.cost_usd
+            ? res.cost
             : null;
         sessionUsageBreakdownCount = res.breakdown_count ?? 0;
       })
@@ -402,7 +403,7 @@
       `${formatTokenCount(entry.output_tokens)} out`,
     ];
     if (entry.has_cost) {
-      parts.push(formatCost(entry.cost_usd));
+      parts.push(formatCost(entry.cost));
     }
     return parts.filter(Boolean).join(" · ");
   }
@@ -1010,7 +1011,7 @@
                   </span>
                   {#if row.has_cost}
                     <span class="usage-breakdown-cost">
-                      {formatCost(row.cost_usd)}
+                      {formatCost(row.cost)}
                     </span>
                   {/if}
                 </div>

@@ -1,0 +1,13 @@
+name: CI
+
+# The PR dispatcher always calls the main-pinned workflow. That workflow
+# independently routes same-repository Linux jobs to the managed public fleet
+# and fork jobs to GitHub-hosted runners.
+on:
+  pull_request:
+
+permissions: read-all
+
+jobs:
+  run:
+    uses: kenn-io/agentsview/.github/workflows/ci.yml@main

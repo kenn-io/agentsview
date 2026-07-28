@@ -35,11 +35,11 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 			updatedAt = row.Rates.UpdatedAt.UTC().Format(jsonTimeLayout)
 		}
 		out = append(out, map[string]any{
-			"cache_read_per_mtok":  row.Rates.CacheReadPerMTok,
-			"cache_write_per_mtok": row.Rates.CacheWritePerMTok,
-			"input_per_mtok":       row.Rates.InputPerMTok,
+			"cache_read_per_mtok":  row.Rates.CacheReadPerMTok.Microdollars,
+			"cache_write_per_mtok": row.Rates.CacheWritePerMTok.Microdollars,
+			"input_per_mtok":       row.Rates.InputPerMTok.Microdollars,
 			"model_pattern":        row.ModelPattern,
-			"output_per_mtok":      row.Rates.OutputPerMTok,
+			"output_per_mtok":      row.Rates.OutputPerMTok.Microdollars,
 			"source":               string(row.Rates.Source),
 			"updated_at":           updatedAt,
 		})
@@ -152,10 +152,10 @@ func canonicalPricingRowSortValues(row EffectivePricingRow) []string {
 	return []string{
 		row.ModelPattern,
 		string(row.Rates.Source),
-		formatCanonicalJSONFloat(row.Rates.InputPerMTok, 64),
-		formatCanonicalJSONFloat(row.Rates.OutputPerMTok, 64),
-		formatCanonicalJSONFloat(row.Rates.CacheWritePerMTok, 64),
-		formatCanonicalJSONFloat(row.Rates.CacheReadPerMTok, 64),
+		strconv.FormatInt(row.Rates.InputPerMTok.Microdollars, 10),
+		strconv.FormatInt(row.Rates.OutputPerMTok.Microdollars, 10),
+		strconv.FormatInt(row.Rates.CacheWritePerMTok.Microdollars, 10),
+		strconv.FormatInt(row.Rates.CacheReadPerMTok.Microdollars, 10),
 		updatedAt,
 	}
 }

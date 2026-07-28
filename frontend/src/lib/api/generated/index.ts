@@ -149,6 +149,7 @@ export type { InsightCannedSessionFilters } from './models/InsightCannedSessionF
 export type { InsightsResponse } from './models/InsightsResponse';
 export type { MachinesResponse } from './models/MachinesResponse';
 export type { ModelTotal } from './models/ModelTotal';
+export type { MoneyMoney } from './models/MoneyMoney';
 export type { Opener } from './models/Opener';
 export type { OpenersResponse } from './models/OpenersResponse';
 export type { OpenRequest } from './models/OpenRequest';

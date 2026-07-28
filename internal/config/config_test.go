@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -48,6 +49,53 @@ func setupTestEnv(t *testing.T) string {
 
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	return dir
+}
+
+func TestChartPaletteDefaultsAndLoads(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want ChartPalette
+	}{
+		{name: "omitted", want: ChartPaletteAgentsview},
+		{name: "agentsview", toml: `chart_palette = "agentsview"`, want: ChartPaletteAgentsview},
+		{name: "matplotlib", toml: `chart_palette = "matplotlib"`, want: ChartPaletteMatplotlib},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.ResolvedChartPalette())
+		})
+	}
+}
+
+func TestChartPaletteRejectsInvalidValue(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want string
+	}{
+		{
+			name: "unknown",
+			toml: `chart_palette = "neon"`,
+			want: `chart_palette must be "agentsview" or "matplotlib" (got "neon")`,
+		},
+		{
+			name: "explicit empty",
+			toml: `chart_palette = ""`,
+			want: `chart_palette must be "agentsview" or "matplotlib" (got "")`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			err = cfg.applyConfigTOML(tt.toml)
+			require.EqualError(t, err, tt.want)
+		})
+	}
 }
 
 func setTestHome(t *testing.T, home string) {
@@ -1656,24 +1704,24 @@ func TestLoadFile_CustomModelPricing(t *testing.T) {
 			name: "basic rates",
 			data: map[string]any{
 				"custom_model_pricing": map[string]CustomModelRate{
-					"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+					"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars},
 				},
 			},
 			want: map[string]CustomModelRate{
-				"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+				"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars},
 			},
 		},
 		{
 			name: "multiple models with cache rates",
 			data: map[string]any{
 				"custom_model_pricing": map[string]CustomModelRate{
-					"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
-					"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+					"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars, CacheCreationMicrodollarsPerMTok: money.MustParseDollars("2.5").Microdollars, CacheReadMicrodollarsPerMTok: money.MustParseDollars("0.2").Microdollars},
+					"acme-fast-2.1":  {InputMicrodollarsPerMTok: money.MustParseDollars("0.8").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("4.0").Microdollars},
 				},
 			},
 			want: map[string]CustomModelRate{
-				"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
-				"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+				"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("2.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("8.0").Microdollars, CacheCreationMicrodollarsPerMTok: money.MustParseDollars("2.5").Microdollars, CacheReadMicrodollarsPerMTok: money.MustParseDollars("0.2").Microdollars},
+				"acme-fast-2.1":  {InputMicrodollarsPerMTok: money.MustParseDollars("0.8").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("4.0").Microdollars},
 			},
 		},
 		{
@@ -1703,6 +1751,31 @@ func TestLoadFile_CustomModelPricing(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadFileRejectsNegativeCustomModelPricing(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.model]
+input_microdollars_per_mtok = -1
+output_microdollars_per_mtok = 1
+`)
+
+	err := f.LoadMinimalErr(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rates must not be negative")
+}
+
+func TestLoadFileRejectsLegacyCustomModelPricingFields(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.model]
+input = 3.0
+output = 15.0
+`)
+
+	err := f.LoadMinimalErr(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom_model_pricing.model.input")
+	assert.Contains(t, err.Error(), "input_microdollars_per_mtok")
 }
 
 func TestLoadFile_RemoteHosts(t *testing.T) {

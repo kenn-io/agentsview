@@ -4,7 +4,7 @@ export type SavingsState = "saved" | "costlier" | "none";
 // decimals are treated as "none" so the UI doesn't render
 // a misleading "$0.00 more than uncached" badge for a
 // sub-cent delta.
-const DISPLAY_EPSILON = 0.005;
+const DISPLAY_EPSILON_MICRODOLLARS = 5_000;
 
 // savingsState classifies a cache-savings dollar delta into
 // the three states the Cache Efficiency panel renders:
@@ -15,7 +15,7 @@ const DISPLAY_EPSILON = 0.005;
 //   - "none"     : zero, or within half a cent of zero — no
 //                  signal worth showing at 2-decimal display
 export function savingsState(value: number): SavingsState {
-  if (Math.abs(value) < DISPLAY_EPSILON) return "none";
+  if (Math.abs(value) < DISPLAY_EPSILON_MICRODOLLARS) return "none";
   if (value > 0) return "saved";
   return "costlier";
 }

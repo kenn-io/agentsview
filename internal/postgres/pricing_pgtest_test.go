@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // TestLoadPricingMapAppliesCustomWhenTableMissing covers the fresh-PG
@@ -27,7 +28,7 @@ func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
 	require.NoError(t, err, "drop model_pricing")
 
 	store.SetCustomPricing(map[string]config.CustomModelRate{
-		"acme-ultra-2.1": {Input: 9.0, Output: 18.0},
+		"acme-ultra-2.1": {InputMicrodollarsPerMTok: money.MustParseDollars("9.0").Microdollars, OutputMicrodollarsPerMTok: money.MustParseDollars("18.0").Microdollars},
 	})
 
 	out, err := store.loadPricingMap(ctx)
@@ -36,8 +37,8 @@ func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
 	byPattern := pricingRowsByPattern(out)
 	got, ok := byPattern["acme-ultra-2.1"]
 	require.True(t, ok, "custom model missing from pricing map")
-	assert.InDelta(t, 9.0, got.InputPerMTok, 0.001)
-	assert.InDelta(t, 18.0, got.OutputPerMTok, 0.001)
+	assert.Equal(t, money.MustParseDollars("9"), got.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("18"), got.OutputPerMTok)
 	assert.Equal(t, export.PricingRowSourceCustom, got.Source)
 
 	// Fallback pricing must still populate the map so real models

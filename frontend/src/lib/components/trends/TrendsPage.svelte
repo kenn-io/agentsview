@@ -2,6 +2,7 @@
   import { m } from "../../i18n/index.js";
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
   import { getBasePath } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import {
@@ -11,6 +12,7 @@
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
   import { rollingRange } from "../../utils/dates.js";
+  import { chartSeriesColorMap } from "../../utils/chartPalette.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
   import { Spinner, Toggle } from "@kenn-io/kit-ui";
@@ -66,8 +68,15 @@
     if (e.key === "Escape") groupByOpen = false;
   }
 
-  function colorFor(_term: string, index: number): string {
-    return TREND_PALETTE[index % TREND_PALETTE.length]!;
+  const termColorMap = $derived(chartSeriesColorMap(
+    (trends.response?.series ?? []).map((item) => item.term),
+    settings.chartPalette,
+    (_term, index) => TREND_PALETTE[index % TREND_PALETTE.length]!,
+  ));
+
+  function colorFor(term: string, index: number): string {
+    return termColorMap.get(term) ??
+      TREND_PALETTE[index % TREND_PALETTE.length]!;
   }
 
   function isGranularity(value: string | null): value is TrendsGranularity {

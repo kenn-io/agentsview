@@ -681,5 +681,8 @@ func traeProviderCapabilities() Capabilities {
 	caps.Content.ToolCalls = CapabilityUnsupported
 	caps.Content.ToolResults = CapabilityUnsupported
 	caps.Content.Thinking = CapabilityUnsupported
+	caps.Sync = ProviderSyncSemantics{
+		UnchangedResults: UnchangedResultMTimeAndHash,
+	}
 	return caps
 }

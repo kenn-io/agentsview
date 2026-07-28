@@ -119,11 +119,11 @@ describe("i18n locale selection", () => {
     })).toBe("12 个会话");
 
     runtime.setLocale("zh-TW", { reload: false });
-    expect(m.nav_sessions()).toBe("會話");
+    expect(m.nav_sessions()).toBe("對話");
     expect(m.status_bar_sessions({
       count: 12,
       countLabel: "12",
-    })).toBe("12 個會話");
+    })).toBe("12 個對話");
 
     runtime.setLocale("ko", { reload: false });
     expect(m.nav_sessions()).toBe("세션");
@@ -179,7 +179,7 @@ describe("i18n locale selection", () => {
     runtime.setLocale("zh-TW", { reload: false });
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 次 tool call");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 次 tool call");
-    expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 條消息");
+    expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 則訊息");
 
     // Korean has no plural distinction, so a single variant serves every count.
     runtime.setLocale("ko", { reload: false });

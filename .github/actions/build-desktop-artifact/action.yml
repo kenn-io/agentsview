@@ -14,17 +14,19 @@ inputs:
   artifact_dir:
     description: Bundle output directory
     required: true
-
 runs:
   using: composite
   steps:
     - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
       with:
         go-version-file: go.mod
+        cache: ${{ inputs.bundle == 'appimage' && inputs.target_triple == '' && github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'false' || 'true' }}
 
     - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
       with:
         node-version: "24"
+
+    - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
 
     - name: Setup MinGW (Windows)
       if: runner.os == 'Windows'
@@ -73,7 +75,7 @@ runs:
         cd desktop
         export TAURI_ENV_TARGET_TRIPLE="$AGENTSVIEW_TARGET_TRIPLE"
         npm run prepare-sidecar
-        build_cmd=(npx tauri build --bundles "$BUNDLE")
+        build_cmd=(npx tauri build --verbose --bundles "$BUNDLE")
         if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
           build_cmd+=(--target "$AGENTSVIEW_TARGET_TRIPLE")
         fi

@@ -1,10 +1,16 @@
 import { defineConfig } from "@playwright/test";
 
 const isCI = process.env.CI === "true";
+const isSelfHostedCI =
+  isCI && process.env.RUNNER_ENVIRONMENT === "self-hosted";
 
 export default defineConfig({
   testDir: "e2e",
   timeout: isCI ? 45_000 : 20_000,
+  // The managed runner exposes more host CPUs than its pod can use, so keep
+  // its worker count bounded. GitHub-hosted runners should retain Playwright's
+  // adaptive default rather than overcommitting a smaller VM.
+  workers: isSelfHostedCI ? 8 : undefined,
   retries: 0,
   use: {
     baseURL: "http://127.0.0.1:8090",

@@ -1,5 +1,7 @@
 package server
 
+import "go.kenn.io/agentsview/internal/config"
+
 // settingsResponse is the JSON shape returned by GET /api/v1/settings.
 type settingsResponse struct {
 	AgentDirs        map[string][]string `json:"agent_dirs"`
@@ -7,6 +9,7 @@ type settingsResponse struct {
 	GithubConfigured bool                `json:"github_configured"`
 	Host             string              `json:"host"`
 	Port             int                 `json:"port"`
+	ChartPalette     config.ChartPalette `json:"chart_palette"`
 	AuthToken        string              `json:"auth_token,omitempty"`
 	RequireAuth      bool                `json:"require_auth"`
 	ReadOnly         bool                `json:"read_only"`
@@ -22,7 +25,8 @@ type terminalResponse struct {
 // settingsUpdateRequest is the JSON body for PUT /api/v1/settings.
 // All fields are optional; only non-nil fields are applied.
 type settingsUpdateRequest struct {
-	Terminal    *terminalResponse `json:"terminal,omitempty"`
-	AuthToken   *string           `json:"auth_token,omitempty"`
-	RequireAuth *bool             `json:"require_auth,omitempty"`
+	Terminal     *terminalResponse `json:"terminal,omitempty"`
+	AuthToken    *string           `json:"auth_token,omitempty"`
+	RequireAuth  *bool             `json:"require_auth,omitempty"`
+	ChartPalette *string           `json:"chart_palette,omitempty"`
 }

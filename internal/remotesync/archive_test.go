@@ -240,6 +240,101 @@ func TestHermesArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 	}
 }
 
+func TestWriteArchiveExcludesRemoteSyncExcludedAgentState(t *testing.T) {
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
+	))
+
+	targets := TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentTrae: {root},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentTrae: {chatDB},
+		},
+	}
+	for _, tt := range []struct {
+		name  string
+		write func(io.Writer) error
+	}{
+		{
+			name: "full",
+			write: func(w io.Writer) error {
+				return WriteArchive(w, targets)
+			},
+		},
+		{
+			name: "delta",
+			write: func(w io.Writer) error {
+				return WriteArchiveFiles(w, targets, []string{chatDB})
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			require.NoError(t, tt.write(&archive))
+			_, err := tar.NewReader(&archive).Next()
+			assert.ErrorIs(t, err, io.EOF,
+				"a remote-sync-excluded agent's state must never enter a remote archive")
+		})
+	}
+}
+
+func TestWriteArchivePrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, ".forbidden-provider")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	targets := TargetSet{
+		Dirs:           map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
+		ForbiddenRoots: []string{forbidden},
+	}
+	for _, tt := range []struct {
+		name  string
+		write func(io.Writer) error
+	}{
+		{
+			name: "full archive",
+			write: func(w io.Writer) error {
+				return WriteArchive(w, targets)
+			},
+		},
+		{
+			name: "delta archive",
+			write: func(w io.Writer) error {
+				return WriteArchiveFiles(w, targets, []string{keep, secret})
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			require.NoError(t, tt.write(&archive))
+
+			var names []string
+			tr := tar.NewReader(&archive)
+			for {
+				hdr, err := tr.Next()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				require.NoError(t, err)
+				names = append(names, hdr.Name)
+			}
+			assert.Contains(t, names, archiveNameForTest(t, keep))
+			assert.NotContains(t, names, archiveNameForTest(t, secret),
+				"a forbidden nested root must not enter the transfer artifact")
+		})
+	}
+}
+
 func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {
 	stateDB := filepath.Join(t.TempDir(), "profile", "state.db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
@@ -563,7 +658,7 @@ func TestResolveDeltaFilePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, ok := resolveDeltaFilePath(
-				fromSlashAll(tt.roots), filepath.FromSlash(tt.path))
+				fromSlashAll(tt.roots), forbiddenRootMatcher{}, filepath.FromSlash(tt.path))
 			require.Equal(t, tt.ok, ok)
 			assert.Equal(t, filepath.FromSlash(tt.want), got)
 		})

@@ -274,7 +274,10 @@ $195.64 today
 The daily table shows input, output, cache-creation, and cache-read token totals
 per local-time day, the estimated cost, and the models that contributed to each
 row. Adding `--breakdown` prints indented per-model sub-rows so you can see
-which model drove the spend on each day.
+which model drove the spend on each day. In JSON output, the same flag also
+populates per-project, per-agent, and per-machine breakdown arrays for every
+day, making costs from shared multi-machine archives separable without another
+query.
 
 ## How Costs Are Computed
 
@@ -326,22 +329,22 @@ the LiteLLM catalog, or override the catalog's rates for models that are. Add
 
 ```toml
 [custom_model_pricing."acme-ultra-2.1"]
-input = 2.0
-output = 8.0
-cache_creation = 2.5
-cache_read = 0.2
+input_microdollars_per_mtok = 2_000_000
+output_microdollars_per_mtok = 8_000_000
+cache_creation_microdollars_per_mtok = 2_500_000
+cache_read_microdollars_per_mtok = 200_000
 
 [custom_model_pricing.internal-tiny]
-input = 0.2
-output = 0.8
+input_microdollars_per_mtok = 200_000
+output_microdollars_per_mtok = 800_000
 ```
 
-| Field            | Description                                                       |
-| ---------------- | ----------------------------------------------------------------- |
-| `input`          | USD per million input tokens (defaults to `0` if omitted)         |
-| `output`         | USD per million output tokens (defaults to `0` if omitted)        |
-| `cache_creation` | USD per million cache-creation tokens (optional, defaults to `0`) |
-| `cache_read`     | USD per million cache-read tokens (optional, defaults to `0`)     |
+| Field                                      | Description                                                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| `input_microdollars_per_mtok`              | Integer microdollars per million input tokens (defaults to `0` if omitted)   |
+| `output_microdollars_per_mtok`             | Integer microdollars per million output tokens (defaults to `0` if omitted)  |
+| `cache_creation_microdollars_per_mtok`     | Integer microdollars per million cache-creation tokens (optional)            |
+| `cache_read_microdollars_per_mtok`         | Integer microdollars per million cache-read tokens (optional)                |
 
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains

@@ -3,10 +3,11 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { DbCacheHitRatioDistribution } from './DbCacheHitRatioDistribution';
+import type { MoneyMoney } from './MoneyMoney';
 export type DbStatsCacheEconomics = {
   cache_hit_ratio: DbCacheHitRatioDistribution;
   claude_only: boolean;
-  dollars_saved_vs_uncached: number;
-  dollars_spent: number;
+  saved_vs_uncached: MoneyMoney;
+  spent: MoneyMoney;
 };
 

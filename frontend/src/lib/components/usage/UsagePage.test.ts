@@ -9,7 +9,10 @@ import { mount, tick, unmount } from "svelte";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
+import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
+import { testMoney } from "../../test/money.js";
+import type { UsageSummaryResponse } from "../../api/types/usage.js";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -30,7 +33,7 @@ function usageSummaryWithUnsupported(kind?: string) {
       outputTokens: 0,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 0,
+      totalCost: testMoney(0),
     },
     daily: [],
     projectTotals: [],
@@ -47,9 +50,60 @@ function usageSummaryWithUnsupported(kind?: string) {
       uncachedInputTokens: 0,
       outputTokens: 0,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
     ...(kind ? { unsupportedUsage: { kind } } : {}),
+  };
+}
+
+function tenModelUsageSummary(): UsageSummaryResponse {
+  const models = [
+    "model-alpha",
+    "model-bravo",
+    "model-charlie",
+    "model-delta",
+    "model-echo",
+    "model-foxtrot",
+    "model-golf",
+    "model-hotel",
+    "model-india",
+    "model-zulu",
+  ];
+  return {
+    ...usageSummaryWithUnsupported(),
+    totals: {
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost: testMoney(55),
+    },
+    daily: [{
+      date: "2026-07-01",
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost: testMoney(55),
+      modelsUsed: models,
+      modelBreakdowns: models.map((modelName, index) => ({
+        modelName,
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(index + 1),
+      })),
+    }],
+    modelTotals: models.map((model, index) => ({
+      model,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(index + 1),
+    })),
+    sessionCounts: { total: 10, byProject: {}, byAgent: {} },
   };
 }
 
@@ -72,6 +126,10 @@ afterEach(() => {
   usage.windowDays = 30;
   usage.from = "";
   usage.to = "";
+  usage.toggles.timeSeries.groupBy = "project";
+  usage.toggles.attribution.groupBy = "project";
+  usage.toggles.attribution.view = "treemap";
+  settings.chartPalette = "agentsview";
   sessions.projects = [];
   yokedDates.setEnabled(false);
   localStorage.clear();
@@ -179,6 +237,41 @@ describe("UsagePage refresh behavior", () => {
     expect(document.body.textContent).toContain(
       "Copilot sessions matched this range",
     );
+  });
+
+  it("shares full-universe model colors across Usage panels and palette changes", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.summary = tenModelUsageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+    settings.chartPalette = "agentsview";
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    const firstPath = () => document.querySelector<SVGPathElement>(
+      "path[opacity='0.7']",
+    );
+    const firstDot = () => document.querySelector<HTMLElement>(".list-dot");
+    expect(firstPath()?.getAttribute("fill")).toBe("var(--accent-sky)");
+    expect(firstDot()?.style.background).toBe("var(--accent-sky)");
+
+    settings.chartPalette = "matplotlib";
+    await tick();
+
+    expect(firstPath()?.getAttribute("fill")).toBe("#c5b0d5");
+    expect(firstDot()?.style.background).toBe("rgb(197, 176, 213)");
   });
 
   it("loads agent metadata on mount for the Agent dropdown", async () => {

@@ -219,9 +219,9 @@ Features:
 
 `agentsview session usage <id>` prints per-session token statistics plus a cost
 estimate for a single session. The output reports the session's total output
-tokens and peak context tokens, plus a cost estimate in USD (`cost_usd`) when
-pricing is available for the session's model(s) (`has_cost`). Cost is computed
-from input/output and cache tokens internally, but only the output-token and
+tokens and peak context tokens, plus a cost estimate (`cost`) when pricing is
+available for the session's model(s) (`has_cost`). Cost is computed from
+input/output and cache tokens internally, but only the output-token and
 peak-context totals are reported alongside the cost.
 
 ```bash
@@ -239,10 +239,13 @@ GET /api/v1/sessions/{id}/usage
 ```
 
 The response includes the `session_id`, `agent`, `project`,
-`total_output_tokens`, `peak_context_tokens`, `has_token_data`, `cost_usd`,
+`total_output_tokens`, `peak_context_tokens`, `has_token_data`, `cost`,
 `has_cost`, `models`, and `unpriced_models` fields from the CLI JSON schema.
-HTTP responses also include `server_running: true`. Existing sessions return
-`200` even when token or cost data is absent; missing sessions return `404`.
+Machine-readable money is always an integer microdollar object, for example
+`{"cost":{"microdollars":2410000}}`; CLI tables and labels render that value as
+ordinary dollars. HTTP responses also include `server_running: true`. Existing
+sessions return `200` even when token or cost data is absent; missing sessions
+return `404`.
 
 The deprecated alias `agentsview token-use <id>` remains available for
 compatibility and now also reports cost estimates.
@@ -345,7 +348,7 @@ thread JSON files.
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                           |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
-| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/share/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) |
+| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                        |
 | Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |

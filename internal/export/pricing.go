@@ -1,10 +1,12 @@
 package export
 
 import (
+	"math/big"
 	"sort"
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -17,27 +19,29 @@ const (
 )
 
 type ModelRates struct {
-	InputPerMTok      float64
-	OutputPerMTok     float64
-	CacheWritePerMTok float64
-	CacheReadPerMTok  float64
+	InputPerMTok      money.Money
+	OutputPerMTok     money.Money
+	CacheWritePerMTok money.Money
+	CacheReadPerMTok  money.Money
 	UpdatedAt         *time.Time
 	Source            PricingRowSource
 }
 
 func (r ModelRates) CostForTokens(
 	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
-) float64 {
+) (money.Money, error) {
 	// reasoningTokens is a breakdown of outputTokens for current sources, not
 	// additional billable output. Reasoning-only rows still bill at output rate.
 	billableOutputTokens := outputTokens
 	if billableOutputTokens == 0 {
 		billableOutputTokens = reasoningTokens
 	}
-	return (float64(inputTokens)*r.InputPerMTok +
-		float64(billableOutputTokens)*r.OutputPerMTok +
-		float64(cacheWriteTokens)*r.CacheWritePerMTok +
-		float64(cacheReadTokens)*r.CacheReadPerMTok) / 1_000_000
+	return money.CostPerMillion([]money.RatedTokens{
+		{Tokens: int64(inputTokens), Rate: r.InputPerMTok},
+		{Tokens: int64(billableOutputTokens), Rate: r.OutputPerMTok},
+		{Tokens: int64(cacheWriteTokens), Rate: r.CacheWritePerMTok},
+		{Tokens: int64(cacheReadTokens), Rate: r.CacheReadPerMTok},
+	})
 }
 
 type EffectivePricingRow struct {
@@ -233,41 +237,51 @@ func CombinedCostSource(computed, reported bool) CostSource {
 }
 
 // AllocateCostByWeight distributes a reported aggregate cost across estimated
-// components. The final positive-weight component receives the floating-point
-// remainder so the allocations add back to total exactly.
-func AllocateCostByWeight(total float64, weights []float64) []float64 {
-	allocated := make([]float64, len(weights))
-	if len(weights) == 0 || total == 0 {
+// components. The final positive-weight component receives the integer
+// remainder so allocations add back to the authoritative total exactly.
+func AllocateCostByWeight(total money.Money, weights []money.Money) []money.Money {
+	allocated := make([]money.Money, len(weights))
+	if len(weights) == 0 || total.Microdollars == 0 {
 		return allocated
 	}
 
-	var weightTotal float64
+	weightTotal := new(big.Int)
 	remainderIndex := -1
 	equalWeights := false
 	for i, weight := range weights {
-		if weight > 0 {
-			weightTotal += weight
+		if weight.Microdollars > 0 {
+			weightTotal.Add(weightTotal, big.NewInt(weight.Microdollars))
 			remainderIndex = i
 		}
 	}
-	if weightTotal == 0 {
-		weightTotal = float64(len(weights))
+	if weightTotal.Sign() == 0 {
+		weightTotal.SetInt64(int64(len(weights)))
 		remainderIndex = len(weights) - 1
 		equalWeights = true
 	}
 
-	var assigned float64
+	assigned := new(big.Int)
+	totalInt := big.NewInt(total.Microdollars)
 	for i, weight := range weights {
 		if equalWeights {
-			weight = 1
+			weight = money.Money{Microdollars: 1}
 		}
-		if i == remainderIndex || weight <= 0 {
+		if i == remainderIndex || weight.Microdollars <= 0 {
 			continue
 		}
-		allocated[i] = total * weight / weightTotal
-		assigned += allocated[i]
+		share := new(big.Int).Mul(totalInt, big.NewInt(weight.Microdollars))
+		share.Quo(share, weightTotal)
+		if !share.IsInt64() {
+			panic(money.ErrOverflow)
+		}
+		allocated[i] = money.Money{Microdollars: share.Int64()}
+		assigned.Add(assigned, share)
 	}
-	allocated[remainderIndex] = total - assigned
+	remainder := new(big.Int).Sub(totalInt, assigned)
+	if !remainder.IsInt64() {
+		panic(money.ErrOverflow)
+	}
+	allocated[remainderIndex] = money.Money{Microdollars: remainder.Int64()}
 	return allocated
 }
 

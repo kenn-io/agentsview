@@ -19,7 +19,7 @@ import (
 
 func TestAppendModelOverlay_FillsGaps(t *testing.T) {
 	base := []catalog.ModelPricing{
-		{ModelPattern: "existing-model", InputPerMTok: 1.0, OutputPerMTok: 2.0},
+		{ModelPattern: "existing-model", InputPerMTok: mustRate("1"), OutputPerMTok: mustRate("2")},
 	}
 	result := appendModelOverlay(base)
 
@@ -35,7 +35,7 @@ func TestAppendModelOverlay_FillsGaps(t *testing.T) {
 
 func TestAppendModelOverlay_DoesNotOverwriteExisting(t *testing.T) {
 	base := []catalog.ModelPricing{
-		{ModelPattern: "claude-opus-4-8", InputPerMTok: 99.0, OutputPerMTok: 99.0},
+		{ModelPattern: "claude-opus-4-8", InputPerMTok: mustRate("99"), OutputPerMTok: mustRate("99")},
 	}
 	result := appendModelOverlay(base)
 
@@ -43,14 +43,14 @@ func TestAppendModelOverlay_DoesNotOverwriteExisting(t *testing.T) {
 	for _, p := range result {
 		if p.ModelPattern == "claude-opus-4-8" {
 			count++
-			assert.Equal(t, 99.0, p.InputPerMTok, "existing rate preserved")
+			assert.Equal(t, mustRate("99"), p.InputPerMTok, "existing rate preserved")
 		}
 	}
 	require.Equal(t, 1, count, "no duplicate entries for existing model")
 }
 
 func TestComputeVersion_Deterministic(t *testing.T) {
-	data := []byte(`[{"ModelPattern":"test","InputPerMTok":1}]`)
+	data := []byte(`[{"ModelPattern":"test","InputPerMTok":{"microdollars":1000000}}]`)
 	v1 := computeVersion(data)
 	v2 := computeVersion(data)
 	assert.Equal(t, v1, v2)
@@ -101,7 +101,7 @@ func TestFileURLPathForAbsPrefixesWindowsDrivePaths(t *testing.T) {
 func TestValidateSnapshotFileAcceptsValidSnapshot(t *testing.T) {
 	path := writeSnapshotFile(t, []byte(`{
 		"version": "litellm-test",
-		"models": [{"ModelPattern": "test-model", "InputPerMTok": 1}]
+		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`))
 
 	require.NoError(t, validateSnapshotFile(path))
@@ -147,7 +147,7 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 	source := filepath.Join(repo, "litellm_snapshot.json.gz")
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-test",
-		"models": [{"ModelPattern": "test-model", "InputPerMTok": 1}]
+		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`)), 0o644))
 	runGit(t, repo, "add", "litellm_snapshot.json.gz")
 	runGit(t, repo, "commit", "-m", "snapshot")
@@ -185,7 +185,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	source := filepath.Join(remote, "litellm_snapshot.json.gz")
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-old",
-		"models": [{"ModelPattern": "old-model", "InputPerMTok": 1}]
+		"models": [{"ModelPattern": "old-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`)), 0o644))
 	runGit(t, remote, "add", "litellm_snapshot.json.gz")
 	runGit(t, remote, "commit", "-m", "old snapshot")
@@ -194,7 +194,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-new",
-		"models": [{"ModelPattern": "new-model", "InputPerMTok": 2}]
+		"models": [{"ModelPattern": "new-model", "InputPerMTok": {"microdollars": 2000000}}]
 	}`)), 0o644))
 	runGit(t, remote, "add", "litellm_snapshot.json.gz")
 	runGit(t, remote, "commit", "-m", "new snapshot")
@@ -226,7 +226,7 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	source := filepath.Join(t.TempDir(), "litellm_snapshot.json.gz")
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-url",
-		"models": [{"ModelPattern": "url-model", "InputPerMTok": 1}]
+		"models": [{"ModelPattern": "url-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`)), 0o644))
 	sourceSHA := sha256FileForTest(t, source)
 

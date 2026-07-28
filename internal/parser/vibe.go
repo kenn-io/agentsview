@@ -455,7 +455,7 @@ func vibeUsageEvents(
 		CacheReadInputTokens:     0,
 		ReasoningTokens:          0,
 		// Vibe doesn't currently expose cost information
-		CostUSD:    nil,
+		Cost:       nil,
 		CostStatus: "",
 		CostSource: "",
 		OccurredAt: vibeTimeString(endedAt, startedAt),

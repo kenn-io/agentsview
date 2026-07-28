@@ -1,7 +1,6 @@
 <script lang="ts">
   import { TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
-  import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import { ConfigService } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
@@ -32,10 +31,7 @@
   }
 </script>
 
-<SettingsSection
-  title={m.settings_github_title()}
-  description={m.settings_github_description()}
->
+<div class="github-settings">
   <div class="status-row">
     <span class="status-label">{m.settings_github_status()}</span>
     <span class="status-value" class:configured={settings.githubConfigured}>
@@ -66,9 +62,15 @@
   {#if success}
     <p class="msg success">{success}</p>
   {/if}
-</SettingsSection>
+</div>
 
 <style>
+  .github-settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
   .status-row {
     display: flex;
     align-items: center;

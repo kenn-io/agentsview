@@ -10,11 +10,15 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
 import { usage } from "../../stores/usage.svelte.js";
+import { testMoney } from "../../test/money.js";
+import type { Money } from "../../money.js";
+import { settings } from "../../stores/settings.svelte.js";
 import type {
   DailyUsageEntry,
   UsageSummaryResponse,
 } from "../../api/types/usage.js";
 import { projectColor } from "../../utils/projectColor.js";
+import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
 const OBSERVED_WIDTH = 1648;
 
@@ -62,7 +66,7 @@ function dailyEntry(index: number): DailyUsageEntry {
     outputTokens: 50,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
-    totalCost: 10,
+    totalCost: testMoney(10),
     modelsUsed: ["model"],
     projectBreakdowns: [
       {
@@ -72,7 +76,7 @@ function dailyEntry(index: number): DailyUsageEntry {
         outputTokens: 50,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 10,
+        cost: testMoney(10),
       },
     ],
   };
@@ -87,7 +91,7 @@ function usageSummary(): UsageSummaryResponse {
       outputTokens: 750,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 150,
+      totalCost: testMoney(150),
     },
     daily: Array.from({ length: 15 }, (_, i) => dailyEntry(i)),
     projectTotals: [
@@ -98,7 +102,7 @@ function usageSummary(): UsageSummaryResponse {
         outputTokens: 750,
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
-        cost: 150,
+        cost: testMoney(150),
       },
     ],
     modelTotals: [],
@@ -114,14 +118,14 @@ function usageSummary(): UsageSummaryResponse {
       uncachedInputTokens: 1500,
       outputTokens: 750,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
 
 function modelDailyEntry(
   index: number,
-  models: Array<{ modelName: string; cost: number }>,
+  models: Array<{ modelName: string; cost: Money }>,
 ): DailyUsageEntry {
   const entry = dailyEntry(index);
   entry.projectBreakdowns = undefined;
@@ -136,23 +140,36 @@ function modelDailyEntry(
   return entry;
 }
 
+function mountChart() {
+  const groupBy = usage.toggles.timeSeries.groupBy;
+  return mount(CostTimeSeriesChart, {
+    target: document.body,
+    props: {
+      colorMap: usageChartColorMaps(
+        usage.summary,
+        settings.chartPalette,
+      )[groupBy],
+    },
+  });
+}
+
 describe("CostTimeSeriesChart", () => {
   beforeEach(() => {
     globalThis.ResizeObserver =
       ImmediateResizeObserver as typeof ResizeObserver;
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "project";
+    settings.chartPalette = "agentsview";
   });
 
   afterEach(() => {
     usage.summary = null;
+    settings.chartPalette = "agentsview";
     document.body.innerHTML = "";
   });
 
   it("keeps the rightmost date label inside the SVG viewBox", async () => {
-    const component = mount(CostTimeSeriesChart, {
-      target: document.body,
-    });
+    const component = mountChart();
     await tick();
 
     const svg = document.querySelector("svg.chart-svg");
@@ -178,15 +195,15 @@ describe("CostTimeSeriesChart", () => {
 	usage.summary = usageSummary();
 	usage.summary.daily = [dailyEntry(0)];
 	usage.summary.daily[0]!.projectBreakdowns = [
-		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: 6 },
+		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
 		{
 			...usage.summary.daily[0]!.projectBreakdowns![0]!,
 			project_key: "pl1:sha256:other-archive",
-			cost: 4,
+			cost: testMoney(4),
 		},
 	];
 
-	const component = mount(CostTimeSeriesChart, { target: document.body });
+	const component = mountChart();
 	await tick();
 
 	expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
@@ -199,16 +216,16 @@ describe("CostTimeSeriesChart", () => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary.daily = [
       modelDailyEntry(0, [
-        { modelName: "claude-sonnet-5", cost: 6 },
-        { modelName: "claude-opus-4-8", cost: 4 },
+        { modelName: "claude-sonnet-5", cost: testMoney(6) },
+        { modelName: "claude-opus-4-8", cost: testMoney(4) },
       ]),
       modelDailyEntry(1, [
-        { modelName: "claude-sonnet-5", cost: 3 },
-        { modelName: "claude-opus-4-8", cost: 2 },
+        { modelName: "claude-sonnet-5", cost: testMoney(3) },
+        { modelName: "claude-opus-4-8", cost: testMoney(2) },
       ]),
     ];
 
-    const component = mount(CostTimeSeriesChart, { target: document.body });
+    const component = mountChart();
     await tick();
 
     const paths = Array.from(
@@ -230,11 +247,11 @@ describe("CostTimeSeriesChart", () => {
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary.daily = [
-      modelDailyEntry(0, [{ modelName: "single-model", cost: 6 }]),
-      modelDailyEntry(1, [{ modelName: "single-model", cost: 3 }]),
+      modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
+      modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ];
 
-    const component = mount(CostTimeSeriesChart, { target: document.body });
+    const component = mountChart();
     await tick();
 
     const paths = document.querySelectorAll<SVGPathElement>(
@@ -251,11 +268,11 @@ describe("CostTimeSeriesChart", () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 6 }, (_, index) => ({
       modelName: `model-${index}`,
-      cost: 6 - index,
+      cost: testMoney(6 - index),
     }));
     usage.summary.daily = [modelDailyEntry(0, models)];
 
-    const component = mount(CostTimeSeriesChart, { target: document.body });
+    const component = mountChart();
     await tick();
 
     const paths = Array.from(
@@ -268,6 +285,35 @@ describe("CostTimeSeriesChart", () => {
     expect(dots).toHaveLength(6);
     expect(paths.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
     expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
+    unmount(component);
+  });
+
+  it("uses lexical Matplotlib colors for colliding model paths and legend dots", async () => {
+    settings.chartPalette = "matplotlib";
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary.daily = [
+      modelDailyEntry(0, [
+        { modelName: "gpt-5.6-sol", cost: testMoney(8) },
+        { modelName: "claude-opus-5", cost: testMoney(4) },
+      ]),
+      modelDailyEntry(1, [
+        { modelName: "gpt-5.6-sol", cost: testMoney(3) },
+        { modelName: "claude-opus-5", cost: testMoney(2) },
+      ]),
+    ];
+
+    const component = mountChart();
+    await tick();
+
+    const paths = Array.from(
+      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+    ).map((path) => path.getAttribute("fill"));
+    const dots = Array.from(
+      document.querySelectorAll<HTMLElement>(".legend-dot"),
+    ).map((dot) => dot.style.background);
+    expect(paths).toEqual(["#ff7f0e", "#1f77b4"]);
+    expect(dots).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
     unmount(component);
   });
 });

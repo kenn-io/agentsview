@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -246,7 +247,7 @@ func TestHandleUsageSummaryIncludesUnsupportedCopilotSignal(t *testing.T) {
 	require.NotNil(t, resp.UnsupportedUsage)
 	assert.Equal(t, service.UnsupportedUsageKindCopilotNoTokenData, resp.UnsupportedUsage.Kind)
 	assert.Equal(t, 0, resp.SessionCounts.Total)
-	assert.Equal(t, 0.0, resp.Totals.TotalCost)
+	assert.Equal(t, money.Money{}, resp.Totals.TotalCost)
 }
 
 func TestHandleUsageSummarySkipsUnsupportedCopilotSignalForMixedFilters(t *testing.T) {
@@ -278,8 +279,8 @@ func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
 		OutputTokens:     567,
 		CacheWriteTokens: 0,
 		CacheReadTokens:  8901,
-		ChargedCents:     15.66,
-		CursorTokenFee:   3.32,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
 		UserEmail:        "member@example.com",
 		IsHeadless:       false,
@@ -295,7 +296,7 @@ func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
 
 	resp := decode[server.UsageSummaryResponse](t, w)
 	require.Len(t, resp.Daily, 1)
-	assert.InDelta(t, 0.1566, resp.Totals.TotalCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.1566"), resp.Totals.TotalCost)
 	require.NotEmpty(t, resp.AgentTotals)
 	assert.Equal(t, "cursor", resp.AgentTotals[0].Agent)
 }

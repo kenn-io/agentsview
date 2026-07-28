@@ -315,5 +315,8 @@ func zedProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			UnchangedResults: UnchangedResultMTime,
+		},
 	}
 }

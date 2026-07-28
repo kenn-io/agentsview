@@ -18,9 +18,10 @@ type SyncStats struct {
 }
 
 type TargetSet struct {
-	Dirs       map[parser.AgentType][]string `json:"dirs"`
-	Files      map[parser.AgentType][]string `json:"files,omitempty"`
-	ExtraFiles []string                      `json:"extra_files,omitempty"`
+	Dirs           map[parser.AgentType][]string `json:"dirs"`
+	Files          map[parser.AgentType][]string `json:"files,omitempty"`
+	ExtraFiles     []string                      `json:"extra_files,omitempty"`
+	ForbiddenRoots []string                      `json:"forbidden_roots,omitempty"`
 }
 
 // HasFileScopedAgents reports whether any agent exports a curated
@@ -65,6 +66,8 @@ func (t TargetSet) IsEmpty() bool {
 // syncs incrementally via the mirror delta; the sanitized half is
 // fetched as a separate small full archive every sync.
 func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
+	dirScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
+	fileScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	for agent, dirs := range t.Dirs {
 		if _, ok := t.Files[agent]; ok && !verbatimFileScopedAgent(agent) {
 			if fileScoped.Dirs == nil {
@@ -101,19 +104,38 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 // never delta-streamed. WriteArchiveFiles uses these roots while
 // retaining the TargetSet's agent ownership information.
 func (t TargetSet) DeltaAllowedRoots() []string {
+	forbidden := newForbiddenRootMatcher(t.ForbiddenRoots)
 	roots := make([]string, 0, len(t.Dirs)+len(t.Files)+len(t.ExtraFiles))
 	for agent, dirs := range t.Dirs {
+		if parser.RemoteSyncExcludedAgent(agent) {
+			continue
+		}
 		if _, fileScoped := t.Files[agent]; fileScoped {
 			continue
 		}
-		roots = append(roots, dirs...)
-	}
-	for agent, files := range t.Files {
-		if verbatimFileScopedAgent(agent) {
-			roots = append(roots, files...)
+		for _, dir := range dirs {
+			if !forbidden.within(dir) {
+				roots = append(roots, dir)
+			}
 		}
 	}
-	roots = append(roots, t.ExtraFiles...)
+	for agent, files := range t.Files {
+		if parser.RemoteSyncExcludedAgent(agent) {
+			continue
+		}
+		if verbatimFileScopedAgent(agent) {
+			for _, file := range files {
+				if !forbidden.within(file) {
+					roots = append(roots, file)
+				}
+			}
+		}
+	}
+	for _, file := range t.ExtraFiles {
+		if !forbidden.within(file) {
+			roots = append(roots, file)
+		}
+	}
 	return roots
 }
 
@@ -138,6 +160,9 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 	if len(r.ExtraFiles) > 0 {
 		out["extra_files"] = r.ExtraFiles
 	}
+	if len(r.ForbiddenRoots) > 0 {
+		out["forbidden_roots"] = r.ForbiddenRoots
+	}
 	if r.DeltaFiles != nil {
 		out["delta_files"] = r.DeltaFiles
 	}
@@ -146,17 +171,19 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 
 func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Dirs       map[parser.AgentType][]string `json:"dirs"`
-		Files      json.RawMessage               `json:"files"`
-		ExtraFiles []string                      `json:"extra_files"`
-		DeltaFiles []string                      `json:"delta_files"`
+		Dirs           map[parser.AgentType][]string `json:"dirs"`
+		Files          json.RawMessage               `json:"files"`
+		ExtraFiles     []string                      `json:"extra_files"`
+		ForbiddenRoots []string                      `json:"forbidden_roots"`
+		DeltaFiles     []string                      `json:"delta_files"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	r.TargetSet = TargetSet{
-		Dirs:       raw.Dirs,
-		ExtraFiles: raw.ExtraFiles,
+		Dirs:           raw.Dirs,
+		ExtraFiles:     raw.ExtraFiles,
+		ForbiddenRoots: raw.ForbiddenRoots,
 	}
 	r.DeltaFiles = raw.DeltaFiles
 	if len(raw.Files) == 0 {

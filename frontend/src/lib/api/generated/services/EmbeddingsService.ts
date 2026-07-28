@@ -46,16 +46,24 @@ export class EmbeddingsService {
    * @returns EmbeddingsGenerationsResponse OK
    * @throws ApiError
    */
-  public static getApiV1EmbeddingsGenerations(): CancelablePromise<EmbeddingsGenerationsResponse> {
+  public static getApiV1EmbeddingsGenerations({
+    store,
+  }: {
+    store?: string,
+  }): CancelablePromise<EmbeddingsGenerationsResponse> {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/embeddings/generations',
+      query: {
+        'store': store,
+      },
       errors: {
         400: `Bad Request`,
         401: `Unauthorized`,
         403: `Forbidden`,
         404: `Not Found`,
         409: `Conflict`,
+        422: `Unprocessable Entity`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,
@@ -72,18 +80,23 @@ export class EmbeddingsService {
   public static postApiV1EmbeddingsGenerationsIdActivate({
     id,
     requestBody,
+    store,
   }: {
     /**
      * Generation ordinal ID
      */
     id: number,
     requestBody: EmbeddingsGenerationActionRequest,
+    store?: string,
   }): CancelablePromise<void> {
     return __request(OpenAPI, {
       method: 'POST',
       url: '/api/v1/embeddings/generations/{id}/activate',
       path: {
         'id': id,
+      },
+      query: {
+        'store': store,
       },
       body: requestBody,
       mediaType: 'application/json',
@@ -110,18 +123,23 @@ export class EmbeddingsService {
   public static postApiV1EmbeddingsGenerationsIdRetire({
     id,
     requestBody,
+    store,
   }: {
     /**
      * Generation ordinal ID
      */
     id: number,
     requestBody: EmbeddingsGenerationActionRequest,
+    store?: string,
   }): CancelablePromise<void> {
     return __request(OpenAPI, {
       method: 'POST',
       url: '/api/v1/embeddings/generations/{id}/retire',
       path: {
         'id': id,
+      },
+      query: {
+        'store': store,
       },
       body: requestBody,
       mediaType: 'application/json',
@@ -145,16 +163,24 @@ export class EmbeddingsService {
    * @returns VectorBuildStatus OK
    * @throws ApiError
    */
-  public static getApiV1EmbeddingsStatus(): CancelablePromise<VectorBuildStatus> {
+  public static getApiV1EmbeddingsStatus({
+    store,
+  }: {
+    store?: string,
+  }): CancelablePromise<VectorBuildStatus> {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/embeddings/status',
+      query: {
+        'store': store,
+      },
       errors: {
         400: `Bad Request`,
         401: `Unauthorized`,
         403: `Forbidden`,
         404: `Not Found`,
         409: `Conflict`,
+        422: `Unprocessable Entity`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,

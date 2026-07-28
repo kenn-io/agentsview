@@ -7,6 +7,7 @@ export type EmbeddingsBuildRequest = {
   full_rebuild?: boolean;
   include_automated?: boolean;
   repair_invalid?: boolean;
+  store?: string;
   using?: string;
 };
 

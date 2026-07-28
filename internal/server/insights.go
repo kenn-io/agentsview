@@ -13,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -440,6 +441,10 @@ func (s *Server) buildCannedPayload(
 	if err != nil {
 		return insight.CannedAggregatePayload{}, "", "", err
 	}
+	modelBreakdowns, err := foldCannedModelBreakdowns(usageResult.Daily)
+	if err != nil {
+		return insight.CannedAggregatePayload{}, "", "", err
+	}
 	usageSummary := &insight.CannedUsageSummary{
 		InputTokens:         usageResult.Totals.InputTokens,
 		OutputTokens:        usageResult.Totals.OutputTokens,
@@ -447,7 +452,7 @@ func (s *Server) buildCannedPayload(
 		CacheReadTokens:     usageResult.Totals.CacheReadTokens,
 		TotalCost:           usageResult.Totals.TotalCost,
 		CacheSavings:        usageResult.Totals.CacheSavings,
-		ModelBreakdowns:     foldCannedModelBreakdowns(usageResult.Daily),
+		ModelBreakdowns:     modelBreakdowns,
 		TopSessionsByCost:   topSessions,
 	}
 	coachSessions, err := s.listCannedCoachSessions(ctx, req)
@@ -490,13 +495,13 @@ func (s *Server) buildCannedPayload(
 
 func foldCannedModelBreakdowns(
 	daily []db.DailyUsageEntry,
-) []insight.CannedModelBreakdown {
+) ([]insight.CannedModelBreakdown, error) {
 	type modelAccum struct {
 		inputTok  int
 		outputTok int
 		cacheCr   int
 		cacheRd   int
-		cost      float64
+		cost      money.Money
 	}
 	byModel := make(map[string]*modelAccum)
 	for _, day := range daily {
@@ -510,7 +515,11 @@ func foldCannedModelBreakdowns(
 			acc.outputTok += model.OutputTokens
 			acc.cacheCr += model.CacheCreationTokens
 			acc.cacheRd += model.CacheReadTokens
-			acc.cost += model.Cost
+			var err error
+			acc.cost, err = money.Add(acc.cost, model.Cost)
+			if err != nil {
+				return nil, fmt.Errorf("summing canned insight model cost: %w", err)
+			}
 		}
 	}
 	out := make([]insight.CannedModelBreakdown, 0, len(byModel))
@@ -525,12 +534,12 @@ func foldCannedModelBreakdowns(
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
+		if out[i].Cost.Microdollars != out[j].Cost.Microdollars {
+			return out[i].Cost.Microdollars > out[j].Cost.Microdollars
 		}
 		return out[i].ModelName < out[j].ModelName
 	})
-	return out
+	return out, nil
 }
 
 func (s *Server) listCannedCoachSessions(

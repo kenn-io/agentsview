@@ -793,13 +793,13 @@ func TestPoolsideTrajectoriesDir(t *testing.T) {
 	}{
 		{
 			name:     "application-data root appends trajectories",
-			root:     "/home/user/.local/share/poolside",
-			expected: "/home/user/.local/share/poolside/trajectories",
+			root:     "/home/user/.local/state/poolside",
+			expected: "/home/user/.local/state/poolside/trajectories",
 		},
 		{
 			name:     "trajectories directory used as-is",
-			root:     "/home/user/.local/share/poolside/trajectories",
-			expected: "/home/user/.local/share/poolside/trajectories",
+			root:     "/home/user/.local/state/poolside/trajectories",
+			expected: "/home/user/.local/state/poolside/trajectories",
 		},
 		{
 			name:     "relative trajectories used as-is",
@@ -808,8 +808,8 @@ func TestPoolsideTrajectoriesDir(t *testing.T) {
 		},
 		{
 			name:     "trajectories with trailing slash",
-			root:     "/home/user/.local/share/poolside/trajectories/",
-			expected: "/home/user/.local/share/poolside/trajectories",
+			root:     "/home/user/.local/state/poolside/trajectories/",
+			expected: "/home/user/.local/state/poolside/trajectories",
 		},
 	}
 	for _, tt := range tests {

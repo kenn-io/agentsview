@@ -4,12 +4,14 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
@@ -236,43 +238,43 @@ func mergeResolvedProjectLabels(raw string, resolved []string) []string {
 
 // ProjectTotal holds range-wide token and cost totals per project.
 type ProjectTotal struct {
-	ProjectKey          string  `json:"project_key"`
-	Project             string  `json:"project"`
-	InputTokens         int     `json:"inputTokens"`
-	OutputTokens        int     `json:"outputTokens"`
-	CacheCreationTokens int     `json:"cacheCreationTokens"`
-	CacheReadTokens     int     `json:"cacheReadTokens"`
-	Cost                float64 `json:"cost"`
+	ProjectKey          string      `json:"project_key"`
+	Project             string      `json:"project"`
+	InputTokens         int         `json:"inputTokens"`
+	OutputTokens        int         `json:"outputTokens"`
+	CacheCreationTokens int         `json:"cacheCreationTokens"`
+	CacheReadTokens     int         `json:"cacheReadTokens"`
+	Cost                money.Money `json:"cost"`
 }
 
 // ModelTotal holds range-wide token and cost totals per model.
 type ModelTotal struct {
-	Model               string  `json:"model"`
-	InputTokens         int     `json:"inputTokens"`
-	OutputTokens        int     `json:"outputTokens"`
-	CacheCreationTokens int     `json:"cacheCreationTokens"`
-	CacheReadTokens     int     `json:"cacheReadTokens"`
-	Cost                float64 `json:"cost"`
+	Model               string      `json:"model"`
+	InputTokens         int         `json:"inputTokens"`
+	OutputTokens        int         `json:"outputTokens"`
+	CacheCreationTokens int         `json:"cacheCreationTokens"`
+	CacheReadTokens     int         `json:"cacheReadTokens"`
+	Cost                money.Money `json:"cost"`
 }
 
 // AgentTotal holds range-wide token and cost totals per agent.
 type AgentTotal struct {
-	Agent               string  `json:"agent"`
-	InputTokens         int     `json:"inputTokens"`
-	OutputTokens        int     `json:"outputTokens"`
-	CacheCreationTokens int     `json:"cacheCreationTokens"`
-	CacheReadTokens     int     `json:"cacheReadTokens"`
-	Cost                float64 `json:"cost"`
+	Agent               string      `json:"agent"`
+	InputTokens         int         `json:"inputTokens"`
+	OutputTokens        int         `json:"outputTokens"`
+	CacheCreationTokens int         `json:"cacheCreationTokens"`
+	CacheReadTokens     int         `json:"cacheReadTokens"`
+	Cost                money.Money `json:"cost"`
 }
 
 // CacheStats summarizes cache hit/miss for the period.
 type CacheStats struct {
-	CacheReadTokens     int     `json:"cacheReadTokens"`
-	CacheCreationTokens int     `json:"cacheCreationTokens"`
-	UncachedInputTokens int     `json:"uncachedInputTokens"`
-	OutputTokens        int     `json:"outputTokens"`
-	HitRate             float64 `json:"hitRate"`
-	SavingsVsUncached   float64 `json:"savingsVsUncached"`
+	CacheReadTokens     int         `json:"cacheReadTokens"`
+	CacheCreationTokens int         `json:"cacheCreationTokens"`
+	UncachedInputTokens int         `json:"uncachedInputTokens"`
+	OutputTokens        int         `json:"outputTokens"`
+	HitRate             float64     `json:"hitRate"`
+	SavingsVsUncached   money.Money `json:"savingsVsUncached"`
 }
 
 const UnsupportedUsageKindNoTokenData = "no-token-data"
@@ -318,38 +320,38 @@ type UsageSummaryResult struct {
 // UsagePairwiseComparisonSide holds aggregate and derived
 // metrics for one side of a pairwise comparison.
 type UsagePairwiseComparisonSide struct {
-	TotalCost           float64  `json:"totalCost"`
-	InputTokens         int      `json:"inputTokens"`
-	OutputTokens        int      `json:"outputTokens"`
-	CacheCreationTokens int      `json:"cacheCreationTokens"`
-	CacheReadTokens     int      `json:"cacheReadTokens"`
-	TotalTokens         int      `json:"totalTokens"`
-	SessionCount        int      `json:"sessionCount"`
-	CostPerSession      *float64 `json:"costPerSession,omitempty"`
-	TokensPerSession    *float64 `json:"tokensPerSession,omitempty"`
+	TotalCost           money.Money  `json:"totalCost"`
+	InputTokens         int          `json:"inputTokens"`
+	OutputTokens        int          `json:"outputTokens"`
+	CacheCreationTokens int          `json:"cacheCreationTokens"`
+	CacheReadTokens     int          `json:"cacheReadTokens"`
+	TotalTokens         int          `json:"totalTokens"`
+	SessionCount        int          `json:"sessionCount"`
+	CostPerSession      *money.Money `json:"costPerSession,omitempty"`
+	TokensPerSession    *float64     `json:"tokensPerSession,omitempty"`
 }
 
 // UsagePairwiseComparisonDelta reports absolute and relative differences
 // for each metric between right and left sides.
 type UsagePairwiseComparisonDelta struct {
-	TotalCostDelta          float64  `json:"totalCostDelta"`
-	TotalCostDeltaRatio     *float64 `json:"totalCostDeltaRatio"`
-	InputTokensDelta        int      `json:"inputTokensDelta"`
-	InputTokensDeltaRatio   *float64 `json:"inputTokensDeltaRatio"`
-	OutputTokensDelta       int      `json:"outputTokensDelta"`
-	OutputTokensDeltaRatio  *float64 `json:"outputTokensDeltaRatio"`
-	CacheCreationDelta      int      `json:"cacheCreationDelta"`
-	CacheCreationDeltaRatio *float64 `json:"cacheCreationDeltaRatio"`
-	CacheReadDelta          int      `json:"cacheReadDelta"`
-	CacheReadDeltaRatio     *float64 `json:"cacheReadDeltaRatio"`
-	TotalTokensDelta        int      `json:"totalTokensDelta"`
-	TotalTokensDeltaRatio   *float64 `json:"totalTokensDeltaRatio"`
-	SessionCountDelta       int      `json:"sessionCountDelta"`
-	SessionCountDeltaRatio  *float64 `json:"sessionCountDeltaRatio"`
-	CostPerSessionDelta     *float64 `json:"costPerSessionDelta"`
-	CostPerSessionRatio     *float64 `json:"costPerSessionRatio"`
-	TokensPerSessionDelta   *float64 `json:"tokensPerSessionDelta"`
-	TokensPerSessionRatio   *float64 `json:"tokensPerSessionRatio"`
+	TotalCostDelta          money.Money  `json:"totalCostDelta"`
+	TotalCostDeltaRatio     *float64     `json:"totalCostDeltaRatio"`
+	InputTokensDelta        int          `json:"inputTokensDelta"`
+	InputTokensDeltaRatio   *float64     `json:"inputTokensDeltaRatio"`
+	OutputTokensDelta       int          `json:"outputTokensDelta"`
+	OutputTokensDeltaRatio  *float64     `json:"outputTokensDeltaRatio"`
+	CacheCreationDelta      int          `json:"cacheCreationDelta"`
+	CacheCreationDeltaRatio *float64     `json:"cacheCreationDeltaRatio"`
+	CacheReadDelta          int          `json:"cacheReadDelta"`
+	CacheReadDeltaRatio     *float64     `json:"cacheReadDeltaRatio"`
+	TotalTokensDelta        int          `json:"totalTokensDelta"`
+	TotalTokensDeltaRatio   *float64     `json:"totalTokensDeltaRatio"`
+	SessionCountDelta       int          `json:"sessionCountDelta"`
+	SessionCountDeltaRatio  *float64     `json:"sessionCountDeltaRatio"`
+	CostPerSessionDelta     *money.Money `json:"costPerSessionDelta"`
+	CostPerSessionRatio     *float64     `json:"costPerSessionRatio"`
+	TokensPerSessionDelta   *float64     `json:"tokensPerSessionDelta"`
+	TokensPerSessionRatio   *float64     `json:"tokensPerSessionRatio"`
 }
 
 // UsagePairwiseComparisonResponse is the backend-computed response
@@ -378,7 +380,7 @@ type UsagePairwiseComparisonRequest struct {
 // query result over the [from, to] range.
 func buildUsageSummary(
 	f db.UsageFilter, result db.DailyUsageResult,
-) *UsageSummaryResult {
+) (*UsageSummaryResult, error) {
 	out := &UsageSummaryResult{
 		SchemaVersion: result.SchemaVersion,
 		Pricing:       result.Pricing,
@@ -391,20 +393,30 @@ func buildUsageSummary(
 		CacheStats:    computeCacheStats(result.Totals),
 	}
 	if f.Breakdowns {
-		out.ProjectTotals = foldProjectTotals(result.Daily)
-		out.ModelTotals = foldModelTotals(result.Daily)
-		out.AgentTotals = foldAgentTotals(result.Daily)
+		var err error
+		out.ProjectTotals, err = foldProjectTotals(result.Daily)
+		if err != nil {
+			return nil, err
+		}
+		out.ModelTotals, err = foldModelTotals(result.Daily)
+		if err != nil {
+			return nil, err
+		}
+		out.AgentTotals, err = foldAgentTotals(result.Daily)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		out.ProjectTotals = []ProjectTotal{}
 		out.ModelTotals = []ModelTotal{}
 		out.AgentTotals = []AgentTotal{}
 	}
-	return out
+	return out, nil
 }
 
 // foldProjectTotals sums daily project breakdowns into range-wide totals
 // sorted by cost descending.
-func foldProjectTotals(daily []db.DailyUsageEntry) []ProjectTotal {
+func foldProjectTotals(daily []db.DailyUsageEntry) ([]ProjectTotal, error) {
 	m := make(map[string]*ProjectTotal)
 	for _, d := range daily {
 		for _, pb := range d.ProjectBreakdowns {
@@ -420,7 +432,11 @@ func foldProjectTotals(daily []db.DailyUsageEntry) []ProjectTotal {
 			pt.OutputTokens += pb.OutputTokens
 			pt.CacheCreationTokens += pb.CacheCreationTokens
 			pt.CacheReadTokens += pb.CacheReadTokens
-			pt.Cost += pb.Cost
+			var err error
+			pt.Cost, err = money.Add(pt.Cost, pb.Cost)
+			if err != nil {
+				return nil, fmt.Errorf("summing usage project cost: %w", err)
+			}
 		}
 	}
 	out := make([]ProjectTotal, 0, len(m))
@@ -428,20 +444,20 @@ func foldProjectTotals(daily []db.DailyUsageEntry) []ProjectTotal {
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
+		if out[i].Cost.Microdollars != out[j].Cost.Microdollars {
+			return out[i].Cost.Microdollars > out[j].Cost.Microdollars
 		}
 		if out[i].ProjectKey != out[j].ProjectKey {
 			return out[i].ProjectKey < out[j].ProjectKey
 		}
 		return out[i].Project < out[j].Project
 	})
-	return out
+	return out, nil
 }
 
 // foldModelTotals sums daily model breakdowns into range-wide totals
 // sorted by cost descending.
-func foldModelTotals(daily []db.DailyUsageEntry) []ModelTotal {
+func foldModelTotals(daily []db.DailyUsageEntry) ([]ModelTotal, error) {
 	m := make(map[string]*ModelTotal)
 	for _, d := range daily {
 		for _, mb := range d.ModelBreakdowns {
@@ -454,7 +470,11 @@ func foldModelTotals(daily []db.DailyUsageEntry) []ModelTotal {
 			mt.OutputTokens += mb.OutputTokens
 			mt.CacheCreationTokens += mb.CacheCreationTokens
 			mt.CacheReadTokens += mb.CacheReadTokens
-			mt.Cost += mb.Cost
+			var err error
+			mt.Cost, err = money.Add(mt.Cost, mb.Cost)
+			if err != nil {
+				return nil, fmt.Errorf("summing usage model cost: %w", err)
+			}
 		}
 	}
 	out := make([]ModelTotal, 0, len(m))
@@ -462,17 +482,17 @@ func foldModelTotals(daily []db.DailyUsageEntry) []ModelTotal {
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
+		if out[i].Cost.Microdollars != out[j].Cost.Microdollars {
+			return out[i].Cost.Microdollars > out[j].Cost.Microdollars
 		}
 		return out[i].Model < out[j].Model
 	})
-	return out
+	return out, nil
 }
 
 // foldAgentTotals sums daily agent breakdowns into range-wide totals
 // sorted by cost descending.
-func foldAgentTotals(daily []db.DailyUsageEntry) []AgentTotal {
+func foldAgentTotals(daily []db.DailyUsageEntry) ([]AgentTotal, error) {
 	m := make(map[string]*AgentTotal)
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
@@ -485,7 +505,11 @@ func foldAgentTotals(daily []db.DailyUsageEntry) []AgentTotal {
 			at.OutputTokens += ab.OutputTokens
 			at.CacheCreationTokens += ab.CacheCreationTokens
 			at.CacheReadTokens += ab.CacheReadTokens
-			at.Cost += ab.Cost
+			var err error
+			at.Cost, err = money.Add(at.Cost, ab.Cost)
+			if err != nil {
+				return nil, fmt.Errorf("summing usage agent cost: %w", err)
+			}
 		}
 	}
 	out := make([]AgentTotal, 0, len(m))
@@ -493,12 +517,12 @@ func foldAgentTotals(daily []db.DailyUsageEntry) []AgentTotal {
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
+		if out[i].Cost.Microdollars != out[j].Cost.Microdollars {
+			return out[i].Cost.Microdollars > out[j].Cost.Microdollars
 		}
 		return out[i].Agent < out[j].Agent
 	})
-	return out
+	return out, nil
 }
 
 // computeCacheStats derives cache hit/miss metrics from totals.
@@ -527,14 +551,24 @@ func computeCacheStats(t db.UsageTotals) CacheStats {
 func BuildUsagePairwiseComparisonResult(
 	left db.DailyUsageResult,
 	right db.DailyUsageResult,
-) UsagePairwiseComparisonResponse {
-	leftSide := usagePairwiseSideFromResult(left)
-	rightSide := usagePairwiseSideFromResult(right)
+) (UsagePairwiseComparisonResponse, error) {
+	leftSide, err := usagePairwiseSideFromResult(left)
+	if err != nil {
+		return UsagePairwiseComparisonResponse{}, err
+	}
+	rightSide, err := usagePairwiseSideFromResult(right)
+	if err != nil {
+		return UsagePairwiseComparisonResponse{}, err
+	}
+	deltas, err := pairwiseDeltas(leftSide, rightSide)
+	if err != nil {
+		return UsagePairwiseComparisonResponse{}, err
+	}
 	return UsagePairwiseComparisonResponse{
 		Left:   leftSide,
 		Right:  rightSide,
-		Deltas: pairwiseDeltas(leftSide, rightSide),
-	}
+		Deltas: deltas,
+	}, nil
 }
 
 func BuildUsagePairwiseFilters(
@@ -675,7 +709,9 @@ func maybeFloatRatio(left, delta float64) *float64 {
 	return &r
 }
 
-func usagePairwiseSideFromResult(r db.DailyUsageResult) UsagePairwiseComparisonSide {
+func usagePairwiseSideFromResult(
+	r db.DailyUsageResult,
+) (UsagePairwiseComparisonSide, error) {
 	total := r.Totals
 	side := UsagePairwiseComparisonSide{
 		TotalCost:           total.TotalCost,
@@ -688,22 +724,35 @@ func usagePairwiseSideFromResult(r db.DailyUsageResult) UsagePairwiseComparisonS
 	side.TotalTokens = side.InputTokens + side.OutputTokens +
 		side.CacheCreationTokens + side.CacheReadTokens
 	if safePerTurnDenominator(r.SessionCounts.Total) {
-		costPerSession := side.TotalCost / float64(r.SessionCounts.Total)
+		costPerSession, err := money.Divide(side.TotalCost, int64(r.SessionCounts.Total))
+		if err != nil {
+			return UsagePairwiseComparisonSide{},
+				fmt.Errorf("computing usage cost per session: %w", err)
+		}
 		tokensPerSession := float64(side.TotalTokens) / float64(r.SessionCounts.Total)
 		side.CostPerSession = &costPerSession
 		side.TokensPerSession = &tokensPerSession
 	}
-	return side
+	return side, nil
 }
 
-func pairwiseDeltas(left, right UsagePairwiseComparisonSide) UsagePairwiseComparisonDelta {
-	costPerSessionDelta, costPerSessionRatio := deltaWithRatio(
+func pairwiseDeltas(
+	left, right UsagePairwiseComparisonSide,
+) (UsagePairwiseComparisonDelta, error) {
+	costPerSessionDelta, costPerSessionRatio, err := deltaWithMoneyRatio(
 		left.CostPerSession, right.CostPerSession,
 	)
+	if err != nil {
+		return UsagePairwiseComparisonDelta{}, err
+	}
 	tokensPerSessionDelta, tokensPerSessionRatio := deltaWithRatio(
 		left.TokensPerSession, right.TokensPerSession,
 	)
-	totalCostDelta := right.TotalCost - left.TotalCost
+	totalCostDelta, err := money.Sub(right.TotalCost, left.TotalCost)
+	if err != nil {
+		return UsagePairwiseComparisonDelta{},
+			fmt.Errorf("computing total usage cost delta: %w", err)
+	}
 	inputTokensDelta := right.InputTokens - left.InputTokens
 	outputTokensDelta := right.OutputTokens - left.OutputTokens
 	cacheCreationDelta := right.CacheCreationTokens - left.CacheCreationTokens
@@ -712,7 +761,7 @@ func pairwiseDeltas(left, right UsagePairwiseComparisonSide) UsagePairwiseCompar
 	sessionCountDelta := right.SessionCount - left.SessionCount
 	return UsagePairwiseComparisonDelta{
 		TotalCostDelta:          totalCostDelta,
-		TotalCostDeltaRatio:     maybeFloatRatio(left.TotalCost, totalCostDelta),
+		TotalCostDeltaRatio:     maybeMoneyRatio(left.TotalCost, totalCostDelta),
 		InputTokensDelta:        inputTokensDelta,
 		InputTokensDeltaRatio:   maybeFloatRatio(float64(left.InputTokens), float64(inputTokensDelta)),
 		OutputTokensDelta:       outputTokensDelta,
@@ -729,7 +778,7 @@ func pairwiseDeltas(left, right UsagePairwiseComparisonSide) UsagePairwiseCompar
 		CostPerSessionRatio:     costPerSessionRatio,
 		TokensPerSessionDelta:   tokensPerSessionDelta,
 		TokensPerSessionRatio:   tokensPerSessionRatio,
-	}
+	}, nil
 }
 
 func deltaWithRatio(left, right *float64) (*float64, *float64) {
@@ -738,4 +787,25 @@ func deltaWithRatio(left, right *float64) (*float64, *float64) {
 	}
 	delta := *right - *left
 	return &delta, maybeFloatRatio(*left, delta)
+}
+
+func maybeMoneyRatio(left, delta money.Money) *float64 {
+	if left.Microdollars == 0 {
+		return nil
+	}
+	ratio := float64(delta.Microdollars) / float64(left.Microdollars)
+	return &ratio
+}
+
+func deltaWithMoneyRatio(
+	left, right *money.Money,
+) (*money.Money, *float64, error) {
+	if left == nil || right == nil {
+		return nil, nil, nil
+	}
+	delta, err := money.Sub(*right, *left)
+	if err != nil {
+		return nil, nil, fmt.Errorf("computing per-session cost delta: %w", err)
+	}
+	return &delta, maybeMoneyRatio(*left, delta), nil
 }

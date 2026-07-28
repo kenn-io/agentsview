@@ -2,7 +2,6 @@
   import { Button, TextInput, Toggle } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
   import { m } from "../../i18n/index.js";
-  import SettingsSection from "./SettingsSection.svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { settings } from "../../stores/settings.svelte.js";
   import {
@@ -105,10 +104,7 @@
   }
 </script>
 
-<SettingsSection
-  title={m.settings_remote_title()}
-  description={m.settings_remote_description()}
->
+<div class="remote-settings">
   {#if !isRemote}
     <div class="subsection">
       <div class="toggle-row">
@@ -228,9 +224,15 @@
       {/if}
     {/if}
   </div>
-</SettingsSection>
+</div>
 
 <style>
+  .remote-settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
   .subsection {
     display: flex;
     flex-direction: column;

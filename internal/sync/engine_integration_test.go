@@ -19,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -368,7 +369,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	assert.Equal(t, 510, daily.Totals.InputTokens)
 	assert.Equal(t, 131456, daily.Totals.CacheReadTokens)
 	assert.Equal(t, 326, daily.Totals.OutputTokens)
-	assert.InDelta(t, 0.0424128, daily.Totals.TotalCost, 1e-9)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, daily.Totals.TotalCost)
 
 	usage, err := database.GetSessionUsage(
 		context.Background(), "grok:sess-1", true,
@@ -377,13 +378,13 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NotNil(t, usage)
 	assert.Contains(t, usage.Models, "grok-4.5-build")
 	assert.True(t, usage.HasCost)
-	assert.InDelta(t, 0.0424128, usage.CostUSD, 1e-9)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, usage.Cost)
 	require.Len(t, usage.Breakdown, 1)
 	assert.Equal(t, 510, usage.Breakdown[0].InputTokens)
 	assert.Equal(t, 131456, usage.Breakdown[0].CacheReadInputTokens)
 	assert.Equal(t, 326, usage.Breakdown[0].OutputTokens)
 	assert.True(t, usage.Breakdown[0].HasCost)
-	assert.InDelta(t, 0.0424128, usage.Breakdown[0].CostUSD, 1e-9)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, usage.Breakdown[0].Cost)
 
 	events, err := database.GetUsageEvents(
 		context.Background(), "grok:sess-1",
@@ -391,8 +392,8 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, 122, events[0].ReasoningTokens)
-	require.NotNil(t, events[0].CostUSD)
-	assert.InDelta(t, 0.0424128, *events[0].CostUSD, 1e-9)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 42_413}, *events[0].Cost)
 
 	exported, err := database.ExportSessionSummaries(
 		context.Background(),
@@ -3276,7 +3277,7 @@ func (f usageParityFactory) NewProvider(parser.ProviderConfig) parser.Provider {
 func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {
 	const rawID = "usage-equivalent"
 	messageOrdinal := 0
-	costUSD := 0.0125
+	costUSD := money.MustParseDollars("0.0125")
 	started := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	return &usageParityProvider{
 		ProviderBase: parser.ProviderBase{
@@ -3309,7 +3310,7 @@ func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {
 				Source: "literal-provider-usage", Model: "literal-model-v1",
 				InputTokens: 101, OutputTokens: 37,
 				CacheCreationInputTokens: 23, CacheReadInputTokens: 19,
-				ReasoningTokens: 11, CostUSD: &costUSD,
+				ReasoningTokens: 11, Cost: &costUSD,
 				CostStatus: "exact", CostSource: "literal-fixture",
 				OccurredAt: "2026-01-02T03:04:05Z",
 				DedupKey:   "usage-equivalent:event-1",
@@ -3375,13 +3376,13 @@ func TestResyncContributorPersistsEquivalentUsageEvents(t *testing.T) {
 		"contributor usage must differ only by its persisted session namespace")
 
 	messageOrdinal := 0
-	costUSD := 0.0125
+	costUSD := money.MustParseDollars("0.0125")
 	assert.Equal(t, db.UsageEvent{
 		SessionID: "usage-equivalent", MessageOrdinal: &messageOrdinal,
 		Source: "literal-provider-usage", Model: "literal-model-v1",
 		InputTokens: 101, OutputTokens: 37,
 		CacheCreationInputTokens: 23, CacheReadInputTokens: 19,
-		ReasoningTokens: 11, CostUSD: &costUSD,
+		ReasoningTokens: 11, Cost: &costUSD,
 		CostStatus: "exact", CostSource: "literal-fixture",
 		OccurredAt: "2026-01-02T03:04:05Z",
 		DedupKey:   "usage-equivalent:event-1",
@@ -8974,8 +8975,8 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 	require.NoError(t, env.db.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:  "claude-opus-4-8",
-			InputPerMTok:  15,
-			OutputPerMTok: 75,
+			InputPerMTok:  money.MustParseDollars("15"),
+			OutputPerMTok: money.MustParseDollars("75"),
 		},
 	}), "UpsertModelPricing")
 
@@ -8986,8 +8987,8 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 	require.NoError(t, err, "GetModelPricing")
 	require.NotNil(t, pricing,
 		"model pricing must survive the resync swap")
-	assert.Equal(t, 15.0, pricing.InputPerMTok, "input rate")
-	assert.Equal(t, 75.0, pricing.OutputPerMTok, "output rate")
+	assert.Equal(t, money.MustParseDollars("15"), pricing.InputPerMTok, "input rate")
+	assert.Equal(t, money.MustParseDollars("75"), pricing.OutputPerMTok, "output rate")
 }
 
 func TestResyncAllAbortsWhenSessionSnapshotMetadataCannotCopy(t *testing.T) {
@@ -13540,6 +13541,195 @@ func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
 	assert.Equal(t, "Fix the login bug", *updated.FirstMessage,
 		"FirstMessage after append = %q, want %q", *updated.FirstMessage, "Fix the login bug")
 	assert.Equal(t, 2, updated.UserMessageCount, "UserMessageCount after append = %d, want 2", updated.UserMessageCount)
+}
+
+func TestIncrementalSync_ClaudeIDEContextOnlyRepairedOnAppend(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Initial sync: Claude has only emitted injected IDE context,
+	// so there is no real user prompt to use as the title.
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "ide-context-only.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "ide-context-only",
+	)
+	require.NoError(t, err, "GetSessionFull after initial sync")
+	if full.FirstMessage != nil {
+		require.Equal(t, "", *full.FirstMessage,
+			"initial FirstMessage = %q, want empty", *full.FirstMessage)
+	}
+	require.Zero(t, full.UserMessageCount,
+		"initial UserMessageCount = %d, want 0", full.UserMessageCount)
+
+	// Appending the first real prompt must force a full parse so
+	// first_message is derived instead of remaining permanently empty.
+	appended := testjsonl.ClaudeUserJSON(
+		"Explain this code", tsZeroS1,
+	) + "\n"
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close(), "close")
+
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "ide-context-only",
+	)
+	require.NoError(t, err, "GetSessionFull after append")
+	require.NotNil(t, updated.FirstMessage,
+		"FirstMessage after append = nil, want %q", "Explain this code")
+	assert.Equal(t, "Explain this code", *updated.FirstMessage,
+		"FirstMessage after append = %q, want %q",
+		*updated.FirstMessage, "Explain this code")
+	assert.Equal(t, 1, updated.UserMessageCount,
+		"UserMessageCount after append = %d, want 1",
+		updated.UserMessageCount)
+}
+
+// A Claude session can hold an empty preview for a long time — after
+// an auto-compact the new file starts with a promoted continuation
+// record and can stream assistant work for hours before the next real
+// prompt. Appends without a real prompt must stay on the incremental
+// path so per-event work is bounded by the appended bytes, not the
+// transcript size.
+func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"This session is being continued from a previous "+
+				"conversation that ran out of context.",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "continuation-only.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "continuation-only",
+	)
+	require.NoError(t, err, "GetSessionFull after initial sync")
+	require.Equal(t, 1, full.MessageCount,
+		"initial MessageCount = %d, want 1", full.MessageCount)
+	require.Zero(t, full.UserMessageCount,
+		"initial UserMessageCount = %d, want 0", full.UserMessageCount)
+
+	// None of these qualify as a first real prompt: injected IDE
+	// context is promoted to a system row, /clear is a
+	// preview-skipped command that cannot become first_message,
+	// and assistant output is not a user turn.
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+			tsZeroS1,
+		),
+		testjsonl.ClaudeUserJSON(
+			"<command-name>/clear</command-name>",
+			"2024-01-01T00:00:02Z",
+		),
+		testjsonl.ClaudeAssistantJSON("still working", tsZeroS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close(), "close after append")
+
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "continuation-only",
+	)
+	require.NoError(t, err, "GetSessionFull after append")
+	assert.True(t, updated.LastWriteIncremental,
+		"promptless append should use the incremental write path")
+	assert.Equal(t, 4, updated.MessageCount,
+		"MessageCount after append = %d, want 4", updated.MessageCount)
+	assert.Equal(t, 1, updated.UserMessageCount,
+		"UserMessageCount after append = %d, want 1", updated.UserMessageCount)
+	if updated.FirstMessage != nil {
+		assert.Equal(t, "", *updated.FirstMessage,
+			"FirstMessage after append = %q, want empty",
+			*updated.FirstMessage)
+	}
+}
+
+// The empty-preview repair must still fire when the first real prompt
+// arrives only after earlier promptless appends were consumed
+// incrementally.
+func TestIncrementalSync_ClaudeEmptyPreviewRepairedOnLaterPrompt(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"This session is being continued from a previous "+
+				"conversation that ran out of context.",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "continuation-late-prompt.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appendLine := func(line string) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err, "open for append")
+		_, err = f.WriteString(line + "\n")
+		require.NoError(t, err, "append")
+		require.NoError(t, f.Close(), "close after append")
+	}
+
+	appendLine(testjsonl.ClaudeUserJSON(
+		"<ide_selection>The user selected package main.</ide_selection>",
+		tsZeroS1,
+	))
+	env.engine.SyncPaths([]string{path})
+
+	mid, err := env.db.GetSessionFull(
+		context.Background(), "continuation-late-prompt",
+	)
+	require.NoError(t, err, "GetSessionFull after IDE append")
+	require.Equal(t, 2, mid.MessageCount,
+		"MessageCount after IDE append = %d, want 2", mid.MessageCount)
+	require.Zero(t, mid.UserMessageCount,
+		"UserMessageCount after IDE append = %d, want 0",
+		mid.UserMessageCount)
+
+	appendLine(testjsonl.ClaudeUserJSON("Explain this code", tsZeroS5))
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "continuation-late-prompt",
+	)
+	require.NoError(t, err, "GetSessionFull after prompt append")
+	require.NotNil(t, updated.FirstMessage,
+		"FirstMessage after prompt append = nil, want %q",
+		"Explain this code")
+	assert.Equal(t, "Explain this code", *updated.FirstMessage,
+		"FirstMessage after prompt append = %q, want %q",
+		*updated.FirstMessage, "Explain this code")
+	assert.Equal(t, 1, updated.UserMessageCount,
+		"UserMessageCount after prompt append = %d, want 1",
+		updated.UserMessageCount)
+	assert.Equal(t, 3, updated.MessageCount,
+		"MessageCount after prompt append = %d, want 3",
+		updated.MessageCount)
 }
 
 // TestIncrementalSync_CodexReemittedPromptDedupedOnAppend covers

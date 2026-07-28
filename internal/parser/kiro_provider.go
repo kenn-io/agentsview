@@ -787,5 +787,8 @@ func kiroProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			UnchangedResults: UnchangedResultMTime,
+		},
 	}
 }

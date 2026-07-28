@@ -9,6 +9,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
@@ -71,7 +72,7 @@ func (db *DB) GetActivityReport(
 		return activity.Report{}, err
 	}
 
-	report := activity.Aggregate(activity.Params{
+	report, err := activity.Aggregate(activity.Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -80,6 +81,9 @@ func (db *DB) GetActivityReport(
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
 	}, sessions, acts, usage)
+	if err != nil {
+		return activity.Report{}, fmt.Errorf("aggregating activity report: %w", err)
+	}
 	report.SchemaVersion = export.ActivityReportSchemaVersion
 	report.Pricing = pricing
 	projects, err := db.BuildProjectIdentityMap(ctx,
@@ -165,16 +169,19 @@ func (db *DB) GetSessionUsageRows(
 		}
 		_, outputTok, _, _, _ := sqliteSessionUsageRowTokens(r)
 		costRow := r
-		var sessionCost *float64
-		if r.costSource == CopilotReportedCostSource && r.costUSD.Valid {
-			v := r.costUSD.Float64
+		var sessionCost *money.Money
+		if r.costSource == CopilotReportedCostSource && r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
 			sessionCost = &v
-			costRow.costUSD = sql.NullFloat64{}
+			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := sessionRowCost(costRow, rateResolver)
+		cost, priced, contributes, priceErr := sessionRowCost(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		costSource := export.CostSourceComputed
-		if costRow.costUSD.Valid {
+		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
 		out = append(out, activity.UsageRow{
@@ -485,18 +492,26 @@ func (db *DB) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _, _ := dailyUsageAmounts(o.scan, rateResolver)
+		_, outputTok, _, _, _, _, priceErr :=
+			dailyUsageAmounts(o.scan, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		costRow := o.scan
-		var sessionCost *float64
-		if o.scan.costSource == CopilotReportedCostSource && o.scan.costUSD.Valid {
-			v := o.scan.costUSD.Float64
+		var sessionCost *money.Money
+		if o.scan.costSource == CopilotReportedCostSource && o.scan.cost.Valid {
+			v := money.Money{Microdollars: o.scan.cost.Int64}
 			sessionCost = &v
-			costRow.costUSD = sql.NullFloat64{}
+			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := sqliteActivityReportRowStatus(costRow, rateResolver)
+		cost, priced, contributes, priceErr :=
+			sqliteActivityReportRowStatus(costRow, rateResolver)
+		if priceErr != nil {
+			return nil, nil, priceErr
+		}
 		costSource := export.CostSourceComputed
-		if costRow.costUSD.Valid {
+		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
 		row := o.row
@@ -517,7 +532,7 @@ func (db *DB) activityReportUsage(
 
 func sqliteActivityReportRowStatus(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
-) (cost float64, priced, contributes bool) {
+) (cost money.Money, priced, contributes bool, err error) {
 	var inTok, outTok, crTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
@@ -530,21 +545,25 @@ func sqliteActivityReportRowStatus(
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	if r.costUSD.Valid {
+	if r.cost.Valid {
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
-		return r.costUSD.Float64, true, true
+		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
 	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
-		return 0, true, false
+		return money.Money{}, true, false, nil
 	}
 	lookup := pricing.Lookup(r.model)
 	if !lookup.OK {
 		pricing.RecordComputed(r.model, lookup)
-		return 0, false, true
+		return money.Money{}, false, true, nil
 	}
-	cost = lookup.Rates.CostForTokens(
+	cost, err = lookup.Rates.CostForTokens(
 		inTok, outTok, reasoningTok, crTok, rdTok)
+	if err != nil {
+		return money.Money{}, false, false,
+			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
+	}
 	pricing.RecordComputed(r.model, lookup)
-	return cost, true, true
+	return cost, true, true, nil
 }

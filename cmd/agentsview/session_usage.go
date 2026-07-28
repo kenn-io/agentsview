@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -294,8 +295,8 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		if models != "" {
 			suffix = " (" + sanitizeTerminal(models) + ")"
 		}
-		fmt.Fprintf(w, "%s %s$%.2f%s\n", label("Cost"),
-			prefix, out.CostUSD, suffix)
+		fmt.Fprintf(w, "%s %s%s%s\n", label("Cost"), prefix,
+			money.FormatUSD(out.Cost, money.DisplayCents), suffix)
 	} else if len(out.UnpricedModels) > 0 {
 		fmt.Fprintf(w, "%s n/a (unpriced: %s)\n", label("Cost"),
 			sanitizeTerminal(strings.Join(out.UnpricedModels, ", ")))

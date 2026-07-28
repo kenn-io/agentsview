@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -17,6 +18,10 @@ const resolveFilePrefix = "@file"
 // resolveAgentFilePrefix marks lines that name an agent-scoped file to
 // transfer without recursively archiving that agent's root directory.
 const resolveAgentFilePrefix = "@agentfile"
+
+// resolveForbiddenRootPrefix marks a root that must never be recursively
+// transferred, even when another allowed provider root overlaps it.
+const resolveForbiddenRootPrefix = "@forbidden"
 
 const resolveRecordSep = "\x00"
 
@@ -41,7 +46,8 @@ func buildAiderResolveSnippet(envVar string) string {
 			"[ \"$av_aider_files\" -ge %d ] && return; "+
 			"[ \"$av_aider_dirs\" -ge %d ] && return; "+
 			"elif [ -f \"$av_entry\" ] && [ \"$av_base\" = '%s' ]; then "+
-			"printf '%%s\\000' \"%s:$av_entry\"; "+
+			"av_aider_phys=$(av_phys_file \"$av_entry\") || continue; "+
+			"printf '%%s\\000' \"%s:$av_aider_phys\"; "+
 			"av_aider_files=$((av_aider_files + 1)); "+
 			"[ \"$av_aider_files\" -ge %d ] && return; "+
 			"fi; "+
@@ -75,13 +81,75 @@ func buildAiderResolveSnippet(envVar string) string {
 // provider facade. For each agent with an EnvVar, the script checks the env var
 // first and falls back to the default dir. Dirs (and files) that don't exist on
 // the remote are skipped.
+// resolveScriptPhysHelpers defines the script's path-canonicalization
+// helpers. av_phys_dir prints a directory's physical path (symlinked
+// ancestors resolved); av_phys_file does the same for a file path by
+// physically resolving its dirname — including a bare filename (parent
+// ".") and a root-level "/file" (parent "/"). av_phys_missing handles a
+// path that need not exist at all: it physically resolves the longest
+// existing ancestor and rejoins the missing tail literally, so a missing
+// forbidden root under a symlinked (or relative) prefix still lands on
+// the same spelling canonicalized targets use. Every emitter
+// canonicalizes through them so forbidden-root comparisons and tar
+// exclusions on the Go side compare one spelling per location: a target
+// aliased into an excluded provider's tree via a symlink resolves to the
+// same prefix as the forbidden root itself. av_phys_file is a pure path
+// transform — existence checks stay with the emitters — so parents must
+// exist but the file itself need not.
+//
+// Physical paths containing CR or LF are refused (return 1) rather than
+// emitted: command substitution strips trailing newlines from pwd output,
+// so a directory name ending in a newline would otherwise be emitted with
+// a clean-looking but WRONG spelling that downstream exclusion would
+// guard instead of the real subtree. The sentinel dance (pwd && printf x)
+// preserves the true spelling long enough to detect the newline. Such
+// paths are unrepresentable end to end anyway — tar -T input is
+// newline-delimited and the record parser rejects them — so refusal here
+// makes targets fail closed per path, and av_emit_forbidden_root turns
+// refusal into a whole-script abort.
+const resolveScriptPhysHelpers = "av_nl='\n'\n" +
+	"av_cr=$(printf '\\r')\n" +
+	"av_phys_dir() { " +
+	"av_phys_out=$(CDPATH= cd -P -- \"$1\" 2>/dev/null && pwd && printf x) || return 1; " +
+	"av_phys_out=${av_phys_out%??}; " +
+	"case \"$av_phys_out\" in *\"$av_nl\"*|*\"$av_cr\"*) return 1;; esac; " +
+	"printf '%s' \"$av_phys_out\"; " +
+	"}\n" +
+	"av_phys_file() { " +
+	"case \"$1\" in *\"$av_nl\"*|*\"$av_cr\"*) return 1;; esac; " +
+	"av_phys_parent=$(av_phys_dir \"$(dirname -- \"$1\")\") || return 1; " +
+	"av_phys_base=$(basename -- \"$1\"); " +
+	"case \"$av_phys_parent\" in " +
+	"/) printf '%s' \"/$av_phys_base\";; " +
+	"*) printf '%s' \"$av_phys_parent/$av_phys_base\";; esac; " +
+	"}\n" +
+	"av_phys_missing() { " +
+	"case \"$1\" in *\"$av_nl\"*|*\"$av_cr\"*) return 1;; esac; " +
+	"av_pm_path=\"$1\"; av_pm_tail=\"\"; " +
+	"while [ ! -d \"$av_pm_path\" ]; do " +
+	"av_pm_base=$(basename -- \"$av_pm_path\"); " +
+	"if [ -n \"$av_pm_tail\" ]; then av_pm_tail=\"$av_pm_base/$av_pm_tail\"; " +
+	"else av_pm_tail=\"$av_pm_base\"; fi; " +
+	"av_pm_parent=$(dirname -- \"$av_pm_path\"); " +
+	"[ \"$av_pm_parent\" = \"$av_pm_path\" ] && return 1; " +
+	"av_pm_path=\"$av_pm_parent\"; " +
+	"done; " +
+	"av_pm_phys=$(av_phys_dir \"$av_pm_path\") || return 1; " +
+	"if [ -z \"$av_pm_tail\" ]; then printf '%s' \"$av_pm_phys\"; return 0; fi; " +
+	"case \"$av_pm_phys\" in " +
+	"/) printf '%s' \"/$av_pm_tail\";; " +
+	"*) printf '%s' \"$av_pm_phys/$av_pm_tail\";; esac; " +
+	"}\n"
+
 func buildResolveScript() string {
 	var b strings.Builder
 	b.WriteString(
-		"av_emit_agent_file() { " +
+		resolveScriptPhysHelpers +
+			"av_emit_agent_file() { " +
 			"agent=\"$1\"; " +
-			"file=\"$2\"; " +
-			"[ -f \"$file\" ] && printf '%s\\000' \"" + resolveAgentFilePrefix + ":$agent:$file\"; " +
+			"[ -f \"$2\" ] || return 0; " +
+			"file=$(av_phys_file \"$2\") || return 0; " +
+			"printf '%s\\000' \"" + resolveAgentFilePrefix + ":$agent:$file\"; " +
 			"}\n" +
 			"av_emit_windsurf_target() { " +
 			"target=\"$1\"; " +
@@ -96,6 +164,7 @@ func buildResolveScript() string {
 			"av_windsurf_db=\"$av_windsurf_ws/" + parser.WindsurfStateDBName + "\"; " +
 			"[ -f \"$av_windsurf_db\" ] || continue; " +
 			"if [ \"$av_windsurf_root_emitted\" -eq 0 ]; then " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentWindsurf) + ":$target\"; " +
 			"av_windsurf_root_emitted=1; " +
 			"fi; " +
@@ -121,6 +190,7 @@ func buildResolveScript() string {
 			"av_roo_history=\"$av_roo_task/history_item.json\"; " +
 			"[ -f \"$av_roo_history\" ] || continue; " +
 			"if [ \"$av_roocode_root_emitted\" -eq 0 ]; then " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentRooCode) + ":$target\"; " +
 			"av_roocode_root_emitted=1; " +
 			"fi; " +
@@ -146,6 +216,7 @@ func buildResolveScript() string {
 			"av_kl_metadata=\"$av_kl_task/task_metadata.json\"; " +
 			"[ -f \"$av_kl_metadata\" ] || continue; " +
 			"if [ \"$av_kilo_legacy_root_emitted\" -eq 0 ]; then " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentKiloLegacy) + ":$target\"; " +
 			"av_kilo_legacy_root_emitted=1; " +
 			"fi; " +
@@ -164,12 +235,19 @@ func buildResolveScript() string {
 			"case \"$target\" in */) target=\"${target%/}\";; esac; " +
 			"case \"${target##*/}\" in " +
 			"trajectories) [ -d \"$target\" ] && " +
+			"target=$(av_phys_dir \"$target\") && " +
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$target\";; " +
 			"*) av_poolside_traj=\"$target/trajectories\"; " +
 			"[ -d \"$av_poolside_traj\" ] && " +
+			"av_poolside_traj=$(av_phys_dir \"$av_poolside_traj\") && " +
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$av_poolside_traj\";; " +
 			"esac; " +
 			"}\n" +
+			// Provider-specific narrowing keys on the override's literal
+			// basename (a symlink named "trajectories" or
+			// "workspaceStorage" is meaningful as spelled), so
+			// canonicalization happens after narrowing, at each
+			// emitter's root-emission printf — never before dispatch.
 			"av_emit_target() { " +
 			"agent=\"$1\"; " +
 			"target=\"$2\"; " +
@@ -189,11 +267,33 @@ func buildResolveScript() string {
 			"av_emit_poolside_target \"$target\"; " +
 			"return; " +
 			"fi; " +
-			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
+			"[ -d \"$target\" ] || return 0; " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
+			"printf '%s\\000' \"$agent:$target\"; " +
 			"}\n" +
 			"av_emit_extra_file() { " +
-			"file=\"$1\"; " +
-			"[ -f \"$file\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
+			"[ -f \"$1\" ] || return 0; " +
+			"file=$(av_phys_file \"$1\") || return 0; " +
+			"printf '%s\\000' \"" + resolveFilePrefix + ":$file\"; " +
+			"}\n" +
+			// A forbidden root that exists is emitted by its physical
+			// spelling so it shares a prefix with canonicalized targets;
+			// a missing one resolves through its longest existing
+			// ancestor (av_phys_missing) so a root spelled via a
+			// symlinked or relative prefix still guards the physical
+			// subtree where its contents would appear.
+			// A forbidden root whose physical path cannot be represented
+			// (av_phys_dir and av_phys_missing refuse CR/LF spellings)
+			// aborts the whole resolve: skipping the record would
+			// silently drop the exclusion boundary, and emitting a
+			// newline path would let the record parser reject it later —
+			// aborting here fails closed at the source.
+			"av_emit_forbidden_root() { " +
+			"dir=\"$1\"; [ -n \"$dir\" ] || dir=\"$2\"; " +
+			"[ -n \"$dir\" ] || return 0; " +
+			"if [ -d \"$dir\" ]; then dir=$(av_phys_dir \"$dir\") || exit 1; " +
+			"else dir=$(av_phys_missing \"$dir\") || exit 1; fi; " +
+			"printf '%s\\000' \"" + resolveForbiddenRootPrefix + ":$dir\"; " +
 			"}\n" +
 			"av_has_hermes_transcript() { " +
 			"av_hermes_transcript_dir=\"$1\"; " +
@@ -220,7 +320,8 @@ func buildResolveScript() string {
 			"for av_hermes_file in \"$av_hermes_state\" \"$av_hermes_state-wal\" \"$av_hermes_state-shm\" \"$av_hermes_state-journal\"; do " +
 			"av_emit_extra_file \"$av_hermes_file\"; done; " +
 			"elif [ -f \"$av_hermes_state\" ]; then " +
-			"printf '%s\\000' \"" + string(parser.AgentHermes) + ":$av_hermes_state\"; " +
+			"av_hermes_state_phys=$(av_phys_file \"$av_hermes_state\") && " +
+			"printf '%s\\000' \"" + string(parser.AgentHermes) + ":$av_hermes_state_phys\"; " +
 			"for av_hermes_file in \"$av_hermes_state-wal\" \"$av_hermes_state-shm\" \"$av_hermes_state-journal\"; do " +
 			"av_emit_extra_file \"$av_hermes_file\"; done; " +
 			"elif [ \"$av_hermes_allow_flat\" -eq 1 ] && av_has_hermes_transcript \"$target\"; then " +
@@ -256,10 +357,19 @@ func buildResolveScript() string {
 			"}\n" +
 			"av_emit_codex_index() { " +
 			"idx=\"${dir%/*}/" + parser.CodexSessionIndexFilename + "\"; " +
-			"[ -f \"$idx\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$idx\"; " +
+			"av_emit_extra_file \"$idx\"; " +
 			"}\n",
 	)
 	for _, def := range parser.Registry {
+		if def.RemoteSyncExcluded {
+			for _, rel := range def.DefaultDirs {
+				fmt.Fprintf(&b,
+					"av_emit_forbidden_root \"%s\" \"$HOME/%s\"\n",
+					remoteEnvExpansion(def.EnvVar), rel,
+				)
+			}
+			continue
+		}
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
 		}
@@ -357,7 +467,7 @@ func remoteDefaultRootTail(rel string) string {
 // resolveAgentHasOnDiskSource reports whether a file-backed agent has local
 // sources the resolve script should probe via the provider facade.
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
-	if def.Type == parser.AgentTrae {
+	if def.RemoteSyncExcluded {
 		return false
 	}
 	if !def.FileBased {
@@ -372,28 +482,55 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 	}
 }
 
-// parseResolvedTargets parses script output into agent root paths,
-// agent-scoped files, and a deduplicated list of extra files (records
-// tagged with resolveFilePrefix). Generated resolver output is
+// parseResolvedTargets parses script output into deduplicated agent root
+// paths, agent-scoped files, extra files (records tagged with
+// resolveFilePrefix), and forbidden roots (records tagged with
+// resolveForbiddenRootPrefix). Generated resolver output is
 // NUL-delimited so remote paths containing newlines cannot inject extra
 // records; newline-delimited input is accepted only for older tests and
-// defensive compatibility. Most agent targets are directories; Aider
+// defensive compatibility, and only that legacy mode trims whitespace —
+// NUL-delimited records are preserved exactly, so a path with leading or
+// trailing whitespace keeps the spelling every downstream comparison and
+// tar exclusion depends on. Most agent targets are directories; Aider
 // targets are individual .aider.chat.history.md files. Skips empty
-// records, empty values, and values containing record separators.
+// records, empty values, and values containing record separators — except
+// forbidden-root records, which fail the parse instead: silently dropping
+// an exclusion boundary would archive the excluded provider's state.
 func parseResolvedTargets(
 	output string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string) {
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string, error) {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	var extraFiles []string
+	var forbiddenRoots []string
+	seenDir := make(map[parser.AgentType]map[string]struct{})
 	seenFile := make(map[string]struct{})
 	seenAgentFile := make(map[parser.AgentType]map[string]struct{})
+	seenForbiddenRoot := make(map[string]struct{})
+	nulDelimited := strings.Contains(output, resolveRecordSep)
 	for _, record := range resolveOutputRecords(output) {
-		record = strings.TrimSpace(record)
+		if !nulDelimited {
+			record = strings.TrimSpace(record)
+		}
 		if record == "" {
 			continue
 		}
 		key, value, ok := strings.Cut(record, ":")
+		if key == resolveForbiddenRootPrefix {
+			if !ok || invalidResolvedPath(value) {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"resolve output: forbidden-root record %q is empty or "+
+						"unrepresentable; refusing to sync without its "+
+						"exclusion boundary", record)
+			}
+			cleaned := path.Clean(value)
+			if _, dup := seenForbiddenRoot[cleaned]; dup {
+				continue
+			}
+			seenForbiddenRoot[cleaned] = struct{}{}
+			forbiddenRoots = append(forbiddenRoots, cleaned)
+			continue
+		}
 		if !ok || invalidResolvedPath(value) {
 			continue
 		}
@@ -431,28 +568,43 @@ func parseResolvedTargets(
 			path.Base(value) != parser.AiderHistoryFileName() {
 			continue
 		}
+		seen, ok := seenDir[at]
+		if !ok {
+			seen = make(map[string]struct{})
+			seenDir[at] = seen
+		}
+		if _, dup := seen[value]; dup {
+			continue
+		}
+		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
 	}
-	return dirs, files, extraFiles
+	return dirs, files, extraFiles, forbiddenRoots, nil
 }
 
 func parseResolvedDirs(
 	output string,
-) (map[parser.AgentType][]string, []string) {
-	dirs, _, extraFiles := parseResolvedTargets(output)
-	return dirs, extraFiles
+) (map[parser.AgentType][]string, []string, error) {
+	dirs, _, extraFiles, _, err := parseResolvedTargets(output)
+	return dirs, extraFiles, err
 }
 
 // ParseResolvedTargetsForTest exposes SSH resolver output parsing to
 // internal/remotesync parity tests.
-func ParseResolvedTargetsForTest(output string) (map[parser.AgentType][]string, []string) {
+func ParseResolvedTargetsForTest(
+	output string,
+) (map[parser.AgentType][]string, []string, error) {
 	return parseResolvedDirs(output)
 }
 
+// ParseResolvedTargetsWithFilesForTest exposes SSH resolver output parsing
+// to internal/remotesync parity tests, discarding forbidden roots that
+// those tests don't assert on.
 func ParseResolvedTargetsWithFilesForTest(
 	output string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string) {
-	return parseResolvedTargets(output)
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, error) {
+	dirs, files, extraFiles, _, err := parseResolvedTargets(output)
+	return dirs, files, extraFiles, err
 }
 
 func resolveOutputRecords(output string) []string {
@@ -462,8 +614,17 @@ func resolveOutputRecords(output string) []string {
 	return strings.Split(output, "\n")
 }
 
+// invalidResolvedPath rejects resolved-path spellings that downstream
+// exclusion machinery cannot represent faithfully: NUL/CR/LF collide
+// with the record and tar -T framings, and non-UTF-8 bytes are mangled
+// by both escapeTarExcludeGlob's rune iteration and the Python
+// snapshot's JSON marshaling, so a boundary spelled with them would
+// silently guard the wrong subtree. Target records are dropped per
+// path; forbidden-root records fail the whole sync.
 func invalidResolvedPath(value string) bool {
-	return value == "" || strings.ContainsAny(value, "\x00\r\n")
+	return value == "" ||
+		strings.ContainsAny(value, "\x00\r\n") ||
+		!utf8.ValidString(value)
 }
 
 // resolveDirs runs the resolve script on the remote host via SSH and
@@ -472,12 +633,15 @@ func invalidResolvedPath(value string) bool {
 func resolveDirs(
 	ctx context.Context,
 	host, user string, port int, sshOpts []string,
-) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, error) {
+) (map[parser.AgentType][]string, map[parser.AgentType][]string, []string, []string, error) {
 	script := buildResolveScript()
 	out, err := runSSHScript(ctx, host, user, port, sshOpts, script)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
 	}
-	dirs, files, extraFiles := parseResolvedTargets(string(out))
-	return dirs, files, extraFiles, nil
+	dirs, files, extraFiles, forbiddenRoots, err := parseResolvedTargets(string(out))
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("resolve dirs: %w", err)
+	}
+	return dirs, files, extraFiles, forbiddenRoots, nil
 }

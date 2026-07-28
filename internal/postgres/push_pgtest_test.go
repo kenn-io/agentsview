@@ -14,7 +14,63 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
+
+func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_usage_fingerprint_money_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	ctx := context.Background()
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "exact-money", Project: "project", Machine: "machine", Agent: "codex",
+	}))
+	cost := money.Money{Microdollars: 9_007_199_254_740_993}
+	require.NoError(t, local.ReplaceSessionUsageEvents("exact-money", []db.UsageEvent{{
+		SessionID: "exact-money", Source: "provider", Model: "model",
+		InputTokens: 11, OutputTokens: 7, Cost: &cost,
+		CostStatus: "priced", CostSource: "provider",
+		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
+	}}))
+	want, err := local.UsageEventFingerprint("exact-money")
+	require.NoError(t, err)
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (id, machine, project, agent)
+		VALUES ('exact-money', 'machine', 'project', 'codex');
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
+		) VALUES (
+			'exact-money', 'provider', 'model', 11, 7,
+			9007199254740993, 'priced', 'provider',
+			'2026-07-22T12:00:00Z', 'exact-cost'
+		)`)
+	require.NoError(t, err)
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	got, err := pgUsageEventFingerprint(ctx, tx, "exact-money")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	batched := map[string]string{}
+	require.NoError(t, loadPushUsageEventFingerprints(
+		ctx, tx, []string{"exact-money"}, batched,
+	))
+	assert.Equal(t, want, batched["exact-money"])
+}
 
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
@@ -1468,7 +1524,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 		Model:        "gpt-5.5",
 		InputTokens:  1000000,
 		OutputTokens: 500000,
-		CostUSD:      nil,
+		Cost:         nil,
 		OccurredAt:   started,
 		DedupKey:     "session:" + sessID,
 	}}), "ReplaceSessionUsageEvents")
@@ -1497,7 +1553,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 		Timezone: "UTC",
 	})
 	require.NoError(t, err, "GetDailyUsage")
-	assert.InDelta(t, 20.0, result.Totals.TotalCost, 1e-9,
+	assert.Equal(t, money.MustParseDollars("20"), result.Totals.TotalCost,
 		"gpt-5.5 usage should be priced from the catalog")
 }
 
@@ -1519,10 +1575,10 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	defer localDB.Close()
 	require.NoError(t, localDB.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-4.6-opus-high-thinking",
-		InputPerMTok:         5.0,
-		OutputPerMTok:        25.0,
-		CacheCreationPerMTok: 6.25,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("5.0"),
+		OutputPerMTok:        money.MustParseDollars("25.0"),
+		CacheCreationPerMTok: money.MustParseDollars("6.25"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}), "UpsertModelPricing")
 	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
@@ -1532,8 +1588,8 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 		OutputTokens:     567,
 		CacheWriteTokens: 12,
 		CacheReadTokens:  34,
-		ChargedCents:     15.66,
-		CursorTokenFee:   3.32,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
 		UserEmail:        "member@example.com",
 		IsHeadless:       false,
@@ -1568,7 +1624,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Equal(t, 567, result.Daily[0].OutputTokens)
 	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
 	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
-	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.1566"), result.Daily[0].TotalCost)
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total)
@@ -1576,6 +1632,84 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Empty(t, result.SessionCounts.ByProject)
 	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
+}
+
+func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_cursor_usage_money_migration_push_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		ALTER TABLE cursor_usage_events
+			ALTER COLUMN charged_microdollars TYPE DOUBLE PRECISION
+			USING charged_microdollars / 10000.0;
+		ALTER TABLE cursor_usage_events
+			RENAME COLUMN charged_microdollars TO charged_cents;
+		ALTER TABLE cursor_usage_events
+			ALTER COLUMN cursor_token_fee_microdollars TYPE DOUBLE PRECISION
+			USING cursor_token_fee_microdollars / 10000.0;
+		ALTER TABLE cursor_usage_events
+			RENAME COLUMN cursor_token_fee_microdollars TO cursor_token_fee;
+	`)
+	require.NoError(t, err, "restore legacy Cursor money columns")
+	legacyTimestamp, err := time.Parse(
+		time.RFC3339Nano, "2026-05-14T10:05:00.123456789Z",
+	)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES (
+			$1,
+			'claude-4.6-opus-high-thinking',
+			'USAGE_EVENT_KIND_USAGE_BASED',
+			1234, 567, 12, 34,
+			15.66001, 3.32001,
+			'152683922', 'member@example.com', false,
+			'legacy-fractional-cent-key'
+		)`, legacyTimestamp)
+	require.NoError(t, err, "seed legacy Cursor usage")
+	require.NoError(t, EnsureSchema(ctx, pg, schema),
+		"migrate legacy Cursor money")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err, "open local db")
+	defer localDB.Close()
+	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00.123456789Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 12,
+		CacheReadTokens:  34,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+	}}), "insert refetched local Cursor usage")
+
+	sync := &Sync{
+		local: localDB, pg: pg, machine: "test-machine",
+		schema: schema, schemaDone: true,
+	}
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+
+	assert.Equal(t, 1, pgTableCount(t, ctx, pg, "cursor_usage_events"),
+		"refetched quantized event must not duplicate its migrated PG row")
 }
 
 func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
@@ -1596,14 +1730,14 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 			occurred_at, model, kind,
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
-			charged_cents, cursor_token_fee,
+			charged_microdollars, cursor_token_fee_microdollars,
 			user_id, user_email, is_headless, dedup_key
 		) VALUES (
 			'2026-05-14T09:05:00Z'::timestamptz,
 			'claude-4.6-opus-high-thinking',
 			'USAGE_EVENT_KIND_USAGE_BASED',
 			10, 20, 0, 30,
-			1.25, 0.25,
+			12500, 2500,
 			'other-user', 'other@example.com', false, 'other-machine-row'
 		)`)
 	require.NoError(t, err, "seed existing pg row")
@@ -1619,8 +1753,8 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 		OutputTokens:     567,
 		CacheWriteTokens: 12,
 		CacheReadTokens:  34,
-		ChargedCents:     15.66,
-		CursorTokenFee:   3.32,
+		Charged:          money.MustParseDollars("0.1566"),
+		CursorTokenFee:   money.MustParseDollars("0.0332"),
 		UserID:           "152683922",
 		UserEmail:        "member@example.com",
 		IsHeadless:       false,
@@ -2101,7 +2235,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	// reset branch re-runs EnsureSchema, but CREATE TABLE IF NOT EXISTS does
 	// not re-add a column to an existing table, so the failure persists.
 	_, err = pg.Exec(
-		`ALTER TABLE model_pricing DROP COLUMN cache_read_per_mtok`,
+		`ALTER TABLE model_pricing DROP COLUMN cache_read_microdollars_per_mtok`,
 	)
 	require.NoError(t, err, "drop model_pricing column")
 
@@ -2114,7 +2248,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	// absent) and re-push the session.
 	_, err = pg.Exec(
 		`ALTER TABLE model_pricing
-		 ADD COLUMN cache_read_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0`,
+		 ADD COLUMN cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0`,
 	)
 	require.NoError(t, err, "restore model_pricing column")
 

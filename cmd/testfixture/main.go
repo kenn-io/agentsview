@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type sessionSpec struct {
@@ -73,17 +74,17 @@ func main() {
 	if err := database.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-4-20250514",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
+			InputPerMTok:         money.Money{Microdollars: 3_000_000},
+			OutputPerMTok:        money.Money{Microdollars: 15_000_000},
+			CacheCreationPerMTok: money.Money{Microdollars: 3_750_000},
+			CacheReadPerMTok:     money.Money{Microdollars: 300_000},
 		},
 		{
 			ModelPattern:         "claude-opus-4-20250514",
-			InputPerMTok:         15.0,
-			OutputPerMTok:        75.0,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.50,
+			InputPerMTok:         money.Money{Microdollars: 15_000_000},
+			OutputPerMTok:        money.Money{Microdollars: 75_000_000},
+			CacheCreationPerMTok: money.Money{Microdollars: 18_750_000},
+			CacheReadPerMTok:     money.Money{Microdollars: 1_500_000},
 		},
 	}); err != nil {
 		log.Fatalf("seeding model pricing: %v", err)

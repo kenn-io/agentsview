@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
@@ -15,7 +16,7 @@ func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 		SessionUsage: db.SessionUsage{
 			SessionID: "claude:s1", Agent: "claude-code", Project: "proj",
 			TotalOutputTokens: 28800, PeakContextTokens: 118000,
-			HasTokenData: true, CostUSD: 0.42, HasCost: true,
+			HasTokenData: true, Cost: money.MustParseDollars("0.42"), HasCost: true,
 			Models: []string{"claude-opus-4-6"},
 		},
 	}
@@ -31,7 +32,7 @@ func TestRenderSessionUsageHuman_ReportedCostOmitsEstimateMarker(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"session_id":"hermes:s1",
 		"agent":"hermes",
-		"cost_usd":0.03,
+		"cost":{"microdollars":30000},
 		"has_cost":true,
 		"cost_source":"reported",
 		"models":["model-a"]
@@ -50,7 +51,7 @@ func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMark
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"session_id":"copilot:cost-only",
 		"agent":"copilot",
-		"cost_usd":0.03,
+		"cost":{"microdollars":30000},
 		"has_cost":true,
 		"cost_source":"reported",
 		"models":[]
@@ -103,7 +104,7 @@ func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 			TotalOutputTokens: 2000,
 			PeakContextTokens: 5000,
 			HasTokenData:      true,
-			CostUSD:           10.00,
+			Cost:              money.MustParseDollars("10.00"),
 			HasCost:           true,
 			AICredits:         1000.0,
 			Models:            []string{"gpt-4"},
@@ -126,7 +127,7 @@ func TestRenderSessionUsageHuman_NonCopilotNoAICredits(t *testing.T) {
 			TotalOutputTokens: 1000,
 			PeakContextTokens: 5000,
 			HasTokenData:      true,
-			CostUSD:           0.42,
+			Cost:              money.MustParseDollars("0.42"),
 			HasCost:           true,
 			Models:            []string{"claude-opus"},
 		},
@@ -168,7 +169,7 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 			TotalOutputTokens: 123,
 			PeakContextTokens: 456,
 			HasTokenData:      true,
-			CostUSD:           0.42,
+			Cost:              money.MustParseDollars("0.42"),
 			HasCost:           true,
 			Models:            []string{"gpt-5.1"},
 			UnpricedModels:    []string{"local-model"},
@@ -190,10 +191,12 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		"total_output_tokens": float64(123),
 		"peak_context_tokens": float64(456),
 		"has_token_data":      true,
-		"cost_usd":            0.42,
-		"has_cost":            true,
-		"models":              []any{"gpt-5.1"},
-		"unpriced_models":     []any{"local-model"},
-		"server_running":      true,
+		"cost": map[string]any{
+			"microdollars": float64(420000),
+		},
+		"has_cost":        true,
+		"models":          []any{"gpt-5.1"},
+		"unpriced_models": []any{"local-model"},
+		"server_running":  true,
 	}, raw)
 }

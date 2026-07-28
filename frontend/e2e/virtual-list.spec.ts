@@ -64,8 +64,7 @@ test.describe("Virtual list behavior", () => {
     });
 
     sp = new SessionsPage(page);
-    await page.goto("/");
-    await expect(sp.sessionItems.first()).toBeVisible();
+    await sp.goto();
   });
 
   test("renders end of list when scrolling down", async () => {
@@ -84,6 +83,17 @@ test.describe("Virtual list behavior", () => {
     await expect
       .poll(() => getScrollTop(sp.sessionListScroll))
       .toBeGreaterThan(0);
+
+    // Scrolling starts best-effort hydration for the newly visible rows.
+    // Wait for those observable labels to settle before opening the
+    // typeahead so late row updates cannot steal focus in WebKit.
+    await expect
+      .poll(async () => {
+        const labels = await sp.sessionItems.allTextContents();
+        return labels.length > 0 &&
+          labels.every((label) => label.includes("Hello from session"));
+      }, { timeout: 15_000 })
+      .toBe(true);
 
     await sp.filterByProject("tiny");
 

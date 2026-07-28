@@ -62,15 +62,15 @@ parse. Restart the daemon (or run a CLI command) after editing the file.
 
 Automatic Recall embedding has a separate, default-off consent gate. Setting
 `[vector.embed] recall = true` permits daemon startup, corpus mutations, and
-periodic backstops to send accepted Recall entry titles, bodies, and triggers
-to the configured embeddings endpoint. `run_after_sync` controls only session
+periodic backstops to send accepted Recall entry titles, bodies, and triggers to
+the configured embeddings endpoint. `run_after_sync` controls only session
 archive sync notifications; it does not suppress Recall startup or Recall
 corpus-mutation refreshes after that consent is enabled. A manual
 `agentsview embeddings build --store recall` remains available without this
-setting because invoking that command is an explicit one-time request.
-Recall vector and hybrid queries also fail closed as unavailable whenever the
-served Recall corpus is newer than the last completed build; lexical queries
-remain available while an automatic or manual refresh catches up.
+setting because invoking that command is an explicit one-time request. Recall
+vector and hybrid queries also fail closed as unavailable whenever the served
+Recall corpus is newer than the last completed build; lexical queries remain
+available while an automatic or manual refresh catches up.
 
 ### Named embeddings servers
 
@@ -141,24 +141,23 @@ document_prefix = "title: none | text: "
 ```
 
 Nomic uses `search_query: ` and `search_document: `, as shown in the initial
-configuration example. E5 models commonly use `query: ` and `passage: `.
-Models such as Qwen3-Embedding that recommend an instruction only for queries
-can leave `document_prefix` unset.
+configuration example. E5 models commonly use `query: ` and `passage: `. Models
+such as Qwen3-Embedding that recommend an instruction only for queries can leave
+`document_prefix` unset.
 
-Prefixes are applied after document content is chunked, so
-`max_input_chars` limits the original chunk rather than the final affixed
-request. If the embedding endpoint has a strict context limit, leave enough
-headroom for the configured prefix and suffix. When an endpoint explicitly
-rejects an input for exceeding its token or context limit, AgentsView logs the
-rejection and skip-stamps that document for the generation so one oversized
-input cannot block the rest of the archive. Lower `max_input_chars` and rebuild
-to include it.
+Prefixes are applied after document content is chunked, so `max_input_chars`
+limits the original chunk rather than the final affixed request. If the
+embedding endpoint has a strict context limit, leave enough headroom for the
+configured prefix and suffix. When an endpoint explicitly rejects an input for
+exceeding its token or context limit, AgentsView logs the rejection and
+skip-stamps that document for the generation so one oversized input cannot block
+the rest of the archive. Lower `max_input_chars` and rebuild to include it.
 
 Both prefixes are part of the generation fingerprint. Adding, removing, or
 changing either one creates a new generation and re-embeds the archive on the
 next build. This intentionally treats the query/document recipe as one
-reproducible embedding configuration, even though changing only
-`query_prefix` would not alter stored document vectors.
+reproducible embedding configuration, even though changing only `query_prefix`
+would not alter stored document vectors.
 
 `input_suffix` is appended verbatim to every text sent to the endpoint —
 documents at build time and queries at search time — for models that expect a
@@ -478,11 +477,19 @@ at most one result per session, and remember the selected mode across palette
 openings and browser sessions.
 
 Semantic and Hybrid depend on the same enabled `[vector]` configuration and
-active embeddings index described above. Configuration and index builds remain
-CLI/config-file operations; the palette surfaces actionable setup or rebuild
-errors and stays in the selected mode. To continue with Full text after an
-error, choose it explicitly—the UI never falls back automatically. The
-in-session find bar remains unchanged and does not support semantic search.
+active embeddings index described above. If `[vector]` is not configured, the
+palette shows a copyable configuration example plus the build and restart steps.
+If vector search is configured but no active index exists, **Build embeddings**
+starts the build through the local daemon and reports scanning, progress,
+throughput, and completion in place. The palette follows an already running
+build and retries the query after a successful build.
+
+![Guided semantic-search setup in the command palette](/assets/generated/screenshots/semantic-search-setup.png)
+
+Setup and rebuild errors remain visible in the selected mode. To continue with
+Full text after an error, choose it explicitly—the UI never falls back
+automatically. The in-session find bar remains unchanged and does not support
+semantic search.
 
 Palette searches run after a 300ms typing pause. Each Semantic or Hybrid query
 must be encoded, so a remote embeddings server can add latency and per-request

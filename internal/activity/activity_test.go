@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func mustLoad(t *testing.T, name string) *time.Location {
@@ -33,6 +34,16 @@ func baseParams(t *testing.T, date, tz string) Params {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: date, Timezone: tz}, fixedNow(t))
 	require.NoError(t, err)
 	return paramsFromQuery(q)
+}
+
+func mustAggregate(
+	t *testing.T, p Params, sessions []SessionMeta, activity []ActivityEvent,
+	usage []UsageRow,
+) Report {
+	t.Helper()
+	report, err := Aggregate(p, sessions, activity, usage)
+	require.NoError(t, err)
+	return report
 }
 
 // paramsFromQuery copies a resolved Query into the aggregator Params it feeds.
@@ -66,24 +77,42 @@ func TestReportEmitsEmptyProjectsMap(t *testing.T) {
 }
 
 func TestAllocateUsageCostsDistributesSessionTotalByEstimatedCost(t *testing.T) {
-	total := 0.03
+	total := money.MustParseDollars("0.03")
 	usage := []UsageRow{
-		{SessionID: "s1", Model: "model-a", Cost: 10, Priced: true, Contributes: true},
-		{SessionID: "s1", Model: "model-b", Cost: 20, SessionCost: &total, Priced: true, Contributes: true},
+		{SessionID: "s1", Model: "model-a", Cost: money.MustParseDollars("0.01"), Priced: true, Contributes: true},
+		{SessionID: "s1", Model: "model-b", Cost: money.MustParseDollars("0.02"), SessionCost: &total, Priced: true, Contributes: true},
 	}
 
 	allocated := AllocateUsageCosts(usage)
 
 	require.Len(t, allocated, 2)
-	assert.InDelta(t, 0.01, allocated[0].Cost, 1e-12)
-	assert.InDelta(t, 0.02, allocated[1].Cost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.01"), allocated[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.02"), allocated[1].Cost)
 	assert.Equal(t, export.CostSourceReported, allocated[0].CostSource)
 	assert.Equal(t, export.CostSourceReported, allocated[1].CostSource)
-	assert.Equal(t, total, allocated[0].Cost+allocated[1].Cost)
+	assert.Equal(t, total, money.MustAdd(allocated[0].Cost, allocated[1].Cost))
+}
+
+func TestAggregate_ReturnsCostOverflow(t *testing.T) {
+	p := baseParams(t, "2026-06-16", "UTC")
+	usage := []UsageRow{
+		{
+			SessionID: "s1", Timestamp: "2026-06-16T10:00:00Z",
+			Cost: money.Money{Microdollars: 1 << 62}, Contributes: true,
+		},
+		{
+			SessionID: "s1", Timestamp: "2026-06-16T10:01:00Z",
+			Cost: money.Money{Microdollars: 1 << 62}, Contributes: true,
+		},
+	}
+
+	_, err := Aggregate(p, nil, nil, usage)
+
+	require.ErrorIs(t, err, money.ErrOverflow)
 }
 
 func TestAggregate_DayWindowUTC(t *testing.T) {
-	r := Aggregate(baseParams(t, "2026-06-16", "UTC"), nil, nil, nil)
+	r := mustAggregate(t, baseParams(t, "2026-06-16", "UTC"), nil, nil, nil)
 	assert.Equal(t, "2026-06-16T00:00:00Z", r.RangeStart)
 	assert.Equal(t, "2026-06-17T00:00:00Z", r.RangeEnd)
 	assert.Equal(t, "minute", r.BucketUnit)
@@ -107,7 +136,7 @@ func TestAggregate_HourlyBucketRange(t *testing.T) {
 		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:00:00Z", Role: "user"},
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:30:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.Equal(t, "hour", r.BucketUnit)
 	assert.Equal(t, 72, r.BucketCount, "3 days of hourly buckets")
 	assert.Equal(t, "2026-06-16T10:00:00Z", r.Buckets[10].Start)
@@ -120,7 +149,7 @@ func TestAggregate_DailyCalendarBucketRange(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "month", Date: "2026-06-10", Timezone: "UTC"}, fixedNow(t))
 	require.NoError(t, err)
 	p := paramsFromQuery(q)
-	r := Aggregate(p, nil, nil, nil)
+	r := mustAggregate(t, p, nil, nil, nil)
 	assert.Equal(t, "day", r.BucketUnit)
 	assert.Equal(t, 86400, r.BucketSeconds, "nominal day seconds")
 	assert.Equal(t, 30, r.BucketCount, "June has 30 calendar-day buckets")
@@ -142,7 +171,7 @@ func TestAggregate_ArbitraryRangeIntervalClip(t *testing.T) {
 		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:28:00Z", Role: "user"},
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:40:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	require.Len(t, r.Intervals, 1)
 	assert.Equal(t, "2026-06-16T10:30:00Z", r.Intervals[0].Start, "clipped to range_start, not midnight")
 	assert.Equal(t, "2026-06-16T10:33:00Z", r.Intervals[0].End)
@@ -155,7 +184,7 @@ func TestAggregate_FutureRangeNoActivity(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-20", Timezone: "UTC"}, now)
 	require.NoError(t, err)
 	p := paramsFromQuery(q)
-	r := Aggregate(p, nil, nil, nil)
+	r := mustAggregate(t, p, nil, nil, nil)
 	assert.True(t, r.Partial)
 	assert.Equal(t, 0, r.ElapsedBucketCount, "fully future range elapses no buckets")
 	assert.Equal(t, 288, r.BucketCount, "but the full day's buckets are still listed")
@@ -164,13 +193,13 @@ func TestAggregate_FutureRangeNoActivity(t *testing.T) {
 
 func TestAggregate_DSTSpringForward23Hours(t *testing.T) {
 	// America/New_York springs forward 2026-03-08 (23-hour local day).
-	r := Aggregate(baseParams(t, "2026-03-08", "America/New_York"), nil, nil, nil)
+	r := mustAggregate(t, baseParams(t, "2026-03-08", "America/New_York"), nil, nil, nil)
 	assert.Equal(t, 276, r.BucketCount) // 23h * 12
 }
 
 func TestAggregate_DSTFallBack25Hours(t *testing.T) {
 	// America/New_York falls back 2026-11-01 (25-hour local day).
-	r := Aggregate(baseParams(t, "2026-11-01", "America/New_York"), nil, nil, nil)
+	r := mustAggregate(t, baseParams(t, "2026-11-01", "America/New_York"), nil, nil, nil)
 	assert.Equal(t, 300, r.BucketCount) // 25h * 12
 }
 
@@ -184,13 +213,13 @@ func TestAggregate_SweepLineNonOverlapVsOverlap(t *testing.T) {
 		{SessionID: "b", Ordinal: 1, Timestamp: "2026-06-16T10:03:00Z", Role: "user"},
 		{SessionID: "b", Ordinal: 2, Timestamp: "2026-06-16T10:03:30Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.Equal(t, 1, r.Peak.Agents, "non-overlapping must peak at 1")
 
 	// Now make them overlap: b starts inside a's interval.
 	act[2].Timestamp = "2026-06-16T10:00:30Z"
 	act[3].Timestamp = "2026-06-16T10:01:30Z"
-	r = Aggregate(p, nil, act, nil)
+	r = mustAggregate(t, p, nil, act, nil)
 	assert.Equal(t, 2, r.Peak.Agents, "overlapping must peak at 2")
 }
 
@@ -204,7 +233,7 @@ func TestAggregate_AdjacentIntervalsOneSessionNotConcurrent(t *testing.T) {
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:02:00Z", Role: "assistant", Model: "m1"},
 		{SessionID: "a", Ordinal: 3, Timestamp: "2026-06-16T10:05:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.Equal(t, 1, r.Peak.Agents, "abutting intervals from one session never overlap")
 	for i, b := range r.Buckets {
 		assert.LessOrEqualf(t, b.MaxAgents, 1, "bucket %d max_agents", i)
@@ -225,18 +254,18 @@ func TestAggregate_PartialDayClipsUsage(t *testing.T) {
 	}
 	usage := []UsageRow{
 		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 100, Cost: 1.0, ClaudeMessageID: "a", ClaudeRequestID: "x"},
+			OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "a", ClaudeRequestID: "x"},
 		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T14:00:00Z",
-			OutputTokens: 200, Cost: 2.0, ClaudeMessageID: "b", ClaudeRequestID: "y"},
+			OutputTokens: 200, Cost: money.MustParseDollars("2.0"), ClaudeMessageID: "b", ClaudeRequestID: "y"},
 	}
 	sessions := []SessionMeta{{SessionID: "s1", Project: "p", Agent: "claude"}}
-	r := Aggregate(p, sessions, nil, usage)
+	r := mustAggregate(t, p, sessions, nil, usage)
 	assert.True(t, r.Partial, "mid-day report must be partial")
 	assert.Equal(t, 100, r.Totals.OutputTokens, "row at/after effEnd excluded from totals")
-	assert.InDelta(t, 1.0, r.Totals.Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.Cost)
 	require.Len(t, r.BySession, 1)
 	assert.Equal(t, 100, r.BySession[0].OutputTokens, "session row clipped to as_of")
-	assert.InDelta(t, 1.0, r.BySession[0].Cost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("1.0"), r.BySession[0].Cost)
 }
 
 func TestAggregate_OverlapUnionVsSumAndPeakAt(t *testing.T) {
@@ -254,7 +283,7 @@ func TestAggregate_OverlapUnionVsSumAndPeakAt(t *testing.T) {
 		{SessionID: "b", Ordinal: 1, Timestamp: "2026-06-16T10:01:00Z", Role: "user"},
 		{SessionID: "b", Ordinal: 2, Timestamp: "2026-06-16T10:05:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.InDelta(t, 5.0, r.Totals.ActiveMinutes, 1e-9,
 		"active minutes are the union 10:00-10:05, not the sum")
 	assert.InDelta(t, 7.0, r.Totals.AgentMinutes, 1e-9,
@@ -291,7 +320,7 @@ func TestAggregate_PartialDayClipsActivityAndBuckets(t *testing.T) {
 		{SessionID: "s1", Ordinal: 2, Timestamp: "2026-06-16T12:10:00Z", Role: "assistant", Model: "m1"},
 	}
 	sessions := []SessionMeta{{SessionID: "s1", Project: "p", Agent: "claude"}}
-	r := Aggregate(p, sessions, act, nil)
+	r := mustAggregate(t, p, sessions, act, nil)
 
 	assert.True(t, r.Partial, "mid-day report must be partial")
 	// All windows are emitted regardless of how much of the range has elapsed.
@@ -325,7 +354,7 @@ func TestAggregate_GapCapAndActiveMinutes(t *testing.T) {
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:02:00Z", Role: "assistant", Model: "m1"},
 		{SessionID: "a", Ordinal: 3, Timestamp: "2026-06-16T10:42:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.InDelta(t, 7.0, r.Totals.AgentMinutes, 1e-9)
 	assert.InDelta(t, 7.0, r.Totals.ActiveMinutes, 1e-9)
 }
@@ -336,7 +365,7 @@ func TestAggregate_NonMonotonicGapIgnored(t *testing.T) {
 		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:05:00Z", Role: "user"},
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:04:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.InDelta(t, 0.0, r.Totals.AgentMinutes, 1e-9)
 }
 
@@ -349,7 +378,7 @@ func TestAggregate_MidnightClipWithFarSuccessor(t *testing.T) {
 		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T23:59:00Z", Role: "user"},
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-17T00:20:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.InDelta(t, 1.0, r.Totals.AgentMinutes, 1e-9)
 }
 
@@ -366,7 +395,7 @@ func TestAggregate_IntervalsExposedSortedAndContiguous(t *testing.T) {
 		{SessionID: "b", Ordinal: 1, Timestamp: "2026-06-16T10:01:00Z", Role: "user"},
 		{SessionID: "b", Ordinal: 2, Timestamp: "2026-06-16T10:03:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	want := []ReportInterval{
 		{SessionID: "a", Start: "2026-06-16T10:00:00Z", End: "2026-06-16T10:01:00Z"},
 		{SessionID: "a", Start: "2026-06-16T10:01:00Z", End: "2026-06-16T10:02:00Z"},
@@ -395,7 +424,7 @@ func TestAggregate_IntervalsClippedToEffEnd(t *testing.T) {
 		{SessionID: "s1", Ordinal: 1, Timestamp: "2026-06-16T11:58:00Z", Role: "user"},
 		{SessionID: "s1", Ordinal: 2, Timestamp: "2026-06-16T12:10:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	require.True(t, r.Partial)
 	require.Len(t, r.Intervals, 1)
 	assert.Equal(t, "2026-06-16T11:58:00Z", r.Intervals[0].Start)
@@ -415,7 +444,7 @@ func TestAggregate_OverlapExceedsPeakConcurrency(t *testing.T) {
 		{SessionID: "b", Ordinal: 1, Timestamp: "2026-06-16T10:08:00Z", Role: "user"},
 		{SessionID: "b", Ordinal: 2, Timestamp: "2026-06-16T10:10:00Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	assert.Equal(t, 1, r.Peak.Agents, "sessions never overlap in time -> peak concurrency 1")
 	want := []ReportInterval{
 		{SessionID: "a", Start: "2026-06-16T10:05:00Z", End: "2026-06-16T10:07:00Z"},
@@ -437,7 +466,7 @@ func TestAggregate_IntervalsUseSecondResolutionForParity(t *testing.T) {
 		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:00:00.300Z", Role: "user"},
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:00:00.800Z", Role: "assistant", Model: "m1"},
 	}
-	r := Aggregate(p, nil, act, nil)
+	r := mustAggregate(t, p, nil, act, nil)
 	require.Len(t, r.Intervals, 1)
 	assert.Equal(t, "2026-06-16T10:00:00Z", r.Intervals[0].Start)
 	assert.Equal(t, "2026-06-16T10:00:00Z", r.Intervals[0].End,
@@ -469,7 +498,7 @@ func TestAggregate_BucketPeakSplitAtTotalPeakInstant(t *testing.T) {
 		{SessionID: "i1", Project: "P", Agent: "claude", IsAutomated: false},
 		{SessionID: "i2", Project: "P", Agent: "claude", IsAutomated: false},
 	}
-	r := Aggregate(p, sessions, act, nil)
+	r := mustAggregate(t, p, sessions, act, nil)
 
 	b := r.Buckets[120] // [10:00,10:05)
 	assert.Equal(t, 2, b.MaxAgents, "true peak is 2, never the 2+2 independent stack")
@@ -501,37 +530,37 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 		{SessionID: "ti", Ordinal: 2, Timestamp: "2026-06-16T10:03:00Z", Role: "assistant", Model: "m1"},
 	}
 	usage := []UsageRow{
-		{SessionID: "ta", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, Cost: 1.0, ClaudeMessageID: "ta", ClaudeRequestID: "r"},
-		{SessionID: "ti", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 20, Cost: 2.0, ClaudeMessageID: "ti", ClaudeRequestID: "r"},
-		{SessionID: "ua", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 40, Cost: 4.0, ClaudeMessageID: "ua", ClaudeRequestID: "r"},
+		{SessionID: "ta", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 10, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "ta", ClaudeRequestID: "r"},
+		{SessionID: "ti", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 20, Cost: money.MustParseDollars("2.0"), ClaudeMessageID: "ti", ClaudeRequestID: "r"},
+		{SessionID: "ua", Model: "m1", Timestamp: "2026-06-16T10:00:00Z", OutputTokens: 40, Cost: money.MustParseDollars("4.0"), ClaudeMessageID: "ua", ClaudeRequestID: "r"},
 	}
 	sessions := []SessionMeta{
 		{SessionID: "ta", Project: "P", Agent: "claude", IsAutomated: true},
 		{SessionID: "ti", Project: "P", Agent: "claude", IsAutomated: false},
 		{SessionID: "ua", Project: "P", Agent: "claude", IsAutomated: true},
 	}
-	r := Aggregate(p, sessions, act, usage)
+	r := mustAggregate(t, p, sessions, act, usage)
 
 	require.Len(t, r.ByProject, 1)
 	proj := r.ByProject[0]
 	assert.Equal(t, "P", proj.Key)
 	assert.InDelta(t, 5.0, proj.AgentMinutes, 1e-9, "2+3 timed minutes")
-	assert.InDelta(t, 7.0, proj.Cost, 1e-9, "1+2+4 includes the untimed session")
+	assert.Equal(t, money.MustParseDollars("7"), proj.Cost, "1+2+4 includes the untimed session")
 	assert.InDelta(t, 2.0, proj.AutomatedAgentMinutes, 1e-9)
 	assert.InDelta(t, 3.0, proj.InteractiveAgentMinutes, 1e-9)
-	assert.InDelta(t, 5.0, proj.AutomatedCost, 1e-9, "ta 1 + ua 4")
-	assert.InDelta(t, 2.0, proj.InteractiveCost, 1e-9, "ti 2")
+	assert.Equal(t, money.MustParseDollars("5"), proj.AutomatedCost, "ta 1 + ua 4")
+	assert.Equal(t, money.MustParseDollars("2"), proj.InteractiveCost, "ti 2")
 	assert.InDelta(t, proj.AgentMinutes,
 		proj.AutomatedAgentMinutes+proj.InteractiveAgentMinutes, 1e-9)
-	assert.InDelta(t, proj.Cost, proj.AutomatedCost+proj.InteractiveCost, 1e-9)
-	assert.InDelta(t, r.Totals.Cost, proj.Cost, 1e-9,
+	assert.Equal(t, proj.Cost, money.MustAdd(proj.AutomatedCost, proj.InteractiveCost))
+	assert.Equal(t, r.Totals.Cost, proj.Cost,
 		"cost breakdown sums to total cost; untimed cost is not dropped")
 
 	assert.InDelta(t, 5.0, r.Totals.AgentMinutes, 1e-9)
 	assert.InDelta(t, 2.0, r.Totals.AutomatedAgentMinutes, 1e-9)
 	assert.InDelta(t, 3.0, r.Totals.InteractiveAgentMinutes, 1e-9)
-	assert.InDelta(t, 5.0, r.Totals.AutomatedCost, 1e-9)
-	assert.InDelta(t, 2.0, r.Totals.InteractiveCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.AutomatedCost)
+	assert.Equal(t, money.MustParseDollars("2.0"), r.Totals.InteractiveCost)
 
 	autoByID := map[string]bool{}
 	for _, row := range r.BySession {
@@ -544,9 +573,9 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	require.Len(t, r.ByModel, 1)
 	assert.Equal(t, "m1", r.ByModel[0].Key)
 	assert.InDelta(t, 5.0, r.ByModel[0].AgentMinutes, 1e-9)
-	assert.InDelta(t, 7.0, r.ByModel[0].Cost, 1e-9)
-	assert.InDelta(t, 5.0, r.ByModel[0].AutomatedCost, 1e-9)
-	assert.InDelta(t, 2.0, r.ByModel[0].InteractiveCost, 1e-9)
+	assert.Equal(t, money.MustParseDollars("7.0"), r.ByModel[0].Cost)
+	assert.Equal(t, money.MustParseDollars("5.0"), r.ByModel[0].AutomatedCost)
+	assert.Equal(t, money.MustParseDollars("2.0"), r.ByModel[0].InteractiveCost)
 }
 
 // TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel confirms a session
@@ -567,12 +596,12 @@ func TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel(t *testing.T) {
 	// known model but ZERO cost.
 	usage := []UsageRow{
 		{SessionID: "u", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 0, Cost: 0, ClaudeMessageID: "u", ClaudeRequestID: "r"},
+			OutputTokens: 0, Cost: money.MustParseDollars("0"), ClaudeMessageID: "u", ClaudeRequestID: "r"},
 	}
 	sessions := []SessionMeta{
 		{SessionID: "u", Project: "P", Agent: "claude"},
 	}
-	r := Aggregate(p, sessions, nil, usage)
+	r := mustAggregate(t, p, sessions, nil, usage)
 
 	require.Len(t, r.BySession, 1)
 	row := r.BySession[0]
@@ -606,11 +635,11 @@ func TestAggregate_BreakdownCostDeterministicAcrossSessionOrder(t *testing.T) {
 	// the order is normalized.
 	usage := []UsageRow{
 		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 10, Cost: 0.1, ClaudeMessageID: "s1", ClaudeRequestID: "r"},
+			OutputTokens: 10, Cost: money.MustParseDollars("0.1"), ClaudeMessageID: "s1", ClaudeRequestID: "r"},
 		{SessionID: "s2", Model: "m1", Timestamp: "2026-06-16T11:00:00Z",
-			OutputTokens: 20, Cost: 0.2, ClaudeMessageID: "s2", ClaudeRequestID: "r"},
+			OutputTokens: 20, Cost: money.MustParseDollars("0.2"), ClaudeMessageID: "s2", ClaudeRequestID: "r"},
 		{SessionID: "s3", Model: "m1", Timestamp: "2026-06-16T12:00:00Z",
-			OutputTokens: 30, Cost: 0.3, ClaudeMessageID: "s3", ClaudeRequestID: "r"},
+			OutputTokens: 30, Cost: money.MustParseDollars("0.3"), ClaudeMessageID: "s3", ClaudeRequestID: "r"},
 	}
 	meta := func(id string) SessionMeta {
 		return SessionMeta{SessionID: id, Project: "P", Agent: "claude"}
@@ -618,8 +647,8 @@ func TestAggregate_BreakdownCostDeterministicAcrossSessionOrder(t *testing.T) {
 	ascending := []SessionMeta{meta("s1"), meta("s2"), meta("s3")}
 	descending := []SessionMeta{meta("s3"), meta("s2"), meta("s1")}
 
-	rAsc := Aggregate(p, ascending, nil, usage)
-	rDesc := Aggregate(p, descending, nil, usage)
+	rAsc := mustAggregate(t, p, ascending, nil, usage)
+	rDesc := mustAggregate(t, p, descending, nil, usage)
 
 	require.Len(t, rAsc.ByModel, 1)
 	require.Len(t, rDesc.ByModel, 1)

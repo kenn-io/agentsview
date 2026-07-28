@@ -7,6 +7,7 @@ import {
   vi,
 } from "vite-plus/test";
 import { setLocale } from "../i18n/index.js";
+import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
   sanitizeSnippet,
@@ -56,9 +57,9 @@ describe("formatCost", () => {
     [12.345, "$12.35"],
     [99.994, "$99.99"],
     [100, "$100"],
-    [1234.5, "$1235"],
+    [1234.5, "$1,235"],
   ])("formats %d as %s", (value, expected) => {
-    expect(formatCost(value)).toBe(expected);
+    expect(formatCost(testMoney(value))).toBe(expected);
   });
 });
 

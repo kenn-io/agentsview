@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func reflectedFieldValue(v any, name string) reflect.Value {
@@ -1007,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionOpenCodeSessionDirectory(t *testing.T) {
-	assert.Equal(t, 71, CurrentDataVersion(),
-		"OpenCode cwd/project derivation requires a data version bump")
+func TestCurrentDataVersionClaudeIDEContext(t *testing.T) {
+	assert.Equal(t, 74, CurrentDataVersion(),
+		"Claude IDE context parsing requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -4426,10 +4427,10 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern:         "claude-opus-4-8",
-			InputPerMTok:         15,
-			OutputPerMTok:        75,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.5,
+			InputPerMTok:         money.MustParseDollars("15"),
+			OutputPerMTok:        money.MustParseDollars("75"),
+			CacheCreationPerMTok: money.MustParseDollars("18.75"),
+			CacheReadPerMTok:     money.MustParseDollars("1.5"),
 		},
 	}), "UpsertModelPricing")
 	require.NoError(t,
@@ -4442,7 +4443,7 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	require.NoError(t, dstDB.UpsertModelPricing([]ModelPricing{
-		{ModelPattern: "claude-opus-4-8", InputPerMTok: 1},
+		{ModelPattern: "claude-opus-4-8", InputPerMTok: money.MustParseDollars("1")},
 	}), "UpsertModelPricing stale row")
 
 	require.NoError(t, dstDB.CopyModelPricingFrom(srcPath),
@@ -4451,9 +4452,9 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	copied, err := dstDB.GetModelPricing("claude-opus-4-8")
 	require.NoError(t, err, "GetModelPricing")
 	require.NotNil(t, copied, "copied pattern present")
-	assert.Equal(t, 15.0, copied.InputPerMTok,
+	assert.Equal(t, money.MustParseDollars("15.0"), copied.InputPerMTok,
 		"source row replaces stale destination row")
-	assert.Equal(t, 75.0, copied.OutputPerMTok, "output rate")
+	assert.Equal(t, money.MustParseDollars("75.0"), copied.OutputPerMTok, "output rate")
 
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
@@ -4475,8 +4476,8 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			OutputTokens:     567,
 			CacheWriteTokens: 12,
 			CacheReadTokens:  34,
-			ChargedCents:     15.66,
-			CursorTokenFee:   3.32,
+			Charged:          money.MustParseDollars("0.1566"),
+			CursorTokenFee:   money.MustParseDollars("0.0332"),
 			UserID:           "152683922",
 			UserEmail:        "member@example.com",
 			DedupKey:         "first",
@@ -4487,8 +4488,8 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			Kind:           "USAGE_EVENT_KIND_USAGE_BASED",
 			InputTokens:    80,
 			OutputTokens:   20,
-			ChargedCents:   1.25,
-			CursorTokenFee: 0.5,
+			Charged:        money.MustParseDollars("0.0125"),
+			CursorTokenFee: money.MustParseDollars("0.005"),
 			UserID:         "777",
 			UserEmail:      "next@example.com",
 			IsHeadless:     true,
@@ -4504,11 +4505,11 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	require.NoError(t, dstDB.InsertCursorUsageEvents([]CursorUsageEvent{{
-		OccurredAt:   "2026-01-01T00:00:00Z",
-		Model:        "stale-model",
-		Kind:         "USAGE_EVENT_KIND_USAGE_BASED",
-		ChargedCents: 99,
-		DedupKey:     "stale",
+		OccurredAt: "2026-01-01T00:00:00Z",
+		Model:      "stale-model",
+		Kind:       "USAGE_EVENT_KIND_USAGE_BASED",
+		Charged:    money.MustParseDollars("0.99"),
+		DedupKey:   "stale",
 	}}), "InsertCursorUsageEvents dst")
 
 	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")

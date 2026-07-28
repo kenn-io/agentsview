@@ -899,6 +899,119 @@ func TestParseOpenCodeDB_SkillTool(t *testing.T) {
 	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "doc-writer")
 }
 
+// TestParseOpenCodeDB_InvalidToolCall verifies that an invalid
+// tool call (tool:"invalid") populates ResultEvents with
+// Status:"errored" so the signal engine detects it as a failure.
+func TestParseOpenCodeDB_InvalidToolCall(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/tmp/proj")
+	seeder.AddSession("ses_inv", "prj_1", "", "", 1700000000000, 1700000030000)
+
+	seeder.AddMessage("msg_u", "ses_inv", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_inv", 1700000000000, 1700000000000, `{"type":"text","text":"do something"}`)
+
+	seeder.AddMessage("msg_a", "ses_inv", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+	seeder.AddPart("prt_t", "msg_a", "ses_inv", 1700000010000, 1700000010000,
+		`{"type":"tool","tool":"invalid","callID":"call_inv","state":{"input":{"tool":"nonexistent_tool","error":"Model tried to call unavailable tool 'nonexistent_tool'"}}}`)
+
+	sessions, err := parseOpenCodeAll(dbPath, "m")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
+
+	msgs := sessions[0].Messages
+	require.Len(t, msgs, 2, "messages len")
+
+	ast := msgs[1]
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
+	assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
+}
+
+// TestParseOpenCodeDB_BashExitFailure verifies that a bash tool whose
+// state metadata records a non-zero exit is reported as a failure even
+// when the output text lacks an "exit status N" marker, and that a
+// successful or exit-less part stays clean.
+func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		tool        string
+		state       string
+		wantErrored bool
+	}{
+		{
+			name:        "non-zero exit without exit-status text",
+			tool:        "bash",
+			state:       `{"input":{"command":"build"},"output":"error: command failed","metadata":{"exit":1}}`,
+			wantErrored: true,
+		},
+		{
+			name:        "non-zero exit with empty output",
+			tool:        "bash",
+			state:       `{"input":{"command":"build"},"output":"","metadata":{"exit":127}}`,
+			wantErrored: true,
+		},
+		{
+			name:        "zero exit is not a failure",
+			tool:        "bash",
+			state:       `{"input":{"command":"build"},"output":"ok","metadata":{"exit":0}}`,
+			wantErrored: false,
+		},
+		{
+			name:        "metadata without an exit key is not a failure",
+			tool:        "bash",
+			state:       `{"input":{"command":"build"},"output":"ok","metadata":{"truncated":false}}`,
+			wantErrored: false,
+		},
+		{
+			name:        "no metadata is not a failure",
+			tool:        "bash",
+			state:       `{"input":{"command":"build"},"output":"ok"}`,
+			wantErrored: false,
+		},
+		{
+			name:        "non-bash metadata exit is not a failure",
+			tool:        "mcp_lookup",
+			state:       `{"input":{"query":"exit routes"},"output":"route 1","metadata":{"exit":1}}`,
+			wantErrored: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath, seeder, db := newTestDB(t)
+			defer db.Close()
+
+			seeder.AddProject("prj_1", "/tmp/proj")
+			seeder.AddSession("ses_bexit", "prj_1", "", "", 1700000000000, 1700000030000)
+
+			seeder.AddMessage("msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"role":"user"}`)
+			seeder.AddPart("prt_u", "msg_u", "ses_bexit", 1700000000000, 1700000000000, `{"type":"text","text":"build"}`)
+
+			seeder.AddMessage("msg_a", "ses_bexit", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+			seeder.AddPart("prt_t", "msg_a", "ses_bexit", 1700000010000, 1700000010000,
+				`{"type":"tool","tool":"`+tt.tool+`","callID":"call_exit","state":`+tt.state+`}`)
+
+			sessions, err := parseOpenCodeAll(dbPath, "m")
+			require.NoError(t, err, "ParseOpenCodeDB")
+			require.Len(t, sessions, 1, "sessions len")
+
+			msgs := sessions[0].Messages
+			require.Len(t, msgs, 2, "messages len")
+
+			ast := msgs[1]
+			require.Len(t, ast.ToolCalls, 1, "tool calls len")
+			if !tt.wantErrored {
+				assert.Empty(t, ast.ToolCalls[0].ResultEvents, "result events")
+				return
+			}
+			require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
+			assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
+		})
+	}
+}
+
 // TestParseOpenCodeDB_SkillNameFromReadTool verifies that a
 // "read" tool part whose input points at a real on-disk SKILL.md
 // infers the skill name from the file's frontmatter, matching the

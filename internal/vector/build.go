@@ -186,10 +186,18 @@ func (ix *Index) Build(
 		spec:  ix.spec,
 	}
 	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped, kitvec.FillOptions[string]{
-		Split:         ix.split,
-		Batch:         kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
-		Concurrency:   o.Concurrency,
-		OnEncodeError: skipPermanentEncodeError,
+		Split:       ix.split,
+		Batch:       kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		Concurrency: o.Concurrency,
+		// A positive BatchSize packs chunks from several documents into one
+		// encode call, so a permanent rejection arrives without knowing which
+		// document caused it. Permitting isolation lets kit re-encode each
+		// document's slice alone and attribute the failure; without it the
+		// whole fill aborts and one poison document wedges every later build,
+		// which is what OnEncodeError exists to prevent. Transient failures
+		// still abort untouched: they are not worth N extra probe calls.
+		ShouldIsolateBatchError: isPermanentEncodeError,
+		OnEncodeError:           skipPermanentEncodeError,
 	})
 	finish()
 	result.Fill = fillStats
@@ -320,13 +328,12 @@ func validatingEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
 
 // skipPermanentEncodeError implements kitvec.FillOptions.OnEncodeError: a
 // document the embeddings endpoint permanently rejects for input-specific
-// reasons (e.g. a token-window overflow, whitespace-only content some servers
-// refuse, or a content-policy rejection) is skipped — kit stamps it for the
-// generation with no vectors so it stops being pending — instead of aborting
-// the whole fill. Without this, one poison document would wedge every future
-// build at the same doc_key-ordered scan position: later documents would never
-// embed, a first build would never reach Missing==0, and auto-activation would
-// never fire.
+// reasons (e.g. a token-window overflow or a content-policy rejection) is
+// skipped — kit stamps it for the generation with no vectors so it stops being
+// pending — instead of aborting the whole fill. Without this, one poison
+// document would wedge every future build at the same doc_key-ordered scan
+// position: later documents would never embed, a first build would never reach
+// Missing==0, and auto-activation would never fire.
 //
 // Every other failure (5xx, network, timeout, 429 rate-limiting, auth, route,
 // model, media-type, or other config/API failures) still aborts the fill, since
@@ -341,7 +348,17 @@ func skipPermanentEncodeError(doc string, err error) bool {
 	return true
 }
 
+// isPermanentEncodeError reports whether err rejects one specific input in a
+// way retrying can never fix. kitvec.ErrEmptyEmbeddingInput is kit's own
+// pre-flight refusal of blank chunk text; it is raised before any HTTP call
+// and replaces sniffing each provider's wording for the same rejection.
+// Ordinary fills never trigger it — kitvec.Split drops blank windows, so a
+// blank document is stamped with no vectors — but a chunk that reaches an
+// encode call blank is still permanently unembeddable, not a transient fault.
 func isPermanentEncodeError(err error) bool {
+	if errors.Is(err, kitvec.ErrEmptyEmbeddingInput) {
+		return true
+	}
 	var statusErr *HTTPStatusError
 	return errors.As(err, &statusErr) && statusErr != nil && statusErr.Permanent()
 }

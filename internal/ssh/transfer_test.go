@@ -24,7 +24,7 @@ func TestBuildTarCommand(t *testing.T) {
 		parser.AgentClaude: {"/home/wes/.claude/projects"},
 		parser.AgentCodex:  {"/home/wes/.codex/sessions"},
 	}
-	cmd := buildTarCommand(dirs, nil, []string{"/home/wes/.codex/session_index.jsonl"})
+	cmd := buildTarCommand(dirs, nil, []string{"/home/wes/.codex/session_index.jsonl"}, nil)
 
 	assert.Contains(t, cmd, "| tar cf - -C / -T -", "bad tar pipe: %s", cmd)
 	assert.NotContains(t, tarCommandLine(t, cmd), "home/wes/.claude/projects",
@@ -50,7 +50,7 @@ func TestBuildTarCommandSkipsFileScopedWindsurfDirs(t *testing.T) {
 		},
 	}
 
-	cmd := buildTarCommand(dirs, files, nil)
+	cmd := buildTarCommand(dirs, files, nil, nil)
 
 	assert.Contains(t, cmd, "'./home/wes/Windsurf/User/workspaceStorage/a/state.vscdb'")
 	assert.Contains(t, cmd, "'./home/wes/Windsurf/User/workspaceStorage/a/workspace.json'")
@@ -94,6 +94,7 @@ func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
 			parser.AgentWindsurf: {stateDB, workspaceJSON},
 		},
 		nil,
+		nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -124,6 +125,7 @@ func TestBuildTarCommandSkipsMissingFileScopedPath(t *testing.T) {
 		map[parser.AgentType][]string{
 			parser.AgentWindsurf: {stateDB, missingWAL},
 		},
+		nil,
 		nil,
 	)
 	cmd := exec.Command("sh")
@@ -166,6 +168,7 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 		map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
 		nil,
 		[]string{wal, shm, stateDB + "-journal"},
+		nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -189,6 +192,107 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 	assert.Equal(t, "Committed in WAL", title)
 }
 
+func TestBuildTarCommandExcludesRemoteSyncExcludedAgentState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	chatDB := filepath.Join(root, "chat.db")
+	require.NoError(t, os.WriteFile(chatDB, []byte("authentication state"), 0o600))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{parser.AgentTrae: {root}},
+		map[parser.AgentType][]string{
+			parser.AgentTrae: {chatDB},
+		},
+		nil,
+		nil,
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+	require.NoError(t, err, "archive command output: %s", archive)
+	assert.Empty(t, tarNames(t, archive),
+		"a remote-sync-excluded agent's state must never enter an SSH archive")
+}
+
+func TestBuildTarCommandPrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, ".forbidden-provider")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
+		nil, nil, []string{forbidden},
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+
+	require.NoError(t, err, "archive command output: %s", archive)
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(keep))
+	assert.NotContains(t, names, archivePathForTest(secret),
+		"SSH transfer inputs must not recurse into a forbidden nested root")
+}
+
+// TestBuildPlainTarCommandEscapesGlobMetacharactersInExcludePattern verifies
+// that a forbidden root containing tar glob metacharacters (here "[" and
+// "]") produces a backslash-escaped --exclude pattern, not a raw glob. tar
+// --exclude patterns are globs under both GNU tar's fnmatch and bsdtar's
+// libarchive, so an unescaped literal path containing "[...]" would be
+// parsed as a character class instead of matching itself.
+func TestBuildPlainTarCommandEscapesGlobMetacharactersInExcludePattern(t *testing.T) {
+	cmd := buildPlainTarCommand(
+		[]string{"./allowed/session.jsonl"},
+		[]string{"./allowed/[forbidden-provider]"},
+	)
+	assert.Contains(t, cmd, `--exclude='./allowed/\[forbidden-provider]'`,
+		"forbidden root glob metacharacters must be backslash-escaped in the tar --exclude pattern")
+}
+
+// TestBuildTarCommandPrunesBracketCharredForbiddenRootNestedInAllowedRoot is
+// the execution-level counterpart of the escaping test above: it proves a
+// real tar invocation still prunes a forbidden root whose name contains
+// glob metacharacters. On the plain-tar path with no Hermes state DBs,
+// --exclude is the only layer that prevents recursion into a forbidden root
+// nested inside an allowed directory.
+func TestBuildTarCommandPrunesBracketCharredForbiddenRootNestedInAllowedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote archive script uses POSIX paths; local Windows paths are not representative")
+	}
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, "[forbidden-provider]")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
+		nil, nil, []string{forbidden},
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+
+	require.NoError(t, err, "archive command output: %s", archive)
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(keep))
+	assert.NotContains(t, names, archivePathForTest(secret),
+		"a forbidden root containing glob metacharacters must still be pruned by tar --exclude")
+}
+
 func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("remote snapshot script uses POSIX symlinks and paths")
@@ -203,7 +307,7 @@ func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 
 		script := buildTarCommand(
 			map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
-			nil, nil,
+			nil, nil, nil,
 		)
 		cmd := exec.Command("sh")
 		cmd.Stdin = strings.NewReader(script)
@@ -227,7 +331,7 @@ func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 
 		script := buildTarCommand(
 			map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
-			nil, []string{wal},
+			nil, []string{wal}, nil,
 		)
 		cmd := exec.Command("sh")
 		cmd.Stdin = strings.NewReader(script)
@@ -265,7 +369,7 @@ func TestBuildTarCommandSkipsFailedHermesSnapshotAndKeepsOtherData(t *testing.T)
 		map[parser.AgentType][]string{
 			parser.AgentHermes: {badSessions, goodSessions},
 		},
-		nil, []string{badStateDB, goodStateDB},
+		nil, []string{badStateDB, goodStateDB}, nil,
 	)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
@@ -303,7 +407,7 @@ func TestBuildTarCommandWithoutPythonKeepsTranscriptsAndOtherAgents(t *testing.T
 			parser.AgentHermes: {hermesSessions},
 			parser.AgentClaude: {claudeDir},
 		},
-		nil, []string{hermesStateDB},
+		nil, []string{hermesStateDB}, nil,
 	)
 	tarPath, err := exec.LookPath("tar")
 	require.NoError(t, err)
@@ -351,7 +455,7 @@ func TestDownloadAndExtractReportsSuccessfulSSHStderr(t *testing.T) {
 	require.NoError(t, err)
 	os.Stderr = stderrWriter
 	extracted, syncErr := downloadAndExtract(
-		context.Background(), "remote", "", 0, nil, nil, nil, nil,
+		context.Background(), "remote", "", 0, nil, nil, nil, nil, nil,
 	)
 	closeErr := stderrWriter.Close()
 	os.Stderr = originalStderr
@@ -389,7 +493,7 @@ func TestBuildTarCommandSkipsLineDelimitedUnsafePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(safeFile, []byte("{}\n"), 0o644))
 	require.NoError(t, os.WriteFile(unsafeFile, []byte("{}\n"), 0o644))
 
-	script := buildTarCommand(nil, nil, []string{safeFile, unsafeFile})
+	script := buildTarCommand(nil, nil, []string{safeFile, unsafeFile}, nil)
 	cmd := exec.Command("sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.Output()
@@ -446,4 +550,61 @@ func TestRemappedDir(t *testing.T) {
 	got := remappedDir(tempDir, remoteDir)
 	want := filepath.Join("tmp", "sync-123", "home", "wes", ".claude")
 	assert.Equal(t, want, got)
+}
+
+// TestBuildTarCommandPythonBranchPrunesForbiddenRootNestedInAllowedRoot
+// exercises the Python snapshot archive path (taken whenever a Hermes
+// state.db is present) against a forbidden root nested inside an allowed
+// root: archive_filter must drop the forbidden subtree while the allowed
+// session file and the Hermes snapshot still stream. This pins the
+// member-name/forbidden-root spelling agreement inside the Python script
+// end to end, independent of how tarfile spells arcnames.
+func TestBuildTarCommandPythonBranchPrunesForbiddenRootNestedInAllowedRoot(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote snapshot script uses POSIX paths; local Windows paths are not representative")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable; the script would take the plain-tar fallback")
+	}
+	root := t.TempDir()
+	allowed := filepath.Join(root, "sessions")
+	forbidden := filepath.Join(allowed, ".forbidden-provider")
+	keep := filepath.Join(allowed, "session.jsonl")
+	secret := filepath.Join(forbidden, "chat.db")
+	require.NoError(t, os.MkdirAll(forbidden, 0o755))
+	require.NoError(t, os.WriteFile(keep, []byte("session"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("authentication state"), 0o600))
+	stateDB := filepath.Join(root, "hermes", "state.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
+	writer, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	_, err = writer.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{
+			parser.AgentClaude: {allowed},
+			parser.AgentHermes: {stateDB},
+		},
+		nil, nil, []string{forbidden},
+	)
+	require.Contains(t, script, "python3",
+		"a Hermes state.db must route through the Python snapshot branch")
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.CombinedOutput()
+	require.NoError(t, err, "archive command output: %s", archive)
+
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(keep))
+	assert.Contains(t, names, archivePathForTest(stateDB))
+	assert.NotContains(t, names, archivePathForTest(secret),
+		"the Python archive filter must drop forbidden content nested in an allowed root")
+	for _, name := range names {
+		assert.NotContains(t, name, ".forbidden-provider",
+			"no spelling of the forbidden subtree may enter the archive")
+	}
 }

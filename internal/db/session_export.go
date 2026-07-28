@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const sessionExportOrder = "last_activity_at DESC, id ASC"
@@ -84,7 +85,7 @@ type SessionModelUsage struct {
 	CacheCreationInputTokens int                                   `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                                   `json:"cache_read_input_tokens"`
 	ReasoningTokens          int                                   `json:"reasoning_tokens"`
-	CostUSD                  float64                               `json:"cost_usd"`
+	Cost                     money.Money                           `json:"cost"`
 	HasCost                  bool                                  `json:"has_cost"`
 	ByModel                  map[string]SessionModelUsageBreakdown `json:"by_model"`
 }
@@ -96,7 +97,7 @@ type SessionModelUsageBreakdown struct {
 	CacheCreationInputTokens int               `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int               `json:"cache_read_input_tokens"`
 	ReasoningTokens          int               `json:"reasoning_tokens"`
-	CostUSD                  float64           `json:"cost_usd"`
+	Cost                     money.Money       `json:"cost"`
 	HasCost                  bool              `json:"has_cost"`
 	CostSource               export.CostSource `json:"cost_source"`
 }
@@ -158,8 +159,8 @@ type sessionExportUsageAccum struct {
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
 	reasoningTokens          int
-	costUSD                  float64
-	authoritativeCost        *float64
+	cost                     money.Money
+	authoritativeCost        *money.Money
 	contributing             bool
 	allPriced                bool
 	seen                     map[usageDedupToken]struct{}
@@ -171,7 +172,7 @@ type sessionExportModelUsageAccum struct {
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
 	reasoningTokens          int
-	costUSD                  float64
+	cost                     money.Money
 	contributing             bool
 	allPriced                bool
 	computed                 bool
@@ -774,14 +775,17 @@ func (db *DB) attachSessionExportUsage(
 			sessionExportUsageTokens(r)
 		costRow := r
 		authoritative := r.costSource == CopilotReportedCostSource &&
-			r.costUSD.Valid
+			r.cost.Valid
 		if authoritative {
-			v := r.costUSD.Float64
+			v := money.Money{Microdollars: r.cost.Int64}
 			a.authoritativeCost = &v
-			costRow.costUSD = sql.NullFloat64{}
+			costRow.cost = sql.NullInt64{}
 			resolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes := sessionRowCost(costRow, resolver)
+		cost, priced, contributes, priceErr := sessionRowCost(costRow, resolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
 		if !contributes {
 			continue
 		}
@@ -793,7 +797,11 @@ func (db *DB) attachSessionExportUsage(
 		a.cacheReadInputTokens += cacheRdTok
 		a.reasoningTokens += reasoningTok
 		if priced {
-			a.costUSD += cost
+			a.cost, priceErr = money.Add(a.cost, cost)
+			if priceErr != nil {
+				return nil, fmt.Errorf(
+					"summing session export cost: %w", priceErr)
+			}
 		} else {
 			a.allPriced = false
 		}
@@ -808,15 +816,17 @@ func (db *DB) attachSessionExportUsage(
 		ma.cacheCreationInputTokens += cacheCrTok
 		ma.cacheReadInputTokens += cacheRdTok
 		ma.reasoningTokens += reasoningTok
-		if authoritative {
-			ma.computed = true
-		} else if r.costUSD.Valid {
+		if costRow.cost.Valid {
 			ma.reported = true
 		} else {
 			ma.computed = true
 		}
 		if priced {
-			ma.costUSD += cost
+			ma.cost, priceErr = money.Add(ma.cost, cost)
+			if priceErr != nil {
+				return nil, fmt.Errorf(
+					"summing session export model cost: %w", priceErr)
+			}
 		} else {
 			ma.allPriced = false
 		}
@@ -841,16 +851,17 @@ func (db *DB) attachSessionExportUsage(
 		sort.Slice(models, func(i, j int) bool {
 			return models[i].model < models[j].model
 		})
-		weights := make([]float64, len(models))
+		weights := make([]money.Money, len(models))
 		for i, model := range models {
-			weights[i] = model.usage.costUSD
+			weights[i] = model.usage.cost
 		}
 		costs := export.AllocateCostByWeight(*a.authoritativeCost, weights)
 		for i, model := range models {
-			model.usage.costUSD = costs[i]
+			model.usage.cost = costs[i]
 			model.usage.allPriced = true
 		}
-		a.costUSD = *a.authoritativeCost
+		a.cost = *a.authoritativeCost
+		a.allPriced = true
 	}
 
 	for i := range rows {
@@ -865,13 +876,9 @@ func (db *DB) attachSessionExportUsage(
 			CacheCreationInputTokens: a.cacheCreationInputTokens,
 			CacheReadInputTokens:     a.cacheReadInputTokens,
 			ReasoningTokens:          a.reasoningTokens,
-			CostUSD:                  a.costUSD,
-			HasCost: a.authoritativeCost != nil ||
-				(a.contributing && a.allPriced),
-			ByModel: sessionExportModelUsageBreakdowns(a.byModel),
-		}
-		if a.authoritativeCost != nil {
-			rows[i].ModelUsage.CostUSD = *a.authoritativeCost
+			Cost:                     a.cost,
+			HasCost:                  a.authoritativeCost != nil || (a.contributing && a.allPriced),
+			ByModel:                  sessionExportModelUsageBreakdowns(a.byModel),
 		}
 	}
 	block, err := resolver.BuildBlock()
@@ -1228,7 +1235,7 @@ func sessionExportModelUsageBreakdowns(
 			CacheCreationInputTokens: a.cacheCreationInputTokens,
 			CacheReadInputTokens:     a.cacheReadInputTokens,
 			ReasoningTokens:          a.reasoningTokens,
-			CostUSD:                  a.costUSD,
+			Cost:                     a.cost,
 			HasCost:                  a.contributing && a.allPriced,
 			CostSource:               sessionExportCostSource(a.computed, a.reported),
 		}

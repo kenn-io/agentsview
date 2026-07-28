@@ -2,11 +2,12 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type AgentTotal = {
   agent: string;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  cost: number;
+  cost: MoneyMoney;
   inputTokens: number;
   outputTokens: number;
 };

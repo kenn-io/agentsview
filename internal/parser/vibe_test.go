@@ -229,7 +229,7 @@ func TestParseVibeSession(t *testing.T) {
 	assert.Equal(t, 0, usageEvent.CacheCreationInputTokens)
 	assert.Equal(t, 0, usageEvent.CacheReadInputTokens)
 	assert.Equal(t, 0, usageEvent.ReasoningTokens)
-	assert.Nil(t, usageEvent.CostUSD)
+	assert.Nil(t, usageEvent.Cost)
 	assert.Equal(t, "", usageEvent.CostStatus)
 	assert.Equal(t, "", usageEvent.CostSource)
 	assert.Equal(t, "session:vibe:abc123def-0000-0000-0000-000000000000", usageEvent.DedupKey)

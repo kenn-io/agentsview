@@ -698,7 +698,10 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	summary := buildUsageSummary(f, result)
+	summary, err := buildUsageSummary(f, result)
+	if err != nil {
+		return nil, err
+	}
 	if parser.AgentFilterLacksPerMessageTokenData(f.Agent) &&
 		db.NoTokenData(result.Totals) {
 		matchingSessions, err := b.db.GetUsageMatchingSessionCount(ctx, f)
@@ -746,7 +749,10 @@ func (b *directBackend) UsagePairwiseComparison(
 		}
 	}
 
-	out := BuildUsagePairwiseComparisonResult(leftResult, rightResult)
+	out, err := BuildUsagePairwiseComparisonResult(leftResult, rightResult)
+	if err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 

@@ -1189,9 +1189,27 @@ func requireRecallEntry(t *testing.T, d *DB, id string) *RecallEntry {
 	return entry
 }
 
-func captureRecallEvidenceLog(t *testing.T) *bytes.Buffer {
+// recallEvidenceLogBuffer keeps only "recall: " prefixed lines written to the
+// global logger while installed, discarding unrelated lines — e.g. the
+// "db: <Op> ..." slow-op diagnostics gated on slowOpThreshold — so a
+// coincidentally slow operation (coverage instrumentation, a loaded CI
+// runner) cannot pollute the exact-equality assertions on revocation lines.
+// The stdlib log package with flags and prefix cleared issues exactly one
+// Write call per formatted line, so matching the prefix per Write is exact.
+type recallEvidenceLogBuffer struct {
+	bytes.Buffer
+}
+
+func (b *recallEvidenceLogBuffer) Write(p []byte) (int, error) {
+	if bytes.HasPrefix(p, []byte("recall: ")) {
+		return b.Buffer.Write(p)
+	}
+	return len(p), nil
+}
+
+func captureRecallEvidenceLog(t *testing.T) *recallEvidenceLogBuffer {
 	t.Helper()
-	var output bytes.Buffer
+	var output recallEvidenceLogBuffer
 	previousWriter := log.Writer()
 	previousFlags := log.Flags()
 	previousPrefix := log.Prefix()
@@ -1204,4 +1222,17 @@ func captureRecallEvidenceLog(t *testing.T) *bytes.Buffer {
 		log.SetPrefix(previousPrefix)
 	})
 	return &output
+}
+
+func TestRecallEvidenceLogCaptureIgnoresUnrelatedLines(t *testing.T) {
+	logs := captureRecallEvidenceLog(t)
+
+	log.Printf("db: ReplaceSessionMessages s1 (3 msgs): 180ms")
+	log.Printf("recall: revoked provenance for entry-1: missing digest")
+
+	assert.Equal(
+		t,
+		"recall: revoked provenance for entry-1: missing digest",
+		strings.TrimSpace(logs.String()),
+	)
 }

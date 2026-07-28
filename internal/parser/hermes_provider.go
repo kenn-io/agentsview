@@ -1592,5 +1592,8 @@ func hermesProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashRequiredForFreshness: true,
+		},
 	}
 }

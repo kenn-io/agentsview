@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -105,8 +106,8 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	backend.ensurePricing = func(_ context.Context, database *db.DB) error {
 		require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
 			ModelPattern:  "new-model",
-			InputPerMTok:  2,
-			OutputPerMTok: 8,
+			InputPerMTok:  money.MustParseDollars("2"),
+			OutputPerMTok: money.MustParseDollars("8"),
 		}}))
 		return nil
 	}
@@ -121,7 +122,7 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	rate, err := backend.database.GetModelPricing("new-model")
 	require.NoError(t, err)
 	require.NotNil(t, rate)
-	assert.Equal(t, 8.0, rate.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
 func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
@@ -332,6 +333,10 @@ type pushWatchOwnerCase struct {
 
 func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 	t.Helper()
+	// Keep SQLite setup outside the timed owner goroutines so channel deadlines
+	// measure watch coordination rather than fixture creation on slow runners.
+	localDuckDB := testLocalArchiveWriteBackend(t)
+	localPostgreSQL := testLocalArchiveWriteBackend(t)
 	return []pushWatchOwnerCase{
 		{
 			name: "daemon DuckDB",
@@ -354,9 +359,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 		{
 			name: "local DuckDB",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				backend := testLocalArchiveWriteBackend(t)
-				backend.watchHooks = hooks
-				return backend.DuckDBPushWatch(
+				localDuckDB.watchHooks = hooks
+				return localDuckDB.DuckDBPushWatch(
 					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
@@ -365,9 +369,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 		{
 			name: "local PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				backend := testLocalArchiveWriteBackend(t)
-				backend.watchHooks = hooks
-				return backend.PGPushWatch(
+				localPostgreSQL.watchHooks = hooks
+				return localPostgreSQL.PGPushWatch(
 					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)

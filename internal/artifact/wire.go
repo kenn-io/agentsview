@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // Artifact kinds. Each kind maps to a top-level directory in an artifact
@@ -32,8 +33,16 @@ var (
 
 var errIncompleteArtifact = errors.New("incomplete artifact")
 
-// formatVersion is the current artifact wire format version.
-const formatVersion = 1
+// Wire versions advance independently because each artifact kind has its own
+// schema and consumers. A change to one kind must not invalidate the others.
+const (
+	checkpointFormatVersion = 1
+	// Manifest v2 replaces usage_events[].cost_usd floats with exact
+	// integer-microdollar cost objects.
+	manifestFormatVersion       = 2
+	messageSegmentFormatVersion = 1
+	metadataEventFormatVersion  = 1
+)
 
 // metadataEventExtension is the file extension for metadata event artifacts.
 const metadataEventExtension = ".json"
@@ -133,19 +142,19 @@ type manifest struct {
 }
 
 type artifactUsageEvent struct {
-	MessageOrdinal           *int     `json:"message_ordinal,omitempty"`
-	Source                   string   `json:"source"`
-	Model                    string   `json:"model"`
-	InputTokens              int      `json:"input_tokens,omitempty"`
-	OutputTokens             int      `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int      `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int      `json:"cache_read_input_tokens,omitempty"`
-	ReasoningTokens          int      `json:"reasoning_tokens,omitempty"`
-	CostUSD                  *float64 `json:"cost_usd,omitempty"`
-	CostStatus               string   `json:"cost_status,omitempty"`
-	CostSource               string   `json:"cost_source,omitempty"`
-	OccurredAt               string   `json:"occurred_at,omitempty"`
-	DedupKey                 string   `json:"dedup_key,omitempty"`
+	MessageOrdinal           *int         `json:"message_ordinal,omitempty"`
+	Source                   string       `json:"source"`
+	Model                    string       `json:"model"`
+	InputTokens              int          `json:"input_tokens,omitempty"`
+	OutputTokens             int          `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int          `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int          `json:"cache_read_input_tokens,omitempty"`
+	ReasoningTokens          int          `json:"reasoning_tokens,omitempty"`
+	Cost                     *money.Money `json:"cost,omitempty"`
+	CostStatus               string       `json:"cost_status,omitempty"`
+	CostSource               string       `json:"cost_source,omitempty"`
+	OccurredAt               string       `json:"occurred_at,omitempty"`
+	DedupKey                 string       `json:"dedup_key,omitempty"`
 }
 
 type rawSourceRef struct {
@@ -236,7 +245,7 @@ var rawSourceMediaTypes = map[string]bool{
 const maxRawSourceSize = int64(1 << 30)
 
 // ValidateRawSource checks a manifest's optional raw_source reference
-// against the frozen v1 contract. A nil reference is valid (raw capture is
+// against the stable wire contract. A nil reference is valid (raw capture is
 // optional).
 func ValidateRawSource(raw *rawSourceRef) error {
 	if raw == nil {
@@ -281,7 +290,7 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 
 func segmentMessageFromDB(msg db.Message) segmentMessage {
 	record := segmentMessage{
-		Version:           formatVersion,
+		Version:           messageSegmentFormatVersion,
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,

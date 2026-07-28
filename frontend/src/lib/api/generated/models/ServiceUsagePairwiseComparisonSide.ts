@@ -2,15 +2,16 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MoneyMoney } from './MoneyMoney';
 export type ServiceUsagePairwiseComparisonSide = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  costPerSession?: number;
+  costPerSession?: MoneyMoney;
   inputTokens: number;
   outputTokens: number;
   sessionCount: number;
   tokensPerSession?: number;
-  totalCost: number;
+  totalCost: MoneyMoney;
   totalTokens: number;
 };
 

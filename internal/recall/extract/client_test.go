@@ -146,6 +146,36 @@ func TestClientDistillParsesEntriesAndSendsShape(t *testing.T) {
 	}
 }
 
+func TestClientDistillSendsBearerToken(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"finish_reason": "stop",
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": entriesJSON(t, "one"),
+				},
+			}},
+			"usage": map[string]any{
+				"prompt_tokens":     7,
+				"completion_tokens": 3,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := testClient(server.URL)
+	client.APIKey = "secret-key"
+	_, _, err := client.DistillWithRecovery(
+		context.Background(), "system prompt", "unit text", 1,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Bearer secret-key", gotAuth)
+}
+
 func TestClientTrailingSlashBaseURL(t *testing.T) {
 	var requests []map[string]any
 	server := newScriptedServer(t, []scriptedResponse{

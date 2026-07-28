@@ -69,6 +69,15 @@ func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 	screenshot, err := os.ReadFile(filepath.Join(localRepo, "docs", "assets", "generated", "screenshots", "dashboard.png"))
 	require.NoError(t, err)
 	assert.Equal(t, "generated", strings.TrimRight(string(screenshot), "\r\n"))
+
+	semanticSetup, err := os.ReadFile(filepath.Join(
+		localRepo, "docs", "assets", "generated", "screenshots",
+		"semantic-search-setup.png",
+	))
+	require.NoError(t, err)
+	assert.Equal(t, "generated", strings.TrimRight(
+		string(semanticSetup), "\r\n",
+	))
 }
 
 func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
@@ -110,6 +119,33 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 			assert.Contains(t, string(output), ".env.local")
 		})
 	}
+}
+
+func TestGeneratedAssetPublisherAcceptsSemanticSetupScreenshot(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := filepath.Join(tempDir, "repo")
+	sourceDir := filepath.Join(tempDir, "source")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	git(t, repo, "init")
+	writeGeneratedAssets(t, sourceDir, "asset")
+
+	scriptPath := installScript(
+		t, repo,
+		filepath.Join("docs", "screenshots", "update-generated-assets-branch.sh"),
+	)
+	cmd := exec.Command("bash", scriptPath, "--source", sourceDir)
+	cmd.Dir = repo
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+
+	show := exec.Command(
+		"git", "show",
+		"docs-generated-assets:screenshots/semantic-search-setup.png",
+	)
+	show.Dir = repo
+	published, err := show.Output()
+	require.NoError(t, err)
+	assert.Equal(t, "asset", strings.TrimRight(string(published), "\r\n"))
 }
 
 func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
@@ -499,6 +535,7 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 		"screenshots/resync-modal.png",
 		"screenshots/search-grouped.png",
 		"screenshots/search-results.png",
+		"screenshots/semantic-search-setup.png",
 		"screenshots/session-filtered.png",
 		"screenshots/session-filters-active.png",
 		"screenshots/session-filters.png",

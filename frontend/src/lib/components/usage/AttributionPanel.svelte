@@ -4,14 +4,16 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { seriesColorMap } from "../../utils/projectColor.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
+  import type { Money } from "../../money.js";
+  import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
-  function fmtCost(v: number): string {
-    if (v >= 100) return `$${v.toFixed(0)}`;
-    return `$${v.toFixed(2)}`;
+  interface Props {
+    colorMap: ReadonlyMap<string, string>;
   }
+
+  let { colorMap }: Props = $props();
 
   function fmtPct(v: number, total: number): string {
     if (total <= 0) return "";
@@ -36,7 +38,7 @@
     let items: Array<{
       id: string;
       label: string;
-      cost: number;
+      cost: Money;
     }> = [];
 
     if (groupBy === "project") {
@@ -59,24 +61,20 @@
       }));
     }
 
-    items.sort((a, b) => b.cost - a.cost);
+    items.sort((a, b) => b.cost.microdollars - a.cost.microdollars);
     return items;
   });
 
-  const colorMap = $derived(
-    seriesColorMap(rowItems.map((item) => item.id).sort()),
-  );
-
   const rows = $derived.by((): Row[] => {
     const items = rowItems;
-    const total = items.reduce((s, d) => s + d.cost, 0);
+    const total = items.reduce((s, d) => s + d.cost.microdollars, 0);
 
     return items.map((d) => ({
       id: d.id,
       label: d.label,
-      cost: d.cost,
+      cost: d.cost.microdollars,
       color: colorMap.get(d.id) ?? "var(--text-muted)",
-      pct: total > 0 ? d.cost / total : 0,
+      pct: total > 0 ? d.cost.microdollars / total : 0,
     }));
   });
 
@@ -185,7 +183,7 @@
                 style="background: {row.color}"
               ></span>
               <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">{fmtCost(row.cost)}</span>
+              <span class="rail-cost">{formatMoney(moneyFromMicrodollars(row.cost))}</span>
             </div>
           {/each}
         </div>
@@ -218,7 +216,7 @@
             <span class="list-pct">
               {(row.pct * 100).toFixed(1)}%
             </span>
-            <span class="list-cost">{fmtCost(row.cost)}</span>
+            <span class="list-cost">{formatMoney(moneyFromMicrodollars(row.cost))}</span>
           </div>
         {/each}
       </div>

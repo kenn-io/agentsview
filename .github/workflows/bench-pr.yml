@@ -1,0 +1,22 @@
+name: Bench Gate
+
+# The PR dispatcher always calls the main-pinned workflow. That workflow
+# independently routes same-repository Linux jobs to the managed public fleet
+# and fork jobs to GitHub-hosted runners.
+on:
+  pull_request:
+    # Docs/frontend-only PRs cannot change the gated Go paths. If
+    # this check is ever made required on branch protection, pair it
+    # with a no-op sibling workflow on the inverse paths.
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/bench.yml"
+      - ".github/workflows/bench-pr.yml"
+permissions: read-all
+
+jobs:
+  run:
+    uses: kenn-io/agentsview/.github/workflows/bench.yml@main

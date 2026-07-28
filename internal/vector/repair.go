@@ -132,6 +132,17 @@ SELECT c.doc_key
 	return documents, nil
 }
 
+// chunkIndexes returns the chunk indexes content splits into, in order. It is
+// not always 0..n-1: kitvec.Split numbers by window and omits blank ones.
+func chunkIndexes(content string, split kitvec.SplitOptions) []int {
+	chunks := kitvec.Split(content, split)
+	indexes := make([]int, len(chunks))
+	for i, chunk := range chunks {
+		indexes[i] = chunk.Index
+	}
+	return indexes
+}
+
 func (ix *Index) scanInvalidRepairDocuments(
 	ctx context.Context, ordinal int64, dimension int, vecTable string, documents []string,
 ) ([]string, error) {
@@ -144,8 +155,15 @@ func (ix *Index) scanInvalidRepairDocuments(
 		args = append(args, docKey)
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(documents)), ",")
+	// expected is the chunk indexes this content splits into, in order, not a
+	// count: kitvec.Split omits blank windows while numbering by window, so a
+	// document with an all-whitespace window is correctly stored with a gap in
+	// its chunk indexes. Comparing each stored index against the expected one
+	// keeps that document healthy while still catching genuine gaps, whereas
+	// an "index equals position" rule would condemn it on every repair scan
+	// and re-embed it forever.
 	type documentState struct {
-		expected int
+		expected []int
 		seen     int
 		invalid  bool
 	}
@@ -167,7 +185,7 @@ SELECT d.doc_key, d.content
 			contentRows.Close()
 			return nil, fmt.Errorf("scan repair document content: %w", err)
 		}
-		states[docKey] = &documentState{expected: len(kitvec.Split(content, ix.split))}
+		states[docKey] = &documentState{expected: chunkIndexes(content, ix.split)}
 	}
 	if err := contentRows.Err(); err != nil {
 		contentRows.Close()
@@ -203,7 +221,7 @@ SELECT c.doc_key, c.chunk_index, v.embedding
 		if state == nil {
 			continue
 		}
-		if state.seen >= state.expected || state.seen != chunkIndex {
+		if state.seen >= len(state.expected) || state.expected[state.seen] != chunkIndex {
 			state.invalid = true
 		}
 		state.seen++
@@ -217,7 +235,7 @@ SELECT c.doc_key, c.chunk_index, v.embedding
 	var affected []string
 	for _, docKey := range documents {
 		state := states[docKey]
-		if state != nil && (state.invalid || state.seen != state.expected) {
+		if state != nil && (state.invalid || state.seen != len(state.expected)) {
 			affected = append(affected, docKey)
 		}
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // itoa is a thin alias for strconv.Itoa kept short so seedModelMessages'
@@ -364,7 +365,7 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
-	assert.Equal(t, 1, stats.SchemaVersion, "schema_version: got")
+	assert.Equal(t, 2, stats.SchemaVersion, "schema_version: got")
 	assert.Equal(t, 5, stats.Totals.SessionsAll, "sessions_all")
 	assert.Equal(t, 2, stats.Totals.SessionsAutomation,
 		"sessions_automation")
@@ -1519,17 +1520,17 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern:         "claude-opus-4-7",
-			InputPerMTok:         15.0,
-			OutputPerMTok:        75.0,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.5,
+			InputPerMTok:         money.MustParseDollars("15.0"),
+			OutputPerMTok:        money.MustParseDollars("75.0"),
+			CacheCreationPerMTok: money.MustParseDollars("18.75"),
+			CacheReadPerMTok:     money.MustParseDollars("1.5"),
 		},
 		{
 			ModelPattern:         "claude-sonnet-4-6",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.3,
+			InputPerMTok:         money.MustParseDollars("3.0"),
+			OutputPerMTok:        money.MustParseDollars("15.0"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"),
+			CacheReadPerMTok:     money.MustParseDollars("0.3"),
 		},
 	}), "UpsertModelPricing")
 
@@ -1610,8 +1611,8 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	//           = (1500 + 3000 + 187.5 + 900)/1e6 = 0.0055875
 	//   ce3 opus = (100*15 + 50*75 + 0 + 100*1.5)/1e6
 	//           = (1500 + 3750 + 150)/1e6 = 0.0054
-	wantSpent := 0.067875 + 0.0055875 + 0.0054
-	assert.InDelta(t, wantSpent, ce.DollarsSpent, 1e-9, "DollarsSpent")
+	wantSpent := money.MustParseDollars("0.078863")
+	assert.Equal(t, wantSpent, ce.DollarsSpent, "DollarsSpent")
 
 	// cost_without_cache reprices input + cache_creation + cache_read
 	// at the input rate, keeping output unchanged. cache_creation
@@ -1624,9 +1625,9 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	//           = (3*3550 + 3000)/1e6 = 0.01365
 	//   ce3 opus = (15*(100+0+100) + 75*50)/1e6
 	//           = (3000 + 3750)/1e6 = 0.00675
-	wantWithoutCache := 0.189 + 0.01365 + 0.00675
-	wantSavings := wantWithoutCache - wantSpent
-	assert.InDelta(t, wantSavings, ce.DollarsSavedVsUncached, 1e-9,
+	wantWithoutCache := money.MustParseDollars("0.2094")
+	wantSavings := money.MustSub(wantWithoutCache, wantSpent)
+	assert.Equal(t, wantSavings, ce.DollarsSavedVsUncached,
 		"DollarsSavedVsUncached")
 }
 
@@ -1637,10 +1638,10 @@ func TestGetSessionStats_CacheEconomicsClampsRawTokenUsage(t *testing.T) {
 
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "claude-sonnet-4-6",
-		InputPerMTok:         1.0,
-		OutputPerMTok:        2.0,
-		CacheCreationPerMTok: 3.0,
-		CacheReadPerMTok:     4.0,
+		InputPerMTok:         money.MustParseDollars("1.0"),
+		OutputPerMTok:        money.MustParseDollars("2.0"),
+		CacheCreationPerMTok: money.MustParseDollars("3.0"),
+		CacheReadPerMTok:     money.MustParseDollars("4.0"),
 	}}), "UpsertModelPricing")
 
 	insertSessionFixture(t, d, sessionFixture{
@@ -1664,13 +1665,25 @@ func TestGetSessionStats_CacheEconomicsClampsRawTokenUsage(t *testing.T) {
 		"CacheHitRatio.Overall")
 	assert.Equal(t, 1, ce.CacheHitRatio.Buckets[1].Count,
 		"clamped ratio 1/3 should land in bucket [0.25,0.5)")
-	wantSpent := float64(maxTokens) * (1.0 + 2.0 + 3.0 + 4.0) / 1_000_000
-	assert.InDelta(t, wantSpent, ce.DollarsSpent, 1e-9, "DollarsSpent")
-	wantWithoutCache := float64(maxTokens) * (1.0 + 2.0 + 1.0 + 1.0) / 1_000_000
-	assert.InDelta(t, wantWithoutCache, ce.DollarsSavedVsUncached+ce.DollarsSpent,
-		1e-9, "DollarsWithoutCache")
-	assert.InDelta(t, wantWithoutCache-wantSpent, ce.DollarsSavedVsUncached,
-		1e-9, "DollarsSavedVsUncached")
+	wantSpent, err := money.CostPerMillion([]money.RatedTokens{
+		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
+		{Tokens: maxTokens, Rate: money.MustParseDollars("2")},
+		{Tokens: maxTokens, Rate: money.MustParseDollars("3")},
+		{Tokens: maxTokens, Rate: money.MustParseDollars("4")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, wantSpent, ce.DollarsSpent, "DollarsSpent")
+	wantWithoutCache, err := money.CostPerMillion([]money.RatedTokens{
+		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
+		{Tokens: maxTokens, Rate: money.MustParseDollars("2")},
+		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
+		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, wantWithoutCache,
+		money.MustAdd(ce.DollarsSavedVsUncached, ce.DollarsSpent), "DollarsWithoutCache")
+	assert.Equal(t, money.MustSub(wantWithoutCache, wantSpent),
+		ce.DollarsSavedVsUncached, "DollarsSavedVsUncached")
 }
 
 // TestGetSessionStats_CacheEconomics_NoClaude verifies that the
@@ -1686,8 +1699,8 @@ func TestGetSessionStats_CacheEconomics_NoClaude(t *testing.T) {
 	// missing pricing map.
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "claude-sonnet-4-6",
-		InputPerMTok: 3.0, OutputPerMTok: 15.0,
-		CacheCreationPerMTok: 3.75, CacheReadPerMTok: 0.3,
+		InputPerMTok: money.MustParseDollars("3.0"), OutputPerMTok: money.MustParseDollars("15.0"),
+		CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3"),
 	}}), "UpsertModelPricing")
 
 	insertSessionFixture(t, d, sessionFixture{
@@ -1713,8 +1726,8 @@ func TestGetSessionStats_CacheEconomics_ZeroDenominatorSkipped(t *testing.T) {
 
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "claude-opus-4-7",
-		InputPerMTok: 15.0, OutputPerMTok: 75.0,
-		CacheCreationPerMTok: 18.75, CacheReadPerMTok: 1.5,
+		InputPerMTok: money.MustParseDollars("15.0"), OutputPerMTok: money.MustParseDollars("75.0"),
+		CacheCreationPerMTok: money.MustParseDollars("18.75"), CacheReadPerMTok: money.MustParseDollars("1.5"),
 	}}), "UpsertModelPricing")
 
 	// Session with a contributing denominator.

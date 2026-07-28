@@ -265,7 +265,7 @@ can still be parsed.
 | OpenCode              | `~/.local/share/opencode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                            |
 | Pi                    | `~/.pi/agent/sessions/`                                                          | JSONL per session                                                                                                               |
-| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/share/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                         |
+| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                         |
 | Piebald               | `~/.local/share/piebald/`                                                        | SQLite database (`app.db`)                                                                                                      |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
 | Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
@@ -600,6 +600,7 @@ export OPENCODE_DIR=~/custom/opencode
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
 export PIEBALD_DIR=~/custom/piebald
+export POOLSIDE_DIR=~/custom/poolside/trajectories
 export POSIT_ASSISTANT_DIR=~/custom/posit-assistant/workspaces
 export POSITRON_DIR=~/custom/positron
 export QCLAW_DIR=~/custom/qclaw
@@ -609,6 +610,7 @@ export QWENPAW_DIR=~/custom/qwenpaw
 export REASONIX_DIR=~/custom/reasonix
 export ROOCODE_DIR=~/custom/roocode
 export SHELLEY_DIR=~/custom/shelley
+export TRAE_DIR=~/custom/trae/User
 export VISUALSTUDIO_COPILOT_DIR=~/custom/visualstudio-copilot/traces
 export VSCODE_COPILOT_DIR=~/custom/vscode
 export WINDSURF_DIR=~/custom/windsurf/User

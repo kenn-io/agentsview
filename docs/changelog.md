@@ -5,20 +5,127 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+---
+
+## 0.39.0
+<small>2026-07-26</small>
+
+**New features**
+
+- Add session support for **Poolside Agent CLI**, **RooCode**, the **Kilo
+  (legacy)** VS Code extension, and **Trae**. Trae's legacy inline-message
+  layout is supported; modern encrypted layouts are detected and reported
+  clearly instead of being silently skipped.
+- Add experimental **Recall extraction** with opt-in, scheduled local-model
+  processing, generation management, provenance checks, lexical/vector/hybrid
+  retrieval, and a read-only session evidence panel. Recall remains an
+  experimental local-SQLite feature; see [Recall](/recall/) for its current
+  limits.
+- Add **French localization** across the application.
+- Guide first-time **semantic search** setup directly in the command palette.
+  The palette supplies configuration and restart steps, can start an embedding
+  build, follows build progress, and retries the query when the index is ready.
+- Add per-machine breakdowns to `agentsview usage daily --json --breakdown`,
+  and roll explicit subagent costs into the parent session total shown in the
+  session header.
+- Show recorded **repository and worktree context** in Session Vital Signs, and
+  add an `AGE` column to human-readable `agentsview session search` results.
+- Introduce an experimental portable artifact envelope and local
+  DocBank-backed store as internal foundations for future workflows. This
+  release does not add an export/import user workflow for the format.
+
 **Improvements**
 
-- Restrict **`duckdb push`** to the local mirror file. It no longer targets a
-  remote Quack endpoint; configuring `[duckdb].url` now makes push fail with
-  an error to unset it and serve the mirror remotely with
-  `duckdb quack serve` instead. `duckdb status` and `duckdb serve` still read
-  from a configured `[duckdb].url`.
-- Rebuild the **DuckDB mirror** whenever its project-filter scope changes,
-  keeping the mirror scoped to exactly the sessions requested by the latest
-  `--projects` / `--exclude-projects` push instead of preserving rows from an
-  earlier, differently scoped push. The mirror is also rebuilt when it is
-  missing or damaged, when `--full` is passed, or when the mirror's schema or
-  the local data version no longer matches; other pushes update it
-  incrementally.
+- Bound filesystem-event sync work by the changed batch, and bound Gemini
+  reconciliation by affected roots, so passive daemon memory and work do not
+  scale with the full archive.
+- Improve semantic search with role-aware query/document prefixes, automatic
+  detection and repair of invalid stored vectors, and incremental
+  PostgreSQL vector reconciliation.
+- Start analysis **Calls** details collapsed, label inline teammate messages
+  distinctly, and assign stable, visually distinct colors across active
+  attribution series.
+- Preserve Claude session identity metadata and include the recorded model in
+  generated resume commands.
+- Make the API write timeout configurable and include clearer timeout details
+  in server responses.
+- Simplify DuckDB into a disposable, safely rebuildable local mirror. This is a
+  user-visible compatibility change: **`duckdb push` now writes only the local
+  mirror file** and rejects `[duckdb].url`; `duckdb status` and `duckdb serve`
+  can still read from a configured remote Quack endpoint. Project-filter scope
+  changes rebuild the mirror so it exactly matches the latest push scope.
+
+**Bug fixes**
+
+- Fix session date filtering across browser time zones and stop persisted
+  rolling date ranges from becoming stale.
+- Fix project selection when a project has an empty name, and preserve project
+  names when opening sessions from search results.
+- Detect failed and invalid OpenCode tool calls correctly, and prefer the
+  session's recorded directory over the project worktree.
+- Align Grok Build parsing with current persistence formats, ingest usage
+  snapshots from `updates.jsonl`, and emit usage per turn instead of treating
+  the last snapshot as the whole session.
+- Treat Copilot-reported billing as the authoritative session cost.
+- Preserve remote Markdown export links and keep legacy archives intact during
+  schema repair.
+- Fix daemon startup readiness and preserve full-resync progress details.
+- Correct Poolside's Linux default directory and remove duplicate resolved
+  Poolside targets during SSH discovery.
+- Fail faster when DuckDB remote endpoints are unavailable, and return
+  actionable errors for unsupported URLs and remote schema incompatibilities.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for Recall extraction,
+  retrieval, and evidence work; the portable artifact foundation; bounded
+  daemon sync and Gemini reconciliation; DuckDB simplification; and release
+  documentation.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for guided semantic
+  setup, the session-search age column, Poolside target deduplication, daemon
+  startup reliability, Antigravity parent links, and clearer DuckDB remote
+  failures.
+- Thanks to [Tyler Gibbs](https://github.com/tylergibbs1) for keeping Claude
+  IDE context out of generated session titles.
+- Thanks to [ajinkyajacob](https://github.com/ajinkyajacob) for detecting
+  invalid and failed OpenCode tool calls.
+- Thanks to [Stephen Cross](https://github.com/scross01) for Poolside Agent CLI,
+  RooCode, Kilo legacy, and the corrected Poolside Linux directory.
+- Thanks to [Berend de Boer](https://github.com/berenddeboer) for using
+  OpenCode's actual session directory.
+- Thanks to [Gabriel Mitelman Tkacz](https://github.com/gtkacz) for fixing
+  browser-timezone session date filters.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for
+  collapsed analysis call details, repository context, Grok format alignment,
+  invalid-vector repair, and provider-format provenance.
+- Thanks to [Rod Boev](https://github.com/rodboev) for Trae support, teammate
+  labels, subagent cost rollups, project-selection fixes, Claude identity and
+  resume-model preservation, server timeout detail, Grok usage ingestion,
+  incremental PostgreSQL vector reconciliation, and attribution colors.
+- Thanks to [Daniel Delattre](https://github.com/delattre1) for correcting
+  Grok's per-turn usage accounting.
+- Thanks to [TzeKei Lee](https://github.com/chikei) for parsing OhMyPi subagent
+  transcripts as nested sessions.
+- Thanks to [Erik Krogen](https://github.com/xkrogen) for using
+  Copilot-reported billing as the authoritative session cost.
+- Thanks to [David Riordan](https://github.com/riordan) for role-aware
+  embedding prefixes.
+- Thanks to [serverless83](https://github.com/serverless83) for tracking Hermes
+  `skill_view` usage.
+- Thanks to [kai](https://github.com/dpanbug) for French localization and the
+  localized analytics model filter.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for canceling obsolete
+  frontend reads and refreshing pricing before PostgreSQL pushes.
+- Thanks to [Kushida](https://github.com/ShiroKSH) for preserving legacy
+  archives during schema repair and preserving remote Markdown export links.
+- Thanks to [TechnoPhobe01](https://github.com/Technophobe01) for making API
+  write timeouts configurable.
+- Thanks to [bangddong](https://github.com/bangddong) for fixing stale rolling
+  session date bounds.
+- Thanks to [jahabdank](https://github.com/jahabdank) for Hermes profile
+  snapshots and the SSH-sync deprecation.
+- Thanks to [matt wilkie](https://github.com/maphew) for collaboration on the
+  portable artifact foundation.
 
 ---
 

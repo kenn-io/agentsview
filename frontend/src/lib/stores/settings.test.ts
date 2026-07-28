@@ -10,6 +10,7 @@ import {
   ApiError,
   SettingsService,
 } from "../api/generated/index";
+import { DEFAULT_CHART_PALETTE } from "../utils/chartPalette.js";
 
 const runtime = vi.hoisted(() => ({
   setAuthToken: vi.fn(),
@@ -69,6 +70,7 @@ beforeEach(() => {
   settings.authToken = "";
   settings.requireAuth = false;
   settings.readOnly = false;
+  settings.chartPalette = DEFAULT_CHART_PALETTE;
   settings.loaded = false;
   settings.loading = false;
   settings.saving = false;
@@ -80,6 +82,7 @@ describe("SettingsStore.load mode handling", () => {
   it("records read-only mode from the settings response", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
+      chart_palette: "agentsview",
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
@@ -91,6 +94,37 @@ describe("SettingsStore.load mode handling", () => {
     await settings.load();
 
     expect(settings.readOnly).toBe(true);
+  });
+});
+
+describe("SettingsStore chart palette", () => {
+  it("loads the server chart palette", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "matplotlib",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+
+    await settings.load();
+
+    expect(settings.chartPalette).toBe("matplotlib");
+  });
+
+  it("keeps the confirmed palette when saving fails", async () => {
+    settings.chartPalette = "agentsview";
+    settingsService.putApiV1Settings.mockRejectedValue(
+      new Error("save failed"),
+    );
+
+    await settings.save({ chart_palette: "matplotlib" });
+
+    expect(settings.chartPalette).toBe("agentsview");
+    expect(settings.error).toBe("save failed");
   });
 });
 

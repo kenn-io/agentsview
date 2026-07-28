@@ -124,7 +124,7 @@ endpoint = "http://localhost:11434/v1"`;
   async function probe(): Promise<void> {
     try {
       const status = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsStatus(),
+        EmbeddingsService.getApiV1EmbeddingsStatus({}),
       );
       if (disposed) return;
       if (status.running) {
@@ -200,7 +200,7 @@ endpoint = "http://localhost:11434/v1"`;
   async function poll(): Promise<void> {
     try {
       const status = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsStatus(),
+        EmbeddingsService.getApiV1EmbeddingsStatus({}),
       );
       if (disposed) return;
       if (status.running) {

@@ -2463,7 +2463,9 @@ func TestReconcileWatchRootsRevivesByteIdenticalSourceWithWarmSkipCache(
 	storedHash, ok := fx.db.GetFileHashByPath(path)
 	require.True(t, ok)
 	cacheKey := providerProcessCacheKeyWithHash(
-		path, parser.AgentClaude, parser.SourceFingerprint{Hash: storedHash},
+		path,
+		parser.SourceFingerprint{Hash: storedHash},
+		parser.ProviderSyncSemantics{FingerprintHashInCacheKey: true},
 	)
 	fx.engine.cacheSkip(cacheKey, originalInfo.ModTime().UnixNano())
 	assert.Equal(t, 1, fx.engine.persistSkipCache(),
@@ -5130,7 +5132,7 @@ func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
 	assert.False(t, e.shouldSkipCodexFingerprint(path, parser.SourceFingerprint{
 		Size:    info.Size(),
 		MTimeNS: info.ModTime().UnixNano(),
-	}), "stale generated roborev CI projects must be reparsed")
+	}, parser.ProviderSyncSemantics{}), "stale generated roborev CI projects must be reparsed")
 }
 
 func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
@@ -5342,7 +5344,9 @@ func cacheCodexProviderFingerprint(
 	require.True(t, found)
 	fingerprint, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	key := providerProcessCacheKey(file, source, fingerprint)
+	key := providerProcessCacheKey(
+		file, source, fingerprint, provider.Capabilities().Sync,
+	)
 	require.NotEmpty(t, key)
 	return key, fingerprint.MTimeNS
 }
@@ -5803,12 +5807,13 @@ func TestProviderProcessCacheKeyCodexIncludesContentHash(t *testing.T) {
 		FingerprintKey: path,
 	}
 
+	semantics := parser.ProviderSyncSemantics{FingerprintHashInCacheKey: true}
 	first := providerProcessCacheKey(file, source, parser.SourceFingerprint{
 		Key: path, Hash: "first-content-hash",
-	})
+	}, semantics)
 	second := providerProcessCacheKey(file, source, parser.SourceFingerprint{
 		Key: path, Hash: "second-content-hash",
-	})
+	}, semantics)
 
 	assert.Equal(t, path+"?source_hash=first-content-hash", first)
 	assert.Equal(t, path+"?source_hash=second-content-hash", second)

@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -67,8 +68,35 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 		Timezone: "UTC",
 	})
 	require.NoError(t, err, "GetDailyUsage")
-	assert.Equal(t, 3.0, result.Totals.TotalCost)
+	assert.Equal(t, money.MustParseDollars("3"), result.Totals.TotalCost)
 	assert.Len(t, result.Daily, 1)
+}
+
+func TestStoreGetDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_overflow_test")
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'usage-overflow', 'test-machine', 'proj', 'claude',
+			'2026-07-26T12:00:00Z'::timestamptz, 1, 1
+		);
+		INSERT INTO usage_events (
+			session_id, source, model, cost_microdollars, occurred_at, dedup_key
+		) VALUES
+			('usage-overflow', 'provider', 'model', 4611686018427387904,
+			 '2026-07-26T12:00:00Z'::timestamptz, 'overflow-1'),
+			('usage-overflow', 'provider', 'model', 4611686018427387904,
+			 '2026-07-26T12:01:00Z'::timestamptz, 'overflow-2')`)
+	require.NoError(t, err)
+
+	_, err = store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-07-26", To: "2026-07-26", Timezone: "UTC",
+	})
+
+	require.ErrorIs(t, err, money.ErrOverflow)
 }
 
 func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
@@ -77,11 +105,11 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('test-model-a', 1, 2, 3, 0.5, 'seed'),
-			('test-model-b', 2, 4, 0, 0, 'seed')`)
+			('test-model-a', 1000000, 2000000, 3000000, 500000, 'seed'),
+			('test-model-b', 2000000, 4000000, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -125,9 +153,9 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	require.Len(t, day.MachineBreakdowns, 2)
 	assert.Equal(t, "host-a", day.MachineBreakdowns[0].MachineName)
 	assert.Equal(t, "host-b", day.MachineBreakdowns[1].MachineName)
-	assert.InDelta(t, day.TotalCost,
-		day.MachineBreakdowns[0].Cost+day.MachineBreakdowns[1].Cost, 1e-9)
-	assert.Greater(t, day.TotalCost, 0.0)
+	assert.Equal(t, day.TotalCost, money.MustAdd(
+		day.MachineBreakdowns[0].Cost, day.MachineBreakdowns[1].Cost))
+	assert.Positive(t, day.TotalCost.Microdollars)
 
 	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From:              "2026-03-12",
@@ -148,9 +176,9 @@ func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testin
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('test-model-source-daily', 1, 2, 3, 0.5, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('test-model-source-daily', 1000000, 2000000, 3000000, 500000, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -196,9 +224,9 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -234,7 +262,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.Equal(t, 56789, got.PeakContextTokens)
 	assert.True(t, got.HasTokenData)
 	assert.True(t, got.HasCost)
-	assert.InDelta(t, 0.01134, got.CostUSD, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.01134"), got.Cost)
 	assert.Equal(t, []string{"gpt-5.1"}, got.Models)
 	assert.Empty(t, got.UnpricedModels)
 	require.Len(t, got.Breakdown, 1, "Breakdown")
@@ -251,7 +279,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.Equal(t, 200, entry.CacheCreationInputTokens)
 	assert.Equal(t, 300, entry.CacheReadInputTokens)
 	assert.True(t, entry.HasCost)
-	assert.InDelta(t, 0.01134, entry.CostUSD, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.01134"), entry.Cost)
 }
 
 func TestStoreSessionUsageRollupParity(t *testing.T) {
@@ -259,9 +287,9 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -286,7 +314,7 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, rollup.SubagentCount)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.021, rollup.CostUSD, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.021"), rollup.Cost)
 }
 
 func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
@@ -294,9 +322,9 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -312,21 +340,21 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES
 			('pg-copilot-rollup-root', 'shutdown', 'gpt-5.1', 1000, 500,
 			 NULL, '', '', '2026-03-12T10:01:00Z', 'first'),
 			('pg-copilot-rollup-root', 'shutdown', 'gpt-5.1', 1000, 500,
-			 0.03, 'exact', 'copilot-reported', '2026-03-12T10:02:00Z', 'final'),
+			 30000, 'exact', 'copilot-reported', '2026-03-12T10:02:00Z', 'final'),
 			('pg-copilot-rollup-child', 'provider', 'gpt-5.1', 0, 0,
-			 0.02, 'exact', 'provider', '2026-03-12T10:03:00Z', 'child')`)
+			 20000, 'exact', 'provider', '2026-03-12T10:03:00Z', 'child')`)
 	require.NoError(t, err)
 
 	rollup, err := service.GetSessionUsageRollup(
 		ctx, store, "pg-copilot-rollup-root", false)
 	require.NoError(t, err)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.05, rollup.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.05"), rollup.Cost)
 }
 
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
@@ -334,9 +362,9 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3, 15, 3.75, 0.30, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -359,7 +387,7 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, rollup.SubagentCount)
 	require.True(t, rollup.HasCost)
-	assert.InDelta(t, 0.021, rollup.CostUSD, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.021"), rollup.Cost)
 }
 
 func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -368,9 +396,9 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5, 25, 6.25, 0.5, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -400,7 +428,7 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, got, "GetSessionUsage result")
 	assert.True(t, got.HasCost)
-	assert.InDelta(t, 0.0175, got.CostUSD, 1e-9)
+	assert.Equal(t, money.MustParseDollars("0.0175"), got.Cost)
 	assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
 	require.Len(t, got.Breakdown, 1, "Breakdown")
 	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
@@ -429,7 +457,7 @@ func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 	assert.Equal(t, "quiet-project", got.Project)
 	assert.False(t, got.HasTokenData)
 	assert.False(t, got.HasCost)
-	assert.Zero(t, got.CostUSD)
+	assert.Zero(t, got.Cost)
 	assert.Empty(t, got.Models)
 	assert.Empty(t, got.UnpricedModels)
 	assert.Empty(t, got.Breakdown)
@@ -449,9 +477,9 @@ func TestStoreGetTopSessionsByCostDedupesClaudeKeys(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('test-model-top', 1, 0, 0, 0, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('test-model-top', 1000000, 0, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -492,9 +520,9 @@ func TestStoreGetTopSessionsByCostDedupesSourceUUIDFallback(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('test-model-top-source', 1, 0, 0, 0, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('test-model-top-source', 1000000, 0, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -848,11 +876,11 @@ func TestPostgresUsageQueriesUnionUsageEvents(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('claude-sonnet-4-20250514', 1, 1, 1, 1, 'seed'),
-			('gpt-5.4', 1, 1, 1, 1, 'seed')`)
+			('claude-sonnet-4-20250514', 1000000, 1000000, 1000000, 1000000, 'seed'),
+			('gpt-5.4', 1000000, 1000000, 1000000, 1000000, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -921,9 +949,9 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	rawOutput := db.MaxPlausibleTokens + 500_000
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.4', 1, 2, 0, 0, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.4', 1000000, 2000000, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -963,8 +991,12 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.Equal(t, rawOutput, usage.TotalOutputTokens)
 	assert.Equal(t, rawInput, usage.PeakContextTokens)
 	require.True(t, usage.HasCost, "HasCost")
-	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
-	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session cost")
+	wantCost, err := money.CostPerMillion([]money.RatedTokens{
+		{Tokens: int64(rawInput), Rate: money.MustParseDollars("1")},
+		{Tokens: int64(rawOutput), Rate: money.MustParseDollars("2")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, wantCost, usage.Cost, "session cost")
 	require.Len(t, usage.Breakdown, 1, "Breakdown")
 	entry := usage.Breakdown[0]
 	assert.Equal(t, "session", entry.Source)
@@ -974,7 +1006,7 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.Equal(t, rawInput, entry.InputTokens)
 	assert.Equal(t, rawOutput, entry.OutputTokens)
 	assert.True(t, entry.HasCost)
-	assert.InDelta(t, wantCost, entry.CostUSD, 1e-9, "breakdown cost")
+	assert.Equal(t, wantCost, entry.Cost, "breakdown cost")
 }
 
 func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
@@ -983,9 +1015,9 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 	ctx := context.Background()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES ('gpt-5.4', 1, 2, 0, 0, 'seed')`)
+			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('gpt-5.4', 1000000, 2000000, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1017,13 +1049,13 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 	require.Len(t, daily.Daily, 1, "daily entries")
 	assert.Equal(t, 1000, daily.Totals.InputTokens)
 	assert.Zero(t, daily.Totals.OutputTokens)
-	assert.InDelta(t, 4.001, daily.Totals.TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("4.001"), daily.Totals.TotalCost)
 
 	usage, err := store.GetSessionUsage(ctx, "pg-message-reasoning", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage)
 	assert.True(t, usage.HasCost)
-	assert.InDelta(t, 4.001, usage.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("4.001"), usage.Cost)
 }
 
 func TestStoreGetDailyUsageSkipsCursorUsageForTerminationFilter(t *testing.T) {
@@ -1053,13 +1085,13 @@ func TestStoreGetDailyUsageSkipsCursorUsageForTerminationFilter(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO cursor_usage_events (
 			occurred_at, model, kind, input_tokens, output_tokens,
-			cache_read_tokens, charged_cents, cursor_token_fee,
+			cache_read_tokens, charged_microdollars, cursor_token_fee_microdollars,
 			user_id, user_email, dedup_key
 		) VALUES (
 			'2026-05-14T10:05:00Z'::timestamptz,
 			'claude-4.6-opus-high-thinking',
 			'USAGE_EVENT_KIND_USAGE_BASED',
-			1234, 567, 8901, 15.66, 3.32,
+			1234, 567, 8901, 156600, 33200,
 			'152683922', 'member@example.com', 'cursor:termination'
 		)`)
 	require.NoError(t, err, "insert cursor usage")
@@ -1085,10 +1117,10 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	local := testDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "test-model-sync",
-		InputPerMTok:         1.5,
-		OutputPerMTok:        2.5,
-		CacheCreationPerMTok: 3.5,
-		CacheReadPerMTok:     0.5,
+		InputPerMTok:         money.MustParseDollars("1.5"),
+		OutputPerMTok:        money.MustParseDollars("2.5"),
+		CacheCreationPerMTok: money.MustParseDollars("3.5"),
+		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}), "UpsertModelPricing")
 
 	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
@@ -1103,8 +1135,8 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	defer store.Close()
 
 	rows, err := store.DB().QueryContext(context.Background(), `
-		SELECT model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok
+		SELECT model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok
 		FROM model_pricing
 		WHERE model_pattern = 'test-model-sync'`)
 	require.NoError(t, err, "query pricing")
@@ -1113,16 +1145,16 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	require.True(t, rows.Next(), "expected synced pricing row")
 	var (
 		model                                   string
-		input, output, cacheCreation, cacheRead float64
+		input, output, cacheCreation, cacheRead int64
 	)
 	require.NoError(t, rows.Scan(
 		&model, &input, &output, &cacheCreation, &cacheRead,
 	), "scan pricing")
 	assert.Equal(t, "test-model-sync", model)
-	assert.Equal(t, 1.5, input)
-	assert.Equal(t, 2.5, output)
-	assert.Equal(t, 3.5, cacheCreation)
-	assert.Equal(t, 0.5, cacheRead)
+	assert.Equal(t, int64(1_500_000), input)
+	assert.Equal(t, int64(2_500_000), output)
+	assert.Equal(t, int64(3_500_000), cacheCreation)
+	assert.Equal(t, int64(500_000), cacheRead)
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
@@ -1177,9 +1209,9 @@ func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
-			session_id, source, model, input_tokens, output_tokens, cost_usd, occurred_at
+			session_id, source, model, input_tokens, output_tokens, cost_microdollars, occurred_at
 		) VALUES (
-			'copilot:s1', 'api', 'gpt-4', 1000, 500, 0.10, '2026-03-12T10:00:00Z'::timestamptz
+			'copilot:s1', 'api', 'gpt-4', 1000, 500, 100000, '2026-03-12T10:00:00Z'::timestamptz
 		)`)
 	require.NoError(t, err, "insert usage event")
 
@@ -1187,7 +1219,7 @@ func TestStoreGetSessionUsage_CopilotExplicitCost(t *testing.T) {
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.True(t, u.HasCost, "HasCost")
-	assert.Equal(t, 0.10, u.CostUSD, "CostUSD")
+	assert.Equal(t, money.MustParseDollars("0.10"), u.Cost, "Cost")
 	assert.Equal(t, 10.0, u.AICredits, "AICredits")
 }
 
@@ -1207,38 +1239,38 @@ func TestStoreGetSessionUsage_CopilotReportedCost(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
 			 NULL, '', '', '2026-03-12T10:01:00Z'::timestamptz, 'segment-1'),
 			('copilot:reported', 'shutdown', 'gpt-4', 1000, 500,
-			 0.0275, 'exact', 'copilot-reported',
+			 27500, 'exact', 'copilot-reported',
 			 '2026-03-13T10:02:00Z'::timestamptz, 'segment-2')`)
 	require.NoError(t, err)
 
 	usage, err := store.GetSessionUsage(ctx, "copilot:reported", true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	assert.InDelta(t, 0.0275, usage.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0275"), usage.Cost)
 	assert.InDelta(t, 0.0275/0.01, usage.AICredits, 1e-9)
 	require.Len(t, usage.Breakdown, 2)
-	assert.InDelta(t, 0.01375, usage.Breakdown[0].CostUSD, 1e-12)
-	assert.InDelta(t, 0.01375, usage.Breakdown[1].CostUSD, 1e-12)
-	assert.Equal(t, usage.CostUSD,
-		usage.Breakdown[0].CostUSD+usage.Breakdown[1].CostUSD)
+	assert.Equal(t, money.MustParseDollars("0.01375"), usage.Breakdown[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.01375"), usage.Breakdown[1].Cost)
+	assert.Equal(t, usage.Cost,
+		money.MustAdd(usage.Breakdown[0].Cost, usage.Breakdown[1].Cost))
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-03-12", To: "2026-03-13", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	require.Len(t, daily.Daily, 2)
-	assert.InDelta(t, 0.01375, daily.Daily[0].TotalCost, 1e-12)
-	assert.InDelta(t, 0.01375, daily.Daily[1].TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.01375"), daily.Daily[0].TotalCost)
+	assert.Equal(t, money.MustParseDollars("0.01375"), daily.Daily[1].TotalCost)
 	for _, day := range daily.Daily {
 		require.Len(t, day.ModelBreakdowns, 1)
 		assert.Equal(t, day.TotalCost, day.ModelBreakdowns[0].Cost)
 	}
-	assert.InDelta(t, 0.0275, daily.Totals.TotalCost, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0275"), daily.Totals.TotalCost)
 	assert.InDelta(t, 2.75, daily.Totals.CopilotAICredits, 1e-9,
 		"credits derive from the authoritative reported cost")
 	require.NotNil(t, daily.Pricing)
@@ -1264,10 +1296,10 @@ func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
 			session_id, source, model, input_tokens, output_tokens,
-			cost_usd, cost_status, cost_source, occurred_at, dedup_key
+			cost_microdollars, cost_status, cost_source, occurred_at, dedup_key
 		) VALUES (
 			'copilot:cost-only', 'shutdown', 'copilot', 0, 0,
-			0.0175, 'exact', 'copilot-reported',
+			17500, 'exact', 'copilot-reported',
 			'2026-03-12T10:01:00Z'::timestamptz, 'cost-only'
 		)`)
 	require.NoError(t, err)
@@ -1276,7 +1308,7 @@ func TestStoreGetSessionUsage_CopilotCostOnlyReported(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	assert.True(t, u.HasCost)
-	assert.InDelta(t, 0.0175, u.CostUSD, 1e-12)
+	assert.Equal(t, money.MustParseDollars("0.0175"), u.Cost)
 	assert.False(t, u.HasTokenData,
 		"a cost-only reported row is not token data")
 	assert.Empty(t, u.Models,
@@ -1311,7 +1343,7 @@ func TestStoreGetSessionUsage_CopilotUnpricedNoCost(t *testing.T) {
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.False(t, u.HasCost, "HasCost should be false")
-	assert.Zero(t, u.CostUSD, "CostUSD should be 0 when unpriced")
+	assert.Zero(t, u.Cost, "Cost should be zero when unpriced")
 	assert.Equal(t, 0.0, u.AICredits, "AICredits should be 0 when unpriced")
 }
 

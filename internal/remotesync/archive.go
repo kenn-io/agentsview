@@ -14,6 +14,7 @@ import (
 
 func WriteArchive(w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
+	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	hermesSQLite := make(map[string]string)
 	for _, stateDB := range hermesStateDBTargets(targets) {
 		for _, path := range hermesSQLitePaths(stateDB) {
@@ -22,6 +23,9 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	}
 	writtenHermesState := make(map[string]struct{})
 	writePath := func(path string, optional bool) error {
+		if forbidden.within(path) {
+			return nil
+		}
 		clean := filepath.Clean(path)
 		if stateDB, ok := hermesSQLite[clean]; ok {
 			if _, written := writtenHermesState[stateDB]; written {
@@ -33,9 +37,12 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
 		}
-		return writeArchivePath(tw, path)
+		return writeArchivePath(tw, path, forbidden)
 	}
 	for agent, dirs := range targets.Dirs {
+		if parser.RemoteSyncExcludedAgent(agent) {
+			continue
+		}
 		if _, fileScoped := targets.Files[agent]; fileScoped {
 			continue
 		}
@@ -46,8 +53,11 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 		}
 	}
 	for agent, files := range targets.Files {
+		if parser.RemoteSyncExcludedAgent(agent) {
+			continue
+		}
 		if agent == parser.AgentWindsurf {
-			if err := writeWindsurfArchiveFiles(tw, files); err != nil {
+			if err := writeWindsurfArchiveFiles(tw, files, forbidden); err != nil {
 				return err
 			}
 			continue
@@ -99,9 +109,14 @@ func writeHermesStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 
 var writeHermesSnapshotFile = writeSQLiteSnapshot
 
-func writeWindsurfArchiveFiles(tw *tar.Writer, files []string) error {
+func writeWindsurfArchiveFiles(
+	tw *tar.Writer, files []string, forbidden forbiddenRootMatcher,
+) error {
 	seen := make(map[string]struct{}, len(files))
 	for _, path := range files {
+		if forbidden.within(path) {
+			continue
+		}
 		if _, ok := seen[path]; ok {
 			continue
 		}
@@ -187,7 +202,12 @@ func writeOptionalArchiveFile(tw *tar.Writer, path string) error {
 	return writeArchiveFile(tw, path, info)
 }
 
-func writeArchivePath(tw *tar.Writer, root string) error {
+func writeArchivePath(
+	tw *tar.Writer, root string, forbidden forbiddenRootMatcher,
+) error {
+	if forbidden.within(root) {
+		return nil
+	}
 	info, err := os.Lstat(root)
 	if err != nil {
 		return fmt.Errorf("stat archive path %q: %w", root, err)
@@ -204,6 +224,12 @@ func writeArchivePath(tw *tar.Writer, root string) error {
 				return nil
 			}
 			return err
+		}
+		if forbidden.within(path) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -337,6 +363,7 @@ func writeArchiveHeader(
 // validate.
 func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 	tw := tar.NewWriter(w)
+	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
 	hermesStateDBs := make(map[string]struct{})
 	for _, stateDB := range hermesStateDBTargets(allowed) {
@@ -344,7 +371,7 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 	}
 	writtenHermesState := make(map[string]struct{})
 	for _, path := range files {
-		local, ok := resolveDeltaFilePath(allowedRoots, path)
+		local, ok := resolveDeltaFilePath(allowedRoots, forbidden, path)
 		if !ok {
 			continue
 		}
@@ -386,18 +413,21 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 // root returns filepath.Join(root, rel) where rel passed
 // filepath.IsLocal, so the path used for filesystem access is always
 // derived from a trusted base rather than the request string.
-func resolveDeltaFilePath(allowedRoots []string, path string) (string, bool) {
+func resolveDeltaFilePath(
+	allowedRoots []string, forbidden forbiddenRootMatcher, path string,
+) (string, bool) {
 	clean := filepath.Clean(path)
 	for _, root := range allowedRoots {
 		root = filepath.Clean(root)
 		if clean == root {
-			return root, true
+			return root, !forbidden.within(root)
 		}
 		rel, err := filepath.Rel(root, clean)
 		if err != nil || !filepath.IsLocal(rel) {
 			continue
 		}
-		return filepath.Join(root, rel), true
+		local := filepath.Join(root, rel)
+		return local, !forbidden.within(local)
 	}
 	return "", false
 }

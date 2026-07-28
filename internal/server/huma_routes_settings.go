@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -69,10 +70,11 @@ func (s *Server) humaGetSettings(
 			CustomBin:  tc.CustomBin,
 			CustomArgs: tc.CustomArgs,
 		},
-		Host:        s.cfg.Host,
-		Port:        s.cfg.Port,
-		RequireAuth: s.cfg.RequireAuth,
-		ReadOnly:    s.db.ReadOnly(),
+		Host:         s.cfg.Host,
+		Port:         s.cfg.Port,
+		ChartPalette: s.cfg.ResolvedChartPalette(),
+		RequireAuth:  s.cfg.RequireAuth,
+		ReadOnly:     s.db.ReadOnly(),
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken
@@ -95,6 +97,13 @@ func (s *Server) humaUpdateSettings(
 			"terminal config must be updated via POST /api/v1/config/terminal")
 	}
 	patch := make(map[string]any)
+	if in.Body.ChartPalette != nil {
+		palette, err := config.ParseChartPalette(*in.Body.ChartPalette)
+		if err != nil {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
+		patch["chart_palette"] = palette
+	}
 	if in.Body.AuthToken != nil {
 		patch["auth_token"] = *in.Body.AuthToken
 	}

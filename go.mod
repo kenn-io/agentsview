@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/ccoveille/go-safecast/v2 v2.0.1
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/dmarkham/enumer v1.6.3
 	github.com/duckdb/duckdb-go/v2 v2.10504.0
@@ -26,7 +27,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	github.com/tidwall/gjson v1.19.0
 	go.kenn.io/docbank v0.11.0
-	go.kenn.io/kit v0.11.0
+	go.kenn.io/kit v0.13.1
 	golang.org/x/mod v0.37.0
 	golang.org/x/perf v0.0.0-20260615155930-9e4b9ddef5b6
 	golang.org/x/sync v0.21.0

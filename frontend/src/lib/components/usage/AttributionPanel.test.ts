@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import type { UsageSummaryResponse } from "../../api/types/usage.js";
+import { testMoney } from "../../test/money.js";
 
 const usageServiceMocks = vi.hoisted(() => ({
   getApiV1UsageSummary: vi.fn().mockResolvedValue({}),
@@ -20,7 +21,9 @@ vi.mock("../../api/generated/index", () => ({
 }));
 
 import AttributionPanel from "./AttributionPanel.svelte";
+import { settings } from "../../stores/settings.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
+import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
 function summaryWithAgents(agents: string[]): UsageSummaryResponse {
   return {
@@ -31,7 +34,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
       outputTokens: 50,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      totalCost: 12,
+      totalCost: testMoney(12),
     },
     daily: [],
     projectTotals: [],
@@ -42,7 +45,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
       outputTokens: 30 - i * 10,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 8 - i * 4,
+      cost: testMoney(8 - i * 4),
     })),
     sessionCounts: { total: 2, byProject: {}, byAgent: {} },
     cacheStats: {
@@ -51,7 +54,7 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
       uncachedInputTokens: 100,
       outputTokens: 50,
       hitRate: 0,
-      savingsVsUncached: 0,
+      savingsVsUncached: testMoney(0),
     },
   };
 }
@@ -66,7 +69,7 @@ function summaryWithDuplicateProjectLabels(): UsageSummaryResponse {
       outputTokens: 30,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 8,
+      cost: testMoney(8),
     },
     {
       project_key: "pl1:sha256:second",
@@ -75,7 +78,7 @@ function summaryWithDuplicateProjectLabels(): UsageSummaryResponse {
       outputTokens: 20,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 4,
+      cost: testMoney(4),
     },
   ];
   return summary;
@@ -85,23 +88,36 @@ function summaryWithModels(): UsageSummaryResponse {
   const summary = summaryWithAgents([]);
   summary.modelTotals = [
     {
-      model: "claude-sonnet-5",
+      model: "gpt-5.6-sol",
       inputTokens: 60,
       outputTokens: 30,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 8,
+      cost: testMoney(8),
     },
     {
-      model: "claude-opus-4-8",
+      model: "claude-opus-5",
       inputTokens: 40,
       outputTokens: 20,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: 4,
+      cost: testMoney(4),
     },
   ];
   return summary;
+}
+
+function mountPanel(colorMap?: ReadonlyMap<string, string>) {
+  const groupBy = usage.toggles.attribution.groupBy;
+  return mount(AttributionPanel, {
+    target: document.body,
+    props: {
+      colorMap: colorMap ?? usageChartColorMaps(
+        usage.summary,
+        settings.chartPalette,
+      )[groupBy],
+    },
+  });
 }
 
 describe("AttributionPanel agent exclusion", () => {
@@ -111,6 +127,7 @@ describe("AttributionPanel agent exclusion", () => {
     usage.excludedAgents = "";
     usage.toggles.attribution.groupBy = "agent";
     usage.toggles.attribution.view = "list";
+    settings.chartPalette = "agentsview";
   });
 
   afterEach(() => {
@@ -123,7 +140,7 @@ describe("AttributionPanel agent exclusion", () => {
   // Drives the real click path: panel click -> store toggle -> outgoing
   // request. Fails without the baseParams excludeAgent wiring.
   it("sends agent exclusions in usage queries after an attribution click", async () => {
-    const component = mount(AttributionPanel, { target: document.body });
+    const component = mountPanel();
     await tick();
 
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
@@ -148,6 +165,7 @@ describe("AttributionPanel project identity", () => {
     usage.excludedProjectKeys = "";
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";
+    settings.chartPalette = "agentsview";
   });
 
   afterEach(() => {
@@ -157,7 +175,7 @@ describe("AttributionPanel project identity", () => {
   });
 
   it("keeps duplicate display labels distinct and filters by project key", async () => {
-    const component = mount(AttributionPanel, { target: document.body });
+    const component = mountPanel();
     await tick();
 
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
@@ -182,6 +200,7 @@ describe("AttributionPanel colors", () => {
     usage.summary = null;
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";
+    settings.chartPalette = "agentsview";
     document.body.innerHTML = "";
   });
 
@@ -190,7 +209,7 @@ describe("AttributionPanel colors", () => {
     usage.toggles.attribution.groupBy = "model";
     usage.toggles.attribution.view = "list";
 
-    const component = mount(AttributionPanel, { target: document.body });
+    const component = mountPanel();
     await tick();
 
     const colors = Array.from(
@@ -205,7 +224,7 @@ describe("AttributionPanel colors", () => {
     usage.toggles.attribution.groupBy = "model";
     usage.toggles.attribution.view = "treemap";
 
-    const component = mount(AttributionPanel, { target: document.body });
+    const component = mountPanel();
     await tick();
 
     const tileColors = Array.from(
@@ -216,6 +235,62 @@ describe("AttributionPanel colors", () => {
     ).map((dot) => dot.style.background);
     expect(new Set(tileColors).size).toBe(2);
     expect(railColors).toEqual(tileColors);
+    unmount(component);
+  });
+
+  it("uses the supplied map for list, treemap, and rail colors", async () => {
+    usage.summary = summaryWithModels();
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+    const supplied = new Map([
+      ["gpt-5.6-sol", "#123456"],
+      ["claude-opus-5", "#abcdef"],
+    ]);
+
+    const component = mountPanel(supplied);
+    await tick();
+
+    const listColors = Array.from(
+      document.querySelectorAll<HTMLElement>(".list-dot"),
+    ).map((dot) => dot.style.background);
+    expect(listColors).toEqual(["rgb(18, 52, 86)", "rgb(171, 205, 239)"]);
+
+    usage.toggles.attribution.view = "treemap";
+    await tick();
+    const tileColors = Array.from(
+      document.querySelectorAll<SVGRectElement>(".tile rect"),
+    ).map((tile) => tile.getAttribute("fill"));
+    const railColors = Array.from(
+      document.querySelectorAll<HTMLElement>(".rail-dot"),
+    ).map((dot) => dot.style.background);
+    expect(tileColors).toEqual(["#123456", "#abcdef"]);
+    expect(railColors).toEqual([
+      "rgb(18, 52, 86)",
+      "rgb(171, 205, 239)",
+    ]);
+    unmount(component);
+  });
+
+  it("uses lexical Matplotlib colors for colliding model representations", async () => {
+    settings.chartPalette = "matplotlib";
+    usage.summary = summaryWithModels();
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "treemap";
+
+    const component = mountPanel();
+    await tick();
+
+    const tileColors = Array.from(
+      document.querySelectorAll<SVGRectElement>(".tile rect"),
+    ).map((tile) => tile.getAttribute("fill"));
+    const railColors = Array.from(
+      document.querySelectorAll<HTMLElement>(".rail-dot"),
+    ).map((dot) => dot.style.background);
+    expect(tileColors).toEqual(["#ff7f0e", "#1f77b4"]);
+    expect(railColors).toEqual([
+      "rgb(255, 127, 14)",
+      "rgb(31, 119, 180)",
+    ]);
     unmount(component);
   });
 });

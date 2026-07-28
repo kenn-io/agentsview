@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const maxSessions = 50
@@ -180,7 +181,7 @@ func buildSessionPrompt(
 		fmt.Fprintf(&b, "- Peak context tokens: %d\n", usage.PeakContextTokens)
 	}
 	if usage != nil && usage.HasCost {
-		fmt.Fprintf(&b, "- Cost: $%.4f\n", usage.CostUSD)
+		fmt.Fprintf(&b, "- Cost: %s\n", money.FormatUSD(usage.Cost, money.DisplayCents))
 	}
 	if timing != nil {
 		fmt.Fprintf(&b, "- Duration: %.1fs\n", float64(timing.TotalDurationMs)/1000)

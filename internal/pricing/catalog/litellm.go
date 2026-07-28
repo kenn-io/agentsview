@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const litellmURL = "https://raw.githubusercontent.com/" +
@@ -16,21 +18,19 @@ const litellmURL = "https://raw.githubusercontent.com/" +
 // ModelPricing holds per-model token pricing in cost per million tokens.
 type ModelPricing struct {
 	ModelPattern         string
-	InputPerMTok         float64
-	OutputPerMTok        float64
-	CacheCreationPerMTok float64
-	CacheReadPerMTok     float64
+	InputPerMTok         money.Money
+	OutputPerMTok        money.Money
+	CacheCreationPerMTok money.Money
+	CacheReadPerMTok     money.Money
 }
 
 type litellmEntry struct {
-	InputCost         *float64 `json:"input_cost_per_token"`
-	OutputCost        *float64 `json:"output_cost_per_token"`
-	CacheCreationCost *float64 `json:"cache_creation_input_token_cost"`
-	CacheReadCost     *float64 `json:"cache_read_input_token_cost"`
-	Provider          string   `json:"litellm_provider"`
+	InputCost         *json.Number `json:"input_cost_per_token"`
+	OutputCost        *json.Number `json:"output_cost_per_token"`
+	CacheCreationCost *json.Number `json:"cache_creation_input_token_cost"`
+	CacheReadCost     *json.Number `json:"cache_read_input_token_cost"`
+	Provider          string       `json:"litellm_provider"`
 }
-
-const perMTok = 1_000_000
 
 // FetchLiteLLMPricing downloads the LiteLLM pricing JSON
 // and parses it into ModelPricing entries.
@@ -94,20 +94,43 @@ func ParseLiteLLMPricing(
 			continue
 		}
 		p := ModelPricing{ModelPattern: model}
+		var err error
 		if entry.InputCost != nil {
-			p.InputPerMTok = *entry.InputCost * perMTok
+			p.InputPerMTok, err = parsePerTokenRate(*entry.InputCost)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s input price: %w", model, err)
+			}
 		}
 		if entry.OutputCost != nil {
-			p.OutputPerMTok = *entry.OutputCost * perMTok
+			p.OutputPerMTok, err = parsePerTokenRate(*entry.OutputCost)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s output price: %w", model, err)
+			}
 		}
 		if entry.CacheCreationCost != nil {
-			p.CacheCreationPerMTok =
-				*entry.CacheCreationCost * perMTok
+			p.CacheCreationPerMTok, err = parsePerTokenRate(*entry.CacheCreationCost)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s cache creation price: %w", model, err)
+			}
 		}
 		if entry.CacheReadCost != nil {
-			p.CacheReadPerMTok = *entry.CacheReadCost * perMTok
+			p.CacheReadPerMTok, err = parsePerTokenRate(*entry.CacheReadCost)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s cache read price: %w", model, err)
+			}
 		}
 		prices = append(prices, p)
 	}
 	return prices, nil
+}
+
+func parsePerTokenRate(value json.Number) (money.Money, error) {
+	microdollars, err := money.ParseScaledDecimal(value.String(), 12)
+	if err != nil {
+		return money.Money{}, err
+	}
+	if microdollars < 0 {
+		return money.Money{}, money.ErrNegative
+	}
+	return money.Money{Microdollars: microdollars}, nil
 }

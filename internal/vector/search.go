@@ -393,12 +393,21 @@ func (ix *Index) snippet(content string, chunkIndex int) string {
 // chunkSnippet is the snippet method's package-level body, shared with
 // DocAnchor for backends (the PG vector searcher) that resolve chunk hits
 // against a document loaded outside an Index.
+//
+// Chunk.Index counts windows, not surviving chunks: kitvec.Split omits blank
+// windows, so a document with an all-whitespace window stores chunk indexes
+// with a gap in them. Match on Index rather than slice position or such a hit
+// resolves to a neighboring chunk's text, or to none at all.
 func chunkSnippet(content string, chunkIndex int, split kitvec.SplitOptions) string {
-	chunks := kitvec.Split(content, split)
-	if chunkIndex < 0 || chunkIndex >= len(chunks) {
+	if chunkIndex < 0 {
 		return ""
 	}
-	return truncateRunes(chunks[chunkIndex].Text, snippetMaxRunes)
+	for _, chunk := range kitvec.Split(content, split) {
+		if chunk.Index == chunkIndex {
+			return truncateRunes(chunk.Text, snippetMaxRunes)
+		}
+	}
+	return ""
 }
 
 // truncateRunes truncates s to at most maxRunes runes, appending an
