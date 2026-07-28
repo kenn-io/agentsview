@@ -74,6 +74,7 @@ type CallRow struct {
 	SubagentSessionID *string
 	InputJSON         string
 	DurationMs        *int64
+	CompletedAt       string
 }
 
 // GetSessionTiming computes the per-session timing summary. Returns
@@ -173,6 +174,30 @@ func (db *DB) queryCallRows(
 		  tc.skill_name,
 		  tc.subagent_session_id,
 		  tc.input_json,
+		  (
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = m.ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status = 'started'
+		      AND NULLIF(tre.timestamp, '') IS NOT NULL
+		    ORDER BY tre.event_index ASC
+		    LIMIT 1
+		  ) AS execution_started_at,
+		  (
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = m.ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status IN ('completed', 'errored')
+		      AND NULLIF(tre.timestamp, '') IS NOT NULL
+		    ORDER BY tre.event_index DESC
+		    LIMIT 1
+		  ) AS execution_completed_at,
 		  CASE
 		    WHEN tc.subagent_session_id IS NOT NULL
 		         AND s_sub.started_at IS NOT NULL THEN
@@ -185,6 +210,7 @@ func (db *DB) queryCallRows(
 		    ELSE NULL
 		  END AS subagent_duration_ms
 		FROM tool_calls tc
+		JOIN messages m ON m.id = tc.message_id
 		LEFT JOIN sessions s_sub
 		  ON s_sub.id = tc.subagent_session_id
 		WHERE tc.session_id = ?
@@ -199,11 +225,12 @@ func (db *DB) queryCallRows(
 	for rows.Next() {
 		var r CallRow
 		var toolUseID, inputJSON sql.NullString
-		var skill, sub sql.NullString
+		var skill, sub, executionStarted, executionCompleted sql.NullString
 		var subDur sql.NullInt64
 		if err := rows.Scan(
 			&r.MessageID, &toolUseID, &r.ToolName, &r.Category,
-			&skill, &sub, &inputJSON, &subDur,
+			&skill, &sub, &inputJSON, &executionStarted, &executionCompleted,
+			&subDur,
 		); err != nil {
 			return nil, err
 		}
@@ -224,6 +251,12 @@ func (db *DB) queryCallRows(
 		if subDur.Valid {
 			v := subDur.Int64
 			r.DurationMs = &v
+		} else if executionStarted.Valid && executionCompleted.Valid {
+			v := millisBetween(executionStarted.String, executionCompleted.String)
+			if v >= 0 {
+				r.DurationMs = &v
+				r.CompletedAt = executionCompleted.String
+			}
 		}
 		out = append(out, r)
 	}
@@ -287,6 +320,13 @@ func AssembleTiming(
 			turnCalls = []CallTiming{}
 		}
 
+		if completedAt, ok := completedCallBoundary(calls, t.MessageID); ok {
+			v := millisBetween(t.Timestamp, completedAt)
+			if v >= 0 {
+				t.DurationMs = &v
+			}
+		}
+
 		for i := range turnCalls {
 			turnCalls[i].IsParallel = len(turnCalls) > 1
 			// Solo non-sub-agent: propagate the turn's duration to the
@@ -345,6 +385,24 @@ func AssembleTiming(
 	})
 
 	return out
+}
+
+func completedCallBoundary(calls []CallRow, messageID int64) (string, bool) {
+	var boundary string
+	matched := 0
+	for _, call := range calls {
+		if call.MessageID != messageID {
+			continue
+		}
+		matched++
+		if call.CompletedAt == "" {
+			return "", false
+		}
+		if boundary == "" || millisBetween(boundary, call.CompletedAt) > 0 {
+			boundary = call.CompletedAt
+		}
+	}
+	return boundary, matched > 0
 }
 
 // turnAttribution is the result of attributeTurnGo. RemainderMs is the

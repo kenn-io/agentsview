@@ -173,7 +173,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   cache-write, and reasoning tokens. Copilot accounting is credit-oriented;
   Agentsview does not treat credits as USD and does not infer a monetary cost.
 - **Agentsview:** `internal/parser/copilot.go` and
-  `internal/parser/copilot_provider.go`.
+  `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
+  Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
+  `tool.execution_complete` carry the same `data.toolCallId` and independent
+  RFC3339 `timestamp` values, providing an exact execution interval even when
+  the next user message arrives after a long resumed-session idle gap.
 
 ## Gemini CLI (`gemini`)
 
