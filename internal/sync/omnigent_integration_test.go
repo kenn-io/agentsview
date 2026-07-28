@@ -1078,6 +1078,73 @@ func TestSyncOmnigentFailedCurrentUpdateForcesContentReplacement(t *testing.T) {
 	assert.Equal(t, "second", messages[1].Content)
 }
 
+// TestSyncSingleSessionOmnigentFailedWriteDemotesDataVersion covers the
+// single-session resync path: when the member's write fails partway (the
+// session row is updated but message replacement is not), the stored data
+// version must be demoted so the next container parse repairs the member
+// instead of comparing it as unchanged. Shared-container members have no
+// per-file mtime to invalidate, so the demotion is the only retry signal.
+func TestSyncSingleSessionOmnigentFailedWriteDemotesDataVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	defer engine.Close()
+	engine.SyncAll(context.Background(), nil)
+	require.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion("omnigent:0:conv_0000"))
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE conversations SET updated_at = ?
+		WHERE workspace_id = 0 AND id = 'conv_0000'`, time.Now().Unix())
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversation_items
+		(workspace_id, conversation_id, id, position, type, data, search_text)
+		VALUES (0, 'conv_0000', 'conv_0000_1', 1, 1, ?, 'second')`,
+		`{"role":"assistant","content":[{"type":"output_text","text":"second"}]}`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	raw, err := sql.Open("sqlite3", archive.Path())
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.Exec(`CREATE TRIGGER fail_omnigent_message_append
+		BEFORE INSERT ON messages
+		WHEN NEW.session_id = 'omnigent:0:conv_0000' AND NEW.ordinal = 1
+		BEGIN
+			SELECT RAISE(FAIL, 'injected message append failure');
+		END`)
+	require.NoError(t, err)
+
+	require.Error(t, engine.SyncSingleSession("omnigent:0:conv_0000"),
+		"the injected write failure must surface to the resync caller")
+	assert.Less(t, archive.GetSessionDataVersion("omnigent:0:conv_0000"),
+		db.CurrentDataVersion(),
+		"a failed single-session write must demote the data version")
+
+	_, err = raw.Exec(`DROP TRIGGER fail_omnigent_message_append`)
+	require.NoError(t, err)
+	engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion("omnigent:0:conv_0000"))
+	messages, err := archive.GetMessages(
+		context.Background(), "omnigent:0:conv_0000", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2,
+		"the demoted member must be repaired by the next container pass")
+	assert.Equal(t, "second", messages[1].Content)
+}
+
 func TestSyncOmnigentPersistsJSONStringToolResult(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")

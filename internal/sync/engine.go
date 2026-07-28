@@ -12958,6 +12958,11 @@ func (e *Engine) SyncSingleSessionContext(
 		if err := e.writeSessionFull(write); err != nil &&
 			!isIntentionalSessionSkip(err) &&
 			!errors.Is(err, errSessionPreserved) {
+			// Mirror the batch write paths: a partial write (session
+			// row updated, messages or usage not) must demote the
+			// stored data version, or the next container parse would
+			// compare the member as unchanged and never repair it.
+			e.markStaleFailedMemberWrite(write)
 			return fmt.Errorf("write session %s: %w",
 				pr.Session.ID, err)
 		} else if errors.Is(err, errSessionPreserved) {
