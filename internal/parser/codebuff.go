@@ -2,7 +2,10 @@
 // ABOUTME: structured session data. Both agents share the same on-disk layout
 // ABOUTME: under ~/.config/manicode/projects/<project>/chats/<timestamp>/.
 // ABOUTME: The agent type (codebuff vs freebuff) is determined from the
-// ABOUTME: agentType field in run-state.json.
+// ABOUTME: agentType field in run-state.json, and agentType is also
+// ABOUTME: surfaced as the session's UsageEvent.Model so the daily usage
+// ABOUTME: report can bucket similar sessions by template while leaving the literal
+// LLM (server-selected and not persisted on disk) unknown.
 package parser
 
 import (

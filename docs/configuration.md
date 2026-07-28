@@ -386,10 +386,22 @@ independently.
 
 Subagent tool calls (basher, code-searcher, file-picker, code-reviewer, etc.)
 are parsed from the AI message blocks and displayed inline in the transcript
-view. The session model (e.g. `base2-free-deepseek`, `base2-free-mimo`) is
-extracted from the `agentType` field and shown in the session detail header.
+view. The agent template (e.g. `base2-free-deepseek`, `base2-free-mimo`) is
+read from run-state.json's `agentType` field and shown in the session
+detail header. This is the classification label used server-side to pick
+the per-step LLM; the literal LLM is not persisted by the CLI and is
+not visible in the UI.
 Project names are derived from the session's working directory via git-root
 detection.
+
+Codebuff and Freebuff sessions report cost only. The CLI's on-disk
+format does not persist per-message input/output/cache tokens, so the
+daily usage model breakdown shows the cost-attributed agent template
+(e.g. `base2-deepseek`, `base2-free-minimax-m3`) without per-message
+token figures. Reported-cost rows ride as microdollars on `money.Money`
+like every other agent, and per-model rates for `base2-*` templates are
+not in the embedded pricing tables, so cache savings for these rows
+resolve to zero by design rather than an aggregator bug.
 
 Freebuff does not have its own environment variable or config key — it shares
 the Codebuff provider for discovery and the parser auto-classifies sessions.
