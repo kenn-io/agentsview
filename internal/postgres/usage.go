@@ -36,11 +36,11 @@ const pgUsageMatchingMessageSourceEligibility = `
 	AND m.model != '<synthetic>'`
 
 const pgUsageEventEligibility = `
-	(ue.model != '' OR ue.cost_usd IS NOT NULL)
+	ue.model != ''
 	AND s.deleted_at IS NULL`
 
 const pgUsageEventSourceEligibility = `
-	(ue.model != '' OR ue.cost_usd IS NOT NULL)`
+	ue.model != ''`
 
 const pgUsageSessionEligibility = `s.deleted_at IS NULL`
 
@@ -1260,17 +1260,7 @@ func (s *Store) GetSessionUsage(
 			continue
 		}
 		contributing = true
-		// Skip empty model names so cost-only Codebuff events do not
-		// surface as Models: [""] or UnpricedModels: [""]. DuckDB
-		// mirrors this filter in analytics_usage.go.GetSessionUsage
-		// alongside an allUnpricedPriced analog so dropping "" from
-		// the unpriced set does not spuriously promote HasCost on
-		// sessions whose only unpriced rows happen to lack a model
-		// name. allPriced still flips to false outside the model
-		// guard here, so HasCost keeps its original semantic.
-		if r.model != "" {
-			modelsSet[r.model] = struct{}{}
-		}
+		modelsSet[r.model] = struct{}{}
 		if !authoritative {
 			if r.cost.Valid {
 				hasReportedCost = true
@@ -1285,9 +1275,7 @@ func (s *Store) GetSessionUsage(
 			}
 		} else {
 			allPriced = false
-			if r.model != "" {
-				unpricedSet[r.model] = struct{}{}
-			}
+			unpricedSet[r.model] = struct{}{}
 		}
 		breakdownCount++
 		if includeBreakdown {
@@ -1607,11 +1595,7 @@ func (s *Store) GetDailyUsage(
 
 			modelNames := make([]string, 0, len(dd.models))
 			for m := range dd.models {
-				// Filter out empty model names from cost-only events
-				// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
-				if m != "" {
-					modelNames = append(modelNames, m)
-				}
+				modelNames = append(modelNames, m)
 			}
 			sort.Slice(modelNames, func(i, j int) bool {
 				left := dd.models[modelNames[i]]
@@ -1625,19 +1609,6 @@ func (s *Store) GetDailyUsage(
 				return modelNames[i] < modelNames[j]
 			})
 			entry.ModelsUsed = modelNames
-			// Accumulate token totals and cost from ALL models
-			// (including empty model names from cost-only events),
-			// not just those in ModelsUsed. Empty model names are
-			// filtered only from ModelsUsed and model breakdowns.
-			for _, ma := range dd.models {
-				if ma != nil {
-					entry.InputTokens += ma.inputTok
-					entry.OutputTokens += ma.outputTok
-					entry.CacheCreationTokens += ma.cacheCr
-					entry.CacheReadTokens += ma.cacheRd
-					entry.TotalCost += ma.aggregateCost
-				}
-			}
 			mbd := make([]db.ModelBreakdown, 0, len(modelNames))
 			for _, m := range modelNames {
 				ma := dd.models[m]
@@ -1686,13 +1657,6 @@ func (s *Store) GetDailyUsage(
 		}
 		if aiCredits > 0 {
 			totals.CopilotAICredits = aiCredits
-		}
-		var codebuffCredits float64
-		for key, b := range accum {
-			codebuffCredits += db.CodebuffCreditsFromCost(key.agent, b.aggregateCost)
-		}
-		if codebuffCredits > 0 {
-			totals.CodebuffAICredits = codebuffCredits
 		}
 
 		var sessionCounts db.UsageSessionCounts
@@ -1808,11 +1772,7 @@ func (s *Store) GetDailyUsage(
 
 		modelNames := make([]string, 0, len(dm.models))
 		for m := range dm.models {
-			// Filter out empty model names from cost-only events
-			// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
-			if m != "" {
-				modelNames = append(modelNames, m)
-			}
+			modelNames = append(modelNames, m)
 		}
 		sort.Slice(modelNames, func(i, j int) bool {
 			left := dm.models[modelNames[i]]
@@ -1823,11 +1783,9 @@ func (s *Store) GetDailyUsage(
 			return modelNames[i] < modelNames[j]
 		})
 		entry.ModelsUsed = modelNames
-		// Accumulate token totals and cost from ALL models
-		// (including empty model names from cost-only events),
-		// not just those in ModelsUsed. Empty model names are
-		// filtered only from ModelsUsed and model breakdowns.
-		for _, b := range dm.models {
+		mbd := make([]db.ModelBreakdown, 0, len(modelNames))
+		for _, m := range modelNames {
+			b := dm.models[m]
 			entry.InputTokens += b.inputTok
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
@@ -1932,15 +1890,6 @@ func (s *Store) GetDailyUsage(
 	}
 	if aiCredits > 0 {
 		totals.CopilotAICredits = aiCredits
-	}
-	var codebuffCredits float64
-	for _, d := range daily {
-		for _, ab := range d.AgentBreakdowns {
-			codebuffCredits += db.CodebuffCreditsFromCost(ab.Agent, ab.Cost)
-		}
-	}
-	if codebuffCredits > 0 {
-		totals.CodebuffAICredits = codebuffCredits
 	}
 
 	var sessionCounts db.UsageSessionCounts

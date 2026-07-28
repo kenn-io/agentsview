@@ -1164,14 +1164,20 @@ func TestParseCodebuffSession_CreditsExtraction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Credits should be mapped to CostUSD in usage events.
+	// Credits should be mapped to a Money cost in usage events.
+	// 15.5 credits × $0.01/credit = $0.155 = 155_000 microdollars.
 	require.Len(t, sess.UsageEvents, 1)
 	evt := sess.UsageEvents[0]
-	require.NotNil(t, evt.CostUSD)
-	assert.InDelta(t, 0.155, *evt.CostUSD, 0.001,
-		"15.5 credits should map to $0.155")
+	require.NotNil(t, evt.Cost)
+	assert.Equal(t, int64(155_000), evt.Cost.Microdollars,
+		"15.5 credits should map to 155_000 microdollars")
 	assert.Equal(t, "reported", evt.CostStatus)
 	assert.Equal(t, "session", evt.CostSource)
+	// Model must mirror rs.AgentType so the daily model breakdown
+	// buckets similar codebuff/freebuff sessions separately.
+	// Aggregator tests insert events directly, so only the parser
+	// path can regress Model attribution.
+	assert.Equal(t, "base2-deepseek", evt.Model)
 }
 
 func TestParseCodebuffSession_CreditsZero(t *testing.T) {

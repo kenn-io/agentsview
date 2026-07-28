@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // codebuffSessionDir contains the session timestamp directory path and
@@ -205,11 +207,24 @@ func parseCodebuffSession(
 	// the true peak, so we cannot reliably derive PeakContextTokens from
 	// this value. Leave peak context unavailable.
 
-	// Emit usage event for reported credits. The actual model is unknown
-	// (selected server-side, can change mid-session), so Model is left
-	// empty. Cost is tracked at the session level via credits.
-	if rs.CreditsUsed > 0 {
-		cost := rs.CreditsUsed * 0.01
+	// Emit usage event for reported credits. The actual LLM is
+	// unknown (selected server-side, can change mid-session), so we
+	// attribute the cost to the agent template (e.g. "base2-deepseek",
+	// "base2-free-minimax-m3") rather than the agent name. The
+	// template is granular enough to bucket similar sessions
+	// separately in the daily model breakdown of the usage report
+	// while remaining non-empty so the ue.model != '' eligibility
+	// filter accepts the row. Skip emitting when the template is
+	// missing so sessions with empty agentType don't surface as
+	// empty-model rows. Freebuff vs codebuff distinction is kept in
+	// the agent breakdown via sess.Agent. One codebuff credit =
+	// $0.01 = 10_000 microdollars, rounded to the nearest microdollar
+	// with halves away from zero.
+	if rs.CreditsUsed > 0 && rs.AgentType != "" {
+		cost, costErr := money.FromFloatDollars(rs.CreditsUsed * 0.01)
+		if costErr != nil {
+			cost = money.Money{}
+		}
 		// Determine occurred_at: prefer message timestamps, then fall
 		// back to the session directory timestamp, then source mtime.
 		occurredAt := startedAt
@@ -225,8 +240,9 @@ func parseCodebuffSession(
 		sess.UsageEvents = []ParsedUsageEvent{{
 			SessionID:  fullID,
 			Source:     "session",
+			Model:      rs.AgentType,
 			OccurredAt: occurredAt.Format(time.RFC3339Nano),
-			CostUSD:    &cost,
+			Cost:       &cost,
 			CostStatus: "reported",
 			CostSource: "session",
 			DedupKey:   "session:" + fullID,

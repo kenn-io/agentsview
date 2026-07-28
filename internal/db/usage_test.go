@@ -210,6 +210,7 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	normalized := strings.ToLower(query)
 	assert.NotContains(t, normalized, "and u.ts >=")
 	assert.NotContains(t, normalized, "and u.ts <=")
+	assert.NotContains(t, normalized, " or ")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
@@ -3495,51 +3496,6 @@ func TestGetSessionUsage_ExplicitCostOnly(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.02"), entry.Cost, "entry Cost")
 }
 
-// TestGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName pins the
-// backend parity for Codebuff/Freebuff cost-only events: usage_events
-// rows that carry CostUSD but no model name (because Codebuff selects
-// the model server-side after billing) must not surface as
-// Models: [""] or UnpricedModels: [""]. DuckDB already filters in
-// analytics_usage.go; this test guards the SQLite path that
-// GetSessionUsage uses.
-func TestGetSessionUsage_CostOnlyEmptyModelOmitsEmptyName(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	insertSession(t, d, "codebuff:costonly", "proj", func(s *Session) {
-		s.Agent = "codebuff"
-		s.StartedAt = new("2026-07-15T10:00:00Z")
-	})
-	cost := 0.05
-	require.NoError(t, d.ReplaceSessionUsageEvents("codebuff:costonly",
-		[]UsageEvent{{
-			SessionID:  "codebuff:costonly",
-			Source:     "session",
-			Model:      "",
-			CostUSD:    &cost,
-			CostStatus: "estimated", CostSource: "codebuff",
-			OccurredAt: "2026-07-15T10:05:00Z",
-			DedupKey:   "session:codebuff:costonly",
-		}}), "ReplaceSessionUsageEvents")
-
-	u, err := d.GetSessionUsage(ctx, "codebuff:costonly", true)
-	requireNoError(t, err, "GetSessionUsage")
-	require.NotNil(t, u, "session usage = nil")
-	assert.True(t, u.HasCost, "HasCost = false, want true (model-less reported cost)")
-	assert.InDelta(t, 0.05, u.CostUSD, 1e-9, "CostUSD")
-	assert.Empty(t, u.Models, "Models must be empty for model-less cost-only events")
-	assert.NotNil(t, u.Models,
-		"Models must be a non-nil empty slice so the JSON wire shape stays \"models\":[]")
-	assert.Empty(t, u.UnpricedModels,
-		"UnpricedModels must not contain an empty model name")
-	// Breakdown still exposes the row so callers can see the
-	// authoritative reported cost, with HasCost set on the entry.
-	require.Len(t, u.Breakdown, 1, "Breakdown")
-	assert.True(t, u.Breakdown[0].HasCost, "breakdown entry HasCost")
-	assert.Equal(t, "", u.Breakdown[0].Model, "breakdown entry Model")
-	assert.InDelta(t, 0.05, u.Breakdown[0].CostUSD, 1e-9,
-		"breakdown entry CostUSD")
-}
-
 func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -3979,4 +3935,47 @@ func TestAICreditsFromCost(t *testing.T) {
 				AICreditsFromCost(tc.agent, tc.cost), 1e-9)
 		})
 	}
+}
+
+// TestGetDailyUsage_CodebuffCostOnly pins the SQLite aggregator path
+// for Codebuff/Freebuff's parser-emitted cost-only usage event. The
+// Codebuff parser (internal/parser/codebuff.go) attributes the session
+// cost to the agent name ("codebuff" or "freebuff") because the actual
+// LLM model is selected server-side and unknown at parse time. The row
+// must therefore carry Model="codebuff" so it passes the
+// usageEventEligibility filter (ue.model != '') and the authoritative
+// reported Cost flows into TotalCost at the daily-usage level. The
+// per-model and per-agent breakdown shapes are aggregator internals
+// covered by other tests; this pins only the cost-flow contract.
+func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "codebuff:cost-only", "proj", func(s *Session) {
+		s.Agent = "codebuff"
+		s.StartedAt = new("2026-07-15T10:00:00Z")
+	})
+	cost := money.MustParseDollars("0.05")
+	require.NoError(t, d.ReplaceSessionUsageEvents(
+		"codebuff:cost-only",
+		[]UsageEvent{{
+			Source:     "session",
+			Model:      "base2-deepseek",
+			Cost:       &cost,
+			CostStatus: "reported",
+			CostSource: "session",
+			OccurredAt: "2026-07-15T10:05:00Z",
+			DedupKey:   "session:codebuff:cost-only",
+		}}))
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-07-15", To: "2026-07-15", Timezone: "UTC",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+	assert.Equal(t, cost, daily.Totals.TotalCost,
+		"the codebuff reported cost must surface in daily TotalCost")
+	require.Len(t, daily.Daily, 1,
+		"the cost-only row should produce one daily entry")
+	assert.Equal(t, cost, daily.Daily[0].TotalCost,
+		"the day's TotalCost must include the reported cost")
 }

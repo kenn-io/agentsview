@@ -37,20 +37,6 @@ func AICreditsFromCost(agent string, cost money.Money) float64 {
 	return float64(cost.Microdollars) / microdollarsPerAICredit
 }
 
-// CodebuffCreditsFromCost converts a USD cost into Codebuff AI credits.
-// Codebuff and Freebuff use credits (1 credit = $0.01) but are not
-// Copilot-family agents, so they get their own separate credit display.
-func CodebuffCreditsFromCost(agent string, costUSD float64) float64 {
-	if costUSD == 0 {
-		return 0
-	}
-	t := parser.AgentType(agent)
-	if t == parser.AgentCodebuff || t == parser.AgentFreebuff {
-		return costUSD / aiCreditUSD
-	}
-	return 0
-}
-
 // NoTokenData reports whether a daily-usage total carries neither token
 // data nor cost: every token counter, the cost total, and any Copilot AI
 // credits are zero. It distinguishes a window whose sessions simply do not
@@ -62,7 +48,6 @@ func NoTokenData(t UsageTotals) bool {
 		t.CacheReadTokens == 0 &&
 		t.TotalCost.Microdollars == 0 &&
 		t.CopilotAICredits == 0
-		t.CodebuffAICredits == 0
 }
 
 // UsageFilter controls the date range, agent, and timezone
@@ -385,14 +370,12 @@ const usageMatchingMessageSourceEligibility = `
     m.role = 'assistant'
     AND m.model != '<synthetic>'`
 
-// usageEventEligibility includes events with a model or a cost (cost-only
-// events from Codebuff/Freebuff have empty model but carry CostUSD).
 const usageEventEligibility = `
-    (ue.model != '' OR ue.cost_usd IS NOT NULL)
+    ue.model != ''
     AND s.deleted_at IS NULL`
 
 const usageEventSourceEligibility = `
-    (ue.model != '' OR ue.cost_usd IS NOT NULL)`
+    ue.model != ''`
 
 const usageSessionEligibility = `s.deleted_at IS NULL`
 
@@ -1676,7 +1659,6 @@ type UsageTotals struct {
 	CacheReadTokens     int         `json:"cacheReadTokens"`
 	TotalCost           money.Money `json:"totalCost"`
 	CopilotAICredits    float64     `json:"copilotAICredits,omitempty"`
-	CodebuffAICredits   float64     `json:"codebuffAICredits,omitempty"`
 	// CacheSavings is the net dollar delta vs an uncached run:
 	// cache reads save (input_rate - cache_read_rate) per token,
 	// cache creations cost (input_rate - cache_creation_rate)
@@ -2155,11 +2137,7 @@ func (db *DB) GetDailyUsage(
 
 			modelNames := make([]string, 0, len(dd.models))
 			for m := range dd.models {
-				// Filter out empty model names from cost-only events
-				// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
-				if m != "" {
-					modelNames = append(modelNames, m)
-				}
+				modelNames = append(modelNames, m)
 			}
 			sort.Slice(modelNames, func(i, j int) bool {
 				left := dd.models[modelNames[i]]
@@ -2175,19 +2153,6 @@ func (db *DB) GetDailyUsage(
 				return modelNames[i] < modelNames[j]
 			})
 			entry.ModelsUsed = modelNames
-			// Accumulate token totals and cost from ALL models
-			// (including empty model names from cost-only events),
-			// not just those in ModelsUsed. Empty model names are
-			// filtered only from ModelsUsed and model breakdowns.
-			for _, ma := range dd.models {
-				if ma != nil {
-					entry.InputTokens += ma.inputTok
-					entry.OutputTokens += ma.outputTok
-					entry.CacheCreationTokens += ma.cacheCr
-					entry.CacheReadTokens += ma.cacheRd
-					entry.TotalCost += ma.aggregateCost
-				}
-			}
 			mbd := make(
 				[]ModelBreakdown, 0, len(modelNames),
 			)
@@ -2239,13 +2204,6 @@ func (db *DB) GetDailyUsage(
 		}
 		if aiCredits > 0 {
 			totals.CopilotAICredits = aiCredits
-		}
-		var codebuffCredits float64
-		for key, b := range accum {
-			codebuffCredits += CodebuffCreditsFromCost(key.agent, b.aggregateCost)
-		}
-		if codebuffCredits > 0 {
-			totals.CodebuffAICredits = codebuffCredits
 		}
 		var sessionCounts UsageSessionCounts
 		if seenSessions != nil {
@@ -2362,11 +2320,7 @@ func (db *DB) GetDailyUsage(
 
 		modelNames := make([]string, 0, len(dm.models))
 		for m := range dm.models {
-			// Filter out empty model names from cost-only events
-			// (e.g. Codebuff) to avoid blank entries in ModelsUsed.
-			if m != "" {
-				modelNames = append(modelNames, m)
-			}
+			modelNames = append(modelNames, m)
 		}
 		sort.Slice(modelNames, func(i, j int) bool {
 			left := dm.models[modelNames[i]]
@@ -2379,17 +2333,6 @@ func (db *DB) GetDailyUsage(
 			return modelNames[i] < modelNames[j]
 		})
 		entry.ModelsUsed = modelNames
-		// Accumulate token totals and cost from ALL models
-		// (including empty model names from cost-only events),
-		// not just those in ModelsUsed. Empty model names are
-		// filtered only from ModelsUsed and model breakdowns.
-		for _, b := range dm.models {
-			entry.InputTokens += b.inputTok
-			entry.OutputTokens += b.outputTok
-			entry.CacheCreationTokens += b.cacheCr
-			entry.CacheReadTokens += b.cacheRd
-			entry.TotalCost += b.aggregateCost
-		}
 		mbd := make(
 			[]ModelBreakdown, 0, len(modelNames),
 		)
@@ -2508,15 +2451,6 @@ func (db *DB) GetDailyUsage(
 	}
 	if aiCredits > 0 {
 		totals.CopilotAICredits = aiCredits
-	}
-	var codebuffCredits float64
-	for _, d := range daily {
-		for _, ab := range d.AgentBreakdowns {
-			codebuffCredits += CodebuffCreditsFromCost(ab.Agent, ab.Cost)
-		}
-	}
-	if codebuffCredits > 0 {
-		totals.CodebuffAICredits = codebuffCredits
 	}
 
 	var sessionCounts UsageSessionCounts
@@ -2925,17 +2859,7 @@ func (db *DB) GetSessionUsage(
 			continue
 		}
 		contributing = true
-		// Skip empty model names so cost-only Codebuff events do not
-		// surface as Models: [""] or UnpricedModels: [""]. DuckDB
-		// mirrors this filter in analytics_usage.go.GetSessionUsage
-		// alongside an allUnpricedPriced analog so dropping "" from
-		// the unpriced set does not spuriously promote HasCost on
-		// sessions whose only unpriced rows happen to lack a model
-		// name. allPriced still flips to false outside the model
-		// guard here, so HasCost keeps its original semantic.
-		if r.model != "" {
-			modelsSet[r.model] = struct{}{}
-		}
+		modelsSet[r.model] = struct{}{}
 		if !authoritative {
 			if r.cost.Valid {
 				hasReportedCost = true
@@ -2950,9 +2874,7 @@ func (db *DB) GetSessionUsage(
 			}
 		} else {
 			allPriced = false
-			if r.model != "" {
-				unpricedSet[r.model] = struct{}{}
-			}
+			unpricedSet[r.model] = struct{}{}
 		}
 		breakdownCount++
 		if includeBreakdown {

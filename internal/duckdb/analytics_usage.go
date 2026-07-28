@@ -3171,7 +3171,7 @@ const duckUsageMatchingMessageEligibility = duckUsageMatchingMessageSourceEligib
 			AND s.deleted_at IS NULL`
 
 const duckUsageEventSourceEligibility = `
-			(ue.model != '' OR ue.cost_usd IS NOT NULL)`
+			ue.model != ''`
 
 const duckUsageEventEligibility = duckUsageEventSourceEligibility + `
 			AND s.deleted_at IS NULL`
@@ -3543,14 +3543,7 @@ func duckUsageAggregateCost(
 			fmt.Errorf("summing duckdb usage for model %q: %w", model, err)
 	}
 	if hasReportedCost {
-		if model != "" {
-			pricing.RecordReported(model, lookup)
-		} else {
-			// Cost-only events (e.g. Codebuff) have no model but
-			// carry an authoritative reported cost. Record as
-			// unattributed so pricing provenance is correct.
-			pricing.RecordUnattributedReported()
-		}
+		pricing.RecordReported(model, lookup)
 	}
 	if hasBillableTokens {
 		pricing.RecordComputed(model, lookup)
@@ -3910,30 +3903,14 @@ func (s *Store) GetDailyUsage(
 			continue
 		}
 		entry := db.DailyUsageEntry{Date: date}
-		// Filter out empty model names from cost-only events (e.g.
-		// Codebuff) to avoid blank entries in ModelsUsed. This
-		// filtering is specific to model lists; project, agent, and
-		// machine breakdowns keep their full key sets.
-		allModelKeys := sortedUsageBucketKeys(day.models)
-		modelNames := make([]string, 0, len(allModelKeys))
-		for _, k := range allModelKeys {
-			if k != "" {
-				modelNames = append(modelNames, k)
-			}
-		}
+		modelNames := sortedUsageBucketKeys(day.models)
 		entry.ModelsUsed = modelNames
-		// Accumulate token totals from ALL models (including empty
-		// model names from cost-only events), not just those in
-		// ModelsUsed. Empty model names are filtered only from
-		// ModelsUsed and model breakdowns.
-		for _, b := range day.models {
+		for _, model := range modelNames {
+			b := day.models[model]
 			entry.InputTokens += b.inputTok
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
 			entry.CacheReadTokens += b.cacheRd
-		}
-		for _, model := range modelNames {
-			b := day.models[model]
 			entry.ModelBreakdowns = append(entry.ModelBreakdowns, db.ModelBreakdown{
 				ModelName:           model,
 				InputTokens:         b.inputTok,
@@ -4002,13 +3979,6 @@ func (s *Store) GetDailyUsage(
 	}
 	if aiCredits > 0 {
 		result.Totals.CopilotAICredits = aiCredits
-	}
-	var codebuffCredits float64
-	for key, b := range accum {
-		codebuffCredits += db.CodebuffCreditsFromCost(key.agent, b.aggregateCost)
-	}
-	if codebuffCredits > 0 {
-		result.Totals.CodebuffAICredits = codebuffCredits
 	}
 
 	if result.Daily == nil {
@@ -4514,7 +4484,7 @@ func (s *Store) GetSessionUsage(
 		out.HasCost = true
 		out.Cost = *authoritativeCost
 		out.CostSource = export.CostSourceReported
-	} else if allUnpricedPriced && hasContributingCost {
+	} else if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.Cost = totalCost
 		out.CostSource = export.CombinedCostSource(hasComputedCost, hasReportedCost)

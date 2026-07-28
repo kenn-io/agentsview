@@ -792,7 +792,6 @@
   "usage_refresh": "重整使用量",
   "usage_summary_total_cost": "總成本",
   "usage_summary_copilot_ai_credits": "Copilot AI Credits",
-  "usage_summary_codebuff_ai_credits": "Codebuff AI Credits",
   "usage_summary_input_tokens": "輸入 token",
   "usage_summary_daily_burn": "每日消耗",
   "usage_summary_peak_day": "尖峰日期",
