@@ -6471,12 +6471,24 @@ func (e *Engine) collectAndBatch(
 		// Virtual members that vanished from a still-existing shared
 		// container are tombstoned with their exact source ownership,
 		// matching the reconciliation audit, instead of hard-deleted.
-		// The cwd-filter freeze applies exactly as it does to parser
-		// exclusions above.
-		if len(r.sourceMissingMembers) > 0 &&
-			sourceAllowsParserExclusions {
+		// The cwd-filter freeze is judged per member against the
+		// archived cwd (missingMemberTombstoneAllowed), not source-wide:
+		// unchanged survivors are dropped from r.results before this
+		// point, so the source-wide gate would freeze an allowed
+		// member's deletion whenever everything else was unchanged.
+		if len(r.sourceMissingMembers) > 0 {
 			tombstoneErr := error(nil)
 			for _, member := range r.sourceMissingMembers {
+				allowed, err := e.missingMemberTombstoneAllowed(
+					ctx, member.sessionID,
+				)
+				if err != nil {
+					tombstoneErr = err
+					break
+				}
+				if !allowed {
+					continue
+				}
 				changed, err := e.tombstoneSessionSourceOwnership(
 					ctx, e.machine, string(r.agent),
 					member.sessionID, member.filePath,
@@ -12918,10 +12930,20 @@ func (e *Engine) SyncSingleSessionContext(
 	// A virtual member gone from a still-existing shared container is
 	// tombstoned with its exact source ownership, mirroring
 	// collectAndBatch, so a single-session resync preserves the archive
-	// row as a revivable source-missing tombstone.
-	if len(res.sourceMissingMembers) > 0 &&
-		sourceAllowsParserExclusions {
+	// row as a revivable source-missing tombstone. The cwd-filter
+	// freeze is judged per member against the archived cwd, matching
+	// the batch path.
+	if len(res.sourceMissingMembers) > 0 {
 		for _, member := range res.sourceMissingMembers {
+			allowed, err := e.missingMemberTombstoneAllowed(
+				ctx, member.sessionID,
+			)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				continue
+			}
 			if _, err := e.tombstoneSessionSourceOwnership(
 				ctx, e.machine, string(file.Agent),
 				member.sessionID, member.filePath,

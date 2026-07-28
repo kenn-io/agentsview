@@ -1741,6 +1741,132 @@ func TestSyncOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.
 	assert.NotNil(t, survivor)
 }
 
+// TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors pins the
+// per-member cwd gate for vanished members: deleting an allowed member
+// while every survivor is unchanged leaves the container pass with zero
+// retained results, so a source-wide "any allowed result" gate would
+// freeze the deletion forever once the container fingerprint is cached.
+// The archived cwd of the missing member itself must decide.
+func TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSplitSyncDB(t, root, 2)
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/work"},
+	})
+	defer engine.Close()
+	syncOmnigentArchive(t, engine, archive, 2)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	for _, stmt := range []string{
+		`DELETE FROM conversation_items
+		  WHERE workspace_id = 0 AND conversation_id = 'conv_0000'`,
+		`DELETE FROM omnigent_conversation_metadata
+		  WHERE workspace_id = 0 AND id = 'conv_0000'`,
+		`DELETE FROM conversations WHERE workspace_id = 0 AND id = 'conv_0000'`,
+	} {
+		_, err = writer.Exec(stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Close())
+
+	engine.SyncAll(context.Background(), nil)
+	retired, err := archive.GetSessionFull(
+		context.Background(), "omnigent:0:conv_0000",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, retired)
+	require.NotNil(t, retired.DeletionCause,
+		"the allowed member's deletion must be applied even when all survivors are unchanged")
+	assert.Equal(t, "source_missing", *retired.DeletionCause)
+	survivor, err := archive.GetSession(
+		context.Background(), "omnigent:0:conv_0001",
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, survivor)
+}
+
+// TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember pins the other
+// half of the per-member gate: in a mixed-cwd container, a vanished
+// member whose archived cwd is outside the allow-list stays frozen (its
+// archived row remains active) even though an allowed member's deletion
+// in the same pass is applied — a source-wide gate would retire both.
+func TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	dbPath := writeOmnigentSplitSyncDB(t, root, 3)
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`UPDATE omnigent_conversation_metadata
+		SET workspace = '/other/place' WHERE workspace_id = 0 AND id = 'conv_0001'`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	archive := dbtest.OpenTestDB(t)
+	unfiltered := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine: "local",
+	})
+	syncOmnigentArchive(t, unfiltered, archive, 3)
+	unfiltered.Close()
+
+	writer, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	for _, id := range []string{"conv_0000", "conv_0001"} {
+		for _, stmt := range []string{
+			`DELETE FROM conversation_items
+			  WHERE workspace_id = 0 AND conversation_id = ?`,
+			`DELETE FROM omnigent_conversation_metadata
+			  WHERE workspace_id = 0 AND id = ?`,
+			`DELETE FROM conversations WHERE workspace_id = 0 AND id = ?`,
+		} {
+			_, err = writer.Exec(stmt, id)
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, writer.Close())
+
+	filtered := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOmnigent: {root},
+		},
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/work"},
+	})
+	defer filtered.Close()
+	filtered.SyncAll(context.Background(), nil)
+
+	retired, err := archive.GetSessionFull(
+		context.Background(), "omnigent:0:conv_0000",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, retired)
+	require.NotNil(t, retired.DeletionCause,
+		"the allowed missing member must be retired")
+	assert.Equal(t, "source_missing", *retired.DeletionCause)
+
+	frozen, err := archive.GetSession(
+		context.Background(), "omnigent:0:conv_0001",
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, frozen,
+		"a missing member outside the allow-list must stay frozen, not be retired")
+}
+
 func TestReconcileOmnigentMissingContainerPreservesArchive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
