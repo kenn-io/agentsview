@@ -440,6 +440,16 @@ func (e *Engine) watermarkOnlySQLiteSourceFresh(
 	if !ok {
 		return 0, false
 	}
+	// The skip is only sound while the pass's container capture is valid. A
+	// trusted full discovery lists watermark-only sources; if the container
+	// changes between that listing and the pass's recapture check, the
+	// capture is invalidated and a concurrent child-only write may hide
+	// beneath an unchanged metadata watermark — those sources must fall
+	// through to Fingerprint and resolve the full digest instead.
+	if dbPath, _, ok := sqliteContainerSourceForFile(file); !ok ||
+		!e.sqliteContainerPassCaptureValid(dbPath) {
+		return 0, false
+	}
 	lookupPath := providerDiscoveredPath(source)
 	if lookupPath == "" {
 		return 0, false
@@ -466,6 +476,23 @@ func (e *Engine) watermarkOnlySQLiteSourceFresh(
 		return 0, false
 	}
 	return storedMtime, true
+}
+
+// sqliteContainerPassCaptureValid reports whether the current pass still
+// holds a live capture for the container: one was taken before discovery,
+// the post-discovery recapture matched it, and no processing failure has
+// poisoned the container since. Watermark-only skips require this — an
+// invalidated capture means the container changed while the pass was
+// listing it, and the watermark cannot see what that change touched.
+func (e *Engine) sqliteContainerPassCaptureValid(dbPath string) bool {
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil || pass.failed[dbPath] {
+		return false
+	}
+	_, ok := pass.captured[dbPath]
+	return ok
 }
 
 // noteSQLiteContainerResult records a processed file's outcome for

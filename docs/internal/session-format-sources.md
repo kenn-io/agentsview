@@ -302,12 +302,18 @@ Grok section and remove the explicit registry exception in the coverage test.
   update (title, directory, worktree rename) whose stamp lands below that
   child maximum. A session or project row that advances past its own stored
   metadata watermark is always a candidate, wherever other sessions'
-  watermarks or its own child timestamps sit. Periodic full passes over a container
-  whose captured state still matches the last fully verified pass also list
-  the watermark form (`SQLiteContainerUnchangedSinceTrust`): every member
-  gate-skips before fingerprinting, so the child identity scan would be
-  archive-sized work nothing reads; any write breaks that trust and the next
-  full pass carries the complete digest again. The trade is explicit: any
+  watermarks or its own child timestamps sit. Periodic full passes and
+  streamed reconciliation passes over a container whose captured state still
+  matches the last fully verified pass also list the watermark form
+  (`SQLiteContainerUnchangedSinceTrust`): every member gate-skips before
+  fingerprinting, so the child identity scan would be archive-sized work
+  nothing reads; any write breaks that trust and the next pass carries the
+  complete digest again. Watermark-only skips additionally require the
+  pass's container capture to still be valid
+  (`sqliteContainerPassCaptureValid`) — a container that changes between
+  listing and the recapture check resolves full per-session digests instead,
+  so a concurrent child-only write cannot hide beneath an unchanged metadata
+  watermark. The trade is explicit: any
   child-only write that leaves the session and project rows untouched —
   wherever its timestamps land relative to the stored composite — is
   invisible to a watcher pass and is reconciled by the next full-discovery

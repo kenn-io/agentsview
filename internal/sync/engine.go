@@ -3167,7 +3167,7 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	}
 	preContainerStates := e.captureSQLiteContainerStates(nil)
 	providers, completedScopes, failedRoots, failures, discoveryErr, err := e.streamReconciliationCandidates(
-		ctx, scope, spool,
+		ctx, scope, spool, preContainerStates,
 	)
 	stats.providerFailures = failures
 	if err != nil {
@@ -3416,6 +3416,7 @@ func eligibleReconciliationBaselines(
 
 func (e *Engine) streamReconciliationCandidates(
 	ctx context.Context, scope *rootSyncScope, spool reconciliationSpoolStore,
+	preContainerStates map[string]parser.SQLiteContainerState,
 ) (
 	map[parser.AgentType]parser.Provider,
 	[]reconciliationProviderScope,
@@ -3429,6 +3430,13 @@ func (e *Engine) streamReconciliationCandidates(
 	var failedRoots []string
 	var failures int
 	var discoveryErr error
+	// Trusted containers stream the bounded watermark listing here for the
+	// same reason full discovery lists them that way: every candidate they
+	// spool will gate-skip, so the child digest would be archive-sized work
+	// nothing reads. The predicate is keyed to this pass's pre-discovery
+	// captures; a container that changes mid-stream fails its recapture
+	// check and its candidates resolve full fingerprints instead.
+	containerTrusted := e.sqliteContainerTrustedForDiscovery(preContainerStates)
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
 		agents = append(agents, agent)
@@ -3455,6 +3463,7 @@ func (e *Engine) streamReconciliationCandidates(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			SQLiteContainerUnchangedSinceTrust: containerTrusted,
 		})
 		providers[agent] = provider
 		if provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {

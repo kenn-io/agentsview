@@ -316,6 +316,53 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 		"the watcher pass must archive the metadata update")
 }
 
+// TestOpenCodeIdleReconcilePassSkipsContainerChildScan pins the same
+// trusted-container bound on the streamed reconciliation path: an idle
+// ReconcileWatchRoots pass over a trusted, untouched container must not
+// aggregate the child tables (its candidates all gate-skip), while any
+// write breaks trust and the next reconcile carries the full digest again —
+// including for a child-only edit below every watermark.
+func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	for i := range 5 {
+		seedOpenCodeSQLiteTextSession(
+			t, oc, "proj", fmt.Sprintf("ses%05d", i),
+			1779012000000, 1779099999000,
+			"prompt", "answer",
+		)
+	}
+	require.Equal(t, 5, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	scansBefore := parser.OpenCodeContainerChildScans()
+	lookupsBefore := parser.OpenCodeSessionChildLookups()
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		context.Background(), []string{env.opencodeDir}, false,
+	))
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"an idle reconcile pass must not aggregate the container's child "+
+			"tables")
+	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
+		"an idle reconcile pass must not pay per-session child lookups")
+	assertMessageContent(
+		t, env.db, "opencode:ses00000", "prompt", "answer",
+	)
+
+	// A child-only replacement below every watermark breaks trust via the
+	// container state, and the next reconcile carries the digest again.
+	oc.replaceTextContent(
+		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
+	)
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		context.Background(), []string{env.opencodeDir}, false,
+	))
+	assertMessageContent(
+		t, env.db, "opencode:ses00000",
+		"swapped prompt", "swapped answer",
+	)
+}
+
 // TestOpenCodeIdleFullPassSkipsContainerChildScan pins that a periodic full
 // pass over a trusted, untouched container does not aggregate the child
 // tables at all: the container gate will skip every member before

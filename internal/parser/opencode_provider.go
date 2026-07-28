@@ -186,54 +186,62 @@ type openCodeProviderSpec struct {
 	// watcher event on the shared container never scans the child tables.
 	listSQLiteWatermark func(string) ([]OpenCodeSessionMeta, error)
 	streamSQLite        func(context.Context, string, func(OpenCodeSessionMeta) error) error
-	sourceMtime         func(string) (int64, error)
-	relabel             func(*ParsedSession)
+	// streamSQLiteWatermark is the bounded trusted-container form of
+	// streamSQLite, used by streamed reconciliation discovery for containers
+	// the engine's container gate will skip wholesale.
+	streamSQLiteWatermark func(context.Context, string, func(OpenCodeSessionMeta) error) error
+	sourceMtime           func(string) (int64, error)
+	relabel               func(*ParsedSession)
 }
 
 func openCodeProviderSpecForAgent(agent AgentType) openCodeProviderSpec {
 	switch agent {
 	case AgentOpenCode:
 		return openCodeProviderSpec{
-			agent:               AgentOpenCode,
-			format:              openCodeFmt,
-			dbName:              openCodeFmt.dbName,
-			listSQLite:          ListOpenCodeSessionMeta,
-			listSQLiteWatermark: ListOpenCodeSessionWatermarkMeta,
-			streamSQLite:        ForEachOpenCodeSessionMeta,
-			sourceMtime:         OpenCodeSourceMtime,
+			agent:                 AgentOpenCode,
+			format:                openCodeFmt,
+			dbName:                openCodeFmt.dbName,
+			listSQLite:            ListOpenCodeSessionMeta,
+			listSQLiteWatermark:   ListOpenCodeSessionWatermarkMeta,
+			streamSQLite:          ForEachOpenCodeSessionMeta,
+			streamSQLiteWatermark: ForEachOpenCodeSessionWatermarkMeta,
+			sourceMtime:           OpenCodeSourceMtime,
 		}
 	case AgentKilo:
 		return openCodeProviderSpec{
-			agent:               AgentKilo,
-			format:              kiloFmt,
-			dbName:              kiloFmt.dbName,
-			listSQLite:          ListKiloSessionMeta,
-			listSQLiteWatermark: listOpenCodeSessionWatermarkMetaAs(KiloSQLiteVirtualPath),
-			streamSQLite:        streamOpenCodeSessionMetaAs(KiloSQLiteVirtualPath),
-			sourceMtime:         KiloSourceMtime,
-			relabel:             relabelOpenCodeSessionAsKilo,
+			agent:                 AgentKilo,
+			format:                kiloFmt,
+			dbName:                kiloFmt.dbName,
+			listSQLite:            ListKiloSessionMeta,
+			listSQLiteWatermark:   listOpenCodeSessionWatermarkMetaAs(KiloSQLiteVirtualPath),
+			streamSQLite:          streamOpenCodeSessionMetaAs(KiloSQLiteVirtualPath),
+			streamSQLiteWatermark: streamOpenCodeSessionWatermarkMetaAs(KiloSQLiteVirtualPath),
+			sourceMtime:           KiloSourceMtime,
+			relabel:               relabelOpenCodeSessionAsKilo,
 		}
 	case AgentMiMoCode:
 		return openCodeProviderSpec{
-			agent:               AgentMiMoCode,
-			format:              mimoFmt,
-			dbName:              mimoFmt.dbName,
-			listSQLite:          ListMiMoCodeSessionMeta,
-			listSQLiteWatermark: listOpenCodeSessionWatermarkMetaAs(MiMoCodeSQLiteVirtualPath),
-			streamSQLite:        streamOpenCodeSessionMetaAs(MiMoCodeSQLiteVirtualPath),
-			sourceMtime:         MiMoCodeSourceMtime,
-			relabel:             relabelOpenCodeSessionAsMiMoCode,
+			agent:                 AgentMiMoCode,
+			format:                mimoFmt,
+			dbName:                mimoFmt.dbName,
+			listSQLite:            ListMiMoCodeSessionMeta,
+			listSQLiteWatermark:   listOpenCodeSessionWatermarkMetaAs(MiMoCodeSQLiteVirtualPath),
+			streamSQLite:          streamOpenCodeSessionMetaAs(MiMoCodeSQLiteVirtualPath),
+			streamSQLiteWatermark: streamOpenCodeSessionWatermarkMetaAs(MiMoCodeSQLiteVirtualPath),
+			sourceMtime:           MiMoCodeSourceMtime,
+			relabel:               relabelOpenCodeSessionAsMiMoCode,
 		}
 	case AgentIcodemate:
 		return openCodeProviderSpec{
-			agent:               AgentIcodemate,
-			format:              icodemateFmt,
-			dbName:              icodemateFmt.dbName,
-			listSQLite:          ListIcodemateSessionMeta,
-			listSQLiteWatermark: listOpenCodeSessionWatermarkMetaAs(IcodemateSQLiteVirtualPath),
-			streamSQLite:        streamOpenCodeSessionMetaAs(IcodemateSQLiteVirtualPath),
-			sourceMtime:         IcodemateSourceMtime,
-			relabel:             relabelOpenCodeSessionAsIcodemate,
+			agent:                 AgentIcodemate,
+			format:                icodemateFmt,
+			dbName:                icodemateFmt.dbName,
+			listSQLite:            ListIcodemateSessionMeta,
+			listSQLiteWatermark:   listOpenCodeSessionWatermarkMetaAs(IcodemateSQLiteVirtualPath),
+			streamSQLite:          streamOpenCodeSessionMetaAs(IcodemateSQLiteVirtualPath),
+			streamSQLiteWatermark: streamOpenCodeSessionWatermarkMetaAs(IcodemateSQLiteVirtualPath),
+			sourceMtime:           IcodemateSourceMtime,
+			relabel:               relabelOpenCodeSessionAsIcodemate,
 		}
 	default:
 		return openCodeProviderSpec{}
@@ -250,6 +258,22 @@ func streamOpenCodeSessionMetaAs(
 			meta.VirtualPath = virtualPath(dbPath, meta.SessionID)
 			return yield(meta)
 		})
+	}
+}
+
+func streamOpenCodeSessionWatermarkMetaAs(
+	virtualPath func(string, string) string,
+) func(context.Context, string, func(OpenCodeSessionMeta) error) error {
+	return func(
+		ctx context.Context, dbPath string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		return ForEachOpenCodeSessionWatermarkMeta(
+			ctx, dbPath,
+			func(meta OpenCodeSessionMeta) error {
+				meta.VirtualPath = virtualPath(dbPath, meta.SessionID)
+				return yield(meta)
+			},
+		)
 	}
 }
 
@@ -508,7 +532,16 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	}
 	var callbackErr error
 	var membershipErr error
-	err := s.spec.streamSQLite(ctx, src.DBPath, func(meta OpenCodeSessionMeta) error {
+	// A container the engine's gate will skip wholesale streams the bounded
+	// watermark listing: computing every session's child digest for a pass
+	// that verifies nothing would be archive-sized work nothing reads (see
+	// ProviderConfig.SQLiteContainerUnchangedSinceTrust).
+	stream := s.spec.streamSQLite
+	if s.containerTrusted != nil && s.containerTrusted(src.DBPath) &&
+		s.spec.streamSQLiteWatermark != nil {
+		stream = s.spec.streamSQLiteWatermark
+	}
+	err := stream(ctx, src.DBPath, func(meta OpenCodeSessionMeta) error {
 		if storageIDs != nil {
 			_, exists, err := storageIDs.get(ctx, meta.SessionID)
 			if err != nil {
