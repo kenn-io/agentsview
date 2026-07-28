@@ -93,6 +93,43 @@ func TestExportCheckpointBootstrapStreamsLargeSessionMap(t *testing.T) {
 		"bootstrap must tokenize the checkpoint instead of reading its full body")
 }
 
+func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "whitespace",
+			body: `{ "origin":"contract-a1b2c3","seq":1,"sessions":{},"v":1}` + "\n",
+		},
+		{
+			name: "escaped field name",
+			body: `{"orig\u0069n":"contract-a1b2c3","seq":1,"sessions":{},"v":1}` + "\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := testExportDB(t)
+			store := newTestArtifactStore(t)
+			createCheckpointBody(t, store, 1, []byte(tt.body))
+
+			result, err := ExportToStore(
+				t.Context(), database, store,
+				ExportOptions{Origin: contractOrigin},
+			)
+			require.NoError(t, err)
+			assert.True(t, result.CheckpointCreated)
+			assert.Equal(t, 2, result.CheckpointSequence)
+			head, ok, err := database.GetArtifactCheckpointHead(
+				t.Context(), contractOrigin,
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, 2, head.Sequence)
+		})
+	}
+}
+
 type maxReadReader struct {
 	reader io.Reader
 	max    int
