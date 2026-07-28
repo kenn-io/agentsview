@@ -31,6 +31,11 @@ type OpenCodeSessionMeta struct {
 	// time_updated. When true the fingerprint omits the shared container's
 	// size, because the composite already discriminates per session.
 	CompositeMtime bool
+	// ChildDigest is the per-session freshness identity carried into the
+	// fingerprint's Hash. It folds the composite watermark together with the
+	// child row counts, so a deletion that leaves the watermark untouched
+	// still changes it. Empty when the container has no composite support.
+	ChildDigest string
 }
 
 // OpenCodeSQLiteSessionExists reports whether a session row with
@@ -101,9 +106,10 @@ func ForEachOpenCodeSessionMeta(
 	if err != nil {
 		return err
 	}
-	query := "SELECT s.id, s.time_updated FROM session s"
+	query := "SELECT s.id, s.time_updated, 0, 0 FROM session s"
 	if composite {
-		query = "SELECT s.id, " + openCodeCompositeMtimeExpr +
+		query = "SELECT s.id, " + openCodeCompositeMtimeExpr + ", " +
+			openCodeCompositeCountsExpr +
 			" FROM session s" + openCodeCompositeMtimeJoins
 	}
 
@@ -117,9 +123,9 @@ func ForEachOpenCodeSessionMeta(
 
 	for rows.Next() {
 		var id string
-		var timeUpdated int64
+		var timeUpdated, messages, parts int64
 		if err := rows.Scan(
-			&id, &timeUpdated,
+			&id, &timeUpdated, &messages, &parts,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning opencode session meta: %w", err,
@@ -131,6 +137,9 @@ func ForEachOpenCodeSessionMeta(
 			VirtualPath:    dbPath + "#" + id,
 			FileMtime:      timeUpdated * 1_000_000,
 			CompositeMtime: composite,
+			ChildDigest: openCodeChildDigest(
+				composite, timeUpdated, messages, parts,
+			),
 		}); err != nil {
 			return err
 		}
@@ -150,14 +159,17 @@ func openCodeSessionCompositeMtime(
 	if err != nil {
 		return 0, false, err
 	}
-	query := "SELECT s.time_updated FROM session s WHERE s.id = ?"
+	query := "SELECT s.time_updated, 0, 0 FROM session s WHERE s.id = ?"
 	if composite {
-		query = "SELECT " + openCodeSessionCompositeMtimeExpr +
+		query = "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
+			openCodeSessionCompositeCountsExpr +
 			" FROM session s" + openCodeSessionCompositeMtimeJoins +
 			" WHERE s.id = ?"
 	}
-	var timeUpdated int64
-	if err := db.QueryRow(query, sessionID).Scan(&timeUpdated); err != nil {
+	var timeUpdated, messages, parts int64
+	if err := db.QueryRow(query, sessionID).Scan(
+		&timeUpdated, &messages, &parts,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, composite, nil
 		}
@@ -168,6 +180,24 @@ func openCodeSessionCompositeMtime(
 	}
 	return timeUpdated, composite, nil
 }
+
+// openCodeChildDigest is the per-session freshness identity: the composite
+// watermark plus the child row counts. The counts are what make a deletion
+// visible; the watermark is what makes an edit or insert visible. Empty for
+// containers without composite support, which keeps their previous
+// container-stat behavior.
+func openCodeChildDigest(
+	composite bool, watermark, messages, parts int64,
+) string {
+	if !composite {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s%d:%d:%d", openCodeChildDigestPrefix, watermark, messages, parts,
+	)
+}
+
+const openCodeChildDigestPrefix = "opencode-child:v1:"
 
 // parseOpenCodeDBSession parses a single session by ID from the
 // OpenCode SQLite database. The OpenCode-format provider owns this
@@ -499,11 +529,24 @@ const openCodeCompositeMtimeExpr = `MAX(s.time_updated,
 const openCodeCompositeMtimeJoins = `
 	LEFT JOIN project pr ON pr.id = s.project_id
 	LEFT JOIN (
-		SELECT session_id, MAX(time_updated) mx FROM message GROUP BY session_id
+		SELECT session_id, MAX(time_updated) mx, COUNT(*) n
+		FROM message GROUP BY session_id
 	) m ON m.session_id = s.id
 	LEFT JOIN (
-		SELECT session_id, MAX(time_updated) mx FROM part GROUP BY session_id
+		SELECT session_id, MAX(time_updated) mx, COUNT(*) n
+		FROM part GROUP BY session_id
 	) p ON p.session_id = s.id`
+
+// openCodeCompositeCountsExpr yields the child row counts that make the
+// signal deletion-sensitive. A MAX over timestamps cannot see a delete: on a
+// real container the session or project row usually already holds the higher
+// value, so removing a message or part leaves the max untouched and the
+// session would look fresh with the deleted content still archived.
+const openCodeCompositeCountsExpr = `COALESCE(m.n, 0), COALESCE(p.n, 0)`
+
+const openCodeSessionCompositeCountsExpr = `
+	(SELECT COUNT(*) FROM message WHERE session_id = s.id),
+	(SELECT COUNT(*) FROM part WHERE session_id = s.id)`
 
 // The single-session form must NOT reuse the grouped subqueries above: a
 // GROUP BY subquery is materialized over the whole container before the outer
@@ -796,6 +839,27 @@ func buildOpenCodeSession(
 	s openCodeSessionRow,
 	cwd, projectWorktree, dbPath, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	// Capture the watermark BEFORE reading children. Messages and parts are
+	// read through separate autocommit queries, so a concurrent write landing
+	// between them would otherwise be stamped with a watermark newer than the
+	// content actually read, and every later sync would skip the session as
+	// fresh — permanently archiving a torn transcript. Reading the watermark
+	// first inverts the race: the stamp is never newer than the content, so a
+	// concurrent change leaves the stored value behind the source and the next
+	// pass re-syncs it.
+	//
+	// Stamp the same composite the fingerprint reports, so the stored
+	// file_mtime is directly comparable to it. Falling back to the session
+	// row's own time_updated keeps legacy containers on their prior value.
+	fileMtime := s.timeUpdated
+	if composite, _, err := openCodeSessionCompositeMtime(
+		db, dbPath, s.id,
+	); err != nil {
+		return nil, nil, err
+	} else if composite != 0 {
+		fileMtime = composite
+	}
+
 	msgs, err := loadOpenCodeMessages(db, s.id)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
@@ -808,18 +872,6 @@ func buildOpenCodeSession(
 		return nil, nil, fmt.Errorf(
 			"loading parts for %s: %w", s.id, err,
 		)
-	}
-
-	// Stamp the same composite the fingerprint reports, so the stored
-	// file_mtime is directly comparable to it. Falling back to the session
-	// row's own time_updated keeps legacy containers on their prior value.
-	fileMtime := s.timeUpdated
-	if composite, _, err := openCodeSessionCompositeMtime(
-		db, dbPath, s.id,
-	); err != nil {
-		return nil, nil, err
-	} else if composite != 0 {
-		fileMtime = composite
 	}
 
 	sess, parsed, err := buildOpenCodeParsedSession(

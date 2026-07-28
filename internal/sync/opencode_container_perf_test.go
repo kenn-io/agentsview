@@ -67,3 +67,43 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 		"sessions rewritten for one changed session must not grow with "+
 			"container size")
 }
+
+// TestOpenCodeDeletedChildIsDetected pins deletion sensitivity. The composite
+// mtime is a MAX over session/project/child timestamps, so when the session or
+// project row already holds the higher value — the common case on a real
+// container — deleting a message or part does not move the max at all. Without
+// a deletion-sensitive component the session looks fresh and the removed
+// content stays archived indefinitely.
+func TestOpenCodeDeletedChildIsDetected(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	// Session row timestamp is deliberately far ahead of every child, so a
+	// deleted child cannot lower the composite.
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "del-session",
+		1779012000000, 1779099999000,
+		"keep prompt", "drop answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
+	assertMessageContent(
+		t, env.db, "opencode:del-session", "keep prompt", "drop answer",
+	)
+
+	// Remove the assistant message and its parts, leaving session and project
+	// timestamps untouched.
+	oc.mustExec(t, "delete assistant parts",
+		"DELETE FROM part WHERE session_id = ? AND message_id LIKE ?",
+		"del-session", "%assistant%")
+	oc.mustExec(t, "delete assistant message",
+		"DELETE FROM message WHERE session_id = ? AND id LIKE ?",
+		"del-session", "%assistant%")
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Synced,
+		"a deleted child must not be hidden behind an unchanged composite max")
+}

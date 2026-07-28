@@ -322,6 +322,9 @@ type openCodeFormatSource struct {
 	// the session row's own time_updated. It gates dropping the shared
 	// container's size from the fingerprint.
 	CompositeMTime bool
+	// ChildDigest carries the deletion-sensitive per-session identity into
+	// Fingerprint.Hash.
+	ChildDigest string
 }
 
 type openCodeFormatSourceSet struct {
@@ -744,6 +747,12 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		if err != nil {
 			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", dbPath, err)
 		}
+		// The watermark alone cannot see a deleted child, because the session
+		// or project row usually already holds the higher timestamp. The
+		// digest folds in the child row counts so a delete changes the
+		// fingerprint; FingerprintHashRequiredForFreshness makes the gate
+		// compare it against the stored value.
+		fingerprint.Hash = sourceCarriedChildDigest(source)
 		// Every session in this root shares one physical container, so the
 		// container's size moves whenever any single session is written.
 		// Stamping it onto a per-session fingerprint made one session's
@@ -780,6 +789,18 @@ func (s openCodeFormatSourceSet) Fingerprint(
 // sourceCarriedMTimeNS returns the discovery-listed session mtime carried on
 // a SQLite-backed source, or zero when the source was built without one
 // (storage sessions, FindSource lookups).
+func sourceCarriedChildDigest(source SourceRef) string {
+	switch src := source.Opaque.(type) {
+	case openCodeFormatSource:
+		return src.ChildDigest
+	case *openCodeFormatSource:
+		if src != nil {
+			return src.ChildDigest
+		}
+	}
+	return ""
+}
+
 func sourceCarriedCompositeMTime(source SourceRef) bool {
 	switch src := source.Opaque.(type) {
 	case openCodeFormatSource:
@@ -883,6 +904,7 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 	if src, ok := ref.Opaque.(openCodeFormatSource); ok {
 		src.MTimeNS = meta.FileMtime
 		src.CompositeMTime = meta.CompositeMtime
+		src.ChildDigest = meta.ChildDigest
 		ref.Opaque = src
 	}
 	return ref, true
@@ -1172,6 +1194,11 @@ func openCodeFormatProviderCapabilities() Capabilities {
 		},
 		Sync: ProviderSyncSemantics{
 			UnchangedResults: UnchangedResultMTimeAndHash,
+			// The per-session digest is the only signal that sees a deleted
+			// child, so freshness must consult it. Containers without
+			// composite support produce an empty hash, which the gate treats
+			// as no constraint, preserving their previous behavior.
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

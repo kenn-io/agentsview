@@ -272,13 +272,20 @@ Grok section and remove the explicit registry exception in the coverage test.
   worktree/metadata changes rather than ordinary session activity. The child
   scans cost ~0.6s warm on that container because `part.data` lives in SQLite
   overflow pages, so scanning `(session_id, time_updated)` does not read
-  transcript bytes. Known gap: a write that moves SQLite's change counter while
-  leaving every one of those timestamps untouched (external/manual DB edits) is
-  not attributed to any session; OpenCode itself stamps `time_updated` on every
-  row write, and a revert deletes the newest rows, which lowers the max and is
-  therefore still detected. Containers whose schema lacks the child
-  `time_updated` columns (older OpenCode, Kilo, MiMoCode, ICodeMate) fall back
-  to the session-only mtime plus the container size, preserving prior behavior.
+  transcript bytes. A MAX over timestamps cannot see a deletion: on that
+  container 5,758 of 5,981 sessions (96%) carry a session or project timestamp
+  at or above every child, so removing a message or part leaves the max
+  untouched. The fingerprint hash therefore carries a per-session digest of the
+  watermark plus the child row counts, and freshness compares it
+  (`FingerprintHashRequiredForFreshness`). An earlier revision of this entry
+  claimed a revert stays detectable because it lowers the max; that is wrong for
+  the 96% above, and the row counts are what actually cover deletions. Known
+  gap: a write that leaves the watermark, the message count and the part count
+  all unchanged is not attributed to any session, which requires an in-place
+  edit that does not stamp `time_updated`. Containers whose schema lacks the
+  child `time_updated` columns (older OpenCode, Kilo, MiMoCode, ICodeMate) fall
+  back to the session-only mtime plus the container size and emit an empty
+  digest, preserving prior behavior.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
