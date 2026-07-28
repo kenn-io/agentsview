@@ -339,7 +339,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // instead of the generated checkout leaf, and generic hosting fragments defer
 // to an enclosing live repository. Existing rows need re-parsing so activity
 // is neither fragmented by worktree names nor claimed by nested fixture paths.)
-const dataVersion = 75
+// (76: Copilot CLI tool execution boundaries. Re-parsing persists
+// tool.execution_start and tool.execution_complete timestamps as result events
+// so Session Analysis excludes resumed-session idle time from completed calls.)
+const dataVersion = 76
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
