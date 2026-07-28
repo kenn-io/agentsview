@@ -162,14 +162,17 @@ func openCodeContainerPathForChangedPathEvent(
 }
 
 // filterFreshWatermarkOnlySources drops watermark-only shared-container
-// sources whose stored composite watermark already covers the carried
-// session-row watermark, before they are materialized into discovered files.
-// The stored values come from one indexed range query over the container's
-// virtual members, so a one-session write flows one candidate into the sync
-// pipeline instead of every session in the container. The comparison is
-// per-session — a watermark that advances past its own stored composite is
-// always kept, wherever other sessions' watermarks sit — and sessions with
-// no stored row or a stale data version are kept unconditionally.
+// sources whose stored session/project metadata watermark (recovered from
+// the stored child digest, see storedSessionRowWatermarkNS) already covers
+// the carried session-row watermark, before they are materialized into
+// discovered files. The stored values come from one indexed range query over
+// the container's virtual members, so a one-session write flows one
+// candidate into the sync pipeline instead of every session in the
+// container. The comparison is per-session and like-for-like — a session or
+// project row that advances past its own stored metadata watermark is always
+// kept, wherever other sessions' watermarks or its own child timestamps sit
+// — and sessions with no stored row or a stale data version are kept
+// unconditionally.
 //
 // Known, deliberate deferral (not a detection gap to "fix" here): a
 // child-only write that leaves the session and project rows untouched is
@@ -217,7 +220,7 @@ func (e *Engine) filterFreshWatermarkOnlySources(
 	for _, source := range sources {
 		if watermark, ok := parser.SourceWatermarkOnlyMTimeNS(source); ok {
 			member, found := stored[providerDiscoveredPath(source)]
-			if found && watermark <= member.MTimeNS &&
+			if found && watermark <= storedSessionRowWatermarkNS(member) &&
 				member.DataVersion >= current {
 				continue
 			}
@@ -225,6 +228,26 @@ func (e *Engine) filterFreshWatermarkOnlySources(
 		kept = append(kept, source)
 	}
 	return kept
+}
+
+// storedSessionRowWatermarkNS resolves the stored value a carried session-row
+// watermark is compared against, like-for-like: the session/project metadata
+// watermark recovered from the stored child digest. Comparing against the
+// stored composite MTimeNS instead would over-skip — a composite dominated by
+// a newer child timestamp would hide a metadata update (title, directory,
+// worktree rename) whose stamp lands below it. Rows without a parseable
+// digest (pre-digest fingerprints, future digest versions) fall back to the
+// composite, the conservative pre-digest behavior that self-heals on the
+// row's next reparse.
+func storedSessionRowWatermarkNS(
+	member db.VirtualContainerMemberFreshness,
+) int64 {
+	if metadata, ok := parser.OpenCodeChildDigestMetadataWatermarkNS(
+		member.Hash,
+	); ok {
+		return metadata
+	}
+	return member.MTimeNS
 }
 
 // sqliteContainerTrustedForDiscovery returns discovery's trust probe: it
@@ -394,14 +417,15 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 }
 
 // watermarkOnlySQLiteSourceFresh reports whether a shared-container session
-// whose changed-path source carries only the session-row watermark is
-// already covered by its stored composite watermark. The stored MTimeNS is
-// MAX(session, project, child times) from the last parse, so a session-row
-// watermark at or below it proves the session and project rows did not
-// advance; the parse is skipped without resolving the child digest. What
-// the watermark cannot see — any child-only write that leaves the session
-// and project rows untouched, above or below the stored composite alike —
-// is deliberately deferred to the next full-discovery pass, whose carried
+// whose source carries only the session-row watermark is already covered by
+// its stored session/project metadata watermark, compared like-for-like:
+// the stored value is recovered from the persisted child digest, falling
+// back to the stored composite MTimeNS for rows without a parseable digest.
+// A session-row watermark at or below the stored metadata watermark proves
+// the session and project rows did not advance, so the parse is skipped
+// without resolving the child digest. What the watermark cannot see — any
+// child-only write that leaves the session and project rows untouched — is
+// deliberately deferred to the next full-discovery pass, whose carried
 // digest still catches it (see filterFreshWatermarkOnlySources for the full
 // contract). That keeps per-event work bounded by the changed batch instead
 // of the archive.
@@ -424,7 +448,18 @@ func (e *Engine) watermarkOnlySQLiteSourceFresh(
 		lookupPath = e.pathRewriter(lookupPath)
 	}
 	_, storedMtime, found := e.db.GetFileInfoByPath(lookupPath)
-	if !found || storedMtime < watermark {
+	if !found {
+		return 0, false
+	}
+	limit := storedMtime
+	if hash, ok := e.db.GetFileHashByPath(lookupPath); ok {
+		if metadata, parsed := parser.OpenCodeChildDigestMetadataWatermarkNS(
+			hash,
+		); parsed {
+			limit = metadata
+		}
+	}
+	if limit < watermark {
 		return 0, false
 	}
 	if e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion() {

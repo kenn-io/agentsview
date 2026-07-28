@@ -288,14 +288,21 @@ Grok section and remove the explicit registry exception in the coverage test.
   digest, preserving prior behavior. Watcher events do not pay the child scan
   at all: changed-path classification lists sessions through a bounded
   session-row watermark (`MAX(session.time_updated, project.time_updated)`,
-  `ForEachOpenCodeSessionWatermarkMeta`), compares it per session against the
-  stored composite watermarks loaded in one indexed range query
-  (`filterFreshWatermarkOnlySources`), and drops covered sessions before they
-  are materialized into discovered files — only the changed batch flows into
-  the pipeline and resolves the full composite and digest through the indexed
-  per-session lookup. The comparison is per-session, so a watermark that
-  advances past its own stored composite is always a candidate regardless of
-  where other sessions' watermarks sit. Periodic full passes over a container
+  `ForEachOpenCodeSessionWatermarkMeta`), compares it per session and
+  like-for-like against the stored session/project metadata watermark
+  recovered from the persisted child digest
+  (`OpenCodeChildDigestMetadataWatermarkNS`; rows without a parseable digest
+  fall back to the stored composite), loaded in one indexed range query
+  (`filterFreshWatermarkOnlySources`), and drops covered sessions before
+  they are materialized into discovered files — only the changed batch flows
+  into the pipeline and resolves the full composite and digest through the
+  indexed per-session lookup. The comparison must be like-for-like: the
+  stored composite can be dominated by a newer child timestamp, and
+  comparing the session-row watermark against it would hide a metadata
+  update (title, directory, worktree rename) whose stamp lands below that
+  child maximum. A session or project row that advances past its own stored
+  metadata watermark is always a candidate, wherever other sessions'
+  watermarks or its own child timestamps sit. Periodic full passes over a container
   whose captured state still matches the last fully verified pass also list
   the watermark form (`SQLiteContainerUnchangedSinceTrust`): every member
   gate-skips before fingerprinting, so the child identity scan would be

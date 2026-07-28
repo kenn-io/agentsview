@@ -262,6 +262,60 @@ func TestOpenCodeFullPassSkipsAfterWatcherPassParse(t *testing.T) {
 		"full-pass skips must not pay per-session child lookups")
 }
 
+// TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite pins
+// the like-for-like watermark comparison. The stored composite is a MAX over
+// session, project, and child times, so when a child timestamp dominates it,
+// a later metadata update (title, session/project time) can advance the
+// session row while staying below the composite. Comparing the session-row
+// watermark against the composite would wrongly skip that session on the
+// watcher pass; comparing against the stored session/project metadata
+// watermark recovered from the persisted digest catches it — still without
+// touching the container's child tables.
+func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "meta-mark",
+		1779012000000, 1779012030000,
+		"prompt", "answer",
+	)
+	// Children exceed both the previous and the soon-to-advance metadata
+	// timestamps, so the stored composite is child-dominated.
+	oc.mustExec(t, "raise children above all metadata times",
+		"UPDATE part SET time_updated = ? WHERE session_id = ?",
+		1779099999000, "meta-mark")
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	// Metadata advances past its own stored value but stays below the
+	// child-dominated composite.
+	oc.mustExec(t, "retitle session below the composite",
+		"UPDATE session SET title = ?, time_updated = ? WHERE id = ?",
+		"renamed by watcher", 1779012040000, "meta-mark")
+
+	scansBefore := parser.OpenCodeContainerChildScans()
+	require.NoError(t, env.engine.SyncPathsContext(
+		context.Background(), []string{oc.path},
+	))
+	stats := env.engine.LastSyncStats()
+	assert.Equal(t, 1, stats.Synced,
+		"a metadata update below the child-dominated composite must "+
+			"re-parse on the watcher pass")
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"the watcher pass must still not scan the container's child tables")
+
+	// OpenCode's LLM-generated title lands in first_message.
+	var firstMessage string
+	require.NoError(t, env.db.Reader().QueryRow(
+		"SELECT first_message FROM sessions WHERE id = ?",
+		"opencode:meta-mark",
+	).Scan(&firstMessage))
+	assert.Equal(t, "renamed by watcher", firstMessage,
+		"the watcher pass must archive the metadata update")
+}
+
 // TestOpenCodeIdleFullPassSkipsContainerChildScan pins that a periodic full
 // pass over a trusted, untouched container does not aggregate the child
 // tables at all: the container gate will skip every member before

@@ -1550,6 +1550,40 @@ func TestListOpenCodeSessionWatermarkMeta(t *testing.T) {
 		"watermark must be MAX(session, project) and exclude child times")
 }
 
+// TestOpenCodeChildDigestMetadataWatermarkNS pins the digest round-trip the
+// watcher's like-for-like comparison depends on: the session/project times a
+// digest embeds must come back out as the metadata watermark, and every
+// other hash shape must be rejected so callers fall back to the composite.
+func TestOpenCodeChildDigestMetadataWatermarkNS(t *testing.T) {
+	agg := openCodeChildAggregate{
+		watermark:    1700000099000,
+		sessionTime:  1700000060000,
+		projectTime:  1700000070000,
+		messages:     2,
+		parts:        5,
+		messageIdent: "m1:1",
+		partIdent:    "p1:1",
+	}
+	got, ok := OpenCodeChildDigestMetadataWatermarkNS(agg.digest(true))
+	require.True(t, ok, "digest must round-trip its metadata watermark")
+	assert.Equal(t, int64(1700000070000)*1_000_000, got,
+		"metadata watermark must be MAX(session, project), not the composite")
+
+	for _, hash := range []string{
+		"",
+		agg.digest(false),
+		openCodeStorageFingerprintPrefix + "abcdef",
+		"opencode-child:v2:1:2:3:4:5:aabb",
+		"opencode-child:v1:1:2:3",
+		"opencode-child:v1:x:2:3:4:5:aabb",
+		"opencode-child:v1:1:x:3:4:5:aabb",
+		"opencode-child:v1:1:2:x:4:5:aabb",
+	} {
+		_, ok := OpenCodeChildDigestMetadataWatermarkNS(hash)
+		assert.False(t, ok, "hash %q must be rejected", hash)
+	}
+}
+
 // TestListOpenCodeSessionWatermarkMeta_LegacySchema pins that containers
 // without composite support keep the full listing's shape: session-only
 // mtime, no composite, and no watermark-only marker, so the engine never

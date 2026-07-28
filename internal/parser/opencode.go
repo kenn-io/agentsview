@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -370,6 +371,11 @@ type openCodeChildAggregate struct {
 	partIdent    string
 }
 
+// The field layout is load-bearing beyond equality comparison:
+// OpenCodeChildDigestMetadataWatermarkNS recovers the session/project times
+// from a stored digest by position. Any layout change must bump the prefix
+// version so stale digests fail that parse (and the equality gate) instead
+// of yielding wrong fields.
 func (a openCodeChildAggregate) digest(composite bool) string {
 	if !composite {
 		return ""
@@ -385,6 +391,38 @@ func (a openCodeChildAggregate) digest(composite bool) string {
 }
 
 const openCodeChildDigestPrefix = "opencode-child:v1:"
+
+// OpenCodeChildDigestMetadataWatermarkNS recovers the session/project
+// metadata watermark (nanoseconds) embedded in a stored child digest. The
+// watermark filter compares the live session-row watermark like-for-like
+// against this value: the stored composite MTimeNS may be dominated by a
+// newer child timestamp, and comparing the session-row watermark against
+// that composite would hide a metadata update (title, directory, worktree)
+// whose stamp lands below it. Returns false for any other hash shape —
+// legacy fingerprints, storage fingerprints, future digest versions — which
+// callers treat as "compare against the composite instead", the
+// conservative pre-digest behavior.
+func OpenCodeChildDigestMetadataWatermarkNS(hash string) (int64, bool) {
+	rest, ok := strings.CutPrefix(hash, openCodeChildDigestPrefix)
+	if !ok {
+		return 0, false
+	}
+	fields := strings.Split(rest, ":")
+	if len(fields) != 6 {
+		return 0, false
+	}
+	// Validate every numeric field, not just the two consumed: a digest with
+	// any malformed component is not a digest this version wrote, and the
+	// caller's composite fallback is the safe answer for it.
+	for _, field := range fields[:5] {
+		if _, err := strconv.ParseInt(field, 10, 64); err != nil {
+			return 0, false
+		}
+	}
+	sessionTime, _ := strconv.ParseInt(fields[1], 10, 64)
+	projectTime, _ := strconv.ParseInt(fields[2], 10, 64)
+	return max(sessionTime, projectTime) * 1_000_000, true
+}
 
 // parseOpenCodeDBSession parses a single session by ID from the
 // OpenCode SQLite database. The OpenCode-format provider owns this

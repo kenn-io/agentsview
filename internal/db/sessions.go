@@ -2157,11 +2157,13 @@ func (db *DB) GetFileInfoByPath(
 }
 
 // VirtualContainerMemberFreshness is one stored virtual member's freshness
-// signal: the newest stored file_mtime for its path and the minimum stored
-// data version, mirroring GetFileInfoByPath and GetDataVersionByPath.
+// signal: the newest stored file_mtime for its path, the minimum stored
+// data version, and the newest row's fingerprint hash, mirroring
+// GetFileInfoByPath, GetDataVersionByPath, and GetFileHashByPath.
 type VirtualContainerMemberFreshness struct {
 	MTimeNS     int64
 	DataVersion int
+	Hash        string
 }
 
 // ListVirtualContainerMemberFreshness returns the freshness signal for every
@@ -2183,12 +2185,15 @@ func (db *DB) ListVirtualContainerMemberFreshness(
 	if containerPath == "" {
 		return nil, nil
 	}
+	// Folded in Go rather than GROUP BY: the map needs MAX(file_mtime),
+	// MIN(data_version), and the hash of the newest-mtime row, and SQLite's
+	// bare-column-from-the-extreme-row guarantee only holds with exactly one
+	// min/max aggregate in the query.
 	rows, err := db.getReader().QueryContext(ctx,
-		"SELECT file_path, MAX(file_mtime), MIN(data_version) FROM sessions"+
+		"SELECT file_path, file_mtime, data_version, file_hash FROM sessions"+
 			" WHERE file_path >= ? || '#' AND file_path < ? || '$'"+
 			" AND (deletion_cause IS NULL"+
-			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
-			" GROUP BY file_path",
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')",
 		containerPath, containerPath,
 	)
 	if err != nil {
@@ -2202,16 +2207,31 @@ func (db *DB) ListVirtualContainerMemberFreshness(
 	for rows.Next() {
 		var path string
 		var mtime, version sql.NullInt64
-		if err := rows.Scan(&path, &mtime, &version); err != nil {
+		var hash sql.NullString
+		if err := rows.Scan(&path, &mtime, &version, &hash); err != nil {
 			return nil, fmt.Errorf(
 				"scanning container member freshness %s: %w",
 				containerPath, err,
 			)
 		}
-		members[path] = VirtualContainerMemberFreshness{
+		row := VirtualContainerMemberFreshness{
 			MTimeNS:     mtime.Int64,
 			DataVersion: int(version.Int64),
+			Hash:        hash.String,
 		}
+		member, seen := members[path]
+		if !seen {
+			members[path] = row
+			continue
+		}
+		if row.MTimeNS > member.MTimeNS {
+			member.MTimeNS = row.MTimeNS
+			member.Hash = row.Hash
+		}
+		if row.DataVersion < member.DataVersion {
+			member.DataVersion = row.DataVersion
+		}
+		members[path] = member
 	}
 	return members, rows.Err()
 }
