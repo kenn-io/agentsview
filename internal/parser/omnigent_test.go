@@ -1491,6 +1491,9 @@ func TestOmnigentBinaryIDGenerationParses(t *testing.T) {
 	assert.Equal(t, omnigentIDPrefix+"0:"+omnigentBinaryConvHex,
 		sub.Session.ParentSessionID,
 		"parent linkage must survive the binary-id hex conversion")
+	assert.Equal(t, "/workspace/project-a", sub.Session.Cwd)
+	assert.Equal(t, "main", sub.Session.GitBranch,
+		"a child with its own workspace but no git_branch must still inherit the root branch")
 }
 
 func TestOmnigentMetaMessageIsHiddenButChangesFingerprint(t *testing.T) {

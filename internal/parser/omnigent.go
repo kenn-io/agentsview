@@ -789,13 +789,17 @@ func omnigentWriteFingerprintField(h hash.Hash, value string) {
 	_, _ = h.Write([]byte(value))
 }
 
-// omnigentResolveWorkspace inherits cwd/branch from the root conversation when
-// a sub-agent conversation carries none of its own.
+// omnigentResolveWorkspace inherits cwd and git branch from the root
+// conversation, each field independently, when a sub-agent conversation
+// does not carry its own value: a child can record its workspace while
+// omnigent leaves git_branch unset, and that child must still inherit
+// the root's branch.
 func omnigentResolveWorkspace(
 	ctx context.Context, conn *sql.DB,
 	schema omnigentSchema, conv omnigentConversationRow,
 ) (string, string, error) {
-	if conv.workspace != "" || conv.rootID == "" || conv.rootID == conv.id {
+	if (conv.workspace != "" && conv.gitBranch != "") ||
+		conv.rootID == "" || conv.rootID == conv.id {
 		return conv.workspace, conv.gitBranch, nil
 	}
 	root, err := loadOmnigentConversation(
