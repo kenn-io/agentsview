@@ -98,48 +98,91 @@ func latestValidCheckpointHead(
 			if err != nil || sequence <= head.Sequence {
 				continue
 			}
-			if entry.Identity.Size > checkpointDecodedLimit {
-				continue
-			}
-			_, reader, err := store.Open(ctx, entry.Ref)
-			if errors.Is(err, ErrArtifactNotFound) || errors.Is(err, ErrArtifactCorrupt) {
-				continue
-			}
-			if err != nil {
-				return db.ArtifactCheckpointHead{}, false,
-					fmt.Errorf("opening artifact checkpoint: %w", err)
-			}
-			candidate, decodeErr := decodeCanonicalCheckpointHead(
-				reader, origin, entry.Ref.Name, entry.Identity,
+			candidate, valid, err := decodeCheckpointCandidate(
+				ctx, store, origin, entry,
 			)
-			// Verify drains any bytes left unread after an early semantic
-			// decode failure before authenticating the complete stream.
-			verifyErr := reader.Verify()
-			closeErr := reader.Close()
-			if closeErr != nil && !errors.Is(closeErr, ErrArtifactCorrupt) {
-				return db.ArtifactCheckpointHead{}, false,
-					fmt.Errorf("closing artifact checkpoint: %w", closeErr)
+			if err != nil {
+				return db.ArtifactCheckpointHead{}, false, err
 			}
-			if verifyErr != nil && !errors.Is(verifyErr, ErrArtifactCorrupt) {
-				return db.ArtifactCheckpointHead{}, false,
-					fmt.Errorf("verifying artifact checkpoint: %w", verifyErr)
+			if valid {
+				head = candidate
 			}
-			if verifyErr != nil || closeErr != nil {
-				continue
-			}
-			if errors.Is(decodeErr, errFutureArtifactVersion) {
-				return db.ArtifactCheckpointHead{}, false, decodeErr
-			}
-			if decodeErr != nil {
-				continue
-			}
-			head = candidate
 		}
 		if errors.Is(nextErr, io.EOF) {
 			break
 		}
 	}
 	return head, head.Sequence > 0, nil
+}
+
+func decodeCheckpointCandidate(
+	ctx context.Context,
+	store ArtifactStore,
+	origin string,
+	entry Entry,
+) (db.ArtifactCheckpointHead, bool, error) {
+	if entry.Identity.Size > checkpointDecodedLimit {
+		return db.ArtifactCheckpointHead{}, false, nil
+	}
+	_, reader, err := store.Open(ctx, entry.Ref)
+	if errors.Is(err, ErrArtifactNotFound) || errors.Is(err, ErrArtifactCorrupt) {
+		return db.ArtifactCheckpointHead{}, false, nil
+	}
+	if err != nil {
+		return db.ArtifactCheckpointHead{}, false,
+			fmt.Errorf("opening artifact checkpoint: %w", err)
+	}
+	candidate, decodeErr := decodeCanonicalCheckpointHead(
+		reader, origin, entry.Ref.Name, entry.Identity,
+	)
+	// Verify drains any bytes left unread after an early semantic decode
+	// failure before authenticating the complete stream.
+	verifyErr := reader.Verify()
+	closeErr := reader.Close()
+	if closeErr != nil && !errors.Is(closeErr, ErrArtifactCorrupt) {
+		return db.ArtifactCheckpointHead{}, false,
+			fmt.Errorf("closing artifact checkpoint: %w", closeErr)
+	}
+	if verifyErr != nil && !errors.Is(verifyErr, ErrArtifactCorrupt) {
+		return db.ArtifactCheckpointHead{}, false,
+			fmt.Errorf("verifying artifact checkpoint: %w", verifyErr)
+	}
+	if verifyErr != nil || closeErr != nil {
+		return db.ArtifactCheckpointHead{}, false, nil
+	}
+	if errors.Is(decodeErr, errFutureArtifactVersion) {
+		return db.ArtifactCheckpointHead{}, false, decodeErr
+	}
+	if decodeErr != nil {
+		return db.ArtifactCheckpointHead{}, false, nil
+	}
+	return candidate, true, nil
+}
+
+func validateRecordedCheckpointFormat(
+	ctx context.Context,
+	store ArtifactStore,
+	head db.ArtifactCheckpointHead,
+) error {
+	if head.CheckpointSize > checkpointDecodedLimit {
+		return fmt.Errorf(
+			"%w: recorded checkpoint %d exceeds the decode limit",
+			ErrArtifactUnsupported, head.Sequence,
+		)
+	}
+	ref, err := NewRef(head.Origin, KindCheckpoints,
+		fmt.Sprintf("cp-%010d.json", head.Sequence))
+	if err != nil {
+		return err
+	}
+	_, _, err = decodeCheckpointCandidate(ctx, store, head.Origin, Entry{
+		Ref: ref,
+		Identity: Identity{
+			SHA256: head.CheckpointSHA256,
+			Size:   head.CheckpointSize,
+		},
+	})
+	return err
 }
 
 func decodeCanonicalCheckpointHead(

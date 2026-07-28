@@ -194,6 +194,11 @@ func exportToStoreWithLimits(
 			return result, nil
 		}
 	}
+	if hadHead {
+		if err := validateRecordedCheckpointFormat(ctx, store, head); err != nil {
+			return result, err
+		}
+	}
 
 	comparableHead := !changed && hadHead
 	if !hadHead {

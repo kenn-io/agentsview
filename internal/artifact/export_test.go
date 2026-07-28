@@ -711,8 +711,69 @@ func TestExportToStoreChangedBatchDoesNotScanCheckpointHistory(t *testing.T) {
 	assert.Equal(t, 2, result.CheckpointSequence)
 	assert.Zero(t, store.lists,
 		"a recorded pre-apply head avoids checkpoint-history traversal")
-	assert.Zero(t, store.opens,
-		"normal changed export does not read an old checkpoint body")
+	assert.Equal(t, 1, store.opens,
+		"normal changed export validates only the recorded checkpoint body")
+}
+
+func TestExportToStoreDirtyBatchDefersRecordedFutureCheckpoint(t *testing.T) {
+	database := testExportDB(t)
+	seedSession(t, database, "sess-1", "alpha")
+	filesystem, err := newProtocolTestStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
+	_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
+		Origin: contractOrigin,
+	})
+	require.NoError(t, err)
+	currentHead, ok, err := database.GetArtifactCheckpointHead(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	futureSequence, err := database.ReserveArtifactCheckpointSequence(
+		t.Context(), contractOrigin, currentHead.Sequence,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, futureSequence)
+	futureBody := []byte(
+		`{"origin":"contract-a1b2c3","seq":2,"sessions":[` +
+			`{"gid":"contract-a1b2c3~session","hash":"sha512:future"}],"v":2}` + "\n",
+	)
+	futureIdentity := identityForBytes(t, futureBody)
+	createCheckpointBody(t, filesystem, futureSequence, futureBody)
+	require.NoError(t, database.RecordArtifactCheckpointHead(
+		t.Context(), db.ArtifactCheckpointHead{
+			Origin: contractOrigin, Sequence: futureSequence,
+			PublicationRevision: currentHead.PublicationRevision,
+			SessionMapSHA256:    strings64("b"),
+			CheckpointSHA256:    futureIdentity.SHA256,
+			CheckpointSize:      futureIdentity.Size,
+		}, nil,
+	))
+	require.NoError(t, database.ReplaceSessionMessages("sess-1", []db.Message{{
+		SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "changed",
+	}}))
+
+	result, err := ExportToStore(t.Context(), database, filesystem, ExportOptions{
+		Origin: contractOrigin,
+	})
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+	assert.False(t, result.CheckpointCreated)
+	result, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
+		Origin: contractOrigin,
+	})
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+	assert.False(t, result.CheckpointCreated)
+	head, ok, headErr := database.GetArtifactCheckpointHead(t.Context(), contractOrigin)
+	require.NoError(t, headErr)
+	require.True(t, ok)
+	assert.Equal(t, futureSequence, head.Sequence)
+	page, listErr := firstStoreEntryPage(
+		t.Context(), filesystem, contractOrigin, KindCheckpoints, 10,
+	)
+	require.NoError(t, listErr)
+	assert.Len(t, page.Items, 2)
 }
 
 func TestExportToStoreUnchangedCheckpointUsesCatalogIdentityOnly(t *testing.T) {
