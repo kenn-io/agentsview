@@ -70,7 +70,9 @@ func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 			Caps:   openCodeFormatProviderCapabilities(),
 			Config: cfg,
 		},
-		sources: newOpenCodeFormatSourceSet(cfg.Roots, f.spec),
+		sources: newOpenCodeFormatSourceSet(
+			cfg.Roots, f.spec, cfg.SQLiteContainerUnchangedSinceTrust,
+		),
 	}
 }
 
@@ -358,15 +360,24 @@ type openCodeFormatSource struct {
 type openCodeFormatSourceSet struct {
 	roots []string
 	spec  openCodeProviderSpec
+	// containerTrusted, when non-nil, reports that a shared container is
+	// byte-identical to the last fully verified pass (see
+	// ProviderConfig.SQLiteContainerUnchangedSinceTrust). Discover answers
+	// with the bounded watermark-only listing for such containers: the
+	// engine's container gate skips every member before fingerprinting, so
+	// the full child digest would be archive-sized work nothing reads.
+	containerTrusted func(dbPath string) bool
 }
 
 func newOpenCodeFormatSourceSet(
 	roots []string,
 	spec openCodeProviderSpec,
+	containerTrusted func(dbPath string) bool,
 ) openCodeFormatSourceSet {
 	return openCodeFormatSourceSet{
-		roots: cleanJSONLRoots(roots),
-		spec:  spec,
+		roots:            cleanJSONLRoots(roots),
+		spec:             spec,
+		containerTrusted: containerTrusted,
 	}
 }
 
@@ -393,7 +404,10 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		if src.DBPath == "" || !IsRegularFile(src.DBPath) {
 			continue
 		}
-		dbSources, err := s.sqliteSources(ctx, root, src.DBPath, storageIDs, false)
+		trusted := s.containerTrusted != nil && s.containerTrusted(src.DBPath)
+		dbSources, err := s.sqliteSources(
+			ctx, root, src.DBPath, storageIDs, trusted,
+		)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, err

@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"context"
 	"maps"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,110 @@ func (e *Engine) captureSQLiteContainerStates(
 		}
 	}
 	return states
+}
+
+// openCodeContainerPathForChangedPathEvent maps a changed-path event to the
+// shared SQLite container it names for one OpenCode-family agent, or ""
+// when the agent has no container or the event is not a container write.
+func openCodeContainerPathForChangedPathEvent(
+	agent parser.AgentType,
+	roots []string,
+	path string,
+) string {
+	if openCodeFormatDBName(agent) == "" {
+		return ""
+	}
+	for _, dir := range roots {
+		if dir == "" || strings.HasPrefix(dir, "s3://") {
+			continue
+		}
+		if container := openCodeContainerPathForEvent(agent, dir, path); container != "" {
+			return container
+		}
+	}
+	return ""
+}
+
+// filterFreshWatermarkOnlySources drops watermark-only shared-container
+// sources whose stored composite watermark already covers the carried
+// session-row watermark, before they are materialized into discovered files.
+// The stored values come from one indexed range query over the container's
+// virtual members, so a one-session write flows one candidate into the sync
+// pipeline instead of every session in the container. The comparison is
+// per-session — a watermark that advances past its own stored composite is
+// always kept, wherever other sessions' watermarks sit — and sessions with
+// no stored row or a stale data version are kept unconditionally. Child
+// writes at or below the stored composite are invisible here by design and
+// reconcile on the next full-discovery pass. Fails open: on a query error
+// every source is kept and the per-file gate decides instead.
+func (e *Engine) filterFreshWatermarkOnlySources(
+	ctx context.Context,
+	agent parser.AgentType,
+	roots []string,
+	path string,
+	sources []parser.SourceRef,
+) []parser.SourceRef {
+	if len(sources) == 0 || e.forceParse || e.pathRewriter != nil {
+		return sources
+	}
+	container := openCodeContainerPathForChangedPathEvent(agent, roots, path)
+	if container == "" {
+		return sources
+	}
+	watermarkOnly := false
+	for i := range sources {
+		if _, ok := parser.SourceWatermarkOnlyMTimeNS(sources[i]); ok {
+			watermarkOnly = true
+			break
+		}
+	}
+	if !watermarkOnly {
+		return sources
+	}
+	stored, err := e.db.ListVirtualContainerMemberFreshness(ctx, container)
+	if err != nil || len(stored) == 0 {
+		return sources
+	}
+	current := db.CurrentDataVersion()
+	kept := make([]parser.SourceRef, 0, len(sources))
+	for _, source := range sources {
+		if watermark, ok := parser.SourceWatermarkOnlyMTimeNS(source); ok {
+			member, found := stored[providerDiscoveredPath(source)]
+			if found && watermark <= member.MTimeNS &&
+				member.DataVersion >= current {
+				continue
+			}
+		}
+		kept = append(kept, source)
+	}
+	return kept
+}
+
+// sqliteContainerTrustedForDiscovery returns discovery's trust probe: it
+// reports containers whose pre-discovery capture matches the last fully
+// verified state, meaning every member will gate-skip before fingerprinting
+// and the full child digest would be computed for nothing. The probe is
+// keyed to the pass's own pre-discovery captures so a container that
+// changes between capture and listing can never look trusted with a newer
+// session set (the gate separately fails such containers for the pass).
+// Nil when nothing was captured or every parse is forced.
+func (e *Engine) sqliteContainerTrustedForDiscovery(
+	preStates map[string]parser.SQLiteContainerState,
+) func(string) bool {
+	if len(preStates) == 0 || e.forceParse {
+		return nil
+	}
+	return func(dbPath string) bool {
+		dbPath = filepath.Clean(dbPath)
+		state, ok := preStates[dbPath]
+		if !ok {
+			return false
+		}
+		e.containerMu.Lock()
+		trusted, ok := e.trustedSQLiteContainers[dbPath]
+		e.containerMu.Unlock()
+		return ok && trusted.state == state
+	}
 }
 
 func openCodeContainerPathForEvent(

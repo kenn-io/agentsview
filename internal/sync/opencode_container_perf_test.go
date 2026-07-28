@@ -69,20 +69,20 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 }
 
 // TestOpenCodeWatcherEventIsWatermarkBounded pins the same rule for the
-// watcher's changed-path pass, one level deeper: not only must a one-session
-// write leave every other session skipped, the pass must decide those skips
-// without reading the container's child tables at all. Changed-path
-// classification lists sessions through the bounded session-row watermark
-// (no message/part aggregation), and only sessions whose watermark advances
-// past their stored composite pay the indexed per-session digest lookup, so
-// the child rows examined per event scale with the changed batch and not
-// with the archive.
+// watcher's changed-path pass, one level deeper: a one-session write must
+// not read the container's child tables at all, and must not even
+// materialize the unchanged sessions. Changed-path classification lists
+// candidates through the bounded session-row watermark (no message/part
+// aggregation) filtered by the container's newest stored watermark, so the
+// sources processed and the child rows examined per event both scale with
+// the changed batch and not with the archive.
 func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	lookups := make(map[int]int64)
+	processed := make(map[int]int)
 	for _, n := range []int{20, 200} {
 		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
@@ -112,13 +112,14 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 			stats := env.engine.LastSyncStats()
 			assert.Equal(t, 1, stats.Synced,
 				"only the changed session may be rewritten")
-			assert.Equal(t, n-1, stats.Skipped,
-				"every unchanged session must skip on the watcher pass")
+			assert.Zero(t, stats.Skipped,
+				"unchanged sessions must not even be materialized as sources")
 			assert.Zero(t,
 				parser.OpenCodeContainerChildScans()-scansBefore,
 				"a watcher event must not aggregate the whole container's "+
 					"child tables")
 			lookups[n] = parser.OpenCodeSessionChildLookups() - lookupsBefore
+			processed[n] = stats.Synced + stats.Skipped + stats.Failed
 			assertMessageContent(
 				t, env.db, "opencode:ses00000",
 				"changed prompt", "changed answer",
@@ -129,6 +130,9 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 	assert.Equal(t, lookups[20], lookups[200],
 		"per-session child lookups for one changed session must not grow "+
 			"with container size")
+	assert.Equal(t, processed[20], processed[200],
+		"sources processed for one changed session must not grow with "+
+			"container size")
 }
 
 // TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery documents the
@@ -157,13 +161,15 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 		t, "below-mark", "swapped prompt", "swapped answer", 1779012500000,
 	)
 
+	scansBefore := parser.OpenCodeContainerChildScans()
+	lookupsBefore := parser.OpenCodeSessionChildLookups()
 	require.NoError(t, env.engine.SyncPathsContext(
 		context.Background(), []string{oc.path},
 	))
-	stats := env.engine.LastSyncStats()
-	assert.Zero(t, stats.Synced,
-		"the watcher pass defers child-only edits below the stored watermark")
-	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"the watcher pass must not scan child tables for a child-only edit")
+	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
+		"a child-only edit below the watermark yields no candidates")
 	assertMessageContent(
 		t, env.db, "opencode:below-mark",
 		"original prompt", "original answer",
@@ -218,6 +224,53 @@ func TestOpenCodeFullPassSkipsAfterWatcherPassParse(t *testing.T) {
 	assert.Equal(t, 3, stats.Skipped)
 	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
 		"full-pass skips must not pay per-session child lookups")
+}
+
+// TestOpenCodeIdleFullPassSkipsContainerChildScan pins that a periodic full
+// pass over a trusted, untouched container does not aggregate the child
+// tables at all: the container gate will skip every member before
+// fingerprinting, so discovery lists the bounded watermark form instead of
+// computing archive-sized child identities nothing reads. Any write breaks
+// container trust, and the next full pass carries the complete digest again
+// — including for child-only edits below every watermark.
+func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	for i := range 5 {
+		// Session rows far ahead of every child, so the later child-only
+		// replacement stays below the stored composite.
+		seedOpenCodeSQLiteTextSession(
+			t, oc, "proj", fmt.Sprintf("ses%05d", i),
+			1779012000000, 1779099999000,
+			"prompt", "answer",
+		)
+	}
+	require.Equal(t, 5, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	scansBefore := parser.OpenCodeContainerChildScans()
+	lookupsBefore := parser.OpenCodeSessionChildLookups()
+	stats := env.engine.SyncAll(context.Background(), nil)
+	assert.Zero(t, stats.Synced)
+	assert.Equal(t, 5, stats.Skipped,
+		"every session of a trusted container must gate-skip")
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"an idle full pass must not aggregate the container's child tables")
+	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
+		"an idle full pass must not pay per-session child lookups")
+
+	// A child-only replacement below every watermark breaks trust via the
+	// container state, and the next full pass carries the digest again.
+	oc.replaceTextContent(
+		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
+	)
+	stats = env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced,
+		"a write breaks container trust and full discovery reconciles it")
+	assertMessageContent(
+		t, env.db, "opencode:ses00000",
+		"swapped prompt", "swapped answer",
+	)
 }
 
 // TestOpenCodeDeletedChildIsDetected pins deletion sensitivity. The composite

@@ -148,7 +148,7 @@ func TestOpenCodeStreamingPartialSQLiteFailureContinuesLaterRoots(t *testing.T) 
 		}
 	}
 	sources := newOpenCodeFormatSourceSet(
-		[]string{partialRoot, healthyRoot}, spec,
+		[]string{partialRoot, healthyRoot}, spec, nil,
 	)
 	var paths []string
 

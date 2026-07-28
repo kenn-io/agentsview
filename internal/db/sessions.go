@@ -2156,6 +2156,62 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// VirtualContainerMemberFreshness is one stored virtual member's freshness
+// signal: the newest stored file_mtime for its path and the minimum stored
+// data version, mirroring GetFileInfoByPath and GetDataVersionByPath.
+type VirtualContainerMemberFreshness struct {
+	MTimeNS     int64
+	DataVersion int
+}
+
+// ListVirtualContainerMemberFreshness returns the freshness signal for every
+// stored session whose file_path is a virtual member of the shared container
+// at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
+// tombstones, keyed by file_path. Changed-path classification compares a
+// watermark-only listing against it in one indexed range query, so a
+// one-session write flows one candidate into the sync pipeline instead of
+// every session in the container. The range predicate rides
+// idx_sessions_file_path; '$' is the ASCII successor of '#', so the
+// half-open range covers exactly the "<containerPath>#" prefix.
+func (db *DB) ListVirtualContainerMemberFreshness(
+	ctx context.Context, containerPath string,
+) (map[string]VirtualContainerMemberFreshness, error) {
+	if containerPath == "" {
+		return nil, nil
+	}
+	rows, err := db.getReader().QueryContext(ctx,
+		"SELECT file_path, MAX(file_mtime), MIN(data_version) FROM sessions"+
+			" WHERE file_path >= ? || '#' AND file_path < ? || '$'"+
+			" AND (deletion_cause IS NULL"+
+			" OR deletion_cause <> '"+deletionCauseSourceMissing+"')"+
+			" GROUP BY file_path",
+		containerPath, containerPath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"listing container member freshness %s: %w", containerPath, err,
+		)
+	}
+	defer rows.Close()
+
+	members := make(map[string]VirtualContainerMemberFreshness)
+	for rows.Next() {
+		var path string
+		var mtime, version sql.NullInt64
+		if err := rows.Scan(&path, &mtime, &version); err != nil {
+			return nil, fmt.Errorf(
+				"scanning container member freshness %s: %w",
+				containerPath, err,
+			)
+		}
+		members[path] = VirtualContainerMemberFreshness{
+			MTimeNS:     mtime.Int64,
+			DataVersion: int(version.Int64),
+		}
+	}
+	return members, rows.Err()
+}
+
 // GetProjectByPath returns the stored project for the newest
 // non-deleted session matching file_path.
 func (db *DB) GetProjectByPath(path string) (project string, ok bool) {

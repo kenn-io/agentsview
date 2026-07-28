@@ -54,6 +54,17 @@ type ProviderConfig struct {
 	// path (Aider) use it to seed those IDs from the canonical remote path
 	// rather than the changing temp path. Most providers ignore it.
 	PathRewriter func(string) string
+	// SQLiteContainerUnchangedSinceTrust reports that the shared SQLite
+	// container at dbPath is byte-identical to the last pass that verified
+	// every one of its sessions, as captured before this discovery began.
+	// Providers that fan such a container out to per-session sources may
+	// answer discovery for it with the bounded watermark-only listing: the
+	// caller's container gate will skip every member before fingerprinting,
+	// so computing the full child digest would be archive-sized work for
+	// values nothing reads. Nil (the default, and every non-discovery
+	// construction) means no container is trusted and listings stay
+	// full-fidelity.
+	SQLiteContainerUnchangedSinceTrust func(dbPath string) bool
 }
 
 // Clone returns an independent config snapshot.

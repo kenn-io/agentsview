@@ -288,16 +288,25 @@ Grok section and remove the explicit registry exception in the coverage test.
   digest, preserving prior behavior. Watcher events do not pay the child scan
   at all: changed-path classification lists sessions through a bounded
   session-row watermark (`MAX(session.time_updated, project.time_updated)`,
-  `ForEachOpenCodeSessionWatermarkMeta`), the engine skips sessions whose
-  stored composite already covers that watermark, and only the changed batch
-  resolves the full composite and digest through the indexed per-session
-  lookup. The trade is explicit: a child write at or below the stored
-  composite that leaves the session and project rows untouched is invisible
-  to a watcher pass and is reconciled by the next full-discovery pass (the
-  periodic sync), whose digest still catches it; on the production container
-  above, 96% of sessions carry a session/project timestamp at or above every
-  child, and actively watched sessions bypass this entirely via the
-  per-session composite poll.
+  `ForEachOpenCodeSessionWatermarkMeta`), compares it per session against the
+  stored composite watermarks loaded in one indexed range query
+  (`filterFreshWatermarkOnlySources`), and drops covered sessions before they
+  are materialized into discovered files — only the changed batch flows into
+  the pipeline and resolves the full composite and digest through the indexed
+  per-session lookup. The comparison is per-session, so a watermark that
+  advances past its own stored composite is always a candidate regardless of
+  where other sessions' watermarks sit. Periodic full passes over a container
+  whose captured state still matches the last fully verified pass also list
+  the watermark form (`SQLiteContainerUnchangedSinceTrust`): every member
+  gate-skips before fingerprinting, so the child identity scan would be
+  archive-sized work nothing reads; any write breaks that trust and the next
+  full pass carries the complete digest again. The trade is explicit: a child
+  write at or below the stored composite that leaves the session and project
+  rows untouched is invisible to a watcher pass and is reconciled by the next
+  full-discovery pass over the now-untrusted container, whose digest still
+  catches it; on the production container above, 96% of sessions carry a
+  session/project timestamp at or above every child, and actively watched
+  sessions bypass this entirely via the per-session composite poll.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are

@@ -1036,8 +1036,9 @@ func (e *Engine) classifyProviderChangedPath(
 				Path:      path,
 				EventKind: eventKind,
 				WatchRoot: watchRoot,
-				// processProviderFile skips watermark-only shared-container
-				// sources against their stored composite watermark, so
+				// The changed-path pipeline drops watermark-only
+				// shared-container sources whose stored composite watermark
+				// already covers them (filterFreshWatermarkOnlySources), so
 				// providers may answer with the bounded session-row listing
 				// instead of a whole-container child digest scan.
 				AllowWatermarkOnlySources: true,
@@ -1081,6 +1082,9 @@ func (e *Engine) classifyProviderChangedPath(
 				}
 				continue
 			}
+			sources = e.filterFreshWatermarkOnlySources(
+				ctx, agentType, roots, path, sources,
+			)
 			for _, source := range sources {
 				sourcePath := providerDiscoveredPath(source)
 				if sourcePath == "" {
@@ -4486,7 +4490,9 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
+	providerFound, providerFailures := e.discoverProviderSources(
+		ctx, scope, preContainerStates,
+	)
 	for _, file := range providerFound {
 		counts[file.Agent]++
 	}
@@ -4747,9 +4753,11 @@ const slowProviderDiscoveryThreshold = 100 * time.Millisecond
 func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
+	preContainerStates map[string]parser.SQLiteContainerState,
 ) ([]parser.DiscoveredFile, int) {
 	var files []parser.DiscoveredFile
 	var failures int
+	containerTrusted := e.sqliteContainerTrustedForDiscovery(preContainerStates)
 
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
@@ -4785,8 +4793,9 @@ func (e *Engine) discoverProviderSources(
 			continue
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:   filteredRoots,
-			Machine: e.machine,
+			Roots:                              filteredRoots,
+			Machine:                            e.machine,
+			SQLiteContainerUnchangedSinceTrust: containerTrusted,
 		})
 		// Shared-database providers are streamed source-by-source by their
 		// dedicated sync phase. Calling Discover here would build an archive-sized
@@ -5270,6 +5279,18 @@ func (e *Engine) discoveredFileEffectiveMtime(
 			}
 		}
 		return mtime, nil
+	}
+	// Watermark-only shared-container sources carry their session-row
+	// watermark from discovery. Consulting the provider Fingerprint instead
+	// would resolve the full composite with one indexed child lookup per
+	// session, scaling cutoff filtering with the container instead of the
+	// changed batch — and these sources are only listed for containers that
+	// provably have not changed since their last verified pass, where the
+	// carried watermark and the composite are equally stale.
+	if file.ProviderSource != nil {
+		if wm, ok := parser.SourceWatermarkOnlyMTimeNS(*file.ProviderSource); ok {
+			return wm, nil
+		}
 	}
 	// Provider-authoritative sources resolve freshness through the provider
 	// Fingerprint so composite provider-owned source state participates in
