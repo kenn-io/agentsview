@@ -710,12 +710,12 @@ func (s openCodeFormatSourceSet) FindSource(
 // value is the per-session composite.
 func (s openCodeFormatSourceSet) sourceMtimeWithComposite(
 	path string,
-) (int64, bool, error) {
+) (int64, string, bool, error) {
 	if dbPath, sessionID, ok := s.spec.parseVirtual(path); ok {
 		return openCodeSQLiteSessionMtimeComposite(dbPath, sessionID)
 	}
 	mtime, err := s.spec.sourceMtime(path)
-	return mtime, false, err
+	return mtime, "", false, err
 }
 
 func (s openCodeFormatSourceSet) Fingerprint(
@@ -731,11 +731,22 @@ func (s openCodeFormatSourceSet) Fingerprint(
 	}
 	mtime := sourceCarriedMTimeNS(source)
 	composite := sourceCarriedCompositeMTime(source)
-	if mtime == 0 {
-		var err error
-		mtime, composite, err = s.sourceMtimeWithComposite(path)
+	digest := sourceCarriedChildDigest(source)
+	if mtime == 0 || digest == "" {
+		// Sources rebuilt by FindSource or reconciliation carry no discovery
+		// metadata. Without this the hash would be empty, and an empty hash is
+		// treated as no constraint by the freshness gate — so a deletion-only
+		// change would pass unnoticed on every non-discovery path.
+		lookupMtime, lookupDigest, lookupComposite, err :=
+			s.sourceMtimeWithComposite(path)
 		if err != nil {
 			return SourceFingerprint{}, err
+		}
+		if mtime == 0 {
+			mtime, composite = lookupMtime, lookupComposite
+		}
+		if digest == "" {
+			digest = lookupDigest
 		}
 	}
 	fingerprint := SourceFingerprint{
@@ -752,7 +763,7 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		// digest folds in the child row counts so a delete changes the
 		// fingerprint; FingerprintHashRequiredForFreshness makes the gate
 		// compare it against the stored value.
-		fingerprint.Hash = sourceCarriedChildDigest(source)
+		fingerprint.Hash = digest
 		// Every session in this root shares one physical container, so the
 		// container's size moves whenever any single session is written.
 		// Stamping it onto a per-session fingerprint made one session's

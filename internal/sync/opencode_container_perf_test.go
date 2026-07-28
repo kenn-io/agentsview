@@ -107,3 +107,64 @@ func TestOpenCodeDeletedChildIsDetected(t *testing.T) {
 	assert.Equal(t, 1, stats.Synced,
 		"a deleted child must not be hidden behind an unchanged composite max")
 }
+
+// TestOpenCodeDeletedChildDetectedViaReconciliation covers the same deletion
+// hole on the reconciliation path. Sources rebuilt by FindSource rather than
+// carried from discovery metadata have no child digest, so the fingerprint hash
+// is empty and the freshness gate treats it as no constraint.
+func TestOpenCodeDeletedChildDetectedViaReconciliation(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "recon-del",
+		1779012000000, 1779099999000,
+		"keep prompt", "drop answer",
+	)
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	oc.mustExec(t, "delete assistant parts",
+		"DELETE FROM part WHERE session_id = ? AND message_id LIKE ?",
+		"recon-del", "%assistant%")
+	oc.mustExec(t, "delete assistant message",
+		"DELETE FROM message WHERE session_id = ? AND id LIKE ?",
+		"recon-del", "%assistant%")
+
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		context.Background(), []string{env.opencodeDir}, false,
+	))
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Assert the observable outcome rather than which pass did the write:
+	// the removed assistant turn must no longer be archived.
+	for _, m := range fetchMessages(t, env.db, "opencode:recon-del") {
+		assert.NotContains(t, m.Content, "drop answer",
+			"deleted child content must not remain archived")
+	}
+}
+
+// TestOpenCodeSameCountChildReplacementIsDetected covers a replacement that
+// preserves both child counts and leaves every new timestamp below the session
+// row's already-higher watermark, so neither the watermark nor the counts move.
+func TestOpenCodeSameCountChildReplacementIsDetected(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "swap-session",
+		1779012000000, 1779099999000,
+		"original prompt", "original answer",
+	)
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	// Same number of messages and parts, timestamps still below the session
+	// row's watermark, but different rows and different content.
+	oc.replaceTextContent(
+		t, "swap-session", "swapped prompt", "swapped answer", 1779012500000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced,
+		"a same-count child replacement below the session watermark must "+
+			"still change the fingerprint")
+}

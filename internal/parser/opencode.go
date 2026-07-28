@@ -106,7 +106,8 @@ func ForEachOpenCodeSessionMeta(
 	if err != nil {
 		return err
 	}
-	query := "SELECT s.id, s.time_updated, 0, 0 FROM session s"
+	query := "SELECT s.id, s.time_updated, 0, 0, 0, 0, '', '', '', '' " +
+		"FROM session s"
 	if composite {
 		query = "SELECT s.id, " + openCodeCompositeMtimeExpr + ", " +
 			openCodeCompositeCountsExpr +
@@ -123,9 +124,12 @@ func ForEachOpenCodeSessionMeta(
 
 	for rows.Next() {
 		var id string
-		var timeUpdated, messages, parts int64
+		var agg openCodeChildAggregate
 		if err := rows.Scan(
-			&id, &timeUpdated, &messages, &parts,
+			&id, &agg.watermark, &agg.messages, &agg.parts,
+			&agg.messageTimeSum, &agg.partTimeSum,
+			&agg.messageLoID, &agg.messageHiID,
+			&agg.partLoID, &agg.partHiID,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning opencode session meta: %w", err,
@@ -135,11 +139,9 @@ func ForEachOpenCodeSessionMeta(
 		if err := yield(OpenCodeSessionMeta{
 			SessionID:      id,
 			VirtualPath:    dbPath + "#" + id,
-			FileMtime:      timeUpdated * 1_000_000,
+			FileMtime:      agg.watermark * 1_000_000,
 			CompositeMtime: composite,
-			ChildDigest: openCodeChildDigest(
-				composite, timeUpdated, messages, parts,
-			),
+			ChildDigest:    agg.digest(composite),
 		}); err != nil {
 			return err
 		}
@@ -154,46 +156,69 @@ func ForEachOpenCodeSessionMeta(
 // gate compares it against.
 func openCodeSessionCompositeMtime(
 	db *sql.DB, dbPath, sessionID string,
-) (int64, bool, error) {
+) (int64, string, bool, error) {
 	composite, err := openCodeCompositeMtimeSupportedCached(db, dbPath)
 	if err != nil {
-		return 0, false, err
+		return 0, "", false, err
 	}
-	query := "SELECT s.time_updated, 0, 0 FROM session s WHERE s.id = ?"
+	query := "SELECT s.time_updated, 0, 0, 0, 0, '', '', '', '' " +
+		"FROM session s WHERE s.id = ?"
 	if composite {
 		query = "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
 			openCodeSessionCompositeCountsExpr +
 			" FROM session s" + openCodeSessionCompositeMtimeJoins +
 			" WHERE s.id = ?"
 	}
-	var timeUpdated, messages, parts int64
+	var agg openCodeChildAggregate
 	if err := db.QueryRow(query, sessionID).Scan(
-		&timeUpdated, &messages, &parts,
+		&agg.watermark, &agg.messages, &agg.parts,
+		&agg.messageTimeSum, &agg.partTimeSum,
+		&agg.messageLoID, &agg.messageHiID,
+		&agg.partLoID, &agg.partHiID,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, composite, nil
+			return 0, "", composite, nil
 		}
-		return 0, composite, fmt.Errorf(
+		return 0, "", composite, fmt.Errorf(
 			"loading opencode session mtime %s#%s: %w",
 			dbPath, sessionID, err,
 		)
 	}
-	return timeUpdated, composite, nil
+	return agg.watermark, agg.digest(composite), composite, nil
 }
 
-// openCodeChildDigest is the per-session freshness identity: the composite
-// watermark plus the child row counts. The counts are what make a deletion
-// visible; the watermark is what makes an edit or insert visible. Empty for
-// containers without composite support, which keeps their previous
-// container-stat behavior.
-func openCodeChildDigest(
-	composite bool, watermark, messages, parts int64,
-) string {
+// openCodeChildAggregate is the cheap per-session identity read alongside the
+// watermark. Each component covers a change the others cannot:
+//
+//   - watermark: an edit or insert that advances a timestamp
+//   - counts: a deletion, which never moves a MAX
+//   - time sums: an edit whose new timestamp still sits below the watermark
+//   - id range: a same-count replacement that reuses the old timestamps
+//
+// All of it lives in the child tables' main b-tree pages, so computing it does
+// not read the transcript text held in overflow pages.
+type openCodeChildAggregate struct {
+	watermark      int64
+	messages       int64
+	parts          int64
+	messageTimeSum int64
+	partTimeSum    int64
+	messageLoID    string
+	messageHiID    string
+	partLoID       string
+	partHiID       string
+}
+
+func (a openCodeChildAggregate) digest(composite bool) string {
 	if !composite {
 		return ""
 	}
 	return fmt.Sprintf(
-		"%s%d:%d:%d", openCodeChildDigestPrefix, watermark, messages, parts,
+		"%s%d:%d:%d:%d:%d:%s:%s:%s:%s",
+		openCodeChildDigestPrefix,
+		a.watermark, a.messages, a.parts,
+		a.messageTimeSum, a.partTimeSum,
+		a.messageLoID, a.messageHiID, a.partLoID, a.partHiID,
 	)
 }
 
@@ -529,11 +554,13 @@ const openCodeCompositeMtimeExpr = `MAX(s.time_updated,
 const openCodeCompositeMtimeJoins = `
 	LEFT JOIN project pr ON pr.id = s.project_id
 	LEFT JOIN (
-		SELECT session_id, MAX(time_updated) mx, COUNT(*) n
+		SELECT session_id, MAX(time_updated) mx, COUNT(*) n,
+		       SUM(time_updated) sm, MIN(id) lo, MAX(id) hi
 		FROM message GROUP BY session_id
 	) m ON m.session_id = s.id
 	LEFT JOIN (
-		SELECT session_id, MAX(time_updated) mx, COUNT(*) n
+		SELECT session_id, MAX(time_updated) mx, COUNT(*) n,
+		       SUM(time_updated) sm, MIN(id) lo, MAX(id) hi
 		FROM part GROUP BY session_id
 	) p ON p.session_id = s.id`
 
@@ -542,11 +569,20 @@ const openCodeCompositeMtimeJoins = `
 // real container the session or project row usually already holds the higher
 // value, so removing a message or part leaves the max untouched and the
 // session would look fresh with the deleted content still archived.
-const openCodeCompositeCountsExpr = `COALESCE(m.n, 0), COALESCE(p.n, 0)`
+const openCodeCompositeCountsExpr = `COALESCE(m.n, 0), COALESCE(p.n, 0),
+	COALESCE(m.sm, 0), COALESCE(p.sm, 0),
+	COALESCE(m.lo, ''), COALESCE(m.hi, ''),
+	COALESCE(p.lo, ''), COALESCE(p.hi, '')`
 
 const openCodeSessionCompositeCountsExpr = `
 	(SELECT COUNT(*) FROM message WHERE session_id = s.id),
-	(SELECT COUNT(*) FROM part WHERE session_id = s.id)`
+	(SELECT COUNT(*) FROM part WHERE session_id = s.id),
+	(SELECT COALESCE(SUM(time_updated), 0) FROM message WHERE session_id = s.id),
+	(SELECT COALESCE(SUM(time_updated), 0) FROM part WHERE session_id = s.id),
+	(SELECT COALESCE(MIN(id), '') FROM message WHERE session_id = s.id),
+	(SELECT COALESCE(MAX(id), '') FROM message WHERE session_id = s.id),
+	(SELECT COALESCE(MIN(id), '') FROM part WHERE session_id = s.id),
+	(SELECT COALESCE(MAX(id), '') FROM part WHERE session_id = s.id)`
 
 // The single-session form must NOT reuse the grouped subqueries above: a
 // GROUP BY subquery is materialized over the whole container before the outer
@@ -852,7 +888,7 @@ func buildOpenCodeSession(
 	// file_mtime is directly comparable to it. Falling back to the session
 	// row's own time_updated keeps legacy containers on their prior value.
 	fileMtime := s.timeUpdated
-	if composite, _, err := openCodeSessionCompositeMtime(
+	if composite, _, _, err := openCodeSessionCompositeMtime(
 		db, dbPath, s.id,
 	); err != nil {
 		return nil, nil, err
@@ -1646,32 +1682,32 @@ func openCodeStorageFingerprintHash(raw string) string {
 // container's size still has to act as a fallback change signal.
 func openCodeSQLiteSessionMtimeComposite(
 	dbPath, sessionID string,
-) (int64, bool, error) {
+) (int64, string, bool, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
-			return 0, false, nil
+			return 0, "", false, nil
 		}
-		return 0, false, fmt.Errorf(
+		return 0, "", false, fmt.Errorf(
 			"stat opencode db %s: %w", dbPath, err,
 		)
 	}
 
 	db, err := openOpenCodeDB(dbPath)
 	if err != nil {
-		return 0, false, err
+		return 0, "", false, err
 	}
 	defer db.Close()
 
-	timeUpdated, composite, err := openCodeSessionCompositeMtime(
+	timeUpdated, digest, composite, err := openCodeSessionCompositeMtime(
 		db, dbPath, sessionID,
 	)
 	if err != nil {
-		return 0, false, err
+		return 0, "", false, err
 	}
 	if timeUpdated == 0 {
-		return 0, composite, nil
+		return 0, digest, composite, nil
 	}
-	return timeUpdated * 1_000_000, composite, nil
+	return timeUpdated * 1_000_000, digest, composite, nil
 }
 
 func openCodeSQLiteSessionMtime(
@@ -1692,7 +1728,7 @@ func openCodeSQLiteSessionMtime(
 	}
 	defer db.Close()
 
-	timeUpdated, _, err := openCodeSessionCompositeMtime(db, dbPath, sessionID)
+	timeUpdated, _, _, err := openCodeSessionCompositeMtime(db, dbPath, sessionID)
 	if err != nil {
 		return 0, err
 	}
