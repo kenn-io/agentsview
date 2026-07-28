@@ -112,6 +112,8 @@ func latestValidCheckpointHead(
 			candidate, decodeErr := decodeCanonicalCheckpointHead(
 				reader, origin, entry.Ref.Name, entry.Identity,
 			)
+			// Verify drains any bytes left unread after an early semantic
+			// decode failure before authenticating the complete stream.
 			verifyErr := reader.Verify()
 			closeErr := reader.Close()
 			if closeErr != nil && !errors.Is(closeErr, ErrArtifactCorrupt) {

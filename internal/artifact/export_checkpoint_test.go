@@ -130,6 +130,27 @@ func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
 	}
 }
 
+func TestExportCheckpointBootstrapSkipsMalformedCheckpointBeforeEOF(t *testing.T) {
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	body := append([]byte(`{"unexpected":`), deterministicDocbankBytes(1<<20)...)
+	createCheckpointBody(t, store, 1, body)
+
+	result, err := ExportToStore(
+		t.Context(), database, store,
+		ExportOptions{Origin: contractOrigin},
+	)
+	require.NoError(t, err)
+	assert.True(t, result.CheckpointCreated)
+	assert.Equal(t, 2, result.CheckpointSequence)
+	head, ok, err := database.GetArtifactCheckpointHead(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 2, head.Sequence)
+}
+
 type maxReadReader struct {
 	reader io.Reader
 	max    int
