@@ -25,6 +25,22 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	timingInsertMessage(t, d, "solo", 2, "user",
 		"ok", "2026-04-26T10:00:30Z", false)
 
+	timingInsertSession(t, d, "copilot-exact",
+		"2026-07-24T11:56:20Z", "2026-07-25T00:34:49.483Z")
+	timingInsertMessage(t, d, "copilot-exact", 0, "user",
+		"finish", "2026-07-24T11:56:20Z", false)
+	timingInsertMessage(t, d, "copilot-exact", 1, "assistant",
+		"task_complete", "2026-07-24T11:56:24.189Z", true)
+	copilotMessageID := timingMsgID(t, d, "copilot-exact", 1)
+	timingInsertToolCall(t, d, "copilot-exact", copilotMessageID,
+		"call_example", "task_complete", "Other", "")
+	timingInsertToolResultEvent(t, d, "copilot-exact", 1, 0,
+		"call_example", "started", "2026-07-24T11:56:24.198Z")
+	timingInsertToolResultEvent(t, d, "copilot-exact", 1, 0,
+		"call_example", "completed", "2026-07-24T11:56:27.923Z")
+	timingInsertMessage(t, d, "copilot-exact", 2, "user",
+		"next request", "2026-07-25T00:34:49.483Z", false)
+
 	timingInsertSession(t, d, "fallback",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
 	timingInsertMessage(t, d, "fallback", 0, "user",
@@ -110,6 +126,17 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 		assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs, "turn duration")
 		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
 		assert.Equal(t, int64(29_000), *got.Turns[0].Calls[0].DurationMs, "call duration")
+	})
+
+	t.Run("copilot exact tool events exclude idle gap", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "copilot-exact")
+		require.NoError(t, err, "GetSessionTiming")
+		require.Len(t, got.Turns, 1)
+		require.Len(t, got.Turns[0].Calls, 1)
+		require.NotNil(t, got.Turns[0].DurationMs, "turn duration")
+		assert.Equal(t, int64(3_725), *got.Turns[0].DurationMs)
+		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
+		assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs)
 	})
 
 	t.Run("last message falls back to session end", func(t *testing.T) {
@@ -343,8 +370,27 @@ func timingInsertToolCall(
 	_, err := d.getWriter().ExecContext(context.Background(), `
 		INSERT INTO tool_calls
 			(session_id, message_id, tool_use_id, tool_name,
-			 category, input_json, subagent_session_id)
-		VALUES (?, ?, ?, ?, ?, '{}', ?)
+			 category, input_json, subagent_session_id, call_index)
+		VALUES (?, ?, ?, ?, ?, '{}', ?, 0)
 	`, sessionID, messageID, toolUseID, toolName, category, sub)
 	require.NoError(t, err, "timingInsertToolCall %s/%d", sessionID, messageID)
+}
+
+func timingInsertToolResultEvent(
+	t *testing.T, d *DB,
+	sessionID string, messageOrdinal, callIndex int,
+	toolUseID, status, timestamp string,
+) {
+	t.Helper()
+	_, err := d.getWriter().ExecContext(context.Background(), `
+		INSERT INTO tool_result_events
+			(session_id, tool_call_message_ordinal, call_index,
+			 tool_use_id, source, status, content, content_length,
+			 timestamp, event_index)
+		VALUES (?, ?, ?, ?, 'copilot-cli', ?, '', 0, ?,
+		        CASE WHEN ? = 'started' THEN 0 ELSE 1 END)
+	`, sessionID, messageOrdinal, callIndex, toolUseID, status,
+		timestamp, status)
+	require.NoError(t, err,
+		"timingInsertToolResultEvent %s/%d", sessionID, messageOrdinal)
 }

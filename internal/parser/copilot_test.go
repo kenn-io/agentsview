@@ -124,6 +124,7 @@ func TestParseCopilotSession_ToolCalls(t *testing.T) {
 		`{"type":"session.start","data":{"sessionId":"tool-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Read the config file"},"timestamp":"2025-01-15T10:00:01Z"}`,
 		`{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"tc-1","name":"view","arguments":"{\"path\":\"config.json\"}"}]},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"tool.execution_start","data":{"toolCallId":"tc-1"},"timestamp":"2025-01-15T10:00:02.125Z"}`,
 		`{"type":"tool.execution_complete","data":{"toolCallId":"tc-1","success":true,"result":"{\"key\":\"value\"}"},"timestamp":"2025-01-15T10:00:03Z"}`,
 		`{"type":"assistant.message","data":{"content":"The config file contains a key-value pair."},"timestamp":"2025-01-15T10:00:04Z"}`,
 	)
@@ -139,6 +140,19 @@ func TestParseCopilotSession_ToolCalls(t *testing.T) {
 		ToolUseID: "tc-1",
 		InputJSON: `{"path":"config.json"}`,
 	}})
+	require.Len(t, tcMsg.ToolCalls[0].ResultEvents, 2)
+	assert.Equal(t, ParsedToolResultEvent{
+		ToolUseID: "tc-1",
+		Source:    "copilot-cli",
+		Status:    "started",
+		Timestamp: parseTimestamp("2025-01-15T10:00:02.125Z"),
+	}, tcMsg.ToolCalls[0].ResultEvents[0])
+	assert.Equal(t, ParsedToolResultEvent{
+		ToolUseID: "tc-1",
+		Source:    "copilot-cli",
+		Status:    "completed",
+		Timestamp: parseTimestamp("2025-01-15T10:00:03Z"),
+	}, tcMsg.ToolCalls[0].ResultEvents[1])
 
 	// Check tool result message.
 	trMsg := msgs[2]

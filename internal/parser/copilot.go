@@ -19,11 +19,13 @@ const (
 	copilotEventSessionStart    = "session.start"
 	copilotEventUserMessage     = "user.message"
 	copilotEventAssistantMsg    = "assistant.message"
+	copilotEventToolStart       = "tool.execution_start"
 	copilotEventToolComplete    = "tool.execution_complete"
 	copilotEventAssistantReason = "assistant.reasoning"
 	copilotEventModelChange     = "session.model_change"
 	copilotEventSessionShutdown = "session.shutdown"
 	copilotReportedCostSource   = "copilot-reported"
+	copilotToolEventSource      = "copilot-cli"
 )
 
 var copilotUsageBasedPricingStartedAt = time.Date(
@@ -69,6 +71,8 @@ func (b *copilotSessionBuilder) processLine(line string) {
 		b.handleUserMessage(data, ts)
 	case copilotEventAssistantMsg:
 		b.handleAssistantMessage(data, ts)
+	case copilotEventToolStart:
+		b.handleToolEvent(data, ts, "started")
 	case copilotEventToolComplete:
 		b.handleToolComplete(data, ts)
 	case copilotEventAssistantReason:
@@ -214,6 +218,7 @@ func (b *copilotSessionBuilder) handleToolComplete(
 	if toolCallID == "" {
 		return
 	}
+	b.appendToolEvent(toolCallID, ts, "completed")
 
 	r := data.Get("result")
 	content := r.Str
@@ -234,6 +239,39 @@ func (b *copilotSessionBuilder) handleToolComplete(
 		}},
 	})
 	b.ordinal++
+}
+
+func (b *copilotSessionBuilder) handleToolEvent(
+	data gjson.Result, ts time.Time, status string,
+) {
+	toolCallID := data.Get("toolCallId").Str
+	if toolCallID == "" {
+		return
+	}
+	b.appendToolEvent(toolCallID, ts, status)
+}
+
+func (b *copilotSessionBuilder) appendToolEvent(
+	toolCallID string, ts time.Time, status string,
+) {
+	for i := len(b.messages) - 1; i >= 0; i-- {
+		for j := range b.messages[i].ToolCalls {
+			call := &b.messages[i].ToolCalls[j]
+			if call.ToolUseID != toolCallID {
+				continue
+			}
+			call.ResultEvents = append(
+				call.ResultEvents,
+				ParsedToolResultEvent{
+					ToolUseID: toolCallID,
+					Source:    copilotToolEventSource,
+					Status:    status,
+					Timestamp: ts,
+				},
+			)
+			return
+		}
+	}
 }
 
 func (b *copilotSessionBuilder) handleAssistantReasoning() {

@@ -76,6 +76,65 @@ func timingInsertToolCallPG(
 	require.NoError(t, err, "insert tool_call %s/%d", sessionID, msgOrdinal)
 }
 
+func timingInsertToolResultEventPG(
+	t *testing.T, pg *sql.DB, sessionID string,
+	msgOrdinal, callIndex int,
+	toolUseID, status, timestamp string,
+) {
+	t.Helper()
+	_, err := pg.Exec(`
+		INSERT INTO tool_result_events
+			(session_id, tool_call_message_ordinal, call_index,
+			 tool_use_id, source, status, content, content_length,
+			 timestamp, event_index)
+		VALUES ($1, $2, $3, $4, 'copilot-cli', $5, '', 0,
+		        $6::timestamptz,
+		        CASE WHEN $5 = 'started' THEN 0 ELSE 1 END)
+	`, sessionID, msgOrdinal, callIndex, toolUseID, status, timestamp)
+	require.NoError(t, err,
+		"insert tool_result_event %s/%d", sessionID, msgOrdinal)
+}
+
+func TestPGGetSessionTiming_CopilotExactToolEventsExcludeIdleGap(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	timingResetSession(t, pg, "timing-copilot-exact")
+	timingInsertSessionPG(t, pg, "timing-copilot-exact",
+		"2026-07-24T11:56:20Z", "2026-07-25T00:34:49.483Z")
+	timingInsertMessagePG(t, pg, "timing-copilot-exact", 0, "user",
+		"finish", "2026-07-24T11:56:20Z", false)
+	timingInsertMessagePG(t, pg, "timing-copilot-exact", 1, "assistant",
+		"task_complete", "2026-07-24T11:56:24.189Z", true)
+	timingInsertToolCallPG(t, pg, "timing-copilot-exact", 1, 0,
+		"call_example", "task_complete", "Other", "")
+	timingInsertToolResultEventPG(t, pg, "timing-copilot-exact", 1, 0,
+		"call_example", "started", "2026-07-24T11:56:24.198Z")
+	timingInsertToolResultEventPG(t, pg, "timing-copilot-exact", 1, 0,
+		"call_example", "completed", "2026-07-24T11:56:27.923Z")
+	timingInsertMessagePG(t, pg, "timing-copilot-exact", 2, "user",
+		"next request", "2026-07-25T00:34:49.483Z", false)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	got, err := store.GetSessionTiming(
+		context.Background(), "timing-copilot-exact",
+	)
+	require.NoError(t, err, "GetSessionTiming")
+	require.Len(t, got.Turns, 1)
+	require.Len(t, got.Turns[0].Calls, 1)
+	require.NotNil(t, got.Turns[0].DurationMs)
+	assert.Equal(t, int64(3_725), *got.Turns[0].DurationMs)
+	require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs)
+}
+
 func TestPGGetSessionTiming_Solo(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)

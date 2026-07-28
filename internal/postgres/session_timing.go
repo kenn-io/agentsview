@@ -102,6 +102,21 @@ func (s *Store) queryCallRows(
 ) ([]db.CallRow, error) {
 	now := time.Now().UTC()
 	rows, err := s.pg.QueryContext(ctx, `
+		WITH copilot_events AS (
+		  SELECT
+		    session_id,
+		    tool_call_message_ordinal,
+		    call_index,
+		    MIN(timestamp) FILTER (
+		      WHERE source = 'copilot-cli' AND status = 'started'
+		    ) AS started_at,
+		    MAX(timestamp) FILTER (
+		      WHERE source = 'copilot-cli' AND status = 'completed'
+		    ) AS completed_at
+		  FROM tool_result_events
+		  WHERE session_id = $1
+		  GROUP BY session_id, tool_call_message_ordinal, call_index
+		)
 		SELECT
 		  tc.message_ordinal,
 		  tc.tool_use_id,
@@ -110,20 +125,32 @@ func (s *Store) queryCallRows(
 		  tc.skill_name,
 		  tc.subagent_session_id,
 		  tc.input_json,
+		  ce.started_at,
+		  ce.completed_at,
 		  CASE
+		    WHEN ce.started_at IS NOT NULL
+		         AND ce.completed_at IS NOT NULL
+		         AND ce.completed_at >= ce.started_at THEN
+		      (round(EXTRACT(EPOCH FROM (
+		        ce.completed_at - ce.started_at
+		      )) * 1000))::bigint
 		    WHEN tc.subagent_session_id IS NOT NULL
 		         AND s_sub.started_at IS NOT NULL THEN
 		      (round(EXTRACT(EPOCH FROM (
-		        COALESCE(s_sub.ended_at, $1::timestamptz) - s_sub.started_at
+		        COALESCE(s_sub.ended_at, $2::timestamptz) - s_sub.started_at
 		      )) * 1000))::bigint
 		    ELSE NULL
 		  END AS subagent_duration_ms
 		FROM tool_calls tc
+		LEFT JOIN copilot_events ce
+		  ON ce.session_id = tc.session_id
+		  AND ce.tool_call_message_ordinal = tc.message_ordinal
+		  AND ce.call_index = tc.call_index
 		LEFT JOIN sessions s_sub
 		  ON s_sub.id = tc.subagent_session_id
-		WHERE tc.session_id = $2
+		WHERE tc.session_id = $1
 		ORDER BY tc.message_ordinal, tc.id
-	`, now, sessionID)
+	`, sessionID, now)
 	if err != nil {
 		return nil, fmt.Errorf("querying timing calls: %w", err)
 	}
@@ -134,10 +161,11 @@ func (s *Store) queryCallRows(
 		var msgOrdinal int
 		var toolUseID, inputJSON, skill, sub sql.NullString
 		var toolName, category string
+		var exactStart, exactEnd *time.Time
 		var subDur sql.NullInt64
 		if err := rows.Scan(
 			&msgOrdinal, &toolUseID, &toolName, &category,
-			&skill, &sub, &inputJSON, &subDur,
+			&skill, &sub, &inputJSON, &exactStart, &exactEnd, &subDur,
 		); err != nil {
 			return nil, fmt.Errorf("scanning timing call: %w", err)
 		}
@@ -163,6 +191,14 @@ func (s *Store) queryCallRows(
 		if subDur.Valid {
 			v := subDur.Int64
 			r.DurationMs = &v
+		}
+		if exactStart != nil {
+			v := FormatISO8601(*exactStart)
+			r.ExactStartedAt = &v
+		}
+		if exactEnd != nil {
+			v := FormatISO8601(*exactEnd)
+			r.ExactEndedAt = &v
 		}
 		out = append(out, r)
 	}

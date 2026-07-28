@@ -3561,6 +3561,53 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 		want    []db.Message
 	}{
 		{
+			name: "timestamp-only events preserve paired result length",
+			msgs: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID:           "call_example",
+					ToolName:            "task_complete",
+					Category:            "Other",
+					ResultContentLength: 8,
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID: "call_example",
+							Source:    "copilot-cli",
+							Status:    "started",
+							Timestamp: "2026-07-24T11:56:24.198Z",
+						},
+						{
+							ToolUseID: "call_example",
+							Source:    "copilot-cli",
+							Status:    "completed",
+							Timestamp: "2026-07-24T11:56:27.923Z",
+						},
+					},
+				}},
+			}},
+			want: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID:           "call_example",
+					ToolName:            "task_complete",
+					Category:            "Other",
+					ResultContentLength: 8,
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID: "call_example",
+							Source:    "copilot-cli",
+							Status:    "started",
+							Timestamp: "2026-07-24T11:56:24.198Z",
+						},
+						{
+							ToolUseID: "call_example",
+							Source:    "copilot-cli",
+							Status:    "completed",
+							Timestamp: "2026-07-24T11:56:27.923Z",
+						},
+					},
+				}},
+			}},
+		},
+		{
 			name: "single event becomes summary",
 			msgs: []db.Message{{
 				ToolCalls: []db.ToolCall{{

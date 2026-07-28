@@ -12770,12 +12770,18 @@ func pairToolResultEventSummaries(
 				continue
 			}
 			summary := summarizeToolResultEvents(tc.ResultEvents)
-			tc.ResultContentLength = len(summary)
 			if blocked[tc.Category] {
+				if summary != "" {
+					tc.ResultContentLength = len(summary)
+				}
 				tc.ResultContent = ""
 				tc.ResultEvents = nil
 				continue
 			}
+			if summary == "" {
+				continue
+			}
+			tc.ResultContentLength = len(summary)
 			tc.ResultContent = summary
 		}
 	}

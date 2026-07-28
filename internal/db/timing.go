@@ -74,6 +74,8 @@ type CallRow struct {
 	SubagentSessionID *string
 	InputJSON         string
 	DurationMs        *int64
+	ExactStartedAt    *string
+	ExactEndedAt      *string
 }
 
 // GetSessionTiming computes the per-session timing summary. Returns
@@ -165,6 +167,23 @@ func (db *DB) queryCallRows(
 ) ([]CallRow, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := db.getReader().QueryContext(ctx, `
+		WITH copilot_events AS (
+		  SELECT
+		    session_id,
+		    tool_call_message_ordinal,
+		    call_index,
+		    MIN(CASE
+		      WHEN source = 'copilot-cli' AND status = 'started'
+		      THEN timestamp
+		    END) AS started_at,
+		    MAX(CASE
+		      WHEN source = 'copilot-cli' AND status = 'completed'
+		      THEN timestamp
+		    END) AS completed_at
+		  FROM tool_result_events
+		  WHERE session_id = ?
+		  GROUP BY session_id, tool_call_message_ordinal, call_index
+		)
 		SELECT
 		  tc.message_id,
 		  tc.tool_use_id,
@@ -173,7 +192,18 @@ func (db *DB) queryCallRows(
 		  tc.skill_name,
 		  tc.subagent_session_id,
 		  tc.input_json,
+		  ce.started_at,
+		  ce.completed_at,
 		  CASE
+		    WHEN ce.started_at IS NOT NULL
+		         AND ce.completed_at IS NOT NULL
+		         AND julianday(ce.completed_at) >= julianday(ce.started_at) THEN
+		      CAST(
+		        ROUND(
+		          (julianday(ce.completed_at) - julianday(ce.started_at))
+		          * 86400000
+		        ) AS INTEGER
+		      )
 		    WHEN tc.subagent_session_id IS NOT NULL
 		         AND s_sub.started_at IS NOT NULL THEN
 		      CAST(
@@ -185,11 +215,16 @@ func (db *DB) queryCallRows(
 		    ELSE NULL
 		  END AS subagent_duration_ms
 		FROM tool_calls tc
+		LEFT JOIN messages m ON m.id = tc.message_id
+		LEFT JOIN copilot_events ce
+		  ON ce.session_id = tc.session_id
+		  AND ce.tool_call_message_ordinal = m.ordinal
+		  AND ce.call_index = tc.call_index
 		LEFT JOIN sessions s_sub
 		  ON s_sub.id = tc.subagent_session_id
 		WHERE tc.session_id = ?
 		ORDER BY tc.message_id, tc.id
-	`, now, sessionID)
+	`, sessionID, now, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -200,10 +235,11 @@ func (db *DB) queryCallRows(
 		var r CallRow
 		var toolUseID, inputJSON sql.NullString
 		var skill, sub sql.NullString
+		var exactStart, exactEnd sql.NullString
 		var subDur sql.NullInt64
 		if err := rows.Scan(
 			&r.MessageID, &toolUseID, &r.ToolName, &r.Category,
-			&skill, &sub, &inputJSON, &subDur,
+			&skill, &sub, &inputJSON, &exactStart, &exactEnd, &subDur,
 		); err != nil {
 			return nil, err
 		}
@@ -224,6 +260,14 @@ func (db *DB) queryCallRows(
 		if subDur.Valid {
 			v := subDur.Int64
 			r.DurationMs = &v
+		}
+		if exactStart.Valid {
+			v := exactStart.String
+			r.ExactStartedAt = &v
+		}
+		if exactEnd.Valid {
+			v := exactEnd.String
+			r.ExactEndedAt = &v
 		}
 		out = append(out, r)
 	}
@@ -261,6 +305,7 @@ func AssembleTiming(
 
 	// Group calls by message id.
 	callsByMsg := map[int64][]CallTiming{}
+	callRowsByMsg := map[int64][]CallRow{}
 	for _, r := range calls {
 		c := CallTiming{
 			ToolUseID:         r.ToolUseID,
@@ -272,6 +317,7 @@ func AssembleTiming(
 			InputPreview:      makeInputPreview(r.Category, r.ToolName, r.InputJSON),
 		}
 		callsByMsg[r.MessageID] = append(callsByMsg[r.MessageID], c)
+		callRowsByMsg[r.MessageID] = append(callRowsByMsg[r.MessageID], r)
 	}
 
 	categoryTotals := map[string]*CategoryTotal{}
@@ -285,6 +331,9 @@ func AssembleTiming(
 		turnCalls := callsByMsg[t.MessageID]
 		if turnCalls == nil {
 			turnCalls = []CallTiming{}
+		}
+		if exact := exactTurnDuration(callRowsByMsg[t.MessageID]); exact != nil {
+			t.DurationMs = exact
 		}
 
 		for i := range turnCalls {
@@ -345,6 +394,34 @@ func AssembleTiming(
 	})
 
 	return out
+}
+
+func exactTurnDuration(calls []CallRow) *int64 {
+	if len(calls) == 0 {
+		return nil
+	}
+	var earliest, latest time.Time
+	for _, call := range calls {
+		if call.ExactStartedAt == nil || call.ExactEndedAt == nil {
+			return nil
+		}
+		started, err := time.Parse(time.RFC3339, *call.ExactStartedAt)
+		if err != nil {
+			return nil
+		}
+		ended, err := time.Parse(time.RFC3339, *call.ExactEndedAt)
+		if err != nil || ended.Before(started) {
+			return nil
+		}
+		if earliest.IsZero() || started.Before(earliest) {
+			earliest = started
+		}
+		if latest.IsZero() || ended.After(latest) {
+			latest = ended
+		}
+	}
+	duration := latest.Sub(earliest).Milliseconds()
+	return &duration
 }
 
 // turnAttribution is the result of attributeTurnGo. RemainderMs is the
