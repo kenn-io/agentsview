@@ -106,8 +106,8 @@ func ForEachOpenCodeSessionMeta(
 	if err != nil {
 		return err
 	}
-	query := "SELECT s.id, s.time_updated, s.time_updated, 0, " +
-		"0, 0, 0, 0, '', '', '', '' FROM session s"
+	query := "SELECT s.id, s.time_updated, s.time_updated, 0, 0, 0, '', '' " +
+		"FROM session s"
 	if composite {
 		query = "SELECT s.id, " + openCodeCompositeMtimeExpr + ", " +
 			openCodeCompositeCountsExpr +
@@ -128,9 +128,7 @@ func ForEachOpenCodeSessionMeta(
 		if err := rows.Scan(
 			&id, &agg.watermark, &agg.sessionTime, &agg.projectTime,
 			&agg.messages, &agg.parts,
-			&agg.messageTimeSum, &agg.partTimeSum,
-			&agg.messageLoID, &agg.messageHiID,
-			&agg.partLoID, &agg.partHiID,
+			&agg.messageIdent, &agg.partIdent,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning opencode session meta: %w", err,
@@ -162,8 +160,8 @@ func openCodeSessionCompositeMtime(
 	if err != nil {
 		return 0, "", false, err
 	}
-	query := "SELECT s.time_updated, s.time_updated, 0, 0, " +
-		"0, 0, 0, '', '', '', '' FROM session s WHERE s.id = ?"
+	query := "SELECT s.time_updated, s.time_updated, 0, 0, 0, '', '' " +
+		"FROM session s WHERE s.id = ?"
 	if composite {
 		query = "SELECT " + openCodeSessionCompositeMtimeExpr + ", " +
 			openCodeSessionCompositeCountsExpr +
@@ -174,9 +172,7 @@ func openCodeSessionCompositeMtime(
 	if err := db.QueryRow(query, sessionID).Scan(
 		&agg.watermark, &agg.sessionTime, &agg.projectTime,
 		&agg.messages, &agg.parts,
-		&agg.messageTimeSum, &agg.partTimeSum,
-		&agg.messageLoID, &agg.messageHiID,
-		&agg.partLoID, &agg.partHiID,
+		&agg.messageIdent, &agg.partIdent,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, "", composite, nil
@@ -228,36 +224,34 @@ func openCodeSessionWatermark(
 //   - session/project times: a metadata update, including a worktree rename,
 //     that lands below an already-higher child watermark
 //   - counts: a deletion, which never moves a MAX
-//   - time sums: an edit whose new timestamp still sits below the watermark
-//   - id range: a same-count replacement that reuses the old timestamps
+//   - child identity: every ordered (id, time_updated) pair, hashed. Reduced
+//     aggregates are not collision-resistant — swapping a non-boundary row for
+//     one carrying the same timestamp preserves counts, sums and min/max ids
+//     alike, so only the complete set separates them.
 //
 // All of it lives in the child tables' main b-tree pages, so computing it does
 // not read the transcript text held in overflow pages.
 type openCodeChildAggregate struct {
-	watermark      int64
-	sessionTime    int64
-	projectTime    int64
-	messages       int64
-	parts          int64
-	messageTimeSum int64
-	partTimeSum    int64
-	messageLoID    string
-	messageHiID    string
-	partLoID       string
-	partHiID       string
+	watermark    int64
+	sessionTime  int64
+	projectTime  int64
+	messages     int64
+	parts        int64
+	messageIdent string
+	partIdent    string
 }
 
 func (a openCodeChildAggregate) digest(composite bool) string {
 	if !composite {
 		return ""
 	}
+	sum := sha256.Sum256([]byte(a.messageIdent + "\x00" + a.partIdent))
 	return fmt.Sprintf(
-		"%s%d:%d:%d:%d:%d:%d:%d:%s:%s:%s:%s",
+		"%s%d:%d:%d:%d:%d:%x",
 		openCodeChildDigestPrefix,
 		a.watermark, a.sessionTime, a.projectTime,
 		a.messages, a.parts,
-		a.messageTimeSum, a.partTimeSum,
-		a.messageLoID, a.messageHiID, a.partLoID, a.partHiID,
+		sum[:16],
 	)
 }
 
@@ -594,13 +588,17 @@ const openCodeCompositeMtimeJoins = `
 	LEFT JOIN project pr ON pr.id = s.project_id
 	LEFT JOIN (
 		SELECT session_id, MAX(time_updated) mx, COUNT(*) n,
-		       SUM(time_updated) sm, MIN(id) lo, MAX(id) hi
-		FROM message GROUP BY session_id
+		       group_concat(id || ':' || time_updated) ident
+		FROM (SELECT session_id, id, time_updated FROM message
+		      ORDER BY session_id, id)
+		GROUP BY session_id
 	) m ON m.session_id = s.id
 	LEFT JOIN (
 		SELECT session_id, MAX(time_updated) mx, COUNT(*) n,
-		       SUM(time_updated) sm, MIN(id) lo, MAX(id) hi
-		FROM part GROUP BY session_id
+		       group_concat(id || ':' || time_updated) ident
+		FROM (SELECT session_id, id, time_updated FROM part
+		      ORDER BY session_id, id)
+		GROUP BY session_id
 	) p ON p.session_id = s.id`
 
 // openCodeCompositeCountsExpr yields the child row counts that make the
@@ -611,21 +609,19 @@ const openCodeCompositeMtimeJoins = `
 const openCodeCompositeCountsExpr = `s.time_updated,
 	COALESCE(pr.time_updated, 0),
 	COALESCE(m.n, 0), COALESCE(p.n, 0),
-	COALESCE(m.sm, 0), COALESCE(p.sm, 0),
-	COALESCE(m.lo, ''), COALESCE(m.hi, ''),
-	COALESCE(p.lo, ''), COALESCE(p.hi, '')`
+	COALESCE(m.ident, ''), COALESCE(p.ident, '')`
 
 const openCodeSessionCompositeCountsExpr = `
 	s.time_updated,
 	COALESCE(pr.time_updated, 0),
 	(SELECT COUNT(*) FROM message WHERE session_id = s.id),
 	(SELECT COUNT(*) FROM part WHERE session_id = s.id),
-	(SELECT COALESCE(SUM(time_updated), 0) FROM message WHERE session_id = s.id),
-	(SELECT COALESCE(SUM(time_updated), 0) FROM part WHERE session_id = s.id),
-	(SELECT COALESCE(MIN(id), '') FROM message WHERE session_id = s.id),
-	(SELECT COALESCE(MAX(id), '') FROM message WHERE session_id = s.id),
-	(SELECT COALESCE(MIN(id), '') FROM part WHERE session_id = s.id),
-	(SELECT COALESCE(MAX(id), '') FROM part WHERE session_id = s.id)`
+	(SELECT COALESCE(group_concat(id || ':' || time_updated), '')
+	 FROM (SELECT id, time_updated FROM message
+	       WHERE session_id = s.id ORDER BY id)),
+	(SELECT COALESCE(group_concat(id || ':' || time_updated), '')
+	 FROM (SELECT id, time_updated FROM part
+	       WHERE session_id = s.id ORDER BY id))`
 
 // The single-session form must NOT reuse the grouped subqueries above: a
 // GROUP BY subquery is materialized over the whole container before the outer

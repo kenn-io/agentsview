@@ -198,3 +198,32 @@ func TestOpenCodeMetadataUpdateBelowWatermarkIsDetected(t *testing.T) {
 	assert.Equal(t, 1, stats.Synced,
 		"a metadata update below the child watermark must still be detected")
 }
+
+// TestOpenCodeMiddleRowReplacementIsDetected covers a replacement that keeps
+// every aggregate the digest currently reduces to: same counts, same timestamp
+// sums, and the same min/max ids because the swapped row sorts strictly between
+// the extrema. Only a complete child identity can tell these apart.
+func TestOpenCodeMiddleRowReplacementIsDetected(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	oc.addSession(t, "mid", "proj", 1779012000000, 1779099999000)
+	oc.addMessage(t, "mid-msg-a", "mid", "user", 1779012000000)
+	// Three parts: a, m, z. The middle one gets swapped for a different id
+	// carrying an identical timestamp, so count, sum and extrema all hold.
+	oc.addTextPart(t, "mid-part-a", "mid", "mid-msg-a", "alpha", 1779012000000)
+	oc.addTextPart(t, "mid-part-m", "mid", "mid-msg-a", "middle", 1779012000001)
+	oc.addTextPart(t, "mid-part-z", "mid", "mid-msg-a", "zulu", 1779012000002)
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	oc.mustExec(t, "delete middle part",
+		"DELETE FROM part WHERE id = ?", "mid-part-m")
+	oc.addTextPart(
+		t, "mid-part-n", "mid", "mid-msg-a", "replaced", 1779012000001,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced,
+		"a middle-row replacement preserving counts, sums and extrema must "+
+			"still change the fingerprint")
+}
