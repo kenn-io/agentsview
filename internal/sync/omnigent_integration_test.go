@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -1150,7 +1151,7 @@ func TestSyncOmnigentFallbackUsageAppearsInAnalytics(t *testing.T) {
 	require.Len(t, daily.Daily, 1)
 	assert.Equal(t, 120, daily.Daily[0].InputTokens)
 	assert.Equal(t, 30, daily.Daily[0].OutputTokens)
-	assert.InDelta(t, 0.25, daily.Daily[0].TotalCost, 0.0001)
+	assert.Equal(t, money.Money{Microdollars: 250_000}, daily.Daily[0].TotalCost)
 }
 
 func TestSyncOmnigentInPlaceEditIsReconciledByFullSync(t *testing.T) {

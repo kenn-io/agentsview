@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/money"
+
 	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -388,8 +390,9 @@ func assertOmnigentParse(t *testing.T, results []ParseResult) {
 	assert.Equal(t, "claude-opus-4-8", root.UsageEvents[0].Model)
 	assert.Equal(t, 100, root.UsageEvents[0].InputTokens)
 	assert.Equal(t, 50, root.UsageEvents[0].OutputTokens)
-	require.NotNil(t, root.UsageEvents[0].CostUSD)
-	assert.InDelta(t, 1.5, *root.UsageEvents[0].CostUSD, 0.0001)
+	require.NotNil(t, root.UsageEvents[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 1_500_000},
+		*root.UsageEvents[0].Cost)
 	assert.True(t, root.Session.HasTotalOutputTokens)
 	assert.Equal(t, 50, root.Session.TotalOutputTokens)
 	assert.False(t, root.Session.HasPeakContextTokens)
@@ -1480,7 +1483,7 @@ func TestOmnigentBinaryIDGenerationParses(t *testing.T) {
 	require.Len(t, main.UsageEvents, 1,
 		"framed session_usage must decode into usage events")
 	assert.Equal(t, "omnigent-large", main.UsageEvents[0].Model)
-	assert.Nil(t, main.UsageEvents[0].CostUSD,
+	assert.Nil(t, main.UsageEvents[0].Cost,
 		"absent total_cost_usd must stay nil so catalog pricing applies")
 
 	sub, ok := byID[omnigentIDPrefix+"0:"+omnigentBinarySubHex]
@@ -1580,7 +1583,7 @@ func TestOmnigentUsageEventsTrackCostPresence(t *testing.T) {
 		name     string
 		payload  string
 		model    string
-		wantCost *float64
+		wantCost *money.Money
 	}{
 		{
 			name:    "aggregate without cost stays nil",
@@ -1598,14 +1601,14 @@ func TestOmnigentUsageEventsTrackCostPresence(t *testing.T) {
 			payload: `{"by_model":{"m1":` +
 				`{"input_tokens":10,"output_tokens":5,"total_cost_usd":0}}}`,
 			model:    "m1",
-			wantCost: new(float64),
+			wantCost: &money.Money{},
 		},
 		{
 			name: "recorded cost is preserved",
 			payload: `{"input_tokens":10,"output_tokens":5,` +
 				`"total_cost_usd":1.25}`,
 			model:    "fallback",
-			wantCost: func() *float64 { v := 1.25; return &v }(),
+			wantCost: &money.Money{Microdollars: 1_250_000},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1616,12 +1619,12 @@ func TestOmnigentUsageEventsTrackCostPresence(t *testing.T) {
 			assert.Equal(t, tc.model, events[0].Model)
 			assert.Equal(t, 10, events[0].InputTokens)
 			if tc.wantCost == nil {
-				assert.Nil(t, events[0].CostUSD,
+				assert.Nil(t, events[0].Cost,
 					"unknown cost must stay NULL for catalog pricing")
 				return
 			}
-			require.NotNil(t, events[0].CostUSD)
-			assert.InDelta(t, *tc.wantCost, *events[0].CostUSD, 0.0001)
+			require.NotNil(t, events[0].Cost)
+			assert.Equal(t, *tc.wantCost, *events[0].Cost)
 		})
 	}
 }
@@ -1641,12 +1644,13 @@ func TestOmnigentUsageEventsAllocateAggregateCostAcrossModels(t *testing.T) {
 
 	require.Len(t, events, 2)
 	assert.Equal(t, "large", events[0].Model)
-	require.NotNil(t, events[0].CostUSD)
-	assert.InDelta(t, 3, *events[0].CostUSD, 0.0001)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 3_000_000}, *events[0].Cost)
 	assert.Equal(t, "small", events[1].Model)
-	require.NotNil(t, events[1].CostUSD)
-	assert.InDelta(t, 1, *events[1].CostUSD, 0.0001)
-	assert.InDelta(t, 4, *events[0].CostUSD+*events[1].CostUSD, 0.0001,
+	require.NotNil(t, events[1].Cost)
+	assert.Equal(t, money.Money{Microdollars: 1_000_000}, *events[1].Cost)
+	assert.Equal(t, int64(4_000_000),
+		events[0].Cost.Microdollars+events[1].Cost.Microdollars,
 		"per-model events must retain Omnigent's authoritative aggregate cost")
 }
 
@@ -1669,11 +1673,11 @@ func TestOmnigentUsageEventsAllocateAggregateRemainder(t *testing.T) {
 
 	require.Len(t, events, 2)
 	assert.Equal(t, "priced", events[0].Model)
-	require.NotNil(t, events[0].CostUSD)
-	assert.InDelta(t, 1, *events[0].CostUSD, 0.0001)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.Money{Microdollars: 1_000_000}, *events[0].Cost)
 	assert.Equal(t, "unpriced", events[1].Model)
-	require.NotNil(t, events[1].CostUSD)
-	assert.InDelta(t, 2, *events[1].CostUSD, 0.0001)
+	require.NotNil(t, events[1].Cost)
+	assert.Equal(t, money.Money{Microdollars: 2_000_000}, *events[1].Cost)
 }
 
 func TestOmnigentShmEventDoesNotResolveToContainer(t *testing.T) {

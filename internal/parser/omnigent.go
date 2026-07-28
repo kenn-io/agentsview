@@ -20,6 +20,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // omnigent orchestrates other coding agents (Claude Code, Codex, OpenCode, ...)
@@ -1087,6 +1089,21 @@ func omnigentSystemLine(typeName, data, searchText string) string {
 	return ""
 }
 
+// omnigentCost converts a wire-format dollar float to Money at the event
+// boundary. A nil input stays nil so catalog-based token pricing applies;
+// an unconvertible value (negative, non-finite) is dropped the same way,
+// matching the parser's fail-soft posture toward malformed usage blobs.
+func omnigentCost(value *float64) *money.Money {
+	if value == nil {
+		return nil
+	}
+	cost, err := money.FromFloatDollars(*value)
+	if err != nil {
+		return nil
+	}
+	return &cost
+}
+
 // omnigentUsageEvents decodes the session_usage blob (zstd-framed on newer
 // builds, plaintext JSON on older ones) into a single session-level usage
 // event, plus per-model breakdown when present.
@@ -1138,7 +1155,7 @@ func omnigentUsageEvents(
 				Model:        model,
 				InputTokens:  m.InputTokens,
 				OutputTokens: m.OutputTokens,
-				CostUSD:      m.TotalCostUSD,
+				Cost:         omnigentCost(m.TotalCostUSD),
 				DedupKey:     sessionID + "|usage|" + model,
 			})
 			if m.TotalCostUSD != nil {
@@ -1167,7 +1184,7 @@ func omnigentUsageEvents(
 							float64(len(missingCostIndexes)-i)
 					}
 				}
-				events[eventIndex].CostUSD = &cost
+				events[eventIndex].Cost = omnigentCost(&cost)
 				remainingCost -= cost
 				remainingWeight -= max(
 					0,
@@ -1189,7 +1206,7 @@ func omnigentUsageEvents(
 		Model:        fallbackModel,
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,
-		CostUSD:      usage.TotalCostUSD,
+		Cost:         omnigentCost(usage.TotalCostUSD),
 		DedupKey:     sessionID + "|usage|" + fallbackModel,
 	}}
 }
