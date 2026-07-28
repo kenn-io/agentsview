@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,11 @@ type OpenCodeSessionMeta struct {
 	SessionID   string
 	VirtualPath string
 	FileMtime   int64
+	// CompositeMtime reports that FileMtime is the per-session composite
+	// (see openCodeCompositeMtimeExpr) rather than the session row's own
+	// time_updated. When true the fingerprint omits the shared container's
+	// size, because the composite already discriminates per session.
+	CompositeMtime bool
 }
 
 // OpenCodeSQLiteSessionExists reports whether a session row with
@@ -91,9 +97,17 @@ func ForEachOpenCodeSessionMeta(
 	}
 	defer db.Close()
 
-	rows, err := db.QueryContext(ctx,
-		"SELECT id, time_updated FROM session",
-	)
+	composite, err := openCodeCompositeMtimeSupportedCached(db, dbPath)
+	if err != nil {
+		return err
+	}
+	query := "SELECT s.id, s.time_updated FROM session s"
+	if composite {
+		query = "SELECT s.id, " + openCodeCompositeMtimeExpr +
+			" FROM session s" + openCodeCompositeMtimeJoins
+	}
+
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf(
 			"listing opencode sessions: %w", err,
@@ -113,14 +127,46 @@ func ForEachOpenCodeSessionMeta(
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		if err := yield(OpenCodeSessionMeta{
-			SessionID:   id,
-			VirtualPath: dbPath + "#" + id,
-			FileMtime:   timeUpdated * 1_000_000,
+			SessionID:      id,
+			VirtualPath:    dbPath + "#" + id,
+			FileMtime:      timeUpdated * 1_000_000,
+			CompositeMtime: composite,
 		}); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
+}
+
+// openCodeSessionCompositeMtime returns one session's composite change signal
+// in milliseconds, and whether the container schema supports it. Discovery,
+// single-session source lookup, and the parse path all resolve mtime through
+// this so a session's stored file_mtime always equals the value the freshness
+// gate compares it against.
+func openCodeSessionCompositeMtime(
+	db *sql.DB, dbPath, sessionID string,
+) (int64, bool, error) {
+	composite, err := openCodeCompositeMtimeSupportedCached(db, dbPath)
+	if err != nil {
+		return 0, false, err
+	}
+	query := "SELECT s.time_updated FROM session s WHERE s.id = ?"
+	if composite {
+		query = "SELECT " + openCodeCompositeMtimeExpr +
+			" FROM session s" + openCodeCompositeMtimeJoins +
+			" WHERE s.id = ?"
+	}
+	var timeUpdated int64
+	if err := db.QueryRow(query, sessionID).Scan(&timeUpdated); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, composite, nil
+		}
+		return 0, composite, fmt.Errorf(
+			"loading opencode session mtime %s#%s: %w",
+			dbPath, sessionID, err,
+		)
+	}
+	return timeUpdated, composite, nil
 }
 
 // parseOpenCodeDBSession parses a single session by ID from the
@@ -378,9 +424,15 @@ type openCodeSessionRow struct {
 	timeUpdated int64
 }
 
+// openCodeSessionSchemaCacheEntry memoizes both schema probes for one
+// container. Each probe has its own "resolved" flag so populating one never
+// makes the other report a false negative from its zero value.
 type openCodeSessionSchemaCacheEntry struct {
-	state        SQLiteContainerState
-	hasDirectory bool
+	state         SQLiteContainerState
+	hasDirectory  bool
+	directoryOnce bool
+	hasComposite  bool
+	compositeOnce bool
 }
 
 // openCodeSessionSchemaCache memoizes whether session.directory exists for
@@ -402,7 +454,7 @@ func openCodeSessionHasDirectoryCached(
 	openCodeSessionSchemaCacheMu.Lock()
 	entry, hit := openCodeSessionSchemaCache[dbPath]
 	openCodeSessionSchemaCacheMu.Unlock()
-	if hit && entry.state == state {
+	if hit && entry.state == state && entry.directoryOnce {
 		return entry.hasDirectory, nil
 	}
 	hasDirectory, err := openCodeSessionTableHasDirectory(db)
@@ -410,12 +462,114 @@ func openCodeSessionHasDirectoryCached(
 		return false, err
 	}
 	openCodeSessionSchemaCacheMu.Lock()
-	openCodeSessionSchemaCache[dbPath] = openCodeSessionSchemaCacheEntry{
-		state:        state,
-		hasDirectory: hasDirectory,
+	prev := openCodeSessionSchemaCache[dbPath]
+	if prev.state != state {
+		prev = openCodeSessionSchemaCacheEntry{}
 	}
+	prev.state = state
+	prev.hasDirectory = hasDirectory
+	prev.directoryOnce = true
+	openCodeSessionSchemaCache[dbPath] = prev
 	openCodeSessionSchemaCacheMu.Unlock()
 	return hasDirectory, nil
+}
+
+// openCodeCompositeMtimeExpr is the per-session change signal for a
+// SQLite-backed OpenCode container. Every session in a root shares one
+// physical opencode.db, so the container file's own size and mtime move
+// whenever any single session is written and cannot discriminate between
+// sessions. These four columns can:
+//
+//   - session.time_updated  — the session row itself
+//   - project.time_updated  — the owning project (worktree renames re-resolve
+//     every session in that project, which is the correct scope; verified on a
+//     production container that this does not track ordinary session activity)
+//   - max(message.time_updated) / max(part.time_updated) — child content,
+//     including in-place edits that leave time_created untouched
+//
+// The child scans read only small columns; OpenCode keeps each part's `data`
+// in SQLite overflow pages, so this does not read transcript bytes.
+const openCodeCompositeMtimeExpr = `MAX(s.time_updated,
+		COALESCE(pr.time_updated, 0),
+		COALESCE(m.mx, 0),
+		COALESCE(p.mx, 0))`
+
+const openCodeCompositeMtimeJoins = `
+	LEFT JOIN project pr ON pr.id = s.project_id
+	LEFT JOIN (
+		SELECT session_id, MAX(time_updated) mx FROM message GROUP BY session_id
+	) m ON m.session_id = s.id
+	LEFT JOIN (
+		SELECT session_id, MAX(time_updated) mx FROM part GROUP BY session_id
+	) p ON p.session_id = s.id`
+
+// openCodeCompositeMtimeSupportedCached reports whether this container's schema
+// carries every column openCodeCompositeMtimeExpr needs. Older OpenCode-family
+// containers (Kilo, MiMoCode, ICodeMate, legacy OpenCode) omit the child
+// time_updated columns; those keep the previous session-only mtime and the
+// container-stat fallback in Fingerprint.
+func openCodeCompositeMtimeSupportedCached(
+	db *sql.DB, dbPath string,
+) (bool, error) {
+	state, ok := StatSQLiteContainerState(dbPath)
+	if !ok {
+		return openCodeSupportsCompositeMtime(db)
+	}
+	openCodeSessionSchemaCacheMu.Lock()
+	entry, hit := openCodeSessionSchemaCache[dbPath]
+	openCodeSessionSchemaCacheMu.Unlock()
+	if hit && entry.state == state && entry.compositeOnce {
+		return entry.hasComposite, nil
+	}
+	supported, err := openCodeSupportsCompositeMtime(db)
+	if err != nil {
+		return false, err
+	}
+	openCodeSessionSchemaCacheMu.Lock()
+	prev := openCodeSessionSchemaCache[dbPath]
+	if prev.state != state {
+		prev = openCodeSessionSchemaCacheEntry{state: state}
+	}
+	prev.state = state
+	prev.hasComposite = supported
+	prev.compositeOnce = true
+	openCodeSessionSchemaCache[dbPath] = prev
+	openCodeSessionSchemaCacheMu.Unlock()
+	return supported, nil
+}
+
+func openCodeSupportsCompositeMtime(db *sql.DB) (bool, error) {
+	for _, probe := range []struct{ table, column string }{
+		{"message", "time_updated"},
+		{"part", "time_updated"},
+		{"project", "time_updated"},
+	} {
+		has, err := openCodeTableHasColumn(db, probe.table, probe.column)
+		if err != nil || !has {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// openCodeTableHasColumn reports whether table carries column. An unknown
+// table yields no PRAGMA rows and reports false rather than erroring, so a
+// container missing an optional table degrades to the legacy signal.
+func openCodeTableHasColumn(
+	db *sql.DB, table, column string,
+) (bool, error) {
+	rows, err := db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`,
+		table, column)
+	if err != nil {
+		return false, fmt.Errorf(
+			"listing opencode %s table info: %w", table, err,
+		)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return true, rows.Err()
+	}
+	return false, rows.Err()
 }
 
 func openCodeSessionTableHasDirectory(db *sql.DB) (bool, error) {
@@ -636,12 +790,24 @@ func buildOpenCodeSession(
 		)
 	}
 
+	// Stamp the same composite the fingerprint reports, so the stored
+	// file_mtime is directly comparable to it. Falling back to the session
+	// row's own time_updated keeps legacy containers on their prior value.
+	fileMtime := s.timeUpdated
+	if composite, _, err := openCodeSessionCompositeMtime(
+		db, dbPath, s.id,
+	); err != nil {
+		return nil, nil, err
+	} else if composite != 0 {
+		fileMtime = composite
+	}
+
 	sess, parsed, err := buildOpenCodeParsedSession(
 		s,
 		cwd,
 		projectWorktree,
 		dbPath+"#"+s.id,
-		s.timeUpdated*1_000_000,
+		fileMtime*1_000_000,
 		machine,
 		msgs,
 		parts,
@@ -1403,6 +1569,39 @@ func openCodeStorageFingerprintHash(raw string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
+// openCodeSQLiteSessionMtimeComposite is openCodeSQLiteSessionMtime with the
+// schema-support flag the fingerprint needs to decide whether the shared
+// container's size still has to act as a fallback change signal.
+func openCodeSQLiteSessionMtimeComposite(
+	dbPath, sessionID string,
+) (int64, bool, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf(
+			"stat opencode db %s: %w", dbPath, err,
+		)
+	}
+
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return 0, false, err
+	}
+	defer db.Close()
+
+	timeUpdated, composite, err := openCodeSessionCompositeMtime(
+		db, dbPath, sessionID,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if timeUpdated == 0 {
+		return 0, composite, nil
+	}
+	return timeUpdated * 1_000_000, composite, nil
+}
+
 func openCodeSQLiteSessionMtime(
 	dbPath, sessionID string,
 ) (int64, error) {
@@ -1421,19 +1620,12 @@ func openCodeSQLiteSessionMtime(
 	}
 	defer db.Close()
 
-	row := db.QueryRow(
-		"SELECT time_updated FROM session WHERE id = ?",
-		sessionID,
-	)
-	var timeUpdated int64
-	if err := row.Scan(&timeUpdated); err != nil {
-		if err == sql.ErrNoRows {
-			return 0, nil
-		}
-		return 0, fmt.Errorf(
-			"loading opencode session mtime %s#%s: %w",
-			dbPath, sessionID, err,
-		)
+	timeUpdated, _, err := openCodeSessionCompositeMtime(db, dbPath, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	if timeUpdated == 0 {
+		return 0, nil
 	}
 	return timeUpdated * 1_000_000, nil
 }

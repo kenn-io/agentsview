@@ -694,11 +694,16 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		"local_modified_at before rewrite")
 
 	time.Sleep(20 * time.Millisecond)
+	// The session row's own time_updated deliberately stays at
+	// 1779012030000. Production OpenCode stamps time_updated on every child
+	// row it writes, so the replacement children carry a newer one; that is
+	// the per-session signal the composite mtime reads, and it must catch a
+	// content change the session row alone cannot show.
 	oc.replaceTextContent(
 		t, "same-mtime-sqlite",
 		"changed prompt with same session mtime",
 		"changed answer with same session mtime",
-		1779012000000,
+		1779012600000,
 	)
 
 	stats = env.engine.SyncAll(context.Background(), nil)
@@ -715,8 +720,11 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 	require.NotNil(t, after.FileHash, "file_hash after rewrite")
 	require.NotNil(t, after.LocalModifiedAt,
 		"local_modified_at after rewrite")
-	assert.Equal(t, *before.FileMtime, *after.FileMtime,
-		"same-mtime rewrite keeps the OpenCode SQLite session mtime")
+	assert.Greater(t, *after.FileMtime, *before.FileMtime,
+		"child content newer than the session row must advance the stored "+
+			"composite mtime: that per-session signal is what detects the "+
+			"change without the shared container's stat invalidating every "+
+			"other session in the same opencode.db")
 	assert.NotEqual(t, *before.FileHash, *after.FileHash,
 		"changed SQLite child content must change the storage fingerprint")
 	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
@@ -799,7 +807,7 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 	oc.replaceTextContent(
 		t, "stat-twin",
 		"replaced prompt", "replaced answer",
-		1779012000000,
+		1779012600000,
 	)
 	after, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat opencode.db after rewrite")
@@ -908,8 +916,15 @@ func TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted(
 
 	stats = engine.SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 0, stats.Skipped,
-		"a container with cwd-vetoed sessions must not be gate-skipped")
+	// Exactly one skip: the persisted allowed session rides its own
+	// per-session freshness check. The vetoed session was never written, so
+	// it has no stored row to be fresh against and must be processed again.
+	// A trusted-container gate skip would cover both sessions and make this
+	// 2, which is the promotion violation this test exists to catch.
+	assert.Equal(t, 1, stats.Skipped,
+		"a container with cwd-vetoed sessions must not be gate-skipped: "+
+			"only the persisted session may skip, and only on its own "+
+			"per-session freshness")
 
 	kept, err := database.GetSessionFull(
 		context.Background(), "opencode:keep-session",
@@ -1188,9 +1203,8 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
 	assert.Equal(t, "original_app", before.Project)
 
 	time.Sleep(20 * time.Millisecond)
-	oc.mustExec(t, "update project worktree",
-		"UPDATE project SET worktree = ? WHERE id = ?",
-		"/home/user/code/renamed-app", "proj",
+	oc.updateProjectWorktree(
+		t, "proj", "/home/user/code/renamed-app", 1779015630000,
 	)
 
 	stats = env.engine.SyncAll(context.Background(), nil)
@@ -1205,8 +1219,11 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
 	require.NotNil(t, after.FileHash, "file_hash after rewrite")
 	require.NotNil(t, after.LocalModifiedAt,
 		"local_modified_at after rewrite")
-	assert.Equal(t, *before.FileMtime, *after.FileMtime,
-		"metadata-only rewrite keeps the OpenCode SQLite session mtime")
+	assert.Greater(t, *after.FileMtime, *before.FileMtime,
+		"a project worktree rename must advance the session's composite "+
+			"mtime: project.time_updated is part of the per-session change "+
+			"signal, which is what re-resolves cwd without the shared "+
+			"container's stat invalidating every unrelated session")
 	assert.NotEqual(t, *before.FileHash, *after.FileHash,
 		"changed SQLite metadata must change the storage fingerprint")
 	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,

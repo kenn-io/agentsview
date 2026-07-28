@@ -256,6 +256,29 @@ Grok section and remove the explicit registry exception in the coverage test.
   counts as a failure, matching the existing `exit status N` heuristic, and a
   timed-out command records `timeout: true` with no `exit` key, so it is not
   detected here. See #1256.
+- **Change detection (SQLite layout):** every session in a root shares one
+  physical `opencode.db`, so the container's own size and mtime move whenever
+  any single session is written and cannot discriminate between sessions.
+  Agentsview instead builds a per-session composite from
+  `session.time_updated`, `project.time_updated`, `MAX(message.time_updated)`,
+  and `MAX(part.time_updated)` (`openCodeCompositeMtimeExpr`), and omits the
+  container size from the per-session fingerprint. Verified 2026-07-27 against
+  an isolated clone of a production container (13.5 GB, 5,981 sessions, 104k
+  messages, 508k parts): 432,779 of 508,400 parts (86%) carry
+  `time_updated != time_created`, so in-place child edits do move the signal;
+  437 sessions have `MAX(part.time_updated) > session.time_updated`, so the
+  session row alone is insufficient; and no project's `time_updated` falls
+  within 5s of its newest session, so folding `project` in tracks genuine
+  worktree/metadata changes rather than ordinary session activity. The child
+  scans cost ~0.6s warm on that container because `part.data` lives in SQLite
+  overflow pages, so scanning `(session_id, time_updated)` does not read
+  transcript bytes. Known gap: a write that moves SQLite's change counter while
+  leaving every one of those timestamps untouched (external/manual DB edits) is
+  not attributed to any session; OpenCode itself stamps `time_updated` on every
+  row write, and a revert deletes the newest rows, which lowers the max and is
+  therefore still detected. Containers whose schema lacks the child
+  `time_updated` columns (older OpenCode, Kilo, MiMoCode, ICodeMate) fall back
+  to the session-only mtime plus the container size, preserving prior behavior.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are

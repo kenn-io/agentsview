@@ -736,9 +736,12 @@ func TestOpenCodeProviderSQLiteFingerprintUsesDiscoveryMeta(t *testing.T) {
 		"fingerprint must not reopen the SQLite DB for a discovered source")
 	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses_meta"), fp.Key)
 	assert.Equal(t, int64(1700000010000000000), fp.MTimeNS,
-		"fingerprint mtime must be the discovered time_updated in ns")
-	assert.Equal(t, int64(len(garbage)), fp.Size,
-		"fingerprint size stays the shared container file size")
+		"fingerprint mtime must be the discovered composite in ns")
+	assert.Zero(t, fp.Size,
+		"a per-session fingerprint must not carry the shared container's "+
+			"size: every session in the root shares one opencode.db, so any "+
+			"one session's write would change every other session's "+
+			"fingerprint and drop its freshness skip")
 }
 
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {

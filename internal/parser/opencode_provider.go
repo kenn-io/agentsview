@@ -312,11 +312,16 @@ func (spec openCodeProviderSpec) parseSQLite(
 type openCodeFormatSource struct {
 	Root string
 	Path string
-	// MTimeNS carries the session's time_updated (already listed during
+	// MTimeNS carries the session's change signal (already listed during
 	// SQLite discovery, scaled to nanoseconds) so Fingerprint does not
 	// reopen the shared DB once per session. Zero means unknown and makes
 	// Fingerprint fall back to querying the DB.
 	MTimeNS int64
+	// CompositeMTime reports that MTimeNS is the per-session composite
+	// (session, project, and child message/part time_updated) rather than
+	// the session row's own time_updated. It gates dropping the shared
+	// container's size from the fingerprint.
+	CompositeMTime bool
 }
 
 type openCodeFormatSourceSet struct {
@@ -697,6 +702,19 @@ func (s openCodeFormatSourceSet) FindSource(
 	return SourceRef{}, false, nil
 }
 
+// sourceMtimeWithComposite resolves a source's change signal when discovery did
+// not carry one (FindSource lookups, storage sessions), reporting whether the
+// value is the per-session composite.
+func (s openCodeFormatSourceSet) sourceMtimeWithComposite(
+	path string,
+) (int64, bool, error) {
+	if dbPath, sessionID, ok := s.spec.parseVirtual(path); ok {
+		return openCodeSQLiteSessionMtimeComposite(dbPath, sessionID)
+	}
+	mtime, err := s.spec.sourceMtime(path)
+	return mtime, false, err
+}
+
 func (s openCodeFormatSourceSet) Fingerprint(
 	ctx context.Context,
 	source SourceRef,
@@ -709,9 +727,10 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		return SourceFingerprint{}, fmt.Errorf("%s source path unavailable", s.spec.agent)
 	}
 	mtime := sourceCarriedMTimeNS(source)
+	composite := sourceCarriedCompositeMTime(source)
 	if mtime == 0 {
 		var err error
-		mtime, err = s.spec.sourceMtime(path)
+		mtime, composite, err = s.sourceMtimeWithComposite(path)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
@@ -725,7 +744,19 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		if err != nil {
 			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", dbPath, err)
 		}
-		fingerprint.Size = info.Size()
+		// Every session in this root shares one physical container, so the
+		// container's size moves whenever any single session is written.
+		// Stamping it onto a per-session fingerprint made one session's
+		// append change the fingerprint of every other session in the
+		// container, dropping their freshness skip and re-parsing the whole
+		// root for one changed session. When MTimeNS is the per-session
+		// composite it already discriminates per session (including in-place
+		// child edits and project worktree renames), so the container stat
+		// is existence-only. Legacy containers whose schema cannot produce
+		// the composite keep the size as their conservative fallback.
+		if !composite {
+			fingerprint.Size = info.Size()
+		}
 		return fingerprint, nil
 	}
 	info, err := os.Stat(path)
@@ -749,6 +780,18 @@ func (s openCodeFormatSourceSet) Fingerprint(
 // sourceCarriedMTimeNS returns the discovery-listed session mtime carried on
 // a SQLite-backed source, or zero when the source was built without one
 // (storage sessions, FindSource lookups).
+func sourceCarriedCompositeMTime(source SourceRef) bool {
+	switch src := source.Opaque.(type) {
+	case openCodeFormatSource:
+		return src.CompositeMTime
+	case *openCodeFormatSource:
+		if src != nil {
+			return src.CompositeMTime
+		}
+	}
+	return false
+}
+
 func sourceCarriedMTimeNS(source SourceRef) int64 {
 	switch src := source.Opaque.(type) {
 	case openCodeFormatSource:
@@ -839,6 +882,7 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 	ref := s.newSourceRef(root, path, "")
 	if src, ok := ref.Opaque.(openCodeFormatSource); ok {
 		src.MTimeNS = meta.FileMtime
+		src.CompositeMTime = meta.CompositeMtime
 		ref.Opaque = src
 	}
 	return ref, true
