@@ -62,7 +62,7 @@ func newSessionGetCommand() *cobra.Command {
 // get a clear failure instead of silent empty output.
 //
 // Bare Codebuff/Freebuff timestamps are pre-resolved by
-// resolveBareCodebuffID at the call site (see newSessionGetCommand),
+// resolveCodebuffBareID at the call site (see newSessionGetCommand),
 // so this function does not need to know about them.
 func resolveServiceSessionID(
 	ctx context.Context,
