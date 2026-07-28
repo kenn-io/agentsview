@@ -106,6 +106,7 @@ use local SQLite unless `--pg` is supplied.
 | `--json`                     | Alias for `--format json`.                       |
 | `--server <url>`             | Explicit daemon URL for HTTP-backed operations.  |
 | `--server-token-file <path>` | Bearer token file for an explicit `--server` URL. |
+| `--machine <value>`          | Filter bare Codebuff/Freebuff timestamp resolution to a single machine identity (`local`, a name, or `*`). Default `local`. `session get` only; canonical IDs and other agents are unaffected. |
 | `--pg`                       | Read from configured PostgreSQL instead of SQLite. |
 
 ## Shared metadata endpoints
@@ -150,6 +151,29 @@ Return session metadata plus computed signal fields. Shape matches
 
 ```bash
 agentsview session get <id> [--format json]
+```
+
+**Bare timestamps on remote stores.** Codebuff/Freebuff sessions live as
+`<agent>:<project>:<timestamp>` canonical IDs; a bare timestamp
+(e.g. `2026-07-16T00-09-00.236Z`) is not a canonical ID. Against the
+local archive the CLI resolves a bare timestamp to its canonical ID
+by walking the configured codebuff/freebuff roots, gated by
+`--machine` (default `local`). Against a remote store (`--server`,
+`--pg`) a bare timestamp is rejected with an explicit error pointing
+at `session list`, because the timestamp direction is intrinsically
+ambiguous across machines and projects. Always pass the full
+canonical ID on remote reads:
+
+```bash
+# Local reads: bare timestamp OK (--machine=local by default).
+agentsview session get 2026-07-16T00-09-00.236Z
+agentsview session get 2026-07-16T00-09-00.236Z --machine=*
+
+# Remote reads: pass the canonical ID from `session list`.
+agentsview session get codebuff:myproject:1704067200 --pg
+agentsview session get freebuff:myproject:1704067200 --pg
+agentsview session get host~codebuff:myproject:1704067200 --server http://remote
+agentsview session get host~freebuff:myproject:1704067200 --server http://remote
 ```
 
 ```json

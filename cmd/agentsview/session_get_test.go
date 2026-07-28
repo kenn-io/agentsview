@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -34,187 +38,401 @@ func TestPrintSessionDetailHidesZeroSecretLeak(t *testing.T) {
 		"clean session should not show a Secrets line")
 }
 
-// stubPartialService implements service.SessionService and records the
-// arguments passed to FindSessionIDsByPartial. All other methods panic;
-// tests that call resolveBareCodebuffIDRemote must not exercise them.
-type stubPartialService struct {
-	// findResult is returned by FindSessionIDsByPartial.
-	findResult []string
-	// findErr is returned by FindSessionIDsByPartial when non-nil.
-	findErr error
-	// findCalls records every (partial, limit) pair passed to
-	// FindSessionIDsByPartial so tests can assert the limit.
-	findCalls []stubPartialCall
+// stubGetService implements service.SessionService. Only Get is wired up;
+// every other method panics to surface unintended use. Tests must not
+// exercise them.
+type stubGetService struct {
+	// getDetails is keyed by ID; Get returns the pointer when present
+	// and nil + nil when absent.
+	getDetails map[string]*service.SessionDetail
+	// getCalls records every (id) pair passed to Get.
+	getCalls []string
+	// getErr, when non-nil, is returned by Get in place of the lookup.
+	getErr error
 }
 
-type stubPartialCall struct {
-	Partial string
-	Limit   int
+func (s *stubGetService) Get(
+	_ context.Context, id string,
+) (*service.SessionDetail, error) {
+	s.getCalls = append(s.getCalls, id)
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.getDetails[id], nil
 }
 
-func (s *stubPartialService) FindSessionIDsByPartial(
-	_ context.Context, partial string, limit int,
-) ([]string, error) {
-	s.findCalls = append(s.findCalls, stubPartialCall{
-		Partial: partial,
-		Limit:   limit,
-	})
-	return s.findResult, s.findErr
-}
-
-// Stubs for the remaining SessionService methods — never called by
-// resolveBareCodebuffIDRemote so they panic to surface misuse.
-func (s *stubPartialService) Get(context.Context, string) (*service.SessionDetail, error) {
-	panic("Get not expected")
-}
-func (s *stubPartialService) List(context.Context, service.ListFilter) (*service.SessionList, error) {
+// Stubs for the remaining SessionService methods — resolveBareCodebuffID
+// and resolveCodebuffBareID do not exercise them, so they panic.
+func (s *stubGetService) List(context.Context, service.ListFilter) (*service.SessionList, error) {
 	panic("List not expected")
 }
-func (s *stubPartialService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
+func (s *stubGetService) Messages(context.Context, string, service.MessageFilter) (*service.MessageList, error) {
 	panic("Messages not expected")
 }
-func (s *stubPartialService) ToolCalls(context.Context, string) (*service.ToolCallList, error) {
+func (s *stubGetService) ToolCalls(context.Context, string) (*service.ToolCallList, error) {
 	panic("ToolCalls not expected")
 }
-func (s *stubPartialService) Sync(context.Context, service.SyncInput) (*service.SessionDetail, error) {
+func (s *stubGetService) Sync(context.Context, service.SyncInput) (*service.SessionDetail, error) {
 	panic("Sync not expected")
 }
-func (s *stubPartialService) Watch(context.Context, string) (<-chan service.Event, error) {
+func (s *stubGetService) Watch(context.Context, string) (<-chan service.Event, error) {
 	panic("Watch not expected")
 }
-func (s *stubPartialService) Stats(context.Context, service.StatsFilter) (*service.SessionStats, error) {
+func (s *stubGetService) Stats(context.Context, service.StatsFilter) (*service.SessionStats, error) {
 	panic("Stats not expected")
 }
-func (s *stubPartialService) Search(context.Context, service.SearchRequest) (*service.SessionSearchResult, error) {
+func (s *stubGetService) Search(context.Context, service.SearchRequest) (*service.SessionSearchResult, error) {
 	panic("Search not expected")
 }
-func (s *stubPartialService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+func (s *stubGetService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	panic("SearchContent not expected")
 }
-func (s *stubPartialService) UsageSummary(context.Context, service.UsageRequest) (*service.UsageSummaryResult, error) {
+func (s *stubGetService) UsageSummary(context.Context, service.UsageRequest) (*service.UsageSummaryResult, error) {
 	panic("UsageSummary not expected")
 }
-func (s *stubPartialService) UsagePairwiseComparison(context.Context, service.UsagePairwiseComparisonRequest) (*service.UsagePairwiseComparisonResponse, error) {
+func (s *stubGetService) UsagePairwiseComparison(context.Context, service.UsagePairwiseComparisonRequest) (*service.UsagePairwiseComparisonResponse, error) {
 	panic("UsagePairwiseComparison not expected")
 }
-func (s *stubPartialService) ListRecallEntries(context.Context, service.RecallFilter) (*service.RecallList, error) {
+func (s *stubGetService) FindSessionIDsByPartial(context.Context, string, int) ([]string, error) {
+	panic("FindSessionIDsByPartial not expected")
+}
+func (s *stubGetService) ListRecallEntries(context.Context, service.RecallFilter) (*service.RecallList, error) {
 	panic("ListRecallEntries not expected")
 }
-func (s *stubPartialService) GetRecallEntry(context.Context, string) (*db.RecallEntry, error) {
+func (s *stubGetService) GetRecallEntry(context.Context, string) (*db.RecallEntry, error) {
 	panic("GetRecallEntry not expected")
 }
-func (s *stubPartialService) QueryRecallEntries(context.Context, service.RecallQuery) (*service.RecallQueryResult, error) {
+func (s *stubGetService) QueryRecallEntries(context.Context, service.RecallQuery) (*service.RecallQueryResult, error) {
 	panic("QueryRecallEntries not expected")
 }
-func (s *stubPartialService) ImportRecallEntries(context.Context, io.Reader, db.RecallImportOptions) (*db.RecallImportResult, error) {
+func (s *stubGetService) ImportRecallEntries(context.Context, io.Reader, db.RecallImportOptions) (*db.RecallImportResult, error) {
 	panic("ImportRecallEntries not expected")
 }
-func (s *stubPartialService) ListSecrets(context.Context, service.SecretListFilter) (*service.SecretFindingList, error) {
+func (s *stubGetService) ListSecrets(context.Context, service.SecretListFilter) (*service.SecretFindingList, error) {
 	panic("ListSecrets not expected")
 }
-func (s *stubPartialService) ScanSecrets(context.Context, service.SecretScanInput, func(service.SecretScanProgress)) (*service.SecretScanSummary, error) {
+func (s *stubGetService) ScanSecrets(context.Context, service.SecretScanInput, func(service.SecretScanProgress)) (*service.SecretScanSummary, error) {
 	panic("ScanSecrets not expected")
 }
 
-func TestResolveBareCodebuffIDRemote_SingleMatch(t *testing.T) {
-	t.Parallel()
-	svc := &stubPartialService{
-		findResult: []string{"codebuff:myproject:1704067200"},
-	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "codebuff:myproject:1704067200", got)
-	require.Len(t, svc.findCalls, 1)
-	assert.Equal(t, "1704067200", svc.findCalls[0].Partial)
-	assert.Equal(t, codebuffRemoteLookupLimit, svc.findCalls[0].Limit)
+// stageCodebuffSession creates <projectsRoot>/<project>/chats/<rawID>/
+// chat-messages.json so the FS walk in resolveBareCodebuffID surfaces the
+// location. Returns the project name.
+func stageCodebuffSession(t *testing.T, projectsRoot, project, rawID string) {
+	t.Helper()
+	chatDir := filepath.Join(projectsRoot, project, "chats", rawID)
+	require.NoError(t, os.MkdirAll(chatDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(chatDir, "chat-messages.json"),
+		[]byte("[]"), 0o644,
+	))
 }
 
-func TestResolveBareCodebuffIDRemote_FreebuffMatch(t *testing.T) {
+func TestResolveBareCodebuffID_LocalMachine_Match(t *testing.T) {
 	t.Parallel()
-	svc := &stubPartialService{
-		findResult: []string{"freebuff:proj:1704067200"},
-	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "freebuff:proj:1704067200", got)
-}
-
-func TestResolveBareCodebuffIDRemote_NoMatch(t *testing.T) {
-	t.Parallel()
-	svc := &stubPartialService{
-		findResult: []string{
-			"codex:1704067200",       // different agent prefix
-			"codebuff:proj:other",    // different suffix
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		// cfg.LocalMachineName drives the --machine=local filter:
+		// a session whose detail.Machine equals cfg.LocalMachineName
+		// passes the gate.
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
 		},
 	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
+	candidate := "codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "test-machine",
+			}},
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
-	assert.Empty(t, got, "non-Codebuff/Freebuff matches must be ignored")
+	assert.Equal(t, candidate, got,
+		"matching machine must yield the canonical ID")
 }
 
-func TestResolveBareCodebuffIDRemote_EmptyResult(t *testing.T) {
+func TestResolveBareCodebuffID_LocalMachine_Mismatch(t *testing.T) {
 	t.Parallel()
-	svc := &stubPartialService{
-		findResult: nil,
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
 	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
+	candidate := "codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		// detail.Machine is a remote-synced machine; the default
+		// --machine=local filter must reject it.
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "remote-box",
+			}},
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "local",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, got,
+		"non-matching machine must not surface as a local match")
+}
+
+func TestResolveBareCodebuffID_WildcardMatch(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	candidate := "codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		// --machine=* must accept any machine value, including a
+		// remote-synced record.
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "remote-box",
+			}},
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "*",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, candidate, got,
+		"wildcard --machine=* must accept records from any machine")
+}
+
+func TestResolveBareCodebuffID_SpecificMachineMatch(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	candidate := "codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "laptop",
+			}},
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "laptop",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, candidate, got,
+		"exact --machine=laptop must accept records from laptop")
+}
+
+// TestResolveBareCodebuffID_SpecificMachineMismatch pins the inverse of
+// the previous test: a specific machine whose value doesn't match any
+// record must not produce a candidate.
+func TestResolveBareCodebuffID_SpecificMachineMismatch(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
+		},
+	}
+	candidate := "codebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			candidate: {Session: db.Session{
+				ID:      candidate,
+				Machine: "desktop",
+			}},
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
 
-func TestResolveBareCodebuffIDRemote_Ambiguous(t *testing.T) {
+// TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots pins
+// the dual-agent probe in resolveBareCodebuffID: when only Codebuff
+// roots are configured (the realistic case — Freebuff shares the
+// same on-disk layout but is absent from parser.Registry), the probe
+// still tries both codebuff and freebuff prefixes against the
+// service. This guards against single-prefix regression where the
+// dual-agent probe would mis-classify Freebuff sessions as Codebuff.
+//
+// AgentDirs deliberately registers only codebuff; if both agents
+// point at the same root FindCodebuffFreebuffMatches returns
+// duplicate locations and the resolver fires the ambiguity error,
+// which is correct (two agents see the same on-disk dir) but is
+// out of scope for this particular test.
+func TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots(t *testing.T) {
 	t.Parallel()
-	svc := &stubPartialService{
-		findResult: []string{
-			"codebuff:projA:1704067200",
-			"freebuff:projB:1704067200",
+	tmp := t.TempDir()
+	stageCodebuffSession(t, tmp, "myproject", "1704067200")
+	cfg := config.Config{
+		LocalMachineName: "test-machine",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {tmp},
 		},
 	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
+	codebuffID := "codebuff:myproject:1704067200"
+	freebuffID := "freebuff:myproject:1704067200"
+	svc := &stubGetService{
+		getDetails: map[string]*service.SessionDetail{
+			codebuffID: nil,
+			freebuffID: {Session: db.Session{
+				ID:      freebuffID,
+				Machine: "test-machine",
+			}},
+		},
+	}
+	got, err := resolveBareCodebuffID(
+		context.Background(), svc, &cfg, "1704067200", "local",
 	)
+	require.NoError(t, err)
+	assert.Equal(t, freebuffID, got,
+		"Freebuff dual-prefix probe must surface a freebuff row")
+}
+
+// TestResolveCodebuffBareID_ServerBareReturnsError pins the E half of
+// E+C: a non-canonical input against --server must NOT silently fall
+// through to findSessionIDsByPartial (which was the previous bug
+// surface). Instead it returns an action-oriented error pointing at
+// `session list` and the canonical ID shapes.
+func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().String("server", "", "")
+	cmd.Flags().String("machine", "local", "")
+	cmd.Flags().Bool("pg", false, "")
+	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
+	// svc.Get would panic because Get panics in stubGetService when
+	// the path is wrong. We must never reach it.
+	svc := &stubGetService{}
+	got, err := resolveCodebuffBareID(cmd, svc, "1704067200")
 	require.Error(t, err)
 	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "ambiguous")
-	assert.Contains(t, err.Error(), "2")
-	assert.Contains(t, err.Error(), "codebuff:projA:1704067200")
-	assert.Contains(t, err.Error(), "freebuff:projB:1704067200")
+	assert.Contains(t, err.Error(), "session list")
+	// Regression-test every canonical-ID shape the error
+	// enumerates. Stripping any of these lines from
+	// errBareCodebuffRemoteUnsupported must break this test.
+	assert.Contains(t, err.Error(), "codebuff:<project>:<ts>")
+	assert.Contains(t, err.Error(), "freebuff:<project>:<ts>")
+	assert.Contains(t, err.Error(), "host~codebuff:<project>:<ts>")
+	assert.Contains(t, err.Error(), "host~freebuff:<project>:<ts>")
+	// No Get calls must occur on the remote-error path.
+	assert.Empty(t, svc.getCalls,
+		"--server must not probe svc.Get for bare timestamps")
 }
 
-func TestResolveBareCodebuffIDRemote_PropagatesError(t *testing.T) {
+// TestResolveCodebuffBareID_PGBareReturnsError mirrors the previous
+// test for the --pg path, which was the second roborev-flagged code
+// path. Symmetric coverage guards against future divergence.
+func TestResolveCodebuffBareID_PGBareReturnsError(t *testing.T) {
 	t.Parallel()
-	svc := &stubPartialService{
-		findErr: errors.New("connection refused"),
-	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
-	)
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().String("server", "", "")
+	cmd.Flags().String("machine", "local", "")
+	cmd.Flags().Bool("pg", false, "")
+	require.NoError(t, cmd.Flags().Set("pg", "true"))
+	svc := &stubGetService{}
+	got, err := resolveCodebuffBareID(cmd, svc, "1704067200")
 	require.Error(t, err)
 	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "connection refused")
+	assert.Contains(t, err.Error(), "session list")
+	assert.Contains(t, err.Error(), "codebuff:<project>:<ts>")
+	assert.Contains(t, err.Error(), "freebuff:<project>:<ts>")
+	assert.Contains(t, err.Error(), "host~codebuff:<project>:<ts>")
+	assert.Contains(t, err.Error(), "host~freebuff:<project>:<ts>")
+	assert.Empty(t, svc.getCalls)
 }
 
-func TestResolveBareCodebuffIDRemote_FiltersNonCodebuff(t *testing.T) {
+// TestResolveCodebuffBareID_CanonicalSkipsBare pins pass-through
+// behaviour: canonical IDs must skip the resolver regardless of
+// transport, because lookupSessionWithPrefixes handles them via the
+// existing prefix-aware Get path. This protects against the Freebuff
+// canonical-check fix regressing canonical-ID handling under --pg.
+func TestResolveCodebuffBareID_CanonicalSkipsBare(t *testing.T) {
 	t.Parallel()
-	// Matches that end with the raw ID but have wrong agent prefix.
-	svc := &stubPartialService{
-		findResult: []string{
-			"codex:someproject:1704067200",
-			"claude:1704067200",
-			"codebuff:mine:1704067200",
-		},
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().String("server", "", "")
+	cmd.Flags().String("machine", "local", "")
+	cmd.Flags().Bool("pg", false, "")
+	require.NoError(t, cmd.Flags().Set("pg", "true"))
+
+	cases := []string{
+		"codebuff:proj:1704067200",      // codebuff canonical
+		"freebuff:proj:1704067200",      // freebuff canonical (new)
+		"host~codebuff:proj:1704067200", // remote-synced canonical
+		"host~freebuff:proj:1704067200", // remote-synced freebuff
 	}
-	got, err := resolveBareCodebuffIDRemote(
-		context.Background(), svc, "1704067200",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "codebuff:mine:1704067200", got)
+	for _, id := range cases {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			// svc.Get panics if called; canonical IDs must skip
+			// the bare bridge entirely.
+			svc := &stubGetService{}
+			got, err := resolveCodebuffBareID(cmd, svc, id)
+			require.NoError(t, err)
+			assert.Empty(t, got)
+			assert.Empty(t, svc.getCalls)
+		})
+	}
+}
+
+// TestIsCanonicalServiceSessionID_FreebuffPrefix pins the Freebuff
+// special case. Without it, `freebuff:<proj>:<ts>` would be
+// misclassified as a bare timestamp and --pg would reject it under
+// option E.
+func TestIsCanonicalServiceSessionID_FreebuffPrefix(t *testing.T) {
+	t.Parallel()
+	assert.True(t, isCanonicalServiceSessionID("freebuff:proj:1704067200"),
+		"freebuff: prefix must be recognised as canonical")
+	assert.True(t, isCanonicalServiceSessionID("host~freebuff:proj:1704067200"),
+		"host~freebuff: remote-synced freebuff must be recognised")
+}
+
+// TestIsCanonicalServiceSessionID_BareTimestampNotCanonical pins the
+// inverse: a bare timestamp must NOT be flagged as canonical so it
+// enters the bare-resolution path on local reads.
+func TestIsCanonicalServiceSessionID_BareTimestampNotCanonical(t *testing.T) {
+	t.Parallel()
+	assert.False(t, isCanonicalServiceSessionID("1704067200"))
+	assert.False(t, isCanonicalServiceSessionID("2026-07-16T00-09-00.236Z"))
+}
+
+// TestCodebuffMachineMatches_EmptyFilter pins the empty-string arm
+// of codebuffMachineMatches. The production --machine flag default is
+// "local" so an empty filter never reaches the resolver naturally,
+// but the helper itself treats "" and "local" identically; a future
+// refactor that splits them would silently alter behaviour. This
+// test guards the invariant.
+func TestCodebuffMachineMatches_EmptyFilter(t *testing.T) {
+	t.Parallel()
+	assert.True(t, codebuffMachineMatches(
+		"test-machine", "", "test-machine",
+	), "empty filter must defer to localMachine like \"local\" does")
+	assert.False(t, codebuffMachineMatches(
+		"other", "", "test-machine",
+	), "empty filter must still reject mismatched machines")
 }
