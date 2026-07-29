@@ -77,6 +77,26 @@ func TestEffectivePricingDigestChangesWhenRateChanges(t *testing.T) {
 	assert.NotEqual(t, digest, changedDigest)
 }
 
+func TestEffectivePricingDigestChangesWhenPricingBandChanges(t *testing.T) {
+	rows := digestFixtureRows(t)
+	rows[0].Rates.Bands = []PricingBand{{
+		AboveInputTokens: 200_000,
+		InputPerMTok:     money.MustParseDollars("6"),
+	}}
+	changed := digestFixtureRows(t)
+	changed[0].Rates.Bands = []PricingBand{{
+		AboveInputTokens: 200_000,
+		InputPerMTok:     money.MustParseDollars("7"),
+	}}
+
+	digest, err := EffectivePricingDigest(rows)
+	require.NoError(t, err)
+	changedDigest, err := EffectivePricingDigest(changed)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, digest, changedDigest)
+}
+
 func TestEffectivePricingDigestFixture(t *testing.T) {
 	rows := digestFixtureRows(t)
 	canonical, err := canonicalPricingJSON(canonicalPricingRows(rows))
@@ -87,7 +107,7 @@ func TestEffectivePricingDigestFixture(t *testing.T) {
 
 	require.Equal(t, "sha256:"+fmt.Sprintf("%x", sum), digest)
 	assert.Equal(t,
-		"sha256:af16a07941c06a54c4ae531ce8d14df0d8a84d2c9e803b4dee93ef95bba6ab28",
+		"sha256:247836888d2c78a5fda3d0e391bbc28a7fd58b4fb3af9b0d5a0e037a9f3faf0b",
 		digest,
 	)
 }

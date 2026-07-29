@@ -35,6 +35,7 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 			updatedAt = row.Rates.UpdatedAt.UTC().Format(jsonTimeLayout)
 		}
 		out = append(out, map[string]any{
+			"bands":                canonicalPricingBands(row.Rates.Bands),
 			"cache_read_per_mtok":  row.Rates.CacheReadPerMTok.Microdollars,
 			"cache_write_per_mtok": row.Rates.CacheWritePerMTok.Microdollars,
 			"input_per_mtok":       row.Rates.InputPerMTok.Microdollars,
@@ -45,6 +46,29 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 		})
 	}
 	return map[string]any{"rows": out}
+}
+
+func canonicalPricingBands(bands []PricingBand) []any {
+	copied := append([]PricingBand(nil), bands...)
+	sort.SliceStable(copied, func(i, j int) bool {
+		return copied[i].AboveInputTokens < copied[j].AboveInputTokens
+	})
+	out := make([]any, 0, len(copied))
+	for _, band := range copied {
+		var updatedAt any
+		if band.UpdatedAt != nil {
+			updatedAt = band.UpdatedAt.UTC().Format(jsonTimeLayout)
+		}
+		out = append(out, map[string]any{
+			"above_input_tokens":   band.AboveInputTokens,
+			"cache_read_per_mtok":  band.CacheReadPerMTok.Microdollars,
+			"cache_write_per_mtok": band.CacheWritePerMTok.Microdollars,
+			"input_per_mtok":       band.InputPerMTok.Microdollars,
+			"output_per_mtok":      band.OutputPerMTok.Microdollars,
+			"updated_at":           updatedAt,
+		})
+	}
+	return out
 }
 
 const jsonTimeLayout = "2006-01-02T15:04:05Z07:00"
@@ -157,7 +181,34 @@ func canonicalPricingRowSortValues(row EffectivePricingRow) []string {
 		strconv.FormatInt(row.Rates.CacheWritePerMTok.Microdollars, 10),
 		strconv.FormatInt(row.Rates.CacheReadPerMTok.Microdollars, 10),
 		updatedAt,
+		canonicalPricingBandsSortKey(row.Rates.Bands),
 	}
+}
+
+func canonicalPricingBandsSortKey(bands []PricingBand) string {
+	copied := append([]PricingBand(nil), bands...)
+	sort.SliceStable(copied, func(i, j int) bool {
+		return copied[i].AboveInputTokens < copied[j].AboveInputTokens
+	})
+	var key strings.Builder
+	for _, band := range copied {
+		values := []int64{
+			int64(band.AboveInputTokens),
+			band.InputPerMTok.Microdollars,
+			band.OutputPerMTok.Microdollars,
+			band.CacheWritePerMTok.Microdollars,
+			band.CacheReadPerMTok.Microdollars,
+		}
+		for _, value := range values {
+			key.WriteString(strconv.FormatInt(value, 10))
+			key.WriteByte(',')
+		}
+		if band.UpdatedAt != nil {
+			key.WriteString(band.UpdatedAt.UTC().Format(jsonTimeLayout))
+		}
+		key.WriteByte(';')
+	}
+	return key.String()
 }
 
 func formatCanonicalJSONFloat(f float64, bits int) string {
