@@ -2768,6 +2768,7 @@ func normalizeStoredSourcePathHintScopes(
 	type mergedScope struct {
 		includeVirtualMembers bool
 		excluded              []string
+		visible               bool
 	}
 	byPath := make(map[string]*mergedScope, len(scopes))
 	for _, scope := range scopes {
@@ -2775,13 +2776,25 @@ func normalizeStoredSourcePathHintScopes(
 		if path == "" || path == "." {
 			continue
 		}
-		excluded := normalizeExcludedHintRoots(path, scope.Excluded)
 		merged, ok := byPath[path]
 		if !ok {
-			byPath[path] = &mergedScope{
-				includeVirtualMembers: scope.IncludeVirtualMembers,
-				excluded:              excluded,
-			}
+			merged = &mergedScope{}
+			byPath[path] = merged
+		}
+		if storedSourcePathHintExcluded(path, scope.Excluded) {
+			// The scope itself lies at or under a root the caller reconciles
+			// separately, so it contributes no rows at all. A provider that
+			// resolves one requested root into leaf scopes (a container file,
+			// a sessions dir) hands back exactly this shape for the nested
+			// roots it was asked to leave alone; narrowing such a scope is
+			// impossible, so it is dropped instead.
+			continue
+		}
+		excluded := normalizeExcludedHintRoots(path, scope.Excluded)
+		if !merged.visible {
+			merged.visible = true
+			merged.includeVirtualMembers = scope.IncludeVirtualMembers
+			merged.excluded = excluded
 			continue
 		}
 		merged.includeVirtualMembers = merged.includeVirtualMembers ||
@@ -2792,6 +2805,9 @@ func normalizeStoredSourcePathHintScopes(
 	}
 	out := make([]StoredSourcePathHintScope, 0, len(byPath))
 	for path, merged := range byPath {
+		if !merged.visible {
+			continue
+		}
 		out = append(out, StoredSourcePathHintScope{
 			Path:                  path,
 			IncludeVirtualMembers: merged.includeVirtualMembers,

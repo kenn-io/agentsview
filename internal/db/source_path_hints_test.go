@@ -1168,14 +1168,23 @@ func TestNormalizeStoredSourcePathHintScopesBoundsExclusions(t *testing.T) {
 	nested := filepath.Join(root, "archive")
 	sibling := filepath.Join(filepath.Dir(root), "codex")
 
-	t.Run("keeps only strict descendants", func(t *testing.T) {
+	t.Run("narrows by strict descendants only", func(t *testing.T) {
 		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{{
 			Path:     root,
-			Excluded: []string{nested, root, sibling, "", ".", nested},
+			Excluded: []string{nested, sibling, "", ".", nested},
 		}})
 		require.Len(t, got, 1)
 		assert.Equal(t, []string{nested}, got[0].Excluded,
-			"an exclusion at or outside the scope root would empty or not narrow it")
+			"an exclusion outside the scope root does not narrow it")
+	})
+
+	t.Run("an exclusion at the scope root drops the scope", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{{
+			Path:     root,
+			Excluded: []string{root},
+		}})
+		assert.Empty(t, got,
+			"a scope entirely inside an exclusion contributes no rows")
 	})
 
 	t.Run("repeated declarations intersect", func(t *testing.T) {
@@ -1204,4 +1213,90 @@ func TestStoredSourcePathHintInRootHonorsExclusions(t *testing.T) {
 		filepath.Join(nested, "state.db")+"#member", scope),
 		"a virtual member is excluded with its container")
 	assert.True(t, storedSourcePathHintInRoot(root+"#member", scope))
+}
+
+// TestListActiveSessionSourceOwnershipScopesPageDropsScopesInsideExclusions
+// covers the shape a provider resolver hands back: one requested parent root
+// expands into leaf scopes (a container file, a sessions dir) for every
+// configured root beneath it, including the nested root the caller excluded.
+// Such a scope cannot be narrowed, only dropped, and the pre-fix code left it
+// paging the whole nested archive.
+func TestListActiveSessionSourceOwnershipScopesPageDropsScopesInsideExclusions(t *testing.T) {
+	d := testDB(t)
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	parentSessions := filepath.Join(root, "sessions")
+	nestedSessions := filepath.Join(nested, "sessions")
+	nestedStateDB := filepath.Join(nested, "state.db")
+
+	seeds := []storedSourcePathSeed{{
+		id:    "parent-0000",
+		agent: "hermes",
+		path:  filepath.Join(parentSessions, "session-0000.jsonl"),
+	}}
+	for i := range WatchReconcileSourcePageSize + 4 {
+		seeds = append(seeds, storedSourcePathSeed{
+			id:    fmt.Sprintf("nested-file-%04d", i),
+			agent: "hermes",
+			path:  filepath.Join(nestedSessions, fmt.Sprintf("session-%04d.jsonl", i)),
+		}, storedSourcePathSeed{
+			id:    fmt.Sprintf("nested-member-%04d", i),
+			agent: "hermes",
+			path:  fmt.Sprintf("%s#member-%04d", nestedStateDB, i),
+		})
+	}
+	insertSessionsWithSourcePaths(t, d, seeds)
+	require.NoError(t, d.BaselineActiveSessionSourcePaths(
+		t.Context(), defaultMachine, sourcePathsFromSeeds(seeds),
+	))
+
+	resolved := []StoredSourcePathHintScope{
+		{Path: parentSessions},
+		{Path: nestedStateDB, IncludeVirtualMembers: true},
+		{Path: nestedSessions},
+	}
+	for i := range resolved {
+		resolved[i].Excluded = []string{nested}
+	}
+
+	page, err := d.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), defaultMachine, "hermes", resolved, SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(page))
+	for _, ownership := range page {
+		got = append(got, ownership.ID)
+	}
+	assert.Equal(t, []string{"parent-0000"}, got,
+		"a resolved leaf scope inside an excluded root pages nothing, and does not displace the selected scope's rows")
+}
+
+func TestNormalizeStoredSourcePathHintScopesDropsScopesInsideExclusions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "hermes")
+	nested := filepath.Join(root, "nested")
+
+	t.Run("scope at or under an exclusion is dropped", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: filepath.Join(root, "sessions"), Excluded: []string{nested}},
+			{Path: filepath.Join(nested, "state.db"), IncludeVirtualMembers: true, Excluded: []string{nested}},
+			{Path: nested, Excluded: []string{nested}},
+		})
+		require.Len(t, got, 1)
+		assert.Equal(t, filepath.Join(root, "sessions"), got[0].Path)
+		assert.Empty(t, got[0].Excluded,
+			"an exclusion disjoint from the surviving scope narrows nothing")
+	})
+
+	t.Run("another declaration keeps a dropped path visible", func(t *testing.T) {
+		leaf := filepath.Join(nested, "state.db")
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: leaf, Excluded: []string{nested}},
+			{Path: leaf, IncludeVirtualMembers: true},
+		})
+		require.Len(t, got, 1)
+		assert.Equal(t, leaf, got[0].Path)
+		assert.True(t, got[0].IncludeVirtualMembers)
+		assert.Empty(t, got[0].Excluded)
+	})
 }
