@@ -39,6 +39,24 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 	})
 }
 
+func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
+	var body strings.Builder
+	for range productionArtifactLimits().segmentMessages + 1 {
+		body.WriteString(
+			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":2}\n",
+		)
+	}
+
+	_, err := decodeSegmentWithLimits(
+		[]byte(body.String()), productionArtifactLimits(),
+	)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+	var future *futureArtifactVersionError
+	require.ErrorAs(t, err, &future)
+	assert.Equal(t, Kind(KindSegments), future.Kind)
+	assert.Equal(t, 2, future.Version)
+}
+
 func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	want := importCheckpoint{

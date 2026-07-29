@@ -121,6 +121,8 @@ func TestStoreImportCoordinatorRetriesMissingSegmentAfterArrival(t *testing.T) {
 	require.NoError(t, err)
 	segmentIdentity := identityForBytes(t, segmentBody)
 	m := importTestManifest("session")
+	m.Session.MessageCount = 1
+	m.Session.UserMessageCount = 1
 	m.Segments = []string{segmentIdentity.SHA256}
 	manifestHash := createImportTestManifest(t, store, m, false)
 	checkpointEntry := createImportTestCheckpoint(

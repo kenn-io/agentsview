@@ -577,12 +577,26 @@ func (db *DB) RecordArtifactCheckpointLanding(
 func (db *DB) GetArtifactCheckpointLanding(
 	ctx context.Context, origin string,
 ) (ArtifactCheckpointLanding, map[string]string, bool, error) {
+	return db.getArtifactCheckpointLanding(ctx, origin, nil)
+}
+
+func (db *DB) getArtifactCheckpointLanding(
+	ctx context.Context,
+	origin string,
+	afterIdentity func(),
+) (ArtifactCheckpointLanding, map[string]string, bool, error) {
 	if strings.TrimSpace(origin) == "" || origin != strings.TrimSpace(origin) {
 		return ArtifactCheckpointLanding{}, nil, false,
 			errors.New("artifact checkpoint landing origin is required")
 	}
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ArtifactCheckpointLanding{}, nil, false,
+			fmt.Errorf("beginning artifact checkpoint landing read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	var landing ArtifactCheckpointLanding
-	err := db.getReader().QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
 		FROM artifact_checkpoint_landings WHERE origin = ?`, origin,
 	).Scan(
@@ -596,7 +610,10 @@ func (db *DB) GetArtifactCheckpointLanding(
 		return ArtifactCheckpointLanding{}, nil, false,
 			fmt.Errorf("reading artifact checkpoint landing: %w", err)
 	}
-	rows, err := db.getReader().QueryContext(ctx, `
+	if afterIdentity != nil {
+		afterIdentity()
+	}
+	rows, err := tx.QueryContext(ctx, `
 		SELECT gid, manifest_hash
 		FROM artifact_checkpoint_landing_sessions
 		WHERE origin = ? ORDER BY gid`, origin,
@@ -618,6 +635,10 @@ func (db *DB) GetArtifactCheckpointLanding(
 	if err := rows.Err(); err != nil {
 		return ArtifactCheckpointLanding{}, nil, false,
 			fmt.Errorf("iterating artifact checkpoint landing map: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ArtifactCheckpointLanding{}, nil, false,
+			fmt.Errorf("committing artifact checkpoint landing read: %w", err)
 	}
 	return landing, sessionMap, true, nil
 }

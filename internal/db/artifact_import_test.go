@@ -1,9 +1,11 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -316,6 +318,62 @@ func TestArtifactCheckpointLandingBindsPeerIdentity(t *testing.T) {
 
 	require.NoError(t,
 		database.RecordArtifactCheckpointLanding(ctx, landing, want))
+}
+
+func TestArtifactCheckpointLandingReadUsesOneSnapshot(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	firstHead := ArtifactPeerCheckpointHead{
+		Origin:           "peer-a1b2c3",
+		Sequence:         1,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   41,
+	}
+	_, err := database.RecordArtifactPeerCheckpointHead(ctx, firstHead)
+	require.NoError(t, err)
+	firstMap := map[string]string{
+		firstHead.Origin + "~one": strings.Repeat("b", 64),
+	}
+	require.NoError(t, database.RecordArtifactCheckpointLanding(
+		ctx, ArtifactCheckpointLanding(firstHead), firstMap,
+	))
+
+	secondHead := firstHead
+	secondHead.Sequence = 2
+	secondHead.CheckpointSHA256 = strings.Repeat("c", 64)
+	secondHead.CheckpointSize = 42
+	secondMap := map[string]string{
+		firstHead.Origin + "~two": strings.Repeat("d", 64),
+	}
+	var once sync.Once
+	gotLanding, gotMap, found, err := database.getArtifactCheckpointLanding(
+		ctx, firstHead.Origin, func() {
+			once.Do(func() {
+				advanced, recordErr := database.RecordArtifactPeerCheckpointHead(
+					context.WithoutCancel(ctx), secondHead,
+				)
+				require.NoError(t, recordErr)
+				require.True(t, advanced)
+				require.NoError(t, database.RecordArtifactCheckpointLanding(
+					context.WithoutCancel(ctx),
+					ArtifactCheckpointLanding(secondHead),
+					secondMap,
+				))
+			})
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ArtifactCheckpointLanding(firstHead), gotLanding)
+	assert.Equal(t, firstMap, gotMap)
+
+	gotLanding, gotMap, found, err = database.GetArtifactCheckpointLanding(
+		ctx, firstHead.Origin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ArtifactCheckpointLanding(secondHead), gotLanding)
+	assert.Equal(t, secondMap, gotMap)
 }
 
 func TestArtifactCheckpointLandingRejectsUnrecordedAndRegressedAuthority(

@@ -200,29 +200,27 @@ func segmentRecords(data []byte, limit int) ([][]byte, error) {
 }
 
 func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight, error) {
+	version, err := segmentDataVersion(data)
+	if err != nil {
+		return segmentPreflight{}, err
+	}
+	if version > messageSegmentFormatVersion {
+		return segmentPreflight{}, &futureArtifactVersionError{
+			Kind: KindSegments, Version: version,
+		}
+	}
+	if version != messageSegmentFormatVersion {
+		return segmentPreflight{}, fmt.Errorf(
+			"message segment has unsupported artifact version %d",
+			version,
+		)
+	}
 	records, err := segmentRecords(data, limits.segmentMessages)
 	if err != nil {
 		return segmentPreflight{}, err
 	}
 	preflight := segmentPreflight{records: records}
 	for _, line := range records {
-		var header struct {
-			Version int `json:"v"`
-		}
-		if err := json.Unmarshal(line, &header); err != nil {
-			return segmentPreflight{}, fmt.Errorf("decoding message segment header: %w", err)
-		}
-		if header.Version > messageSegmentFormatVersion {
-			return segmentPreflight{}, &futureArtifactVersionError{
-				Kind: KindSegments, Version: header.Version,
-			}
-		}
-		if header.Version != messageSegmentFormatVersion {
-			return segmentPreflight{}, fmt.Errorf(
-				"message segment has unsupported artifact version %d",
-				header.Version,
-			)
-		}
 		messageNested, err := preflightMessageNestedCollections(line, limits)
 		if err != nil {
 			return segmentPreflight{}, err
@@ -250,6 +248,51 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 		preflight.nested.resultEvents += messageNested.resultEvents
 	}
 	return preflight, nil
+}
+
+func segmentDataVersion(data []byte) (int, error) {
+	remaining := data
+	lineNumber := 0
+	version := 0
+	haveVersion := false
+	for len(remaining) > 0 {
+		lineNumber++
+		newline := bytes.IndexByte(remaining, '\n')
+		line := remaining
+		if newline >= 0 {
+			line = remaining[:newline]
+			remaining = remaining[newline+1:]
+		} else {
+			remaining = nil
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			return 0, fmt.Errorf("blank message record at line %d", lineNumber)
+		}
+		var header struct {
+			Version int `json:"v"`
+		}
+		if err := json.Unmarshal(line, &header); err != nil {
+			return 0, fmt.Errorf(
+				"decoding message segment header at line %d: %w",
+				lineNumber, err,
+			)
+		}
+		if !haveVersion {
+			version = header.Version
+			haveVersion = true
+			continue
+		}
+		if header.Version != version {
+			return 0, fmt.Errorf(
+				"message segment mixes artifact versions %d and %d",
+				version, header.Version,
+			)
+		}
+	}
+	if !haveVersion {
+		return messageSegmentFormatVersion, nil
+	}
+	return version, nil
 }
 
 func preflightMessageNestedCollections(

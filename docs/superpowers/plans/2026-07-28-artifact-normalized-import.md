@@ -683,8 +683,11 @@ Feed literal future-version manifest and segment bytes through
 decoder error still satisfies `errors.Is(err, errFutureArtifactVersion)` and
 that `errors.As` reports the exact kind and input version. These tests fail if a
 decoder loses the dependency kind, reports the wrong version, or stops
-preserving the existing sentinel contract; do not test the error struct's
-constructor or fields in isolation.
+preserving the existing sentinel contract. Include a complete future segment
+whose record count exceeds the current v1 per-segment limit: authentication and
+version detection must precede all current-schema cardinality and nested
+collection checks. Do not test the error struct's constructor or fields in
+isolation.
 
 - [ ] **Step 2: Implement the typed error**
 
@@ -699,7 +702,11 @@ func (e *futureArtifactVersionError) Unwrap() error {
 ```
 
 Return it from future manifest and message-segment decoding without changing
-existing `errors.Is` behavior.
+existing `errors.Is` behavior. Segment preflight first scans the complete
+byte-bounded NDJSON body for one consistent record version. A future version
+returns the typed error only after that complete structural scan; current v1
+record, tool-call, and result-event limits are applied only after the version is
+known to be current.
 
 - [ ] **Step 3: Write failing checkpoint-decoder tests**
 
@@ -900,6 +907,10 @@ Create manifest and segment artifacts directly in a real test store. Cover:
 - native ID containing `~`;
 - duplicate segment references;
 - aggregate message, decoded-byte, tool-call, and result-event limits; and
+- duplicate message ordinals, manifest/message count disagreement, and duplicate
+  nonempty usage-event persistence keys;
+- invalid or corrupt manifest and segment identities returned by either `Stat`
+  or `Open`; and
 - semantically valid noncanonical manifest and segment bytes.
 
 Missing and future dependencies return `importClosureDeferred`. Complete invalid
@@ -933,6 +944,14 @@ For current manifests require:
 
 `raw_source`, when present, receives existing wire validation only. Normalized
 import does not read `KindRaw`.
+
+Before returning a complete closure, validate every invariant needed by the
+normalized persistence schema: message ordinals are unique across all segments,
+the manifest message count equals the decoded message count, the user-message
+count is within the message-count range, and nonempty usage-event keys are
+unique within their database uniqueness scope. Violations are deterministic
+invalid closures and quarantine the manifest rather than reaching SQLite as
+retryable write failures.
 
 - [ ] **Step 5: Implement bounded closure loading**
 
@@ -1369,7 +1388,8 @@ usage events, regressed heads, or lost claims.
 
 Create a checkpoint with one changed session and compare it with a checkpoint
 containing 10,000 already-provenance-matched sessions plus the same one changed
-session. Instrument the coordinator database wrapper and store:
+session. Add narrow test-only query observer hooks at the concrete `*db.DB`
+provenance and queue page boundaries, and instrument the store:
 
 - at most 128 queue claims are read;
 - only the changed session's manifest and segments are opened;

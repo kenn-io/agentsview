@@ -145,6 +145,14 @@ writes into a provider directory. Capture rejects a coordinate that cannot be
 represented safely beneath that root instead of rewriting it into a different
 parse layout.
 
+Stewardship-capable providers also declare how parsing separates the
+materialized read path from the canonical source coordinate. The parser opens
+members beneath the temporary root, but session IDs, projects, fingerprints, and
+persisted provenance are derived from the original configured-source namespace
+and provider-relative coordinate. A provider is not archive-reparse capable
+until live and materialized parses produce equivalent normalized records without
+persisting temporary paths.
+
 Database-backed providers and unsupported multi-file directory stores remain
 outside stewardship until they define a sound provider-specific snapshot
 mechanism. They continue to sync from provider storage and are never eligible
@@ -154,8 +162,14 @@ for eviction.
 
 Every source has an origin-scoped stable `source_id`.
 
-- A provider-native durable identity is preferred when available.
-- Otherwise the exact provider-relative parse coordinate supplies identity.
+- Identity is always provider-qualified, so identical native IDs from different
+  providers cannot collide.
+- Each configured provider root receives a stable source-namespace identity that
+  survives path relocation but is not inferred from the current absolute path.
+- A provider-native durable identity within that namespace is preferred when
+  available.
+- Otherwise the source-namespace identity plus exact provider-relative parse
+  coordinate supplies identity.
 - At a known path, prefix-continuity failure creates a rewrite revision of the
   same source. Filename reuse is therefore one revision history. This may
   conflate logically distinct uses of a recycled path, but it loses no bytes.
@@ -250,7 +264,10 @@ copies are alternate locations for one logical revision, not separate inputs:
 
 Ingestion work is keyed by source ID and revision identity. Archive
 materialization stages one complete parse unit at a time under an
-AgentsView-owned temporary root, preserving its exact parse-relative layout.
+AgentsView-owned temporary root, preserving its exact parse-relative layout. The
+inventory passes both the temporary read root and the canonical
+configured-source coordinate to the provider capability; temporary coordinates
+never become normalized identity or provenance.
 
 ## 3. Archive Protocol and Receipts
 
@@ -372,8 +389,9 @@ Before beginning, AgentsView verifies:
 ### Watcher coordination
 
 Before moving any file, AgentsView records the source's eviction transition in
-`stewardship.db`. The disappearance classifier added with the eviction feature
-consults that state:
+`stewardship.db`. Every authoritative source-missing path added to or used by
+the eviction feature consults that state, including watcher events, scoped
+reconciliation, full reconciliation, and archive audits:
 
 - an expected eviction changes provider presence to `evicted`; and
 - an ordinary disappearance retains the existing source-missing tombstone
@@ -592,6 +610,8 @@ where observable filesystem behavior matters.
 - Crash after chunk creation but before manifest commit.
 - Crash after manifest commit but before `stewardship.db` update.
 - Ledger rebuild from committed manifests and orphan-chunk grace.
+- Collision resistance across configured roots and across providers with the
+  same native source identity.
 - Small and production-scale source inventories demonstrate bounded per-event
   work and memory.
 
@@ -599,6 +619,8 @@ where observable filesystem behavior matters.
 
 - Single-file and declared sidecar sets preserve exact parse-relative layout.
 - Cross-linked units are grouped or rejected as non-evictable.
+- Live and archive-backed parses are equivalent for providers whose normalized
+  identity or provenance depends on source paths.
 - Provider and archive copies of one revision produce one ingestion.
 - Each of the five inventory branches selects exactly one source.
 - Archive-backed full resync rebuilds normalized provenance.
@@ -618,6 +640,8 @@ where observable filesystem behavior matters.
 ### Eviction and retention
 
 - Watcher disappearance during eviction does not tombstone normalized sessions.
+- Scoped and full reconciliation plus archive audits preserve intentionally
+  evicted sessions.
 - Ordinary disappearance still creates the existing source-missing tombstone.
 - Quarantine is outside watched roots and same-filesystem; unsupported volumes
   decline eviction.

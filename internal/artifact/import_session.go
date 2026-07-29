@@ -39,6 +39,11 @@ func loadImportedSession(
 	}
 	manifestEntry, found, err := statImportDependency(ctx, store, manifestRef)
 	if err != nil {
+		if isInvalidImportDependencyError(err) {
+			return quarantineImportDependency(
+				ctx, store, manifestRef, "invalid import manifest",
+			)
+		}
 		return db.SessionBatchWrite{}, importClosureDeferred, err
 	}
 	if !found {
@@ -84,6 +89,11 @@ func loadImportedSession(
 		}
 		segmentEntry, found, err := statImportDependency(ctx, store, segmentRef)
 		if err != nil {
+			if isInvalidImportDependencyError(err) {
+				return quarantineImportDependency(
+					ctx, store, segmentRef, "invalid import segment",
+				)
+			}
 			return db.SessionBatchWrite{}, importClosureDeferred, err
 		}
 		if !found {
@@ -138,6 +148,11 @@ func loadImportedSession(
 		nested.toolCalls += preflight.nested.toolCalls
 		nested.resultEvents += preflight.nested.resultEvents
 	}
+	if err := validateImportedClosure(m, messages); err != nil {
+		return quarantineImportDependency(
+			ctx, store, manifestRef, "invalid import session closure",
+		)
+	}
 	return rewriteManifestForImport(m, messages), importClosureComplete, nil
 }
 
@@ -179,6 +194,35 @@ func validateImportedManifest(
 		return errors.New("manifest usage event limit exceeded")
 	}
 	return ValidateRawSource(m.RawSource)
+}
+
+func validateImportedClosure(m manifest, messages []db.Message) error {
+	if m.Session.MessageCount != len(messages) {
+		return errors.New("manifest message count does not match segment messages")
+	}
+	if m.Session.UserMessageCount < 0 ||
+		m.Session.UserMessageCount > m.Session.MessageCount {
+		return errors.New("manifest user message count is invalid")
+	}
+	ordinals := make(map[int]struct{}, len(messages))
+	for _, message := range messages {
+		if _, exists := ordinals[message.Ordinal]; exists {
+			return errors.New("session closure has duplicate message ordinal")
+		}
+		ordinals[message.Ordinal] = struct{}{}
+	}
+	usageKeys := make(map[string]struct{}, len(m.UsageEvents))
+	for _, event := range m.UsageEvents {
+		if event.DedupKey == "" {
+			continue
+		}
+		key := event.Source + "\x00" + event.DedupKey
+		if _, exists := usageKeys[key]; exists {
+			return errors.New("session closure has duplicate usage event key")
+		}
+		usageKeys[key] = struct{}{}
+	}
+	return nil
 }
 
 func statImportDependency(

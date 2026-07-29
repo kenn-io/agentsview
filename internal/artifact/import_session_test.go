@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -136,6 +137,37 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	assert.Equal(t, "hello", write.Messages[0].Content)
 }
 
+func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	var segment strings.Builder
+	for range productionArtifactLimits().segmentMessages + 1 {
+		segment.WriteString(
+			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":2}\n",
+		)
+	}
+	segmentHash := createHashedImportArtifact(
+		t, store, KindSegments, ".ndjson", []byte(segment.String()),
+	)
+	m := importTestManifest("session")
+	m.Session.MessageCount = 1
+	m.Session.UserMessageCount = 1
+	m.Segments = []string{segmentHash}
+	manifestHash := createImportTestManifest(t, store, m, false)
+
+	_, outcome, err := loadImportedSession(
+		t.Context(), database, store, contractOrigin,
+		contractOrigin+"~session", manifestHash,
+		productionArtifactLimits(),
+	)
+	assert.Equal(t, importClosureDeferred, outcome)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+	var future *futureArtifactVersionError
+	require.ErrorAs(t, err, &future)
+	assert.Equal(t, Kind(KindSegments), future.Kind)
+	assert.Equal(t, 2, future.Version)
+}
+
 func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -202,6 +234,122 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 			var future *futureArtifactVersionError
 			require.ErrorAs(t, err, &future)
 			assert.Equal(t, tc.futureKind, future.Kind)
+		})
+	}
+}
+
+func TestLoadImportedSessionQuarantinesInvalidStatDependency(t *testing.T) {
+	tests := []struct {
+		name string
+		kind Kind
+	}{
+		{name: "manifest", kind: KindManifests},
+		{name: "segment", kind: KindSegments},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testExportDB(t)
+			base := newTestArtifactStore(t)
+			m := importTestManifest("session")
+			manifestHash := createImportTestClosure(t, base, &m, []db.Message{{
+				Ordinal: 0, Role: "user", Content: "one",
+			}})
+			ref := requireContractRef(
+				t, contractOrigin, KindManifests, manifestHash+".json",
+			)
+			if tc.kind == KindSegments {
+				ref = requireContractRef(
+					t, contractOrigin, KindSegments, m.Segments[0]+".ndjson",
+				)
+			}
+			store := &failingImportStatStore{
+				ArtifactStore: base,
+				failRef:       ref,
+				err:           fmt.Errorf("%w: corrupt catalog", ErrArtifactCorrupt),
+			}
+
+			_, outcome, err := loadImportedSession(
+				t.Context(), database, store, contractOrigin,
+				contractOrigin+"~session", manifestHash,
+				productionArtifactLimits(),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, importClosureInvalid, outcome)
+			_, err = base.Stat(t.Context(), ref)
+			assert.ErrorIs(t, err, ErrArtifactNotFound)
+		})
+	}
+}
+
+func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
+	t *testing.T,
+) {
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, ArtifactStore) (manifest, string)
+	}{
+		{
+			name: "duplicate message ordinals",
+			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				m := importTestManifest("session")
+				hash := createImportTestClosure(t, store, &m, []db.Message{
+					{Ordinal: 0, Role: "user", Content: "one"},
+					{Ordinal: 0, Role: "assistant", Content: "two"},
+				})
+				return m, hash
+			},
+		},
+		{
+			name: "manifest message count mismatch",
+			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				m := importTestManifest("session")
+				segment, err := encodeSegment([]db.Message{{
+					Ordinal: 0, Role: "user", Content: "one",
+				}})
+				require.NoError(t, err)
+				segmentHash := createHashedImportArtifact(
+					t, store, KindSegments, ".ndjson", segment,
+				)
+				m.Segments = []string{segmentHash}
+				m.Session.MessageCount = 2
+				m.Session.UserMessageCount = 1
+				hash := createImportTestManifest(t, store, m, false)
+				return m, hash
+			},
+		},
+		{
+			name: "duplicate nonempty usage key",
+			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				m := importTestManifest("session")
+				m.UsageEvents = []artifactUsageEvent{
+					{Source: "provider", DedupKey: "same"},
+					{Source: "provider", DedupKey: "same"},
+				}
+				hash := createImportTestClosure(t, store, &m, []db.Message{{
+					Ordinal: 0, Role: "user", Content: "one",
+				}})
+				return m, hash
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			database := testExportDB(t)
+			store := newTestArtifactStore(t)
+			_, manifestHash := tc.prepare(t, store)
+			manifestRef := requireContractRef(
+				t, contractOrigin, KindManifests, manifestHash+".json",
+			)
+
+			_, outcome, err := loadImportedSession(
+				t.Context(), database, store, contractOrigin,
+				contractOrigin+"~session", manifestHash,
+				productionArtifactLimits(),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, importClosureInvalid, outcome)
+			_, err = store.Stat(t.Context(), manifestRef)
+			assert.ErrorIs(t, err, ErrArtifactNotFound)
 		})
 	}
 }
@@ -287,6 +435,8 @@ func TestLoadImportedSessionAcceptsNoncanonicalManifestAndSegment(t *testing.T) 
 		t, store, KindSegments, ".ndjson", segment,
 	)
 	m := importTestManifest("session")
+	m.Session.MessageCount = 1
+	m.Session.UserMessageCount = 1
 	m.Segments = []string{segmentHash}
 	canonical, err := canonicalJSON(m)
 	require.NoError(t, err)
@@ -368,6 +518,13 @@ func createImportTestClosure(
 	messages []db.Message,
 ) string {
 	t.Helper()
+	m.Session.MessageCount = len(messages)
+	m.Session.UserMessageCount = 0
+	for _, message := range messages {
+		if message.Role == "user" && !message.IsSystem {
+			m.Session.UserMessageCount++
+		}
+	}
 	segment, err := encodeSegment(messages)
 	require.NoError(t, err)
 	segmentHash := createHashedImportArtifact(
@@ -417,6 +574,21 @@ type failingImportOpenStore struct {
 	ArtifactStore
 	failRef Ref
 	err     error
+}
+
+type failingImportStatStore struct {
+	ArtifactStore
+	failRef Ref
+	err     error
+}
+
+func (s *failingImportStatStore) Stat(
+	ctx context.Context, ref Ref,
+) (Entry, error) {
+	if ref == s.failRef {
+		return Entry{}, s.err
+	}
+	return s.ArtifactStore.Stat(ctx, ref)
 }
 
 func (s *failingImportOpenStore) Open(
