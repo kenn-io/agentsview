@@ -672,3 +672,114 @@ func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
 			"zero means the freshness gate missed the deletion, and "+
 			"a value above one means it over-counted")
 }
+
+// TestSourceMtimeCodebuffUsesPerFileHash pins the roborev-medium
+// regression on ab050f8: SourceMtime for Codebuff sessions must
+// detect (a) a same-size companion-file rewrite whose mtime stays
+// below the existing max, (b) offsetting size changes that keep the
+// total size unchanged, and (c) a missing companion file's later
+// appearance. The freshness gate reduces chat-messages.json +
+// run-state.json + chat-meta.json to a single int64 via an FNV-1a
+// hash of each (size, mtime) pair so any per-file change in size or
+// mtime is detected. A max-mtime-only reduction would miss (a) and
+// (b); a sum-of-sizes reduction would miss (a). The watcher polls
+// SourceMtime continuously, so the lookup must stay stat-only.
+func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodebuff: {root},
+		},
+		Machine: "local",
+	})
+
+	// Codebuff session IDs are codebuff:<project>:<ts> and the
+	// corresponding on-disk layout is root/<project>/chats/<ts>/,
+	// mirroring createCodebuffArchive. Using a single-component
+	// rawID would miss FindSourceFile's expected layout.
+	project := "test-project"
+	ts := "2026-07-15T10-00-00.000Z"
+	rawID := project + ":" + ts
+	dir := filepath.Join(root, project, "chats", ts)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	chatPath := filepath.Join(dir, "chat-messages.json")
+	runStatePath := filepath.Join(dir, "run-state.json")
+	chatMetaPath := filepath.Join(dir, "chat-meta.json")
+
+	// Fixed contents so we can rewrite a sibling with the *same byte
+	// length* but a new mtime. The FNV-1a hash includes size, so a
+	// pure same-size, same-mtime rewrite is the only input that would
+	// legitimately leave SourceMtime unchanged.
+	const chatBody = `[{"id":"u1","variant":"user","content":"hello","timestamp":"03:04 PM"}]`
+	const runStateBody = `{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek"}}}`
+	const chatMetaBody = `{"messageCount":1,"firstPrompt":"hello","messagesSize":50}`
+	require.NoError(t, os.WriteFile(chatPath, []byte(chatBody), 0o644))
+	require.NoError(t, os.WriteFile(runStatePath, []byte(runStateBody), 0o644))
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(chatMetaBody), 0o644))
+
+	// Stagger mtimes so chat-messages.json holds the max; the other
+	// two files are below it. Rewriting run-state.json with a new
+	// mtime that is still below the max would be invisible to the
+	// old max-mtime reduction.
+	chatTime := time.Date(2026, time.July, 4, 12, 0, 0, 0, time.UTC)
+	runStateTime := chatTime.Add(-5 * time.Minute)
+	chatMetaTime := chatTime.Add(-10 * time.Minute)
+	require.NoError(t, os.Chtimes(chatPath, chatTime, chatTime))
+	require.NoError(t, os.Chtimes(runStatePath, runStateTime, runStateTime))
+	require.NoError(t, os.Chtimes(chatMetaPath, chatMetaTime, chatMetaTime))
+
+	baseline := engine.SourceMtime("codebuff:" + rawID)
+	require.NotZero(t, baseline,
+		"baseline SourceMtime must be non-zero for a live Codebuff session")
+
+	// (a) Same-size companion-file rewrite with a *new* mtime that
+	// stays below the existing max. The old max-mtime reduction
+	// would return the same value; the per-file hash must change.
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, os.WriteFile(runStatePath, []byte(runStateBody), 0o644))
+	subMaxTime := chatTime.Add(-1 * time.Minute) // still below chatTime
+	require.NoError(t, os.Chtimes(runStatePath, subMaxTime, subMaxTime))
+	afterSubMaxRewrite := engine.SourceMtime("codebuff:" + rawID)
+	assert.NotEqual(t, baseline, afterSubMaxRewrite,
+		"a same-size run-state.json rewrite with a sub-max mtime "+
+			"must change SourceMtime; equal values pin the regression "+
+			"where SourceMtime reduced to max mtime across the three files")
+
+	// (b) Offsetting size changes: grow chat-messages.json by 10
+	// bytes and shrink chat-meta.json by 10 bytes. The total size
+	// delta is zero, but per-file stats must still trigger a hash
+	// change. The old code never inspected sizes, so a per-file
+	// size shift would have been invisible.
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, os.WriteFile(chatPath, []byte(chatBody+"          "), 0o644))
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(chatMetaBody[:len(chatMetaBody)-10]), 0o644))
+	require.NoError(t, os.Chtimes(chatPath, chatTime, chatTime))
+	require.NoError(t, os.Chtimes(chatMetaPath, chatMetaTime, chatMetaTime))
+	afterOffsettingSize := engine.SourceMtime("codebuff:" + rawID)
+	assert.NotEqual(t, afterSubMaxRewrite, afterOffsettingSize,
+		"offsetting per-file size changes that keep the sum unchanged "+
+			"must still change SourceMtime; equal values pin the "+
+			"regression where freshness ignored per-file size")
+
+	// (c) A missing companion file's later appearance. Delete
+	// chat-meta.json, capture SourceMtime, recreate it with new
+	// content, and capture again. The new appearance must change
+	// the hash because the missing-file block is a fixed zero
+	// sequence distinct from any real (size, mtime) pair.
+	require.NoError(t, os.Remove(chatMetaPath))
+	afterMissingMeta := engine.SourceMtime("codebuff:" + rawID)
+	assert.NotEqual(t, afterOffsettingSize, afterMissingMeta,
+		"a deleted chat-meta.json must change SourceMtime; equal "+
+			"values mean the missing-companion branch is hashed the "+
+			"same as a present one")
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(chatMetaBody), 0o644))
+	recreatedTime := chatTime.Add(2 * time.Minute)
+	require.NoError(t, os.Chtimes(chatMetaPath, recreatedTime, recreatedTime))
+	afterRecreatedMeta := engine.SourceMtime("codebuff:" + rawID)
+	assert.NotEqual(t, afterMissingMeta, afterRecreatedMeta,
+		"a recreated chat-meta.json with a new mtime must change "+
+			"SourceMtime back to a value distinct from the missing-file state")
+}

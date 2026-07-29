@@ -2900,6 +2900,64 @@ func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 		"the row-count path must exclude cost-only reported rows")
 }
 
+// TestDuckDBCostOnlyCodebuffSessionHasTokenDataFalse pins the backend
+// parity rule surfaced by roborev on ab050f8: a Codebuff session whose
+// contributor rows report only explicitCost (cost_source !=
+// 'copilot-reported', zero billable tokens) must NOT flip HasTokenData.
+// The fix in (*Store).sessionUsage splits hasRows ("any contributing
+// row processed") from hasTokenRows ("any row carries billable tokens"),
+// since the cost-only contributor path otherwise set hasRows = true and
+// spilled into HasTokenData via the prior `hasRows ||
+// sess.HasTotalOutputTokens || sess.HasPeakContextTokens` predicate.
+// Mirrors the copilot pattern in TestDuckDBCostOnlyReportedSessionMatchesSQLite
+// but uses a non-copilot cost_source so the row passes the
+// `contributes = true` gate (the copilot path early-returns).
+func TestDuckDBCostOnlyCodebuffSessionHasTokenDataFalse(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	reportedCost := money.MustParseDollars("0.0250")
+	sess := syncSession(
+		"codebuff:cost-only", "alpha", "cost only",
+		"2026-01-18T00:00:00.000Z", 0)
+	sess.Agent = "codebuff"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{{
+			Source:     "shutdown",
+			Model:      "codebuff-base",
+			Cost:       &reportedCost,
+			CostStatus: "exact",
+			// Anything other than db.CopilotReportedCostSource causes
+			// the SQL to set reported_cost_rows = 1, keeping the row
+			// out of the copilot early-return and inside the
+			// contributes=true branch that previously leaked into
+			// HasTokenData.
+			CostSource: "provider",
+			OccurredAt: "2026-01-18T00:01:00.000Z",
+			DedupKey:   "codebuff-cost-only",
+		}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetSessionUsage(ctx, sess.ID, true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.HasCost, "cost-only Codebuff row must still report HasCost")
+	assert.Equal(t, reportedCost, got.Cost)
+	assert.False(t, got.HasTokenData,
+		"a cost-only Codebuff row is not token data; the hasRows || "+
+			"sess.HasTotalOutputTokens || sess.HasPeakContextTokens "+
+			"short-circuit in (*Store).sessionUsage is the regression "+
+			"this test pins")
+}
+
 func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

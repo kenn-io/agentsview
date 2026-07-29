@@ -2,8 +2,10 @@ package sync
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"maps"
 	"os"
@@ -12759,23 +12761,45 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	if def.Type == parser.AgentCodebuff {
 		// Freshness spans chat-messages.json plus run-state.json and
-		// chat-meta.json. Compute the composite max mtime across all
-		// three files so companion-file-only changes are caught.
-		info, err := os.Stat(path)
-		if err != nil {
-			return 0
-		}
-		mtime := info.ModTime().UnixNano()
+		// chat-meta.json. Reducing three files to a single max mtime is
+		// lossy: a same-size companion-file rewrite whose mtime stays
+		// below the existing max, or offsetting size changes that keep
+		// the sum unchanged, would both leave SourceMtime stable and
+		// stale metadata survive. Hash each component's (size, mtime)
+		// pair into a single int64 so any per-file change in size or
+		// mtime is detected by the watcher; the fingerprint step that
+		// triggers reparse continues to live where it always has.
 		dir := filepath.Dir(path)
-		for _, name := range []string{"run-state.json", "chat-meta.json"} {
-			companion := filepath.Join(dir, name)
-			if ci, err := os.Stat(companion); err == nil {
-				if cm := ci.ModTime().UnixNano(); cm > mtime {
-					mtime = cm
-				}
-			}
+		files := []string{
+			path,
+			filepath.Join(dir, "run-state.json"),
+			filepath.Join(dir, "chat-meta.json"),
 		}
-		return mtime
+		h := fnv.New64a()
+		// Domain separator: number of files included in the hash so a
+		// future file addition is the only way to change the value.
+		_, _ = h.Write([]byte{byte(len(files))})
+		for _, f := range files {
+			ci, err := os.Stat(f)
+			if err != nil {
+				// A missing companion file is a valid state (chat-meta
+				// and run-state can be absent in flight) and is encoded
+				// as a fixed zero block so its later appearance
+				// changes the hash. The primary file (path) must exist
+				// for the session to be live, so a missing primary file
+				// short-circuits to 0.
+				if f == path {
+					return 0
+				}
+				_, _ = h.Write([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+				continue
+			}
+			var buf [16]byte
+			binary.LittleEndian.PutUint64(buf[0:8], uint64(ci.Size()))
+			binary.LittleEndian.PutUint64(buf[8:16], uint64(ci.ModTime().UnixNano()))
+			_, _ = h.Write(buf[:])
+		}
+		return int64(h.Sum64())
 	}
 	if def.Type == parser.AgentKiloLegacy {
 		// Freshness spans task_metadata.json (the stored path) plus
