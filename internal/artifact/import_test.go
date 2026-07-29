@@ -1047,6 +1047,82 @@ func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 		"a restarted coordinator rereads once, then retains the verified body")
 }
 
+func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "archive.db")
+	storeRoot := filepath.Join(root, "artifacts")
+	store, err := newProtocolTestStore(storeRoot)
+	require.NoError(t, err)
+	destination, err := db.Open(databasePath)
+	require.NoError(t, err)
+	body, err := canonicalJSON(checkpoint{
+		Version:  checkpointFormatVersion,
+		Origin:   contractOrigin,
+		Sequence: 1,
+		Sessions: map[string]string{},
+	})
+	require.NoError(t, err)
+	ref := requireContractRef(
+		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
+	)
+	entry := createContractArtifact(t, store, ref, body).Entry
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), entry))
+
+	_, sessions, err := decodeImportCheckpointHeader(
+		body, contractOrigin, entry.Ref.Name,
+	)
+	require.NoError(t, err)
+	page, nextOffset, done, err := decodeImportCheckpointSessionPage(
+		sessions, contractOrigin, 0, artifactImportDrainLimit,
+	)
+	require.NoError(t, err)
+	require.Empty(t, page)
+	require.True(t, done)
+	stage := db.ArtifactCheckpointLanding{
+		Origin:           contractOrigin,
+		Sequence:         1,
+		CheckpointSHA256: entry.Identity.SHA256,
+		CheckpointSize:   entry.Identity.Size,
+	}
+	require.NoError(t, destination.BeginArtifactCheckpointStage(
+		t.Context(), stage,
+	))
+	require.NoError(t, destination.StageArtifactCheckpointSessionPage(
+		t.Context(), stage, nil, 0, nextOffset,
+	))
+	require.NoError(t, destination.Close())
+	require.NoError(t, store.Close())
+
+	destination, err = db.Open(databasePath)
+	require.NoError(t, err)
+	defer destination.Close()
+	store, err = newProtocolTestStore(storeRoot)
+	require.NoError(t, err)
+	defer store.Close()
+	restarted := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	result, err := restarted.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, result.Quarantined)
+	complete, err := destination.ArtifactCheckpointStageComplete(
+		t.Context(), stage,
+	)
+	require.NoError(t, err)
+	assert.True(t, complete)
+	landing, _, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, landing.Sequence)
+	_, err = store.Stat(t.Context(), ref)
+	require.NoError(t, err)
+}
+
 func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {
 	base := newTestArtifactStore(t)
 	ordinal := 0

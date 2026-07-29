@@ -113,6 +113,19 @@ func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	assert.Equal(t, 2, future.Version)
 }
 
+func TestCurrentSegmentRecordLimitPrecedesLaterRecordDecode(t *testing.T) {
+	limits := productionArtifactLimits()
+	limits.segmentMessages = 1
+	body := []byte(
+		"{\"content\":\"one\",\"ordinal\":0,\"role\":\"user\",\"v\":1}\n" +
+			"{not-json}\n",
+	)
+
+	_, err := decodeSegmentWithLimits(body, limits)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "message record limit exceeded")
+}
+
 func TestImportCollectionBoundaries(t *testing.T) {
 	t.Run("manifest usage events", func(t *testing.T) {
 		limits := productionArtifactLimits()
@@ -353,6 +366,33 @@ func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sessionCount, count)
 	assert.Equal(t, []int{128, 128, 44}, pageSizes)
+}
+
+func TestDecodeImportCheckpointDefersSessionValidationToPages(t *testing.T) {
+	var body strings.Builder
+	fmt.Fprintf(&body, `{"origin":%q,"seq":7,"sessions":{`, contractOrigin)
+	for i := range 128 {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(
+			&body, "%q:%q",
+			fmt.Sprintf("%s~session-%03d", contractOrigin, i),
+			fmt.Sprintf("%064x", i+1),
+		)
+	}
+	body.WriteString(`,"broken":},"v":1}`)
+
+	_, sessions, err := decodeImportCheckpointHeader(
+		[]byte(body.String()), contractOrigin, "cp-0000000007.json",
+	)
+	require.NoError(t, err)
+	page, _, done, err := decodeImportCheckpointSessionPage(
+		sessions, contractOrigin, 0, 128,
+	)
+	require.NoError(t, err)
+	assert.Len(t, page, 128)
+	assert.False(t, done)
 }
 
 func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {

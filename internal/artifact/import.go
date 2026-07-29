@@ -63,7 +63,7 @@ type retainedImportCheckpoint struct {
 	sha256   string
 	size     int64
 	header   importCheckpoint
-	sessions []byte
+	sessions importCheckpointSessionStream
 }
 
 func NewStoreImportCoordinator(
@@ -351,21 +351,47 @@ func (c *StoreImportCoordinator) processImportClaim(
 		return err
 	}
 	if !complete {
-		if *sessionBudget == 0 {
-			result.More = true
-			return nil
-		}
 		state, stateErr := c.database.ArtifactCheckpointStageProgress(
 			ctx, landingIdentity,
 		)
 		if stateErr != nil {
 			return stateErr
 		}
+		if state.DecodeOffset == int64(len(sessionsRaw.data)) {
+			if err := c.database.CompleteArtifactCheckpointStage(
+				ctx, landingIdentity, state.DecodedCount,
+			); err != nil {
+				if errors.Is(err, db.ErrArtifactImportConflict) {
+					return c.quarantineCheckpoint(ctx, work, ref, result)
+				}
+				return err
+			}
+			c.discardRetainedCheckpoint(work)
+			return c.importCheckpointSessions(
+				ctx, work, landingIdentity, sessionBudget, result,
+			)
+		}
+		if *sessionBudget == 0 {
+			result.More = true
+			return nil
+		}
 		page, nextOffset, done, decodeErr :=
 			decodeImportCheckpointSessionPage(
 				sessionsRaw, work.Origin, state.DecodeOffset, *sessionBudget,
 			)
 		if decodeErr != nil {
+			var future *futureArtifactVersionError
+			if errors.As(decodeErr, &future) {
+				updated := work
+				updated.RequiredCheckpointVersion = max(
+					updated.RequiredCheckpointVersion, future.Version,
+				)
+				if err := c.deferImportClaim(ctx, updated); err != nil {
+					return err
+				}
+				result.Deferred++
+				return nil
+			}
 			if errors.Is(decodeErr, ErrArtifactInvalid) {
 				return c.quarantineCheckpoint(ctx, work, ref, result)
 			}
@@ -414,7 +440,7 @@ func (c *StoreImportCoordinator) loadImportCheckpoint(
 	ctx context.Context,
 	work db.ArtifactImportWork,
 	entry Entry,
-) (importCheckpoint, []byte, error) {
+) (importCheckpoint, importCheckpointSessionStream, error) {
 	if cached := c.checkpoint; cached != nil &&
 		cached.origin == work.Origin &&
 		cached.name == work.Name &&
@@ -427,13 +453,13 @@ func (c *StoreImportCoordinator) loadImportCheckpoint(
 		ctx, c.store, entry, checkpointDecodedLimit,
 	)
 	if err != nil {
-		return importCheckpoint{}, nil, err
+		return importCheckpoint{}, importCheckpointSessionStream{}, err
 	}
 	header, sessions, err := decodeImportCheckpointHeader(
 		body, work.Origin, work.Name,
 	)
 	if err != nil {
-		return importCheckpoint{}, nil, err
+		return importCheckpoint{}, importCheckpointSessionStream{}, err
 	}
 	c.checkpoint = &retainedImportCheckpoint{
 		origin: work.Origin, name: work.Name, sha256: work.SHA256, size: work.Size,

@@ -22,6 +22,22 @@ type importCheckpointSession struct {
 	ManifestHash string
 }
 
+type importCheckpointFieldState struct {
+	seen                 uint8
+	version              int
+	versionSeen          bool
+	future               bool
+	unknownBeforeVersion bool
+}
+
+type importCheckpointSessionStream struct {
+	data             []byte
+	checkpoint       []byte
+	fields           importCheckpointFieldState
+	expectedOrigin   string
+	expectedSequence int
+}
+
 const (
 	importCheckpointOriginField uint8 = 1 << iota
 	importCheckpointSequenceField
@@ -136,55 +152,100 @@ func decodeImportCheckpoint(
 
 func decodeImportCheckpointHeader(
 	data []byte, expectedOrigin, name string,
-) (importCheckpoint, json.RawMessage, error) {
-	fields, version, future, err := decodeImportCheckpointFields(data)
-	if err != nil {
-		return importCheckpoint{}, nil, err
-	}
-	if future {
-		return importCheckpoint{}, nil, &futureArtifactVersionError{
-			Kind: KindCheckpoints, Version: version,
-		}
-	}
-	for _, field := range []string{"origin", "seq", "sessions"} {
-		if _, ok := fields[field]; !ok {
-			return importCheckpoint{}, nil, invalidImportCheckpointf(
-				"field %q is missing", field,
-			)
-		}
-	}
-
-	var origin string
-	if err := json.Unmarshal(fields["origin"], &origin); err != nil {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"origin is invalid: %v", err,
-		)
-	}
-	if origin != expectedOrigin {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"origin %q does not match %q", origin, expectedOrigin,
-		)
-	}
-	var sequence int
-	if err := json.Unmarshal(fields["seq"], &sequence); err != nil {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"sequence is invalid: %v", err,
-		)
-	}
+) (importCheckpoint, importCheckpointSessionStream, error) {
 	nameSequence, err := checkpointSequence(name)
 	if err != nil {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"checkpoint name is invalid: %v", err,
-		)
+		return importCheckpoint{}, importCheckpointSessionStream{},
+			invalidImportCheckpointf(
+				"checkpoint name is invalid: %v", err,
+			)
 	}
-	if sequence != nameSequence {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"sequence %d does not match %s", sequence, name,
-		)
+	stream, err := decodeImportCheckpointPrefix(
+		data, expectedOrigin, nameSequence,
+	)
+	if err != nil {
+		if futureErr := futureImportCheckpointError(data); futureErr != nil {
+			return importCheckpoint{}, importCheckpointSessionStream{}, futureErr
+		}
+		return importCheckpoint{}, importCheckpointSessionStream{}, err
 	}
 	return importCheckpoint{
-		Version: version, Origin: origin, Sequence: sequence,
-	}, fields["sessions"], nil
+		Version: checkpointFormatVersion,
+		Origin:  expectedOrigin, Sequence: nameSequence,
+	}, stream, nil
+}
+
+func decodeImportCheckpointPrefix(
+	data []byte,
+	expectedOrigin string,
+	expectedSequence int,
+) (importCheckpointSessionStream, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	token, err := decoder.Token()
+	if err != nil {
+		return importCheckpointSessionStream{}, invalidImportCheckpointf(
+			"decoding object: %v", err,
+		)
+	}
+	if token != json.Delim('{') {
+		return importCheckpointSessionStream{},
+			invalidImportCheckpointf("checkpoint must be an object")
+	}
+	state := importCheckpointFieldState{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return importCheckpointSessionStream{}, invalidImportCheckpointf(
+				"decoding object key: %v", err,
+			)
+		}
+		key, ok := token.(string)
+		if !ok {
+			return importCheckpointSessionStream{},
+				invalidImportCheckpointf("object key is invalid")
+		}
+		field := importCheckpointField(key)
+		if field != 0 && state.seen&field != 0 {
+			return importCheckpointSessionStream{}, invalidImportCheckpointf(
+				"duplicate field %q", key,
+			)
+		}
+		if field == importCheckpointSessionsField {
+			state.seen |= field
+			valueStart := skipJSONWhitespace(data, int(decoder.InputOffset()))
+			if valueStart >= len(data) || data[valueStart] != ':' {
+				return importCheckpointSessionStream{},
+					invalidImportCheckpointf("field %q has no value", key)
+			}
+			valueStart = skipJSONWhitespace(data, valueStart+1)
+			if valueStart >= len(data) {
+				return importCheckpointSessionStream{},
+					invalidImportCheckpointf("field %q has no value", key)
+			}
+			return importCheckpointSessionStream{
+				data: data[valueStart:], checkpoint: data, fields: state,
+				expectedOrigin: expectedOrigin, expectedSequence: expectedSequence,
+			}, nil
+		}
+		if field != 0 {
+			state.seen |= field
+		}
+		if err := decodeImportCheckpointField(
+			decoder, key, field, expectedOrigin, expectedSequence, &state,
+		); err != nil {
+			return importCheckpointSessionStream{}, err
+		}
+		if state.future {
+			if futureErr := futureImportCheckpointError(data); futureErr != nil {
+				return importCheckpointSessionStream{}, futureErr
+			}
+			return importCheckpointSessionStream{},
+				invalidImportCheckpointf("future checkpoint is malformed")
+		}
+	}
+	return importCheckpointSessionStream{},
+		invalidImportCheckpointf(`field "sessions" is missing`)
 }
 
 func decodeImportCheckpointFields(
@@ -318,6 +379,99 @@ func importCheckpointField(key string) uint8 {
 	}
 }
 
+func decodeImportCheckpointField(
+	decoder *json.Decoder,
+	key string,
+	field uint8,
+	expectedOrigin string,
+	expectedSequence int,
+	state *importCheckpointFieldState,
+) error {
+	switch field {
+	case importCheckpointOriginField:
+		if state.future {
+			if err := skipImportJSONValue(decoder); err != nil {
+				return invalidImportCheckpointf(
+					"decoding field %q: %v", key, err,
+				)
+			}
+			return nil
+		}
+		var origin string
+		if err := decoder.Decode(&origin); err != nil {
+			return invalidImportCheckpointf("origin is invalid: %v", err)
+		}
+		if origin != expectedOrigin {
+			return invalidImportCheckpointf(
+				"origin %q does not match %q", origin, expectedOrigin,
+			)
+		}
+		return nil
+	case importCheckpointSequenceField:
+		if state.future {
+			if err := skipImportJSONValue(decoder); err != nil {
+				return invalidImportCheckpointf(
+					"decoding field %q: %v", key, err,
+				)
+			}
+			return nil
+		}
+		var sequence int
+		if err := decoder.Decode(&sequence); err != nil {
+			return invalidImportCheckpointf("sequence is invalid: %v", err)
+		}
+		if sequence != expectedSequence {
+			return invalidImportCheckpointf(
+				"sequence %d does not match checkpoint name", sequence,
+			)
+		}
+		return nil
+	case importCheckpointVersionField:
+		if err := decoder.Decode(&state.version); err != nil {
+			return invalidImportCheckpointf("version is invalid: %v", err)
+		}
+		state.versionSeen = true
+		switch {
+		case state.version > checkpointFormatVersion:
+			state.future = true
+		case state.version < checkpointFormatVersion:
+			return invalidImportCheckpointf(
+				"version %d is unsupported", state.version,
+			)
+		case state.unknownBeforeVersion:
+			return invalidImportCheckpointf(
+				"current-version fields are not exact",
+			)
+		}
+		return nil
+	case 0:
+		if state.versionSeen && !state.future {
+			return invalidImportCheckpointf(
+				"current-version fields are not exact",
+			)
+		}
+		state.unknownBeforeVersion = true
+		if err := skipImportJSONValue(decoder); err != nil {
+			return invalidImportCheckpointf(
+				"decoding field %q: %v", key, err,
+			)
+		}
+		return nil
+	default:
+		return invalidImportCheckpointf("field %q is invalid", key)
+	}
+}
+
+func futureImportCheckpointError(data []byte) error {
+	_, version, future, err := decodeImportCheckpointFields(data)
+	if err != nil || !future {
+		return nil
+	}
+	return &futureArtifactVersionError{
+		Kind: KindCheckpoints, Version: version,
+	}
+}
+
 func skipImportJSONValue(decoder *json.Decoder) error {
 	token, err := decoder.Token()
 	if err != nil {
@@ -351,7 +505,7 @@ func skipImportJSONValue(decoder *json.Decoder) error {
 }
 
 func streamImportCheckpointSessions(
-	data json.RawMessage,
+	stream importCheckpointSessionStream,
 	origin string,
 	pageSize int,
 	consume func([]importCheckpointSession) error,
@@ -366,7 +520,7 @@ func streamImportCheckpointSessions(
 	count := 0
 	for {
 		page, nextOffset, done, err := decodeImportCheckpointSessionPage(
-			data, origin, offset, pageSize,
+			stream, origin, offset, pageSize,
 		)
 		if err != nil {
 			return 0, err
@@ -383,15 +537,26 @@ func streamImportCheckpointSessions(
 }
 
 func decodeImportCheckpointSessionPage(
-	data json.RawMessage,
+	stream importCheckpointSessionStream,
 	origin string,
 	offset int64,
 	limit int,
-) ([]importCheckpointSession, int64, bool, error) {
+) (_ []importCheckpointSession, _ int64, _ bool, retErr error) {
+	defer func() {
+		if retErr == nil || !errors.Is(retErr, ErrArtifactInvalid) {
+			return
+		}
+		if futureErr := futureImportCheckpointError(
+			stream.checkpoint,
+		); futureErr != nil {
+			retErr = futureErr
+		}
+	}()
 	if limit < 1 {
 		return nil, 0, false,
 			errors.New("checkpoint session page limit must be positive")
 	}
+	data := stream.data
 	if offset < 0 || offset >= int64(len(data)) {
 		return nil, 0, false,
 			invalidImportCheckpointf("sessions decode cursor is invalid")
@@ -407,9 +572,8 @@ func decodeImportCheckpointSessionPage(
 				invalidImportCheckpointf("sessions object is incomplete")
 		}
 		if input[next] == '}' {
-			if !onlyJSONWhitespace(input[next+1:]) {
-				return nil, 0, false,
-					invalidImportCheckpointf("sessions has trailing JSON")
+			if err := validateImportCheckpointSuffix(stream, next+1); err != nil {
+				return nil, 0, false, err
 			}
 			return nil, int64(len(input)), true, nil
 		}
@@ -476,12 +640,95 @@ func decodeImportCheckpointSessionPage(
 	if next < len(data) && data[next] == ',' {
 		return page, nextOffset, false, nil
 	}
-	if next >= len(data) || data[next] != '}' ||
-		!onlyJSONWhitespace(data[next+1:]) {
+	if next >= len(data) || data[next] != '}' {
 		return nil, 0, false,
 			invalidImportCheckpointf("sessions object is incomplete")
 	}
+	if err := validateImportCheckpointSuffix(stream, next+1); err != nil {
+		return nil, 0, false, err
+	}
 	return page, int64(len(data)), true, nil
+}
+
+func validateImportCheckpointSuffix(
+	stream importCheckpointSessionStream,
+	start int,
+) error {
+	data := stream.data
+	next := skipJSONWhitespace(data, start)
+	var suffix io.Reader
+	switch {
+	case next < len(data) && data[next] == ',':
+		suffix = io.MultiReader(
+			strings.NewReader("{"), bytes.NewReader(data[next+1:]),
+		)
+	case next < len(data) && data[next] == '}':
+		suffix = io.MultiReader(
+			strings.NewReader("{"), bytes.NewReader(data[next:]),
+		)
+	default:
+		return invalidImportCheckpointf("checkpoint object is incomplete")
+	}
+	decoder := json.NewDecoder(suffix)
+	decoder.UseNumber()
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return invalidImportCheckpointf("checkpoint suffix is invalid")
+	}
+	state := stream.fields
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return invalidImportCheckpointf(
+				"decoding object key: %v", err,
+			)
+		}
+		key, ok := token.(string)
+		if !ok {
+			return invalidImportCheckpointf("object key is invalid")
+		}
+		field := importCheckpointField(key)
+		if field != 0 && state.seen&field != 0 {
+			return invalidImportCheckpointf("duplicate field %q", key)
+		}
+		if field != 0 {
+			state.seen |= field
+		}
+		if err := decodeImportCheckpointField(
+			decoder, key, field,
+			stream.expectedOrigin, stream.expectedSequence, &state,
+		); err != nil {
+			return err
+		}
+	}
+	token, err = decoder.Token()
+	if err != nil || token != json.Delim('}') {
+		return invalidImportCheckpointf("checkpoint object is incomplete")
+	}
+	var trailing json.RawMessage
+	err = decoder.Decode(&trailing)
+	if !errors.Is(err, io.EOF) {
+		if err == nil {
+			return invalidImportCheckpointf("checkpoint has trailing JSON")
+		}
+		return invalidImportCheckpointf(
+			"decoding trailing content: %v", err,
+		)
+	}
+	if !state.versionSeen {
+		return invalidImportCheckpointf("version is missing")
+	}
+	if state.future {
+		return &futureArtifactVersionError{
+			Kind: KindCheckpoints, Version: state.version,
+		}
+	}
+	if state.seen != importCheckpointCurrentFields {
+		return invalidImportCheckpointf(
+			"current-version fields are not exact",
+		)
+	}
+	return nil
 }
 
 func skipJSONWhitespace(data []byte, start int) int {
@@ -494,10 +741,6 @@ func skipJSONWhitespace(data []byte, start int) int {
 		}
 	}
 	return start
-}
-
-func onlyJSONWhitespace(data []byte) bool {
-	return skipJSONWhitespace(data, 0) == len(data)
 }
 
 func invalidImportCheckpointf(format string, args ...any) error {
