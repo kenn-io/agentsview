@@ -553,6 +553,11 @@ func cloneExportSessionsModelRate(
 		pattern := *rate.MatchedPattern
 		rate.MatchedPattern = &pattern
 	}
+	rate.Bands = append([]export.PricingBand(nil), rate.Bands...)
+	rate.Application.Bands = append(
+		[]export.AppliedPricingBand(nil),
+		rate.Application.Bands...,
+	)
 	return rate
 }
 
@@ -576,10 +581,8 @@ func mergeExportSessionsModelProvenance(
 	for _, rate := range next.Resolutions {
 		key := exportSessionsModelRateKey(rate)
 		if i, ok := positions[key]; ok {
-			merged.Resolutions[i].CostSource =
-				mergeExportSessionsCostSource(
-					merged.Resolutions[i].CostSource,
-					rate.CostSource)
+			merged.Resolutions[i] = mergeExportSessionsModelRate(
+				merged.Resolutions[i], rate)
 			continue
 		}
 		positions[key] = len(merged.Resolutions)
@@ -600,6 +603,26 @@ func mergeExportSessionsModelProvenance(
 	return merged
 }
 
+func mergeExportSessionsModelRate(
+	base, next export.EffectiveModelRate,
+) export.EffectiveModelRate {
+	merged := cloneExportSessionsModelRate(base)
+	if merged.MatchedPattern == nil && next.MatchedPattern != nil {
+		pattern := *next.MatchedPattern
+		merged.MatchedPattern = &pattern
+	}
+	if len(merged.Bands) == 0 && len(next.Bands) > 0 {
+		merged.Bands = append([]export.PricingBand(nil), next.Bands...)
+	}
+	merged.Application = mergeExportSessionsPricingApplication(
+		merged.Application,
+		next.Application,
+	)
+	merged.CostSource = mergeExportSessionsCostSource(
+		merged.CostSource, next.CostSource)
+	return merged
+}
+
 func exportSessionsModelRateKey(
 	rate export.EffectiveModelRate,
 ) exportSessionsModelResolutionKey {
@@ -611,6 +634,34 @@ func exportSessionsModelRateKey(
 		key.hasMatchedPattern = true
 	}
 	return key
+}
+
+func mergeExportSessionsPricingApplication(
+	base, next export.PricingApplication,
+) export.PricingApplication {
+	merged := export.PricingApplication{
+		BaseRequestCount:  base.BaseRequestCount + next.BaseRequestCount,
+		AggregateRowCount: base.AggregateRowCount + next.AggregateRowCount,
+	}
+	counts := make(map[int]int, len(base.Bands)+len(next.Bands))
+	for _, band := range base.Bands {
+		counts[band.AboveInputTokens] += band.RequestCount
+	}
+	for _, band := range next.Bands {
+		counts[band.AboveInputTokens] += band.RequestCount
+	}
+	thresholds := make([]int, 0, len(counts))
+	for threshold := range counts {
+		thresholds = append(thresholds, threshold)
+	}
+	sort.Ints(thresholds)
+	for _, threshold := range thresholds {
+		merged.Bands = append(merged.Bands, export.AppliedPricingBand{
+			AboveInputTokens: threshold,
+			RequestCount:     counts[threshold],
+		})
+	}
+	return merged
 }
 
 func mergeExportSessionsCostSource(
