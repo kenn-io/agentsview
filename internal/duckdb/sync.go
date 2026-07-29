@@ -597,7 +597,7 @@ func (s *Sync) readMirrorFingerprintBatch(
 }
 
 // mirrorResidentSessionIDs reports which of ids currently exist in the
-// mirror under this Sync's machine name. IDs are deduplicated and queried
+// mirror for this source archive. IDs are deduplicated and queried
 // in batches of 500, so cost tracks the caller's ID list (a candidate
 // window, a tombstone delta, the curation set), never total mirror size.
 func (s *Sync) mirrorResidentSessionIDs(
@@ -627,14 +627,13 @@ func (s *Sync) readMirrorResidentBatch(
 	ctx context.Context, batch []string, out map[string]bool,
 ) error {
 	placeholders := make([]string, len(batch))
-	args := make([]any, 0, len(batch)+1)
-	args = append(args, s.machine)
+	args := make([]any, 0, len(batch))
 	for i, id := range batch {
 		placeholders[i] = "?"
 		args = append(args, id)
 	}
 	rows, err := s.duck.QueryContext(ctx,
-		`SELECT id FROM sessions WHERE machine = ? AND id IN (`+
+		`SELECT id FROM sessions WHERE id IN (`+
 			strings.Join(placeholders, ",")+`)`, args...,
 	)
 	if err != nil {
@@ -938,7 +937,9 @@ func (s *Sync) sessionFingerprints(
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
 		}{
-			SessionFields:  duckSessionFingerprintFields(sess, s.machine),
+			SessionFields: duckSessionFingerprintFields(
+				sess, mirroredSessionMachine(sess, s.machine),
+			),
 			Messages:       msgs,
 			Usage:          usage[sess.ID],
 			ToolCalls:      toolCalls,

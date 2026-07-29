@@ -641,8 +641,8 @@ func (s *Sync) replaceCuration(
 			if err := s.execMutation(ctx, tx, `
 				DELETE FROM `+table+`
 				WHERE session_id IN (
-					SELECT id FROM sessions WHERE machine = ?
-				)`, s.machine); err != nil {
+					SELECT id FROM sessions
+				)`); err != nil {
 				return fmt.Errorf("clearing duckdb %s: %w", table, err)
 			}
 		}
@@ -899,7 +899,9 @@ func (s *Sync) upsertSession(
 			secrets_rules_version = excluded.secrets_rules_version,
 			agentsview_push_fingerprint = excluded.agentsview_push_fingerprint`
 
-	args := sessionInsertArgs(sess, s.machine, fingerprint)
+	args := sessionInsertArgs(
+		sess, mirroredSessionMachine(sess, s.machine), fingerprint,
+	)
 	if err := s.execMutation(ctx, exec, query, args...); err != nil {
 		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
 	}
@@ -942,6 +944,13 @@ func sessionInsertArgs(sess db.Session, machine, fingerprint string) []any {
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
 		nilEmpty(fingerprint),
 	}
+}
+
+func mirroredSessionMachine(sess db.Session, pushMachine string) string {
+	if sess.Machine == "" || sess.Machine == "local" {
+		return pushMachine
+	}
+	return sess.Machine
 }
 
 func insertMessages(

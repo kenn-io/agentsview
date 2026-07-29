@@ -44,6 +44,46 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-2", 3)
 }
 
+func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 3)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			"source-machine", "sess-2",
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(
+			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			" source-machine ", "sess-3",
+		)
+		return err
+	}))
+	starred, err := local.StarSession("sess-2")
+	require.NoError(t, err)
+	require.True(t, starred)
+
+	_, err = Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var machine string
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-2",
+	).Scan(&machine))
+	assert.Equal(t, "source-machine", machine)
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-3",
+	).Scan(&machine))
+	assert.Equal(t, " source-machine ", machine)
+	assertDuckDBCountWhere(
+		t, conn, "starred_sessions", "session_id = ?", "sess-2", 1,
+	)
+}
+
 // TestPushBoundaryEqualSessionIsNotLost regression-tests the inclusive
 // mirror window: an update whose sync_marker equals the stored cutoff must
 // still be selected and pushed when its fingerprint differs, not skipped
@@ -233,6 +273,47 @@ func TestPushRebuildTriggers(t *testing.T) {
 			assertMirrorMessageCount(t, path, "sess-1", 2)
 		})
 	}
+}
+
+func TestPushRebuildsV6MirrorToRestoreSourceMachine(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			"source-machine", "sess-1",
+		)
+		return err
+	}))
+	_, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	// Recreate the relevant state of a v6 mirror: rows were attributed to
+	// the publisher, and this session predates the next incremental window.
+	conn, err := Open(path)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE sessions SET machine = ? WHERE id = ?`,
+		"push-machine", "sess-1",
+	)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "6")
+	setSessionSignalsTo(t, local, "sess-1", "2020-01-01T00:00:00.000Z")
+
+	res, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.Full)
+	assert.Contains(t, res.Diagnostics.RebuildReason, "schema version 6")
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var machine string
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&machine))
+	assert.Equal(t, "source-machine", machine)
 }
 
 // TestPushRefusesToReplaceUnrecognizedExistingFile is the fail-closed
@@ -725,16 +806,10 @@ func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
 		"a matching source database id must allow the incremental path")
 }
 
-// TestPushRebuildsWhenMachineNameChanges is the FIX1 regression: mirror rows
-// are machine-stamped, and an incremental push only re-pushes sessions whose
-// LOCAL content changed within the current window. A session that has not
-// changed locally since the mirror's last push would otherwise stay
-// permanently labeled with the OLD machine name even after the client's
-// configured machine name (and so the mirror's LastPushMachine metadata)
-// changes, stranding it under a machine filter that will never select it
-// again (see readMachineStatus). The mirror's recorded LastPushMachine
-// differing from the currently configured machine name must force a
-// rebuild instead, so every session is re-pushed and relabeled.
+// TestPushRebuildsWhenMachineNameChanges guards legacy sessions whose source
+// machine is empty or "local". Those rows use the configured push machine, so
+// changing that name must rebuild the mirror and restamp every fallback row.
+// Sessions with explicit source-machine labels keep those labels unchanged.
 func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
@@ -1696,8 +1771,8 @@ func TestReadStatusFromConfigReportsTargetPushMetadataAndCounts(t *testing.T) {
 	assert.Equal(t, SchemaVersion, status.SchemaVersion)
 	assert.Equal(t, db.CurrentDataVersion(), status.DataVersion)
 	assert.Empty(t, status.Scope, "unfiltered push canonicalizes to empty scope")
-	assert.Equal(t, 2, status.DuckDBSessions)
-	assert.Equal(t, 3, status.DuckDBMessages)
+	assert.Equal(t, 3, status.DuckDBSessions)
+	assert.Equal(t, 4, status.DuckDBMessages)
 
 	lastPushAt, err := time.Parse(time.RFC3339, status.LastPushAt)
 	require.NoError(t, err)
@@ -1767,17 +1842,10 @@ func TestReadStatusFromConfigDoesNotCreateMissingMirror(t *testing.T) {
 		"status must never create the mirror file")
 }
 
-// TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine is the
-// FIX2 regression: readMachineStatus previously filtered its row counts by
-// the CLIENT's configured machine name, while the LastPushMachine it
-// displays comes from the target's own metadata. A remote Quack client is
-// normally configured under its own hostname, which almost never matches
-// whatever machine actually pushed the mirror it is reading, so filtering
-// counts by the configured name reports zero rows even though the mirror
-// plainly has data and the display line already shows a real
-// LastPushMachine. Counts must be keyed off the target's recorded
-// LastPushMachine when it is set.
-func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testing.T) {
+// Mirror status reports every resident source machine. LastPushMachine identifies
+// the process that published the mirror; it is not the source attribution shared
+// by every mirrored session.
+func TestReadStatusFromConfigCountsAllSourceMachines(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
@@ -1786,6 +1854,11 @@ func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testin
 	_, err := Push(ctx, target, local, "actual-pusher", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 
+	conn, err := Open(target)
+	require.NoError(t, err)
+	insertOtherMachineDuckSession(t, conn)
+	require.NoError(t, conn.Close())
+
 	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
 		Path:        target,
 		MachineName: "remote-client-hostname",
@@ -1793,9 +1866,8 @@ func TestReadStatusFromConfigCountsByTargetMachineNotConfiguredMachine(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, "remote-client-hostname", status.Machine)
 	assert.Equal(t, "actual-pusher", status.LastPushMachine)
-	assert.Equal(t, 2, status.DuckDBSessions,
-		"counts must key off the target's LastPushMachine, not the client's configured name")
-	assert.Equal(t, 3, status.DuckDBMessages)
+	assert.Equal(t, 3, status.DuckDBSessions)
+	assert.Equal(t, 4, status.DuckDBMessages)
 }
 
 type syncFixture struct {

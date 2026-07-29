@@ -278,15 +278,10 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 // rebuilds: identity-less mirrors only come from earlier builds of this
 // unreleased branch, so they simply rebuild once and record the id.
 //
-// The machine-change check exists because mirror rows are machine-stamped
-// (see the sessions.machine column and duckSessionFingerprintFields): an
-// incremental push only rewrites sessions whose LOCAL content changed
-// within the current mirror window, so a session that has not changed
-// since the mirror's last push stays permanently labeled with the OLD
-// machine name even after the push metadata's LastPushMachine flips to the
-// new one — silently stranding it under a machine filter (see
-// readMachineStatus) that will never again select it. A full rebuild
-// re-pushes every session under the new machine name instead.
+// The machine-change check remains necessary for legacy sessions whose local
+// machine is empty or "local": mirroring substitutes the current push machine
+// for those values, so a full rebuild must restamp every such row when that
+// configured name changes. Explicit per-source machine labels remain unchanged.
 //
 // localDeletionRevision is the caller's local.SessionDeletionPublicationRevision
 // read, and localDatabaseID the caller's local.GetDatabaseID read; both are
