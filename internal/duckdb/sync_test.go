@@ -44,6 +44,43 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-2", 3)
 }
 
+func TestMirroredSessionMachine(t *testing.T) {
+	tests := []struct {
+		name           string
+		sessionMachine string
+		want           string
+	}{
+		{
+			name:           "explicit source machine",
+			sessionMachine: "source-machine",
+			want:           "source-machine",
+		},
+		{
+			name:           "empty source machine",
+			sessionMachine: "",
+			want:           "push-machine",
+		},
+		{
+			name:           "local sentinel",
+			sessionMachine: "local",
+			want:           "push-machine",
+		},
+		{
+			name:           "explicit whitespace is preserved",
+			sessionMachine: " source-machine ",
+			want:           " source-machine ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, mirroredSessionMachine(
+				db.Session{Machine: tt.sessionMachine}, "push-machine",
+			))
+		})
+	}
+}
+
 func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 3)
@@ -60,16 +97,11 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 		)
 		return err
 	}))
-	starred, err := local.StarSession("sess-2")
-	require.NoError(t, err)
-	require.True(t, starred)
-
-	_, err = Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(path)
 	require.NoError(t, err)
-	defer conn.Close()
 	var machine string
 	require.NoError(t, conn.QueryRow(
 		`SELECT machine FROM sessions WHERE id = ?`, "sess-2",
@@ -79,9 +111,79 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 		`SELECT machine FROM sessions WHERE id = ?`, "sess-3",
 	).Scan(&machine))
 	assert.Equal(t, " source-machine ", machine)
+	require.NoError(t, conn.Close())
+
+	starred, err := local.StarSession("sess-2")
+	require.NoError(t, err)
+	require.True(t, starred)
+	msgs, err := local.GetAllMessages(ctx, "sess-2")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	pinID, err := local.PinMessage("sess-2", msgs[0].ID, nil)
+	require.NoError(t, err)
+	require.NotZero(t, pinID)
+
+	res, err := Push(
+		ctx, path, local, "push-machine", SyncOptions{}, false, nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed)
+
+	conn, err = Open(path)
+	require.NoError(t, err)
 	assertDuckDBCountWhere(
 		t, conn, "starred_sessions", "session_id = ?", "sess-2", 1,
 	)
+	assertDuckDBCountWhere(
+		t, conn, "pinned_messages", "session_id = ?", "sess-2", 1,
+	)
+	require.NoError(t, conn.Close())
+
+	require.NoError(t, local.UnstarSession("sess-2"))
+	require.NoError(t, local.UnpinMessage("sess-2", msgs[0].ID))
+	res, err = Push(
+		ctx, path, local, "push-machine", SyncOptions{}, false, nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed)
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	assertDuckDBCountWhere(
+		t, conn, "starred_sessions", "session_id = ?", "sess-2", 0,
+	)
+	assertDuckDBCountWhere(
+		t, conn, "pinned_messages", "session_id = ?", "sess-2", 0,
+	)
+}
+
+func TestPushRepushesLegacySessionWhenResolvedMachineChanges(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "machine-a", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	// Bypass the normal machine-change rebuild and widen the candidate window
+	// so only the resolved machine changes in the per-session fingerprint.
+	setMirrorMetadataValue(t, path, lastPushMachineMetadataKey, "machine-b")
+	setMirrorMetadataValue(
+		t, path, lastPushCutoffMetadataKey, "2020-01-01T00:00:00.000Z",
+	)
+
+	res, err := Push(ctx, path, local, "machine-b", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var machine string
+	require.NoError(t, conn.QueryRow(
+		`SELECT machine FROM sessions WHERE id = ?`, "sess-1",
+	).Scan(&machine))
+	assert.Equal(t, "machine-b", machine)
 }
 
 // TestPushBoundaryEqualSessionIsNotLost regression-tests the inclusive

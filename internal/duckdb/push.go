@@ -600,7 +600,7 @@ func (snap curationSnapshot) fingerprint() (string, error) {
 // All work is bounded by curation size, not mirror size: mirror membership
 // is validated for exactly the snapshot's session IDs (one batched lookup,
 // see mirrorResidentSessionIDs), pin notes are preserved, and the delete
-// side stays the machine-scoped clear of both tables, so removed
+// side clears both tables for sessions in this source archive, so removed
 // stars/pins disappear without enumerating them.
 func (s *Sync) replaceCuration(
 	ctx context.Context, snap curationSnapshot,
