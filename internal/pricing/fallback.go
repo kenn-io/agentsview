@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
 const fallbackVersionUnknown = "0"
@@ -61,9 +63,7 @@ func FallbackPricing() []ModelPricing {
 		panic(fallbackPricingErr)
 	}
 
-	pricing := make([]ModelPricing, len(fallbackPricing))
-	copy(pricing, fallbackPricing)
-	return pricing
+	return cloneModelPricing(fallbackPricing)
 }
 
 func initFallbackPricing() {
@@ -75,7 +75,10 @@ func initFallbackPricing() {
 		log.Panicf("pricing: %v", fallbackPricingErr)
 	}
 
-	merged := append(slices.Clone(snapshot.Models), supplementalPricing...)
+	merged := append(
+		cloneModelPricing(snapshot.Models),
+		cloneModelPricing(supplementalPricing)...,
+	)
 	slices.SortFunc(merged, func(a, b ModelPricing) int {
 		return strings.Compare(a.ModelPattern, b.ModelPattern)
 	})
@@ -147,11 +150,15 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 			maxFallbackSnapshotModels,
 		)
 	}
-	for _, model := range snapshot.Models {
+	for i := range snapshot.Models {
+		model := &snapshot.Models[i]
 		if strings.TrimSpace(model.ModelPattern) == "" {
 			return litellmFallbackSnapshot{}, fmt.Errorf(
 				"snapshot contains model with empty pattern",
 			)
+		}
+		if err := catalog.NormalizePricingBands(model.ModelPattern, model.Bands); err != nil {
+			return litellmFallbackSnapshot{}, err
 		}
 	}
 
@@ -160,6 +167,14 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 	})
 
 	return snapshot, nil
+}
+
+func cloneModelPricing(models []ModelPricing) []ModelPricing {
+	cloned := slices.Clone(models)
+	for i := range cloned {
+		cloned[i].Bands = slices.Clone(cloned[i].Bands)
+	}
+	return cloned
 }
 
 func readLimitedSnapshot(reader io.Reader, limit int64) ([]byte, error) {

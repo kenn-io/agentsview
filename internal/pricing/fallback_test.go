@@ -143,6 +143,26 @@ func TestFallbackPricing_Deterministic(t *testing.T) {
 	assert.Equal(t, first, second, "FallbackPricing should be deterministic")
 }
 
+func TestFallbackPricing_DeepClonesPricingBands(t *testing.T) {
+	original := fallbackPricing
+	fallbackPricing = []ModelPricing{{
+		ModelPattern: "banded-model",
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     testRate("2"),
+		}},
+	}}
+	t.Cleanup(func() {
+		fallbackPricing = original
+	})
+
+	first := FallbackPricing()
+	first[0].Bands[0].AboveInputTokens = 1
+	second := FallbackPricing()
+
+	assert.Equal(t, 200_000, second[0].Bands[0].AboveInputTokens)
+}
+
 func TestFallbackPricing_SortedByModelPattern(t *testing.T) {
 	prices := requireEmbeddedFallbackPricing(t)
 	require.Greater(t, len(prices), 0, "FallbackPricing returned empty")
@@ -254,6 +274,63 @@ func TestDecodeFallbackSnapshotFromFS(t *testing.T) {
 	require.Len(t, got.Models, 2)
 	assert.Equal(t, "a-model", got.Models[0].ModelPattern)
 	assert.Equal(t, "z-model", got.Models[1].ModelPattern)
+}
+
+func TestDecodeFallbackSnapshotFromFS_SortsPricingBands(t *testing.T) {
+	snapshot := []byte(`{
+		"version": "litellm-test",
+		"models": [{
+			"ModelPattern": "banded-model",
+			"InputPerMTok": {"microdollars": 1000000},
+			"Bands": [
+				{"above_input_tokens": 272000, "input_per_mtok": {"microdollars": 3000000}},
+				{"above_input_tokens": 200000, "input_per_mtok": {"microdollars": 2000000}}
+			]
+		}]
+	}`)
+	fys := fstest.MapFS{
+		"snapshot/litellm_snapshot.json.gz": &fstest.MapFile{Data: gzipData(t, snapshot)},
+	}
+
+	got, err := decodeFallbackSnapshotFromFS(fys)
+	require.NoError(t, err)
+	require.Len(t, got.Models, 1)
+	require.Len(t, got.Models[0].Bands, 2)
+	assert.Equal(t, 200_000, got.Models[0].Bands[0].AboveInputTokens)
+	assert.Equal(t, 272_000, got.Models[0].Bands[1].AboveInputTokens)
+}
+
+func TestDecodeFallbackSnapshotFromFS_RejectsInvalidPricingBands(t *testing.T) {
+	tests := []struct {
+		name  string
+		bands string
+		want  string
+	}{
+		{
+			name:  "non-positive threshold",
+			bands: `[{"above_input_tokens": 0}]`,
+			want:  "pricing threshold must be positive",
+		},
+		{
+			name:  "duplicate threshold",
+			bands: `[{"above_input_tokens": 200000}, {"above_input_tokens": 200000}]`,
+			want:  "duplicate pricing threshold 200000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := []byte(`{"version":"litellm-test","models":[{"ModelPattern":"model","Bands":` + tt.bands + `}]}`)
+			fys := fstest.MapFS{
+				"snapshot/litellm_snapshot.json.gz": &fstest.MapFile{Data: gzipData(t, snapshot)},
+			}
+
+			_, err := decodeFallbackSnapshotFromFS(fys)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestDecodeFallbackSnapshotFromFS_MissingSnapshot(t *testing.T) {

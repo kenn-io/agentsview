@@ -127,6 +127,20 @@ func TestValidateSnapshotFileRejectsEmptyModels(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing snapshot models")
 }
 
+func TestValidateSnapshotFileRejectsInvalidPricingBands(t *testing.T) {
+	path := writeSnapshotFile(t, []byte(`{
+		"version": "litellm-test",
+		"models": [{
+			"ModelPattern": "test-model",
+			"Bands": [{"above_input_tokens": 0}]
+		}]
+	}`))
+
+	err := validateSnapshotFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pricing threshold must be positive")
+}
+
 func TestValidateSnapshotFileRejectsOversizedDecompressedPayload(t *testing.T) {
 	path := writeSnapshotFile(t, bytes.Repeat(
 		[]byte(" "),

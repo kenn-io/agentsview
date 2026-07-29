@@ -34,8 +34,8 @@ func mustRate(dollars string) money.Money {
 }
 
 const (
-	defaultSnapshotRef     = "f6ab33b020fe51171356b3691c00c8216243c744"
-	defaultSnapshotSHA256  = "ea928d93944ab0434cf961e188860afed4eed287c096ca68acd3fc9a45c5e34b"
+	defaultSnapshotRef     = "4e9a816778337eb7c6c06fe42a1b24ad362e40c0"
+	defaultSnapshotSHA256  = "9bb2314a67c83a632d3f5c77d07ef05b2de777b035cf3f87bf2c1aad1ff4a806"
 	defaultSnapshotBranch  = "litellm-pricing-snapshot"
 	defaultSnapshotFile    = "litellm_snapshot.json.gz"
 	defaultSnapshotBaseURL = "https://raw.githubusercontent.com/kenn-io/agentsview"
@@ -180,9 +180,13 @@ func validateSnapshotFile(path string) error {
 	if len(snapshot.Models) > maxSnapshotModels {
 		return fmt.Errorf("snapshot models exceed %d entries", maxSnapshotModels)
 	}
-	for _, model := range snapshot.Models {
+	for i := range snapshot.Models {
+		model := &snapshot.Models[i]
 		if strings.TrimSpace(model.ModelPattern) == "" {
 			return fmt.Errorf("snapshot contains model with empty pattern")
+		}
+		if err := catalog.NormalizePricingBands(model.ModelPattern, model.Bands); err != nil {
+			return err
 		}
 	}
 

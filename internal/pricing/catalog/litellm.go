@@ -1,11 +1,16 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -22,15 +27,20 @@ type ModelPricing struct {
 	OutputPerMTok        money.Money
 	CacheCreationPerMTok money.Money
 	CacheReadPerMTok     money.Money
+	Bands                []PricingBand
 }
 
-type litellmEntry struct {
-	InputCost         *json.Number `json:"input_cost_per_token"`
-	OutputCost        *json.Number `json:"output_cost_per_token"`
-	CacheCreationCost *json.Number `json:"cache_creation_input_token_cost"`
-	CacheReadCost     *json.Number `json:"cache_read_input_token_cost"`
-	Provider          string       `json:"litellm_provider"`
+type PricingBand struct {
+	AboveInputTokens     int         `json:"above_input_tokens"`
+	InputPerMTok         money.Money `json:"input_per_mtok"`
+	OutputPerMTok        money.Money `json:"output_per_mtok"`
+	CacheCreationPerMTok money.Money `json:"cache_creation_per_mtok"`
+	CacheReadPerMTok     money.Money `json:"cache_read_per_mtok"`
 }
+
+var inputThresholdRatePattern = regexp.MustCompile(
+	`^input_cost_per_token_above_([0-9]+)(k?)_tokens$`,
+)
 
 // FetchLiteLLMPricing downloads the LiteLLM pricing JSON
 // and parses it into ModelPricing entries.
@@ -83,45 +93,184 @@ func fetchLiteLLMPricing(
 func ParseLiteLLMPricing(
 	data []byte,
 ) ([]ModelPricing, error) {
-	var raw map[string]litellmEntry
+	var raw map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing litellm JSON: %w", err)
 	}
 
 	var prices []ModelPricing
-	for model, entry := range raw {
-		if entry.InputCost == nil && entry.OutputCost == nil {
+	for model, fields := range raw {
+		input, hasInput, err := parseOptionalRate(fields, "input_cost_per_token")
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s input price: %w", model, err)
+		}
+		output, hasOutput, err := parseOptionalRate(fields, "output_cost_per_token")
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s output price: %w", model, err)
+		}
+		if !hasInput && !hasOutput {
 			continue
 		}
-		p := ModelPricing{ModelPattern: model}
-		var err error
-		if entry.InputCost != nil {
-			p.InputPerMTok, err = parsePerTokenRate(*entry.InputCost)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s input price: %w", model, err)
-			}
+		cacheCreation, _, err := parseOptionalRate(fields, "cache_creation_input_token_cost")
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s cache creation price: %w", model, err)
 		}
-		if entry.OutputCost != nil {
-			p.OutputPerMTok, err = parsePerTokenRate(*entry.OutputCost)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s output price: %w", model, err)
-			}
+		cacheRead, _, err := parseOptionalRate(fields, "cache_read_input_token_cost")
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s cache read price: %w", model, err)
 		}
-		if entry.CacheCreationCost != nil {
-			p.CacheCreationPerMTok, err = parsePerTokenRate(*entry.CacheCreationCost)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s cache creation price: %w", model, err)
-			}
+
+		p := ModelPricing{
+			ModelPattern:         model,
+			InputPerMTok:         input,
+			OutputPerMTok:        output,
+			CacheCreationPerMTok: cacheCreation,
+			CacheReadPerMTok:     cacheRead,
 		}
-		if entry.CacheReadCost != nil {
-			p.CacheReadPerMTok, err = parsePerTokenRate(*entry.CacheReadCost)
-			if err != nil {
-				return nil, fmt.Errorf("parsing %s cache read price: %w", model, err)
-			}
+		p.Bands, err = parsePricingBands(model, fields, p)
+		if err != nil {
+			return nil, err
 		}
 		prices = append(prices, p)
 	}
 	return prices, nil
+}
+
+func parsePricingBands(
+	model string,
+	fields map[string]json.RawMessage,
+	base ModelPricing,
+) ([]PricingBand, error) {
+	var bands []PricingBand
+	thresholds := make(map[int]struct{})
+	for key := range fields {
+		matches := inputThresholdRatePattern.FindStringSubmatch(key)
+		if matches == nil {
+			continue
+		}
+
+		threshold, err := parseThreshold(matches[1], matches[2] == "k")
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s pricing threshold %q: %w", model, key, err)
+		}
+		if _, exists := thresholds[threshold]; exists {
+			return nil, fmt.Errorf(
+				"parsing %s: duplicate pricing threshold %d",
+				model,
+				threshold,
+			)
+		}
+
+		input, present, err := parseOptionalRate(fields, key)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s %s: %w", model, key, err)
+		}
+		if !present {
+			continue
+		}
+		thresholds[threshold] = struct{}{}
+
+		suffix := strings.TrimPrefix(key, "input_cost_per_token")
+		band := PricingBand{
+			AboveInputTokens:     threshold,
+			InputPerMTok:         input,
+			OutputPerMTok:        base.OutputPerMTok,
+			CacheCreationPerMTok: base.CacheCreationPerMTok,
+			CacheReadPerMTok:     base.CacheReadPerMTok,
+		}
+		companions := []struct {
+			prefix string
+			dest   *money.Money
+		}{
+			{prefix: "output_cost_per_token", dest: &band.OutputPerMTok},
+			{prefix: "cache_creation_input_token_cost", dest: &band.CacheCreationPerMTok},
+			{prefix: "cache_read_input_token_cost", dest: &band.CacheReadPerMTok},
+		}
+		for _, companion := range companions {
+			rate, exists, err := parseOptionalRate(fields, companion.prefix+suffix)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"parsing %s %s: %w",
+					model,
+					companion.prefix+suffix,
+					err,
+				)
+			}
+			if exists {
+				*companion.dest = rate
+			}
+		}
+		bands = append(bands, band)
+	}
+
+	if err := NormalizePricingBands(model, bands); err != nil {
+		return nil, err
+	}
+	return bands, nil
+}
+
+// NormalizePricingBands validates and sorts a model's complete request-pricing
+// bands for deterministic transport and persistence.
+func NormalizePricingBands(model string, bands []PricingBand) error {
+	slices.SortFunc(bands, func(a, b PricingBand) int {
+		return cmp.Compare(a.AboveInputTokens, b.AboveInputTokens)
+	})
+	for i, band := range bands {
+		if band.AboveInputTokens <= 0 {
+			return fmt.Errorf(
+				"model %s pricing threshold must be positive",
+				model,
+			)
+		}
+		if i > 0 && bands[i-1].AboveInputTokens == band.AboveInputTokens {
+			return fmt.Errorf(
+				"model %s has duplicate pricing threshold %d",
+				model,
+				band.AboveInputTokens,
+			)
+		}
+	}
+	return nil
+}
+
+func parseThreshold(raw string, thousands bool) (int, error) {
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if thousands {
+		if value > maxInt/1000 {
+			return 0, strconv.ErrRange
+		}
+		value *= 1000
+	}
+	if value == 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	if value > maxInt {
+		return 0, strconv.ErrRange
+	}
+	return int(value), nil
+}
+
+func parseOptionalRate(
+	fields map[string]json.RawMessage,
+	key string,
+) (money.Money, bool, error) {
+	raw, ok := fields[key]
+	if !ok || string(raw) == "null" {
+		return money.Money{}, false, nil
+	}
+	var value json.Number
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return money.Money{}, false, err
+	}
+	rate, err := parsePerTokenRate(value)
+	if err != nil {
+		return money.Money{}, false, err
+	}
+	return rate, true, nil
 }
 
 func parsePerTokenRate(value json.Number) (money.Money, error) {
