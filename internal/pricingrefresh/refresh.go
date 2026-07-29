@@ -151,12 +151,23 @@ func ensureCurrent(
 func upsert(database *db.DB, prices []pricing.ModelPricing) error {
 	dbPrices := make([]db.ModelPricing, len(prices))
 	for i, price := range prices {
+		bands := make([]db.PricingBand, len(price.Bands))
+		for j, band := range price.Bands {
+			bands[j] = db.PricingBand{
+				AboveInputTokens:     band.AboveInputTokens,
+				InputPerMTok:         band.InputPerMTok,
+				OutputPerMTok:        band.OutputPerMTok,
+				CacheCreationPerMTok: band.CacheCreationPerMTok,
+				CacheReadPerMTok:     band.CacheReadPerMTok,
+			}
+		}
 		dbPrices[i] = db.ModelPricing{
 			ModelPattern:         price.ModelPattern,
 			InputPerMTok:         price.InputPerMTok,
 			OutputPerMTok:        price.OutputPerMTok,
 			CacheCreationPerMTok: price.CacheCreationPerMTok,
 			CacheReadPerMTok:     price.CacheReadPerMTok,
+			Bands:                bands,
 		}
 	}
 	return database.UpsertModelPricing(dbPrices)

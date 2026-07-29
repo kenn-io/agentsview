@@ -1734,36 +1734,20 @@ func (db *DB) loadPricingMap(
 func (db *DB) loadPricingMapFrom(
 	ctx context.Context, q sessionExportQuerier,
 ) ([]export.EffectivePricingRow, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT model_pattern,
-			input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-			updated_at
-		 FROM model_pricing
-		 WHERE model_pattern NOT LIKE '\_%' ESCAPE '\'`)
+	prices, err := listModelPricingFrom(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	fallback := fallbackRateMap()
 	out := make(map[string]export.ModelRates)
-	for rows.Next() {
-		var p ModelPricing
-		if err := rows.Scan(
-			&p.ModelPattern,
-			&p.InputPerMTok, &p.OutputPerMTok,
-			&p.CacheCreationPerMTok, &p.CacheReadPerMTok,
-			&p.UpdatedAt,
-		); err != nil {
-			return nil, err
+	for _, p := range prices {
+		if strings.HasPrefix(p.ModelPattern, "_") {
+			continue
 		}
 		rates := modelPricingRates(p)
 		rates.Source = modelPricingSource(p, fallback)
 		out[p.ModelPattern] = rates
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 
 	for model, cp := range db.customPricing {
@@ -1782,9 +1766,10 @@ func (db *DB) loadPricingMapFrom(
 			},
 		}
 		rates.Source = customPricingSource()
-		if source, ok := db.customPricingSources[model]; ok {
-			rates.Source = source
-		}
+		out[model] = rates
+	}
+	for model, rates := range db.effectivePricing {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		out[model] = rates
 	}
 
@@ -1805,6 +1790,7 @@ func fallbackRateMap() map[string]export.ModelRates {
 			CacheWritePerMTok: p.CacheCreationPerMTok,
 			CacheReadPerMTok:  p.CacheReadPerMTok,
 			Source:            export.PricingRowSourceEmbedded,
+			Bands:             catalogPricingBands(p.Bands),
 		}
 		out[p.ModelPattern] = rates
 	}
@@ -1825,7 +1811,42 @@ func modelPricingRates(p ModelPricing) export.ModelRates {
 		CacheWritePerMTok: p.CacheCreationPerMTok,
 		CacheReadPerMTok:  p.CacheReadPerMTok,
 		UpdatedAt:         updatedAt,
+		Bands:             storedPricingBands(p.Bands),
 	}
+}
+
+func catalogPricingBands(bands []pricingpkg.PricingBand) []export.PricingBand {
+	out := make([]export.PricingBand, len(bands))
+	for i, band := range bands {
+		out[i] = export.PricingBand{
+			AboveInputTokens:  band.AboveInputTokens,
+			InputPerMTok:      band.InputPerMTok,
+			OutputPerMTok:     band.OutputPerMTok,
+			CacheWritePerMTok: band.CacheCreationPerMTok,
+			CacheReadPerMTok:  band.CacheReadPerMTok,
+		}
+	}
+	return out
+}
+
+func storedPricingBands(bands []PricingBand) []export.PricingBand {
+	out := make([]export.PricingBand, len(bands))
+	for i, band := range bands {
+		var updatedAt *time.Time
+		if parsed, err := time.Parse(time.RFC3339Nano, band.UpdatedAt); err == nil {
+			t := parsed.UTC()
+			updatedAt = &t
+		}
+		out[i] = export.PricingBand{
+			AboveInputTokens:  band.AboveInputTokens,
+			InputPerMTok:      band.InputPerMTok,
+			OutputPerMTok:     band.OutputPerMTok,
+			CacheWritePerMTok: band.CacheCreationPerMTok,
+			CacheReadPerMTok:  band.CacheReadPerMTok,
+			UpdatedAt:         updatedAt,
+		}
+	}
+	return out
 }
 
 func modelPricingSource(
@@ -1835,10 +1856,27 @@ func modelPricingSource(
 		rates.InputPerMTok == p.InputPerMTok &&
 		rates.OutputPerMTok == p.OutputPerMTok &&
 		rates.CacheWritePerMTok == p.CacheCreationPerMTok &&
-		rates.CacheReadPerMTok == p.CacheReadPerMTok {
+		rates.CacheReadPerMTok == p.CacheReadPerMTok &&
+		exportPricingBandsEqual(rates.Bands, storedPricingBands(p.Bands)) {
 		return export.PricingRowSourceEmbedded
 	}
 	return export.PricingRowSourceFetched
+}
+
+func exportPricingBandsEqual(a, b []export.PricingBand) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].AboveInputTokens != b[i].AboveInputTokens ||
+			a[i].InputPerMTok != b[i].InputPerMTok ||
+			a[i].OutputPerMTok != b[i].OutputPerMTok ||
+			a[i].CacheWritePerMTok != b[i].CacheWritePerMTok ||
+			a[i].CacheReadPerMTok != b[i].CacheReadPerMTok {
+			return false
+		}
+	}
+	return true
 }
 
 func pricingMapRows(

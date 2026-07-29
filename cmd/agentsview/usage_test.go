@@ -853,6 +853,38 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 		"offline read-only usage must preserve custom pricing")
 }
 
+func TestApplyFallbackPricingPreservesReadOnlyLongContextBands(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	writable := dbtest.OpenTestDBAt(t, dbPath)
+	startedAt := "2026-07-03T12:00:00Z"
+	require.NoError(t, writable.UpsertSession(db.Session{
+		ID: "long-context", Project: "pricing", Machine: "local", Agent: "codex",
+		StartedAt: &startedAt,
+	}))
+	ordinal := 1
+	require.NoError(t, writable.ReplaceSessionUsageEvents("long-context", []db.UsageEvent{{
+		MessageOrdinal: &ordinal,
+		Source:         "codex",
+		Model:          "gpt-5.5",
+		InputTokens:    272_001,
+		OccurredAt:     startedAt,
+		DedupKey:       "request-1",
+	}}))
+	require.NoError(t, writable.Close())
+
+	readonly, err := db.OpenReadOnly(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	applyFallbackPricing(readonly, nil)
+
+	got, err := readonly.GetDailyUsage(context.Background(), db.UsageFilter{
+		From: "2026-07-03", To: "2026-07-03", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 2_720_010}, got.Totals.TotalCost)
+}
+
 func TestArchiveQueryBackendNoSyncStartsNoSyncDaemonForDailyUsage(t *testing.T) {
 	newAgentDataDir(t)
 	var started bool

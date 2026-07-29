@@ -76,6 +76,13 @@ func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
 		ModelPattern:  "new-model",
 		InputPerMTok:  money.MustParseDollars("1.25"),
 		OutputPerMTok: money.MustParseDollars("10"),
+		Bands: []pricing.PricingBand{{
+			AboveInputTokens:     200_000,
+			InputPerMTok:         money.MustParseDollars("2.50"),
+			OutputPerMTok:        money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.125"),
+			CacheReadPerMTok:     money.MustParseDollars("0.25"),
+		}},
 	}}}
 
 	refreshed, err := RefreshIfStale(
@@ -88,6 +95,9 @@ func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, price)
 	assert.Equal(t, money.MustParseDollars("10"), price.OutputPerMTok)
+	require.Len(t, price.Bands, 1)
+	assert.Equal(t, 200_000, price.Bands[0].AboveInputTokens)
+	assert.Equal(t, money.MustParseDollars("15"), price.Bands[0].OutputPerMTok)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
 }
 

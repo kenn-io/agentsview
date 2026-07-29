@@ -546,8 +546,8 @@ type DB struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
-	customPricing        map[string]config.CustomModelRate
-	customPricingSources map[string]export.PricingRowSource
+	customPricing    map[string]config.CustomModelRate
+	effectivePricing map[string]export.ModelRates
 
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
@@ -792,17 +792,20 @@ func (db *DB) requireWritable() error {
 
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
-	db.customPricingSources = nil
+	db.effectivePricing = nil
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
 // sources for read-only fallback paths that cannot seed model_pricing.
 func (db *DB) SetEffectivePricing(
-	p map[string]config.CustomModelRate,
-	sources map[string]export.PricingRowSource,
+	p map[string]export.ModelRates,
 ) {
-	db.customPricing = p
-	db.customPricingSources = sources
+	db.customPricing = nil
+	db.effectivePricing = make(map[string]export.ModelRates, len(p))
+	for model, rates := range p {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+		db.effectivePricing[model] = rates
+	}
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -1367,6 +1370,7 @@ var readOnlyRequiredTables = []string{
 	"session_project_identity_snapshots",
 	"pg_sync_state",
 	"model_pricing",
+	"model_pricing_bands",
 	"secret_findings",
 	"recall_entries",
 	"recall_evidence",

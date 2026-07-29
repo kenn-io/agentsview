@@ -1,9 +1,11 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -11,7 +13,17 @@ import (
 
 // ModelPricing holds per-model token pricing (per million tokens).
 type ModelPricing struct {
-	ModelPattern         string      `json:"model_pattern"`
+	ModelPattern         string        `json:"model_pattern"`
+	InputPerMTok         money.Money   `json:"input_per_mtok"`
+	OutputPerMTok        money.Money   `json:"output_per_mtok"`
+	CacheCreationPerMTok money.Money   `json:"cache_creation_per_mtok"`
+	CacheReadPerMTok     money.Money   `json:"cache_read_per_mtok"`
+	UpdatedAt            string        `json:"updated_at"`
+	Bands                []PricingBand `json:"bands"`
+}
+
+type PricingBand struct {
+	AboveInputTokens     int         `json:"above_input_tokens"`
 	InputPerMTok         money.Money `json:"input_per_mtok"`
 	OutputPerMTok        money.Money `json:"output_per_mtok"`
 	CacheCreationPerMTok money.Money `json:"cache_creation_per_mtok"`
@@ -65,7 +77,39 @@ func pricingFieldsEqual(a, b ModelPricing) bool {
 	return a.InputPerMTok == b.InputPerMTok &&
 		a.OutputPerMTok == b.OutputPerMTok &&
 		a.CacheCreationPerMTok == b.CacheCreationPerMTok &&
-		a.CacheReadPerMTok == b.CacheReadPerMTok
+		a.CacheReadPerMTok == b.CacheReadPerMTok &&
+		pricingBandsEqual(a.Bands, b.Bands)
+}
+
+func pricingBandsEqual(a, b []PricingBand) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	a = slices.Clone(a)
+	b = slices.Clone(b)
+	slices.SortFunc(a, comparePricingBands)
+	slices.SortFunc(b, comparePricingBands)
+	for i := range a {
+		if comparePricingBands(a[i], b[i]) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func comparePricingBands(a, b PricingBand) int {
+	for _, comparison := range []int{
+		cmp.Compare(a.AboveInputTokens, b.AboveInputTokens),
+		cmp.Compare(a.InputPerMTok.Microdollars, b.InputPerMTok.Microdollars),
+		cmp.Compare(a.OutputPerMTok.Microdollars, b.OutputPerMTok.Microdollars),
+		cmp.Compare(a.CacheCreationPerMTok.Microdollars, b.CacheCreationPerMTok.Microdollars),
+		cmp.Compare(a.CacheReadPerMTok.Microdollars, b.CacheReadPerMTok.Microdollars),
+	} {
+		if comparison != 0 {
+			return comparison
+		}
+	}
+	return 0
 }
 
 func sqlitePricingValues(
@@ -171,7 +215,61 @@ func (db *DB) UpsertModelPricing(
 			)
 		}
 	}
+	for _, price := range prices {
+		if _, err := tx.Exec(`
+			UPDATE model_pricing
+			SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			WHERE model_pattern = ?`, price.ModelPattern); err != nil {
+			return fmt.Errorf(
+				"advancing pricing timestamp for %q: %w",
+				price.ModelPattern,
+				err,
+			)
+		}
+	}
+	if err := replaceModelPricingBands(tx, prices); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func replaceModelPricingBands(tx *sql.Tx, prices []ModelPricing) error {
+	for _, price := range prices {
+		if _, err := tx.Exec(
+			`DELETE FROM model_pricing_bands WHERE model_pattern = ?`,
+			price.ModelPattern,
+		); err != nil {
+			return fmt.Errorf(
+				"deleting pricing bands for %q: %w",
+				price.ModelPattern,
+				err,
+			)
+		}
+		for _, band := range price.Bands {
+			if _, err := tx.Exec(`
+				INSERT INTO model_pricing_bands
+					(model_pattern, above_input_tokens,
+					 input_microdollars_per_mtok, output_microdollars_per_mtok,
+					 cache_creation_microdollars_per_mtok,
+					 cache_read_microdollars_per_mtok, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+				price.ModelPattern,
+				band.AboveInputTokens,
+				band.InputPerMTok.Microdollars,
+				band.OutputPerMTok.Microdollars,
+				band.CacheCreationPerMTok.Microdollars,
+				band.CacheReadPerMTok.Microdollars,
+			); err != nil {
+				return fmt.Errorf(
+					"inserting pricing band %d for %q: %w",
+					band.AboveInputTokens,
+					price.ModelPattern,
+					err,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 // DeleteModelPricing removes pricing rows by exact model pattern.
@@ -288,6 +386,20 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 	); err != nil {
 		return fmt.Errorf("copying model pricing: %w", err)
 	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT OR REPLACE INTO model_pricing_bands
+			(model_pattern, above_input_tokens,
+			 input_microdollars_per_mtok, output_microdollars_per_mtok,
+			 cache_creation_microdollars_per_mtok,
+			 cache_read_microdollars_per_mtok, updated_at)
+		SELECT model_pattern, above_input_tokens,
+			input_microdollars_per_mtok, output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		FROM old_db.model_pricing_bands`,
+	); err != nil {
+		return fmt.Errorf("copying model pricing bands: %w", err)
+	}
 	return nil
 }
 
@@ -302,6 +414,24 @@ func (db *DB) InsertMissingModelPricing(
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	existing, err := db.listModelPricing(context.Background())
+	if err != nil {
+		return fmt.Errorf("listing current pricing before insert: %w", err)
+	}
+	existingPatterns := make(map[string]struct{}, len(existing))
+	for _, price := range existing {
+		existingPatterns[price.ModelPattern] = struct{}{}
+	}
+	missing := make([]ModelPricing, 0, len(prices))
+	for _, price := range prices {
+		if _, exists := existingPatterns[price.ModelPattern]; !exists {
+			missing = append(missing, price)
+		}
+	}
+	prices = missing
+	if len(prices) == 0 {
+		return nil
+	}
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
@@ -318,6 +448,9 @@ func (db *DB) InsertMissingModelPricing(
 				i, err,
 			)
 		}
+	}
+	if err := replaceModelPricingBands(tx, prices); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -366,5 +499,12 @@ func (db *DB) GetModelPricing(
 			"getting pricing %q: %w", model, err,
 		)
 	}
+	bands, err := loadPricingBandsForModel(
+		context.Background(), db.getReader(), model,
+	)
+	if err != nil {
+		return nil, err
+	}
+	p.Bands = bands
 	return &p, nil
 }

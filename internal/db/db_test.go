@@ -4431,6 +4431,10 @@ func TestCopyModelPricingFrom(t *testing.T) {
 			OutputPerMTok:        money.MustParseDollars("75"),
 			CacheCreationPerMTok: money.MustParseDollars("18.75"),
 			CacheReadPerMTok:     money.MustParseDollars("1.5"),
+			Bands: []PricingBand{{
+				AboveInputTokens: 200_000,
+				InputPerMTok:     money.MustParseDollars("30"),
+			}},
 		},
 	}), "UpsertModelPricing")
 	require.NoError(t,
@@ -4455,6 +4459,9 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("15.0"), copied.InputPerMTok,
 		"source row replaces stale destination row")
 	assert.Equal(t, money.MustParseDollars("75.0"), copied.OutputPerMTok, "output rate")
+	require.Len(t, copied.Bands, 1)
+	assert.Equal(t, 200_000, copied.Bands[0].AboveInputTokens)
+	assert.Equal(t, money.MustParseDollars("30"), copied.Bands[0].InputPerMTok)
 
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
