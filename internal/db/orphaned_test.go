@@ -5,11 +5,118 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	work := artifactImportTestWork("peer-a1b2c3", 2)
+	require.NoError(t, source.EnqueueArtifactImport(ctx, work))
+	attempt, err := source.ReserveArtifactImportAttemptGeneration(ctx)
+	require.NoError(t, err)
+	pending, err := source.PendingArtifactImports(
+		ctx,
+		ArtifactImportVersions{Checkpoint: 1, Manifest: 2, Segment: 1},
+		attempt,
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	marked, err := source.MarkArtifactImportAttempted(
+		ctx, pending[0], attempt,
+	)
+	require.NoError(t, err)
+	require.True(t, marked)
+
+	head := ArtifactPeerCheckpointHead{
+		Origin:           work.Origin,
+		Sequence:         2,
+		CheckpointSHA256: strings.Repeat("d", 64),
+		CheckpointSize:   99,
+	}
+	_, err = source.RecordArtifactPeerCheckpointHead(ctx, head)
+	require.NoError(t, err)
+	landing := ArtifactCheckpointLanding(head)
+	sessionMap := map[string]string{
+		head.Origin + "~one": strings.Repeat("e", 64),
+	}
+	require.NoError(t, source.RecordArtifactCheckpointLanding(
+		ctx, landing, sessionMap,
+	))
+	imported := ArtifactImportedSession{
+		Origin:            head.Origin,
+		GID:               head.Origin + "~one",
+		ManifestHash:      sessionMap[head.Origin+"~one"],
+		ImportedSessionID: head.Origin + "~one",
+	}
+	require.NoError(t, source.RecordArtifactImportedSession(ctx, imported))
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(
+		t, filepath.Join(dir, "destination.db"), "destination",
+	)
+	defer destination.Close()
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
+
+	nextAttempt, err := destination.ReserveArtifactImportAttemptGeneration(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, nextAttempt, attempt)
+	pending, err = destination.PendingArtifactImports(
+		ctx,
+		ArtifactImportVersions{Checkpoint: 1, Manifest: 2, Segment: 1},
+		nextAttempt,
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, work.Name, pending[0].Name)
+
+	gotHead, found, err := destination.GetArtifactPeerCheckpointHead(
+		ctx, head.Origin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, head, gotHead)
+	gotLanding, gotMap, found, err :=
+		destination.GetArtifactCheckpointLanding(ctx, head.Origin)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, landing, gotLanding)
+	assert.Equal(t, sessionMap, gotMap)
+	gotProvenance, err := destination.ArtifactImportedManifestHashes(
+		ctx, head.Origin, []string{imported.GID},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		imported.GID: imported.ManifestHash,
+	}, gotProvenance)
+}
+
+func TestCopySyncStateAcceptsDatabaseWithoutArtifactImportTables(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "old.db")
+	source, err := sql.Open("sqlite3", makeDSN(sourcePath, false))
+	require.NoError(t, err)
+	_, err = source.Exec(`CREATE TABLE pg_sync_state (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(
+		t, filepath.Join(dir, "destination.db"), "destination",
+	)
+	defer destination.Close()
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
+}
 
 func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")

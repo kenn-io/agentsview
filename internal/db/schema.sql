@@ -1085,3 +1085,30 @@ CREATE TABLE IF NOT EXISTS artifact_peer_checkpoint_heads (
     checkpoint_sha256 TEXT NOT NULL,
     checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
 );
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_landings (
+    origin            TEXT PRIMARY KEY,
+    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    checkpoint_sha256 TEXT NOT NULL,
+    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
+    origin        TEXT NOT NULL,
+    gid           TEXT NOT NULL,
+    manifest_hash TEXT NOT NULL,
+    PRIMARY KEY (origin, gid),
+    FOREIGN KEY (origin) REFERENCES artifact_checkpoint_landings(origin)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
+    origin              TEXT NOT NULL,
+    gid                 TEXT NOT NULL,
+    manifest_hash       TEXT NOT NULL,
+    imported_session_id TEXT NOT NULL,
+    imported_at         TEXT NOT NULL DEFAULT (
+        strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    ),
+    PRIMARY KEY (origin, gid)
+);

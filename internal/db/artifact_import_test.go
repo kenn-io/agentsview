@@ -286,3 +286,132 @@ func TestArtifactImportQueueRejectsInvalidClaims(t *testing.T) {
 		})
 	}
 }
+
+func TestArtifactCheckpointLandingBindsPeerIdentity(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	head := ArtifactPeerCheckpointHead{
+		Origin:           "peer-a1b2c3",
+		Sequence:         2,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   99,
+	}
+	_, err := database.RecordArtifactPeerCheckpointHead(ctx, head)
+	require.NoError(t, err)
+
+	landing := ArtifactCheckpointLanding(head)
+	want := map[string]string{
+		head.Origin + "~one": strings.Repeat("b", 64),
+		head.Origin + "~two": strings.Repeat("c", 64),
+	}
+	require.NoError(t,
+		database.RecordArtifactCheckpointLanding(ctx, landing, want))
+
+	gotLanding, got, found, err :=
+		database.GetArtifactCheckpointLanding(ctx, head.Origin)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, landing, gotLanding)
+	assert.Equal(t, want, got)
+
+	require.NoError(t,
+		database.RecordArtifactCheckpointLanding(ctx, landing, want))
+}
+
+func TestArtifactCheckpointLandingRejectsUnrecordedAndRegressedAuthority(
+	t *testing.T,
+) {
+	database := testDB(t)
+	ctx := t.Context()
+	head := ArtifactPeerCheckpointHead{
+		Origin:           "peer-a1b2c3",
+		Sequence:         2,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   99,
+	}
+	_, err := database.RecordArtifactPeerCheckpointHead(ctx, head)
+	require.NoError(t, err)
+	landing := ArtifactCheckpointLanding(head)
+	sessionMap := map[string]string{
+		head.Origin + "~one": strings.Repeat("b", 64),
+	}
+	require.NoError(t, database.RecordArtifactCheckpointLanding(
+		ctx, landing, sessionMap,
+	))
+
+	wrongIdentity := landing
+	wrongIdentity.CheckpointSHA256 = strings.Repeat("c", 64)
+	err = database.RecordArtifactCheckpointLanding(
+		ctx, wrongIdentity, sessionMap,
+	)
+	require.ErrorIs(t, err, ErrArtifactImportConflict)
+
+	newerHead := head
+	newerHead.Sequence = 3
+	newerHead.CheckpointSHA256 = strings.Repeat("d", 64)
+	advanced, err := database.RecordArtifactPeerCheckpointHead(ctx, newerHead)
+	require.NoError(t, err)
+	require.True(t, advanced)
+	newerLanding := ArtifactCheckpointLanding(newerHead)
+	newerMap := map[string]string{
+		head.Origin + "~two": strings.Repeat("e", 64),
+	}
+	require.NoError(t, database.RecordArtifactCheckpointLanding(
+		ctx, newerLanding, newerMap,
+	))
+
+	err = database.RecordArtifactCheckpointLanding(ctx, landing, sessionMap)
+	require.ErrorIs(t, err, ErrArtifactImportConflict)
+	gotLanding, got, found, err := database.GetArtifactCheckpointLanding(
+		ctx, head.Origin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, newerLanding, gotLanding)
+	assert.Equal(t, newerMap, got)
+}
+
+func TestArtifactImportedSessionProvenanceIsBoundedAndAdvances(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	origin := "peer-a1b2c3"
+	one := ArtifactImportedSession{
+		Origin:            origin,
+		GID:               origin + "~one",
+		ManifestHash:      strings.Repeat("a", 64),
+		ImportedSessionID: origin + "~one",
+	}
+	two := ArtifactImportedSession{
+		Origin:            origin,
+		GID:               origin + "~two",
+		ManifestHash:      strings.Repeat("b", 64),
+		ImportedSessionID: origin + "~two",
+	}
+	require.NoError(t, database.RecordArtifactImportedSession(ctx, one))
+	require.NoError(t, database.RecordArtifactImportedSession(ctx, two))
+	require.NoError(t, database.RecordArtifactImportedSession(ctx, one))
+
+	got, err := database.ArtifactImportedManifestHashes(
+		ctx, origin, []string{two.GID, two.GID},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{two.GID: two.ManifestHash}, got)
+
+	one.ManifestHash = strings.Repeat("c", 64)
+	require.NoError(t, database.RecordArtifactImportedSession(ctx, one))
+	got, err = database.ArtifactImportedManifestHashes(
+		ctx, origin, []string{one.GID, two.GID},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		one.GID: one.ManifestHash,
+		two.GID: two.ManifestHash,
+	}, got)
+
+	tooMany := make([]string, 1025)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("%s~%04d", origin, i)
+	}
+	_, err = database.ArtifactImportedManifestHashes(ctx, origin, tooMany)
+	require.Error(t, err)
+}

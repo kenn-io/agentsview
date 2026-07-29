@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -44,6 +45,24 @@ type ArtifactPeerCheckpointHead struct {
 	Sequence         int
 	CheckpointSHA256 string
 	CheckpointSize   int64
+}
+
+// ArtifactCheckpointLanding records the exact foreign checkpoint whose full
+// current-version session map has been durably satisfied.
+type ArtifactCheckpointLanding struct {
+	Origin           string
+	Sequence         int
+	CheckpointSHA256 string
+	CheckpointSize   int64
+}
+
+// ArtifactImportedSession records the manifest last durably applied or
+// intentionally suppressed for one foreign session.
+type ArtifactImportedSession struct {
+	Origin            string
+	GID               string
+	ManifestHash      string
+	ImportedSessionID string
 }
 
 // EnqueueArtifactImport records exact checkpoint work without moving its FIFO
@@ -416,6 +435,318 @@ func (db *DB) GetArtifactPeerCheckpointHead(
 	return head, true, nil
 }
 
+// RecordArtifactCheckpointLanding atomically binds the complete session map to
+// the exact currently recorded peer head.
+func (db *DB) RecordArtifactCheckpointLanding(
+	ctx context.Context,
+	landing ArtifactCheckpointLanding,
+	sessionMap map[string]string,
+) error {
+	if err := validateArtifactCheckpointLanding(landing); err != nil {
+		return err
+	}
+	gids := make([]string, 0, len(sessionMap))
+	for gid, manifestHash := range sessionMap {
+		if !strings.HasPrefix(gid, landing.Origin+"~") ||
+			len(gid) == len(landing.Origin)+1 {
+			return fmt.Errorf("artifact checkpoint GID %q has wrong origin", gid)
+		}
+		if len(manifestHash) != 64 {
+			return fmt.Errorf("artifact checkpoint manifest %q is incomplete", gid)
+		}
+		if err := validateLowerHex(manifestHash); err != nil {
+			return fmt.Errorf("validating artifact checkpoint manifest %q: %w", gid, err)
+		}
+		gids = append(gids, gid)
+	}
+	slices.Sort(gids)
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning artifact checkpoint landing: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var head ArtifactPeerCheckpointHead
+	err = tx.QueryRowContext(ctx, `
+		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+		FROM artifact_peer_checkpoint_heads WHERE origin = ?`, landing.Origin,
+	).Scan(
+		&head.Origin, &head.Sequence,
+		&head.CheckpointSHA256, &head.CheckpointSize,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf(
+			"%w: artifact checkpoint landing has no peer head",
+			ErrArtifactImportConflict,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("reading artifact peer head for landing: %w", err)
+	}
+	if head.Sequence != landing.Sequence ||
+		head.CheckpointSHA256 != landing.CheckpointSHA256 ||
+		head.CheckpointSize != landing.CheckpointSize {
+		return fmt.Errorf(
+			"%w: artifact checkpoint landing does not match peer head",
+			ErrArtifactImportConflict,
+		)
+	}
+
+	var existing ArtifactCheckpointLanding
+	err = tx.QueryRowContext(ctx, `
+		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+		FROM artifact_checkpoint_landings WHERE origin = ?`, landing.Origin,
+	).Scan(
+		&existing.Origin, &existing.Sequence,
+		&existing.CheckpointSHA256, &existing.CheckpointSize,
+	)
+	switch {
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("reading artifact checkpoint landing: %w", err)
+	case err == nil && existing.Sequence > landing.Sequence:
+		return fmt.Errorf(
+			"%w: artifact checkpoint landing would regress",
+			ErrArtifactImportConflict,
+		)
+	case err == nil && existing.Sequence == landing.Sequence:
+		if existing.CheckpointSHA256 != landing.CheckpointSHA256 ||
+			existing.CheckpointSize != landing.CheckpointSize {
+			return fmt.Errorf(
+				"%w: artifact checkpoint landing identity changed",
+				ErrArtifactImportConflict,
+			)
+		}
+		equal, compareErr := artifactLandingMapEqualTx(
+			ctx, tx, landing.Origin, sessionMap,
+		)
+		if compareErr != nil {
+			return compareErr
+		}
+		if !equal {
+			return fmt.Errorf(
+				"%w: artifact checkpoint landing map changed",
+				ErrArtifactImportConflict,
+			)
+		}
+		return nil
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO artifact_checkpoint_landings (
+			origin, sequence, checkpoint_sha256, checkpoint_size
+		) VALUES (?, ?, ?, ?)
+		ON CONFLICT(origin) DO UPDATE SET
+			sequence = excluded.sequence,
+			checkpoint_sha256 = excluded.checkpoint_sha256,
+			checkpoint_size = excluded.checkpoint_size`,
+		landing.Origin, landing.Sequence,
+		landing.CheckpointSHA256, landing.CheckpointSize,
+	)
+	if err != nil {
+		return fmt.Errorf("recording artifact checkpoint landing: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM artifact_checkpoint_landing_sessions
+		WHERE origin = ?`, landing.Origin,
+	); err != nil {
+		return fmt.Errorf("clearing artifact checkpoint landing map: %w", err)
+	}
+	for _, gid := range gids {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO artifact_checkpoint_landing_sessions (
+				origin, gid, manifest_hash
+			) VALUES (?, ?, ?)`,
+			landing.Origin, gid, sessionMap[gid],
+		); err != nil {
+			return fmt.Errorf(
+				"recording artifact checkpoint landing session %q: %w", gid, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing artifact checkpoint landing: %w", err)
+	}
+	return nil
+}
+
+// GetArtifactCheckpointLanding returns an identity and a fresh copy of its
+// complete landed session map.
+func (db *DB) GetArtifactCheckpointLanding(
+	ctx context.Context, origin string,
+) (ArtifactCheckpointLanding, map[string]string, bool, error) {
+	if strings.TrimSpace(origin) == "" || origin != strings.TrimSpace(origin) {
+		return ArtifactCheckpointLanding{}, nil, false,
+			errors.New("artifact checkpoint landing origin is required")
+	}
+	var landing ArtifactCheckpointLanding
+	err := db.getReader().QueryRowContext(ctx, `
+		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+		FROM artifact_checkpoint_landings WHERE origin = ?`, origin,
+	).Scan(
+		&landing.Origin, &landing.Sequence,
+		&landing.CheckpointSHA256, &landing.CheckpointSize,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ArtifactCheckpointLanding{}, nil, false, nil
+	}
+	if err != nil {
+		return ArtifactCheckpointLanding{}, nil, false,
+			fmt.Errorf("reading artifact checkpoint landing: %w", err)
+	}
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT gid, manifest_hash
+		FROM artifact_checkpoint_landing_sessions
+		WHERE origin = ? ORDER BY gid`, origin,
+	)
+	if err != nil {
+		return ArtifactCheckpointLanding{}, nil, false,
+			fmt.Errorf("reading artifact checkpoint landing map: %w", err)
+	}
+	defer rows.Close()
+	sessionMap := make(map[string]string)
+	for rows.Next() {
+		var gid, manifestHash string
+		if err := rows.Scan(&gid, &manifestHash); err != nil {
+			return ArtifactCheckpointLanding{}, nil, false,
+				fmt.Errorf("scanning artifact checkpoint landing map: %w", err)
+		}
+		sessionMap[gid] = manifestHash
+	}
+	if err := rows.Err(); err != nil {
+		return ArtifactCheckpointLanding{}, nil, false,
+			fmt.Errorf("iterating artifact checkpoint landing map: %w", err)
+	}
+	return landing, sessionMap, true, nil
+}
+
+// ArtifactImportedManifestHashes returns provenance for a bounded exact GID
+// set without scanning an origin's complete imported history.
+func (db *DB) ArtifactImportedManifestHashes(
+	ctx context.Context, origin string, gids []string,
+) (map[string]string, error) {
+	if strings.TrimSpace(origin) == "" || origin != strings.TrimSpace(origin) {
+		return nil, errors.New("artifact imported-session origin is required")
+	}
+	if len(gids) > maxArtifactQueuePageSize {
+		return nil, fmt.Errorf(
+			"artifact imported-session query exceeds %d rows",
+			maxArtifactQueuePageSize,
+		)
+	}
+	unique := make([]string, 0, len(gids))
+	seen := make(map[string]struct{}, len(gids))
+	for _, gid := range gids {
+		if !strings.HasPrefix(gid, origin+"~") || len(gid) == len(origin)+1 {
+			return nil, fmt.Errorf("artifact imported-session GID %q has wrong origin", gid)
+		}
+		if _, ok := seen[gid]; ok {
+			continue
+		}
+		seen[gid] = struct{}{}
+		unique = append(unique, gid)
+	}
+	result := make(map[string]string, len(unique))
+	if len(unique) == 0 {
+		return result, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(unique)), ",")
+	args := make([]any, 0, len(unique)+1)
+	args = append(args, origin)
+	for _, gid := range unique {
+		args = append(args, gid)
+	}
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT gid, manifest_hash
+		FROM artifact_imported_sessions
+		WHERE origin = ? AND gid IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("reading artifact imported-session provenance: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var gid, manifestHash string
+		if err := rows.Scan(&gid, &manifestHash); err != nil {
+			return nil, fmt.Errorf(
+				"scanning artifact imported-session provenance: %w", err,
+			)
+		}
+		result[gid] = manifestHash
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterating artifact imported-session provenance: %w", err,
+		)
+	}
+	return result, nil
+}
+
+// RecordArtifactImportedSession advances durable per-session provenance.
+func (db *DB) RecordArtifactImportedSession(
+	ctx context.Context, imported ArtifactImportedSession,
+) error {
+	if err := validateArtifactImportedSession(imported); err != nil {
+		return err
+	}
+	_, err := db.getWriter().ExecContext(ctx, `
+		INSERT INTO artifact_imported_sessions (
+			origin, gid, manifest_hash, imported_session_id
+		) VALUES (?, ?, ?, ?)
+		ON CONFLICT(origin, gid) DO UPDATE SET
+			manifest_hash = excluded.manifest_hash,
+			imported_session_id = excluded.imported_session_id,
+			imported_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE artifact_imported_sessions.manifest_hash <> excluded.manifest_hash
+		   OR artifact_imported_sessions.imported_session_id <>
+		      excluded.imported_session_id`,
+		imported.Origin, imported.GID,
+		imported.ManifestHash, imported.ImportedSessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("recording artifact imported-session provenance: %w", err)
+	}
+	return nil
+}
+
+func artifactLandingMapEqualTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	origin string,
+	want map[string]string,
+) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT gid, manifest_hash
+		FROM artifact_checkpoint_landing_sessions
+		WHERE origin = ?`, origin,
+	)
+	if err != nil {
+		return false, fmt.Errorf("reading existing artifact landing map: %w", err)
+	}
+	defer rows.Close()
+	got := make(map[string]string)
+	for rows.Next() {
+		var gid, manifestHash string
+		if err := rows.Scan(&gid, &manifestHash); err != nil {
+			return false, fmt.Errorf("scanning existing artifact landing map: %w", err)
+		}
+		got[gid] = manifestHash
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterating existing artifact landing map: %w", err)
+	}
+	if len(got) != len(want) {
+		return false, nil
+	}
+	for gid, manifestHash := range want {
+		if got[gid] != manifestHash {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func validateArtifactImportWork(
 	work ArtifactImportWork, requireClaim bool,
 ) error {
@@ -470,6 +801,33 @@ func validateArtifactPeerCheckpointHead(head ArtifactPeerCheckpointHead) error {
 		return errors.New("complete artifact peer checkpoint identity is required")
 	}
 	return validateLowerHex(head.CheckpointSHA256)
+}
+
+func validateArtifactCheckpointLanding(
+	landing ArtifactCheckpointLanding,
+) error {
+	return validateArtifactPeerCheckpointHead(ArtifactPeerCheckpointHead(landing))
+}
+
+func validateArtifactImportedSession(imported ArtifactImportedSession) error {
+	if strings.TrimSpace(imported.Origin) == "" ||
+		imported.Origin != strings.TrimSpace(imported.Origin) {
+		return errors.New("artifact imported-session origin is required")
+	}
+	if !strings.HasPrefix(imported.GID, imported.Origin+"~") ||
+		len(imported.GID) == len(imported.Origin)+1 {
+		return errors.New("artifact imported-session GID has wrong origin")
+	}
+	if len(imported.ManifestHash) != 64 {
+		return errors.New("artifact imported-session manifest identity is incomplete")
+	}
+	if err := validateLowerHex(imported.ManifestHash); err != nil {
+		return err
+	}
+	if strings.TrimSpace(imported.ImportedSessionID) == "" {
+		return errors.New("artifact imported session ID is required")
+	}
+	return nil
 }
 
 func validateLowerHex(value string) error {
