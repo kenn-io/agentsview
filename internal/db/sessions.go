@@ -2820,6 +2820,24 @@ func normalizeStoredSourcePathHintScopes(
 	return out
 }
 
+// hintContainmentPath canonicalizes a path for containment comparison only.
+// Scope paths keep the representation the caller stored, because the query has
+// to match `file_path` exactly as persisted, while exclusion roots arrive
+// already absolute. Comparing both in absolute form is what stops a relative
+// configured path from reading as outside an exclusion that in fact contains
+// it, which would page the excluded archive on every pass.
+func hintContainmentPath(path string) string {
+	cleaned := cleanStoredSourcePathHint(path)
+	if cleaned == "" || cleaned == "." {
+		return cleaned
+	}
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	return abs
+}
+
 // normalizeExcludedHintRoots keeps the strict descendants of root, the only
 // exclusions that can narrow a scope without emptying it, then deduplicates
 // and orders them so the rendered SQL is stable.
@@ -2827,13 +2845,17 @@ func normalizeExcludedHintRoots(root string, excluded []string) []string {
 	if len(excluded) == 0 {
 		return nil
 	}
+	comparableRoot := hintContainmentPath(root)
 	out := make([]string, 0, len(excluded))
 	for _, candidate := range excluded {
 		cleaned := cleanStoredSourcePathHint(candidate)
-		if cleaned == "" || cleaned == "." || cleaned == root {
+		comparable := hintContainmentPath(candidate)
+		if comparable == "" || comparable == "." || comparable == comparableRoot {
 			continue
 		}
-		if !strings.HasPrefix(cleaned, root+string(filepath.Separator)) {
+		if !strings.HasPrefix(
+			comparable, comparableRoot+string(filepath.Separator),
+		) {
 			continue
 		}
 		if slices.Contains(out, cleaned) {
@@ -2955,13 +2977,16 @@ func storedSourcePathHintInRoot(path string, scope StoredSourcePathHintScope) bo
 // so the query and the post-read filter agree on scope membership. A virtual
 // member is covered by its container's prefix, so no member branch is needed.
 func storedSourcePathHintExcluded(path string, excluded []string) bool {
+	comparablePath := hintContainmentPath(path)
 	return slices.ContainsFunc(excluded, func(root string) bool {
-		cleaned := cleanStoredSourcePathHint(root)
-		if cleaned == "" || cleaned == "." {
+		comparableRoot := hintContainmentPath(root)
+		if comparableRoot == "" || comparableRoot == "." {
 			return false
 		}
-		return path == cleaned ||
-			strings.HasPrefix(path, cleaned+string(filepath.Separator))
+		return comparablePath == comparableRoot ||
+			strings.HasPrefix(
+				comparablePath, comparableRoot+string(filepath.Separator),
+			)
 	})
 }
 

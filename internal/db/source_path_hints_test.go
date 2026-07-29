@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1297,6 +1298,63 @@ func TestNormalizeStoredSourcePathHintScopesDropsScopesInsideExclusions(t *testi
 		require.Len(t, got, 1)
 		assert.Equal(t, leaf, got[0].Path)
 		assert.True(t, got[0].IncludeVirtualMembers)
+		assert.Empty(t, got[0].Excluded)
+	})
+}
+
+// TestStoredSourcePathHintExclusionsMatchAcrossPathRepresentations covers the
+// mismatch a lexical comparison creates: exclusion roots reach the query
+// already absolute, while a provider can hand back an ownership scope that
+// kept its relative configured path. Comparing the two as written leaves the
+// scope outside its own exclusion, so every pass pages the excluded archive
+// and discards it in the later safety filter.
+func TestStoredSourcePathHintExclusionsMatchAcrossPathRepresentations(t *testing.T) {
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	relativeRoot := filepath.Join("testdata", "hints-representation")
+	absoluteRoot := filepath.Join(wd, relativeRoot)
+	relativeNested := filepath.Join(relativeRoot, "nested")
+	absoluteNested := filepath.Join(absoluteRoot, "nested")
+
+	t.Run("relative scope inside an absolute exclusion is dropped", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: filepath.Join(relativeNested, "state.db"), Excluded: []string{absoluteNested}},
+		})
+		assert.Empty(t, got)
+	})
+
+	t.Run("absolute scope inside a relative exclusion is dropped", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: filepath.Join(absoluteNested, "state.db"), Excluded: []string{relativeNested}},
+		})
+		assert.Empty(t, got)
+	})
+
+	t.Run("relative scope keeps an absolute exclusion as a narrowing", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: relativeRoot, Excluded: []string{absoluteNested}},
+		})
+		require.Len(t, got, 1)
+		assert.Equal(t, relativeRoot, got[0].Path,
+			"the scope keeps the representation the query has to match")
+		assert.Equal(t, []string{absoluteNested}, got[0].Excluded,
+			"a nested exclusion still narrows a relatively expressed scope")
+	})
+
+	t.Run("absolute scope keeps a relative exclusion as a narrowing", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: absoluteRoot, Excluded: []string{relativeNested}},
+		})
+		require.Len(t, got, 1)
+		assert.Equal(t, absoluteRoot, got[0].Path)
+		assert.Equal(t, []string{relativeNested}, got[0].Excluded)
+	})
+
+	t.Run("a sibling outside the scope still narrows nothing", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: relativeRoot, Excluded: []string{filepath.Join(wd, "testdata", "other")}},
+		})
+		require.Len(t, got, 1)
 		assert.Empty(t, got[0].Excluded)
 	})
 }
