@@ -59,7 +59,8 @@ type PricingBand struct {
 input tokens uses the base rates; 272,001 uses the matching band. Bands are
 sorted by threshold, and the highest satisfied threshold wins.
 
-The request input used for selection is reconstructed from normalized usage:
+For request-scoped rows, the request input used for selection is reconstructed
+from normalized usage:
 
 ```text
 uncached input + cache-read input + cache-creation input
@@ -68,6 +69,15 @@ uncached input + cache-read input + cache-creation input
 This works for Codex, whose inclusive upstream input is split by the parser, and
 for Claude-style usage, whose input and cache categories are already separate.
 
+Not every normalized usage row represents one request. Message token usage is
+request-scoped, as is a standalone usage event carrying a non-nil
+`message_ordinal`. A usage event without a message ordinal is aggregate or has
+unknown request boundaries. Agentsview applies bands only to request-scoped
+rows. It prices aggregate/unknown rows at the base tuple, because selecting a
+band from their combined input could overcharge several individually
+sub-threshold requests. This is a conservative estimate; authoritative reported
+cost remains authoritative regardless of row scope.
+
 ## Persistence and Synchronization
 
 SQLite and PostgreSQL gain a `model_pricing_bands` table keyed by
@@ -75,9 +85,11 @@ SQLite and PostgreSQL gain a `model_pricing_bands` table keyed by
 and an update timestamp. The table references `model_pricing` so a model and its
 bands remain one catalog unit.
 
+Catalog change detection compares the complete normalized band set (threshold
+and all four rates) in addition to the base tuple while ignoring timestamps.
 Catalog upserts replace the bands for each changed model in the same transaction
-as its base rate. This makes removal of an upstream threshold as deterministic
-as adding one. Full-resync archive copying and PostgreSQL push copy the band
+as its base rate. This makes a band-only update or removal as deterministic as a
+base-rate change. Full-resync archive copying and PostgreSQL push copy the band
 rows alongside base pricing.
 
 Fallback pricing snapshots retain bands, so offline estimates behave like fresh
@@ -88,17 +100,40 @@ must not combine custom base rates with fetched tier rates.
 ## Cost Calculation
 
 Band selection lives on the resolved model rates. All existing usage paths
-already calculate cost one deduplicated usage row at a time, so they will call
-the band-aware calculation before accumulating daily, project, model, session,
-or activity totals.
+already calculate cost one deduplicated usage row at a time. Request-scoped rows
+call the band-aware calculation before accumulating daily, project, model,
+session, or activity totals; aggregate/unknown rows call the same calculation
+with band selection disabled so they use the base tuple.
 
 Cache-savings calculations use the same selected band as request cost. Reported
 provider costs remain authoritative and bypass computed pricing exactly as they
 do today.
 
 The pricing provenance block includes normalized bands and incorporates them
-into its digest. That makes exports explain the applied threshold and ensures
-catalog changes invalidate deterministic pricing metadata.
+into its digest. Each effective model additionally records pricing application
+counts:
+
+```go
+type PricingApplication struct {
+    BaseRequestCount  int
+    AggregateRowCount int
+    Bands             []AppliedPricingBand
+}
+
+type AppliedPricingBand struct {
+    AboveInputTokens int
+    RequestCount     int
+}
+```
+
+`BaseRequestCount` counts priced request-scoped rows that selected no band.
+`AggregateRowCount` counts priced computed aggregate/unknown rows forced to the
+base tuple. `Bands` is ordered by threshold and counts priced request-scoped
+rows that selected each band. Reported-only rows do not increment computed
+application counts. This distinguishes one banded request from multiple base
+requests even after token and cost aggregation. Normalized catalog bands remain
+in the digest so catalog changes invalidate deterministic pricing metadata;
+application counts describe this report and are not part of that catalog digest.
 
 ## Validation and Failure Behavior
 
@@ -108,6 +143,7 @@ catalog changes invalidate deterministic pricing metadata.
 - A missing companion tier rate inherits the base component.
 - An explicit zero tier rate is preserved.
 - Models without bands retain current flat-rate behavior.
+- Aggregate usage with unknown request boundaries uses base rates.
 - Unknown threshold-like keys outside the supported standard token-rate shape
   remain ignored, matching the adapter's existing forward-compatible JSON
   behavior.
@@ -122,12 +158,16 @@ Focused tests will protect observable behavior:
    use the band for all token categories.
 1. Two requests that are individually below the threshold remain base-priced
    even when their aggregate input exceeds it.
+1. An unbound session aggregate above the threshold remains base-priced, while
+   an ordinal-bound request with the same totals uses the band.
+1. Mixed base/banded/aggregate rows emit literal application counts after
+   aggregation.
 1. Daily usage, session usage, and activity calculations expose the same
    band-aware cost in SQLite.
 1. PostgreSQL integration tests assert the same usage result and pricing-band
    persistence behavior.
-1. Pricing export/digest tests show the applied bands without duplicating the
-   implementation's calculations.
+1. Pricing export/digest tests show the available bands and application counts
+   without duplicating the implementation's calculations.
 
 ## Non-goals
 
