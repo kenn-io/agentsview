@@ -108,6 +108,7 @@ func newArchivePushUnwatchedPoller(
 	ticker := time.NewTicker(unwatchedPollInterval)
 	return newUnwatchedPollCoordinatorWithTicks(
 		ctx, engine, ticker.C, ticker.Stop, func(work func()) { work() }, nil,
+		time.Now, time.After,
 	)
 }
 
@@ -147,18 +148,29 @@ func archivePushWatchWatcherOptions(
 			// the affected roots authoritatively (including tombstoning
 			// missed deletions) and the loop re-pushes the refreshed
 			// archive on its floor.
+			scopes := make([]pollingScope, 0, len(roots))
+			for _, r := range roots {
+				scopes = append(scopes, pollingScope{Root: r})
+			}
 			if err := poller.AddObligation(pollingObligation{
-				Key: "watcher-fallback", Roots: roots,
+				Key: "watcher-fallback", Scopes: scopes,
 			}); err != nil {
 				return err
 			}
 			return loop.NotifyCoverageDegraded(roots)
 		},
 		OnPollingRequired: func(obligation syncpkg.PollingObligation) error {
+			scopes := make([]pollingScope, 0, len(obligation.Scopes))
+			for _, s := range obligation.Scopes {
+				scopes = append(scopes, pollingScope{
+					Agent: parser.AgentType(s.Agent),
+					Root:  s.Root,
+				})
+			}
 			return poller.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
+				Key:    obligation.Key,
+				Scopes: scopes,
+				Probe:  obligation.Probe,
 			})
 		},
 		OnPollingReleased: poller.RemoveObligation,

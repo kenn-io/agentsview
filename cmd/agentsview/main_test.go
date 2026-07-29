@@ -526,30 +526,27 @@ func TestNewDaemonIdleTrackerEnvOverridesConfig(t *testing.T) {
 type fakeUnwatchedPollSyncer struct {
 	calls     int
 	callRoots [][]string
-	callFull  []bool
 }
 
-func (f *fakeUnwatchedPollSyncer) ReconcileWatchRoots(
-	_ context.Context, roots []string, full bool,
+func (f *fakeUnwatchedPollSyncer) ReconcileProviderRoots(
+	_ context.Context, _ parser.AgentType, roots []string,
 ) error {
 	f.calls++
 	f.callRoots = append(f.callRoots, append([]string(nil), roots...))
-	f.callFull = append(f.callFull, full)
 	return nil
 }
 
-func TestPollUnwatchedRootsOnceUsesScopedAuthoritativeReconciliation(t *testing.T) {
+func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing.T) {
 	fake := &fakeUnwatchedPollSyncer{}
 	roots := []string{"/tmp/claude", "/tmp/codex"}
+	groups := map[parser.AgentType][]string{"": roots}
 
-	pollUnwatchedRootsOnce(t.Context(), fake, roots)
-	pollUnwatchedRootsOnce(t.Context(), fake, roots)
+	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups))
+	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups))
 
 	require.Equal(t, 2, fake.calls)
 	assert.Equal(t, roots, fake.callRoots[0])
-	assert.False(t, fake.callFull[0])
 	assert.Equal(t, roots, fake.callRoots[1])
-	assert.False(t, fake.callFull[1])
 }
 
 func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
@@ -1308,6 +1305,7 @@ func TestStartFileWatcherSuppressesPendingPollingWhenLifecycleIsOwned(t *testing
 			MissingRootLifecycleOwned: true,
 		}},
 		got,
+		nil,
 	), "owned missing roots must not schedule authoritative polling")
 }
 
@@ -1520,9 +1518,9 @@ func TestWatchPollingObligationsMissingRootLifecycleCardinality(t *testing.T) {
 				unwatched = append(unwatched, syncDir)
 			}
 
-			assert.Empty(t, watchPollingObligations(roots, owned, nil),
+			assert.Empty(t, watchPollingObligations(roots, owned, nil, nil),
 				"native lifecycle work must remain independent of configured archive cardinality")
-			assert.Len(t, watchPollingObligations(roots, portable, unwatched), rootCount,
+			assert.Len(t, watchPollingObligations(roots, portable, unwatched, nil), rootCount,
 				"portable backends retain one obligation per uncovered missing root")
 		})
 	}
@@ -1551,7 +1549,7 @@ func TestOpenCodeFormatMissingRootsUseNativeLifecycleWithoutPolling(t *testing.T
 			}
 			unwatched = accountRegisteredWatchRoots(unwatched, roots, results)
 
-			assert.Empty(t, watchPollingObligations(roots, results, unwatched),
+			assert.Empty(t, watchPollingObligations(roots, results, unwatched, nil),
 				"absent OpenCode-format providers must not add archive-scale polling")
 		})
 	}
@@ -1577,11 +1575,20 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 		roots,
 		[]agentsync.RecursiveWatchResult{{Watched: 1}, {Watched: 1}},
 		[]string{shared},
+		nil,
 	)
 
 	assert.Equal(t, []agentsync.PollingObligation{
-		{Key: pendingPath, Roots: []string{shared}, Probe: pendingPath},
-		{Key: "persistent:" + shared, Roots: []string{shared}, Probe: shared},
+		{
+			Key:    pendingPath,
+			Scopes: []agentsync.PollingScope{{Agent: "devin", Root: shared}},
+			Probe:  pendingPath,
+		},
+		{
+			Key:    "persistent:" + shared,
+			Scopes: []agentsync.PollingScope{{Agent: "devin", Root: shared}},
+			Probe:  shared,
+		},
 	}, got)
 }
 
@@ -1597,10 +1604,13 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 		roots,
 		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
 		[]string{syncDir},
+		nil,
 	)
 
 	assert.Equal(t, []agentsync.PollingObligation{{
-		Key: watchPath, Roots: []string{syncDir}, Probe: watchPath,
+		Key:    "degraded:claude:" + watchPath,
+		Scopes: []agentsync.PollingScope{{Agent: "claude", Root: syncDir}},
+		Probe:  watchPath,
 	}}, got)
 }
 
@@ -1616,22 +1626,26 @@ func TestSymlinkPollingObligationsGateDirsOnTargetAvailability(t *testing.T) {
 	symRoot := filepath.Join(parent, "sessions")
 	requireSymlinkOrSkip(t, target, symRoot)
 
-	obligations := symlinkPollingObligations(map[string][]string{
-		symRoot: {parent},
+	obligations := symlinkPollingObligations(map[string][]watchScope{
+		symRoot: {{syncDir: parent}},
 	})
 	require.Equal(t, []agentsync.PollingObligation{{
-		Key: "symlink:" + symRoot, Roots: []string{parent}, Probe: symRoot,
+		Key: "symlink:" + symRoot, Scopes: []agentsync.PollingScope{{Root: parent}}, Probe: symRoot,
 	}}, obligations)
 
 	combined := []pollingObligation{
-		{Key: "persistent:" + parent, Roots: []string{parent}, Probe: parent},
-		{Key: obligations[0].Key, Roots: obligations[0].Roots, Probe: obligations[0].Probe},
+		{Key: "persistent:" + parent, Scopes: []pollingScope{{Root: parent}}, Probe: parent},
+		{
+			Key:    obligations[0].Key,
+			Scopes: []pollingScope{{Root: parent}},
+			Probe:  obligations[0].Probe,
+		},
 	}
-	assert.Equal(t, []string{parent}, availableUnwatchedPollRoots(combined),
+	assert.Equal(t, []string{parent}, availableUnwatchedPollRootsFlat(combined),
 		"a working symlink target keeps the dir pollable")
 
 	require.NoError(t, os.RemoveAll(target))
-	assert.Empty(t, availableUnwatchedPollRoots(combined),
+	assert.Empty(t, availableUnwatchedPollRootsFlat(combined),
 		"a broken symlink target must defer the dir even though the dir itself exists")
 }
 
@@ -1653,21 +1667,26 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) { run() }, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
 		OnCoverageDegraded: func(roots []string) error {
+			scopes := make([]pollingScope, 0, len(roots))
+			for _, r := range roots {
+				scopes = append(scopes, pollingScope{Root: r})
+			}
 			return coordinator.AddObligation(pollingObligation{
-				Key: "watcher-fallback", Roots: roots,
+				Key: "watcher-fallback", Scopes: scopes,
 			})
 		},
 		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
-			return coordinator.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
-			})
+			return coordinator.AddObligation(syncObligationToPoller(obligation))
 		},
 	}
 
@@ -1675,7 +1694,7 @@ func TestWatcherUnavailableFallbackDefersBrokenSymlinkScope(t *testing.T) {
 		options,
 		nil,
 		[]string{parent, other},
-		map[string][]string{symRoot: {parent}},
+		map[string][]watchScope{symRoot: {{syncDir: parent}}},
 	))
 
 	bothDirs := []string{parent, other}
@@ -1710,24 +1729,41 @@ func TestWatcherUnavailableFallbackDefersMissingNestedRootScope(t *testing.T) {
 	nestedRoot := filepath.Join(parent, "tmp")
 	other := requireExistingPollRoot(t, t.TempDir(), "other")
 
-	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
+	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 4)}
+	// passDone fires once per complete poll pass regardless of how many
+	// per-agent ReconcileProviderRoots calls the pass makes. Waiting on
+	// syncer.wake races when two agent groups fire: the empty-agent group
+	// runs first, syncer.wake fires, and the test resumes before Gemini
+	// records parent — intermittently failing the assertion.
+	passDone := make(chan struct{}, 4)
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) {
+			run()
+			select {
+			case passDone <- struct{}{}:
+			default:
+			}
+		}, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
 		OnCoverageDegraded: func(roots []string) error {
+			scopes := make([]pollingScope, 0, len(roots))
+			for _, r := range roots {
+				scopes = append(scopes, pollingScope{Root: r})
+			}
 			return coordinator.AddObligation(pollingObligation{
-				Key: "watcher-fallback", Roots: roots,
+				Key: "watcher-fallback", Scopes: scopes,
 			})
 		},
 		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
-			return coordinator.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
-			})
+			return coordinator.AddObligation(syncObligationToPoller(obligation))
 		},
 	}
 	roots := []watchRoot{{
@@ -1742,17 +1778,27 @@ func TestWatcherUnavailableFallbackDefersMissingNestedRootScope(t *testing.T) {
 	))
 
 	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
+	requirePollWithin(t, passDone, time.Second)
 	assert.Equal(t, [][]string{{other}}, syncer.snapshot(),
 		"a missing nested watch root must defer the configured dir from the fallback poll")
 
 	require.NoError(t, os.MkdirAll(nestedRoot, 0o755))
-	bothDirs := []string{parent, other}
-	slices.Sort(bothDirs)
+	snap1 := syncer.snapshot()
 	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{other}, bothDirs}, syncer.snapshot(),
+	requirePollWithin(t, passDone, time.Second)
+	// Per-agent polling: parent (gemini) and other ("") arrive as separate calls.
+	// Collect everything new since poll 1.
+	snap2 := syncer.snapshot()
+	polled2 := make(map[string]bool)
+	for _, call := range snap2[len(snap1):] {
+		for _, d := range call {
+			polled2[d] = true
+		}
+	}
+	assert.True(t, polled2[parent],
 		"the deferred dir must rejoin the poll once the nested root is restored")
+	assert.True(t, polled2[other],
+		"other must continue to be polled")
 }
 
 // TestWatcherUnavailableFallbackDefersNestedRootLostAfterRegistration guards
@@ -1770,23 +1816,39 @@ func TestWatcherUnavailableFallbackDefersNestedRootLostAfterRegistration(t *test
 	other := requireExistingPollRoot(t, t.TempDir(), "other")
 
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
+	// passDone fires once per poll pass (after run() returns), regardless of how
+	// many per-agent ReconcileProviderRoots calls the pass makes. This avoids a
+	// timing hazard where syncer.wake (fired per-call) leaves a leftover signal
+	// that causes requirePollWithin to return early for the next pass.
+	passDone := make(chan struct{}, 3)
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil,
+		func(run func()) {
+			run()
+			select {
+			case passDone <- struct{}{}:
+			default:
+			}
+		}, nil, time.Now,
+		func(d time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
 		OnCoverageDegraded: func(roots []string) error {
+			scopes := make([]pollingScope, 0, len(roots))
+			for _, r := range roots {
+				scopes = append(scopes, pollingScope{Root: r})
+			}
 			return coordinator.AddObligation(pollingObligation{
-				Key: "watcher-fallback", Roots: roots,
+				Key: "watcher-fallback", Scopes: scopes,
 			})
 		},
 		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
-			return coordinator.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
-			})
+			return coordinator.AddObligation(syncObligationToPoller(obligation))
 		},
 	}
 	roots := []watchRoot{{
@@ -1800,24 +1862,98 @@ func TestWatcherUnavailableFallbackDefersNestedRootLostAfterRegistration(t *test
 		options, roots, []string{parent, other}, nil,
 	))
 
-	bothDirs := []string{parent, other}
-	slices.Sort(bothDirs)
+	// Per-agent polling: parent (gemini) and other ("") arrive as separate calls.
+	// Collect unique dirs across all calls within a pass to check coverage.
+	collectPolled := func(calls [][]string) map[string]bool {
+		m := make(map[string]bool)
+		for _, c := range calls {
+			for _, d := range c {
+				m[d] = true
+			}
+		}
+		return m
+	}
+
 	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{bothDirs}, syncer.snapshot(),
+	requirePollWithin(t, passDone, time.Second)
+	snap1 := syncer.snapshot()
+	polled1 := collectPolled(snap1)
+	assert.True(t, polled1[parent] && polled1[other],
 		"a present nested watch root keeps the configured dir pollable")
 
 	require.NoError(t, os.RemoveAll(nestedRoot))
 	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{bothDirs, {other}}, syncer.snapshot(),
-		"a nested root lost after registration must defer the configured dir")
+	requirePollWithin(t, passDone, time.Second)
+	snap2 := syncer.snapshot()
+	delta2 := snap2[len(snap1):]
+	polled2 := collectPolled(delta2)
+	for _, call := range delta2 {
+		assert.NotContains(t, call, parent,
+			"a nested root lost after registration must defer the configured dir")
+	}
+	// De-vacuumize: if a regression causes zero second-pass calls the loop above
+	// passes vacuously. Assert other is present to catch over-suppression.
+	assert.True(t, polled2[other],
+		"the unaffected other dir must still be polled when the nested root is missing")
 
 	require.NoError(t, os.MkdirAll(nestedRoot, 0o755))
 	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{bothDirs, {other}, bothDirs}, syncer.snapshot(),
+	requirePollWithin(t, passDone, time.Second)
+	snap3 := syncer.snapshot()
+	polled3 := collectPolled(snap3[len(snap2):])
+	assert.True(t, polled3[parent] && polled3[other],
 		"the deferred dir must rejoin the poll once the nested root is restored")
+}
+
+// TestRegisterWatcherUnavailableCoversDegradedWithoutPollingRequired
+// when OnCoverageDegraded is set but OnPollingRequired is nil (as archive-watch
+// callers do), registerWatcherUnavailableObligations must still call
+// OnCoverageDegraded with all unwatched dirs.
+//
+// Pre-fix, the probeGated exclusion is applied unconditionally. Because
+// every obligation returned by watchPollingObligations has a probe (the
+// physical watch root path), probeGated ends up containing every scope root,
+// and fallbackDirs is always empty → OnCoverageDegraded is silently never
+// called and archive coverage is silently dropped.
+//
+// The fix: skip the probeGated exclusion when OnPollingRequired is nil, because
+// without a named obligation owner the probe-gated obligations are NOT
+// installed; the coverage-degraded fallback must cover all dirs.
+func TestRegisterWatcherUnavailableCoversDegradedWithoutPollingRequired(t *testing.T) {
+	parent := t.TempDir()
+	// nestedRoot does not exist; it becomes the probe for parent's obligation.
+	nestedRoot := filepath.Join(parent, "tmp")
+	other := requireExistingPollRoot(t, t.TempDir(), "other")
+
+	var degradedRoots []string
+	options := agentsync.WatcherOptions{
+		// OnPollingRequired is intentionally nil — archive-watch callers omit it.
+		OnCoverageDegraded: func(roots []string) error {
+			degradedRoots = append(degradedRoots, roots...)
+			return nil
+		},
+	}
+	roots := []watchRoot{{
+		path:               nestedRoot,
+		recursive:          true,
+		scopes:             []watchScope{{agent: parser.AgentGemini, syncDir: parent}},
+		pendingPollingDirs: []string{parent},
+	}}
+
+	require.NoError(t, registerWatcherUnavailableObligations(
+		options, roots, []string{parent, other}, nil,
+	))
+
+	// Pre-fix, probeGated excludes parent (its scope has a probe=nestedRoot
+	// obligation) and other (its scope has a probe=other persistent obligation),
+	// so fallbackDirs is empty and OnCoverageDegraded is never called.
+	// Post-fix, the probeGated exclusion is skipped when OnPollingRequired
+	// is nil, and OnCoverageDegraded receives all dirs.
+	assert.Contains(t, degradedRoots, parent,
+		"OnCoverageDegraded must cover parent even though it has a probe obligation, "+
+			"when OnPollingRequired is nil")
+	assert.Contains(t, degradedRoots, other,
+		"OnCoverageDegraded must also cover other")
 }
 
 // TestWatcherUnavailableObligationsGateBeforeFallback snapshots the pollable
@@ -1840,22 +1976,22 @@ func TestWatcherUnavailableObligationsGateBeforeFallback(t *testing.T) {
 		make(chan time.Time), func() {}, func(run func()) { run() },
 		func([]string) {
 			stepAvailable = append(stepAvailable,
-				availableUnwatchedPollRoots(coordinator.currentPollObligations()))
-		},
+				availableUnwatchedPollRootsFlat(coordinator.currentPollObligations()))
+		}, time.Now, time.After,
 	)
 	t.Cleanup(coordinator.Stop)
 	options := agentsync.WatcherOptions{
 		OnCoverageDegraded: func(roots []string) error {
+			scopes := make([]pollingScope, 0, len(roots))
+			for _, r := range roots {
+				scopes = append(scopes, pollingScope{Root: r})
+			}
 			return coordinator.AddObligation(pollingObligation{
-				Key: "watcher-fallback", Roots: roots,
+				Key: "watcher-fallback", Scopes: scopes,
 			})
 		},
 		OnPollingRequired: func(obligation agentsync.PollingObligation) error {
-			return coordinator.AddObligation(pollingObligation{
-				Key:   obligation.Key,
-				Roots: obligation.Roots,
-				Probe: obligation.Probe,
-			})
+			return coordinator.AddObligation(syncObligationToPoller(obligation))
 		},
 	}
 	roots := []watchRoot{{

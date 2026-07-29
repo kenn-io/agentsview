@@ -55,7 +55,7 @@ func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing
 	// OnCoverageDegraded must not be called; OnPollingRequired is the
 	// authoritative coverage path when it is set.
 	assert.False(t, degradedCalled,
-		"OnCoverageDegraded must not be called when OnPollingRequired is set (P1-B)")
+		"OnCoverageDegraded must not be called when OnPollingRequired is set")
 
 	// Named obligations must be emitted for all registered roots.
 	require.Len(t, emitted, 1,
@@ -226,7 +226,7 @@ func TestWatcherStartFailureNoEmptyAgentForNamedRoot(t *testing.T) {
 }
 
 // TestWatcherStartFailureMixedScopesBothDirsAreCovered verifies the P1
-// Failure 2 regression: when a registered root has both a named-agent scope
+// Mixed-scope regression: when a registered root has both a named-agent scope
 // and an empty-agent scope, the start-failure emission must carry BOTH
 // configured dirs and must NOT suppress the empty-agent scope just because a
 // named agent also exists on the same physical root. Before the fix,
@@ -279,7 +279,7 @@ func TestWatcherStartFailureMixedScopesBothDirsAreCovered(t *testing.T) {
 	assert.Equal(t, filepath.Clean("/gemini-dir"), filepath.Clean(geminiRoot),
 		"gemini scope Root must be the configured SyncDir /gemini-dir, not the physical path")
 	assert.NotEmpty(t, legacyRoot,
-		"empty-agent scope must not be dropped when a named agent coexists on the same root (P1 Failure 2)")
+		"empty-agent scope must not be dropped when a named agent coexists on the same root")
 	assert.Equal(t, filepath.Clean("/legacy-dir"), filepath.Clean(legacyRoot),
 		"empty-agent scope Root must be the configured SyncDir /legacy-dir")
 }

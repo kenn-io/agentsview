@@ -905,7 +905,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				ctx, engine, ticks, func() {}, func(work func()) { work() },
 				func(roots []string) {
 					owned <- append([]string(nil), roots...)
-				},
+				}, time.Now, time.After,
 			)
 		},
 	}
@@ -1023,6 +1023,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				func(roots []string) {
 					owned <- append([]string(nil), roots...)
 				},
+				time.Now, time.After,
 			)
 		},
 	}
