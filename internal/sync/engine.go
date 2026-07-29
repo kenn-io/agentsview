@@ -11385,6 +11385,10 @@ func shouldReplaceFullParseMessages(
 	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
 		revivingSourceMissing ||
 		pw.sess.Agent == parser.AgentCowork ||
+		// Copilot execution start/completion records arrive after the
+		// assistant tool-call message and attach result events to it. An
+		// append would leave the persisted tool call without those events.
+		pw.sess.Agent == parser.AgentCopilot ||
 		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
 		pw.sess.Agent == parser.AgentVSCopilot ||
 		pw.sess.Agent == parser.AgentAntigravity ||

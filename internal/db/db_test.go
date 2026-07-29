@@ -1008,9 +1008,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionGitWorktreeProjectAttribution(t *testing.T) {
-	assert.Equal(t, 75, CurrentDataVersion(),
-		"final git worktree project attribution requires a data version bump")
+func TestCurrentDataVersionCopilotToolTiming(t *testing.T) {
+	assert.Equal(t, 76, CurrentDataVersion(),
+		"Copilot tool execution timing requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
