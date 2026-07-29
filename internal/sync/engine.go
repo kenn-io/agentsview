@@ -3316,13 +3316,17 @@ func (e *Engine) reconcileWatchRootsStreamed(
 	}
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
-		baselineEligibleProviders[completed.agent] = struct{}{}
-		// Freebuff shares the Codebuff provider. When Codebuff is
-		// eligible, also mark Freebuff as eligible for baselines.
-		if completed.agent == parser.AgentCodebuff {
-			baselineEligibleProviders[parser.AgentFreebuff] = struct{}{}
-		}
 		authoritativeProviders[completed.agent] = struct{}{}
+		// Freebuff shares the Codebuff provider. When Codebuff
+		// completes, also mark Freebuff as authoritative so
+		// baseline admission (eligibleReconciliationBaselines) and
+		// cache-write promotion (the write.agent lookup below)
+		// see Freebuff rows even though no Freebuff provider exists
+		// in parser.Registry: a single Codebuff scan covers both
+		// codebuff and freebuff files at the same on-disk roots.
+		if completed.agent == parser.AgentCodebuff {
+			authoritativeProviders[parser.AgentFreebuff] = struct{}{}
+		}
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	e.finishStreamingSQLiteContainerDiscovery()
@@ -4234,6 +4238,25 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 											agent, ownership.FilePath, lookupErr,
 										)
 									}
+									if !present {
+										// Container-granular discovery spools the
+										// still-present container itself rather than
+										// each member. A discovered container accounts
+										// for its members: deleting a member changes
+										// the container's bytes, so the
+										// fingerprint-gated complete-result parse
+										// already tombstoned it.
+										present, lookupErr = spool.ContainsSource(
+											ctx, agent,
+											canonicalReconciliationSourceIdentity(physicalPath),
+										)
+										if lookupErr != nil {
+											return deleted, fmt.Errorf(
+												"lookup %s persistent container %s: %w",
+												agent, physicalPath, lookupErr,
+											)
+										}
+									}
 									if present {
 										continue
 									}
@@ -4279,25 +4302,6 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 										"lookup %s virtual member %s: %w",
 										agent, ownership.FilePath, lookupErr,
 									)
-								}
-								if !present {
-									// Container-granular discovery spools the
-									// still-present container itself rather than
-									// each member. A discovered container accounts
-									// for its members: deleting a member changes
-									// the container's bytes, so the
-									// fingerprint-gated complete-result parse
-									// already tombstoned it.
-									present, lookupErr = spool.ContainsSource(
-										ctx, agent,
-										canonicalReconciliationSourceIdentity(physicalPath),
-									)
-									if lookupErr != nil {
-										return deleted, fmt.Errorf(
-											"lookup %s persistent container %s: %w",
-											agent, physicalPath, lookupErr,
-										)
-									}
 								}
 								if present {
 									continue
@@ -6364,8 +6368,12 @@ func (e *Engine) collectAndBatch(
 	}
 	baselineProcessedSource := func(job syncJob, admitted bool) {
 		// Use the parsed session's agent type for the baseline row,
-		// not the provider's agent type. Freebuff sessions have
-		// agent=AgentFreebuff but are discovered under Codebuff.
+		// not the provider's agent type. Freebuff sessions are
+		// stored under agent=AgentFreebuff but discovered under
+		// Codebuff, so the baseline row must key on the resolved
+		// agent. Skip-cache staging (stageNoWriteCache) still uses
+		// job.agent because the skip cache is per-file, not
+		// per-session-agent.
 		agent := job.agent
 		if len(job.results) > 0 {
 			if sessAgent := job.results[0].Session.Agent; sessAgent != "" {
@@ -6389,10 +6397,6 @@ func (e *Engine) collectAndBatch(
 			Agent: string(agent), FilePath: e.effectiveSourcePath(job.path),
 		}
 		if source.Agent == "" || source.FilePath == "" {
-			return
-		}
-		source, ok := baselineSourceForJob(job)
-		if !ok {
 			return
 		}
 		if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {

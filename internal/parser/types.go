@@ -847,7 +847,8 @@ var Registry = []AgentDef{
 		// pages. Remote sync stays disabled until Omnigent has a fresh,
 		// allowlisted export schema.
 		RemoteSyncExcluded: true,
-  },
+	},
+	{
 		// Codebuff and Freebuff share the same on-disk layout under
 		// ~/.config/manicode/projects/<project>/chats/<timestamp>/. Each
 		// session directory holds chat-messages.json (primary),

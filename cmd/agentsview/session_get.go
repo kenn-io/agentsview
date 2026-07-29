@@ -312,10 +312,7 @@ func isCanonicalServiceSessionID(id string) bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(rawID, string(parser.AgentFreebuff)+":") {
-		return true
-	}
-	return false
+	return strings.HasPrefix(rawID, string(parser.AgentFreebuff)+":")
 }
 
 // lookupSessionWithPrefixes fetches a session detail, trying agent
