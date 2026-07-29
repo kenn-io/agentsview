@@ -57,7 +57,7 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 		ImportedSessionID: head.Origin + "~one",
 	}
 	require.NoError(t, source.RecordArtifactImportedSession(ctx, imported))
-	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, landing))
+	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, landing, 1))
 	require.NoError(t, source.StageArtifactCheckpointSessions(
 		ctx, landing, []ArtifactCheckpointSession{{
 			GID: imported.GID, ManifestHash: imported.ManifestHash,
@@ -78,7 +78,7 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 		ctx, ArtifactPeerCheckpointHead(partial),
 	)
 	require.NoError(t, err)
-	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, partial))
+	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, partial, 2))
 	require.NoError(t, source.StageArtifactCheckpointSessionPage(
 		ctx, partial,
 		[]ArtifactCheckpointSession{{
@@ -128,6 +128,7 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		imported.GID: imported.ManifestHash,
 	}, gotProvenance)
+	require.NoError(t, destination.BeginArtifactCheckpointStage(ctx, partial, 2))
 	progress, err := destination.ArtifactCheckpointStageProgress(ctx, partial)
 	require.NoError(t, err)
 	assert.False(t, progress.Complete)
@@ -411,7 +412,7 @@ func stageCheckpointForCopyTest(
 ) {
 	t.Helper()
 	ctx := t.Context()
-	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing))
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 	if complete {
 		require.NoError(t, database.StageArtifactCheckpointSessions(
 			ctx, landing, entries,

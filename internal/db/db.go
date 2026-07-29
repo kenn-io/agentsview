@@ -1693,6 +1693,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decode_offset INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"artifact_checkpoint_stages", "decoder_version",
+			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decoder_version INTEGER NOT NULL DEFAULT 1",
+		},
+		{
 			"artifact_checkpoint_stage_sessions", "satisfied",
 			"ALTER TABLE artifact_checkpoint_stage_sessions ADD COLUMN satisfied INTEGER NOT NULL DEFAULT 0",
 		},
@@ -2949,6 +2953,11 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
 	); err != nil {
 		return fmt.Errorf("dropping legacy usage index: %w", err)
+	}
+	if _, err := w.Exec(
+		`DROP INDEX IF EXISTS idx_artifact_checkpoint_stage_pending`,
+	); err != nil {
+		return fmt.Errorf("dropping superseded artifact stage index: %w", err)
 	}
 	// Superseded by idx_recall_extract_progress_retry (schema.sql), whose
 	// trailing updated_at column serves the same prefix.

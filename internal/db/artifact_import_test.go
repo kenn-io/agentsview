@@ -667,7 +667,7 @@ func TestArtifactCheckpointStagePagesDeferredSessionsAndLands(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, advanced)
-	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing))
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 	require.NoError(t, database.StageArtifactCheckpointSessions(
 		ctx, landing, entries[:2],
 	))
@@ -707,7 +707,7 @@ func TestArtifactCheckpointStagePagesDeferredSessionsAndLands(t *testing.T) {
 		ctx, landing, 12, 10,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, []ArtifactCheckpointSession{entries[2], entries[1]}, pending)
+	assert.Equal(t, []ArtifactCheckpointSession{entries[1], entries[2]}, pending)
 
 	err = database.RecordArtifactCheckpointLandingFromStage(ctx, landing)
 	require.ErrorIs(t, err, ErrArtifactImportConflict)
@@ -739,6 +739,129 @@ func TestArtifactCheckpointStagePagesDeferredSessionsAndLands(t *testing.T) {
 	}, gotMap)
 }
 
+func TestPendingArtifactCheckpointSessionsUsesBoundedPendingOrder(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	landing := ArtifactCheckpointLanding{
+		Origin:           "peer-a1b2c3",
+		Sequence:         9,
+		CheckpointSHA256: strings.Repeat("d", 64),
+		CheckpointSize:   654,
+	}
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
+
+	const satisfiedCount = 512
+	entries := make([]ArtifactCheckpointSession, 0, satisfiedCount+2)
+	for i := range satisfiedCount {
+		entry := ArtifactCheckpointSession{
+			GID:          fmt.Sprintf("%s~a-satisfied-%04d", landing.Origin, i),
+			ManifestHash: fmt.Sprintf("%064x", i+1),
+		}
+		require.NoError(t, database.RecordArtifactImportedSession(
+			ctx,
+			ArtifactImportedSession{
+				Origin:            landing.Origin,
+				GID:               entry.GID,
+				ManifestHash:      entry.ManifestHash,
+				ImportedSessionID: entry.GID,
+			},
+		))
+		entries = append(entries, entry)
+	}
+	newerAttempt := ArtifactCheckpointSession{
+		GID:          landing.Origin + "~z-newer-attempt",
+		ManifestHash: strings.Repeat("e", 64),
+	}
+	olderAttempt := ArtifactCheckpointSession{
+		GID:          landing.Origin + "~zz-older-attempt",
+		ManifestHash: strings.Repeat("f", 64),
+	}
+	entries = append(entries, newerAttempt, olderAttempt)
+	for start := 0; start < len(entries); start += maxArtifactImportSessionPageSize {
+		end := min(start+maxArtifactImportSessionPageSize, len(entries))
+		require.NoError(t, database.StageArtifactCheckpointSessions(
+			ctx, landing, entries[start:end],
+		))
+	}
+	require.NoError(t, database.CompleteArtifactCheckpointStage(
+		ctx, landing, len(entries),
+	))
+	marked, err := database.MarkArtifactCheckpointSessionAttempted(
+		ctx, landing, newerAttempt, 5,
+	)
+	require.NoError(t, err)
+	require.True(t, marked)
+
+	pending, err := database.PendingArtifactCheckpointSessions(
+		ctx, landing, 10, 1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []ArtifactCheckpointSession{olderAttempt}, pending)
+
+	rows, err := database.getReader().Query(
+		`PRAGMA index_info('idx_artifact_checkpoint_stage_ready')`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var sequence, columnID int
+		var name string
+		require.NoError(t, rows.Scan(&sequence, &columnID, &name))
+		columns = append(columns, name)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{
+		"origin", "sequence", "satisfied",
+		"attempt_generation", "gid", "manifest_hash",
+	}, columns)
+}
+
+func TestArtifactCheckpointStageRestartsForNewDecoderVersion(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	landing := ArtifactCheckpointLanding{
+		Origin:           "peer-a1b2c3",
+		Sequence:         10,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   777,
+	}
+	entry := ArtifactCheckpointSession{
+		GID:          landing.Origin + "~session",
+		ManifestHash: strings.Repeat("b", 64),
+	}
+	require.NoError(t, database.BeginArtifactCheckpointStage(
+		ctx, landing, 1,
+	))
+	require.NoError(t, database.StageArtifactCheckpointSessionPage(
+		ctx, landing, []ArtifactCheckpointSession{entry}, 0, 42,
+	))
+	require.NoError(t, database.BeginArtifactCheckpointStage(
+		ctx, landing, 1,
+	))
+	progress, err := database.ArtifactCheckpointStageProgress(ctx, landing)
+	require.NoError(t, err)
+	assert.Equal(t, 1, progress.DecodedCount)
+	assert.Equal(t, int64(42), progress.DecodeOffset)
+
+	require.NoError(t, database.BeginArtifactCheckpointStage(
+		ctx, landing, 2,
+	))
+	progress, err = database.ArtifactCheckpointStageProgress(ctx, landing)
+	require.NoError(t, err)
+	assert.False(t, progress.Complete)
+	assert.Zero(t, progress.DecodedCount)
+	assert.Zero(t, progress.DecodeOffset)
+	var staged int
+	require.NoError(t, database.getReader().QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM artifact_checkpoint_stage_sessions
+		WHERE origin = ? AND sequence = ?`,
+		landing.Origin, landing.Sequence,
+	).Scan(&staged))
+	assert.Zero(t, staged)
+}
+
 func TestArtifactCheckpointStageRejectsNestedNativeSessionID(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
@@ -752,7 +875,7 @@ func TestArtifactCheckpointStageRejectsNestedNativeSessionID(t *testing.T) {
 		ctx, ArtifactPeerCheckpointHead(landing),
 	)
 	require.NoError(t, err)
-	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing))
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 
 	err = database.StageArtifactCheckpointSessions(
 		ctx,
@@ -788,7 +911,7 @@ func TestPruneArtifactCheckpointStagesUsesPeerHeadAndKeepsLanding(
 			ctx, ArtifactPeerCheckpointHead(stage),
 		)
 		require.NoError(t, err)
-		require.NoError(t, database.BeginArtifactCheckpointStage(ctx, stage))
+		require.NoError(t, database.BeginArtifactCheckpointStage(ctx, stage, 1))
 		require.NoError(t, database.CompleteArtifactCheckpointStage(ctx, stage, 0))
 	}
 	require.NoError(t, database.RecordArtifactCheckpointLandingFromStage(
@@ -830,7 +953,7 @@ func TestPruneArtifactCheckpointStagesIsBoundedAndKeepsCurrentLanding(
 		ctx, ArtifactPeerCheckpointHead(first),
 	)
 	require.NoError(t, err)
-	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, first))
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, first, 1))
 	for i := range 3 {
 		entry := ArtifactCheckpointSession{
 			GID:          fmt.Sprintf("%s~old-%d", origin, i),
@@ -862,7 +985,7 @@ func TestPruneArtifactCheckpointStagesIsBoundedAndKeepsCurrentLanding(
 		ctx, ArtifactPeerCheckpointHead(current),
 	)
 	require.NoError(t, err)
-	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, current))
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, current, 1))
 	require.NoError(t, database.CompleteArtifactCheckpointStage(ctx, current, 0))
 	require.NoError(t, database.RecordArtifactCheckpointLanding(
 		ctx, current,

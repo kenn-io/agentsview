@@ -620,6 +620,7 @@ func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
 		 AND current.sequence = old.sequence
 		WHERE current.checkpoint_sha256 <> old.checkpoint_sha256
 		   OR current.checkpoint_size <> old.checkpoint_size
+		   OR current.decoder_version <> old.decoder_version
 		   OR (
 				current.complete = 1 AND old.complete = 1
 				AND current.session_count <> old.session_count
@@ -664,12 +665,12 @@ func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
 		INSERT INTO main.artifact_checkpoint_stages (
 			origin, sequence, checkpoint_sha256, checkpoint_size,
 			complete, session_count, pending_count,
-			decoded_count, decode_offset
+			decoded_count, decode_offset, decoder_version
 		)
 		SELECT
 			origin, sequence, checkpoint_sha256, checkpoint_size,
 			complete, session_count, pending_count,
-			decoded_count, decode_offset
+			decoded_count, decode_offset, decoder_version
 		FROM old_db.artifact_checkpoint_stages WHERE true
 		ON CONFLICT(origin, sequence) DO UPDATE SET
 			complete = max(artifact_checkpoint_stages.complete, excluded.complete),

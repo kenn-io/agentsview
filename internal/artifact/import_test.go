@@ -1088,7 +1088,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 		CheckpointSize:   entry.Identity.Size,
 	}
 	require.NoError(t, destination.BeginArtifactCheckpointStage(
-		t.Context(), stage,
+		t.Context(), stage, checkpointFormatVersion,
 	))
 	require.NoError(t, destination.StageArtifactCheckpointSessionPage(
 		t.Context(), stage, nil, 0, nextOffset,

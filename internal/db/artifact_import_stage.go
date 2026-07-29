@@ -29,9 +29,13 @@ type ArtifactCheckpointStageState struct {
 func (db *DB) BeginArtifactCheckpointStage(
 	ctx context.Context,
 	landing ArtifactCheckpointLanding,
+	decoderVersion int,
 ) error {
 	if err := validateArtifactCheckpointLanding(landing); err != nil {
 		return err
+	}
+	if decoderVersion < 1 {
+		return errors.New("artifact checkpoint decoder version must be positive")
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -43,6 +47,34 @@ func (db *DB) BeginArtifactCheckpointStage(
 
 	if err := requireArtifactCheckpointStageIdentityTx(ctx, tx, landing, true); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM artifact_checkpoint_stage_sessions
+		WHERE origin = ? AND sequence = ?
+		  AND EXISTS (
+			SELECT 1
+			FROM artifact_checkpoint_stages
+			WHERE origin = ? AND sequence = ?
+			  AND decoder_version <> ?
+		  )`,
+		landing.Origin, landing.Sequence,
+		landing.Origin, landing.Sequence, decoderVersion,
+	); err != nil {
+		return fmt.Errorf("resetting artifact checkpoint stage sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE artifact_checkpoint_stages
+		SET decoder_version = ?,
+		    complete = 0,
+		    session_count = 0,
+		    pending_count = 0,
+		    decoded_count = 0,
+		    decode_offset = 0
+		WHERE origin = ? AND sequence = ?
+		  AND decoder_version <> ?`,
+		decoderVersion, landing.Origin, landing.Sequence, decoderVersion,
+	); err != nil {
+		return fmt.Errorf("resetting artifact checkpoint stage decoder: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing artifact checkpoint stage: %w", err)
@@ -364,7 +396,7 @@ func (db *DB) PendingArtifactCheckpointSessions(
 		  AND stage.complete = 1
 		  AND sessions.attempt_generation < ?
 		  AND sessions.satisfied = 0
-		ORDER BY sessions.gid
+		ORDER BY sessions.attempt_generation, sessions.gid
 		LIMIT ?`,
 		landing.Origin, landing.Sequence,
 		landing.CheckpointSHA256, landing.CheckpointSize,

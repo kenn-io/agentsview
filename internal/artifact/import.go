@@ -340,7 +340,7 @@ func (c *StoreImportCoordinator) processImportClaim(
 		)
 	}
 	if err := c.database.BeginArtifactCheckpointStage(
-		ctx, landingIdentity,
+		ctx, landingIdentity, checkpointFormatVersion,
 	); err != nil {
 		return err
 	}

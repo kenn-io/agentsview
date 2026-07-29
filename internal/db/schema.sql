@@ -1115,6 +1115,7 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_stages (
     pending_count     INTEGER NOT NULL DEFAULT 0 CHECK (pending_count >= 0),
     decoded_count     INTEGER NOT NULL DEFAULT 0 CHECK (decoded_count >= 0),
     decode_offset     INTEGER NOT NULL DEFAULT 0 CHECK (decode_offset >= 0),
+    decoder_version   INTEGER NOT NULL DEFAULT 1 CHECK (decoder_version >= 1),
     PRIMARY KEY (origin, sequence)
 );
 
@@ -1133,9 +1134,9 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_stage_sessions (
         ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_artifact_checkpoint_stage_pending
+CREATE INDEX IF NOT EXISTS idx_artifact_checkpoint_stage_ready
 ON artifact_checkpoint_stage_sessions (
-    origin, sequence, attempt_generation, gid
+    origin, sequence, satisfied, attempt_generation, gid, manifest_hash
 );
 
 CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
