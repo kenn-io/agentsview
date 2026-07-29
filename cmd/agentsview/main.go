@@ -1913,7 +1913,7 @@ func watchPollingObligations(
 		}
 		if !result.MissingRootLifecycleOwned {
 			add(root.pollingObligations(
-				root.path, root.path, root.pendingPollingDirs,
+				pendingRootKey(root.path), root.path, root.pendingPollingDirs,
 			)...)
 		}
 		for dir, scopes := range root.persistentPollingScopes {
@@ -1964,6 +1964,16 @@ func watchPollingObligations(
 		return strings.Compare(a.Key, b.Key)
 	})
 	return obligations
+}
+
+// Obligation keys are namespaced by the reason that created them. Every key
+// carries a prefix, including the pending one: a bare path could otherwise be
+// produced twice, once as a pending root literally named "unwatched:X" and once
+// as the unwatched key for a root named "X", and the coordinator indexes
+// obligations by key, so the collision would drop one reason's probe gate and
+// degraded state.
+func pendingRootKey(rootPath string) string {
+	return "pending:" + filepath.Clean(rootPath)
 }
 
 // unwatchedRootKey names the obligation a root gets when its watcher was never

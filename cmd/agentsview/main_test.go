@@ -90,7 +90,7 @@ func TestPendingOpenCodeRootPreservesProviderOwnershipWhenItBecomesSQLite(t *tes
 	)
 	require.Len(t, got, 1)
 	assert.Equal(t, agentsync.PollingObligation{
-		Key:   root,
+		Key:   pendingRootKey(root),
 		Agent: parser.AgentOpenCode,
 		Roots: []string{root},
 		Probe: root,
@@ -1704,7 +1704,7 @@ func TestWatchPollingObligationsKeepPendingAndPersistentReasonsIndependent(t *te
 
 	assert.Equal(t, []agentsync.PollingObligation{
 		{
-			Key: pendingPath, Agent: parser.AgentDevin,
+			Key: pendingRootKey(pendingPath), Agent: parser.AgentDevin,
 			Roots: []string{shared}, Probe: pendingPath,
 		},
 		{
@@ -3732,13 +3732,13 @@ func TestWatchPollingObligationsSplitSameProviderPendingDirs(t *testing.T) {
 
 	assert.Equal(t, []agentsync.PollingObligation{
 		{
-			Key:   watchPath + "|" + filepath.Clean(firstDir),
+			Key:   pendingRootKey(watchPath) + "|" + filepath.Clean(firstDir),
 			Agent: parser.AgentOpenCode,
 			Roots: []string{firstDir},
 			Probe: watchPath,
 		},
 		{
-			Key:   watchPath + "|" + filepath.Clean(secondDir),
+			Key:   pendingRootKey(watchPath) + "|" + filepath.Clean(secondDir),
 			Agent: parser.AgentOpenCode,
 			Roots: []string{secondDir},
 			Probe: watchPath,
@@ -3808,7 +3808,7 @@ func TestWatchPollingObligationsKeepMixedProviderDirsGrouped(t *testing.T) {
 
 	require.Len(t, got, 1)
 	assert.Equal(t, agentsync.PollingObligation{
-		Key:   watchPath,
+		Key:   pendingRootKey(watchPath),
 		Roots: []string{mixedDir, otherMixedDir},
 		Probe: watchPath,
 	}, got[0], "mixed-provider dirs stay generic and keep sharing the root obligation")
@@ -3843,7 +3843,7 @@ func TestWatchPollingObligationsDoNotDuplicateUnwatchedAndPendingObligations(t *
 
 	require.Len(t, got, 2, "the pending and unwatched reasons are distinct obligations")
 	keys := []string{got[0].Key, got[1].Key}
-	assert.ElementsMatch(t, []string{watchPath, unwatchedRootKey(watchPath)}, keys,
+	assert.ElementsMatch(t, []string{pendingRootKey(watchPath), unwatchedRootKey(watchPath)}, keys,
 		"they are told apart by their own keys, not by a per-directory suffix")
 	for _, obligation := range got {
 		assert.Equal(t, []string{syncDir}, obligation.Roots)

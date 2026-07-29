@@ -2835,6 +2835,12 @@ func hintContainmentPath(path string) (string, bool) {
 	if cleaned == "" || cleaned == "." {
 		return "", false
 	}
+	if strings.ContainsRune(cleaned, 0) {
+		// No filesystem this repo targets accepts a NUL, and filepath.Abs only
+		// rejects it on some of them, so checking here keeps the undecidable
+		// branch from depending on which OS the caller is running.
+		return "", false
+	}
 	abs, err := filepath.Abs(cleaned)
 	if err != nil {
 		return "", false

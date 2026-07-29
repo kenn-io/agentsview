@@ -1427,7 +1427,17 @@ func TestNormalizeExcludedHintRootsHandlesVolumeAndUnresolvableRoots(t *testing.
 
 	t.Run("an exclusion that cannot be canonicalized is dropped", func(t *testing.T) {
 		root := filepath.Join(t.TempDir(), "claude")
-		assert.Empty(t, normalizeExcludedHintRoots(root, []string{"", "."}),
-			"an undecidable exclusion must not fall back to a lexical compare")
+		// "" and "." return before canonicalization; the NUL reaches it and is
+		// the case that would stay green if the lexical fallback came back.
+		assert.Empty(t, normalizeExcludedHintRoots(root, []string{
+			"", ".", filepath.Join(root, "archive\x00"),
+		}), "an undecidable exclusion must not fall back to a lexical compare")
+	})
+
+	t.Run("an undecidable scope excludes nothing rather than everything", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "claude")
+		assert.Empty(t, normalizeExcludedHintRoots("\x00", []string{root}),
+			"a scope that cannot be canonicalized cannot decide containment either")
+		assert.False(t, storedSourcePathHintExcluded("\x00", []string{root}))
 	})
 }
