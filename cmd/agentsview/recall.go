@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/pathutil"
 	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -912,7 +913,11 @@ func newRecallImportCommand() *cobra.Command {
 					return err
 				}
 			}
-			f, err := os.Open(args[0])
+			path, err := pathutil.ExpandHome(args[0])
+			if err != nil {
+				return fmt.Errorf("expanding recall import path: %w", err)
+			}
+			f, err := os.Open(path)
 			if err != nil {
 				return fmt.Errorf("opening recall import file: %w", err)
 			}
@@ -1050,7 +1055,7 @@ func addRecallFilterFlags(cmd *cobra.Command, f *service.RecallFilter) {
 	flags := cmd.Flags()
 	flags.StringVar(&f.Query, "query", "", "Filter by query text")
 	flags.StringVar(&f.Project, "project", "", "Filter by project")
-	flags.StringVar(&f.CWD, "cwd", "", "Filter by cwd")
+	flags.Var(&homePathValue{value: &f.CWD}, "cwd", "Filter by cwd")
 	flags.StringVar(&f.GitBranch, "git-branch", "", "Filter by git branch")
 	flags.StringVar(&f.Agent, "agent", "", "Filter by agent")
 	flags.StringVar(&f.Type, "type", "", "Filter by recall type")
@@ -1100,6 +1105,28 @@ func addRecallFilterFlags(cmd *cobra.Command, f *service.RecallFilter) {
 	)
 	flags.IntVar(&f.Limit, "limit", 0, "Maximum entries to return")
 }
+
+type homePathValue struct {
+	value *string
+}
+
+func (v *homePathValue) Set(path string) error {
+	expanded, err := pathutil.ExpandHome(path)
+	if err != nil {
+		return err
+	}
+	*v.value = expanded
+	return nil
+}
+
+func (v *homePathValue) String() string {
+	if v == nil || v.value == nil {
+		return ""
+	}
+	return *v.value
+}
+
+func (*homePathValue) Type() string { return "path" }
 
 func addRecallEntryCurrentCWDFlag(cmd *cobra.Command, currentCWD *bool) {
 	cmd.Flags().BoolVar(
@@ -1238,7 +1265,7 @@ func addRecallQueryFlags(cmd *cobra.Command, req *service.RecallQuery) {
 		"Retrieval mode: lexical, vector, or hybrid",
 	)
 	flags.StringVar(&req.Project, "project", "", "Filter by project")
-	flags.StringVar(&req.CWD, "cwd", "", "Filter by cwd")
+	flags.Var(&homePathValue{value: &req.CWD}, "cwd", "Filter by cwd")
 	flags.StringVar(&req.GitBranch, "git-branch", "", "Filter by git branch")
 	flags.StringVar(&req.Agent, "agent", "", "Filter by agent")
 	flags.StringVar(&req.Type, "type", "", "Filter by recall type")

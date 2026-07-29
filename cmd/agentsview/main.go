@@ -1235,6 +1235,14 @@ func openDB(cfg config.Config) (*db.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	localMachine := cfg.LocalMachineName
+	if strings.TrimSpace(localMachine) == "" {
+		localMachine = "local"
+	}
+	if err := database.ConfigureArtifactLocalMachine(localMachine); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("configuring artifact local machine: %w", err)
+	}
 	applyCustomPricing(database, cfg)
 	return database, nil
 }

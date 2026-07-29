@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Zed stores every thread in one shared SQLite database
@@ -87,28 +86,9 @@ func zedWatchRoots(roots []string) []WatchRoot {
 // sourceRefForChangedPath split: allowMissing relaxes the regular-file check so
 // a database delete (or its WAL/SHM sibling) still classifies for tombstones.
 func zedClassifyPath(root, path string, allowMissing bool) (multiSessionMatch, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	requireRegular := !allowMissing
-	if dbPath, sessionID, ok := parseZedVirtualPath(path); ok {
-		if !zedDBUnderRoot(root, dbPath, requireRegular) {
-			return multiSessionMatch{}, false
-		}
-		return multiSessionMatch{
-			Path:      path,
-			Container: dbPath,
-			MemberID:  sessionID,
-		}, true
-	}
-	if zedDBUnderRoot(root, path, requireRegular) {
-		return multiSessionMatch{Path: path, Container: path}, true
-	}
-	if allowMissing {
-		if dbPath, ok := zedDBPathForEvent(root, path); ok {
-			return multiSessionMatch{Path: dbPath, Container: dbPath}, true
-		}
-	}
-	return multiSessionMatch{}, false
+	return classifySQLiteContainerPath(
+		root, path, zedThreadsDBRelPath, allowMissing, false, parseZedVirtualPath,
+	)
 }
 
 func zedFindMember(root, rawID string) (multiSessionMatch, bool) {
@@ -153,7 +133,9 @@ func zedFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
 		// A non-ErrNoRows error (unreadable DB, non-virtual path) keeps the
 		// physical DB mtime fallback, preserving the prior behavior for
 		// transient failures.
-	} else if compositeMtime, err := sqliteDBCompositeMtime(src.Container); err == nil {
+	} else if compositeMtime, err := sqliteDBCompositeMtime(
+		src.Container, sqliteDBJournalSuffixes,
+	); err == nil {
 		mtime = compositeMtime
 	}
 	// Zed has no cheap per-thread content digest; legacy sync stored the
@@ -243,35 +225,18 @@ func zedParseContainer(
 	return results, nil
 }
 
-func zedDBUnderRoot(root, dbPath string, requireRegular bool) bool {
-	root = filepath.Clean(root)
-	dbPath = filepath.Clean(dbPath)
-	rel, ok := relUnder(root, dbPath)
-	if !ok || filepath.ToSlash(rel) != "threads/threads.db" {
-		return false
-	}
-	return !requireRegular || IsRegularFile(dbPath)
-}
+// sqliteDBJournalSuffixes is the default sibling-file suffix list for
+// sqliteDBCompositeMtime: the database file itself plus its WAL and
+// shared-memory files. Omnigent uses a narrower list (see
+// omnigentDBMtimeSuffixes) because it opens its own read connections against
+// the database, which touch the shared-memory file.
+var sqliteDBJournalSuffixes = []string{"", "-wal", "-shm"}
 
-func zedDBPathForEvent(root, path string) (string, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, ok := relUnder(root, path)
-	if !ok {
-		return "", false
-	}
-	relSlash := filepath.ToSlash(rel)
-	if relSlash == "threads/threads.db" ||
-		(filepath.ToSlash(filepath.Dir(rel)) == "threads" &&
-			strings.HasPrefix(filepath.Base(rel), "threads.db-")) {
-		return filepath.Join(root, zedThreadsDBRelPath), true
-	}
-	return "", false
-}
-
-func sqliteDBCompositeMtime(dbPath string) (int64, error) {
+// sqliteDBCompositeMtime returns the freshest mtime across a SQLite database
+// file and the listed sibling suffixes (e.g. "-wal", "-shm").
+func sqliteDBCompositeMtime(dbPath string, suffixes []string) (int64, error) {
 	var maxMtime int64
-	for _, suffix := range []string{"", "-wal", "-shm"} {
+	for _, suffix := range suffixes {
 		info, err := os.Stat(dbPath + suffix)
 		if err != nil {
 			continue

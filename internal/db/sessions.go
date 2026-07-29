@@ -1084,6 +1084,32 @@ func (db *DB) GetSession(
 func (db *DB) GetSessionFull(
 	ctx context.Context, id string,
 ) (*Session, error) {
+	s, err := db.getSessionFullUncoalesced(ctx, id)
+	if err != nil || s == nil {
+		return s, err
+	}
+	// Expose the visible name (user rename, else agent session name)
+	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
+	// The coalesce happens post-scan because sessionFullCols is shared
+	// with ListSessionsModifiedBetween, whose push consumers must see
+	// display_name and session_name unmerged.
+	if s.DisplayName == nil {
+		s.DisplayName = s.SessionName
+	}
+	return s, nil
+}
+
+// GetArtifactExportSession returns raw user- and agent-owned session names so
+// canonical manifests do not publish session_name as a user display_name.
+func (db *DB) GetArtifactExportSession(
+	ctx context.Context, id string,
+) (*Session, error) {
+	return db.getSessionFullUncoalesced(ctx, id)
+}
+
+func (db *DB) getSessionFullUncoalesced(
+	ctx context.Context, id string,
+) (*Session, error) {
 	row := db.getReader().QueryRowContext(
 		ctx,
 		"SELECT "+sessionFullCols+" FROM sessions WHERE id = ?",
@@ -1133,14 +1159,6 @@ func (db *DB) GetSessionFull(
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting session full %s: %w", id, err)
-	}
-	// Expose the visible name (user rename, else agent session name)
-	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
-	// The coalesce happens post-scan because sessionFullCols is shared
-	// with ListSessionsModifiedBetween, whose push consumers must see
-	// display_name and session_name unmerged.
-	if s.DisplayName == nil {
-		s.DisplayName = s.SessionName
 	}
 	return &s, nil
 }
@@ -2252,6 +2270,85 @@ func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	return ids, nil
 }
 
+const descendantSessionRootBatchSize = 100
+
+// ListActiveDescendantSessionSourcePaths returns the source paths of active
+// descendants already linked beneath parentIDs. Both the seed and recursive
+// steps use idx_sessions_parent, so work scales with the affected subagent
+// trees rather than every archived session.
+func (db *DB) ListActiveDescendantSessionSourcePaths(
+	ctx context.Context,
+	machine, agent string,
+	parentIDs []string,
+) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	var paths []string
+	for start := 0; start < len(parentIDs); start += descendantSessionRootBatchSize {
+		end := min(start+descendantSessionRootBatchSize, len(parentIDs))
+		batch := parentIDs[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		query := `
+			WITH RECURSIVE descendants(id, file_path) AS (
+				SELECT id, file_path
+				  FROM sessions INDEXED BY idx_sessions_parent
+				 WHERE parent_session_id IS NOT NULL
+				   AND parent_session_id IN (` + placeholders + `)
+				   AND machine = ? AND agent = ? AND deleted_at IS NULL
+				UNION
+				SELECT s.id, s.file_path
+				  FROM sessions AS s INDEXED BY idx_sessions_parent
+				  JOIN descendants AS d ON s.parent_session_id = d.id
+				 WHERE s.parent_session_id IS NOT NULL
+				   AND s.machine = ? AND s.agent = ? AND s.deleted_at IS NULL
+			)
+			SELECT file_path
+			  FROM descendants
+			 WHERE file_path IS NOT NULL AND file_path <> ''
+			 ORDER BY file_path`
+		args := make([]any, 0, len(batch)+4)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		args = append(args, machine, agent, machine, agent)
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"listing active descendant session sources: %w", err,
+			)
+		}
+		for rows.Next() {
+			var path string
+			if err := rows.Scan(&path); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf(
+					"scanning active descendant session source: %w", err,
+				)
+			}
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf(
+				"iterating active descendant session sources: %w", err,
+			)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf(
+				"closing active descendant session sources: %w", err,
+			)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
 const storedSourcePathHintRootBatchSize = 100
 
 // StoredSourcePathHintScope identifies one affected stored-source prefix.
@@ -2843,6 +2940,40 @@ func sqliteLikeEscape(value string) string {
 	value = strings.ReplaceAll(value, `%`, `!%`)
 	value = strings.ReplaceAll(value, `_`, `!_`)
 	return value
+}
+
+// ListOwnedSessionIDsForExport returns the IDs of locally-owned, non-deleted
+// sessions for artifact export, ordered by id. Unlike ListSessions it does not
+// apply the sidebar visibility filter (message_count > 0), so zero-message
+// usage-only sessions are still published.
+func (db *DB) ListOwnedSessionIDsForExport(ctx context.Context) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE (
+			machine = 'local' OR machine = (
+				SELECT value FROM pg_sync_state
+				WHERE key = 'artifact_local_machine_name'
+			)
+		 ) AND deleted_at IS NULL
+		 ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions for artifact export: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning export session ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating export session IDs: %w", err)
+	}
+	return ids, nil
 }
 
 // GetDataVersionByPath returns the minimum data_version for non-source-missing

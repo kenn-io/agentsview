@@ -1090,3 +1090,43 @@ func TestGetTerminalConfig(t *testing.T) {
 		assertStatus(t, w, http.StatusBadRequest)
 	})
 }
+
+func TestSetTerminalConfigExpandsHomeBeforeImmediateResume(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX executable script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	binDir := filepath.Join(home, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(binDir, "test-terminal"),
+		[]byte("#!/bin/sh\nexit 0\n"),
+		0o755,
+	))
+
+	te := setup(t)
+	projectDir := t.TempDir()
+	te.seedSession(t, "live-terminal-config", projectDir, 1, func(s *db.Session) {
+		s.Agent = "claude"
+	})
+
+	w := te.post(t,
+		"/api/v1/config/terminal",
+		`{"mode":"custom","custom_bin":"~/bin/test-terminal"}`,
+	)
+	assertStatus(t, w, http.StatusOK)
+
+	w = te.post(t, "/api/v1/sessions/live-terminal-config/resume", `{}`)
+	assertStatus(t, w, http.StatusOK)
+	var resp struct {
+		Launched bool   `json:"launched"`
+		Terminal string `json:"terminal"`
+		Error    string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Launched)
+	assert.Equal(t, "test-terminal", resp.Terminal)
+	assert.Empty(t, resp.Error)
+}

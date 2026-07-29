@@ -234,6 +234,23 @@ func newTestDocbankStore(t *testing.T, config docbank.Config) (*docbank.Vault, *
 	return vault, store
 }
 
+func newTestArtifactStore(t *testing.T) *docbankStore {
+	t.Helper()
+	_, store := newTestDocbankStore(t, docbank.Config{})
+	return store
+}
+
+// newProtocolTestStore opens a real isolated Docbank store at root without
+// registering test cleanup. Callers use it for explicit close/reopen protocol
+// and transport scenarios.
+func newProtocolTestStore(root string) (*docbankStore, error) {
+	vault, err := docbank.New(context.Background(), docbank.Config{Root: root})
+	if err != nil {
+		return nil, err
+	}
+	return newDocbankContent(vault), nil
+}
+
 func walkDocbankTestEntries(
 	t *testing.T, vault *docbank.Vault, root string,
 ) []docbank.WalkEntry {

@@ -75,9 +75,9 @@ Grok section and remove the explicit registry exception in the coverage test.
   `attachment.type=queued_command` are written mid-stream, in file order
   between consecutive `assistant` records that share one `message.id`, so a
   queued command can fall inside a streaming run that straddles an incremental
-  sync boundary. Reverified 2026-07-23 against the transcript shape reported in
-  [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code for
-  VS Code writes standalone `user` records wrapped in `ide_opened_file` or
+  sync boundary. Reverified 2026-07-23 against the transcript shape reported
+  in [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code
+  for VS Code writes standalone `user` records wrapped in `ide_opened_file` or
   `ide_selection` tags for editor context rather than operator prompts.
 
 ## OpenClaude (`openclaude`)
@@ -228,11 +228,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   from those tokens rather than consuming a persisted USD total.
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
-  prefers a concrete `session.directory` over `project.worktree` when resolving
-  cwd/project (verified against live `opencode.db` rows under `project_id=global`
-  on 2026-07-23; see #1236).
-- **Invalid tool calls:** Model calls to unknown or malformed tools are
-  recorded as a synthetic `invalid` tool part whose `execute` succeeds
+  prefers a concrete `session.directory` over `project.worktree` when
+  resolving cwd/project (verified against live `opencode.db` rows under
+  `project_id=global` on 2026-07-23; see #1236).
+- **Invalid tool calls:** Model calls to unknown or malformed tools are recorded
+  as a synthetic `invalid` tool part whose `execute` succeeds
   (`packages/opencode/src/tool/invalid.ts`, registered in
   `packages/opencode/src/tool/registry.ts` at the pinned commit), so
   `state.status` is `completed` with the error text in the output. Agentsview
@@ -247,10 +247,10 @@ Grok section and remove the explicit registry exception in the coverage test.
   failure signal. The tool's own output text carries no `exit status N`
   marker, and the shell is `COMSPEC`/`cmd.exe` on Windows, so text-pattern
   matching alone misses these failures on every platform. Agentsview treats a
-  non-zero `state.metadata.exit` on a `bash` tool part as a failure and attaches
-  an errored result event. Only `bash` parts record `exit`; other tools omit the
-  key. Verified 2026-07-24 against a live `opencode.db` where all 24 bash
-  parts with `exit` in `{1, 127, 128}` had output text without an
+  non-zero `state.metadata.exit` on a `bash` tool part as a failure and
+  attaches an errored result event. Only `bash` parts record `exit`; other
+  tools omit the key. Verified 2026-07-24 against a live `opencode.db` where
+  all 24 bash parts with `exit` in `{1, 127, 128}` had output text without an
   `exit status` marker, and the 81 successful parts recorded `exit=0`. Known
   gaps: a command that legitimately exits non-zero (`grep` with no match)
   counts as a failure, matching the existing `exit status N` heuristic, and a
@@ -294,8 +294,8 @@ Grok section and remove the explicit registry exception in the coverage test.
   OpenCode-based rebuild (public beta 2026-03-10, GA 2026-04-02); new sessions
   stopped appearing around 2026-03-21.
 - **Usage and cost:** `ui_messages.json` carries per-request `api_req_started`
-  metadata with input, output, cache-read, and cache-write tokens, explicit USD
-  cost, and `usageMissing` flag. `task_metadata.json` does not carry the
+  metadata with input, output, cache-read, and cache-write tokens, explicit
+  USD cost, and `usageMissing` flag. `task_metadata.json` does not carry the
   RooCode-style ID/token/cost wiring; token and cost totals are derived from
   the transcript itself.
 - **Agentsview:** `internal/parser/kilo_legacy.go` and
@@ -1124,20 +1124,20 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Upstream:** The public
   [pool release repository](https://github.com/poolsideai/pool) (README,
   changelog, and third-party notices only; no source code) and the
-  [Poolside Agent CLI documentation](https://docs.poolside.ai/cli/pool)
-  were checked 2026-07-23. Upstream confirms sessions are saved
-  automatically and that per-session trajectory files exist (`pool config`
-  prints the trajectory directory; `pool history trajectories` browses
-  them), but publishes neither the on-disk paths nor the NDJSON event
-  schema. The event format was characterized from real trajectory files.
+  [Poolside Agent CLI documentation](https://docs.poolside.ai/cli/pool) were
+  checked 2026-07-23. Upstream confirms sessions are saved automatically and
+  that per-session trajectory files exist (`pool config` prints the trajectory
+  directory; `pool history trajectories` browses them), but publishes neither
+  the on-disk paths nor the NDJSON event schema. The event format was
+  characterized from real trajectory files.
 - **Usage and cost:** Per-inference token counts (`input_tokens`,
-  `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`)
-  are persisted in `tool_call.inference.end` events. The model is recorded
-  in `tool_call.inference.start` and paired by `step_id`. No authoritative
-  USD cost is persisted; Agentsview computes cost from its pricing catalog.
+  `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`) are
+  persisted in `tool_call.inference.end` events. The model is recorded in
+  `tool_call.inference.start` and paired by `step_id`. No authoritative USD
+  cost is persisted; Agentsview computes cost from its pricing catalog.
 - **Agentsview:** `internal/parser/poolside.go` and
-  `internal/parser/poolside_provider.go`; single-file provider with
-  NDJSON line-by-line parsing.
+  `internal/parser/poolside_provider.go`; single-file provider with NDJSON
+  line-by-line parsing.
 
 ## Reasonix (`reasonix`)
 
@@ -1156,6 +1156,56 @@ Grok section and remove the explicit registry exception in the coverage test.
   `internal/parser/reasonix_provider.go`; discovery spans multiple roots and
   uses metadata sidecars for identity.
 
+## Omnigent (`omnigent`)
+
+- **Format:** A shared SQLite `chat.db` containing conversations and ordered
+  conversation items, with session metadata and usage stored alongside each
+  conversation.
+- **Evidence:** `source`.
+- **Upstream:** The first-party
+  [database documentation](https://omnigent.ai/docs/deploy/database)
+  identifies SQLite `chat.db` as the local persistence store and was checked
+  2026-07-27. Clone `https://github.com/omnigent-ai/omnigent.git` at
+  `61fd72350ea4c4aba776fbc01c40774079d352e8`. The pinned
+  [conversation schema](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/omnigent/db/db_models.py),
+  and
+  [store decoding](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/omnigent/stores/conversation_store/sqlalchemy_store.py)
+  describe persistence. The current schema indexes conversation changes by
+  `(workspace_id, archived, updated_at, id)` rather than a bare `updated_at`
+  index. `session_usage` lives on `omnigent_conversation_metadata`, and both
+  `set_session_usage` and `increment_session_usage` update that metadata row
+  without changing `conversations.updated_at`. The metadata table has runner
+  and project lookup indexes but no modification timestamp or change index.
+  Consequently, the immediate filesystem-event sync can defer a metadata-only
+  edit. The next scheduled reconciliation pass, an explicit resync, or an
+  archive audit reparses the whole changed container and is not limited to a
+  bounded candidate set, so it picks up the edit regardless of how long ago it
+  was made. The pinned
+  [message entity](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/omnigent/entities/conversation.py)
+  and
+  [deterministic benchmark seeder](https://github.com/omnigent-ai/omnigent/blob/61fd72350ea4c4aba776fbc01c40774079d352e8/dev/benchmarks/omnigent/seed.py)
+  were inspected. The seeder runs the Alembic lineage to head before
+  inserting model-backed rows. Agentsview supports two schema generations
+  observed at that lineage head: the split text-ID generation (session
+  metadata in `omnigent_conversation_metadata`, model overrides in a separate
+  `agent_configuration` table) and the current split binary-UUID generation
+  (16-byte `BLOB` ids, `session_overrides` JSON on `conversations`). The
+  earlier single-table generation, where session metadata columns (including
+  `kind`) lived directly on `conversations` with no separate metadata table,
+  predates that split and is detected-unsupported: Agentsview fails closed
+  with a nonfatal `ErrOmnigentUnsupportedSchema`, skips the container, and
+  preserves any archive rows already synced from it.
+- **Regeneration:** From that checkout, run
+  `uv run dev/benchmarks/omnigent/seed.py --database-uri sqlite:////absolute/temp/path/chat.db --sessions 3 --items-per-session 4 --projects 1 --filed-fraction 1`,
+  then set `OMNIGENT_SOURCE_DB` to the generated file for the opt-in parser
+  test. Never use a live Omnigent data directory.
+- **Usage and cost:** Session usage can contain input and output tokens,
+  per-model breakdowns, and an optional authoritative USD total. An absent
+  cost remains unset so Agentsview can use catalog pricing.
+- **Agentsview:** `internal/parser/omnigent.go` and
+  `internal/parser/omnigent_provider.go`; fixtures under
+  `internal/parser/testdata/omnigent/` provide observed event-shape evidence.
+  
 ## Codebuff (`codebuff`)
 
 - **Format:** Per-session JSON files under
@@ -1192,3 +1242,4 @@ Grok section and remove the explicit registry exception in the coverage test.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`; single-file provider with
   JSON array parsing.
+

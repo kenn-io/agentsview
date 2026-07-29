@@ -32,6 +32,7 @@ type SessionBatchResult struct {
 	ExcludedSessions int
 	ExcludedIDs      []string
 	FailedSessions   int
+	FailedIDs        []string
 	Errors           []error
 }
 
@@ -109,6 +110,7 @@ func (db *DB) WriteSessionBatch(
 				return result, rerr
 			}
 			result.FailedSessions++
+			result.FailedIDs = append(result.FailedIDs, write.Session.ID)
 			result.Errors = append(result.Errors, err)
 		}
 	}
@@ -325,6 +327,12 @@ func writeOneSessionBatchTx(
 	}
 	replaceMessages := write.ReplaceMessages ||
 		(deletionCause.Valid && deletionCause.String == deletionCauseSourceMissing)
+	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
+		tx, write.Session.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
 	replacementTranscriptChanged := false
 	if replaceMessages && sessionExists {
 		stored, err := sessionMessagesTx(
@@ -355,7 +363,7 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if err := replaceSessionUsageEventsTx(
-		tx, write.Session.ID, write.UsageEvents,
+		tx, write.Session.ID, write.UsageEvents, false,
 	); err != nil {
 		return 0, err
 	}
@@ -449,6 +457,11 @@ func writeOneSessionBatchTx(
 	}
 	if err := replaceSecretFindingsTx(tx, write.Session.ID, write.Findings,
 		write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion); err != nil {
+		return 0, err
+	}
+	if err := enqueueArtifactExportIfGenerationUnchangedTx(
+		tx, write.Session.ID, queueGenerationBefore, queueExistedBefore,
+	); err != nil {
 		return 0, err
 	}
 

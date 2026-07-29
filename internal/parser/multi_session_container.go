@@ -43,6 +43,87 @@ type multiSessionMatch struct {
 	DiscoveryMTimeNS       int64
 }
 
+// classifySQLiteContainerPath maps a stored or changed path to its database
+// container and member, shared by every multi-session provider whose
+// sessions live in one shared SQLite database (Zed, Shelley, Omnigent).
+// dbRelPath is the container's path relative to a provider root (e.g.
+// "shelley.db", "threads/threads.db"); parseVirtual splits a virtual member
+// path into its physical container path and raw member ID. allowMissing
+// relaxes the regular-file requirement so a database delete (or its WAL/SHM
+// sibling) still classifies for tombstones. rejectShmSiblingEvents refuses to
+// resolve a bare "-shm" sibling event to the container; only Omnigent sets
+// it, because opening its own read connections updates that file's mtime and
+// would otherwise make every scan trigger the next one.
+func classifySQLiteContainerPath(
+	root, path, dbRelPath string,
+	allowMissing, rejectShmSiblingEvents bool,
+	parseVirtual func(path string) (dbPath, memberID string, ok bool),
+) (multiSessionMatch, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	requireRegular := !allowMissing
+	if dbPath, memberID, ok := parseVirtual(path); ok {
+		if !sqliteContainerUnderRoot(root, dbPath, dbRelPath, requireRegular) {
+			return multiSessionMatch{}, false
+		}
+		return multiSessionMatch{
+			Path:      path,
+			Container: dbPath,
+			MemberID:  memberID,
+		}, true
+	}
+	if sqliteContainerUnderRoot(root, path, dbRelPath, requireRegular) {
+		return multiSessionMatch{Path: path, Container: path}, true
+	}
+	if allowMissing {
+		if dbPath, ok := sqliteContainerPathForEvent(
+			root, path, dbRelPath, rejectShmSiblingEvents,
+		); ok {
+			return multiSessionMatch{Path: dbPath, Container: dbPath}, true
+		}
+	}
+	return multiSessionMatch{}, false
+}
+
+// sqliteContainerUnderRoot reports whether dbPath is the provider's shared
+// database at its expected location under root.
+func sqliteContainerUnderRoot(
+	root, dbPath, dbRelPath string, requireRegular bool,
+) bool {
+	root = filepath.Clean(root)
+	dbPath = filepath.Clean(dbPath)
+	rel, ok := relUnder(root, dbPath)
+	if !ok || filepath.ToSlash(rel) != dbRelPath {
+		return false
+	}
+	return !requireRegular || IsRegularFile(dbPath)
+}
+
+// sqliteContainerPathForEvent resolves a changed-path event naming the
+// database file itself or a WAL/SHM/journal sibling to the container's
+// canonical path.
+func sqliteContainerPathForEvent(
+	root, path, dbRelPath string, rejectShmSiblingEvents bool,
+) (string, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if rejectShmSiblingEvents && strings.HasSuffix(path, "-shm") {
+		return "", false
+	}
+	rel, ok := relUnder(root, path)
+	if !ok {
+		return "", false
+	}
+	dbDir := filepath.ToSlash(filepath.Dir(dbRelPath))
+	dbBase := filepath.Base(dbRelPath)
+	if filepath.ToSlash(rel) == dbRelPath ||
+		(filepath.ToSlash(filepath.Dir(rel)) == dbDir &&
+			strings.HasPrefix(filepath.Base(rel), dbBase+"-")) {
+		return filepath.Join(root, filepath.FromSlash(dbRelPath)), true
+	}
+	return "", false
+}
+
 type multiSessionConfig struct {
 	// discoverContainers returns the physical container paths under one root;
 	// each becomes a whole-container source that fans out on parse.
@@ -692,6 +773,13 @@ func (s multiSessionContainerSourceSet) parse(
 		ResultSetComplete: true,
 		ForceReplace:      true,
 	}, nil
+}
+
+func unsupportedMultiSessionOutcome() ParseOutcome {
+	return ParseOutcome{
+		ResultSetComplete: true,
+		SkipReason:        SkipUnsupportedSource,
+	}
 }
 
 // skipOutcome builds the "no session" outcome for a container/member that
