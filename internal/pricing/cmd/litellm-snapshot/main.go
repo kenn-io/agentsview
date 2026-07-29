@@ -180,8 +180,7 @@ func validateSnapshotFile(path string) error {
 	if len(snapshot.Models) > maxSnapshotModels {
 		return fmt.Errorf("snapshot models exceed %d entries", maxSnapshotModels)
 	}
-	for i := range snapshot.Models {
-		model := &snapshot.Models[i]
+	for _, model := range snapshot.Models {
 		if strings.TrimSpace(model.ModelPattern) == "" {
 			return fmt.Errorf("snapshot contains model with empty pattern")
 		}

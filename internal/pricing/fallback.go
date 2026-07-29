@@ -150,8 +150,7 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 			maxFallbackSnapshotModels,
 		)
 	}
-	for i := range snapshot.Models {
-		model := &snapshot.Models[i]
+	for _, model := range snapshot.Models {
 		if strings.TrimSpace(model.ModelPattern) == "" {
 			return litellmFallbackSnapshot{}, fmt.Errorf(
 				"snapshot contains model with empty pattern",
