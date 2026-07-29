@@ -729,6 +729,33 @@ func (db *DB) GetArtifactCheckpointLanding(
 	return db.getArtifactCheckpointLanding(ctx, origin, nil)
 }
 
+// GetArtifactCheckpointLandingIdentity returns only the landed checkpoint
+// identity without reading its potentially large session map.
+func (db *DB) GetArtifactCheckpointLandingIdentity(
+	ctx context.Context, origin string,
+) (ArtifactCheckpointLanding, bool, error) {
+	if strings.TrimSpace(origin) == "" || origin != strings.TrimSpace(origin) {
+		return ArtifactCheckpointLanding{}, false,
+			errors.New("artifact checkpoint landing origin is required")
+	}
+	var landing ArtifactCheckpointLanding
+	err := db.getReader().QueryRowContext(ctx, `
+		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
+		FROM artifact_checkpoint_landings WHERE origin = ?`, origin,
+	).Scan(
+		&landing.Origin, &landing.Sequence,
+		&landing.CheckpointSHA256, &landing.CheckpointSize,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ArtifactCheckpointLanding{}, false, nil
+	}
+	if err != nil {
+		return ArtifactCheckpointLanding{}, false,
+			fmt.Errorf("reading artifact checkpoint landing identity: %w", err)
+	}
+	return landing, true, nil
+}
+
 func (db *DB) getArtifactCheckpointLanding(
 	ctx context.Context,
 	origin string,

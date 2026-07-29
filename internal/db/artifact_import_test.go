@@ -360,6 +360,42 @@ func TestArtifactCheckpointLandingBindsPeerIdentity(t *testing.T) {
 		database.RecordArtifactCheckpointLanding(ctx, landing, want))
 }
 
+func TestArtifactCheckpointLandingIdentityReadDoesNotMaterializeSessionMap(
+	t *testing.T,
+) {
+	database := testDB(t)
+	ctx := t.Context()
+	head := ArtifactPeerCheckpointHead{
+		Origin:           "peer-a1b2c3",
+		Sequence:         2,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   99,
+	}
+	_, err := database.RecordArtifactPeerCheckpointHead(ctx, head)
+	require.NoError(t, err)
+	const sessionCount = 2_000
+	sessionMap := make(map[string]string, sessionCount)
+	for i := range sessionCount {
+		sessionMap[fmt.Sprintf("%s~session-%04d", head.Origin, i)] =
+			fmt.Sprintf("%064x", i+1)
+	}
+	require.NoError(t, database.RecordArtifactCheckpointLanding(
+		ctx, ArtifactCheckpointLanding(head), sessionMap,
+	))
+
+	var got ArtifactCheckpointLanding
+	var found bool
+	allocations := testing.AllocsPerRun(3, func() {
+		var readErr error
+		got, found, readErr =
+			database.GetArtifactCheckpointLandingIdentity(ctx, head.Origin)
+		require.NoError(t, readErr)
+	})
+	require.True(t, found)
+	assert.Equal(t, ArtifactCheckpointLanding(head), got)
+	assert.Less(t, allocations, 500.0)
+}
+
 func TestArtifactCheckpointLandingReadUsesOneSnapshot(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()

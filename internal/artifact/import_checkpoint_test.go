@@ -420,6 +420,54 @@ func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 	}
 }
 
+func TestDecodeImportCheckpointBoundsTopLevelFieldState(t *testing.T) {
+	var body strings.Builder
+	body.WriteByte('{')
+	for i := range 10_000 {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, "%q:0", fmt.Sprintf("unknown-%05d", i))
+	}
+	body.WriteString(`,"v":2}`)
+	data := []byte(body.String())
+
+	fields, version, future, err := decodeImportCheckpointFields(data)
+	require.NoError(t, err)
+	assert.Empty(t, fields)
+	assert.Equal(t, 2, version)
+	assert.True(t, future)
+
+	_, err = decodeImportCheckpoint(
+		data, contractOrigin, "cp-0000000007.json",
+	)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
+}
+
+func TestDecodeImportCheckpointRejectsCurrentExtraFieldBeforeItsValue(
+	t *testing.T,
+) {
+	var body strings.Builder
+	body.WriteString(`{"v":1,"extra":{`)
+	for i := range 10_000 {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, "%q:0", fmt.Sprintf("nested-%05d", i))
+	}
+	body.WriteString(`}}`)
+	data := []byte(body.String())
+
+	var decodeErr error
+	allocations := testing.AllocsPerRun(1, func() {
+		_, decodeErr = decodeImportCheckpoint(
+			data, contractOrigin, "cp-0000000007.json",
+		)
+	})
+	require.ErrorIs(t, decodeErr, ErrArtifactInvalid)
+	assert.Less(t, allocations, 500.0)
+}
+
 func TestDecodeImportCheckpointDefersExtensibleFutureJSON(t *testing.T) {
 	tests := []string{
 		`{"sessions":"opaque","v":2}`,

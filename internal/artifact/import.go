@@ -248,7 +248,7 @@ func (c *StoreImportCoordinator) processImportClaim(
 		_, err := c.database.AcknowledgeArtifactImport(ctx, work)
 		return err
 	}
-	landing, _, landed, err := c.database.GetArtifactCheckpointLanding(
+	landing, landed, err := c.database.GetArtifactCheckpointLandingIdentity(
 		ctx, work.Origin,
 	)
 	if err != nil {

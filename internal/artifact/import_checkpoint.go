@@ -22,6 +22,17 @@ type importCheckpointSession struct {
 	ManifestHash string
 }
 
+const (
+	importCheckpointOriginField uint8 = 1 << iota
+	importCheckpointSequenceField
+	importCheckpointSessionsField
+	importCheckpointVersionField
+	importCheckpointCurrentFields = importCheckpointOriginField |
+		importCheckpointSequenceField |
+		importCheckpointSessionsField |
+		importCheckpointVersionField
+)
+
 func readVerifiedImportArtifact(
 	ctx context.Context,
 	store ArtifactStore,
@@ -126,36 +137,16 @@ func decodeImportCheckpoint(
 func decodeImportCheckpointHeader(
 	data []byte, expectedOrigin, name string,
 ) (importCheckpoint, json.RawMessage, error) {
-	fields, err := decodeImportJSONObject(data)
+	fields, version, future, err := decodeImportCheckpointFields(data)
 	if err != nil {
 		return importCheckpoint{}, nil, err
 	}
-	versionRaw, ok := fields["v"]
-	if !ok {
-		return importCheckpoint{}, nil, invalidImportCheckpointf("version is missing")
-	}
-	var version int
-	if err := json.Unmarshal(versionRaw, &version); err != nil {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"version is invalid: %v", err,
-		)
-	}
-	if version > checkpointFormatVersion {
+	if future {
 		return importCheckpoint{}, nil, &futureArtifactVersionError{
 			Kind: KindCheckpoints, Version: version,
 		}
 	}
-	if version < checkpointFormatVersion {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"version %d is unsupported", version,
-		)
-	}
-	if len(fields) != 4 {
-		return importCheckpoint{}, nil, invalidImportCheckpointf(
-			"current-version fields are not exact",
-		)
-	}
-	for _, field := range []string{"origin", "seq", "sessions", "v"} {
+	for _, field := range []string{"origin", "seq", "sessions"} {
 		if _, ok := fields[field]; !ok {
 			return importCheckpoint{}, nil, invalidImportCheckpointf(
 				"field %q is missing", field,
@@ -196,58 +187,135 @@ func decodeImportCheckpointHeader(
 	}, fields["sessions"], nil
 }
 
-func decodeImportJSONObject(data []byte) (map[string]json.RawMessage, error) {
+func decodeImportCheckpointFields(
+	data []byte,
+) (map[string]json.RawMessage, int, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	token, err := decoder.Token()
 	if err != nil {
-		return nil, invalidImportCheckpointf("decoding object: %v", err)
+		return nil, 0, false,
+			invalidImportCheckpointf("decoding object: %v", err)
 	}
 	if token != json.Delim('{') {
-		return nil, invalidImportCheckpointf("checkpoint must be an object")
+		return nil, 0, false,
+			invalidImportCheckpointf("checkpoint must be an object")
 	}
-	fields := make(map[string]json.RawMessage)
+	fields := make(map[string]json.RawMessage, 3)
+	var seen uint8
+	version := 0
+	versionSeen := false
+	future := false
+	unknownBeforeVersion := false
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
-			return nil, invalidImportCheckpointf("decoding object key: %v", err)
+			return nil, 0, false,
+				invalidImportCheckpointf("decoding object key: %v", err)
 		}
 		key, ok := token.(string)
 		if !ok {
-			return nil, invalidImportCheckpointf("object key is invalid")
+			return nil, 0, false,
+				invalidImportCheckpointf("object key is invalid")
 		}
-		if _, exists := fields[key]; exists {
-			return nil, invalidImportCheckpointf("duplicate field %q", key)
+		field := importCheckpointField(key)
+		if field != 0 && seen&field != 0 {
+			return nil, 0, false,
+				invalidImportCheckpointf("duplicate field %q", key)
+		}
+		if field != 0 {
+			seen |= field
+		}
+		if key == "v" {
+			if err := decoder.Decode(&version); err != nil {
+				return nil, 0, false, invalidImportCheckpointf(
+					"version is invalid: %v", err,
+				)
+			}
+			versionSeen = true
+			switch {
+			case version > checkpointFormatVersion:
+				future = true
+			case version < checkpointFormatVersion:
+				return nil, 0, false, invalidImportCheckpointf(
+					"version %d is unsupported", version,
+				)
+			case unknownBeforeVersion:
+				return nil, 0, false, invalidImportCheckpointf(
+					"current-version fields are not exact",
+				)
+			}
+			continue
+		}
+		currentField := field != 0
+		if !currentField {
+			if versionSeen && !future {
+				return nil, 0, false, invalidImportCheckpointf(
+					"current-version fields are not exact",
+				)
+			}
+			unknownBeforeVersion = true
 		}
 		valueStart := skipJSONWhitespace(data, int(decoder.InputOffset()))
 		if valueStart >= len(data) || data[valueStart] != ':' {
-			return nil, invalidImportCheckpointf("field %q has no value", key)
+			return nil, 0, false,
+				invalidImportCheckpointf("field %q has no value", key)
 		}
 		valueStart = skipJSONWhitespace(data, valueStart+1)
 		if err := skipImportJSONValue(decoder); err != nil {
-			return nil, invalidImportCheckpointf(
+			return nil, 0, false, invalidImportCheckpointf(
 				"decoding field %q: %v", key, err,
 			)
 		}
 		valueEnd := int(decoder.InputOffset())
 		if valueEnd <= valueStart || valueEnd > len(data) {
-			return nil, invalidImportCheckpointf("field %q is invalid", key)
+			return nil, 0, false,
+				invalidImportCheckpointf("field %q is invalid", key)
 		}
-		fields[key] = data[valueStart:valueEnd]
+		if currentField {
+			fields[key] = data[valueStart:valueEnd]
+		}
 	}
 	token, err = decoder.Token()
 	if err != nil || token != json.Delim('}') {
-		return nil, invalidImportCheckpointf("checkpoint object is incomplete")
+		return nil, 0, false,
+			invalidImportCheckpointf("checkpoint object is incomplete")
 	}
 	var trailing json.RawMessage
 	err = decoder.Decode(&trailing)
 	if !errors.Is(err, io.EOF) {
 		if err == nil {
-			return nil, invalidImportCheckpointf("checkpoint has trailing JSON")
+			return nil, 0, false,
+				invalidImportCheckpointf("checkpoint has trailing JSON")
 		}
-		return nil, invalidImportCheckpointf("decoding trailing content: %v", err)
+		return nil, 0, false,
+			invalidImportCheckpointf("decoding trailing content: %v", err)
 	}
-	return fields, nil
+	if !versionSeen {
+		return nil, 0, false,
+			invalidImportCheckpointf("version is missing")
+	}
+	if !future && seen != importCheckpointCurrentFields {
+		return nil, 0, false, invalidImportCheckpointf(
+			"current-version fields are not exact",
+		)
+	}
+	return fields, version, future, nil
+}
+
+func importCheckpointField(key string) uint8 {
+	switch key {
+	case "origin":
+		return importCheckpointOriginField
+	case "seq":
+		return importCheckpointSequenceField
+	case "sessions":
+		return importCheckpointSessionsField
+	case "v":
+		return importCheckpointVersionField
+	default:
+		return 0
+	}
 }
 
 func skipImportJSONValue(decoder *json.Decoder) error {
