@@ -318,6 +318,18 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 			},
 		},
 		{
+			name: "manifest user message count mismatch",
+			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				m := importTestManifest("session")
+				createImportTestClosure(t, store, &m, []db.Message{{
+					Ordinal: 0, Role: "user", Content: "one",
+				}})
+				m.Session.UserMessageCount = 0
+				hash := createImportTestManifest(t, store, m, false)
+				return m, hash
+			},
+		},
+		{
 			name: "duplicate nonempty usage key",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
 				m := importTestManifest("session")

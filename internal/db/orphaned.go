@@ -634,26 +634,30 @@ func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
 			ErrArtifactImportConflict,
 		)
 	}
-	if oldDBHasTable(ctx, tx, "artifact_checkpoint_stage_sessions") {
+	oldHasStageSessions := oldDBHasTable(
+		ctx, tx, "artifact_checkpoint_stage_sessions",
+	)
+	if !oldHasStageSessions {
+		var stages int
 		err = tx.QueryRowContext(ctx, `
-			SELECT count(*)
-			FROM old_db.artifact_checkpoint_stage_sessions old
-			JOIN main.artifact_checkpoint_stage_sessions current
-			  ON current.origin = old.origin
-			 AND current.sequence = old.sequence
-			 AND current.gid = old.gid
-			WHERE current.manifest_hash <> old.manifest_hash`,
-		).Scan(&conflicts)
+			SELECT count(*) FROM old_db.artifact_checkpoint_stages`,
+		).Scan(&stages)
 		if err != nil {
 			return fmt.Errorf(
-				"checking copied artifact checkpoint stage sessions: %w", err,
+				"checking copied artifact checkpoint stage maps: %w", err,
 			)
 		}
-		if conflicts > 0 {
+		if stages > 0 {
 			return fmt.Errorf(
-				"%w: copied artifact checkpoint stage session changed",
+				"%w: copied artifact checkpoint stage map is unavailable",
 				ErrArtifactImportConflict,
 			)
+		}
+	}
+	if oldHasStageSessions {
+		err = validateArtifactCheckpointStageMerges(ctx, tx)
+		if err != nil {
+			return err
 		}
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -684,7 +688,7 @@ func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("copying artifact checkpoint stages: %w", err)
 	}
-	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_stage_sessions") {
+	if !oldHasStageSessions {
 		return nil
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -723,6 +727,106 @@ func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
 		)`)
 	if err != nil {
 		return fmt.Errorf("recounting copied artifact checkpoint stages: %w", err)
+	}
+	return nil
+}
+
+func validateArtifactCheckpointStageMerges(
+	ctx context.Context,
+	tx *sql.Tx,
+) error {
+	var conflicts int
+	err := tx.QueryRowContext(ctx, `
+		WITH overlapping AS (
+			SELECT
+				old_stage.complete AS old_complete,
+				current_stage.complete AS current_complete,
+				old_stage.session_count AS old_session_count,
+				current_stage.session_count AS current_session_count,
+				old_stage.decoded_count AS old_decoded_count,
+				current_stage.decoded_count AS current_decoded_count,
+				old_stage.decode_offset AS old_decode_offset,
+				current_stage.decode_offset AS current_decode_offset,
+				EXISTS (
+					SELECT gid, manifest_hash
+					FROM old_db.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+					EXCEPT
+					SELECT gid, manifest_hash
+					FROM main.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+				) AS old_only,
+				EXISTS (
+					SELECT gid, manifest_hash
+					FROM main.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+					EXCEPT
+					SELECT gid, manifest_hash
+					FROM old_db.artifact_checkpoint_stage_sessions
+					WHERE origin = old_stage.origin
+					  AND sequence = old_stage.sequence
+				) AS current_only
+			FROM old_db.artifact_checkpoint_stages old_stage
+			JOIN main.artifact_checkpoint_stages current_stage
+			  ON current_stage.origin = old_stage.origin
+			 AND current_stage.sequence = old_stage.sequence
+			 AND current_stage.checkpoint_sha256 = old_stage.checkpoint_sha256
+			 AND current_stage.checkpoint_size = old_stage.checkpoint_size
+		)
+		SELECT count(*) FROM overlapping
+		WHERE (
+			old_complete = 1 AND current_complete = 1
+			AND (old_only OR current_only)
+		)
+		OR (
+			old_complete = 0 AND current_complete = 0
+			AND (
+				(
+					old_decoded_count < current_decoded_count
+					AND old_decode_offset > current_decode_offset
+				)
+				OR (
+					old_decoded_count > current_decoded_count
+					AND old_decode_offset < current_decode_offset
+				)
+				OR (
+					old_decoded_count <= current_decoded_count
+					AND old_only
+				)
+				OR (
+					current_decoded_count <= old_decoded_count
+					AND current_only
+				)
+			)
+		)
+		OR (
+			old_complete = 1 AND current_complete = 0
+			AND (
+				current_decoded_count > old_session_count
+				OR current_only
+			)
+		)
+		OR (
+			old_complete = 0 AND current_complete = 1
+			AND (
+				old_decoded_count > current_session_count
+				OR old_only
+			)
+		)`,
+	).Scan(&conflicts)
+	if err != nil {
+		return fmt.Errorf(
+			"checking copied artifact checkpoint stage maps: %w", err,
+		)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf(
+			"%w: copied artifact checkpoint stage map changed",
+			ErrArtifactImportConflict,
+		)
 	}
 	return nil
 }

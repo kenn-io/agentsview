@@ -278,6 +278,154 @@ func TestCopySyncStateRejectsEqualLandingWithDifferentMap(t *testing.T) {
 	require.ErrorIs(t, err, ErrArtifactImportConflict)
 }
 
+func TestCopySyncStateRejectsIncompatibleCheckpointStages(t *testing.T) {
+	tests := []struct {
+		name               string
+		sourceEntries      []ArtifactCheckpointSession
+		destinationEntries []ArtifactCheckpointSession
+		sourceOffset       int64
+		destinationOffset  int64
+		complete           bool
+	}{
+		{
+			name: "complete stages have different session sets",
+			sourceEntries: []ArtifactCheckpointSession{
+				{GID: "peer-a1b2c3~one", ManifestHash: strings.Repeat("1", 64)},
+				{GID: "peer-a1b2c3~two", ManifestHash: strings.Repeat("2", 64)},
+			},
+			destinationEntries: []ArtifactCheckpointSession{
+				{GID: "peer-a1b2c3~one", ManifestHash: strings.Repeat("1", 64)},
+				{GID: "peer-a1b2c3~three", ManifestHash: strings.Repeat("3", 64)},
+			},
+			complete: true,
+		},
+		{
+			name: "partial stages have different decoded prefixes",
+			sourceEntries: []ArtifactCheckpointSession{
+				{GID: "peer-a1b2c3~one", ManifestHash: strings.Repeat("1", 64)},
+			},
+			destinationEntries: []ArtifactCheckpointSession{
+				{GID: "peer-a1b2c3~two", ManifestHash: strings.Repeat("2", 64)},
+			},
+			sourceOffset:      10,
+			destinationOffset: 10,
+		},
+		{
+			name: "partial stage count and cursor progress cross",
+			sourceEntries: []ArtifactCheckpointSession{
+				{GID: "peer-a1b2c3~one", ManifestHash: strings.Repeat("1", 64)},
+				{GID: "peer-a1b2c3~two", ManifestHash: strings.Repeat("2", 64)},
+			},
+			destinationEntries: []ArtifactCheckpointSession{
+				{GID: "peer-a1b2c3~one", ManifestHash: strings.Repeat("1", 64)},
+			},
+			sourceOffset:      10,
+			destinationOffset: 20,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sourcePath := filepath.Join(dir, "source.db")
+			source := testDBAtPath(t, sourcePath, "source")
+			landing := ArtifactCheckpointLanding{
+				Origin:           "peer-a1b2c3",
+				Sequence:         4,
+				CheckpointSHA256: strings.Repeat("a", 64),
+				CheckpointSize:   91,
+			}
+			stageCheckpointForCopyTest(
+				t, source, landing, tc.sourceEntries,
+				tc.sourceOffset, tc.complete,
+			)
+			require.NoError(t, source.Close())
+
+			destination := testDBAtPath(
+				t, filepath.Join(dir, "destination.db"), "destination",
+			)
+			defer destination.Close()
+			stageCheckpointForCopyTest(
+				t, destination, landing, tc.destinationEntries,
+				tc.destinationOffset, tc.complete,
+			)
+
+			err := destination.CopySyncStateFrom(sourcePath)
+			require.ErrorIs(t, err, ErrArtifactImportConflict)
+		})
+	}
+}
+
+func TestCopySyncStateMergesCompatibleCheckpointStagePrefix(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	landing := ArtifactCheckpointLanding{
+		Origin:           "peer-a1b2c3",
+		Sequence:         4,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   91,
+	}
+	one := ArtifactCheckpointSession{
+		GID: landing.Origin + "~one", ManifestHash: strings.Repeat("1", 64),
+	}
+	two := ArtifactCheckpointSession{
+		GID: landing.Origin + "~two", ManifestHash: strings.Repeat("2", 64),
+	}
+	stageCheckpointForCopyTest(
+		t, source, landing, []ArtifactCheckpointSession{one, two}, 20, false,
+	)
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(
+		t, filepath.Join(dir, "destination.db"), "destination",
+	)
+	defer destination.Close()
+	stageCheckpointForCopyTest(
+		t, destination, landing, []ArtifactCheckpointSession{one}, 10, false,
+	)
+
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
+	progress, err := destination.ArtifactCheckpointStageProgress(ctx, landing)
+	require.NoError(t, err)
+	assert.False(t, progress.Complete)
+	assert.Equal(t, 2, progress.DecodedCount)
+	assert.Equal(t, int64(20), progress.DecodeOffset)
+	var stagedCount int
+	require.NoError(t, destination.getReader().QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM artifact_checkpoint_stage_sessions
+		WHERE origin = ? AND sequence = ?`,
+		landing.Origin, landing.Sequence,
+	).Scan(&stagedCount))
+	assert.Equal(t, 2, stagedCount)
+}
+
+func stageCheckpointForCopyTest(
+	t *testing.T,
+	database *DB,
+	landing ArtifactCheckpointLanding,
+	entries []ArtifactCheckpointSession,
+	offset int64,
+	complete bool,
+) {
+	t.Helper()
+	ctx := t.Context()
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing))
+	if complete {
+		require.NoError(t, database.StageArtifactCheckpointSessions(
+			ctx, landing, entries,
+		))
+		require.NoError(t, database.CompleteArtifactCheckpointStage(
+			ctx, landing, len(entries),
+		))
+		return
+	}
+	require.NoError(t, database.StageArtifactCheckpointSessionPage(
+		ctx, landing, entries, 0, offset,
+	))
+}
+
 func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	pool, err := sql.Open("sqlite3", path)

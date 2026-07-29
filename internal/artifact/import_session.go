@@ -205,11 +205,20 @@ func validateImportedClosure(m manifest, messages []db.Message) error {
 		return errors.New("manifest user message count is invalid")
 	}
 	ordinals := make(map[int]struct{}, len(messages))
+	userMessageCount := 0
 	for _, message := range messages {
 		if _, exists := ordinals[message.Ordinal]; exists {
 			return errors.New("session closure has duplicate message ordinal")
 		}
 		ordinals[message.Ordinal] = struct{}{}
+		if message.Role == "user" && !message.IsSystem {
+			userMessageCount++
+		}
+	}
+	if m.Session.UserMessageCount != userMessageCount {
+		return errors.New(
+			"manifest user message count does not match segment messages",
+		)
 	}
 	usageKeys := make(map[string]struct{}, len(m.UsageEvents))
 	for _, event := range m.UsageEvents {
