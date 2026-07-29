@@ -49,6 +49,7 @@ func (w *Watcher) RegisterRoots(
 				}
 			}
 			w.SetRootAgents(root.Path, agents)
+			w.setRootScopes(root.Path, root.Scopes)
 		}
 		return backend.RegisterRoots(roots, recursiveBudget)
 	}
@@ -62,6 +63,7 @@ func (w *Watcher) RegisterRoots(
 			}
 		}
 		w.SetRootAgents(root.Path, agents)
+		w.setRootScopes(root.Path, root.Scopes)
 		if !root.Exists {
 			continue
 		}

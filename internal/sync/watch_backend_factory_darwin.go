@@ -48,8 +48,8 @@ const (
 // probe on the collapsed scope roots would let authoritative reconciliation
 // tombstone every session under the absent subtree.
 type darwinFallbackPollPlan struct {
-	path  string
-	roots []string
+	path   string
+	scopes []PollingScope
 }
 
 // darwinFallbackPollingObligationKey names the per-plan fallback obligation so
@@ -61,26 +61,29 @@ func darwinFallbackPollingObligationKey(path string) string {
 // appendFallbackPollPlan adds a plan's scope roots under its physical path,
 // merging into an existing entry for the same path.
 func appendFallbackPollPlan(
-	plans []darwinFallbackPollPlan, path string, scopes []WatchScope,
+	plans []darwinFallbackPollPlan, path string, watchScopes []WatchScope,
 ) []darwinFallbackPollPlan {
-	roots := appendWatchScopeRoots(nil, scopes)
-	if len(roots) == 0 {
+	newScopes := appendWatchScopeRoots(nil, watchScopes)
+	if len(newScopes) == 0 {
 		return plans
 	}
 	for i := range plans {
 		if plans[i].path == path {
-			merged := plans[i].roots
-			for _, root := range roots {
-				if !slices.Contains(merged, root) {
-					merged = append(merged, root)
+			for _, ps := range newScopes {
+				if !slices.Contains(plans[i].scopes, ps) {
+					plans[i].scopes = append(plans[i].scopes, ps)
 				}
 			}
-			slices.Sort(merged)
-			plans[i].roots = merged
+			slices.SortFunc(plans[i].scopes, func(a, b PollingScope) int {
+				if a.Agent != b.Agent {
+					return strings.Compare(a.Agent, b.Agent)
+				}
+				return strings.Compare(a.Root, b.Root)
+			})
 			return plans
 		}
 	}
-	plans = append(plans, darwinFallbackPollPlan{path: path, roots: roots})
+	plans = append(plans, darwinFallbackPollPlan{path: path, scopes: newScopes})
 	slices.SortFunc(plans, func(a, b darwinFallbackPollPlan) int {
 		return strings.Compare(a.path, b.path)
 	})
@@ -1052,13 +1055,19 @@ func (b *darwinWatchBackend) requireRootPollingLocked(
 func (b *darwinWatchBackend) installRootPollingLocked(
 	state *darwinLogicalRoot,
 ) error {
-	roots := appendWatchScopeRoots(nil, state.plan.Scopes)
+	scopes := appendWatchScopeRoots(nil, state.plan.Scopes)
 	if b.onPollingRequired != nil {
 		return b.onPollingRequired(PollingObligation{
-			Key: state.plan.Path, Roots: roots, Probe: state.plan.Path,
+			Key: state.plan.Path, Scopes: scopes, Probe: state.plan.Path,
 		})
 	}
 	if b.onCoverageDegraded != nil {
+		roots := make([]string, 0, len(scopes))
+		for _, s := range scopes {
+			if !slices.Contains(roots, s.Root) {
+				roots = append(roots, s.Root)
+			}
+		}
 		return b.onCoverageDegraded(roots)
 	}
 	return nil
@@ -1251,9 +1260,9 @@ func (b *darwinWatchBackend) requireFallbackPolling(
 	if required != nil {
 		for _, plan := range plans {
 			if err := required(PollingObligation{
-				Key:   darwinFallbackPollingObligationKey(plan.path),
-				Roots: plan.roots,
-				Probe: plan.path,
+				Key:    darwinFallbackPollingObligationKey(plan.path),
+				Scopes: plan.scopes,
+				Probe:  plan.path,
 			}); err != nil {
 				return err
 			}
@@ -1273,9 +1282,9 @@ func (b *darwinWatchBackend) requireFallbackPolling(
 		// absent.
 		var roots []string
 		for _, plan := range plans {
-			for _, root := range plan.roots {
-				if !slices.Contains(roots, root) {
-					roots = append(roots, root)
+			for _, scope := range plan.scopes {
+				if !slices.Contains(roots, scope.Root) {
+					roots = append(roots, scope.Root)
 				}
 			}
 		}
@@ -1589,14 +1598,23 @@ func (b *darwinWatchBackend) scheduleFallbackRetryLocked(now time.Time) {
 	b.fallbackRetryAt = now.Add(b.fallbackRetryDelay)
 }
 
-func appendWatchScopeRoots(roots []string, scopes []WatchScope) []string {
-	for _, scope := range scopes {
-		if scope.SyncDir != "" && !slices.Contains(roots, filepath.Clean(scope.SyncDir)) {
-			roots = append(roots, filepath.Clean(scope.SyncDir))
+func appendWatchScopeRoots(scopes []PollingScope, watchScopes []WatchScope) []PollingScope {
+	for _, scope := range watchScopes {
+		if scope.SyncDir == "" {
+			continue
+		}
+		ps := PollingScope{Agent: scope.Agent, Root: filepath.Clean(scope.SyncDir)}
+		if !slices.Contains(scopes, ps) {
+			scopes = append(scopes, ps)
 		}
 	}
-	slices.Sort(roots)
-	return roots
+	slices.SortFunc(scopes, func(a, b PollingScope) int {
+		if a.Agent != b.Agent {
+			return strings.Compare(a.Agent, b.Agent)
+		}
+		return strings.Compare(a.Root, b.Root)
+	})
+	return scopes
 }
 
 func fallbackReasonLabel(reason darwinFallbackReason) string {

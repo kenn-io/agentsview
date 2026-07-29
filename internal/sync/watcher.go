@@ -67,18 +67,24 @@ type WatchBatch struct {
 
 type WatchCallback func(context.Context, WatchBatch) error
 
+// PollingScope identifies one configured provider root within a polling obligation.
+type PollingScope struct {
+	Agent string
+	Root  string
+}
+
 // PollingObligation identifies one independently releasable reason that a set
-// of configured roots needs authoritative polling coverage.
+// of configured scopes needs authoritative polling coverage.
 type PollingObligation struct {
-	Key   string
-	Roots []string
+	Key    string
+	Scopes []PollingScope
 	// Probe is the physical watcher path whose availability gates this
-	// obligation's reconciliation Roots. For nested provider roots (e.g.
+	// obligation's reconciliation Scopes. For nested provider roots (e.g.
 	// Gemini's <root>/tmp) the physical path differs from the configured
 	// reconciliation scope; probing the scope instead would let polling
 	// authoritatively reconcile a present <root> while the missing physical
 	// subtree holds every session, tombstoning all of them. Empty means the
-	// Roots themselves are the physical paths to probe.
+	// Scopes' roots themselves are the physical paths to probe.
 	Probe string
 }
 
@@ -611,19 +617,25 @@ func (s *watchEventSink) signal() {
 // Watcher schedules backend changes into serialized callbacks with short-burst
 // batching and a dispatch floor.
 type Watcher struct {
-	onChange            WatchCallback
-	onCoverageDegraded  func([]string) error
-	callbackCtx         context.Context
-	callbackCancel      context.CancelFunc
-	backend             watchBackend
-	eventSink           *watchEventSink
-	batchDelay          time.Duration
-	minInterval         time.Duration
-	maxEntries          int
-	dispatchEnabled     atomic.Bool
-	dispatchMu          sync.Mutex
-	rootAgentsMu        sync.RWMutex
-	rootAgents          map[string][]string
+	onChange           WatchCallback
+	onCoverageDegraded func([]string) error
+	onPollingRequired  func(PollingObligation) error
+	callbackCtx        context.Context
+	callbackCancel     context.CancelFunc
+	backend            watchBackend
+	eventSink          *watchEventSink
+	batchDelay         time.Duration
+	minInterval        time.Duration
+	maxEntries         int
+	dispatchEnabled    atomic.Bool
+	dispatchMu         sync.Mutex
+	rootAgentsMu       sync.RWMutex
+	rootAgents         map[string][]string
+	// rootScopes retains the full WatchScope set per physical root path,
+	// including scopes with empty Agent strings. The start-failure path uses
+	// this to emit PollingScope{Root: scope.SyncDir} rather than the physical
+	// path, so the coordinator's overlap check can match the configured dir.
+	rootScopes          map[string][]WatchScope
 	registeredSyncRoots []string
 	stopping            bool
 	lifecycleMu         sync.Mutex
@@ -750,6 +762,7 @@ func newWatcherWithBackendOptions(
 	w := &Watcher{
 		onChange:           onChange,
 		onCoverageDegraded: options.OnCoverageDegraded,
+		onPollingRequired:  options.OnPollingRequired,
 		callbackCtx:        callbackCtx,
 		callbackCancel:     callbackCancel,
 		backend:            backend,
@@ -758,6 +771,7 @@ func newWatcherWithBackendOptions(
 		minInterval:        minInterval,
 		maxEntries:         maxEntries,
 		rootAgents:         make(map[string][]string),
+		rootScopes:         make(map[string][]WatchScope),
 		stop:               make(chan struct{}),
 		done:               make(chan struct{}),
 	}
@@ -791,6 +805,17 @@ func (w *Watcher) agentsForRoot(root string) []string {
 	w.rootAgentsMu.RLock()
 	defer w.rootAgentsMu.RUnlock()
 	return append([]string(nil), w.rootAgents[filepath.Clean(root)]...)
+}
+
+// setRootScopes records the complete WatchScope set for a physical root,
+// including scopes with empty Agent strings. It is called from RegisterRoots
+// alongside SetRootAgents so the start-failure emission can use scope.SyncDir
+// rather than the physical path.
+func (w *Watcher) setRootScopes(root string, scopes []WatchScope) {
+	w.rootAgentsMu.Lock()
+	defer w.rootAgentsMu.Unlock()
+	stored := append([]WatchScope(nil), scopes...)
+	w.rootScopes[filepath.Clean(root)] = stored
 }
 
 // WatchRecursive walks a directory tree and adds all
@@ -832,34 +857,132 @@ func (w *Watcher) StartCollecting() error {
 
 func (w *Watcher) start(openDispatch bool) error {
 	w.lifecycleMu.Lock()
-	defer w.lifecycleMu.Unlock()
+
 	if w.lifecycle == watcherCollecting && openDispatch {
 		w.lifecycle = watcherDispatching
 		w.dispatchEnabled.Store(true)
+		w.lifecycleMu.Unlock()
 		w.eventSink.signal()
 		return nil
 	}
 	if w.lifecycle != watcherNew {
-		return w.startErr
+		err := w.startErr
+		w.lifecycleMu.Unlock()
+		return err
 	}
-	if err := w.backend.Start(); err != nil {
+
+	backendErr := w.backend.Start()
+	if backendErr != nil {
 		w.lifecycle = watcherStopped
 		w.beginStopping()
 		w.stopBackend()
 		w.finish()
-		if w.onCoverageDegraded != nil && len(w.registeredSyncRoots) > 0 {
-			err = errors.Join(err, w.onCoverageDegraded(w.registeredSyncRoots))
+
+		// Snapshot the callback obligations under the lock so the external
+		// callbacks run after lifecycleMu is released. A callback that calls
+		// w.Stop(), w.Start(), or w.OpenDispatch() must be able to re-acquire
+		// lifecycleMu without deadlocking.
+		//
+		// Lock order: lifecycleMu → rootAgentsMu.RLock is safe; rootAgentsMu
+		// is never acquired while lifecycleMu is held by other callers.
+		type startFailureEntry struct {
+			path   string
+			scopes []WatchScope
 		}
-		w.startErr = fmt.Errorf("starting %s backend: %w", w.backend.Name(), err)
-		log.Printf("watcher: %v", w.startErr)
-		return w.startErr
+		var obligations []PollingObligation
+		var fallbackRoots []string
+		if w.onPollingRequired != nil {
+			// Backend start failed while onPollingRequired is set. The
+			// caller's pre-start obligations (watchPollingObligations) only
+			// cover roots with known problems; cleanly-registered roots have
+			// none and would otherwise go dark. Emit one obligation per
+			// registered root so native-backend failure never silently drops
+			// clean roots.
+			//
+			// Use the full WatchScope set from rootScopes (not just agent
+			// names from rootAgents) so each scope's SyncDir becomes the
+			// PollingScope Root. The physical path is used only for the
+			// obligation Key and Probe; when the two differ (the common case
+			// for nested provider roots), using the physical path would leave
+			// the configured dir with no authoritative polling coverage.
+			//
+			// Preserve the invariant that a root whose scopes genuinely have
+			// no agent still gets one empty-agent scope so coverage is never
+			// silently dropped, but do NOT synthesise an extra empty-agent
+			// scope for a root that already has named scopes.
+			w.rootAgentsMu.RLock()
+			entries := make([]startFailureEntry, 0, len(w.rootScopes))
+			for path, scopes := range w.rootScopes {
+				entries = append(entries, startFailureEntry{
+					path:   path,
+					scopes: append([]WatchScope(nil), scopes...),
+				})
+			}
+			w.rootAgentsMu.RUnlock()
+			for _, e := range entries {
+				var pollScopes []PollingScope
+				for _, scope := range e.scopes {
+					root := scope.SyncDir
+					if root == "" {
+						root = e.path
+					}
+					pollScopes = append(pollScopes, PollingScope{
+						Agent: scope.Agent,
+						Root:  root,
+					})
+				}
+				if len(pollScopes) == 0 {
+					// No scopes at all: emit a synthetic empty-agent scope so
+					// this root is not silently dropped by the coordinator.
+					pollScopes = []PollingScope{{Root: e.path}}
+				}
+				obligations = append(obligations, PollingObligation{
+					Key:    "startfailure:" + e.path,
+					Scopes: pollScopes,
+					Probe:  e.path,
+				})
+			}
+		} else if w.onCoverageDegraded != nil && len(w.registeredSyncRoots) > 0 {
+			fallbackRoots = append([]string(nil), w.registeredSyncRoots...)
+		}
+
+		// Set startErr to a preliminary value before releasing lifecycleMu so
+		// any concurrent Start()/Stop() call observes failure and returns a
+		// non-nil error rather than seeing a nil startErr.
+		prelimErr := fmt.Errorf("starting %s backend: %w", w.backend.Name(), backendErr)
+		w.startErr = prelimErr
+		log.Printf("watcher: %v", prelimErr)
+		w.lifecycleMu.Unlock()
+
+		// Invoke all external callbacks after releasing lifecycleMu.
+		var callbackErr error
+		for _, ob := range obligations {
+			callbackErr = errors.Join(callbackErr, w.onPollingRequired(ob))
+		}
+		if len(fallbackRoots) > 0 {
+			callbackErr = errors.Join(callbackErr, w.onCoverageDegraded(fallbackRoots))
+		}
+
+		if callbackErr == nil {
+			return prelimErr
+		}
+		// Incorporate callback errors into the final startErr so callers that
+		// retry Start() see the complete failure reason.
+		finalErr := fmt.Errorf("starting %s backend: %w",
+			w.backend.Name(), errors.Join(backendErr, callbackErr))
+		w.lifecycleMu.Lock()
+		w.startErr = finalErr
+		w.lifecycleMu.Unlock()
+		return finalErr
 	}
+
 	w.lifecycle = watcherCollecting
 	go w.loop()
 	if openDispatch {
 		w.lifecycle = watcherDispatching
 		w.dispatchEnabled.Store(true)
 	}
+	w.lifecycleMu.Unlock()
 	return nil
 }
 
