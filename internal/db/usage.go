@@ -1478,25 +1478,46 @@ func dailyUsageAmounts(
 	pricedModel, lookup := pricing.Resolve(
 		r.model, usageLookupModel(r.model, r.ts))
 	rates := lookup.Rates
+	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	if r.cost.Valid && r.costSource != CopilotReportedCostSource {
 		cost = money.Money{Microdollars: r.cost.Int64}
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 	} else {
-		cost, err = rates.CostForTokens(
+		cost, err = rates.CostForTokensScoped(
+			requestScoped,
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
 		if err != nil {
 			return 0, 0, 0, 0, money.Money{}, money.Money{},
 				fmt.Errorf("pricing usage row for model %q: %w", r.model, err)
 		}
-		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		recordComputedUsagePricing(
+			pricing,
+			r.model,
+			pricedModel,
+			lookup,
+			requestScoped,
+			inputTok,
+			cacheCrTok,
+			cacheRdTok,
+		)
 	}
 
-	readRate, err := money.Sub(rates.InputPerMTok, rates.CacheReadPerMTok)
+	selectedRates := rates
+	if requestScoped {
+		selectedRates = rates.RatesForTokens(inputTok, cacheCrTok, cacheRdTok)
+	}
+	readRate, err := money.Sub(
+		selectedRates.InputPerMTok,
+		selectedRates.CacheReadPerMTok,
+	)
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("deriving cache read rate for model %q: %w", r.model, err)
 	}
-	creationRate, err := money.Sub(rates.InputPerMTok, rates.CacheWritePerMTok)
+	creationRate, err := money.Sub(
+		selectedRates.InputPerMTok,
+		selectedRates.CacheWritePerMTok,
+	)
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("deriving cache creation rate for model %q: %w", r.model, err)
@@ -1510,6 +1531,34 @@ func dailyUsageAmounts(
 			fmt.Errorf("pricing cache savings for model %q: %w", r.model, err)
 	}
 	return
+}
+
+func usageRowIsRequestScoped(
+	usageSource string, messageOrdinal sql.NullInt64,
+) bool {
+	return usageSource == "message" || messageOrdinal.Valid
+}
+
+func recordComputedUsagePricing(
+	pricing *export.PricingResolver,
+	reportedModel, pricedModel string,
+	lookup export.PricingLookup,
+	requestScoped bool,
+	inputTokens, cacheWriteTokens, cacheReadTokens int,
+) {
+	if requestScoped {
+		pricing.RecordResolvedComputedRequest(
+			reportedModel,
+			pricedModel,
+			lookup,
+			inputTokens,
+			cacheWriteTokens,
+			cacheReadTokens,
+		)
+		return
+	}
+	pricing.RecordResolvedComputedAggregate(
+		reportedModel, pricedModel, lookup)
 }
 
 type usageDedupToken struct {
@@ -2825,13 +2874,24 @@ func sessionRowCost(
 		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
-	cost, err = lookup.Rates.CostForTokens(
+	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	cost, err = lookup.Rates.CostForTokensScoped(
+		requestScoped,
 		inTok, outTok, reasoningTok, crTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing session usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+	recordComputedUsagePricing(
+		pricing,
+		r.model,
+		pricedModel,
+		lookup,
+		requestScoped,
+		inTok,
+		crTok,
+		rdTok,
+	)
 	return cost, true, true, nil
 }
 

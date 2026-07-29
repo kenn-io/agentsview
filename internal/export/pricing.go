@@ -53,7 +53,23 @@ func (r ModelRates) RatesForTokens(
 func (r ModelRates) CostForTokens(
 	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
 ) (money.Money, error) {
-	r = r.RatesForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	return r.CostForTokensScoped(
+		true,
+		inputTokens,
+		outputTokens,
+		reasoningTokens,
+		cacheWriteTokens,
+		cacheReadTokens,
+	)
+}
+
+func (r ModelRates) CostForTokensScoped(
+	requestScoped bool,
+	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
+) (money.Money, error) {
+	if requestScoped {
+		r = r.RatesForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	}
 	// reasoningTokens is a breakdown of outputTokens for current sources, not
 	// additional billable output. Reasoning-only rows still bill at output rate.
 	billableOutputTokens := outputTokens

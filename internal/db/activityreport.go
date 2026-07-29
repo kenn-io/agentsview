@@ -559,12 +559,23 @@ func sqliteActivityReportRowStatus(
 		pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
 		return money.Money{}, false, true, nil
 	}
-	cost, err = lookup.Rates.CostForTokens(
+	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	cost, err = lookup.Rates.CostForTokensScoped(
+		requestScoped,
 		inTok, outTok, reasoningTok, crTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
 	}
-	pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+	recordComputedUsagePricing(
+		pricing,
+		r.model,
+		pricedModel,
+		lookup,
+		requestScoped,
+		inTok,
+		crTok,
+		rdTok,
+	)
 	return cost, true, true, nil
 }

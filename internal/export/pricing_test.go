@@ -240,6 +240,21 @@ func TestModelRatesPricesRequestsBeforeAggregation(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 300_000}, money.MustAdd(first, second))
 }
 
+func TestModelRatesCostForTokensScopedAggregateUsesBaseRate(t *testing.T) {
+	rates := ModelRates{
+		InputPerMTok: money.MustParseDollars("1"),
+		Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}},
+	}
+
+	cost, err := rates.CostForTokensScoped(false, 300_000, 0, 0, 0, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, money.Money{Microdollars: 300_000}, cost)
+}
+
 func TestPricingResolverBuildBlockPricingBandsAndApplicationCounts(t *testing.T) {
 	baseUpdatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	bandUpdatedAt := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
