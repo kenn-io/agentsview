@@ -1913,7 +1913,7 @@ func watchPollingObligations(
 		}
 		if !result.MissingRootLifecycleOwned {
 			add(root.pollingObligations(
-				root.path, root.path, root.pendingPollingDirs, false,
+				root.path, root.path, root.pendingPollingDirs,
 			)...)
 		}
 		for dir, scopes := range root.persistentPollingScopes {
@@ -1922,7 +1922,6 @@ func watchPollingObligations(
 				"persistent:"+cleanDir,
 				cleanDir,
 				scopes,
-				false,
 			)...)
 		}
 		if i >= len(results) {
@@ -1933,14 +1932,14 @@ func watchPollingObligations(
 			// pollable and the fallback poll reconciles it as an
 			// authoritative empty discovery.
 			add(root.pollingObligations(
-				root.path, root.path, root.syncDirs(), true,
+				unwatchedRootKey(root.path), root.path, root.syncDirs(),
 			)...)
 			continue
 		}
 		if result.Unwatched > 0 || result.BudgetExhausted ||
 			result.ResourceExhausted || result.Err != nil {
 			add(root.pollingObligations(
-				root.path, root.path, root.syncDirs(), true,
+				unwatchedRootKey(root.path), root.path, root.syncDirs(),
 			)...)
 		}
 	}
@@ -1958,7 +1957,6 @@ func watchPollingObligations(
 				"persistent:"+dir,
 				dir,
 				[]watchScope{{syncDir: dir}},
-				false,
 			)...)
 		}
 	}
@@ -1968,17 +1966,23 @@ func watchPollingObligations(
 	return obligations
 }
 
+// unwatchedRootKey names the obligation a root gets when its watcher was never
+// constructed or its registration failed. It is a distinct key rather than the
+// root's own so that this obligation and the root's pending obligation stay
+// separate without either having to be split per directory to tell them apart.
+func unwatchedRootKey(rootPath string) string {
+	return "unwatched:" + filepath.Clean(rootPath)
+}
+
 func (r watchRoot) pollingObligations(
 	rootKey string,
 	probePath string,
 	dirs []string,
-	alwaysSplitByDir bool,
 ) []sync.PollingObligation {
 	return pollingObligationsForScopes(
 		rootKey,
 		probePath,
 		r.scopesForDirs(dirs),
-		alwaysSplitByDir,
 	)
 }
 
@@ -1990,15 +1994,15 @@ func (r watchRoot) pollingObligations(
 // directory it never looked at, and a change in another grouped directory is
 // skipped for as long as the probe stays unchanged.
 //
-// alwaysSplitByDir additionally forces the split at one directory. It is not a
-// second policy: the registration-failure call sites reuse the root's own key,
-// so without the per-directory suffix their obligation would collide with the
-// pending obligation for the same root when both fire.
+// Callers do not choose this. The registration-failure sites used to force the
+// split at one directory so their obligation would not collide with the
+// pending obligation on the same root key; they carry their own key prefix
+// instead, which keeps them distinct without emitting a second obligation over
+// the same directory, agent, and probe.
 func pollingObligationsForScopes(
 	rootKey string,
 	probePath string,
 	scopes []watchScope,
-	alwaysSplitByDir bool,
 ) []sync.PollingObligation {
 	if len(scopes) == 0 {
 		return nil
@@ -2024,7 +2028,7 @@ func pollingObligationsForScopes(
 		dirs = append(dirs, dir)
 	}
 	slices.Sort(dirs)
-	splitByDir := alwaysSplitByDir || len(grouped) > 1
+	splitByDir := len(grouped) > 1
 	for _, cleanDir := range dirs {
 		key := rootKey
 		var agent parser.AgentType
@@ -2196,7 +2200,6 @@ func symlinkPollingObligations(
 			"symlink:"+filepath.Clean(symRoot),
 			filepath.Clean(symRoot),
 			scopes,
-			false,
 		)...)
 	}
 	slices.SortFunc(obligations, func(a, b sync.PollingObligation) int {

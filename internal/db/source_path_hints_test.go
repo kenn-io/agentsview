@@ -1330,24 +1330,24 @@ func TestStoredSourcePathHintExclusionsMatchAcrossPathRepresentations(t *testing
 		assert.Empty(t, got)
 	})
 
-	t.Run("relative scope keeps an absolute exclusion as a narrowing", func(t *testing.T) {
+	t.Run("an absolute exclusion is re-expressed for a relative scope", func(t *testing.T) {
 		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
 			{Path: relativeRoot, Excluded: []string{absoluteNested}},
 		})
 		require.Len(t, got, 1)
 		assert.Equal(t, relativeRoot, got[0].Path,
 			"the scope keeps the representation the query has to match")
-		assert.Equal(t, []string{absoluteNested}, got[0].Excluded,
-			"a nested exclusion still narrows a relatively expressed scope")
+		assert.Equal(t, []string{relativeNested}, got[0].Excluded,
+			"the exclusion binds against file_path, so it has to use the scope's representation")
 	})
 
-	t.Run("absolute scope keeps a relative exclusion as a narrowing", func(t *testing.T) {
+	t.Run("a relative exclusion is re-expressed for an absolute scope", func(t *testing.T) {
 		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
 			{Path: absoluteRoot, Excluded: []string{relativeNested}},
 		})
 		require.Len(t, got, 1)
 		assert.Equal(t, absoluteRoot, got[0].Path)
-		assert.Equal(t, []string{relativeNested}, got[0].Excluded)
+		assert.Equal(t, []string{absoluteNested}, got[0].Excluded)
 	})
 
 	t.Run("a sibling outside the scope still narrows nothing", func(t *testing.T) {
@@ -1356,5 +1356,78 @@ func TestStoredSourcePathHintExclusionsMatchAcrossPathRepresentations(t *testing
 		})
 		require.Len(t, got, 1)
 		assert.Empty(t, got[0].Excluded)
+	})
+}
+
+// TestListActiveSessionSourceOwnershipScopesPageExcludesRelativeScopeInQuery
+// exercises the exclusion through SQL rather than through normalization alone.
+// An exclusion left in the representation it arrived in binds against
+// `file_path` values that use the scope's representation, so it matches nothing
+// and the excluded archive pages anyway.
+func TestListActiveSessionSourceOwnershipScopesPageExcludesRelativeScopeInQuery(t *testing.T) {
+	d := testDB(t)
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	relativeRoot := filepath.Join("testdata", "relative-scope")
+	absoluteNested := filepath.Join(wd, relativeRoot, "archive")
+
+	seeds := make([]storedSourcePathSeed, 0, WatchReconcileSourcePageSize+8)
+	for i := range WatchReconcileSourcePageSize + 4 {
+		seeds = append(seeds, storedSourcePathSeed{
+			id:    fmt.Sprintf("nested-%04d", i),
+			agent: "claude",
+			path:  filepath.Join(relativeRoot, "archive", fmt.Sprintf("a-%04d.jsonl", i)),
+		})
+	}
+	selectedIDs := make([]string, 0, 3)
+	for i := range 3 {
+		id := fmt.Sprintf("selected-%04d", i)
+		selectedIDs = append(selectedIDs, id)
+		seeds = append(seeds, storedSourcePathSeed{
+			id:    id,
+			agent: "claude",
+			path:  filepath.Join(relativeRoot, fmt.Sprintf("session-%04d.jsonl", i)),
+		})
+	}
+	insertSessionsWithSourcePaths(t, d, seeds)
+	require.NoError(t, d.BaselineActiveSessionSourcePaths(
+		t.Context(), defaultMachine, sourcePathsFromSeeds(seeds),
+	))
+
+	page, err := d.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), defaultMachine, "claude",
+		[]StoredSourcePathHintScope{{
+			Path: relativeRoot, Excluded: []string{absoluteNested},
+		}},
+		SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(page))
+	for _, ownership := range page {
+		got = append(got, ownership.ID)
+	}
+	assert.Equal(t, selectedIDs, got,
+		"an absolute exclusion must narrow a relatively expressed scope in the query, not after the read")
+}
+
+func TestNormalizeExcludedHintRootsHandlesVolumeAndUnresolvableRoots(t *testing.T) {
+	t.Run("a root ending in a separator still matches descendants", func(t *testing.T) {
+		root := filepath.VolumeName(os.Args[0])
+		if root == "" {
+			t.Skip("no volume name on this platform")
+		}
+		volumeRoot := root + string(filepath.Separator)
+		nested := filepath.Join(volumeRoot, "archive")
+
+		got := normalizeExcludedHintRoots(volumeRoot, []string{nested})
+		assert.Equal(t, []string{nested}, got,
+			"appending a second separator to a volume root yields a prefix nothing matches")
+	})
+
+	t.Run("an exclusion that cannot be canonicalized is dropped", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "claude")
+		assert.Empty(t, normalizeExcludedHintRoots(root, []string{"", "."}),
+			"an undecidable exclusion must not fall back to a lexical compare")
 	})
 }

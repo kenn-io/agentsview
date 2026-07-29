@@ -2826,42 +2826,68 @@ func normalizeStoredSourcePathHintScopes(
 // already absolute. Comparing both in absolute form is what stops a relative
 // configured path from reading as outside an exclusion that in fact contains
 // it, which would page the excluded archive on every pass.
-func hintContainmentPath(path string) string {
+//
+// The empty second return says the path could not be canonicalized. Callers
+// treat that as "cannot decide containment" and drop the exclusion rather than
+// fall back to a lexical compare, which is the mismatch this exists to remove.
+func hintContainmentPath(path string) (string, bool) {
 	cleaned := cleanStoredSourcePathHint(path)
 	if cleaned == "" || cleaned == "." {
-		return cleaned
+		return "", false
 	}
 	abs, err := filepath.Abs(cleaned)
 	if err != nil {
-		return cleaned
+		return "", false
 	}
-	return abs
+	return abs, true
+}
+
+// hintRootPrefix returns the prefix a descendant of root must start with. A
+// volume or share root such as `C:\` already ends in a separator, and appending
+// a second one yields a prefix nothing can match.
+func hintRootPrefix(root string) string {
+	if strings.HasSuffix(root, string(filepath.Separator)) {
+		return root
+	}
+	return root + string(filepath.Separator)
 }
 
 // normalizeExcludedHintRoots keeps the strict descendants of root, the only
 // exclusions that can narrow a scope without emptying it, then deduplicates
 // and orders them so the rendered SQL is stable.
+//
+// Each surviving exclusion is re-expressed in the scope's own representation.
+// The query binds it against `file_path`, and rows under a relatively expressed
+// scope carry relative paths, so an exclusion left in absolute form would match
+// nothing and the excluded archive would page anyway, filtered out only after
+// the read.
 func normalizeExcludedHintRoots(root string, excluded []string) []string {
 	if len(excluded) == 0 {
 		return nil
 	}
-	comparableRoot := hintContainmentPath(root)
+	cleanRoot := cleanStoredSourcePathHint(root)
+	comparableRoot, ok := hintContainmentPath(root)
+	if !ok {
+		return nil
+	}
 	out := make([]string, 0, len(excluded))
 	for _, candidate := range excluded {
-		cleaned := cleanStoredSourcePathHint(candidate)
-		comparable := hintContainmentPath(candidate)
-		if comparable == "" || comparable == "." || comparable == comparableRoot {
+		comparable, ok := hintContainmentPath(candidate)
+		if !ok || comparable == comparableRoot {
 			continue
 		}
-		if !strings.HasPrefix(
-			comparable, comparableRoot+string(filepath.Separator),
-		) {
+		if !strings.HasPrefix(comparable, hintRootPrefix(comparableRoot)) {
 			continue
 		}
-		if slices.Contains(out, cleaned) {
+		rel, err := filepath.Rel(comparableRoot, comparable)
+		if err != nil {
 			continue
 		}
-		out = append(out, cleaned)
+		stored := cleanStoredSourcePathHint(filepath.Join(cleanRoot, rel))
+		if slices.Contains(out, stored) {
+			continue
+		}
+		out = append(out, stored)
 	}
 	sort.Strings(out)
 	return out
@@ -2977,16 +3003,17 @@ func storedSourcePathHintInRoot(path string, scope StoredSourcePathHintScope) bo
 // so the query and the post-read filter agree on scope membership. A virtual
 // member is covered by its container's prefix, so no member branch is needed.
 func storedSourcePathHintExcluded(path string, excluded []string) bool {
-	comparablePath := hintContainmentPath(path)
+	comparablePath, pathOK := hintContainmentPath(path)
+	if !pathOK {
+		return false
+	}
 	return slices.ContainsFunc(excluded, func(root string) bool {
-		comparableRoot := hintContainmentPath(root)
-		if comparableRoot == "" || comparableRoot == "." {
+		comparableRoot, ok := hintContainmentPath(root)
+		if !ok {
 			return false
 		}
 		return comparablePath == comparableRoot ||
-			strings.HasPrefix(
-				comparablePath, comparableRoot+string(filepath.Separator),
-			)
+			strings.HasPrefix(comparablePath, hintRootPrefix(comparableRoot))
 	})
 }
 

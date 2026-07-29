@@ -1796,7 +1796,7 @@ func TestWatchPollingObligationsCoverRegistrationFailureByLogicalRoot(t *testing
 	)
 
 	require.Len(t, got, 1)
-	assert.Equal(t, watchPath+"|"+filepath.Clean(syncDir), got[0].Key)
+	assert.Equal(t, unwatchedRootKey(watchPath), got[0].Key)
 	assert.Equal(t, parser.AgentClaude, got[0].Agent)
 	assert.Equal(t, []string{syncDir}, got[0].Roots)
 	assert.Equal(t, watchPath, got[0].Probe)
@@ -1827,13 +1827,13 @@ func TestWatchPollingObligationsKeepMergedRootProbesScopedToTheirDir(t *testing.
 	require.Len(t, got, 2)
 	assert.Equal(t, []agentsync.PollingObligation{
 		{
-			Key:   watchPath + "|" + filepath.Clean(unsupportedDir),
+			Key:   unwatchedRootKey(watchPath) + "|" + filepath.Clean(unsupportedDir),
 			Agent: parser.AgentKilo,
 			Roots: []string{unsupportedDir},
 			Probe: watchPath,
 		},
 		{
-			Key:   watchPath + "|" + filepath.Clean(openCodeDir),
+			Key:   unwatchedRootKey(watchPath) + "|" + filepath.Clean(openCodeDir),
 			Agent: parser.AgentOpenCode,
 			Roots: []string{openCodeDir},
 			Probe: watchPath,
@@ -1863,7 +1863,7 @@ func TestWatchPollingObligationsSharedDirWithUnsupportedScopeDisablesProbe(t *te
 
 	require.Len(t, got, 1)
 	assert.Equal(t, []agentsync.PollingObligation{{
-		Key:   watchPath,
+		Key:   unwatchedRootKey(watchPath),
 		Roots: []string{sharedDir},
 		Probe: watchPath,
 	}}, got)
@@ -3812,4 +3812,41 @@ func TestWatchPollingObligationsKeepMixedProviderDirsGrouped(t *testing.T) {
 		Roots: []string{mixedDir, otherMixedDir},
 		Probe: watchPath,
 	}, got[0], "mixed-provider dirs stay generic and keep sharing the root obligation")
+}
+
+// TestWatchPollingObligationsDoNotDuplicateUnwatchedAndPendingObligations
+// covers the pair a shared root key used to produce: when a root has pending
+// polling dirs and its registration also failed, both branches fire, and with
+// both keyed on the root the two obligations differed only by a per-directory
+// suffix while carrying the same agent, roots, and probe. The coordinator then
+// evaluated the same degraded probe twice per tick.
+func TestWatchPollingObligationsDoNotDuplicateUnwatchedAndPendingObligations(t *testing.T) {
+	base := t.TempDir()
+	syncDir := filepath.Join(base, "opencode")
+	watchPath := filepath.Join(base, "sessions")
+	roots := []watchRoot{{
+		path:      watchPath,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: syncDir},
+		},
+		pendingPollingDirs: []string{syncDir},
+	}}
+
+	got := watchPollingObligations(
+		roots,
+		[]agentsync.RecursiveWatchResult{{Unwatched: 1, Err: errors.New("watch failed")}},
+		nil,
+		nil,
+	)
+
+	require.Len(t, got, 2, "the pending and unwatched reasons are distinct obligations")
+	keys := []string{got[0].Key, got[1].Key}
+	assert.ElementsMatch(t, []string{watchPath, unwatchedRootKey(watchPath)}, keys,
+		"they are told apart by their own keys, not by a per-directory suffix")
+	for _, obligation := range got {
+		assert.Equal(t, []string{syncDir}, obligation.Roots)
+		assert.Equal(t, watchPath, obligation.Probe)
+	}
 }
