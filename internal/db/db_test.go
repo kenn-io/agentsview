@@ -1010,7 +1010,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 
 func TestCurrentDataVersionGitWorktreeProjectAttribution(t *testing.T) {
 	assert.Equal(t, 75, CurrentDataVersion(),
-		"git worktree project attribution requires a data version bump")
+		"final git worktree project attribution requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

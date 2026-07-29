@@ -334,10 +334,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // ide_selection wrappers are promoted to system metadata so existing
 // VS Code sessions no longer use them as titles or user turns.)
 // (75: Git worktree project attribution reparse. Hosting-oriented worktree
-// paths retain the owning repository after checkout removal, and live linked
+// paths retain the owning repository after checkout removal, live linked
 // worktrees backed by bare common repositories resolve to the repository
-// instead of the generated checkout leaf. Existing rows need re-parsing so
-// project activity is no longer fragmented by worktree names.)
+// instead of the generated checkout leaf, and generic hosting fragments defer
+// to an enclosing live repository. Existing rows need re-parsing so activity
+// is neither fragmented by worktree names nor claimed by nested fixture paths.)
 const dataVersion = 75
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
