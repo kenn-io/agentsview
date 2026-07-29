@@ -124,3 +124,16 @@ func exceedsCollectionLimit(current, additional, limit int) bool {
 }
 
 var errFutureArtifactVersion = errors.New("future artifact version")
+
+type futureArtifactVersionError struct {
+	Kind    Kind
+	Version int
+}
+
+func (e *futureArtifactVersionError) Error() string {
+	return fmt.Sprintf("%s has future artifact version %d", e.Kind, e.Version)
+}
+
+func (e *futureArtifactVersionError) Unwrap() error {
+	return errFutureArtifactVersion
+}

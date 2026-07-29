@@ -23,7 +23,9 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 	// their scalar header avoids allocating collections whose schema this
 	// version does not understand.
 	if envelope.Version > manifestFormatVersion {
-		return manifest{Version: envelope.Version, Origin: envelope.Origin}, nil
+		return manifest{}, &futureArtifactVersionError{
+			Kind: KindManifests, Version: envelope.Version,
+		}
 	}
 	if envelope.Version != manifestFormatVersion {
 		return manifest{}, fmt.Errorf(
@@ -211,10 +213,9 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 			return segmentPreflight{}, fmt.Errorf("decoding message segment header: %w", err)
 		}
 		if header.Version > messageSegmentFormatVersion {
-			return segmentPreflight{}, fmt.Errorf(
-				"%w: message segment has artifact version %d",
-				errFutureArtifactVersion, header.Version,
-			)
+			return segmentPreflight{}, &futureArtifactVersionError{
+				Kind: KindSegments, Version: header.Version,
+			}
 		}
 		if header.Version != messageSegmentFormatVersion {
 			return segmentPreflight{}, fmt.Errorf(
