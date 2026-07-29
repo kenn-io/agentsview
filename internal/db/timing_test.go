@@ -596,7 +596,7 @@ func timingInsertToolCallAtIndex(
 }
 
 func timingInt64Ptr(v int64) *int64 {
-	return &v
+	return new(v)
 }
 
 func timingInsertToolResultEvent(
