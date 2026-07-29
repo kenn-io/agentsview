@@ -29,8 +29,9 @@ const maxFallbackSnapshotModels = 100_000
 var litellmSnapshotFS embed.FS
 
 type litellmFallbackSnapshot struct {
-	Version string         `json:"version"`
-	Models  []ModelPricing `json:"models"`
+	Version   string         `json:"version"`
+	SourceRef string         `json:"source_ref"`
+	Models    []ModelPricing `json:"models"`
 }
 
 var (
@@ -48,6 +49,10 @@ var FallbackVersion = fallbackVersionUnknown
 // existing databases pick up supplemental additions on binary upgrade
 // even when the snapshot itself is unchanged.
 var SeedVersion = fallbackVersionUnknown
+
+// FallbackSourceRef is the immutable LiteLLM commit used to generate the
+// embedded fallback catalog.
+var FallbackSourceRef string
 
 func init() {
 	fallbackPricingOnce.Do(initFallbackPricing)
@@ -72,6 +77,7 @@ func initFallbackPricing() {
 		fallbackPricingErr = fmt.Errorf("loading liteLLM snapshot: %w", err)
 		FallbackVersion = fallbackVersionUnknown
 		SeedVersion = fallbackVersionUnknown
+		FallbackSourceRef = ""
 		log.Panicf("pricing: %v", fallbackPricingErr)
 	}
 
@@ -85,6 +91,7 @@ func initFallbackPricing() {
 	fallbackPricing = merged
 	FallbackVersion = snapshot.Version
 	SeedVersion = snapshot.Version + "+supplemental-" + supplementalVersion
+	FallbackSourceRef = snapshot.SourceRef
 }
 
 func decodeFallbackSnapshot() (litellmFallbackSnapshot, error) {

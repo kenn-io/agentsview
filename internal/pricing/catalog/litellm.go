@@ -16,9 +16,9 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-const litellmURL = "https://raw.githubusercontent.com/" +
-	"BerriAI/litellm/main/" +
-	"model_prices_and_context_window.json"
+const litellmBaseURL = "https://raw.githubusercontent.com/BerriAI/litellm/"
+const litellmPricingFile = "model_prices_and_context_window.json"
+const litellmURL = litellmBaseURL + "main/" + litellmPricingFile
 
 // ModelPricing holds per-model token pricing in cost per million tokens.
 type ModelPricing struct {
@@ -55,6 +55,19 @@ func FetchLiteLLMPricingContext(
 ) ([]ModelPricing, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return fetchLiteLLMPricing(ctx, client, litellmURL)
+}
+
+// FetchLiteLLMPricingAtRef downloads the catalog from an immutable upstream
+// Git ref for reproducible fallback snapshot generation.
+func FetchLiteLLMPricingAtRef(
+	ctx context.Context, ref string,
+) ([]ModelPricing, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	return fetchLiteLLMPricing(
+		ctx,
+		client,
+		litellmBaseURL+ref+"/"+litellmPricingFile,
+	)
 }
 
 func fetchLiteLLMPricing(

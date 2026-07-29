@@ -470,6 +470,23 @@ func TestPricingResolverLookupCachesByReportedModel(t *testing.T) {
 	assert.Len(t, resolver.lookupCache, 1)
 }
 
+func TestPricingResolverDeepClonesPricingBands(t *testing.T) {
+	rows := []EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: ModelRates{Bands: []PricingBand{{
+			AboveInputTokens: 200_000,
+			InputPerMTok:     money.MustParseDollars("2"),
+		}}},
+	}}
+	resolver := NewPricingResolver(rows)
+	rows[0].Rates.Bands[0].InputPerMTok = money.MustParseDollars("99")
+
+	lookup := resolver.Lookup("banded-model")
+	require.True(t, lookup.OK)
+
+	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.Bands[0].InputPerMTok)
+}
+
 func TestPricingResolverSourceCanonicalOrder(t *testing.T) {
 	tests := []struct {
 		name string

@@ -92,10 +92,20 @@ as its base rate. This makes a band-only update or removal as deterministic as a
 base-rate change. Full-resync archive copying and PostgreSQL push copy the band
 rows alongside base pricing.
 
-Fallback pricing snapshots retain bands, so offline estimates behave like fresh
-LiteLLM pricing. User-configured custom pricing remains a single flat rate tuple
-and replaces both the fetched base rate and its bands for that model; Agentsview
-must not combine custom base rates with fetched tier rates.
+Fallback pricing snapshots retain bands and embed the immutable LiteLLM commit
+that produced them, so offline estimates are reproducible and behave like the
+corresponding live catalog. The read-only offline path carries those complete
+effective rates instead of flattening them into custom-rate DTOs.
+User-configured custom pricing remains a single flat rate tuple and replaces
+both the fetched base rate and its bands for that model; Agentsview must not
+combine custom base rates with fetched tier rates.
+
+Every complete band-set replacement, including removal of the final band,
+advances the parent pricing row timestamp. This keeps catalog versions monotone
+when no child timestamp remains. Nested band slices are treated as immutable and
+deep-cloned at caller-facing and cache boundaries. A read-only open of an older
+archive reports the existing schema-upgrade-required diagnostic until a writable
+process installs the forward table.
 
 ## Cost Calculation
 
@@ -141,6 +151,7 @@ application counts describe this report and are not part of that catalog digest.
 - Duplicate thresholds for a model are an ingestion error.
 - Bands are emitted and persisted in ascending threshold order.
 - A missing companion tier rate inherits the base component.
+- A null anchor is ignored; a null companion is missing and inherits base.
 - An explicit zero tier rate is preserved.
 - Models without bands retain current flat-rate behavior.
 - Aggregate usage with unknown request boundaries uses base rates.

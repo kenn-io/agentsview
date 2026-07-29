@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -34,20 +36,24 @@ func mustRate(dollars string) money.Money {
 }
 
 const (
-	defaultSnapshotRef     = "4e9a816778337eb7c6c06fe42a1b24ad362e40c0"
-	defaultSnapshotSHA256  = "9bb2314a67c83a632d3f5c77d07ef05b2de777b035cf3f87bf2c1aad1ff4a806"
-	defaultSnapshotBranch  = "litellm-pricing-snapshot"
-	defaultSnapshotFile    = "litellm_snapshot.json.gz"
-	defaultSnapshotBaseURL = "https://raw.githubusercontent.com/kenn-io/agentsview"
+	defaultSnapshotRef      = "db257992fb8e3048af8c1cec9da738c28b4fe603"
+	defaultSnapshotSHA256   = "0e89b636ccf858edbf95a3f6188476b6eab6cf21f66d16a65c2184229ef81cbe"
+	defaultSnapshotBranch   = "litellm-pricing-snapshot"
+	defaultSnapshotFile     = "litellm_snapshot.json.gz"
+	defaultSnapshotBaseURL  = "https://raw.githubusercontent.com/kenn-io/agentsview"
+	defaultLiteLLMSourceRef = "551e5d097c11f08fd2400a25a651b1844fcf89c2"
 )
+
+var immutableGitRefPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 const maxSnapshotCompressedBytes = 1 << 20
 const maxSnapshotJSONBytes = 8 << 20
 const maxSnapshotModels = 100_000
 
 type snapshotBundle struct {
-	Version string                 `json:"version"`
-	Models  []catalog.ModelPricing `json:"models"`
+	Version   string                 `json:"version"`
+	SourceRef string                 `json:"source_ref"`
+	Models    []catalog.ModelPricing `json:"models"`
 }
 
 func main() {
@@ -59,6 +65,11 @@ func main() {
 	restoreSHA256 := flag.String("sha256", defaultSnapshotSHA256, "expected snapshot SHA256")
 	restoreBranch := flag.String("branch", defaultSnapshotBranch, "artifact branch to fetch when ref is missing")
 	restoreURL := flag.String("url", defaultSnapshotURL(), "snapshot URL to use when git restore is unavailable")
+	litellmSourceRef := flag.String(
+		"litellm-ref",
+		defaultLiteLLMSourceRef,
+		"immutable LiteLLM commit used to generate the snapshot",
+	)
 	flag.Parse()
 
 	if *validatePath != "" {
@@ -82,7 +93,13 @@ func main() {
 		return
 	}
 
-	prices, err := catalog.FetchLiteLLMPricing()
+	if !immutableGitRefPattern.MatchString(*litellmSourceRef) {
+		panic("litellm-ref must be a full lowercase commit SHA")
+	}
+	prices, err := catalog.FetchLiteLLMPricingAtRef(
+		context.Background(),
+		*litellmSourceRef,
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -99,8 +116,9 @@ func main() {
 
 	version := computeVersion(modelsJSON)
 	bundle := snapshotBundle{
-		Version: version,
-		Models:  prices,
+		Version:   version,
+		SourceRef: *litellmSourceRef,
+		Models:    prices,
 	}
 
 	raw, err := json.Marshal(bundle)
@@ -173,6 +191,9 @@ func validateSnapshotFile(path string) error {
 	}
 	if snapshot.Version == "" {
 		return fmt.Errorf("missing snapshot version")
+	}
+	if !immutableGitRefPattern.MatchString(snapshot.SourceRef) {
+		return fmt.Errorf("missing immutable LiteLLM source ref")
 	}
 	if len(snapshot.Models) == 0 {
 		return fmt.Errorf("missing snapshot models")

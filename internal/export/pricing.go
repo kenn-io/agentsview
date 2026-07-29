@@ -114,9 +114,10 @@ type pricingRecord struct {
 
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 	copied := make([]EffectivePricingRow, len(rows))
-	copy(copied, rows)
 	byModel := make(map[string]ModelRates, len(rows))
-	for _, row := range rows {
+	for i, row := range rows {
+		row.Rates.Bands = append([]PricingBand(nil), row.Rates.Bands...)
+		copied[i] = row
 		if row.ModelPattern == "" {
 			continue
 		}

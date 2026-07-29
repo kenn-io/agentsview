@@ -78,6 +78,7 @@ func TestDefaultSnapshotConstantsNonEmpty(t *testing.T) {
 	assert.Len(t, defaultSnapshotSHA256, 64, "pinned SHA256 must be a hex-encoded SHA-256")
 	assert.NotEmpty(t, defaultSnapshotBranch, "pinned branch must be set")
 	assert.NotEmpty(t, defaultSnapshotFile, "pinned file must be set")
+	assert.Len(t, defaultLiteLLMSourceRef, 40, "LiteLLM source must be a full commit SHA")
 }
 
 func TestFileURLForPathUsesFileScheme(t *testing.T) {
@@ -101,6 +102,7 @@ func TestFileURLPathForAbsPrefixesWindowsDrivePaths(t *testing.T) {
 func TestValidateSnapshotFileAcceptsValidSnapshot(t *testing.T) {
 	path := writeSnapshotFile(t, []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`))
 
@@ -119,6 +121,7 @@ func TestValidateSnapshotFileRejectsInvalidGzip(t *testing.T) {
 func TestValidateSnapshotFileRejectsEmptyModels(t *testing.T) {
 	path := writeSnapshotFile(t, []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": []
 	}`))
 
@@ -127,9 +130,21 @@ func TestValidateSnapshotFileRejectsEmptyModels(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing snapshot models")
 }
 
+func TestValidateSnapshotFileRejectsMissingSourceRef(t *testing.T) {
+	path := writeSnapshotFile(t, []byte(`{
+		"version": "litellm-test",
+		"models": [{"ModelPattern": "test-model"}]
+	}`))
+
+	err := validateSnapshotFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing immutable LiteLLM source ref")
+}
+
 func TestValidateSnapshotFileRejectsInvalidPricingBands(t *testing.T) {
 	path := writeSnapshotFile(t, []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{
 			"ModelPattern": "test-model",
 			"Bands": [{"above_input_tokens": 0}]
@@ -161,6 +176,7 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 	source := filepath.Join(repo, "litellm_snapshot.json.gz")
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`)), 0o644))
 	runGit(t, repo, "add", "litellm_snapshot.json.gz")
@@ -199,6 +215,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	source := filepath.Join(remote, "litellm_snapshot.json.gz")
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-old",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "old-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`)), 0o644))
 	runGit(t, remote, "add", "litellm_snapshot.json.gz")
@@ -208,6 +225,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-new",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "new-model", "InputPerMTok": {"microdollars": 2000000}}]
 	}`)), 0o644))
 	runGit(t, remote, "add", "litellm_snapshot.json.gz")
@@ -240,6 +258,7 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	source := filepath.Join(t.TempDir(), "litellm_snapshot.json.gz")
 	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-url",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "url-model", "InputPerMTok": {"microdollars": 1000000}}]
 	}`)), 0o644))
 	sourceSHA := sha256FileForTest(t, source)

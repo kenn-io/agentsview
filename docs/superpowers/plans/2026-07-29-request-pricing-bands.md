@@ -31,6 +31,9 @@ testify.
   names, and `max_input_tokens` as threshold signals.
 - Custom rates stay flat and suppress catalog bands; reported costs remain
   authoritative.
+- Fallback artifacts are generated from, embed, and validate one immutable
+  LiteLLM commit. Read-only offline fallback rows retain bands; actual custom
+  overrides remain flat.
 - SQLite/PostgreSQL behavior must match. DuckDB uses a schema-version rebuild,
   never an in-place migration.
 - Add one conceptual forward catalog-schema change; do not edit shipped
@@ -88,8 +91,9 @@ regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)(k?)_tokens$`)
 ```
 
 Use checked `int` conversion and checked `k * 1000`, construct companion keys
-from the exact matched suffix, distinguish absent/null from numeric zero, reject
-duplicate normalized thresholds, inherit missing components, and sort bands.
+from the exact matched suffix, ignore a null anchor, treat a null companion as
+missing/inherited, preserve numeric zero, reject duplicate normalized
+thresholds, inherit missing components, and sort bands.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -121,11 +125,15 @@ model overlays for threshold pricing.
 - [ ] **Step 7: Publish and pin a band-bearing fallback artifact**
 
 This step requires the user's explicit authorization to push the dedicated
-artifact branch. Generate and validate a current snapshot:
+artifact branch. Generate from the immutable LiteLLM commit recorded as format
+evidence, embed that full commit in the bundle, and reject validation when it is
+absent or mutable:
 
 ```bash
 artifact_dir=$(mktemp -d /tmp/agentsview-pricing-artifact.XXXXXX)
-go run ./internal/pricing/cmd/litellm-snapshot -out "$artifact_dir/litellm_snapshot.json.gz"
+go run ./internal/pricing/cmd/litellm-snapshot \
+  -litellm-ref 551e5d097c11f08fd2400a25a651b1844fcf89c2 \
+  -out "$artifact_dir/litellm_snapshot.json.gz"
 go run ./internal/pricing/cmd/litellm-snapshot -validate "$artifact_dir/litellm_snapshot.json.gz"
 shasum -a 256 "$artifact_dir/litellm_snapshot.json.gz"
 ```
@@ -243,6 +251,8 @@ ______________________________________________________________________
 - Modify: `internal/db/session_stats_test.go`
 - Modify: `internal/pricingrefresh/refresh.go`
 - Modify: `internal/pricingrefresh/refresh_test.go`
+- Modify: `cmd/agentsview/usage.go`
+- Modify: `cmd/agentsview/usage_test.go`
 
 **Interfaces:** Produces `db.PricingBand`, nested `ModelPricing.Bands`, and
 SQLite `model_pricing_bands` keyed by model/threshold.
@@ -253,6 +263,7 @@ Test schema columns, sorted get/list, complete-set replacement/removal,
 band-only change detection, insert-missing not contaminating an existing flat
 row, full-resync copy, refresh conversion, flat custom suppression, source
 classification as `fetched` when base rates match fallback but bands differ,
+read-only offline fallback above a threshold and read-only upgrade diagnostics,
 exact daily/session/activity 200,001 cost, separate 150K rows staying
 base-priced, an unbound 300K session aggregate staying base-priced, an
 ordinal-bound 300K event using the band, mixed application counts, and session
@@ -281,7 +292,10 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
 );
 ```
 
-Add it to read-only required schema; do not bump parser `dataVersion`.
+Add it to read-only required schema; do not bump parser `dataVersion`. An older
+archive opened read-only returns the existing typed
+`SchemaUpgradeRequiredError`; a writable open installs the table without a
+parser resync.
 
 - [ ] **Step 3: Implement atomic persistence/load/copy**
 
@@ -294,6 +308,10 @@ the entire rate object with nil bands. Embedded/fetched classification compares
 the complete sorted bands as well as the four base rates. Pass deterministic row
 scope (`message` or non-nil `message_ordinal`) into cost selection and
 application-count recording; force other computed usage events to base rates.
+Every changed band set, including removal of the final band, also advances the
+parent row timestamp so catalog version metadata never moves backward. Replace
+the read-only `SetEffectivePricing` flattening path with band-bearing effective
+rows, and deep-clone nested slices at resolver/cache boundaries.
 
 - [ ] **Step 4: Verify SQLite GREEN**
 
@@ -321,9 +339,16 @@ cache deltas, keeping reported-cost branches unchanged.
 go test -tags fts5 ./internal/db -count=1
 ```
 
-- [ ] **Step 7: Commit SQLite persistence/behavior**
+- [ ] **Step 7: Commit SQLite persistence**
 
-Use the mandatory commit skill. This is the SQLite part of the single conceptual
+Commit the forward table, complete-set writes, copying, refresh conversion,
+parent timestamp advancement, and read-only effective-rate transport after their
+focused tests pass.
+
+- [ ] **Step 8: Commit SQLite usage behavior**
+
+Commit request-scope selection, application counts, and savings after their
+focused tests pass. Together these are the SQLite part of the single conceptual
 catalog-schema change.
 
 ______________________________________________________________________
@@ -372,7 +397,9 @@ table to push compatibility checks and `CheckSchemaCompat`'s read probes so
 delete/reinsert complete changed sets in the base upsert transaction; map
 timestamps/fallback bands; compare complete bands for embedded/fetched source
 classification; keep custom rows flat; use selected rates for PG savings. Mirror
-SQLite's request-scope predicate and application-count recording.
+SQLite's request-scope predicate and application-count recording. Advance the
+parent timestamp for every band-set replacement/removal and deep-clone cached
+band slices.
 
 - [ ] **Step 3: Verify PG GREEN**
 
@@ -381,9 +408,15 @@ go test ./internal/postgres -count=1
 make test-postgres
 ```
 
-- [ ] **Step 4: Commit PostgreSQL parity**
+- [ ] **Step 4: Commit PostgreSQL schema/sync parity**
 
-Use the mandatory commit skill and commit PG schema/sync/usage changes.
+Commit schema compatibility, persistence, copying, classification, and parent
+timestamp advancement after the schema/sync tests pass.
+
+- [ ] **Step 5: Commit PostgreSQL usage parity**
+
+Commit request-scope pricing, application counts, and savings after real-PG
+behavior tests pass.
 
 ______________________________________________________________________
 
@@ -456,6 +489,8 @@ ______________________________________________________________________
 
 - Modify: `cmd/agentsview/export_sessions_test.go`
 
+- Modify: `cmd/agentsview/export.go`
+
 - Modify: `docs/session-export.md`
 
 - Modify: `docs/token-usage.md`
@@ -483,6 +518,9 @@ and the session-export example. Document schema version 4, model `bands`, and
 base/band/aggregate application counts and revised canonical digest row keys in
 `docs/token-usage.md`; update the activity/session API examples and
 shared-contract descriptions. Use the existing `-update` golden path, then:
+Merge application counts across paginated session-export pages by summing base,
+aggregate, and matching per-threshold counts; deep-clone band/application slices
+in the merged document.
 
 ```bash
 go test -tags fts5 ./cmd/agentsview -run 'Test(UsageDaily.*Golden|ActivityReportGolden|ExportSessions.*Golden)' -count=1
