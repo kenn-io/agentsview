@@ -723,12 +723,12 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 	require.Len(t, stagePages, 79)
 	assert.Equal(t, 17, stagePages[len(stagePages)-1])
 	assert.Equal(t, []int{1}, provenancePages)
-	assert.Equal(t, 79, store.opens[KindCheckpoints])
+	assert.Equal(t, 1, store.opens[KindCheckpoints])
 	assert.Equal(t, 1, store.opens[KindManifests])
 	assert.Equal(t, 1, store.opens[KindSegments])
 	assert.Equal(t, 1, store.stats[KindManifests])
 	assert.Equal(t, 1, store.stats[KindSegments])
-	assert.Equal(t, 81, store.openOrigins[contractOrigin])
+	assert.Equal(t, 3, store.openOrigins[contractOrigin])
 }
 
 func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
@@ -764,7 +764,7 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 		previousStats = currentStats
 	}
 	assert.Equal(t, []int{0, 0, 84, 128, 88}, attempts)
-	assert.Equal(t, 3, store.opens[KindCheckpoints])
+	assert.Equal(t, 1, store.opens[KindCheckpoints])
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
@@ -773,6 +773,44 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	)
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
+	const changedSessions = 300
+	base := newTestArtifactStore(t)
+	sessionMap := make(map[string]string, changedSessions)
+	for i := range changedSessions {
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
+			fmt.Sprintf("%064x", i+1)
+	}
+	checkpointEntry := createImportTestCheckpoint(
+		t, base, contractOrigin, 1, sessionMap,
+	)
+	store := &countingImportStore{ArtifactStore: base}
+	destination := testDB(t)
+	first := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, first.RecordChanged(t.Context(), checkpointEntry))
+
+	result, err := first.Finalize(t.Context())
+	require.NoError(t, err)
+	require.True(t, result.More)
+	require.Equal(t, 1, store.opens[KindCheckpoints])
+
+	restarted := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	for rounds := 0; ; rounds++ {
+		require.Less(t, rounds, 10)
+		result, err = restarted.Finalize(t.Context())
+		require.NoError(t, err)
+		if !result.More {
+			break
+		}
+	}
+	assert.Equal(t, 2, store.opens[KindCheckpoints],
+		"a restarted coordinator rereads once, then retains the verified body")
 }
 
 func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {

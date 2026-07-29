@@ -2511,6 +2511,9 @@ func (db *DB) migrateColumns() error {
 	if err := db.ensureCursorUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}
+	if err := requeueInvalidArtifactPublicationsLocked(w); err != nil {
+		return err
+	}
 
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)
 	if err != nil {
@@ -2576,6 +2579,28 @@ const (
 			last_error = '',
 			rejected_at = NULL`
 )
+
+func requeueInvalidArtifactPublicationsLocked(w *writerHandle) error {
+	_, err := w.Exec(`
+		INSERT INTO artifact_export_queue(session_id)
+		SELECT session_id
+		FROM artifact_publications
+		WHERE origin = (
+			SELECT value FROM pg_sync_state WHERE key = 'artifact_origin_id'
+		) AND (session_id = '' OR instr(session_id, '~') > 0)
+		ON CONFLICT(session_id) DO UPDATE SET
+			enqueued_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+			generation = artifact_export_queue.generation + 1,
+			pending = 1,
+			rejected_generation = NULL,
+			last_error = '',
+			rejected_at = NULL
+		WHERE artifact_export_queue.pending = 0`)
+	if err != nil {
+		return fmt.Errorf("requeueing invalid artifact publications: %w", err)
+	}
+	return nil
+}
 
 var populateArtifactOriginQueueTx = func(tx *sql.Tx, origin string, requeue bool) error {
 	statement := bootstrapArtifactExportQueueSQL

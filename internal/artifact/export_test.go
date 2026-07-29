@@ -468,6 +468,108 @@ func TestExportContinuesPastInvalidManifestValue(t *testing.T) {
 	assert.Contains(t, rejection.Error, "encoding manifest for invalid")
 }
 
+func TestFullExportSkipsPreviouslyRejectedNativeSessionID(t *testing.T) {
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	seedSession(t, database, "invalid~native", "alpha")
+
+	rejected, err := ExportToStore(
+		t.Context(), database, store, ExportOptions{Origin: contractOrigin},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, rejected.RejectedSessions)
+
+	result, err := ExportToStore(
+		t.Context(), database, store, ExportOptions{
+			Origin: contractOrigin,
+			Full:   true,
+		},
+	)
+	require.NoError(t, err)
+	assert.Zero(t, result.ExportedSessions)
+	assert.Zero(t, result.RejectedSessions)
+	pending, err := database.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
+func TestFullExportRemovesPublishedNativeSessionIDRejectedByCurrentWire(t *testing.T) {
+	ctx := t.Context()
+	databasePath := filepath.Join(t.TempDir(), "archive.db")
+	database, err := db.Open(databasePath)
+	require.NoError(t, err)
+	require.NoError(t, database.SetSyncState(originStateKey, contractOrigin))
+	store := newTestArtifactStore(t)
+	seedSession(t, database, "legacy~native", "alpha")
+
+	claims, err := database.ArtifactExportClaims(ctx, []string{"legacy~native"})
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	manifestHash := strings.Repeat("a", 64)
+	revision, changed, err := database.ApplyArtifactPublicationChanges(
+		ctx, contractOrigin, []db.ArtifactPublicationChange{{
+			SessionID:         "legacy~native",
+			Generation:        claims[0].Generation,
+			ManifestHash:      manifestHash,
+			SourceFingerprint: manifestHash,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	publications, mapDigest, mapRevision, err := spoolArtifactPublicationMap(
+		ctx, database, contractOrigin,
+	)
+	require.NoError(t, err)
+	require.Equal(t, revision, mapRevision)
+	checkpointBody, checkpointIdentity, err := spoolArtifactCheckpoint(
+		ctx, publications, contractOrigin, 1,
+	)
+	require.NoError(t, err)
+	checkpointRef := requireContractRef(
+		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
+	)
+	_, err = store.Create(
+		ctx, checkpointRef, checkpointIdentity,
+		canonicalArtifactMediaType(KindCheckpoints), checkpointBody,
+	)
+	require.NoError(t, err)
+	require.NoError(t, closeAndRemoveExportSpool(publications))
+	require.NoError(t, closeAndRemoveExportSpool(checkpointBody))
+	require.NoError(t, database.RecordArtifactCheckpointHead(
+		ctx, db.ArtifactCheckpointHead{
+			Origin:              contractOrigin,
+			Sequence:            1,
+			PublicationRevision: revision,
+			SessionMapSHA256:    mapDigest,
+			CheckpointSHA256:    checkpointIdentity.SHA256,
+			CheckpointSize:      checkpointIdentity.Size,
+		},
+		claims,
+	))
+	require.NoError(t, database.Close())
+
+	database, err = db.Open(databasePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	result, err := ExportToStore(ctx, database, store, ExportOptions{
+		Origin: contractOrigin,
+		Full:   true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.RejectedSessions)
+	published := latestStoreCheckpointForTest(t, store, contractOrigin)
+	assert.NotContains(t, published.Sessions, contractOrigin+"~legacy~native")
+	pending, err := database.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+	rejection, ok, err := database.GetArtifactExportRejection(
+		ctx, "legacy~native",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Contains(t, rejection.Error, "native session ID")
+}
+
 func TestExportTransientFailureDoesNotReject(t *testing.T) {
 	database := testExportDB(t)
 	seedSession(t, database, "rejected", "alpha")

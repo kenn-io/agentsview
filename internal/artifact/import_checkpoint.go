@@ -219,13 +219,21 @@ func decodeImportJSONObject(data []byte) (map[string]json.RawMessage, error) {
 		if _, exists := fields[key]; exists {
 			return nil, invalidImportCheckpointf("duplicate field %q", key)
 		}
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil {
+		valueStart := skipJSONWhitespace(data, int(decoder.InputOffset()))
+		if valueStart >= len(data) || data[valueStart] != ':' {
+			return nil, invalidImportCheckpointf("field %q has no value", key)
+		}
+		valueStart = skipJSONWhitespace(data, valueStart+1)
+		if err := skipImportJSONValue(decoder); err != nil {
 			return nil, invalidImportCheckpointf(
 				"decoding field %q: %v", key, err,
 			)
 		}
-		fields[key] = raw
+		valueEnd := int(decoder.InputOffset())
+		if valueEnd <= valueStart || valueEnd > len(data) {
+			return nil, invalidImportCheckpointf("field %q is invalid", key)
+		}
+		fields[key] = data[valueStart:valueEnd]
 	}
 	token, err = decoder.Token()
 	if err != nil || token != json.Delim('}') {
@@ -240,6 +248,38 @@ func decodeImportJSONObject(data []byte) (map[string]json.RawMessage, error) {
 		return nil, invalidImportCheckpointf("decoding trailing content: %v", err)
 	}
 	return fields, nil
+}
+
+func skipImportJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		for decoder.More() {
+			if _, err := decoder.Token(); err != nil {
+				return err
+			}
+			if err := skipImportJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := skipImportJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("JSON value starts with a closing delimiter")
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 func streamImportCheckpointSessions(
@@ -290,6 +330,7 @@ func decodeImportCheckpointSessionPage(
 	}
 
 	input := []byte(data)
+	var inputReader io.Reader = bytes.NewReader(input)
 	base := int64(0)
 	if offset > 0 {
 		next := skipJSONWhitespace(input, int(offset))
@@ -309,10 +350,12 @@ func decodeImportCheckpointSessionPage(
 				invalidImportCheckpointf("sessions decode cursor is invalid")
 		}
 		base = int64(next + 1)
-		input = append([]byte{'{'}, input[next+1:]...)
+		inputReader = io.MultiReader(
+			strings.NewReader("{"), bytes.NewReader(input[next+1:]),
+		)
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder := json.NewDecoder(inputReader)
 	token, err := decoder.Token()
 	if err != nil {
 		return nil, 0, false,

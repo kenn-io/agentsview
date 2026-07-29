@@ -408,6 +408,9 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 		if _, _, err := exportClaimedSessionToStore(
 			ctx, database, store, origin, sess, limits,
 		); err != nil {
+			if isDeterministicArtifactExportError(err) {
+				continue
+			}
 			return result, err
 		}
 	}
