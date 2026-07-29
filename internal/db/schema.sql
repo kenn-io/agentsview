@@ -1035,3 +1035,53 @@ CREATE INDEX IF NOT EXISTS idx_secret_findings_session
     ON secret_findings(session_id);
 CREATE INDEX IF NOT EXISTS idx_secret_findings_rule
     ON secret_findings(rule_name);
+
+-- Durable normalized-artifact import claims. Artifact kinds evolve
+-- independently, so each claim retains a separate version gate.
+CREATE TABLE IF NOT EXISTS artifact_import_queue (
+    origin                      TEXT NOT NULL,
+    kind                        TEXT NOT NULL,
+    name                        TEXT NOT NULL,
+    sha256                      TEXT NOT NULL,
+    size                        INTEGER NOT NULL CHECK (size >= 0),
+    required_checkpoint_version INTEGER NOT NULL CHECK (
+        required_checkpoint_version >= 1
+    ),
+    required_manifest_version   INTEGER NOT NULL CHECK (
+        required_manifest_version >= 1
+    ),
+    required_segment_version    INTEGER NOT NULL CHECK (
+        required_segment_version >= 1
+    ),
+    attempt_generation          INTEGER NOT NULL DEFAULT 0 CHECK (
+        attempt_generation >= 0
+    ),
+    enqueued_at                 TEXT NOT NULL DEFAULT (
+        strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    ),
+    PRIMARY KEY (origin, kind, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_import_queue_pending
+ON artifact_import_queue (
+    required_checkpoint_version,
+    required_manifest_version,
+    required_segment_version,
+    attempt_generation,
+    enqueued_at,
+    origin,
+    kind,
+    name
+);
+
+CREATE TABLE IF NOT EXISTS artifact_import_attempt_generations (
+    singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
+    generation INTEGER NOT NULL CHECK (generation >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_peer_checkpoint_heads (
+    origin            TEXT PRIMARY KEY,
+    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    checkpoint_sha256 TEXT NOT NULL,
+    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+);

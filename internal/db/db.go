@@ -1379,6 +1379,9 @@ var readOnlyRequiredTables = []string{
 	"artifact_publication_revisions",
 	"artifact_checkpoint_heads",
 	"artifact_checkpoint_floors",
+	"artifact_import_queue",
+	"artifact_import_attempt_generations",
+	"artifact_peer_checkpoint_heads",
 }
 
 var (
