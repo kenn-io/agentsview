@@ -146,6 +146,7 @@ func (s *Server) humaSetTerminalConfig(
 	}
 	s.mu.Lock()
 	err := s.cfg.SaveTerminalConfig(tc)
+	tc = s.cfg.Terminal
 	s.mu.Unlock()
 	if err != nil {
 		return nil, internalError("save terminal config", err)

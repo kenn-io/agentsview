@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +95,34 @@ func (e *Engine) sourceAllowsParserExclusions(res processResult) bool {
 		}
 	}
 	return false
+}
+
+// missingMemberTombstoneAllowed reports whether the cwd allow-list
+// admits retiring one vanished shared-container member. The member has
+// no parsed result to judge — its source row is gone — so the decision
+// uses the archived session's cwd instead of the container's surviving
+// results: source-wide gating would let one allowed survivor unfreeze
+// members outside the list, and an all-unchanged (dropped) survivor set
+// would freeze an allowed member's deletion forever once the container
+// fingerprint is cached. A missing archive row skips harmlessly (there
+// is nothing to retire); a read error propagates so the container pass
+// fails and retries.
+func (e *Engine) missingMemberTombstoneAllowed(
+	ctx context.Context, sessionID string,
+) (bool, error) {
+	if e.cwdFilter.empty() {
+		return true, nil
+	}
+	sess, err := e.db.GetSession(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf(
+			"read archived cwd for missing member %s: %w", sessionID, err,
+		)
+	}
+	if sess == nil {
+		return false, nil
+	}
+	return e.cwdFilter.allows(sess.Cwd), nil
 }
 
 // splitResultsByCwdFilter returns the parsed sessions the cwd

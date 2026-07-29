@@ -115,10 +115,10 @@ func extractProjectFromCwdWithBranch(
 	}
 	cleaned := filepath.Clean(norm)
 
-	// Recognize worktree manager layouts before walking git roots.
-	// These layouts encode the owning project in the path even when
+	// Recognize tool-anchored worktree manager layouts before walking git
+	// roots. These layouts encode the owning project in the path even when
 	// the git root basename is a branch or generated worktree id.
-	if p := projectFromWorktreeLayout(cleaned); p != "" {
+	if p := projectFromAnchoredWorktreeLayout(cleaned); p != "" {
 		return NormalizeName(p)
 	}
 
@@ -135,6 +135,13 @@ func extractProjectFromCwdWithBranch(
 			}
 			return NormalizeName(name)
 		}
+	}
+
+	// Generic hosting layouts are intentionally a fallback after live Git
+	// metadata. Otherwise a normal repository containing a matching fixture
+	// path would be attributed to the fixture's repository component.
+	if p := projectFromWorktreeLayout(cleaned); p != "" {
+		return NormalizeName(p)
 	}
 
 	name := filepath.Base(cleaned)
@@ -156,6 +163,7 @@ type worktreeLayout struct {
 	projectPart         int
 	minParts            int
 	roborevCIBareLayout bool
+	gitFallbackOnly     bool
 }
 
 var worktreeLayouts []worktreeLayout
@@ -169,8 +177,21 @@ func init() {
 		{marker: sep + ".superset" + sep + "worktrees" + sep, projectPart: 0, minParts: 2},
 		// conductor/workspaces/$PROJECT/$BRANCH[/...]
 		{marker: sep + "conductor" + sep + "workspaces" + sep, projectPart: 0, minParts: 2},
-		// ~/.config/middleman/worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
-		{marker: sep + ".config" + sep + "middleman" + sep + "worktrees" + sep + "github.com" + sep, projectPart: 1, minParts: 3},
+		// .../worktrees/github/github.com/$OWNER/$REPO/$WORKTREE[/...]
+		{
+			marker: sep + "worktrees" + sep + "github" + sep +
+				"github.com" + sep,
+			projectPart:     1,
+			minParts:        3,
+			gitFallbackOnly: true,
+		},
+		// .../worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
+		{
+			marker:          sep + "worktrees" + sep + "github.com" + sep,
+			projectPart:     1,
+			minParts:        3,
+			gitFallbackOnly: true,
+		},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
 		// roborev CI: ~/.roborev/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].
@@ -190,7 +211,18 @@ func init() {
 // directory layouts and extracts the project name component.
 // Returns "" if the path does not match any known layout.
 func projectFromWorktreeLayout(path string) string {
+	return projectFromWorktreeLayouts(path, true)
+}
+
+func projectFromAnchoredWorktreeLayout(path string) string {
+	return projectFromWorktreeLayouts(path, false)
+}
+
+func projectFromWorktreeLayouts(path string, includeGitFallbacks bool) string {
 	for _, layout := range worktreeLayouts {
+		if layout.gitFallbackOnly && !includeGitFallbacks {
+			continue
+		}
 		_, rest, found := strings.Cut(path, layout.marker)
 		if !found {
 			continue
@@ -702,6 +734,15 @@ func repoRootFromGitFile(repoDir, gitFilePath string) string {
 		if filepath.Base(commonDir) == ".git" {
 			return filepath.Dir(commonDir)
 		}
+		if gitConfigCoreBare(commonDir) {
+			// Bare repositories have no main checkout root. Return a
+			// conceptual sibling path so the caller can use its basename
+			// as the stable repository name.
+			name := strings.TrimSuffix(filepath.Base(commonDir), ".git")
+			if !isInvalidPathBase(name) {
+				return filepath.Join(filepath.Dir(commonDir), name)
+			}
+		}
 	}
 
 	// Fallback for linked worktrees if commondir is missing.
@@ -748,6 +789,52 @@ func readCommonDir(gitDir string) string {
 		return filepath.Clean(value)
 	}
 	return filepath.Clean(filepath.Join(gitDir, value))
+}
+
+func gitConfigCoreBare(gitDir string) bool {
+	b, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	if err != nil {
+		return false
+	}
+
+	inCore := false
+	for raw := range strings.SplitSeq(string(b), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" ||
+			strings.HasPrefix(line, "#") ||
+			strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.IndexByte(line, ']')
+			if end < 0 {
+				inCore = false
+				continue
+			}
+			section := strings.TrimSpace(line[1:end])
+			section, _, _ = strings.Cut(section, " ")
+			inCore = strings.EqualFold(section, "core")
+			continue
+		}
+		if !inCore {
+			continue
+		}
+
+		key, value, hasValue := strings.Cut(line, "=")
+		if !strings.EqualFold(strings.TrimSpace(key), "bare") {
+			continue
+		}
+		if !hasValue {
+			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "yes", "on", "1":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func trimBranchSuffix(name, gitBranch string) string {

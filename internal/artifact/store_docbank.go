@@ -399,6 +399,95 @@ func (s *docbankStore) Close() error {
 	return s.vault.Close()
 }
 
+// checkpointFloor traverses both Docbank namespaces through stable walkers,
+// page-by-page, without materializing either checkpoint collection.
+func (s *docbankStore) checkpointFloor(
+	ctx context.Context, origin string,
+) (int, error) {
+	liveCollection := docbankLiveRoot + "/" + origin + "/" + string(KindCheckpoints)
+	live, err := s.walkCheckpointFloor(ctx, liveCollection, false)
+	if err != nil {
+		return 0, err
+	}
+	quarantineCollection := docbankQuarantineRoot + "/" + origin + "/" + string(KindCheckpoints)
+	quarantined, err := s.walkCheckpointFloor(ctx, quarantineCollection, true)
+	if err != nil {
+		return 0, err
+	}
+	return max(live, quarantined), nil
+}
+
+func (s *docbankStore) walkCheckpointFloor(
+	ctx context.Context, collection string, quarantined bool,
+) (_ int, retErr error) {
+	return walkCheckpointFloor(ctx, collection, quarantined, func(
+		ctx context.Context,
+	) (docbankWalker, error) {
+		return s.vault.Walk(ctx, collection, docbank.WalkOptions{
+			PageSize: checkpointFloorPageSize,
+		})
+	})
+}
+
+func walkCheckpointFloor(
+	ctx context.Context,
+	collection string,
+	quarantined bool,
+	open func(context.Context) (docbankWalker, error),
+) (_ int, retErr error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	walker, err := open(ctx)
+	if errors.Is(err, docbank.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, mapDocbankError(err)
+	}
+	defer func() { retErr = errors.Join(retErr, walker.Close()) }()
+	prefix := collection + "/"
+	floor := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		page, nextErr := walker.Next(ctx)
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if errors.Is(nextErr, io.EOF) {
+			return floor, nil
+		}
+		if nextErr != nil {
+			return 0, mapDocbankError(nextErr)
+		}
+		for _, item := range page {
+			if item.Node.BlobHash == "" {
+				continue
+			}
+			name := strings.TrimPrefix(item.Path, prefix)
+			if name == item.Path || strings.Contains(name, "/") {
+				continue
+			}
+			if quarantined {
+				if len(name) <= 33 || name[32] != '-' {
+					continue
+				}
+				quarantineID, err := hex.DecodeString(name[:32])
+				if err != nil || len(quarantineID) != 16 {
+					continue
+				}
+				name = name[33:]
+			}
+			sequence, err := checkpointSequence(name)
+			if err == nil {
+				floor = max(floor, sequence)
+			}
+		}
+	}
+}
+
 type docbankWalker interface {
 	Next(context.Context) ([]docbank.WalkEntry, error)
 	Close() error

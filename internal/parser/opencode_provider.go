@@ -875,8 +875,8 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
 	fingerprint.Size = info.Size()
-	// No content hash: this family declares FingerprintHashRequiredForFreshness
-	// false, so no engine freshness gate consumes it, and the
+	// No content hash: no engine freshness gate consumes it for this
+	// family (see providerFingerprintHashRequiredForFreshness), and the
 	// authoritative storage fingerprint is computed by Parse and compared
 	// post-parse by dropUnchangedSharedSQLiteResults. Computing it here
 	// re-read and re-hashed every message and part file of the session on

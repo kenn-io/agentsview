@@ -263,6 +263,7 @@ can still be parsed.
 | OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/` | JSONL per session                                                                                                               |
 | OpenCode              | `~/.local/share/opencode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                            |
+| Omnigent              | `~/.omnigent/`                                                                   | SQLite `chat.db`, one session per conversation                                                                                  |
 | Pi                    | `~/.pi/agent/sessions/`                                                          | JSONL per session                                                                                                               |
 | Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                         |
 | Piebald               | `~/.local/share/piebald/`                                                        | SQLite database (`app.db`)                                                                                                      |
@@ -291,6 +292,16 @@ present for the full transcript (user turns, assistant replies, thinking,
 and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
 to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
+
+Omnigent sessions are read from `~/.omnigent/chat.db`. Set `OMNIGENT_DIR` or
+`omnigent_dirs` to override the default directory. AgentsView creates one
+session per conversation and supports the split text-ID and current
+binary-UUID schema generations; the older single-table schema is detected and
+reported as unsupported without losing sessions already synced from it.
+Remote HTTP and SSH sync stay disabled for Omnigent because `chat.db`
+co-locates transcripts with authentication secrets. A metadata-only edit made
+directly in `chat.db` can be deferred by the immediate filesystem-event sync;
+the next scheduled reconciliation pass or an explicit resync picks it up.
 
 **VS Code Copilot default directories** vary by platform:
 

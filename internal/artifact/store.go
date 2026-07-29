@@ -92,6 +92,18 @@ func canonicalArtifactMediaType(kind Kind) string {
 	}
 }
 
+type contextArtifactReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextArtifactReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
 func artifactStoreError(op string, ref Ref, err error) error {
 	return &ArtifactOpError{Op: op, Ref: ref, Err: err}
 }

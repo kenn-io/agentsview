@@ -103,6 +103,25 @@ func TestCanonicalManifestGolden(t *testing.T) {
 	assert.Equal(t, "d84a3987c40f800f23ea943ebd50c0910c64444e6ff4b64b6f8a68782f7a32d6", hashHex(data))
 }
 
+func TestDecodeManifestRejectsUnsupportedOlderVersion(t *testing.T) {
+	data := []byte(`{
+		"v": 1,
+		"origin": "laptop-a1b2c3",
+		"native_session_id": "sess-1",
+		"segments": [],
+		"usage_events": [{
+			"source": "fixture",
+			"model": "claude-test",
+			"cost_usd": 0.03125
+		}]
+	}`)
+
+	decoded, err := decodeManifestWithLimits(data, productionArtifactLimits())
+	require.Error(t, err)
+	assert.Empty(t, decoded)
+	assert.Contains(t, err.Error(), "manifest has unsupported artifact version 1")
+}
+
 func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	msgs := []db.Message{
 		{

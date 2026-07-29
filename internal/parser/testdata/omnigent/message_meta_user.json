@@ -1,0 +1,10 @@
+{
+  "role": "user",
+  "content": [
+    {
+      "type": "input_text",
+      "text": "secret injected skill instructions"
+    }
+  ],
+  "is_meta": true
+}

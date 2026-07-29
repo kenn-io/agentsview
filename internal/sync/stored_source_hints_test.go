@@ -40,7 +40,11 @@ type hintRecordingProvider struct {
 }
 
 func (p *hintRecordingProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {
-	return parser.WatchPlan{Roots: []parser.WatchRoot{{Path: p.Config.Roots[0]}}}, nil
+	roots := make([]parser.WatchRoot, 0, len(p.Config.Roots))
+	for _, root := range p.Config.Roots {
+		roots = append(roots, parser.WatchRoot{Path: root})
+	}
+	return parser.WatchPlan{Roots: roots}, nil
 }
 
 func (p *hintRecordingProvider) SourcesForChangedPath(

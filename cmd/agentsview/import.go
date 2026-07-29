@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 type ImportConfig struct {
@@ -19,6 +20,12 @@ type ImportConfig struct {
 }
 
 func runImport(cfg ImportConfig) {
+	expandedPath, err := pathutil.ExpandHome(cfg.Path)
+	if err != nil {
+		log.Fatalf("expanding import path: %v", err)
+	}
+	cfg.Path = expandedPath
+
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)

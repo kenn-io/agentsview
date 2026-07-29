@@ -106,6 +106,54 @@ func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T
 		"kit-backed worktree resolution should use the main repo name")
 }
 
+func TestExtractProjectFromCwd_BareBackedGitWorktree(t *testing.T) {
+	skipIfNoGit(t)
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	bareRepo := filepath.Join(root, "shared", "sample-repo.git")
+	worktree := filepath.Join(root, "checkouts", "generated-leaf")
+	subdir := filepath.Join(worktree, "internal", "parser")
+
+	mustMkdirAll(t, source)
+	mustMkdirAll(t, filepath.Dir(bareRepo))
+	mustMkdirAll(t, filepath.Dir(worktree))
+	gitRun(t, source, "init", "-q", "-b", "main")
+	gitRun(t, source,
+		"-c", "user.email=test@example.com",
+		"-c", "user.name=Test User",
+		"-c", "commit.gpgsign=false",
+		"commit", "--allow-empty", "-q", "-m", "seed",
+	)
+	gitRun(t, root, "clone", "--bare", "-q", source, bareRepo)
+	gitRun(t, root,
+		"--git-dir", bareRepo,
+		"worktree", "add", "-q", "-b", "feature", worktree, "main",
+	)
+	mustMkdirAll(t, subdir)
+
+	assert.Equal(t, "sample_repo", ExtractProjectFromCwd(subdir))
+}
+
+func TestRepoRootFromGitFileDoesNotTreatNonBareCommonDirAsBare(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	checkout := filepath.Join(root, "checkouts", "generated-leaf")
+	commonDir := filepath.Join(root, "shared", "sample-repo.git")
+	gitDir := filepath.Join(commonDir, "worktrees", "generated-leaf")
+	gitFile := filepath.Join(checkout, ".git")
+
+	mustMkdirAll(t, checkout)
+	mustMkdirAll(t, gitDir)
+	mustWriteFile(t, gitFile, "gitdir: "+gitDir+"\n")
+	mustWriteFile(t, filepath.Join(gitDir, "commondir"), "../..\n")
+	mustWriteFile(t, filepath.Join(commonDir, "config"),
+		"[core]\n\tbare = false\n")
+
+	assert.Equal(t, checkout, repoRootFromGitFile(checkout, gitFile))
+}
+
 func TestExtractProjectFromCwdPlainRepoDoesNotInvokeGit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses a POSIX shell git shim")
@@ -544,6 +592,88 @@ func TestExtractProjectFromCwdWithBranch_NestedWorktree(
 	assert.Equal(t, "agentsview",
 		ExtractProjectFromCwdWithBranch(deleted, "tauri-packaging"),
 		"ExtractProjectFromCwdWithBranch(%q, %q)", deleted, "tauri-packaging")
+}
+
+func TestExtractProjectFromCwd_HostingWorktreeLayouts(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name  string
+		parts []string
+		want  string
+	}{
+		{
+			name: "HostingWorktree",
+			parts: []string{
+				"worktrees", "github.com", "example-org",
+				"sample-repo", "feature-branch",
+			},
+			want: "sample_repo",
+		},
+		{
+			name: "HostingWorktreeSubdirectory",
+			parts: []string{
+				"worktrees", "github.com", "example-org",
+				"sample-repo", "feature-branch", "internal", "parser",
+			},
+			want: "sample_repo",
+		},
+		{
+			name: "NamespacedHostingWorktree",
+			parts: []string{
+				"worktrees", "github", "github.com", "example-org",
+				"data-pipeline", "pr-17",
+			},
+			want: "data_pipeline",
+		},
+		{
+			name: "NamespacedHostingWorktreeSubdirectory",
+			parts: []string{
+				"worktrees", "github", "github.com", "example-org",
+				"data-pipeline", "pr-17", "cmd", "worker",
+			},
+			want: "data_pipeline",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cwd := filepath.Join(append([]string{root}, tt.parts...)...)
+			assert.Equal(t, tt.want, ExtractProjectFromCwd(cwd))
+		})
+	}
+}
+
+func TestExtractProjectFromCwd_HostingLayoutInsideGitRepoPrefersRepo(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "outer-repo")
+	cwd := filepath.Join(
+		repo, "worktrees", "github.com", "example-org",
+		"sample-repo", "fixture",
+	)
+
+	mustMkdirAll(t, filepath.Join(repo, ".git"))
+	mustMkdirAll(t, cwd)
+
+	assert.Equal(t, "outer_repo", ExtractProjectFromCwd(cwd))
+}
+
+func TestProjectFromWorktreeLayoutRequiresWorktreeLeaf(t *testing.T) {
+	root := t.TempDir()
+	tests := []string{
+		filepath.Join(
+			root, "worktrees", "github.com", "example-org", "sample-repo",
+		),
+		filepath.Join(
+			root, "worktrees", "github", "github.com",
+			"example-org", "sample-repo",
+		),
+	}
+
+	for _, path := range tests {
+		assert.Empty(t, projectFromWorktreeLayout(path), path)
+	}
 }
 
 func TestExtractProjectFromCwdWithBranch(t *testing.T) {
