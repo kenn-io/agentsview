@@ -445,7 +445,10 @@ func decodeImportCheckpointSessionPage(
 			return nil, 0, false,
 				invalidImportCheckpointf("session GID is invalid")
 		}
-		if !strings.HasPrefix(gid, origin+"~") || len(gid) == len(origin)+1 {
+		prefix := origin + "~"
+		if !strings.HasPrefix(gid, prefix) ||
+			len(gid) == len(prefix) ||
+			strings.Contains(gid[len(prefix):], "~") {
 			return nil, 0, false,
 				invalidImportCheckpointf("session GID %q is invalid", gid)
 		}

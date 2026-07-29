@@ -24,6 +24,7 @@ type importCoordinatorHooks struct {
 	afterSessionWrite func() error
 	afterProvenance   func() error
 	afterLanding      func() error
+	afterPrune        func() error
 	observePending    func(limit, count int)
 	observeProvenance func(count int)
 	observeStage      func(count int)
@@ -173,7 +174,14 @@ func (c *StoreImportCoordinator) Finalize(
 			if err != nil {
 				return result, err
 			}
-			result.More = more
+			if c.hooks != nil && c.hooks.afterPrune != nil {
+				if err := c.hooks.afterPrune(); err != nil {
+					return result, err
+				}
+			}
+			c.signalMu.Lock()
+			result.More = more || c.generation > drainGeneration
+			c.signalMu.Unlock()
 			return result, nil
 		}
 		attempt, err := c.database.ReserveArtifactImportAttemptGeneration(ctx)

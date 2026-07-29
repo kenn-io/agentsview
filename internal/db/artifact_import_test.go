@@ -739,6 +739,82 @@ func TestArtifactCheckpointStagePagesDeferredSessionsAndLands(t *testing.T) {
 	}, gotMap)
 }
 
+func TestArtifactCheckpointStageRejectsNestedNativeSessionID(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	landing := ArtifactCheckpointLanding{
+		Origin:           "peer-a1b2c3",
+		Sequence:         1,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   100,
+	}
+	_, err := database.RecordArtifactPeerCheckpointHead(
+		ctx, ArtifactPeerCheckpointHead(landing),
+	)
+	require.NoError(t, err)
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing))
+
+	err = database.StageArtifactCheckpointSessions(
+		ctx,
+		landing,
+		[]ArtifactCheckpointSession{{
+			GID:          landing.Origin + "~session~nested",
+			ManifestHash: strings.Repeat("b", 64),
+		}},
+	)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrArtifactImportConflict)
+}
+
+func TestPruneArtifactCheckpointStagesUsesPeerHeadAndKeepsLanding(
+	t *testing.T,
+) {
+	database := testDB(t)
+	ctx := t.Context()
+	unlanded := ArtifactCheckpointLanding{
+		Origin:           "unlanded-a1b2c3",
+		Sequence:         1,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   100,
+	}
+	landed := ArtifactCheckpointLanding{
+		Origin:           "landed-a1b2c3",
+		Sequence:         1,
+		CheckpointSHA256: strings.Repeat("b", 64),
+		CheckpointSize:   101,
+	}
+	for _, stage := range []ArtifactCheckpointLanding{unlanded, landed} {
+		_, err := database.RecordArtifactPeerCheckpointHead(
+			ctx, ArtifactPeerCheckpointHead(stage),
+		)
+		require.NoError(t, err)
+		require.NoError(t, database.BeginArtifactCheckpointStage(ctx, stage))
+		require.NoError(t, database.CompleteArtifactCheckpointStage(ctx, stage, 0))
+	}
+	require.NoError(t, database.RecordArtifactCheckpointLandingFromStage(
+		ctx, landed,
+	))
+	for _, stage := range []ArtifactCheckpointLanding{unlanded, landed} {
+		next := ArtifactPeerCheckpointHead(stage)
+		next.Sequence = 2
+		next.CheckpointSHA256 = strings.Repeat("c", 64)
+		next.CheckpointSize = 102
+		advanced, err := database.RecordArtifactPeerCheckpointHead(ctx, next)
+		require.NoError(t, err)
+		require.True(t, advanced)
+	}
+
+	pruned, more, err := database.PruneArtifactCheckpointStages(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, 1, pruned)
+	assert.False(t, more)
+	_, err = database.ArtifactCheckpointStageProgress(ctx, unlanded)
+	require.ErrorIs(t, err, ErrArtifactImportConflict)
+	state, err := database.ArtifactCheckpointStageProgress(ctx, landed)
+	require.NoError(t, err)
+	assert.True(t, state.Complete)
+}
+
 func TestPruneArtifactCheckpointStagesIsBoundedAndKeepsCurrentLanding(
 	t *testing.T,
 ) {

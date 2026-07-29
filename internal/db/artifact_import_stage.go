@@ -627,8 +627,10 @@ func validateArtifactCheckpointSession(
 	origin string,
 	entry ArtifactCheckpointSession,
 ) error {
-	if !strings.HasPrefix(entry.GID, origin+"~") ||
-		len(entry.GID) == len(origin)+1 {
+	prefix := origin + "~"
+	if !strings.HasPrefix(entry.GID, prefix) ||
+		len(entry.GID) == len(prefix) ||
+		strings.Contains(entry.GID[len(prefix):], "~") {
 		return errors.New("artifact checkpoint stage session GID has wrong origin")
 	}
 	if len(entry.ManifestHash) != 64 {
@@ -637,9 +639,9 @@ func validateArtifactCheckpointSession(
 	return validateLowerHex(entry.ManifestHash)
 }
 
-// PruneArtifactCheckpointStages removes at most limit rows from stages older
-// than each origin's current landing. The current authority and newer partial
-// stages are never eligible.
+// PruneArtifactCheckpointStages removes at most limit rows from stages
+// superseded by each origin's peer head. The exact stage backing the current
+// landing and stages at the peer head are never eligible.
 func (db *DB) PruneArtifactCheckpointStages(
 	ctx context.Context,
 	limit int,
@@ -663,9 +665,20 @@ func (db *DB) PruneArtifactCheckpointStages(
 		WHERE rowid IN (
 			SELECT sessions.rowid
 			FROM artifact_checkpoint_stage_sessions sessions
-			JOIN artifact_checkpoint_landings landing
-			  ON landing.origin = sessions.origin
-			WHERE sessions.sequence < landing.sequence
+			JOIN artifact_checkpoint_stages stage
+			  ON stage.origin = sessions.origin
+			 AND stage.sequence = sessions.sequence
+			JOIN artifact_peer_checkpoint_heads head
+			  ON head.origin = stage.origin
+			WHERE stage.sequence < head.sequence
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM artifact_checkpoint_landings landing
+				WHERE landing.origin = stage.origin
+				  AND landing.sequence = stage.sequence
+				  AND landing.checkpoint_sha256 = stage.checkpoint_sha256
+				  AND landing.checkpoint_size = stage.checkpoint_size
+			  )
 			ORDER BY sessions.origin, sessions.sequence, sessions.gid
 			LIMIT ?
 		)`, limit)
@@ -683,9 +696,17 @@ func (db *DB) PruneArtifactCheckpointStages(
 			WHERE rowid IN (
 				SELECT stage.rowid
 				FROM artifact_checkpoint_stages stage
-				JOIN artifact_checkpoint_landings landing
-				  ON landing.origin = stage.origin
-				WHERE stage.sequence < landing.sequence
+				JOIN artifact_peer_checkpoint_heads head
+				  ON head.origin = stage.origin
+				WHERE stage.sequence < head.sequence
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM artifact_checkpoint_landings landing
+					WHERE landing.origin = stage.origin
+					  AND landing.sequence = stage.sequence
+					  AND landing.checkpoint_sha256 = stage.checkpoint_sha256
+					  AND landing.checkpoint_size = stage.checkpoint_size
+				  )
 				  AND NOT EXISTS (
 					SELECT 1
 					FROM artifact_checkpoint_stage_sessions sessions
@@ -735,9 +756,17 @@ func (db *DB) PruneArtifactCheckpointStages(
 		SELECT EXISTS (
 			SELECT 1
 			FROM artifact_checkpoint_stages stage
-			JOIN artifact_checkpoint_landings landing
-			  ON landing.origin = stage.origin
-			WHERE stage.sequence < landing.sequence
+			JOIN artifact_peer_checkpoint_heads head
+			  ON head.origin = stage.origin
+			WHERE stage.sequence < head.sequence
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM artifact_checkpoint_landings landing
+				WHERE landing.origin = stage.origin
+				  AND landing.sequence = stage.sequence
+				  AND landing.checkpoint_sha256 = stage.checkpoint_sha256
+				  AND landing.checkpoint_size = stage.checkpoint_size
+			  )
 		)
 		OR EXISTS (
 			SELECT 1

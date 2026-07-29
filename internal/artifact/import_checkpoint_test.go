@@ -384,6 +384,16 @@ func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 			"cp-0000000007.json",
 		},
 		{
+			"native GID contains separator",
+			strings.Replace(
+				valid,
+				contractOrigin+"~session",
+				contractOrigin+"~session~nested",
+				1,
+			),
+			"cp-0000000007.json",
+		},
+		{
 			"invalid manifest hash",
 			strings.Replace(valid, hash, "ABC", 1),
 			"cp-0000000007.json",

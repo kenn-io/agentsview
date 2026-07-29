@@ -980,6 +980,35 @@ func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	assert.Equal(t, "project", session.Project)
 }
 
+func TestStoreImportCoordinatorPreservesSignalDuringCompletedPrune(
+	t *testing.T,
+) {
+	store := newTestArtifactStore(t)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	_, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	manifest := importTestManifest("signal")
+	manifestHash := createImportTestManifest(t, store, manifest, false)
+	manifestRef := requireContractRef(
+		t, contractOrigin, KindManifests, manifestHash+".json",
+	)
+	manifestEntry, err := store.Stat(t.Context(), manifestRef)
+	require.NoError(t, err)
+	coordinator.hooks = &importCoordinatorHooks{
+		afterPrune: func() error {
+			coordinator.hooks.afterPrune = nil
+			return coordinator.RecordChanged(t.Context(), manifestEntry)
+		},
+	}
+
+	result, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.True(t, result.More)
+}
+
 func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 	const changedSessions = 300
 	base := newTestArtifactStore(t)
