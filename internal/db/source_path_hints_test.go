@@ -1111,3 +1111,97 @@ func insertSessionsWithSourcePaths(
 	require.NoError(t, err, "insert source path sessions")
 	require.Equal(t, len(seeds), result.WrittenSessions, "WrittenSessions")
 }
+
+// TestListActiveSessionSourceOwnershipScopesPageExcludesNestedRootsInQuery
+// proves the exclusion is applied by the query rather than after the page is
+// read: the excluded archive is larger than one page, so a read-then-filter
+// exclusion returns an empty page while the selected scope's own rows wait
+// behind it.
+func TestListActiveSessionSourceOwnershipScopesPageExcludesNestedRootsInQuery(t *testing.T) {
+	d := testDB(t)
+	root := t.TempDir()
+	// "archive" sorts ahead of "session", so the nested rows are exactly the
+	// ones a page limit would hand back first.
+	nested := filepath.Join(root, "archive")
+	seeds := make([]storedSourcePathSeed, 0, WatchReconcileSourcePageSize+8)
+	for i := range WatchReconcileSourcePageSize + 4 {
+		seeds = append(seeds, storedSourcePathSeed{
+			id:    fmt.Sprintf("nested-%04d", i),
+			agent: "claude",
+			path:  filepath.Join(nested, fmt.Sprintf("nested-%04d.jsonl", i)),
+		})
+	}
+	selectedIDs := make([]string, 0, 4)
+	for i := range 4 {
+		id := fmt.Sprintf("parent-%04d", i)
+		selectedIDs = append(selectedIDs, id)
+		seeds = append(seeds, storedSourcePathSeed{
+			id:    id,
+			agent: "claude",
+			path:  filepath.Join(root, fmt.Sprintf("session-%04d.jsonl", i)),
+		})
+	}
+	insertSessionsWithSourcePaths(t, d, seeds)
+	require.NoError(t, d.BaselineActiveSessionSourcePaths(
+		t.Context(), defaultMachine, sourcePathsFromSeeds(seeds),
+	))
+
+	page, err := d.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), defaultMachine, "claude",
+		[]StoredSourcePathHintScope{{Path: root, Excluded: []string{nested}}},
+		SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(page))
+	for _, ownership := range page {
+		got = append(got, ownership.ID)
+		assert.NotContains(t, ownership.FilePath, nested,
+			"an excluded nested root must not reach the caller")
+	}
+	assert.Equal(t, selectedIDs, got,
+		"the first page must carry the selected scope's rows, not the excluded archive's")
+}
+
+func TestNormalizeStoredSourcePathHintScopesBoundsExclusions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "claude")
+	nested := filepath.Join(root, "archive")
+	sibling := filepath.Join(filepath.Dir(root), "codex")
+
+	t.Run("keeps only strict descendants", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{{
+			Path:     root,
+			Excluded: []string{nested, root, sibling, "", ".", nested},
+		}})
+		require.Len(t, got, 1)
+		assert.Equal(t, []string{nested}, got[0].Excluded,
+			"an exclusion at or outside the scope root would empty or not narrow it")
+	})
+
+	t.Run("repeated declarations intersect", func(t *testing.T) {
+		got := normalizeStoredSourcePathHintScopes([]StoredSourcePathHintScope{
+			{Path: root, Excluded: []string{nested}},
+			{Path: root},
+		})
+		require.Len(t, got, 1)
+		assert.Empty(t, got[0].Excluded,
+			"declarations of one path union their rows, so a root only one excludes stays visible")
+	})
+}
+
+func TestStoredSourcePathHintInRootHonorsExclusions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "claude")
+	nested := filepath.Join(root, "archive")
+	scope := StoredSourcePathHintScope{
+		Path: root, IncludeVirtualMembers: true, Excluded: []string{nested},
+	}
+
+	assert.True(t, storedSourcePathHintInRoot(
+		filepath.Join(root, "session.jsonl"), scope))
+	assert.False(t, storedSourcePathHintInRoot(
+		filepath.Join(nested, "session.jsonl"), scope))
+	assert.False(t, storedSourcePathHintInRoot(
+		filepath.Join(nested, "state.db")+"#member", scope),
+		"a virtual member is excluded with its container")
+	assert.True(t, storedSourcePathHintInRoot(root+"#member", scope))
+}

@@ -3878,7 +3878,9 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 		var provider parser.Provider
 		var replacementIndex reconciliationSpoolStore
 		ownsReplacementIndex := false
-		allProviderRootsCovered := reconciliationCoversConfiguredRoots(roots, dirs)
+		allProviderRootsCovered := reconciliationCoversConfiguredRoots(
+			roots, dirs, agentFilter != "",
+		)
 		excludedDescendantRoots := unselectedDescendantConfiguredRoots(roots, dirs)
 		matchedConfiguredRoots := matchedConfiguredRootsForRequestedPaths(
 			roots, dirs,
@@ -3903,14 +3905,22 @@ func (e *Engine) tombstoneMissingWatchSourcesForAgentLocked(
 					ownershipScopes = resolved
 				}
 			}
+			// Exclusions ride the query so a large unselected nested archive
+			// never fills a page ahead of this scope's own rows. The read-side
+			// skip below still runs: a provider-resolved ownership scope need
+			// not be an ancestor of the excluded root, and normalization drops
+			// the exclusion in that case.
+			dbScopes := storedSourceDBHintScopes(ownershipScopes)
+			for i := range dbScopes {
+				dbScopes[i].Excluded = excludedDescendantRoots
+			}
 			var cursor db.SessionSourceCursor
 			for {
 				if err := ctx.Err(); err != nil {
 					return deleted, err
 				}
 				page, err := e.db.ListActiveSessionSourceOwnershipScopesPage(
-					ctx, e.machine, string(agent),
-					storedSourceDBHintScopes(ownershipScopes), cursor,
+					ctx, e.machine, string(agent), dbScopes, cursor,
 				)
 				if err != nil {
 					return deleted, fmt.Errorf(
@@ -4159,14 +4169,33 @@ func (e *Engine) tombstoneSessionSourceOwnership(
 	return true, nil
 }
 
-func reconciliationCoversConfiguredRoots(requested, configured []string) bool {
+// reconciliationScopeCoversConfiguredRoot reports whether a pass over the
+// requested roots reaches one configured root. rootSyncScope.includes admits
+// discovery through it and tombstone accounting asks it what the pass covered,
+// so the two cannot drift: an agent-scoped pass admits only exactly selected
+// configured dirs, leaving a nested configured root undiscovered when its
+// ancestor was selected, while a generic pass expands into descendants.
+func reconciliationScopeCoversConfiguredRoot(
+	requested []string, configured string, agentScoped bool,
+) bool {
+	cleanedConfigured := cleanRootPath(configured)
+	return slices.ContainsFunc(requested, func(requestedRoot string) bool {
+		cleanedRequested := cleanRootPath(requestedRoot)
+		if agentScoped {
+			return cleanedConfigured == cleanedRequested
+		}
+		return samePathOrDescendant(cleanedConfigured, cleanedRequested)
+	})
+}
+
+func reconciliationCoversConfiguredRoots(
+	requested, configured []string, agentScoped bool,
+) bool {
 	for _, configuredRoot := range configured {
 		if isRemoteReconciliationRoot(configuredRoot) ||
-			!slices.ContainsFunc(requested, func(requestedRoot string) bool {
-				return samePathOrDescendant(
-					cleanRootPath(configuredRoot), cleanRootPath(requestedRoot),
-				)
-			}) {
+			!reconciliationScopeCoversConfiguredRoot(
+				requested, configuredRoot, agentScoped,
+			) {
 			return false
 		}
 	}
@@ -4487,19 +4516,11 @@ func (s *rootSyncScope) includes(dir string) bool {
 	if dir == "" {
 		return false
 	}
-	cleaned := cleanRootPath(dir)
-	if s.agent != "" {
-		exactRoots := s.exactRoots
-		if len(exactRoots) == 0 {
-			exactRoots = s.roots
-		}
-		return slices.ContainsFunc(exactRoots, func(root string) bool {
-			return cleanRootPath(root) == cleaned
-		})
+	roots := s.roots
+	if s.agent != "" && len(s.exactRoots) > 0 {
+		roots = s.exactRoots
 	}
-	return slices.ContainsFunc(s.roots, func(root string) bool {
-		return samePathOrDescendant(cleaned, root)
-	})
+	return reconciliationScopeCoversConfiguredRoot(roots, dir, s.agent != "")
 }
 
 func (s *rootSyncScope) includesAny(dirs []string) bool {

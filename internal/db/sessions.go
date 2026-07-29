@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -2260,6 +2261,10 @@ const storedSourcePathHintRootBatchSize = 100
 type StoredSourcePathHintScope struct {
 	Path                  string
 	IncludeVirtualMembers bool
+	// Excluded names descendant roots the caller reconciles under their own
+	// scope. Filtering them after a page is read lets a large excluded archive
+	// consume the page limit, so the exclusion belongs in the query.
+	Excluded []string
 }
 
 // WatchReconcileSourcePageSize bounds each watcher reconciliation ownership
@@ -2360,6 +2365,13 @@ func (db *DB) listActiveSessionSourceOwnershipScopeBatch(
 				AND b.file_path NOT LIKE ? ESCAPE '!'))`
 			args = append(args, root+"#", root+"$",
 				likeRoot+`#%/%`, likeRoot+`#%\%`)
+		}
+		var exclusionClause string
+		exclusionClause, args = storedSourcePathHintExclusionSQL(
+			"b.file_path", scope.Excluded, args,
+		)
+		if exclusionClause != "" {
+			rootClause = `(` + rootClause + exclusionClause + `)`
 		}
 		rootClauses = append(rootClauses, rootClause)
 	}
@@ -2753,18 +2765,37 @@ func (db *DB) ListStoredSourcePathHintsContext(
 func normalizeStoredSourcePathHintScopes(
 	scopes []StoredSourcePathHintScope,
 ) []StoredSourcePathHintScope {
-	byPath := make(map[string]bool, len(scopes))
+	type mergedScope struct {
+		includeVirtualMembers bool
+		excluded              []string
+	}
+	byPath := make(map[string]*mergedScope, len(scopes))
 	for _, scope := range scopes {
 		path := cleanStoredSourcePathHint(scope.Path)
 		if path == "" || path == "." {
 			continue
 		}
-		byPath[path] = byPath[path] || scope.IncludeVirtualMembers
+		excluded := normalizeExcludedHintRoots(path, scope.Excluded)
+		merged, ok := byPath[path]
+		if !ok {
+			byPath[path] = &mergedScope{
+				includeVirtualMembers: scope.IncludeVirtualMembers,
+				excluded:              excluded,
+			}
+			continue
+		}
+		merged.includeVirtualMembers = merged.includeVirtualMembers ||
+			scope.IncludeVirtualMembers
+		// Repeated declarations of one path union their rows, so a root only
+		// one of them excludes must stay visible.
+		merged.excluded = intersectHintRoots(merged.excluded, excluded)
 	}
 	out := make([]StoredSourcePathHintScope, 0, len(byPath))
-	for path, includeVirtualMembers := range byPath {
+	for path, merged := range byPath {
 		out = append(out, StoredSourcePathHintScope{
-			Path: path, IncludeVirtualMembers: includeVirtualMembers,
+			Path:                  path,
+			IncludeVirtualMembers: merged.includeVirtualMembers,
+			Excluded:              merged.excluded,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -2773,26 +2804,89 @@ func normalizeStoredSourcePathHintScopes(
 	return out
 }
 
+// normalizeExcludedHintRoots keeps the strict descendants of root, the only
+// exclusions that can narrow a scope without emptying it, then deduplicates
+// and orders them so the rendered SQL is stable.
+func normalizeExcludedHintRoots(root string, excluded []string) []string {
+	if len(excluded) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(excluded))
+	for _, candidate := range excluded {
+		cleaned := cleanStoredSourcePathHint(candidate)
+		if cleaned == "" || cleaned == "." || cleaned == root {
+			continue
+		}
+		if !strings.HasPrefix(cleaned, root+string(filepath.Separator)) {
+			continue
+		}
+		if slices.Contains(out, cleaned) {
+			continue
+		}
+		out = append(out, cleaned)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func intersectHintRoots(left, right []string) []string {
+	if len(left) == 0 || len(right) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(left), len(right)))
+	for _, root := range left {
+		if slices.Contains(right, root) {
+			out = append(out, root)
+		}
+	}
+	return out
+}
+
+// storedSourcePathHintExclusionSQL renders the predicate that drops descendant
+// roots the caller reconciles separately. Both stored-source queries route
+// through it so an excluded archive is never read and then discarded.
+func storedSourcePathHintExclusionSQL(
+	column string, excluded []string, args []any,
+) (string, []any) {
+	if len(excluded) == 0 {
+		return "", args
+	}
+	var clause strings.Builder
+	for _, root := range excluded {
+		clause.WriteString(` AND ` + column + ` <> ? AND ` +
+			column + ` NOT LIKE ? ESCAPE '!'`)
+		args = append(args, root,
+			sqliteLikeEscape(root)+string(filepath.Separator)+"%")
+	}
+	return clause.String(), args
+}
+
 func storedSourcePathHintQuery(
 	agent string,
 	scopes []StoredSourcePathHintScope,
 ) (string, []any) {
 	selects := make([]string, 0, len(scopes)*3)
 	var args []any
-	appendSelect := func(predicate string, values ...any) {
-		selects = append(selects, `SELECT file_path
-			FROM sessions
-			WHERE agent = ?
-			  AND file_path IS NOT NULL
-			  AND deleted_at IS NULL
-			  AND `+predicate)
-		args = append(args, agent)
-		args = append(args, values...)
-	}
 	for _, scope := range scopes {
 		root := cleanStoredSourcePathHint(scope.Path)
 		if root == "" || root == "." {
 			continue
+		}
+		exclusion, _ := storedSourcePathHintExclusionSQL(
+			"file_path", scope.Excluded, nil,
+		)
+		appendSelect := func(predicate string, values ...any) {
+			selects = append(selects, `SELECT file_path
+			FROM sessions
+			WHERE agent = ?
+			  AND file_path IS NOT NULL
+			  AND deleted_at IS NULL
+			  AND `+predicate+exclusion)
+			args = append(args, agent)
+			args = append(args, values...)
+			_, args = storedSourcePathHintExclusionSQL(
+				"file_path", scope.Excluded, args,
+			)
 		}
 		descendantPrefix, descendantEnd := activeSessionSourceBounds(root)
 		appendSelect(`file_path = ?`, root)
@@ -2828,6 +2922,9 @@ func storedSourcePathHintInAnyRoot(
 func storedSourcePathHintInRoot(path string, scope StoredSourcePathHintScope) bool {
 	path = cleanStoredSourcePathHint(path)
 	root := cleanStoredSourcePathHint(scope.Path)
+	if storedSourcePathHintExcluded(path, scope.Excluded) {
+		return false
+	}
 	if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
 		return true
 	}
@@ -2836,6 +2933,20 @@ func storedSourcePathHintInRoot(path string, scope StoredSourcePathHintScope) bo
 		scope.IncludeVirtualMembers &&
 		suffix != "" &&
 		!strings.ContainsAny(suffix, `/\`)
+}
+
+// storedSourcePathHintExcluded mirrors storedSourcePathHintExclusionSQL in Go
+// so the query and the post-read filter agree on scope membership. A virtual
+// member is covered by its container's prefix, so no member branch is needed.
+func storedSourcePathHintExcluded(path string, excluded []string) bool {
+	return slices.ContainsFunc(excluded, func(root string) bool {
+		cleaned := cleanStoredSourcePathHint(root)
+		if cleaned == "" || cleaned == "." {
+			return false
+		}
+		return path == cleaned ||
+			strings.HasPrefix(path, cleaned+string(filepath.Separator))
+	})
 }
 
 func sqliteLikeEscape(value string) string {

@@ -187,19 +187,12 @@ func TestReconcileProviderRootsDoesNotExpandAcrossSameProviderScopes(t *testing.
 	require.NoError(t, engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentClaude, []string{parentDir}))
 
-	deleted, err := database.GetSessionFull(t.Context(), parentIDs[2])
-	require.NoError(t, err)
-	require.NotNil(t, deleted)
-	require.NotNil(t, deleted.DeletionCause)
-	assert.Equal(t, "source_missing", *deleted.DeletionCause)
-
-	for i, id := range parentIDs {
-		if i == 2 {
-			continue
-		}
+	for _, id := range parentIDs {
 		active, err := database.GetSession(t.Context(), id)
 		require.NoError(t, err)
-		assert.NotNil(t, active, "surviving parent sessions must remain active")
+		assert.NotNil(t, active,
+			"a pass that never discovered the nested configured root cannot tell "+
+				"a deleted source from one relocated into it")
 	}
 
 	for _, id := range nestedIDs {
@@ -214,4 +207,74 @@ func TestReconcileProviderRootsDoesNotExpandAcrossSameProviderScopes(t *testing.
 	assert.LessOrEqual(t, engine.LastReconciliationResult().Metrics.MaxRehydratedSources,
 		len(parentIDs),
 		"rehydration must stay bounded by the selected parent scope")
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentClaude, []string{parentDir, nestedDir}))
+
+	deleted, err := database.GetSessionFull(t.Context(), parentIDs[2])
+	require.NoError(t, err)
+	require.NotNil(t, deleted)
+	require.NotNil(t, deleted.DeletionCause)
+	assert.Equal(t, "source_missing", *deleted.DeletionCause,
+		"a pass selecting every configured root still tombstones the removed source")
+
+	for i, id := range parentIDs {
+		if i == 2 {
+			continue
+		}
+		active, err := database.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		assert.NotNil(t, active, "surviving parent sessions must remain active")
+	}
+}
+
+// TestReconcileProviderRootsKeepsSessionMovedIntoUnselectedNestedScope covers
+// the move a partial pass cannot see: the source vanished from the selected
+// parent and reappeared under a configured nested root the pass excluded from
+// discovery, so its absence is not evidence of deletion.
+func TestReconcileProviderRootsKeepsSessionMovedIntoUnselectedNestedScope(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	base := t.TempDir()
+	parentDir := filepath.Join(base, "claude")
+	nestedDir := filepath.Join(parentDir, "nested")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+
+	parentIDs := writeNamedClaudeCorpus(t, parentDir, "parent", 5)
+	nestedIDs := writeNamedClaudeCorpus(t, nestedDir, "nested", 3)
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {parentDir, nestedDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, len(parentIDs)+len(nestedIDs),
+		engine.SyncAll(t.Context(), nil).Synced, "cold pass ingests every source")
+
+	movedID := parentIDs[2]
+	from := filepath.Join(parentDir, "project", movedID+".jsonl")
+	to := filepath.Join(nestedDir, "project", movedID+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(to), 0o755))
+	require.NoError(t, os.Rename(from, to))
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentClaude, []string{parentDir}))
+
+	moved, err := database.GetSession(t.Context(), movedID)
+	require.NoError(t, err)
+	assert.NotNil(t, moved,
+		"a session moved into an unselected nested configured root must survive a parent-scoped pass")
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentClaude, []string{parentDir, nestedDir}))
+
+	stillActive, err := database.GetSession(t.Context(), movedID)
+	require.NoError(t, err)
+	assert.NotNil(t, stillActive,
+		"a covering pass finds the relocated source and leaves the session active")
 }
