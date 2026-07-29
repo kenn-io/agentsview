@@ -11,19 +11,34 @@ import (
 
 const periodicPricingRefreshInterval = 24 * time.Hour
 
-func startPeriodicPricingRefresh(ctx context.Context, database *db.DB) {
+type pricingRefreshExclusiveRunner interface {
+	RunExclusive(func() error) error
+}
+
+func startPeriodicPricingRefresh(
+	ctx context.Context,
+	database *db.DB,
+	runner pricingRefreshExclusiveRunner,
+) {
 	ticker := time.NewTicker(periodicPricingRefreshInterval)
 	defer ticker.Stop()
-	runPeriodicPricingRefresh(ctx, ticker.C, database)
+	runPeriodicPricingRefresh(ctx, ticker.C, database, runner)
 }
 
 func runPeriodicPricingRefresh(
 	ctx context.Context,
 	ticks <-chan time.Time,
 	database *db.DB,
+	runner pricingRefreshExclusiveRunner,
 ) {
 	runPricingRefreshLoop(ctx, ticks, func(ctx context.Context) error {
-		return pricingrefresh.RefreshCurrent(ctx, database)
+		refresh := func() error {
+			return pricingrefresh.RefreshCurrent(ctx, database)
+		}
+		if runner == nil {
+			return refresh()
+		}
+		return runner.RunExclusive(refresh)
 	})
 }
 

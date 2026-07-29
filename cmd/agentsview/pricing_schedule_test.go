@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/dbtest"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 type pricingCatalogTransport struct {
@@ -54,7 +56,7 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 	ticks := make(chan time.Time, 1)
 	done := make(chan struct{})
 	go func() {
-		runPeriodicPricingRefresh(ctx, ticks, database)
+		runPeriodicPricingRefresh(ctx, ticks, database, nil)
 		close(done)
 	}()
 	t.Cleanup(func() {
@@ -84,6 +86,90 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 	currentAttempt, err := database.GetPricingMeta("_litellm_last_attempt")
 	require.NoError(t, err)
 	require.NotEqual(t, previousAttempt, currentAttempt)
+}
+
+func TestRunPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{})
+	t.Cleanup(engine.Close)
+	dbtest.EnsureTestDBAt(t, engine.ResyncTempPath())
+
+	swapEntered := make(chan struct{})
+	releaseSwap := make(chan struct{}, 1)
+	swapDone := make(chan error, 1)
+	go func() {
+		swapDone <- engine.RunExclusive(func() error {
+			close(swapEntered)
+			<-releaseSwap
+			if err := engine.SwapResyncDatabase(
+				engine.ResyncTempPath(),
+			); err != nil {
+				return err
+			}
+			return engine.ResetCachesAfterSwap()
+		})
+	}()
+	defer func() {
+		select {
+		case releaseSwap <- struct{}{}:
+		default:
+		}
+	}()
+	require.Eventually(t, func() bool {
+		select {
+		case <-swapEntered:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	requests := make(chan *http.Request, 1)
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = pricingCatalogTransport{requests: requests}
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time, 1)
+	refreshDone := make(chan struct{})
+	go func() {
+		runPeriodicPricingRefresh(ctx, ticks, database, engine)
+		close(refreshDone)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		require.Eventually(t, func() bool {
+			select {
+			case <-refreshDone:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, time.Millisecond)
+	})
+
+	ticks <- time.Now()
+	assert.Never(t, func() bool {
+		return len(requests) > 0
+	}, 50*time.Millisecond, time.Millisecond)
+
+	releaseSwap <- struct{}{}
+	var swapErr error
+	require.Eventually(t, func() bool {
+		select {
+		case swapErr = <-swapDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.NoError(t, swapErr)
+	require.Eventually(t, func() bool {
+		price, err := database.GetModelPricing("scheduled-model")
+		return err == nil && price != nil
+	}, time.Second, time.Millisecond)
 }
 
 func TestRunPricingRefreshLoopContinuesAfterFailure(t *testing.T) {
