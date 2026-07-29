@@ -39,6 +39,40 @@ type DuckDBPushConfig struct {
 	Automatic bool
 }
 
+// duckDBPusher runs a local engine sync then pushes to the DuckDB mirror.
+// It mirrors pgPusher's watch-loop shape: interval pushes use SyncAll, which
+// never tombstones missed deletions, so deferred scopes rely on the separate
+// unwatched-root poller wired by DuckDBPushWatch.
+type duckDBPusher struct {
+	localSync     func(context.Context) error
+	ensurePricing func(context.Context) error
+	mirrorPush    func(context.Context, bool) (duckdbsync.PushResult, error)
+}
+
+func (p *duckDBPusher) push(
+	ctx context.Context, reason pushReason, full bool,
+) error {
+	if err := p.localSync(ctx); err != nil {
+		return fmt.Errorf("local sync: %w", err)
+	}
+	if p.ensurePricing != nil {
+		if err := p.ensurePricing(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			log.Printf("warning: pricing refresh failed: %v", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	res, err := p.mirrorPush(ctx, full)
+	if err != nil {
+		return err
+	}
+	return completeDuckDBWatchPush(res, reason)
+}
+
 type DuckDBQuackServeConfig struct {
 	Bind          string
 	Path          string
