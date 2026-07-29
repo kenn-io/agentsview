@@ -1972,21 +1972,33 @@ func (r watchRoot) pollingObligations(
 	rootKey string,
 	probePath string,
 	dirs []string,
-	providerScoped bool,
+	alwaysSplitByDir bool,
 ) []sync.PollingObligation {
 	return pollingObligationsForScopes(
 		rootKey,
 		probePath,
 		r.scopesForDirs(dirs),
-		providerScoped,
+		alwaysSplitByDir,
 	)
 }
 
+// pollingObligationsForScopes splits a provider-owned directory into its own
+// obligation whenever the obligation would otherwise cover more than one, the
+// rule the runtime watcher fallback already applies in
+// internal/sync/watch_backend.go. One obligation carries one probe, so
+// grouping same-provider directories under it lets that probe answer for a
+// directory it never looked at, and a change in another grouped directory is
+// skipped for as long as the probe stays unchanged.
+//
+// alwaysSplitByDir additionally forces the split at one directory. It is not a
+// second policy: the registration-failure call sites reuse the root's own key,
+// so without the per-directory suffix their obligation would collide with the
+// pending obligation for the same root when both fire.
 func pollingObligationsForScopes(
 	rootKey string,
 	probePath string,
 	scopes []watchScope,
-	providerScoped bool,
+	alwaysSplitByDir bool,
 ) []sync.PollingObligation {
 	if len(scopes) == 0 {
 		return nil
@@ -2012,6 +2024,7 @@ func pollingObligationsForScopes(
 		dirs = append(dirs, dir)
 	}
 	slices.Sort(dirs)
+	splitByDir := alwaysSplitByDir || len(grouped) > 1
 	for _, cleanDir := range dirs {
 		key := rootKey
 		var agent parser.AgentType
@@ -2023,7 +2036,7 @@ func pollingObligationsForScopes(
 				sameAgent = false
 			}
 		}
-		if providerScoped && sameAgent && agent != "" {
+		if splitByDir && sameAgent && agent != "" {
 			key = rootKey + "|" + cleanDir
 		}
 		currentAgent := parser.AgentType("")

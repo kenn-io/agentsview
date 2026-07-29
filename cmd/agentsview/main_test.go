@@ -3701,3 +3701,115 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	assert.NotNil(t, synced,
 		"the available root must still reconcile the rename authoritatively")
 }
+
+// TestWatchPollingObligationsSplitSameProviderPendingDirs covers the grouping
+// the runtime watcher fallback never had: a pending reason spanning two
+// directories owned by one provider produced a single obligation carrying one
+// probe, so that probe answered for whichever directory it matched first and a
+// change in the other was skipped for as long as the probe stayed unchanged.
+func TestWatchPollingObligationsSplitSameProviderPendingDirs(t *testing.T) {
+	base := t.TempDir()
+	firstDir := filepath.Join(base, "opencode-a")
+	secondDir := filepath.Join(base, "opencode-b")
+	watchPath := filepath.Join(base, "shared")
+	roots := []watchRoot{{
+		path:      watchPath,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: firstDir},
+			{agent: parser.AgentOpenCode, syncDir: secondDir},
+		},
+		pendingPollingDirs: []string{firstDir, secondDir},
+	}}
+
+	got := watchPollingObligations(
+		roots,
+		[]agentsync.RecursiveWatchResult{{Watched: 1}},
+		nil,
+		nil,
+	)
+
+	assert.Equal(t, []agentsync.PollingObligation{
+		{
+			Key:   watchPath + "|" + filepath.Clean(firstDir),
+			Agent: parser.AgentOpenCode,
+			Roots: []string{firstDir},
+			Probe: watchPath,
+		},
+		{
+			Key:   watchPath + "|" + filepath.Clean(secondDir),
+			Agent: parser.AgentOpenCode,
+			Roots: []string{secondDir},
+			Probe: watchPath,
+		},
+	}, got, "one probe cannot answer for two provider-owned directories")
+}
+
+// TestSymlinkPollingObligationsSplitSameProviderDirs is the symlink-gated
+// analogue: the gate reports one symlink root, but the directories beneath it
+// are polled independently and must each carry their own obligation.
+func TestSymlinkPollingObligationsSplitSameProviderDirs(t *testing.T) {
+	base := t.TempDir()
+	symRoot := filepath.Join(base, "link-target")
+	firstDir := filepath.Join(base, "opencode-a")
+	secondDir := filepath.Join(base, "opencode-b")
+
+	got := symlinkPollingObligations(map[string][]watchScope{
+		symRoot: {
+			{agent: parser.AgentOpenCode, syncDir: firstDir},
+			{agent: parser.AgentOpenCode, syncDir: secondDir},
+		},
+	})
+
+	assert.Equal(t, []agentsync.PollingObligation{
+		{
+			Key:   "symlink:" + filepath.Clean(symRoot) + "|" + filepath.Clean(firstDir),
+			Agent: parser.AgentOpenCode,
+			Roots: []string{firstDir},
+			Probe: filepath.Clean(symRoot),
+		},
+		{
+			Key:   "symlink:" + filepath.Clean(symRoot) + "|" + filepath.Clean(secondDir),
+			Agent: parser.AgentOpenCode,
+			Roots: []string{secondDir},
+			Probe: filepath.Clean(symRoot),
+		},
+	}, got)
+}
+
+// TestWatchPollingObligationsKeepMixedProviderDirsGrouped pins the negative
+// space: only provider-owned directories split. A directory whose scopes carry
+// more than one agent stays generic and keeps sharing the root's obligation.
+func TestWatchPollingObligationsKeepMixedProviderDirsGrouped(t *testing.T) {
+	base := t.TempDir()
+	mixedDir := filepath.Join(base, "mixed")
+	otherMixedDir := filepath.Join(base, "mixed-two")
+	watchPath := filepath.Join(base, "shared")
+	roots := []watchRoot{{
+		path:      watchPath,
+		exists:    true,
+		recursive: true,
+		scopes: []watchScope{
+			{agent: parser.AgentOpenCode, syncDir: mixedDir},
+			{agent: parser.AgentKilo, syncDir: mixedDir},
+			{agent: parser.AgentOpenCode, syncDir: otherMixedDir},
+			{agent: parser.AgentKilo, syncDir: otherMixedDir},
+		},
+		pendingPollingDirs: []string{mixedDir, otherMixedDir},
+	}}
+
+	got := watchPollingObligations(
+		roots,
+		[]agentsync.RecursiveWatchResult{{Watched: 1}},
+		nil,
+		nil,
+	)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, agentsync.PollingObligation{
+		Key:   watchPath,
+		Roots: []string{mixedDir, otherMixedDir},
+		Probe: watchPath,
+	}, got[0], "mixed-provider dirs stay generic and keep sharing the root obligation")
+}
