@@ -475,6 +475,108 @@ func TestLoadImportedSessionEnforcesAggregateLimits(t *testing.T) {
 	assert.Equal(t, importClosureInvalid, outcome)
 }
 
+func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*artifactLimits)
+		message   func(int) []db.Message
+	}{
+		{
+			name: "messages",
+			configure: func(limits *artifactLimits) {
+				limits.sessionMessages = 2
+			},
+			message: func(count int) []db.Message {
+				messages := make([]db.Message, count)
+				for ordinal := range messages {
+					messages[ordinal] = db.Message{
+						Ordinal: ordinal, Role: "assistant",
+					}
+				}
+				return messages
+			},
+		},
+		{
+			name: "tool calls",
+			configure: func(limits *artifactLimits) {
+				limits.sessionToolCalls = 2
+			},
+			message: func(count int) []db.Message {
+				return []db.Message{{
+					Ordinal: 0, Role: "assistant",
+					ToolCalls: make([]db.ToolCall, count),
+				}}
+			},
+		},
+		{
+			name: "result events",
+			configure: func(limits *artifactLimits) {
+				limits.sessionResultEvents = 2
+			},
+			message: func(count int) []db.Message {
+				return []db.Message{{
+					Ordinal: 0, Role: "assistant",
+					ToolCalls: []db.ToolCall{{
+						ResultEvents: make([]db.ToolResultEvent, count),
+					}},
+				}}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, count := range []int{2, 3} {
+				database := testExportDB(t)
+				store := newTestArtifactStore(t)
+				m := importTestManifest("session")
+				manifestHash := createImportTestClosure(
+					t, store, &m, tc.message(count),
+				)
+				limits := productionArtifactLimits()
+				tc.configure(&limits)
+
+				_, outcome, err := loadImportedSession(
+					t.Context(), database, store, contractOrigin,
+					contractOrigin+"~session", manifestHash, limits,
+				)
+				require.NoError(t, err)
+				if count == 2 {
+					assert.Equal(t, importClosureComplete, outcome)
+				} else {
+					assert.Equal(t, importClosureInvalid, outcome)
+				}
+			}
+		})
+	}
+
+	t.Run("decoded bytes", func(t *testing.T) {
+		database := testExportDB(t)
+		store := newTestArtifactStore(t)
+		m := importTestManifest("session")
+		messages := []db.Message{{
+			Ordinal: 0, Role: "assistant", Content: "bounded",
+		}}
+		manifestHash := createImportTestClosure(t, store, &m, messages)
+		segmentBody, err := encodeSegment(messages)
+		require.NoError(t, err)
+
+		for _, delta := range []int64{0, -1} {
+			limits := productionArtifactLimits()
+			limits.sessionDecodedBytes = int64(len(segmentBody)) + delta
+			_, outcome, err := loadImportedSession(
+				t.Context(), database, store, contractOrigin,
+				contractOrigin+"~session", manifestHash, limits,
+			)
+			require.NoError(t, err)
+			if delta == 0 {
+				assert.Equal(t, importClosureComplete, outcome)
+			} else {
+				assert.Equal(t, importClosureInvalid, outcome)
+			}
+		}
+	})
+}
+
 func TestLoadImportedSessionPropagatesOperationalStoreError(t *testing.T) {
 	database := testExportDB(t)
 	base := newTestArtifactStore(t)

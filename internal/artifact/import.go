@@ -21,10 +21,20 @@ type ImportResult struct {
 	More        bool
 }
 
+type importCoordinatorHooks struct {
+	afterPeerHead     func() error
+	afterSessionWrite func() error
+	afterProvenance   func() error
+	afterLanding      func() error
+	observePending    func(limit, count int)
+	observeProvenance func(count int)
+}
+
 type StoreImportCoordinator struct {
 	database    *db.DB
 	store       ArtifactStore
 	localOrigin string
+	hooks       *importCoordinatorHooks
 
 	runMu                   sync.Mutex
 	signalMu                sync.Mutex
@@ -84,6 +94,11 @@ func (c *StoreImportCoordinator) RecordChanged(
 	)
 	if err != nil {
 		return err
+	}
+	if advanced && c.hooks != nil && c.hooks.afterPeerHead != nil {
+		if err := c.hooks.afterPeerHead(); err != nil {
+			return err
+		}
 	}
 	if !advanced {
 		head, found, err := c.database.GetArtifactPeerCheckpointHead(
@@ -150,6 +165,9 @@ func (c *StoreImportCoordinator) Finalize(
 	)
 	if err != nil {
 		return result, err
+	}
+	if c.hooks != nil && c.hooks.observePending != nil {
+		c.hooks.observePending(artifactImportDrainLimit, len(work))
 	}
 	for _, claim := range work {
 		if err := c.processImportClaim(ctx, claim, &result); err != nil {
@@ -266,6 +284,9 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 		if err != nil {
 			return err
 		}
+		if c.hooks != nil && c.hooks.observeProvenance != nil {
+			c.hooks.observeProvenance(end - start)
+		}
 		maps.Copy(provenance, page)
 	}
 
@@ -321,6 +342,11 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 		case err == nil:
 			result.Sessions += batch.WrittenSessions
 			result.Messages += batch.WrittenMessages
+			if c.hooks != nil && c.hooks.afterSessionWrite != nil {
+				if err := c.hooks.afterSessionWrite(); err != nil {
+					return err
+				}
+			}
 		case errors.Is(err, db.ErrSessionExcluded),
 			errors.Is(err, db.ErrSessionTrashed):
 		default:
@@ -334,6 +360,11 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			},
 		); err != nil {
 			return err
+		}
+		if c.hooks != nil && c.hooks.afterProvenance != nil {
+			if err := c.hooks.afterProvenance(); err != nil {
+				return err
+			}
 		}
 	}
 	if deferred {
@@ -353,6 +384,11 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 		checkpoint.Sessions,
 	); err != nil {
 		return err
+	}
+	if c.hooks != nil && c.hooks.afterLanding != nil {
+		if err := c.hooks.afterLanding(); err != nil {
+			return err
+		}
 	}
 	_, err := c.database.AcknowledgeArtifactImport(ctx, work)
 	return err

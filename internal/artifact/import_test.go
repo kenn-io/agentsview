@@ -1,8 +1,10 @@
 package artifact
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -433,6 +435,310 @@ func TestStoreImportCoordinatorDoesNotDeleteSessionOmittedByNewCheckpoint(
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "kept", messages[0].Content)
+}
+
+func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
+	injected := errors.New("injected crash")
+	tests := []struct {
+		name      string
+		recordErr bool
+		install   func(*importCoordinatorHooks)
+	}{
+		{
+			name:      "after peer head before queue",
+			recordErr: true,
+			install: func(hooks *importCoordinatorHooks) {
+				hooks.afterPeerHead = func() error { return injected }
+			},
+		},
+		{
+			name: "after session write before provenance",
+			install: func(hooks *importCoordinatorHooks) {
+				hooks.afterSessionWrite = func() error { return injected }
+			},
+		},
+		{
+			name: "after provenance before landing",
+			install: func(hooks *importCoordinatorHooks) {
+				hooks.afterProvenance = func() error { return injected }
+			},
+		},
+		{
+			name: "after landing before acknowledgement",
+			install: func(hooks *importCoordinatorHooks) {
+				hooks.afterLanding = func() error { return injected }
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			databasePath := filepath.Join(root, "archive.db")
+			storeRoot := filepath.Join(root, "artifacts")
+			store, err := newProtocolTestStore(storeRoot)
+			require.NoError(t, err)
+			database, err := db.Open(databasePath)
+			require.NoError(t, err)
+
+			ordinal := 0
+			m := importTestManifest("session")
+			m.UsageEvents = []artifactUsageEvent{{
+				MessageOrdinal: &ordinal,
+				Source:         "provider",
+				Model:          "model",
+				DedupKey:       "usage",
+			}}
+			manifestHash := createImportTestClosure(
+				t, store, &m, []db.Message{{
+					Ordinal: 0, Role: "user", Content: "once",
+				}},
+			)
+			checkpointEntry := createImportTestCheckpoint(
+				t, store, contractOrigin, 1,
+				map[string]string{
+					contractOrigin + "~session": manifestHash,
+				},
+			)
+			coordinator := NewStoreImportCoordinator(
+				database, store, importLocalOrigin,
+			)
+			coordinator.hooks = &importCoordinatorHooks{}
+			tc.install(coordinator.hooks)
+
+			if tc.recordErr {
+				err = coordinator.RecordChanged(t.Context(), checkpointEntry)
+			} else {
+				require.NoError(t, coordinator.RecordChanged(
+					t.Context(), checkpointEntry,
+				))
+				_, err = coordinator.Finalize(t.Context())
+			}
+			require.ErrorIs(t, err, injected)
+			require.NoError(t, database.Close())
+			require.NoError(t, store.Close())
+
+			database, err = db.Open(databasePath)
+			require.NoError(t, err)
+			store, err = newProtocolTestStore(storeRoot)
+			require.NoError(t, err)
+			coordinator = NewStoreImportCoordinator(
+				database, store, importLocalOrigin,
+			)
+			require.NoError(t, coordinator.RecordChanged(
+				t.Context(), checkpointEntry,
+			))
+			_, err = coordinator.Finalize(t.Context())
+			require.NoError(t, err)
+
+			head, found, err := database.GetArtifactPeerCheckpointHead(
+				t.Context(), contractOrigin,
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, 1, head.Sequence)
+			landing, _, found, err :=
+				database.GetArtifactCheckpointLanding(
+					t.Context(), contractOrigin,
+				)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, 1, landing.Sequence)
+			count, _, err := database.ArtifactImportQueueStats(t.Context())
+			require.NoError(t, err)
+			assert.Zero(t, count)
+			messages, err := database.GetMessages(
+				t.Context(), contractOrigin+"~session", 0, 10, true,
+			)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "once", messages[0].Content)
+			usage, err := database.GetUsageEvents(
+				t.Context(), contractOrigin+"~session",
+			)
+			require.NoError(t, err)
+			require.Len(t, usage, 1)
+			assert.Equal(t, "usage", usage[0].DedupKey)
+			require.NoError(t, database.Close())
+			require.NoError(t, store.Close())
+		})
+	}
+}
+
+func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
+	const unchangedSessions = 10_000
+	base := newTestArtifactStore(t)
+	m := importTestManifest("changed")
+	changedHash := createImportTestClosure(t, base, &m, []db.Message{{
+		Ordinal: 0, Role: "user", Content: "changed",
+	}})
+	sessionMap := make(map[string]string, unchangedSessions+1)
+	destination := testDB(t)
+	for i := range unchangedSessions {
+		gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
+		hash := fmt.Sprintf("%064x", i+1)
+		sessionMap[gid] = hash
+		require.NoError(t, destination.RecordArtifactImportedSession(
+			t.Context(),
+			db.ArtifactImportedSession{
+				Origin:            contractOrigin,
+				GID:               gid,
+				ManifestHash:      hash,
+				ImportedSessionID: gid,
+			},
+		))
+	}
+	sessionMap[contractOrigin+"~changed"] = changedHash
+	checkpointEntry := createImportTestCheckpoint(
+		t, base, contractOrigin, 1, sessionMap,
+	)
+	store := &countingImportStore{ArtifactStore: base}
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	var pendingLimits, pendingCounts, provenancePages []int
+	coordinator.hooks = &importCoordinatorHooks{
+		observePending: func(limit, count int) {
+			pendingLimits = append(pendingLimits, limit)
+			pendingCounts = append(pendingCounts, count)
+		},
+		observeProvenance: func(count int) {
+			provenancePages = append(provenancePages, count)
+		},
+	}
+	require.NoError(t, coordinator.RecordChanged(
+		t.Context(), checkpointEntry,
+	))
+	result, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sessions)
+	assert.Equal(t, []int{artifactImportDrainLimit}, pendingLimits)
+	assert.Equal(t, []int{1}, pendingCounts)
+	require.NotEmpty(t, provenancePages)
+	for _, size := range provenancePages {
+		assert.LessOrEqual(t, size, 1024)
+	}
+	assert.Equal(t, unchangedSessions+1, sumInts(provenancePages))
+	assert.Equal(t, 1, store.opens[KindCheckpoints])
+	assert.Equal(t, 1, store.opens[KindManifests])
+	assert.Equal(t, 1, store.opens[KindSegments])
+	assert.Equal(t, 1, store.stats[KindManifests])
+	assert.Equal(t, 1, store.stats[KindSegments])
+	assert.Equal(t, map[string]int{contractOrigin: 3}, store.openOrigins)
+}
+
+func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {
+	base := newTestArtifactStore(t)
+	ordinal := 0
+	m := importTestManifest("session")
+	m.UsageEvents = []artifactUsageEvent{{
+		MessageOrdinal: &ordinal,
+		Source:         "provider",
+		Model:          "model",
+		DedupKey:       "usage",
+	}}
+	manifestHash := createImportTestClosure(t, base, &m, []db.Message{{
+		Ordinal: 0, Role: "user", Content: "once",
+	}})
+	checkpoint := createImportTestCheckpoint(
+		t, base, contractOrigin, 1,
+		map[string]string{contractOrigin + "~session": manifestHash},
+	)
+	manifestRef := requireContractRef(
+		t, contractOrigin, KindManifests, manifestHash+".json",
+	)
+	manifestEntry, err := base.Stat(t.Context(), manifestRef)
+	require.NoError(t, err)
+	segmentRef := requireContractRef(
+		t, contractOrigin, KindSegments, m.Segments[0]+".ndjson",
+	)
+	segmentEntry, err := base.Stat(t.Context(), segmentRef)
+	require.NoError(t, err)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, base, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), checkpoint))
+	initialGeneration := coordinator.generation
+	require.NoError(t, coordinator.RecordChanged(t.Context(), manifestEntry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), segmentEntry))
+	assert.Equal(t, initialGeneration+2, coordinator.generation)
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), checkpoint))
+	count, _, err = destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	first, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.Sessions)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), checkpoint))
+	replay, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, replay.Sessions)
+
+	higher := createImportTestCheckpoint(
+		t, base, contractOrigin, 2,
+		map[string]string{contractOrigin + "~session": manifestHash},
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), higher))
+	unchanged, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, unchanged.Sessions)
+	messages, err := destination.GetMessages(
+		t.Context(), contractOrigin+"~session", 0, 10, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, messages, 1)
+	usage, err := destination.GetUsageEvents(
+		t.Context(), contractOrigin+"~session",
+	)
+	require.NoError(t, err)
+	assert.Len(t, usage, 1)
+	landing, _, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, landing.Sequence)
+}
+
+type countingImportStore struct {
+	ArtifactStore
+	opens       map[Kind]int
+	stats       map[Kind]int
+	openOrigins map[string]int
+}
+
+func (s *countingImportStore) Open(
+	ctx context.Context, ref Ref,
+) (Entry, VerifiedReader, error) {
+	if s.opens == nil {
+		s.opens = make(map[Kind]int)
+		s.openOrigins = make(map[string]int)
+	}
+	s.opens[ref.Kind]++
+	s.openOrigins[ref.Origin]++
+	return s.ArtifactStore.Open(ctx, ref)
+}
+
+func (s *countingImportStore) Stat(
+	ctx context.Context, ref Ref,
+) (Entry, error) {
+	if s.stats == nil {
+		s.stats = make(map[Kind]int)
+	}
+	s.stats[ref.Kind]++
+	return s.ArtifactStore.Stat(ctx, ref)
+}
+
+func sumInts(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
 }
 
 func createImportTestCheckpoint(

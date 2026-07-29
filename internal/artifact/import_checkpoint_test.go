@@ -11,7 +11,63 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestReadVerifiedImportArtifactByteBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		kind      Kind
+		extension string
+		limit     int64
+	}{
+		{
+			name: "checkpoint", kind: KindCheckpoints,
+			extension: ".json", limit: checkpointDecodedLimit,
+		},
+		{
+			name: "manifest", kind: KindManifests,
+			extension: ".json", limit: manifestDecodedLimit,
+		},
+		{
+			name: "segment", kind: KindSegments,
+			extension: ".ndjson", limit: segmentDecodedLimit,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := make([]byte, tc.limit)
+			identity := Identity{
+				SHA256: hashHex(body),
+				Size:   int64(len(body)),
+			}
+			name := identity.SHA256 + tc.extension
+			if tc.kind == KindCheckpoints {
+				name = "cp-0000000001.json"
+			}
+			ref := requireContractRef(t, contractOrigin, tc.kind, name)
+			store := &countingOpenStore{
+				entry:  Entry{Ref: ref, Identity: identity},
+				reader: &testVerifiedReader{Reader: bytes.NewReader(body)},
+			}
+
+			got, err := readVerifiedImportArtifact(
+				t.Context(), store, store.entry, tc.limit,
+			)
+			require.NoError(t, err)
+			assert.Len(t, got, int(tc.limit))
+			assert.Equal(t, 1, store.opens)
+
+			oversize := store.entry
+			oversize.Identity.Size++
+			_, err = readVerifiedImportArtifact(
+				t.Context(), store, oversize, tc.limit,
+			)
+			require.ErrorIs(t, err, ErrArtifactInvalid)
+			assert.Equal(t, 1, store.opens)
+		})
+	}
+}
 
 func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 	t.Run("manifest", func(t *testing.T) {
@@ -55,6 +111,170 @@ func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	require.ErrorAs(t, err, &future)
 	assert.Equal(t, Kind(KindSegments), future.Kind)
 	assert.Equal(t, 2, future.Version)
+}
+
+func TestImportCollectionBoundaries(t *testing.T) {
+	t.Run("manifest usage events", func(t *testing.T) {
+		limits := productionArtifactLimits()
+		limits.manifestUsageEvents = 2
+		m := importTestManifest("session")
+		m.UsageEvents = make([]artifactUsageEvent, 2)
+		body, err := canonicalJSON(m)
+		require.NoError(t, err)
+		_, err = decodeManifestWithLimits(body, limits)
+		require.NoError(t, err)
+
+		m.UsageEvents = append(m.UsageEvents, artifactUsageEvent{})
+		body, err = canonicalJSON(m)
+		require.NoError(t, err)
+		_, err = decodeManifestWithLimits(body, limits)
+		require.Error(t, err)
+	})
+
+	t.Run("manifest segments", func(t *testing.T) {
+		limits := productionArtifactLimits()
+		limits.manifestSegments = 2
+		m := importTestManifest("session")
+		m.Segments = []string{
+			strings.Repeat("a", 64),
+			strings.Repeat("b", 64),
+		}
+		body, err := canonicalJSON(m)
+		require.NoError(t, err)
+		_, err = decodeManifestWithLimits(body, limits)
+		require.NoError(t, err)
+
+		m.Segments = append(m.Segments, strings.Repeat("c", 64))
+		body, err = canonicalJSON(m)
+		require.NoError(t, err)
+		_, err = decodeManifestWithLimits(body, limits)
+		require.Error(t, err)
+	})
+
+	t.Run("segment messages", func(t *testing.T) {
+		limits := productionArtifactLimits()
+		limits.segmentMessages = 2
+		messages := []db.Message{
+			{Ordinal: 0, Role: "user"},
+			{Ordinal: 1, Role: "assistant"},
+		}
+		body, err := encodeSegment(messages)
+		require.NoError(t, err)
+		_, err = decodeSegmentWithLimits(body, limits)
+		require.NoError(t, err)
+
+		messages = append(messages, db.Message{Ordinal: 2, Role: "user"})
+		body, err = encodeSegment(messages)
+		require.NoError(t, err)
+		_, err = decodeSegmentWithLimits(body, limits)
+		require.Error(t, err)
+	})
+
+	tests := []struct {
+		name      string
+		configure func(*artifactLimits)
+		message   func(int) db.Message
+	}{
+		{
+			name: "message tool calls",
+			configure: func(limits *artifactLimits) {
+				limits.messageToolCalls = 2
+				limits.segmentToolCalls = 3
+			},
+			message: func(count int) db.Message {
+				return db.Message{
+					Ordinal: 0, Role: "assistant",
+					ToolCalls: make([]db.ToolCall, count),
+				}
+			},
+		},
+		{
+			name: "tool result events",
+			configure: func(limits *artifactLimits) {
+				limits.toolResultEvents = 2
+				limits.segmentResultEvents = 3
+			},
+			message: func(count int) db.Message {
+				return db.Message{
+					Ordinal: 0, Role: "assistant",
+					ToolCalls: []db.ToolCall{{
+						ResultEvents: make([]db.ToolResultEvent, count),
+					}},
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			limits := productionArtifactLimits()
+			tc.configure(&limits)
+			body, err := encodeSegment([]db.Message{tc.message(2)})
+			require.NoError(t, err)
+			_, err = decodeSegmentWithLimits(body, limits)
+			require.NoError(t, err)
+
+			body, err = encodeSegment([]db.Message{tc.message(3)})
+			require.NoError(t, err)
+			_, err = decodeSegmentWithLimits(body, limits)
+			require.Error(t, err)
+		})
+	}
+
+	aggregateTests := []struct {
+		name      string
+		configure func(*artifactLimits)
+		message   func(int) []db.Message
+	}{
+		{
+			name: "segment tool calls",
+			configure: func(limits *artifactLimits) {
+				limits.segmentToolCalls = 2
+			},
+			message: func(count int) []db.Message {
+				messages := make([]db.Message, count)
+				for ordinal := range messages {
+					messages[ordinal] = db.Message{
+						Ordinal: ordinal, Role: "assistant",
+						ToolCalls: []db.ToolCall{{}},
+					}
+				}
+				return messages
+			},
+		},
+		{
+			name: "segment result events",
+			configure: func(limits *artifactLimits) {
+				limits.segmentResultEvents = 2
+			},
+			message: func(count int) []db.Message {
+				messages := make([]db.Message, count)
+				for ordinal := range messages {
+					messages[ordinal] = db.Message{
+						Ordinal: ordinal, Role: "assistant",
+						ToolCalls: []db.ToolCall{{
+							ResultEvents: []db.ToolResultEvent{{}},
+						}},
+					}
+				}
+				return messages
+			},
+		},
+	}
+	for _, tc := range aggregateTests {
+		t.Run(tc.name, func(t *testing.T) {
+			limits := productionArtifactLimits()
+			tc.configure(&limits)
+			body, err := encodeSegment(tc.message(2))
+			require.NoError(t, err)
+			_, err = decodeSegmentWithLimits(body, limits)
+			require.NoError(t, err)
+
+			body, err = encodeSegment(tc.message(3))
+			require.NoError(t, err)
+			_, err = decodeSegmentWithLimits(body, limits)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
