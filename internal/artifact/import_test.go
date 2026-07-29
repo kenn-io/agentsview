@@ -913,6 +913,73 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	assert.False(t, found)
 }
 
+func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
+	t *testing.T,
+) {
+	const sessionCount = 300
+	store := newTestArtifactStore(t)
+	segmentBody, err := encodeSegment([]db.Message{{
+		Ordinal: 0, Role: "user", Content: "arrived",
+	}})
+	require.NoError(t, err)
+	segmentHash := createHashedImportArtifact(
+		t, store, KindSegments, ".ndjson", segmentBody,
+	)
+	arrivedManifest := importTestManifest("000-arrived")
+	arrivedManifest.Session.MessageCount = 1
+	arrivedManifest.Session.UserMessageCount = 1
+	arrivedManifest.Segments = []string{segmentHash}
+	arrivedBody, err := canonicalJSON(arrivedManifest)
+	require.NoError(t, err)
+	arrivedIdentity := identityForBytes(t, arrivedBody)
+	sessionMap := make(map[string]string, sessionCount)
+	sessionMap[contractOrigin+"~000-arrived"] = arrivedIdentity.SHA256
+	for i := 1; i < sessionCount; i++ {
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
+			fmt.Sprintf("%064x", i+1)
+	}
+	checkpointEntry := createImportTestCheckpoint(
+		t, store, contractOrigin, 1, sessionMap,
+	)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(
+		t.Context(), checkpointEntry,
+	))
+
+	for range 3 {
+		result, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		require.True(t, result.More)
+	}
+	arrivedRef := requireContractRef(
+		t, contractOrigin, KindManifests,
+		arrivedIdentity.SHA256+".json",
+	)
+	arrived := createContractArtifact(t, store, arrivedRef, arrivedBody)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), arrived.Entry))
+
+	imported := 0
+	for rounds := 0; ; rounds++ {
+		require.Less(t, rounds, 10)
+		result, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		imported += result.Sessions
+		if !result.More {
+			break
+		}
+	}
+	assert.Equal(t, 1, imported)
+	session, err := destination.GetSessionFull(
+		t.Context(), contractOrigin+"~000-arrived",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "project", session.Project)
+}
+
 func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 	const changedSessions = 300
 	base := newTestArtifactStore(t)

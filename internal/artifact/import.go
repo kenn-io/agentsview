@@ -45,6 +45,7 @@ type StoreImportCoordinator struct {
 	generation              uint64
 	completed               uint64
 	activeAttemptGeneration int64
+	activeSignalGeneration  uint64
 }
 
 type importClaimKey struct {
@@ -180,6 +181,7 @@ func (c *StoreImportCoordinator) Finalize(
 			return result, err
 		}
 		c.activeAttemptGeneration = attempt
+		c.activeSignalGeneration = drainGeneration
 	}
 	work, err := c.database.PendingArtifactImports(
 		ctx,
@@ -219,12 +221,14 @@ func (c *StoreImportCoordinator) Finalize(
 		result.More = true
 		return result, nil
 	}
+	completedGeneration := c.activeSignalGeneration
 	c.activeAttemptGeneration = 0
+	c.activeSignalGeneration = 0
 	c.signalMu.Lock()
-	if drainGeneration > c.completed {
-		c.completed = drainGeneration
+	if completedGeneration > c.completed {
+		c.completed = completedGeneration
 	}
-	result.More = c.generation > drainGeneration
+	result.More = c.generation > completedGeneration
 	c.signalMu.Unlock()
 	return result, nil
 }
