@@ -35,12 +35,24 @@ type StoreImportCoordinator struct {
 	localOrigin string
 	hooks       *importCoordinatorHooks
 	checkpoint  *retainedImportCheckpoint
+	// Future requirements stay provisional until the active attempt has
+	// visited every staged row. Attempt generations are durable, so a
+	// restarted coordinator re-observes them before raising the queue gate.
+	future map[importClaimKey]db.ArtifactImportVersions
 
 	runMu                   sync.Mutex
 	signalMu                sync.Mutex
 	generation              uint64
 	completed               uint64
 	activeAttemptGeneration int64
+}
+
+type importClaimKey struct {
+	origin     string
+	name       string
+	sha256     string
+	size       int64
+	enqueuedAt string
 }
 
 type retainedImportCheckpoint struct {
@@ -232,6 +244,7 @@ func (c *StoreImportCoordinator) processImportClaim(
 		return err
 	}
 	if found && head.Sequence > sequence {
+		c.discardFutureRequirements(work)
 		_, err := c.database.AcknowledgeArtifactImport(ctx, work)
 		return err
 	}
@@ -245,6 +258,7 @@ func (c *StoreImportCoordinator) processImportClaim(
 		landing.Sequence == sequence &&
 		landing.CheckpointSHA256 == work.SHA256 &&
 		landing.CheckpointSize == work.Size {
+		c.discardFutureRequirements(work)
 		_, err := c.database.AcknowledgeArtifactImport(ctx, work)
 		return err
 	}
@@ -458,9 +472,7 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 	if c.hooks != nil && c.hooks.observeProvenance != nil {
 		c.hooks.observeProvenance(len(pending))
 	}
-	updatedWork := work
 	deferred := false
-	futureVersion := false
 	for _, staged := range pending {
 		*sessionBudget--
 		write, outcome, err := loadImportedSession(
@@ -470,22 +482,10 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 		if err != nil {
 			var future *futureArtifactVersionError
 			if errors.As(err, &future) {
-				switch future.Kind {
-				case KindManifests:
-					updatedWork.RequiredManifestVersion = max(
-						updatedWork.RequiredManifestVersion,
-						future.Version,
-					)
-				case KindSegments:
-					updatedWork.RequiredSegmentVersion = max(
-						updatedWork.RequiredSegmentVersion,
-						future.Version,
-					)
-				default:
+				if err := c.rememberFutureRequirement(work, future); err != nil {
 					return err
 				}
 				deferred = true
-				futureVersion = true
 				if err := c.markCheckpointSessionAttempted(
 					ctx, landing, staged,
 				); err != nil {
@@ -544,13 +544,6 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			}
 		}
 	}
-	if futureVersion {
-		if err := c.deferImportClaim(ctx, updatedWork); err != nil {
-			return err
-		}
-		result.Deferred++
-		return nil
-	}
 	hasPending, err := c.database.ArtifactCheckpointStageHasPending(ctx, landing)
 	if err != nil {
 		return err
@@ -563,7 +556,9 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			}
 			return nil
 		}
-		if err := c.deferImportClaim(ctx, updatedWork); err != nil {
+		if err := c.deferImportClaim(
+			ctx, c.takeFutureRequirements(work),
+		); err != nil {
 			return err
 		}
 		result.Deferred++
@@ -579,8 +574,61 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			return err
 		}
 	}
+	c.discardFutureRequirements(work)
 	_, err = c.database.AcknowledgeArtifactImport(ctx, work)
 	return err
+}
+
+func (c *StoreImportCoordinator) rememberFutureRequirement(
+	work db.ArtifactImportWork,
+	future *futureArtifactVersionError,
+) error {
+	if future == nil {
+		return errors.New("future artifact version is required")
+	}
+	if c.future == nil {
+		c.future = make(map[importClaimKey]db.ArtifactImportVersions)
+	}
+	key := artifactImportClaimKey(work)
+	requirements := c.future[key]
+	switch future.Kind {
+	case KindManifests:
+		requirements.Manifest = max(requirements.Manifest, future.Version)
+	case KindSegments:
+		requirements.Segment = max(requirements.Segment, future.Version)
+	default:
+		return fmt.Errorf("unsupported future artifact kind %s", future.Kind)
+	}
+	c.future[key] = requirements
+	return nil
+}
+
+func (c *StoreImportCoordinator) takeFutureRequirements(
+	work db.ArtifactImportWork,
+) db.ArtifactImportWork {
+	key := artifactImportClaimKey(work)
+	requirements := c.future[key]
+	delete(c.future, key)
+	work.RequiredManifestVersion = max(
+		work.RequiredManifestVersion, requirements.Manifest,
+	)
+	work.RequiredSegmentVersion = max(
+		work.RequiredSegmentVersion, requirements.Segment,
+	)
+	return work
+}
+
+func (c *StoreImportCoordinator) discardFutureRequirements(
+	work db.ArtifactImportWork,
+) {
+	delete(c.future, artifactImportClaimKey(work))
+}
+
+func artifactImportClaimKey(work db.ArtifactImportWork) importClaimKey {
+	return importClaimKey{
+		origin: work.Origin, name: work.Name, sha256: work.SHA256,
+		size: work.Size, enqueuedAt: work.EnqueuedAt,
+	}
 }
 
 func (c *StoreImportCoordinator) markCheckpointSessionAttempted(
@@ -656,7 +704,8 @@ func (c *StoreImportCoordinator) finishCheckpointQuarantine(
 	if err != nil && !errors.Is(err, ErrArtifactNotFound) {
 		return err
 	}
-	_, err = c.database.AcknowledgeArtifactImport(ctx, work)
+	c.discardFutureRequirements(work)
+	_, err = c.database.AcknowledgeArtifactImportAndDiscardStage(ctx, work)
 	if err != nil {
 		return err
 	}

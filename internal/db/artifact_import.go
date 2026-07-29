@@ -354,6 +354,124 @@ func (db *DB) AcknowledgeArtifactImport(
 	return affected == 1, nil
 }
 
+// AcknowledgeArtifactImportAndDiscardStage atomically removes one exact
+// terminally quarantined claim and any partial decode state bound to it.
+func (db *DB) AcknowledgeArtifactImportAndDiscardStage(
+	ctx context.Context, work ArtifactImportWork,
+) (bool, error) {
+	if err := validateArtifactImportWork(work, true); err != nil {
+		return false, err
+	}
+	if !work.QuarantinePending {
+		return false, errors.New("artifact import quarantine intent is required")
+	}
+	sequence, err := artifactImportCheckpointSequence(work.Name)
+	if err != nil {
+		return false, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf(
+			"beginning artifact import quarantine cleanup: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var claimExists int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM artifact_import_queue
+			WHERE origin = ? AND kind = ? AND name = ?
+			  AND sha256 = ? AND size = ?
+			  AND required_checkpoint_version = ?
+			  AND required_manifest_version = ?
+			  AND required_segment_version = ?
+			  AND attempt_generation = ? AND quarantine_pending = 1
+			  AND enqueued_at = ?
+		)`,
+		work.Origin, work.Kind, work.Name, work.SHA256, work.Size,
+		work.RequiredCheckpointVersion, work.RequiredManifestVersion,
+		work.RequiredSegmentVersion, work.AttemptGeneration, work.EnqueuedAt,
+	).Scan(&claimExists); err != nil {
+		return false, fmt.Errorf(
+			"validating artifact import quarantine claim: %w", err,
+		)
+	}
+	if claimExists == 0 {
+		return false, nil
+	}
+
+	var stageSHA string
+	var stageSize int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT checkpoint_sha256, checkpoint_size
+		FROM artifact_checkpoint_stages
+		WHERE origin = ? AND sequence = ?`,
+		work.Origin, sequence,
+	).Scan(&stageSHA, &stageSize)
+	switch {
+	case err == nil && (stageSHA != work.SHA256 || stageSize != work.Size):
+		return false, fmt.Errorf(
+			"%w: quarantined artifact checkpoint stage identity changed",
+			ErrArtifactImportConflict,
+		)
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return false, fmt.Errorf(
+			"reading quarantined artifact checkpoint stage: %w", err,
+		)
+	case err == nil:
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM artifact_checkpoint_stages
+			WHERE origin = ? AND sequence = ?
+			  AND checkpoint_sha256 = ? AND checkpoint_size = ?`,
+			work.Origin, sequence, work.SHA256, work.Size,
+		); err != nil {
+			return false, fmt.Errorf(
+				"discarding quarantined artifact checkpoint stage: %w", err,
+			)
+		}
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM artifact_import_queue
+		WHERE origin = ? AND kind = ? AND name = ?
+		  AND sha256 = ? AND size = ?
+		  AND required_checkpoint_version = ?
+		  AND required_manifest_version = ?
+		  AND required_segment_version = ?
+		  AND attempt_generation = ? AND quarantine_pending = 1
+		  AND enqueued_at = ?`,
+		work.Origin, work.Kind, work.Name, work.SHA256, work.Size,
+		work.RequiredCheckpointVersion, work.RequiredManifestVersion,
+		work.RequiredSegmentVersion, work.AttemptGeneration, work.EnqueuedAt,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"acknowledging quarantined artifact import: %w", err,
+		)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading quarantined artifact import acknowledgement: %w", err,
+		)
+	}
+	if affected != 1 {
+		return false, fmt.Errorf(
+			"%w: quarantined artifact import claim changed",
+			ErrArtifactImportConflict,
+		)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf(
+			"committing artifact import quarantine cleanup: %w", err,
+		)
+	}
+	return true, nil
+}
+
 // ArtifactImportQueueStats reports all retained work, including rows deferred
 // behind future-version gates.
 func (db *DB) ArtifactImportQueueStats(

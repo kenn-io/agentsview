@@ -243,6 +243,86 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 	}
 }
 
+func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
+	t *testing.T,
+) {
+	store := newTestArtifactStore(t)
+	sessionMap := map[string]string{
+		contractOrigin + "~000-future": createHashedImportArtifact(
+			t, store, KindManifests, ".json",
+			[]byte(`{"origin":"contract-a1b2c3","v":3}`),
+		),
+	}
+	const supportedSessions = artifactImportDrainLimit + 1
+	for i := range supportedSessions {
+		nativeID := fmt.Sprintf("supported-%03d", i)
+		m := importTestManifest(nativeID)
+		sessionMap[contractOrigin+"~"+nativeID] = createImportTestClosure(
+			t, store, &m, []db.Message{{
+				Ordinal: 0, Role: "user", Content: nativeID,
+			}},
+		)
+	}
+	checkpointEntry := createImportTestCheckpoint(
+		t, store, contractOrigin, 1, sessionMap,
+	)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(
+		t.Context(), checkpointEntry,
+	))
+
+	first, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	require.True(t, first.More)
+	second, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	require.True(t, second.More)
+	coordinator = NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	imported := first.Sessions + second.Sessions
+	deferred := first.Deferred + second.Deferred
+	for rounds := 0; ; rounds++ {
+		require.Less(t, rounds, 10)
+		result, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		imported += result.Sessions
+		deferred += result.Deferred
+		if !result.More {
+			break
+		}
+	}
+	assert.Equal(t, supportedSessions, imported)
+	assert.Positive(t, deferred)
+	session, err := destination.GetSessionFull(
+		t.Context(), contractOrigin+"~supported-128",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "project", session.Project)
+
+	attempt, err := destination.ReserveArtifactImportAttemptGeneration(
+		t.Context(),
+	)
+	require.NoError(t, err)
+	pending, err := destination.PendingArtifactImports(
+		t.Context(),
+		db.ArtifactImportVersions{
+			Checkpoint: checkpointFormatVersion,
+			Manifest:   3,
+			Segment:    messageSegmentFormatVersion,
+		},
+		attempt,
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, 3, pending[0].RequiredManifestVersion)
+}
+
 func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 	t *testing.T,
 ) {
@@ -327,6 +407,64 @@ func TestStoreImportCoordinatorRecoversCrashAfterCheckpointQuarantine(
 	)
 	require.NoError(t, err)
 	assert.True(t, found)
+}
+
+func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
+	t *testing.T,
+) {
+	base := newTestArtifactStore(t)
+	sessionMap := make(map[string]string, artifactImportDrainLimit+1)
+	for i := range artifactImportDrainLimit {
+		sessionMap[fmt.Sprintf("%s~valid-%03d", contractOrigin, i)] =
+			fmt.Sprintf("%064x", i+1)
+	}
+	sessionMap[contractOrigin+"~zzz-invalid"] = "invalid"
+	checkpointEntry := createImportTestCheckpoint(
+		t, base, contractOrigin, 1, sessionMap,
+	)
+	injected := errors.New("crash after partial checkpoint quarantine")
+	store := &failAfterQuarantineImportStore{
+		ArtifactStore: base,
+		err:           injected,
+	}
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(
+		t.Context(), checkpointEntry,
+	))
+
+	first, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	require.True(t, first.More)
+	landing := db.ArtifactCheckpointLanding{
+		Origin:           contractOrigin,
+		Sequence:         1,
+		CheckpointSHA256: checkpointEntry.Identity.SHA256,
+		CheckpointSize:   checkpointEntry.Identity.Size,
+	}
+	progress, err := destination.ArtifactCheckpointStageProgress(
+		t.Context(), landing,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, artifactImportDrainLimit, progress.DecodedCount)
+
+	_, err = coordinator.Finalize(t.Context())
+	require.ErrorIs(t, err, injected)
+	coordinator = NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	result, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	_, err = destination.ArtifactCheckpointStageProgress(
+		t.Context(), landing,
+	)
+	require.ErrorIs(t, err, db.ErrArtifactImportConflict)
 }
 
 func TestStoreImportCoordinatorRetainsClaimOnOperationalStoreError(t *testing.T) {
