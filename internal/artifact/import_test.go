@@ -284,6 +284,51 @@ func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 	require.NotNil(t, session)
 }
 
+func TestStoreImportCoordinatorRecoversCrashAfterCheckpointQuarantine(
+	t *testing.T,
+) {
+	base := newTestArtifactStore(t)
+	invalidOrigin := "alpha-a1b2c3"
+	invalidRef := requireContractRef(
+		t, invalidOrigin, KindCheckpoints, "cp-0000000001.json",
+	)
+	invalid := createContractArtifact(
+		t, base, invalidRef,
+		[]byte(`{"origin":"alpha-a1b2c3","seq":1,"v":1}`),
+	)
+	valid := createImportTestCheckpoint(
+		t, base, contractOrigin, 1, map[string]string{},
+	)
+	injected := errors.New("crash after quarantine")
+	store := &failAfterQuarantineImportStore{
+		ArtifactStore: base,
+		err:           injected,
+	}
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), invalid.Entry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), valid))
+
+	_, err := coordinator.Finalize(t.Context())
+	require.ErrorIs(t, err, injected)
+	coordinator = NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	result, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	_, _, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	assert.True(t, found)
+}
+
 func TestStoreImportCoordinatorRetainsClaimOnOperationalStoreError(t *testing.T) {
 	base := newTestArtifactStore(t)
 	checkpointEntry := createImportTestCheckpoint(
@@ -359,6 +404,48 @@ func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, sessionMap, landedMap)
+}
+
+func TestStoreImportCoordinatorSuppressesLocalSessionIDCollision(t *testing.T) {
+	store := newTestArtifactStore(t)
+	m := importTestManifest("session")
+	manifestHash := createImportTestClosure(t, store, &m, []db.Message{{
+		Ordinal: 0, Role: "user", Content: "peer content",
+	}})
+	checkpointEntry := createImportTestCheckpoint(
+		t, store, contractOrigin, 1,
+		map[string]string{contractOrigin + "~session": manifestHash},
+	)
+	destination := testDB(t)
+	collidingID := contractOrigin + "~session"
+	seedSession(t, destination, collidingID, "local-project")
+
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(
+		t.Context(), checkpointEntry,
+	))
+	result, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, result.Sessions)
+
+	session, err := destination.GetSessionFull(t.Context(), collidingID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "local-project", session.Project)
+	assert.Equal(t, "local", session.Machine)
+	messages, err := destination.GetMessages(
+		t.Context(), collidingID, 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.NotEqual(t, "peer content", messages[0].Content)
+	provenance, err := destination.ArtifactImportedManifestHashes(
+		t.Context(), contractOrigin, []string{collidingID},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{collidingID: manifestHash}, provenance)
 }
 
 func TestStoreImportCoordinatorKeepsCheckpointPendingAfterInvalidDependency(
@@ -595,7 +682,7 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	var pendingLimits, pendingCounts, provenancePages []int
+	var pendingLimits, pendingCounts, provenancePages, stagePages []int
 	coordinator.hooks = &importCoordinatorHooks{
 		observePending: func(limit, count int) {
 			pendingLimits = append(pendingLimits, limit)
@@ -604,26 +691,88 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 		observeProvenance: func(count int) {
 			provenancePages = append(provenancePages, count)
 		},
+		observeStage: func(count int) {
+			stagePages = append(stagePages, count)
+		},
 	}
 	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
-	result, err := coordinator.Finalize(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Sessions)
-	assert.Equal(t, []int{artifactImportDrainLimit}, pendingLimits)
-	assert.Equal(t, []int{1}, pendingCounts)
-	require.NotEmpty(t, provenancePages)
-	for _, size := range provenancePages {
-		assert.LessOrEqual(t, size, 1024)
+	totalSessions := 0
+	for rounds := 0; ; rounds++ {
+		require.Less(t, rounds, 100)
+		result, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		totalSessions += result.Sessions
+		if !result.More {
+			break
+		}
 	}
-	assert.Equal(t, unchangedSessions+1, sumInts(provenancePages))
-	assert.Equal(t, 1, store.opens[KindCheckpoints])
+	assert.Equal(t, 1, totalSessions)
+	require.Len(t, pendingLimits, 79)
+	for _, limit := range pendingLimits {
+		assert.Equal(t, artifactImportDrainLimit, limit)
+	}
+	require.Len(t, pendingCounts, 79)
+	for _, count := range pendingCounts {
+		assert.Equal(t, 1, count)
+	}
+	for _, size := range append(stagePages, provenancePages...) {
+		assert.LessOrEqual(t, size, artifactImportDrainLimit)
+	}
+	require.Len(t, stagePages, 79)
+	assert.Equal(t, 17, stagePages[len(stagePages)-1])
+	assert.Equal(t, []int{1}, provenancePages)
+	assert.Equal(t, 79, store.opens[KindCheckpoints])
 	assert.Equal(t, 1, store.opens[KindManifests])
 	assert.Equal(t, 1, store.opens[KindSegments])
 	assert.Equal(t, 1, store.stats[KindManifests])
 	assert.Equal(t, 1, store.stats[KindSegments])
-	assert.Equal(t, map[string]int{contractOrigin: 3}, store.openOrigins)
+	assert.Equal(t, 81, store.openOrigins[contractOrigin])
+}
+
+func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
+	t *testing.T,
+) {
+	const changedSessions = 300
+	base := newTestArtifactStore(t)
+	sessionMap := make(map[string]string, changedSessions)
+	for i := range changedSessions {
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
+			fmt.Sprintf("%064x", i+1)
+	}
+	checkpointEntry := createImportTestCheckpoint(
+		t, base, contractOrigin, 1, sessionMap,
+	)
+	store := &countingImportStore{ArtifactStore: base}
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(
+		t.Context(), checkpointEntry,
+	))
+
+	var attempts []int
+	previousStats := 0
+	for i := range 5 {
+		result, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, i < 4, result.More)
+		currentStats := store.stats[KindManifests]
+		attempts = append(attempts, currentStats-previousStats)
+		previousStats = currentStats
+	}
+	assert.Equal(t, []int{0, 0, 84, 128, 88}, attempts)
+	assert.Equal(t, 3, store.opens[KindCheckpoints])
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	_, _, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	assert.False(t, found)
 }
 
 func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {
@@ -711,6 +860,25 @@ type countingImportStore struct {
 	openOrigins map[string]int
 }
 
+type failAfterQuarantineImportStore struct {
+	ArtifactStore
+	err    error
+	failed bool
+}
+
+func (s *failAfterQuarantineImportStore) Quarantine(
+	ctx context.Context, ref Ref, reason string,
+) error {
+	if err := s.ArtifactStore.Quarantine(ctx, ref, reason); err != nil {
+		return err
+	}
+	if !s.failed {
+		s.failed = true
+		return s.err
+	}
+	return nil
+}
+
 func (s *countingImportStore) Open(
 	ctx context.Context, ref Ref,
 ) (Entry, VerifiedReader, error) {
@@ -731,14 +899,6 @@ func (s *countingImportStore) Stat(
 	}
 	s.stats[ref.Kind]++
 	return s.ArtifactStore.Stat(ctx, ref)
-}
-
-func sumInts(values []int) int {
-	total := 0
-	for _, value := range values {
-		total += value
-	}
-	return total
 }
 
 func createImportTestCheckpoint(

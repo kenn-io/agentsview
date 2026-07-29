@@ -35,6 +35,7 @@ type ArtifactImportWork struct {
 	RequiredManifestVersion   int
 	RequiredSegmentVersion    int
 	AttemptGeneration         int64
+	QuarantinePending         bool
 	EnqueuedAt                string
 }
 
@@ -194,7 +195,7 @@ func (db *DB) PendingArtifactImports(
 			required_checkpoint_version,
 			required_manifest_version,
 			required_segment_version,
-			attempt_generation, enqueued_at
+			attempt_generation, quarantine_pending, enqueued_at
 		FROM artifact_import_queue
 		WHERE required_checkpoint_version <= ?
 		  AND required_manifest_version <= ?
@@ -217,7 +218,7 @@ func (db *DB) PendingArtifactImports(
 			&item.RequiredCheckpointVersion,
 			&item.RequiredManifestVersion,
 			&item.RequiredSegmentVersion,
-			&item.AttemptGeneration, &item.EnqueuedAt,
+			&item.AttemptGeneration, &item.QuarantinePending, &item.EnqueuedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning artifact import queue: %w", err)
 		}
@@ -227,6 +228,36 @@ func (db *DB) PendingArtifactImports(
 		return nil, fmt.Errorf("iterating artifact import queue: %w", err)
 	}
 	return work, nil
+}
+
+// MarkArtifactImportQuarantinePending durably records intent to remove one
+// exact invalid checkpoint before the artifact-store mutation occurs.
+func (db *DB) MarkArtifactImportQuarantinePending(
+	ctx context.Context,
+	work ArtifactImportWork,
+) (bool, error) {
+	if err := validateArtifactImportWork(work, true); err != nil {
+		return false, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	result, err := db.getWriter().ExecContext(ctx, `
+		UPDATE artifact_import_queue
+		SET quarantine_pending = 1
+		WHERE origin = ? AND kind = ? AND name = ?
+		  AND sha256 = ? AND size = ?
+		  AND enqueued_at = ?`,
+		work.Origin, work.Kind, work.Name,
+		work.SHA256, work.Size, work.EnqueuedAt,
+	)
+	if err != nil {
+		return false, fmt.Errorf("marking artifact import quarantine pending: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("reading artifact import quarantine result: %w", err)
+	}
+	return affected == 1, nil
 }
 
 // ReserveArtifactImportAttemptGeneration returns a durable generation greater
@@ -613,11 +644,37 @@ func (db *DB) getArtifactCheckpointLanding(
 	if afterIdentity != nil {
 		afterIdentity()
 	}
-	rows, err := tx.QueryContext(ctx, `
+	var staged bool
+	var complete int
+	err = tx.QueryRowContext(ctx, `
+		SELECT complete
+		FROM artifact_checkpoint_stages
+		WHERE origin = ? AND sequence = ?
+		  AND checkpoint_sha256 = ? AND checkpoint_size = ?`,
+		landing.Origin, landing.Sequence,
+		landing.CheckpointSHA256, landing.CheckpointSize,
+	).Scan(&complete)
+	switch {
+	case err == nil:
+		staged = complete == 1
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return ArtifactCheckpointLanding{}, nil, false,
+			fmt.Errorf("reading artifact checkpoint landing stage: %w", err)
+	}
+	query := `
 		SELECT gid, manifest_hash
 		FROM artifact_checkpoint_landing_sessions
-		WHERE origin = ? ORDER BY gid`, origin,
-	)
+		WHERE origin = ? ORDER BY gid`
+	args := []any{origin}
+	if staged {
+		query = `
+			SELECT gid, manifest_hash
+			FROM artifact_checkpoint_stage_sessions
+			WHERE origin = ? AND sequence = ? ORDER BY gid`
+		args = append(args, landing.Sequence)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return ArtifactCheckpointLanding{}, nil, false,
 			fmt.Errorf("reading artifact checkpoint landing map: %w", err)
@@ -723,7 +780,31 @@ func (db *DB) RecordArtifactImportedSession(
 	if err := validateArtifactImportedSession(imported); err != nil {
 		return err
 	}
-	_, err := db.getWriter().ExecContext(ctx, `
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning artifact imported-session provenance: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
+		return err
+	}
+	if err := satisfyAllArtifactCheckpointStagesTx(ctx, tx, imported); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing artifact imported-session provenance: %w", err)
+	}
+	return nil
+}
+
+func recordArtifactImportedSessionTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	imported ArtifactImportedSession,
+) error {
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO artifact_imported_sessions (
 			origin, gid, manifest_hash, imported_session_id
 		) VALUES (?, ?, ?, ?)

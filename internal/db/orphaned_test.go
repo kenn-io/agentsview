@@ -34,6 +34,9 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, marked)
+	marked, err = source.MarkArtifactImportQuarantinePending(ctx, pending[0])
+	require.NoError(t, err)
+	require.True(t, marked)
 
 	head := ArtifactPeerCheckpointHead{
 		Origin:           work.Origin,
@@ -47,9 +50,6 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	sessionMap := map[string]string{
 		head.Origin + "~one": strings.Repeat("e", 64),
 	}
-	require.NoError(t, source.RecordArtifactCheckpointLanding(
-		ctx, landing, sessionMap,
-	))
 	imported := ArtifactImportedSession{
 		Origin:            head.Origin,
 		GID:               head.Origin + "~one",
@@ -57,6 +57,36 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 		ImportedSessionID: head.Origin + "~one",
 	}
 	require.NoError(t, source.RecordArtifactImportedSession(ctx, imported))
+	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, landing))
+	require.NoError(t, source.StageArtifactCheckpointSessions(
+		ctx, landing, []ArtifactCheckpointSession{{
+			GID: imported.GID, ManifestHash: imported.ManifestHash,
+		}},
+	))
+	require.NoError(t, source.CompleteArtifactCheckpointStage(
+		ctx, landing, 1,
+	))
+	require.NoError(t, source.RecordArtifactCheckpointLandingFromStage(
+		ctx, landing,
+	))
+	partial := ArtifactCheckpointLanding{
+		Origin: "peer-b2c3d4", Sequence: 1,
+		CheckpointSHA256: strings.Repeat("f", 64),
+		CheckpointSize:   88,
+	}
+	_, err = source.RecordArtifactPeerCheckpointHead(
+		ctx, ArtifactPeerCheckpointHead(partial),
+	)
+	require.NoError(t, err)
+	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, partial))
+	require.NoError(t, source.StageArtifactCheckpointSessionPage(
+		ctx, partial,
+		[]ArtifactCheckpointSession{{
+			GID:          partial.Origin + "~partial",
+			ManifestHash: strings.Repeat("1", 64),
+		}},
+		0, 42,
+	))
 	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
@@ -77,6 +107,7 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	assert.Equal(t, work.Name, pending[0].Name)
+	assert.True(t, pending[0].QuarantinePending)
 
 	gotHead, found, err := destination.GetArtifactPeerCheckpointHead(
 		ctx, head.Origin,
@@ -97,6 +128,11 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		imported.GID: imported.ManifestHash,
 	}, gotProvenance)
+	progress, err := destination.ArtifactCheckpointStageProgress(ctx, partial)
+	require.NoError(t, err)
+	assert.False(t, progress.Complete)
+	assert.Equal(t, 1, progress.DecodedCount)
+	assert.Equal(t, int64(42), progress.DecodeOffset)
 }
 
 func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {

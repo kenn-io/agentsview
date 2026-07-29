@@ -480,6 +480,12 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 
 func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
 	if oldDBHasTable(ctx, tx, "artifact_import_queue") {
+		quarantinePending := "0"
+		if oldDBHasColumn(
+			ctx, tx, "artifact_import_queue", "quarantine_pending",
+		) {
+			quarantinePending = "quarantine_pending"
+		}
 		var conflicts int
 		err := tx.QueryRowContext(ctx, `
 			SELECT count(*)
@@ -505,14 +511,14 @@ func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
 				required_checkpoint_version,
 				required_manifest_version,
 				required_segment_version,
-				attempt_generation, enqueued_at
+				attempt_generation, quarantine_pending, enqueued_at
 			)
 			SELECT
 				origin, kind, name, sha256, size,
 				required_checkpoint_version,
 				required_manifest_version,
 				required_segment_version,
-				attempt_generation, enqueued_at
+				attempt_generation, `+quarantinePending+`, enqueued_at
 			FROM old_db.artifact_import_queue WHERE true
 			ON CONFLICT(origin, kind, name) DO UPDATE SET
 				required_checkpoint_version = max(
@@ -530,6 +536,10 @@ func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
 				attempt_generation = max(
 					artifact_import_queue.attempt_generation,
 					excluded.attempt_generation
+				),
+				quarantine_pending = max(
+					artifact_import_queue.quarantine_pending,
+					excluded.quarantine_pending
 				),
 				enqueued_at = min(
 					artifact_import_queue.enqueued_at,
@@ -571,6 +581,9 @@ func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
 	if err := copyArtifactPeerHeads(ctx, tx); err != nil {
 		return err
 	}
+	if err := copyArtifactCheckpointStages(ctx, tx); err != nil {
+		return err
+	}
 	if err := copyArtifactCheckpointLandings(ctx, tx); err != nil {
 		return err
 	}
@@ -590,6 +603,126 @@ func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
 		if err != nil {
 			return fmt.Errorf("copying artifact imported-session provenance: %w", err)
 		}
+	}
+	return nil
+}
+
+func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
+	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_stages") {
+		return nil
+	}
+	var conflicts int
+	err := tx.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM old_db.artifact_checkpoint_stages old
+		JOIN main.artifact_checkpoint_stages current
+		  ON current.origin = old.origin
+		 AND current.sequence = old.sequence
+		WHERE current.checkpoint_sha256 <> old.checkpoint_sha256
+		   OR current.checkpoint_size <> old.checkpoint_size
+		   OR (
+				current.complete = 1 AND old.complete = 1
+				AND current.session_count <> old.session_count
+		   )`,
+	).Scan(&conflicts)
+	if err != nil {
+		return fmt.Errorf("checking copied artifact checkpoint stages: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf(
+			"%w: copied artifact checkpoint stage changed",
+			ErrArtifactImportConflict,
+		)
+	}
+	if oldDBHasTable(ctx, tx, "artifact_checkpoint_stage_sessions") {
+		err = tx.QueryRowContext(ctx, `
+			SELECT count(*)
+			FROM old_db.artifact_checkpoint_stage_sessions old
+			JOIN main.artifact_checkpoint_stage_sessions current
+			  ON current.origin = old.origin
+			 AND current.sequence = old.sequence
+			 AND current.gid = old.gid
+			WHERE current.manifest_hash <> old.manifest_hash`,
+		).Scan(&conflicts)
+		if err != nil {
+			return fmt.Errorf(
+				"checking copied artifact checkpoint stage sessions: %w", err,
+			)
+		}
+		if conflicts > 0 {
+			return fmt.Errorf(
+				"%w: copied artifact checkpoint stage session changed",
+				ErrArtifactImportConflict,
+			)
+		}
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_checkpoint_stages (
+			origin, sequence, checkpoint_sha256, checkpoint_size,
+			complete, session_count, pending_count,
+			decoded_count, decode_offset
+		)
+		SELECT
+			origin, sequence, checkpoint_sha256, checkpoint_size,
+			complete, session_count, pending_count,
+			decoded_count, decode_offset
+		FROM old_db.artifact_checkpoint_stages WHERE true
+		ON CONFLICT(origin, sequence) DO UPDATE SET
+			complete = max(artifact_checkpoint_stages.complete, excluded.complete),
+			session_count = max(
+				artifact_checkpoint_stages.session_count,
+				excluded.session_count
+			),
+			decoded_count = max(
+				artifact_checkpoint_stages.decoded_count,
+				excluded.decoded_count
+			),
+			decode_offset = max(
+				artifact_checkpoint_stages.decode_offset,
+				excluded.decode_offset
+			)`)
+	if err != nil {
+		return fmt.Errorf("copying artifact checkpoint stages: %w", err)
+	}
+	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_stage_sessions") {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO main.artifact_checkpoint_stage_sessions (
+			origin, sequence, gid, manifest_hash, attempt_generation, satisfied
+		)
+		SELECT
+			origin, sequence, gid, manifest_hash, attempt_generation, satisfied
+		FROM old_db.artifact_checkpoint_stage_sessions WHERE true
+		ON CONFLICT(origin, sequence, gid) DO UPDATE SET
+			attempt_generation = max(
+				artifact_checkpoint_stage_sessions.attempt_generation,
+				excluded.attempt_generation
+			),
+			satisfied = max(
+				artifact_checkpoint_stage_sessions.satisfied,
+				excluded.satisfied
+			)`)
+	if err != nil {
+		return fmt.Errorf("copying artifact checkpoint stage sessions: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE main.artifact_checkpoint_stages AS stage
+		SET pending_count = (
+			SELECT count(*)
+			FROM main.artifact_checkpoint_stage_sessions sessions
+			WHERE sessions.origin = stage.origin
+			  AND sessions.sequence = stage.sequence
+			  AND sessions.satisfied = 0
+		)
+		WHERE EXISTS (
+			SELECT 1
+			FROM old_db.artifact_checkpoint_stages old
+			WHERE old.origin = stage.origin
+			  AND old.sequence = stage.sequence
+		)`)
+	if err != nil {
+		return fmt.Errorf("recounting copied artifact checkpoint stages: %w", err)
 	}
 	return nil
 }

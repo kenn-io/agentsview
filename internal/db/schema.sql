@@ -1056,6 +1056,9 @@ CREATE TABLE IF NOT EXISTS artifact_import_queue (
     attempt_generation          INTEGER NOT NULL DEFAULT 0 CHECK (
         attempt_generation >= 0
     ),
+    quarantine_pending          INTEGER NOT NULL DEFAULT 0 CHECK (
+        quarantine_pending IN (0, 1)
+    ),
     enqueued_at                 TEXT NOT NULL DEFAULT (
         strftime('%Y-%m-%dT%H:%M:%fZ','now')
     ),
@@ -1100,6 +1103,39 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
     PRIMARY KEY (origin, gid),
     FOREIGN KEY (origin) REFERENCES artifact_checkpoint_landings(origin)
         ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_stages (
+    origin            TEXT NOT NULL,
+    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    checkpoint_sha256 TEXT NOT NULL,
+    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0),
+    complete          INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
+    session_count     INTEGER NOT NULL DEFAULT 0 CHECK (session_count >= 0),
+    pending_count     INTEGER NOT NULL DEFAULT 0 CHECK (pending_count >= 0),
+    decoded_count     INTEGER NOT NULL DEFAULT 0 CHECK (decoded_count >= 0),
+    decode_offset     INTEGER NOT NULL DEFAULT 0 CHECK (decode_offset >= 0),
+    PRIMARY KEY (origin, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_checkpoint_stage_sessions (
+    origin             TEXT NOT NULL,
+    sequence           INTEGER NOT NULL,
+    gid                TEXT NOT NULL,
+    manifest_hash      TEXT NOT NULL,
+    attempt_generation INTEGER NOT NULL DEFAULT 0 CHECK (
+        attempt_generation >= 0
+    ),
+    satisfied         INTEGER NOT NULL DEFAULT 0 CHECK (satisfied IN (0, 1)),
+    PRIMARY KEY (origin, sequence, gid),
+    FOREIGN KEY (origin, sequence)
+        REFERENCES artifact_checkpoint_stages(origin, sequence)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_checkpoint_stage_pending
+ON artifact_checkpoint_stage_sessions (
+    origin, sequence, attempt_generation, gid
 );
 
 CREATE TABLE IF NOT EXISTS artifact_imported_sessions (

@@ -323,6 +323,38 @@ func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
 	}
 }
 
+func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
+	const sessionCount = 300
+	var body strings.Builder
+	fmt.Fprintf(&body, `{"origin":%q,"seq":7,"sessions":{`, contractOrigin)
+	for i := range sessionCount {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, "%q:%q",
+			fmt.Sprintf("%s~session-%03d", contractOrigin, i),
+			fmt.Sprintf("%064x", i+1))
+	}
+	body.WriteString(`},"v":1}`)
+
+	header, sessions, err := decodeImportCheckpointHeader(
+		[]byte(body.String()), contractOrigin, "cp-0000000007.json",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 7, header.Sequence)
+	var pageSizes []int
+	count, err := streamImportCheckpointSessions(
+		sessions, contractOrigin, 128,
+		func(page []importCheckpointSession) error {
+			pageSizes = append(pageSizes, len(page))
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, sessionCount, count)
+	assert.Equal(t, []int{128, 128, 44}, pageSizes)
+}
+
 func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	valid := fmt.Sprintf(

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -28,6 +26,7 @@ type importCoordinatorHooks struct {
 	afterLanding      func() error
 	observePending    func(limit, count int)
 	observeProvenance func(count int)
+	observeStage      func(count int)
 }
 
 type StoreImportCoordinator struct {
@@ -145,6 +144,13 @@ func (c *StoreImportCoordinator) Finalize(
 	c.signalMu.Unlock()
 	if c.activeAttemptGeneration == 0 {
 		if completed >= drainGeneration {
+			_, more, err := c.database.PruneArtifactCheckpointStages(
+				ctx, artifactImportDrainLimit,
+			)
+			if err != nil {
+				return result, err
+			}
+			result.More = more
 			return result, nil
 		}
 		attempt, err := c.database.ReserveArtifactImportAttemptGeneration(ctx)
@@ -169,12 +175,25 @@ func (c *StoreImportCoordinator) Finalize(
 	if c.hooks != nil && c.hooks.observePending != nil {
 		c.hooks.observePending(artifactImportDrainLimit, len(work))
 	}
+	sessionBudget := artifactImportDrainLimit
 	for _, claim := range work {
-		if err := c.processImportClaim(ctx, claim, &result); err != nil {
+		if err := c.processImportClaim(
+			ctx, claim, &sessionBudget, &result,
+		); err != nil {
 			return result, err
 		}
+		if result.More && sessionBudget == 0 {
+			break
+		}
 	}
-	if len(work) == artifactImportDrainLimit {
+	_, pruneMore, err := c.database.PruneArtifactCheckpointStages(
+		ctx, artifactImportDrainLimit,
+	)
+	if err != nil {
+		return result, err
+	}
+	result.More = result.More || pruneMore
+	if result.More || len(work) == artifactImportDrainLimit {
 		result.More = true
 		return result, nil
 	}
@@ -191,6 +210,7 @@ func (c *StoreImportCoordinator) Finalize(
 func (c *StoreImportCoordinator) processImportClaim(
 	ctx context.Context,
 	work db.ArtifactImportWork,
+	sessionBudget *int,
 	result *ImportResult,
 ) error {
 	sequence, err := checkpointSequence(work.Name)
@@ -230,6 +250,25 @@ func (c *StoreImportCoordinator) processImportClaim(
 			Size:   work.Size,
 		},
 	}
+	landingIdentity := db.ArtifactCheckpointLanding{
+		Origin: work.Origin, Sequence: sequence,
+		CheckpointSHA256: entry.Identity.SHA256,
+		CheckpointSize:   entry.Identity.Size,
+	}
+	if work.QuarantinePending {
+		return c.finishCheckpointQuarantine(ctx, work, ref, result)
+	}
+	complete, err := c.database.ArtifactCheckpointStageComplete(
+		ctx, landingIdentity,
+	)
+	if err != nil {
+		return err
+	}
+	if complete {
+		return c.importCheckpointSessions(
+			ctx, work, landingIdentity, sessionBudget, result,
+		)
+	}
 	body, err := readVerifiedImportArtifact(
 		ctx, c.store, entry, checkpointDecodedLimit,
 	)
@@ -237,9 +276,16 @@ func (c *StoreImportCoordinator) processImportClaim(
 		if isInvalidImportDependencyError(err) {
 			return c.quarantineCheckpoint(ctx, work, ref, result)
 		}
+		if errors.Is(err, ErrArtifactNotFound) {
+			if err := c.deferImportClaim(ctx, work); err != nil {
+				return err
+			}
+			result.Deferred++
+			return nil
+		}
 		return err
 	}
-	checkpoint, err := decodeImportCheckpoint(
+	checkpoint, sessionsRaw, err := decodeImportCheckpointHeader(
 		body, work.Origin, work.Name,
 	)
 	if err != nil {
@@ -260,46 +306,120 @@ func (c *StoreImportCoordinator) processImportClaim(
 		}
 		return err
 	}
-	return c.importCheckpointSessions(ctx, work, entry, checkpoint, result)
+	if checkpoint.Sequence != landingIdentity.Sequence {
+		return fmt.Errorf(
+			"%w: decoded checkpoint sequence changed",
+			db.ErrArtifactImportConflict,
+		)
+	}
+	if err := c.database.BeginArtifactCheckpointStage(
+		ctx, landingIdentity,
+	); err != nil {
+		return err
+	}
+	complete, err = c.database.ArtifactCheckpointStageComplete(
+		ctx, landingIdentity,
+	)
+	if err != nil {
+		return err
+	}
+	if !complete {
+		if *sessionBudget == 0 {
+			result.More = true
+			return nil
+		}
+		state, stateErr := c.database.ArtifactCheckpointStageProgress(
+			ctx, landingIdentity,
+		)
+		if stateErr != nil {
+			return stateErr
+		}
+		page, nextOffset, done, decodeErr :=
+			decodeImportCheckpointSessionPage(
+				sessionsRaw, work.Origin, state.DecodeOffset, *sessionBudget,
+			)
+		if decodeErr != nil {
+			if errors.Is(decodeErr, ErrArtifactInvalid) {
+				return c.quarantineCheckpoint(ctx, work, ref, result)
+			}
+			return decodeErr
+		}
+		entries := make([]db.ArtifactCheckpointSession, len(page))
+		for i, session := range page {
+			entries[i] = db.ArtifactCheckpointSession{
+				GID:          session.GID,
+				ManifestHash: session.ManifestHash,
+			}
+		}
+		if err := c.database.StageArtifactCheckpointSessionPage(
+			ctx, landingIdentity, entries,
+			state.DecodeOffset, nextOffset,
+		); err != nil {
+			if errors.Is(err, db.ErrArtifactImportConflict) {
+				return c.quarantineCheckpoint(ctx, work, ref, result)
+			}
+			return err
+		}
+		*sessionBudget -= len(entries)
+		if c.hooks != nil && c.hooks.observeStage != nil {
+			c.hooks.observeStage(len(entries))
+		}
+		if !done {
+			result.More = true
+			return nil
+		}
+		if err := c.database.CompleteArtifactCheckpointStage(
+			ctx, landingIdentity, state.DecodedCount+len(entries),
+		); err != nil {
+			if errors.Is(err, db.ErrArtifactImportConflict) {
+				return c.quarantineCheckpoint(ctx, work, ref, result)
+			}
+			return err
+		}
+	}
+	return c.importCheckpointSessions(
+		ctx, work, landingIdentity, sessionBudget, result,
+	)
 }
 
 func (c *StoreImportCoordinator) importCheckpointSessions(
 	ctx context.Context,
 	work db.ArtifactImportWork,
-	entry Entry,
-	checkpoint importCheckpoint,
+	landing db.ArtifactCheckpointLanding,
+	sessionBudget *int,
 	result *ImportResult,
 ) error {
-	gids := make([]string, 0, len(checkpoint.Sessions))
-	for gid := range checkpoint.Sessions {
-		gids = append(gids, gid)
+	if sessionBudget == nil || *sessionBudget < 0 {
+		return errors.New("artifact import session budget is invalid")
 	}
-	slices.Sort(gids)
-	provenance := make(map[string]string, len(gids))
-	for start := 0; start < len(gids); start += 1024 {
-		end := min(start+1024, len(gids))
-		page, err := c.database.ArtifactImportedManifestHashes(
-			ctx, work.Origin, gids[start:end],
-		)
+	if *sessionBudget == 0 {
+		pending, err := c.database.ArtifactCheckpointStageHasPending(ctx, landing)
 		if err != nil {
 			return err
 		}
-		if c.hooks != nil && c.hooks.observeProvenance != nil {
-			c.hooks.observeProvenance(end - start)
+		if pending {
+			result.More = true
+			return nil
 		}
-		maps.Copy(provenance, page)
 	}
 
-	deferred := false
+	pending, err := c.database.PendingArtifactCheckpointSessions(
+		ctx, landing, c.activeAttemptGeneration, max(*sessionBudget, 1),
+	)
+	if err != nil {
+		return err
+	}
+	if c.hooks != nil && c.hooks.observeProvenance != nil {
+		c.hooks.observeProvenance(len(pending))
+	}
 	updatedWork := work
-	for _, gid := range gids {
-		manifestHash := checkpoint.Sessions[gid]
-		if provenance[gid] == manifestHash {
-			continue
-		}
+	deferred := false
+	futureVersion := false
+	for _, staged := range pending {
+		*sessionBudget--
 		write, outcome, err := loadImportedSession(
 			ctx, c.database, c.store, work.Origin,
-			gid, manifestHash, productionArtifactLimits(),
+			staged.GID, staged.ManifestHash, productionArtifactLimits(),
 		)
 		if err != nil {
 			var future *futureArtifactVersionError
@@ -319,6 +439,12 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 					return err
 				}
 				deferred = true
+				futureVersion = true
+				if err := c.markCheckpointSessionAttempted(
+					ctx, landing, staged,
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			return err
@@ -326,40 +452,45 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 		switch outcome {
 		case importClosureDeferred:
 			deferred = true
+			if err := c.markCheckpointSessionAttempted(
+				ctx, landing, staged,
+			); err != nil {
+				return err
+			}
 			continue
 		case importClosureInvalid:
 			deferred = true
 			result.Quarantined++
+			if err := c.markCheckpointSessionAttempted(
+				ctx, landing, staged,
+			); err != nil {
+				return err
+			}
 			continue
 		case importClosureComplete:
 		default:
 			return errors.New("artifact import closure returned invalid outcome")
 		}
-		batch, err := c.database.WriteSessionBatchAtomic(
-			[]db.SessionBatchWrite{write},
+		applied, err := c.database.ApplyStagedArtifactImportedSession(
+			ctx, landing, staged,
+			db.ArtifactImportedSession{
+				Origin: work.Origin, GID: staged.GID,
+				ManifestHash:      staged.ManifestHash,
+				ImportedSessionID: staged.GID,
+			},
+			write,
 		)
-		switch {
-		case err == nil:
-			result.Sessions += batch.WrittenSessions
-			result.Messages += batch.WrittenMessages
+		if err != nil {
+			return err
+		}
+		if applied.Written {
+			result.Sessions++
+			result.Messages += applied.WrittenMessages
 			if c.hooks != nil && c.hooks.afterSessionWrite != nil {
 				if err := c.hooks.afterSessionWrite(); err != nil {
 					return err
 				}
 			}
-		case errors.Is(err, db.ErrSessionExcluded),
-			errors.Is(err, db.ErrSessionTrashed):
-		default:
-			return err
-		}
-		if err := c.database.RecordArtifactImportedSession(
-			ctx, db.ArtifactImportedSession{
-				Origin: work.Origin, GID: gid,
-				ManifestHash:      manifestHash,
-				ImportedSessionID: gid,
-			},
-		); err != nil {
-			return err
 		}
 		if c.hooks != nil && c.hooks.afterProvenance != nil {
 			if err := c.hooks.afterProvenance(); err != nil {
@@ -367,21 +498,33 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			}
 		}
 	}
-	if deferred {
+	if futureVersion {
 		if err := c.deferImportClaim(ctx, updatedWork); err != nil {
 			return err
 		}
 		result.Deferred++
 		return nil
 	}
-	if err := c.database.RecordArtifactCheckpointLanding(
-		ctx,
-		db.ArtifactCheckpointLanding{
-			Origin: work.Origin, Sequence: checkpoint.Sequence,
-			CheckpointSHA256: entry.Identity.SHA256,
-			CheckpointSize:   entry.Identity.Size,
-		},
-		checkpoint.Sessions,
+	hasPending, err := c.database.ArtifactCheckpointStageHasPending(ctx, landing)
+	if err != nil {
+		return err
+	}
+	if hasPending {
+		if *sessionBudget == 0 {
+			result.More = true
+			if deferred {
+				result.Deferred++
+			}
+			return nil
+		}
+		if err := c.deferImportClaim(ctx, updatedWork); err != nil {
+			return err
+		}
+		result.Deferred++
+		return nil
+	}
+	if err := c.database.RecordArtifactCheckpointLandingFromStage(
+		ctx, landing,
 	); err != nil {
 		return err
 	}
@@ -390,8 +533,28 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			return err
 		}
 	}
-	_, err := c.database.AcknowledgeArtifactImport(ctx, work)
+	_, err = c.database.AcknowledgeArtifactImport(ctx, work)
 	return err
+}
+
+func (c *StoreImportCoordinator) markCheckpointSessionAttempted(
+	ctx context.Context,
+	landing db.ArtifactCheckpointLanding,
+	session db.ArtifactCheckpointSession,
+) error {
+	marked, err := c.database.MarkArtifactCheckpointSessionAttempted(
+		ctx, landing, session, c.activeAttemptGeneration,
+	)
+	if err != nil {
+		return err
+	}
+	if !marked {
+		return fmt.Errorf(
+			"%w: staged artifact session changed while deferring",
+			db.ErrArtifactImportConflict,
+		)
+	}
+	return nil
 }
 
 func (c *StoreImportCoordinator) deferImportClaim(
@@ -421,12 +584,33 @@ func (c *StoreImportCoordinator) quarantineCheckpoint(
 	ref Ref,
 	result *ImportResult,
 ) error {
-	if err := c.store.Quarantine(
-		ctx, ref, "invalid import checkpoint",
-	); err != nil {
+	marked, err := c.database.MarkArtifactImportQuarantinePending(ctx, work)
+	if err != nil {
 		return err
 	}
-	_, err := c.database.AcknowledgeArtifactImport(ctx, work)
+	if !marked {
+		return fmt.Errorf(
+			"%w: artifact import claim changed before quarantine",
+			db.ErrArtifactImportConflict,
+		)
+	}
+	work.QuarantinePending = true
+	return c.finishCheckpointQuarantine(ctx, work, ref, result)
+}
+
+func (c *StoreImportCoordinator) finishCheckpointQuarantine(
+	ctx context.Context,
+	work db.ArtifactImportWork,
+	ref Ref,
+	result *ImportResult,
+) error {
+	err := c.store.Quarantine(
+		ctx, ref, "invalid import checkpoint",
+	)
+	if err != nil && !errors.Is(err, ErrArtifactNotFound) {
+		return err
+	}
+	_, err = c.database.AcknowledgeArtifactImport(ctx, work)
 	if err != nil {
 		return err
 	}
