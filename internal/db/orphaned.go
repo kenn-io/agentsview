@@ -1396,6 +1396,30 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying messages: %w", err)
 	}
 
+	if oldDBHasTable(ctx, tx, "usage_events") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO usage_events (
+				session_id, message_ordinal, source, model,
+				input_tokens, output_tokens,
+				cache_creation_input_tokens, cache_read_input_tokens,
+				reasoning_tokens, cost_microdollars, cost_status, cost_source,
+				occurred_at, dedup_key
+			)
+			SELECT
+				session_id, message_ordinal, source, model,
+				input_tokens, output_tokens,
+				cache_creation_input_tokens, cache_read_input_tokens,
+				reasoning_tokens, cost_microdollars, cost_status, cost_source,
+				occurred_at, dedup_key
+			FROM old_db.usage_events
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying usage_events: %w", err)
+		}
+	}
+
 	// Copy tool_calls. Map old message_id to new
 	// message_id via the (session_id, ordinal) natural key.
 	toolCallCols := []string{

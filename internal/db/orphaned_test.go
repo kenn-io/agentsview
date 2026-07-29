@@ -99,6 +99,94 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	}, gotProvenance)
 }
 
+func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source := testDBAtPath(t, sourcePath, "source")
+	origin := "peer-a1b2c3"
+	gid := origin + "~native-session"
+	insertSession(t, source, gid, "project", func(session *Session) {
+		session.Machine = origin
+	})
+	ordinal := 2
+	require.NoError(t, source.ReplaceSessionUsageEvents(gid, []UsageEvent{{
+		SessionID:                gid,
+		MessageOrdinal:           &ordinal,
+		Source:                   "artifact",
+		Model:                    "example-model",
+		InputTokens:              101,
+		OutputTokens:             29,
+		CacheCreationInputTokens: 11,
+		CacheReadInputTokens:     7,
+		ReasoningTokens:          5,
+		CostStatus:               "reported",
+		CostSource:               "provider",
+		OccurredAt:               "2026-07-29T12:00:00Z",
+		DedupKey:                 "imported-usage",
+	}}))
+
+	head := ArtifactPeerCheckpointHead{
+		Origin:           origin,
+		Sequence:         3,
+		CheckpointSHA256: strings.Repeat("a", 64),
+		CheckpointSize:   123,
+	}
+	_, err := source.RecordArtifactPeerCheckpointHead(ctx, head)
+	require.NoError(t, err)
+	manifestHash := strings.Repeat("b", 64)
+	require.NoError(t, source.RecordArtifactCheckpointLanding(
+		ctx,
+		ArtifactCheckpointLanding(head),
+		map[string]string{gid: manifestHash},
+	))
+	require.NoError(t, source.RecordArtifactImportedSession(
+		ctx,
+		ArtifactImportedSession{
+			Origin:            origin,
+			GID:               gid,
+			ManifestHash:      manifestHash,
+			ImportedSessionID: gid,
+		},
+	))
+	require.NoError(t, source.Close())
+
+	destination := testDBAtPath(
+		t, filepath.Join(dir, "destination.db"), "destination",
+	)
+	defer destination.Close()
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
+	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	require.NoError(t, err)
+	require.Equal(t, 1, copied)
+
+	events, err := destination.GetUsageEvents(ctx, gid)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	events[0].ID = 0
+	assert.Equal(t, UsageEvent{
+		SessionID:                gid,
+		MessageOrdinal:           &ordinal,
+		Source:                   "artifact",
+		Model:                    "example-model",
+		InputTokens:              101,
+		OutputTokens:             29,
+		CacheCreationInputTokens: 11,
+		CacheReadInputTokens:     7,
+		ReasoningTokens:          5,
+		CostStatus:               "reported",
+		CostSource:               "provider",
+		OccurredAt:               "2026-07-29T12:00:00Z",
+		DedupKey:                 "imported-usage",
+	}, events[0])
+
+	provenance, err := destination.ArtifactImportedManifestHashes(
+		ctx, origin, []string{gid},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: manifestHash}, provenance)
+}
+
 func TestCopySyncStateAcceptsDatabaseWithoutArtifactImportTables(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "old.db")

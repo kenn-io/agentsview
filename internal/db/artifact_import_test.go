@@ -473,3 +473,37 @@ func TestArtifactImportedSessionProvenanceIsBoundedAndAdvances(t *testing.T) {
 	_, err = database.ArtifactImportedManifestHashes(ctx, origin, tooMany)
 	require.Error(t, err)
 }
+
+func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(
+	t *testing.T,
+) {
+	database := testDB(t)
+	ctx := t.Context()
+	origin := "peer-a1b2c3"
+	gids := make([]string, maxArtifactQueuePageSize)
+	for i := range gids {
+		gids[i] = fmt.Sprintf("%s~%04d", origin, i)
+	}
+	first := ArtifactImportedSession{
+		Origin:            origin,
+		GID:               gids[0],
+		ManifestHash:      strings.Repeat("a", 64),
+		ImportedSessionID: gids[0],
+	}
+	last := ArtifactImportedSession{
+		Origin:            origin,
+		GID:               gids[len(gids)-1],
+		ManifestHash:      strings.Repeat("b", 64),
+		ImportedSessionID: gids[len(gids)-1],
+	}
+	require.NoError(t, database.RecordArtifactImportedSession(ctx, first))
+	require.NoError(t, database.RecordArtifactImportedSession(ctx, last))
+	forceReaderVarLimit(t, database, 999)
+
+	got, err := database.ArtifactImportedManifestHashes(ctx, origin, gids)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		first.GID: first.ManifestHash,
+		last.GID:  last.ManifestHash,
+	}, got)
+}
