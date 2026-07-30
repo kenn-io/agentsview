@@ -499,6 +499,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 			newForegroundResyncRunner(ctx, cfg, engine, database),
 		))
 	}
+	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
+		newDaemonArtifactExchangeRunner(cfg, database, engine),
+	))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")

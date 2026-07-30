@@ -436,8 +436,15 @@ func exportFullToStoreWithDrainRoundsAndLimits(
 			return result, err
 		}
 	}
+	pending, err := database.PendingArtifactExports(ctx, 1)
+	if err != nil {
+		return result, fmt.Errorf("checking final full artifact work: %w", err)
+	}
+	if len(pending) == 0 {
+		return result, nil
+	}
 	return result, fmt.Errorf(
-		"artifact export queue did not settle after %d drain rounds", drainRounds,
+		"%w after %d drain rounds", ErrArtifactExportUnsettled, drainRounds,
 	)
 }
 

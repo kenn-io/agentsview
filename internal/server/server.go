@@ -45,7 +45,7 @@ type VersionInfo struct {
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
-const APIVersion = 4
+const APIVersion = 5
 
 const daemonService = "agentsview"
 
@@ -145,6 +145,8 @@ type Server struct {
 	// localResyncRunner, when set, backs the foreground full-resync HTTP handler
 	// with the worker-backed build-and-swap instead of an in-process resync.
 	localResyncRunner LocalResyncRunner
+
+	artifactExchangeRunner ArtifactExchangeRunner
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -441,6 +443,13 @@ func (s *Server) routes() {
 		s.handleImportRecallEntries,
 	))
 	s.registerEvalIngestRoutes()
+
+	if s.artifactExchangeRunner != nil {
+		s.mux.HandleFunc(
+			"POST /api/v1/artifacts/exchange",
+			s.handleArtifactExchange,
+		)
+	}
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

@@ -1795,6 +1795,7 @@ func TestExportFullDrainCapReturnsAccumulatedResultAfterUnsettledQueue(t *testin
 		ctx, store, filesystem, contractOrigin, drainRounds,
 	)
 	require.EqualError(t, err, "artifact export queue did not settle after 3 drain rounds")
+	assert.ErrorIs(t, err, ErrArtifactExportUnsettled)
 	assert.Positive(t, result.ExportedSessions,
 		"the accumulated result must still be returned alongside the drain-cap error")
 }
@@ -1853,8 +1854,54 @@ func TestExportFullDrainCapAppliesToWritesArrivingDuringDrain(t *testing.T) {
 		ctx, concurrent, filesystem, contractOrigin, drainRounds,
 	)
 	require.EqualError(t, err, "artifact export queue did not settle after 3 drain rounds")
+	assert.ErrorIs(t, err, ErrArtifactExportUnsettled)
 	assert.Positive(t, result.ExportedSessions)
 	assert.GreaterOrEqual(t, concurrent.requeues, drainRounds)
+}
+
+type finiteReEnqueueBoundaryStore struct {
+	*db.DB
+	remaining int
+}
+
+func (s *finiteReEnqueueBoundaryStore) PendingArtifactExports(
+	ctx context.Context,
+	limit int,
+) ([]db.ArtifactExportQueueItem, error) {
+	if limit == 1 && s.remaining > 0 {
+		s.remaining--
+		if err := s.ReplaceSessionMessages("sess-1", []db.Message{{
+			SessionID: "sess-1", Ordinal: 0, Role: "user",
+			Content: "one final concurrent write",
+		}}); err != nil {
+			return nil, err
+		}
+	}
+	return s.DB.PendingArtifactExports(ctx, limit)
+}
+
+func TestExportFullDrainCapDoesNotReportMoreAfterFinalDrainSettles(
+	t *testing.T,
+) {
+	database := testExportDB(t)
+	seedSession(t, database, "sess-1", "alpha")
+	store := newTestArtifactStore(t)
+	concurrent := &finiteReEnqueueBoundaryStore{
+		DB: database, remaining: 1,
+	}
+
+	result, err := exportFullToStoreWithDrainRounds(
+		t.Context(),
+		concurrent,
+		store,
+		contractOrigin,
+		1,
+	)
+	require.NoError(t, err)
+	assert.Positive(t, result.ExportedSessions)
+	pending, err := database.CountPendingArtifactExports(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, pending)
 }
 
 // TestExportRoundTripsSessionQualitySignals pins the PR1 invariant that the
