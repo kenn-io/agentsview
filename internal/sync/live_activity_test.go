@@ -362,6 +362,45 @@ func TestLiveActivityRetriesCanonicalRefreshWhileOldPathExists(t *testing.T) {
 	assert.Equal(t, 3, lookups)
 }
 
+func TestLiveActivityPreservesRefreshRetryAcrossHotExpiration(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	rollout := filepath.Join(dir, "rollout.jsonl")
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("old", now)), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("stable\n"), 0o644))
+	provider := newLiveActivityTestProvider(history)
+	lookupErr := errors.New("temporary lookup failure")
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		if lookupErr != nil {
+			return LiveActivitySource{}, false, lookupErr
+		}
+		return LiveActivitySource{Path: rollout}, true, nil
+	}, func(context.Context, []string) error {
+		return nil
+	}, nil)
+	poller.hot["codex:old"] = &liveActivityHotEntry{
+		source:       LiveActivitySource{Path: rollout},
+		lastActivity: now.Add(-liveActivityHotTTL),
+	}
+
+	_, err := poller.PollOnce(t.Context(), now)
+	require.Error(t, err)
+	assert.NotContains(t, poller.hot, "codex:old")
+	require.Contains(t, poller.retries, "codex:old")
+	assert.Equal(t, now, poller.retries["codex:old"].firstSeen)
+
+	lookupErr = nil
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
+	require.NoError(t, err)
+	assert.Contains(t, poller.hot, "codex:old")
+	assert.NotContains(t, poller.retries, "codex:old")
+}
+
 func TestLiveActivityRefreshesCanonicalPathAndDropsMissing(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()

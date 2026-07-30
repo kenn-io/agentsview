@@ -417,6 +417,10 @@ func (p *LiveActivityPoller) setHot(
 func (p *LiveActivityPoller) expireHot(now time.Time) {
 	for fullID, entry := range p.hot {
 		if now.Sub(entry.lastActivity) >= liveActivityHotTTL {
+			if retry := entry.refreshRetry; retry != nil &&
+				now.Sub(retry.firstSeen) < liveActivityRetryTTL {
+				p.retries[fullID] = retry
+			}
 			delete(p.hot, fullID)
 		}
 	}
