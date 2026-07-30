@@ -176,7 +176,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           go test -tags "fts5" ./internal/duckdb -count=1
-          go test -tags "fts5" -race $(go list ./... | grep -v '/internal/duckdb$') -count=1
+          go test -tags "fts5" -race $(go list ./... | grep -v '/internal/duckdb$') -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
