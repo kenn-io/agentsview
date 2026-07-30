@@ -1,10 +1,12 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +55,37 @@ func (d *countingActivityHintDecoder) DecodeActivityHint(
 	return literalActivityHintDecoder{}.DecodeActivityHint(line)
 }
 
+func activityHintCursorRetainsText(
+	cursor *activityHintCursor,
+	text string,
+) bool {
+	value := reflect.ValueOf(*cursor)
+	needle := []byte(text)
+	for _, field := range value.Fields() {
+		switch {
+		case field.Kind() == reflect.String:
+			if strings.Contains(field.String(), text) {
+				return true
+			}
+		case field.Kind() == reflect.Slice &&
+			field.Type().Elem().Kind() == reflect.Uint8:
+			if bytes.Contains(field.Bytes(), needle) {
+				return true
+			}
+		case field.Kind() == reflect.Array &&
+			field.Type().Elem().Kind() == reflect.Uint8:
+			candidate := make([]byte, field.Len())
+			for j := range field.Len() {
+				candidate[j] = byte(field.Index(j).Uint())
+			}
+			if bytes.Contains(candidate, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestReadActivityHintsBootstrapIsRecentAndBounded(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	path := filepath.Join(t.TempDir(), "history.jsonl")
@@ -98,7 +131,10 @@ func TestReadActivityHintsRetainsPartialAndDeduplicates(t *testing.T) {
 		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	assert.Empty(t, got.Hints)
-	assert.Equal(t, []byte(partial), cursor.partial)
+	assert.True(t, cursor.hasPartial)
+	assert.Equal(
+		t, int64(len(hintRecord("first", now))), cursor.partialOffset,
+	)
 
 	file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	require.NoError(t, err)
@@ -111,6 +147,38 @@ func TestReadActivityHintsRetainsPartialAndDeduplicates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
 	assert.Equal(t, "later", got.Hints[0].RawSessionID)
+}
+
+func TestReadActivityHintsDoesNotRetainHistoryContent(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	const prompt = "private-prompt-sentinel"
+	content := hintRecord("seed", now) + prompt + "\n" + prompt
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	cursor := &activityHintCursor{}
+
+	got, err := readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, got.Hints, 1)
+	assert.Equal(t, "seed", got.Hints[0].RawSessionID)
+	assert.False(t, activityHintCursorRetainsText(cursor, prompt))
+
+	appendFile(t, path, "\n"+hintRecord("later", now))
+	got, err = readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, got.Hints, 1)
+	assert.Equal(t, "later", got.Hints[0].RawSessionID)
+	assert.False(t, activityHintCursorRetainsText(cursor, prompt))
 }
 
 func TestReadActivityHintsDropsOversizeLine(t *testing.T) {

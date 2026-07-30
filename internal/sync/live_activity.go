@@ -20,8 +20,7 @@ const (
 	liveActivityMaxEntries     = 8192
 	liveActivityMaxPathBytes   = 2 << 20
 	liveActivityMaxCursors     = 256
-	liveActivityMaxCursorBytes = activityHintMaxReadBytes +
-		liveActivityMaxPathBytes
+	liveActivityMaxCursorBytes = liveActivityMaxPathBytes
 )
 
 type LiveActivitySource struct {
@@ -92,10 +91,7 @@ type LiveActivityPoller struct {
 func cloneActivityHintCursor(
 	cursor *activityHintCursor,
 ) activityHintCursor {
-	cloned := *cursor
-	cloned.boundary = append([]byte(nil), cursor.boundary...)
-	cloned.partial = append([]byte(nil), cursor.partial...)
-	return cloned
+	return *cursor
 }
 
 func NewLiveActivityPoller(
@@ -627,8 +623,7 @@ func (p *LiveActivityPoller) enforceCursorBounds() int {
 		candidates = append(candidates, candidate{
 			key:      key,
 			lastUsed: cursor.lastUsed,
-			bytes: len(key.path) + len(cursor.boundary) +
-				len(cursor.partial),
+			bytes:    len(key.path),
 		})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
@@ -656,9 +651,8 @@ func (p *LiveActivityPoller) enforceCursorBounds() int {
 
 func (p *LiveActivityPoller) cursorBytes() int {
 	total := 0
-	for key, cursor := range p.cursors {
-		total += len(key.path) + len(cursor.boundary) +
-			len(cursor.partial)
+	for key := range p.cursors {
+		total += len(key.path)
 	}
 	return total
 }

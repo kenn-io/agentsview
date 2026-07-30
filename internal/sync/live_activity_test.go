@@ -680,7 +680,7 @@ func TestLiveActivityBoundsCursorMemoryAcrossManySources(t *testing.T) {
 	const (
 		sourceCount            = 320
 		expectedMaxCursors     = 256
-		expectedMaxCursorBytes = 6 << 20
+		expectedMaxCursorBytes = 2 << 20
 	)
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
@@ -712,9 +712,8 @@ func TestLiveActivityBoundsCursorMemoryAcrossManySources(t *testing.T) {
 	}
 
 	retainedBytes := 0
-	for key, cursor := range poller.cursors {
-		retainedBytes += len(key.path) + len(cursor.boundary) +
-			len(cursor.partial)
+	for key := range poller.cursors {
+		retainedBytes += len(key.path)
 	}
 	assert.LessOrEqual(t, len(poller.cursors), expectedMaxCursors)
 	assert.LessOrEqual(t, retainedBytes, expectedMaxCursorBytes)
@@ -930,9 +929,7 @@ func TestLiveActivityOlderHintReplayPreservesObservedGrowth(t *testing.T) {
 	require.Contains(t, poller.hot, "codex:growing")
 	assert.Equal(t, now, poller.hot["codex:growing"].lastActivity)
 
-	replacement := history + ".new"
-	require.NoError(t, os.WriteFile(replacement, []byte(oldHint), 0o644))
-	require.NoError(t, os.Rename(replacement, history))
+	delete(poller.cursors, liveActivityCursorKey{path: history})
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Hour))
 
 	require.NoError(t, err)

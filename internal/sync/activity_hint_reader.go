@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -22,13 +23,15 @@ const (
 )
 
 type activityHintCursor struct {
-	info         os.FileInfo
-	offset       int64
-	boundary     []byte
-	partial      []byte
-	initialized  bool
-	droppingLine bool
-	lastUsed     uint64
+	info           os.FileInfo
+	offset         int64
+	boundaryDigest [sha256.Size]byte
+	boundaryLength int
+	partialOffset  int64
+	initialized    bool
+	hasPartial     bool
+	droppingLine   bool
+	lastUsed       uint64
 }
 
 type activityHintReadResult struct {
@@ -87,6 +90,9 @@ func readActivityHints(
 
 	bootstrap := !cursor.initialized
 	start := cursor.offset
+	if !bootstrap && cursor.hasPartial && info.Size() > cursor.offset {
+		start = cursor.partialOffset
+	}
 	shifted := false
 	result := activityHintReadResult{}
 	if bootstrap {
@@ -97,11 +103,11 @@ func readActivityHints(
 			info.Size()-int64(min(activityHintBootstrapBytes, maxBytes)),
 		)
 		shifted = start > 0
-	} else if unread := info.Size() - cursor.offset; unread > int64(maxBytes) {
+	} else if unread := info.Size() - start; unread > int64(maxBytes) {
 		start = info.Size() - int64(maxBytes)
 		shifted = true
 		result.ByteOverflow = true
-		cursor.partial = nil
+		cursor.hasPartial = false
 		cursor.droppingLine = false
 	}
 	result.Overflow = result.ByteOverflow
@@ -119,9 +125,6 @@ func readActivityHints(
 		)
 	}
 
-	previousOffset := cursor.offset
-	previousBoundary := append([]byte(nil), cursor.boundary...)
-	wasInitialized := cursor.initialized
 	readLimit := min(info.Size()-start, int64(maxBytes))
 	data, err := io.ReadAll(io.LimitReader(file, readLimit))
 	if err != nil {
@@ -137,21 +140,25 @@ func readActivityHints(
 	cursor.info = info
 	cursor.offset = start + int64(len(data))
 	cursor.initialized = true
-	if wasInitialized && start == previousOffset {
-		previousBoundary = append(previousBoundary, data...)
-		cursor.boundary = retainActivityHintBoundary(previousBoundary)
-	} else {
-		cursor.boundary = retainActivityHintBoundary(data)
+	digest, length, err := readActivityHintBoundary(file, cursor.offset)
+	if err != nil {
+		return activityHintReadResult{}, fmt.Errorf(
+			"hash activity hint boundary %q: %w", source.Path, err,
+		)
 	}
+	cursor.boundaryDigest = digest
+	cursor.boundaryLength = length
 
+	dataStart := start
 	if shifted {
 		newline := bytes.IndexByte(data, '\n')
 		if newline < 0 {
-			cursor.partial = nil
+			cursor.hasPartial = false
 			cursor.droppingLine = true
 			return result, nil
 		}
 		data = data[newline+1:]
+		dataStart += int64(newline + 1)
 	}
 
 	seen := make(map[string]struct{})
@@ -159,7 +166,7 @@ func readActivityHints(
 	futureCutoff := now.Add(time.Minute)
 	var canceled error
 	decoded, overflow := consumeNewestActivityHintLines(
-		cursor, data, maxRecords, func(line []byte) bool {
+		cursor, data, dataStart, maxRecords, func(line []byte) bool {
 			if err := ctx.Err(); err != nil {
 				canceled = err
 				return false
@@ -190,8 +197,8 @@ func activityHintBoundaryMatches(
 	path string,
 	cursor *activityHintCursor,
 ) bool {
-	if len(cursor.boundary) == 0 ||
-		cursor.offset < int64(len(cursor.boundary)) {
+	if cursor.boundaryLength == 0 ||
+		cursor.offset < int64(cursor.boundaryLength) {
 		return true
 	}
 	file, err := os.Open(path)
@@ -199,63 +206,80 @@ func activityHintBoundaryMatches(
 		return false
 	}
 	defer file.Close()
-	got := make([]byte, len(cursor.boundary))
-	n, err := file.ReadAt(got, cursor.offset-int64(len(got)))
-	return n == len(got) && err == nil && bytes.Equal(got, cursor.boundary)
+	digest, length, err := readActivityHintBoundary(file, cursor.offset)
+	return err == nil &&
+		length == cursor.boundaryLength &&
+		digest == cursor.boundaryDigest
 }
 
-func retainActivityHintBoundary(data []byte) []byte {
-	if len(data) > activityHintBoundaryBytes {
-		data = data[len(data)-activityHintBoundaryBytes:]
+func readActivityHintBoundary(
+	file *os.File,
+	offset int64,
+) ([sha256.Size]byte, int, error) {
+	length := int(min(offset, int64(activityHintBoundaryBytes)))
+	if length == 0 {
+		return [sha256.Size]byte{}, 0, nil
 	}
-	return append([]byte(nil), data...)
+	data := make([]byte, length)
+	n, err := file.ReadAt(data, offset-int64(length))
+	if err != nil {
+		return [sha256.Size]byte{}, 0, err
+	}
+	if n != length {
+		return [sha256.Size]byte{}, 0, io.ErrUnexpectedEOF
+	}
+	return sha256.Sum256(data), length, nil
 }
 
-// consumeNewestActivityHintLines retains an incomplete trailing record for the
-// next append and walks complete records backwards without materializing a
-// slice per line. Newest-first traversal keeps recent activity when the input
-// exceeds the poll-wide decode budget.
+// consumeNewestActivityHintLines records the file offset of an incomplete
+// trailing record and walks complete records backwards without materializing a
+// slice per line. The next append rereads that record from disk so cursor state
+// never retains record contents. Newest-first traversal keeps recent activity
+// when the input exceeds the poll-wide decode budget.
 func consumeNewestActivityHintLines(
 	cursor *activityHintCursor,
 	data []byte,
+	dataStart int64,
 	maxRecords int,
 	consume func([]byte) bool,
 ) (decoded int, overflow bool) {
+	if len(data) == 0 {
+		return 0, false
+	}
+	cursor.hasPartial = false
 	if cursor.droppingLine {
 		newline := bytes.IndexByte(data, '\n')
 		if newline < 0 {
 			return 0, false
 		}
 		data = data[newline+1:]
+		dataStart += int64(newline + 1)
 		cursor.droppingLine = false
 	}
 
-	buffer := make([]byte, 0, len(cursor.partial)+len(data))
-	buffer = append(buffer, cursor.partial...)
-	buffer = append(buffer, data...)
-	cursor.partial = nil
-
-	lastNewline := bytes.LastIndexByte(buffer, '\n')
+	lastNewline := bytes.LastIndexByte(data, '\n')
 	if lastNewline < 0 {
-		if len(buffer) > activityHintMaxLineBytes {
+		if len(data) > activityHintMaxLineBytes {
 			cursor.droppingLine = true
 			return 0, false
 		}
-		cursor.partial = append(cursor.partial[:0], buffer...)
+		cursor.hasPartial = true
+		cursor.partialOffset = dataStart
 		return 0, false
 	}
 
-	trailing := buffer[lastNewline+1:]
+	trailing := data[lastNewline+1:]
 	if len(trailing) > activityHintMaxLineBytes {
 		cursor.droppingLine = true
-	} else {
-		cursor.partial = append(cursor.partial[:0], trailing...)
+	} else if len(trailing) > 0 {
+		cursor.hasPartial = true
+		cursor.partialOffset = dataStart + int64(lastNewline+1)
 	}
 
 	end := lastNewline
 	for {
-		previousNewline := bytes.LastIndexByte(buffer[:end], '\n')
-		line := buffer[previousNewline+1 : end]
+		previousNewline := bytes.LastIndexByte(data[:end], '\n')
+		line := data[previousNewline+1 : end]
 		if len(line) <= activityHintMaxLineBytes {
 			if decoded >= maxRecords {
 				return decoded, true
