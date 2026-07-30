@@ -564,6 +564,15 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 			},
 			write,
 		)
+		if errors.Is(err, db.ErrSessionTrashed) {
+			deferred = true
+			if err := c.markCheckpointSessionAttempted(
+				ctx, landing, staged,
+			); err != nil {
+				return err
+			}
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -605,7 +614,26 @@ func (c *StoreImportCoordinator) importCheckpointSessions(
 	if err := c.database.RecordArtifactCheckpointLandingFromStage(
 		ctx, landing,
 	); err != nil {
-		return err
+		if !errors.Is(err, db.ErrArtifactImportConflict) {
+			return err
+		}
+		head, found, headErr := c.database.GetArtifactPeerCheckpointHead(
+			ctx, work.Origin,
+		)
+		if headErr != nil {
+			return headErr
+		}
+		if !found || head.Sequence <= landing.Sequence {
+			return err
+		}
+		c.discardFutureRequirements(work)
+		if _, ackErr := c.database.AcknowledgeArtifactImport(
+			ctx, work,
+		); ackErr != nil {
+			return ackErr
+		}
+		result.More = true
+		return nil
 	}
 	if c.hooks != nil && c.hooks.afterLanding != nil {
 		if err := c.hooks.afterLanding(); err != nil {

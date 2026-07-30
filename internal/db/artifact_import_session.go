@@ -116,8 +116,10 @@ func (db *DB) applyArtifactImportedSession(
 	case err == nil:
 		result.Written = true
 		result.WrittenMessages = messagesWritten
-	case errors.Is(err, ErrSessionExcluded), errors.Is(err, ErrSessionTrashed):
+	case errors.Is(err, ErrSessionExcluded):
 		result.Suppressed = true
+	case errors.Is(err, ErrSessionTrashed):
+		return ArtifactImportedSessionResult{}, ErrSessionTrashed
 	default:
 		return result, err
 	}

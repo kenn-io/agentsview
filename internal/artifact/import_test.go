@@ -637,6 +637,154 @@ func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T
 	assert.Equal(t, sessionMap, landedMap)
 }
 
+func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) {
+	store := newTestArtifactStore(t)
+	gid := contractOrigin + "~session"
+	firstManifest := importTestManifest("session")
+	firstHash := createImportTestClosure(
+		t, store, &firstManifest, []db.Message{{
+			Ordinal: 0, Role: "user", Content: "version A",
+		}},
+	)
+	first := createImportTestCheckpoint(
+		t, store, contractOrigin, 1, map[string]string{gid: firstHash},
+	)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), first))
+	_, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, destination.SoftDeleteSession(gid))
+
+	secondManifest := importTestManifest("session")
+	secondHash := createImportTestClosure(
+		t, store, &secondManifest, []db.Message{{
+			Ordinal: 0, Role: "user", Content: "version B",
+		}},
+	)
+	second := createImportTestCheckpoint(
+		t, store, contractOrigin, 2, map[string]string{gid: secondHash},
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), second))
+	deferred, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, deferred.Deferred)
+	assert.Zero(t, deferred.Sessions)
+
+	provenance, err := destination.ArtifactImportedManifestHashes(
+		t.Context(), contractOrigin, []string{gid},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: firstHash}, provenance)
+	landing, landedMap, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, landing.Sequence)
+	assert.Equal(t, map[string]string{gid: firstHash}, landedMap)
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	coordinator = NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	restored, err := destination.RestoreSession(gid)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, restored)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), second))
+	applied, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, applied.Sessions)
+	assert.Zero(t, applied.Deferred)
+
+	messages, err := destination.GetAllMessages(t.Context(), gid)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "version B", messages[0].Content)
+	provenance, err = destination.ArtifactImportedManifestHashes(
+		t.Context(), contractOrigin, []string{gid},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: secondHash}, provenance)
+	landing, landedMap, found, err = destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, landing.Sequence)
+	assert.Equal(t, map[string]string{gid: secondHash}, landedMap)
+	count, _, err = destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
+func TestStoreImportCoordinatorContinuesAfterConcurrentCheckpointSupersession(
+	t *testing.T,
+) {
+	store := newTestArtifactStore(t)
+	gid := contractOrigin + "~session"
+	firstManifest := importTestManifest("session")
+	firstHash := createImportTestClosure(
+		t, store, &firstManifest, []db.Message{{
+			Ordinal: 0, Role: "user", Content: "version A",
+		}},
+	)
+	first := createImportTestCheckpoint(
+		t, store, contractOrigin, 1, map[string]string{gid: firstHash},
+	)
+	secondManifest := importTestManifest("session")
+	secondHash := createImportTestClosure(
+		t, store, &secondManifest, []db.Message{{
+			Ordinal: 0, Role: "user", Content: "version B",
+		}},
+	)
+	second := createImportTestCheckpoint(
+		t, store, contractOrigin, 2, map[string]string{gid: secondHash},
+	)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	coordinator.hooks = &importCoordinatorHooks{
+		afterProvenance: func() error {
+			coordinator.hooks.afterProvenance = nil
+			return coordinator.RecordChanged(t.Context(), second)
+		},
+	}
+	require.NoError(t, coordinator.RecordChanged(t.Context(), first))
+
+	superseded, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	require.True(t, superseded.More)
+	for rounds := 0; ; rounds++ {
+		require.Less(t, rounds, 5)
+		result, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		if !result.More {
+			break
+		}
+	}
+
+	messages, err := destination.GetAllMessages(t.Context(), gid)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "version B", messages[0].Content)
+	landing, landedMap, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), contractOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, landing.Sequence)
+	assert.Equal(t, map[string]string{gid: secondHash}, landedMap)
+	count, _, err := destination.ArtifactImportQueueStats(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
 func TestStoreImportCoordinatorSuppressesLocalSessionIDCollision(t *testing.T) {
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
