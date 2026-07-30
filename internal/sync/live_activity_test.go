@@ -36,6 +36,25 @@ func newLiveActivityTestProvider(hintPath string) *liveActivityTestProvider {
 	}
 }
 
+type cancelingActivityHintDecoder struct {
+	cancel  context.CancelFunc
+	decoded int
+}
+
+func (d *cancelingActivityHintDecoder) ActivityHintSources(
+	context.Context,
+) ([]parser.ActivityHintSource, error) {
+	return nil, nil
+}
+
+func (d *cancelingActivityHintDecoder) DecodeActivityHint(
+	line []byte,
+) (parser.ActivityHint, bool) {
+	d.decoded++
+	d.cancel()
+	return literalActivityHintDecoder{}.DecodeActivityHint(line)
+}
+
 func (p *liveActivityTestProvider) ActivityHintSources(
 	context.Context,
 ) ([]parser.ActivityHintSource, error) {
@@ -291,6 +310,40 @@ func TestLiveActivityNewHintRestartsExpiredLookupWindow(t *testing.T) {
 	assert.Equal(t, later, poller.retries["codex:waiting"].firstSeen)
 }
 
+func TestLiveActivityOlderHintDoesNotRegressRetryTimestamp(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	history := filepath.Join(t.TempDir(), "history.jsonl")
+	require.NoError(t, os.WriteFile(
+		history, []byte(hintRecord("waiting", now)), 0o644,
+	))
+	provider := newLiveActivityTestProvider(history)
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		return LiveActivitySource{}, false, nil
+	}, func(context.Context, []string) error {
+		return nil
+	}, nil)
+	_, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+
+	replacement := history + ".new"
+	require.NoError(t, os.WriteFile(
+		replacement,
+		[]byte(hintRecord("waiting", now.Add(-time.Hour))),
+		0o644,
+	))
+	require.NoError(t, os.Rename(replacement, history))
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
+
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:waiting")
+	assert.Equal(t, now, poller.retries["codex:waiting"].firstSeen)
+	assert.Equal(t, now, poller.retries["codex:waiting"].lastHint)
+}
+
 func TestLiveActivityRetriesHotSessionAfterLookupFailureAndMove(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
@@ -381,6 +434,63 @@ func TestLiveActivityRetriesCanonicalRefreshWhileOldPathExists(t *testing.T) {
 	assert.Equal(t, second, poller.hot["codex:move"].source.Path)
 	assert.Nil(t, poller.hot["codex:move"].refreshRetry)
 	assert.Equal(t, 3, lookups)
+}
+
+func TestLiveActivityOlderHintDoesNotRegressHotRefreshRetry(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	rollout := filepath.Join(dir, "rollout.jsonl")
+	require.NoError(t, os.WriteFile(
+		history, []byte(hintRecord("active", now)), 0o644,
+	))
+	require.NoError(t, os.WriteFile(rollout, []byte("stable\n"), 0o644))
+	provider := newLiveActivityTestProvider(history)
+	var lookupErr error
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		if lookupErr != nil {
+			return LiveActivitySource{}, false, lookupErr
+		}
+		return LiveActivitySource{Path: rollout}, true, nil
+	}, func(context.Context, []string) error {
+		return nil
+	}, nil)
+	_, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+
+	newerHint := now.Add(time.Minute)
+	replacement := history + ".newer"
+	require.NoError(t, os.WriteFile(
+		replacement, []byte(hintRecord("active", newerHint)), 0o644,
+	))
+	require.NoError(t, os.Rename(replacement, history))
+	lookupErr = errors.New("temporary lookup failure")
+	_, err = poller.PollOnce(t.Context(), newerHint)
+	require.Error(t, err)
+	require.Contains(t, poller.hot, "codex:active")
+	require.NotNil(t, poller.hot["codex:active"].refreshRetry)
+
+	replacement = history + ".older"
+	require.NoError(t, os.WriteFile(
+		replacement,
+		[]byte(hintRecord("active", now.Add(-time.Hour))),
+		0o644,
+	))
+	require.NoError(t, os.Rename(replacement, history))
+	_, err = poller.PollOnce(t.Context(), now.Add(2*time.Minute))
+
+	require.Error(t, err)
+	require.NotNil(t, poller.hot["codex:active"].refreshRetry)
+	assert.Equal(
+		t, newerHint, poller.hot["codex:active"].refreshRetry.firstSeen,
+	)
+	assert.Equal(
+		t, newerHint, poller.hot["codex:active"].refreshRetry.lastHint,
+	)
 }
 
 func TestLiveActivityRetriesHintWhoseIndexedPathIsMissing(t *testing.T) {
@@ -778,6 +888,127 @@ func TestLiveActivityGrowthRefreshesHotExpiration(t *testing.T) {
 	_, err = poller.PollOnce(t.Context(), now.Add(liveActivityHotTTL+time.Second))
 	require.NoError(t, err)
 	assert.Empty(t, poller.hot)
+}
+
+func TestLiveActivityOlderHintReplayPreservesObservedGrowth(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	rollout := filepath.Join(dir, "rollout.jsonl")
+	oldHint := hintRecord("growing", now.Add(-23*time.Hour))
+	require.NoError(t, os.WriteFile(history, []byte(oldHint), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("growth"), 0o644))
+	info, err := os.Stat(rollout)
+	require.NoError(t, err)
+	inode, device := getFileIdentity(rollout, info)
+	provider := newLiveActivityTestProvider(history)
+	lookups := 0
+	syncs := 0
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		lookups++
+		source := LiveActivitySource{Path: rollout}
+		if lookups > 1 {
+			source.StoredSize = info.Size()
+			source.StoredMTimeNS = info.ModTime().UnixNano()
+			source.StoredInode = inode
+			source.StoredDevice = device
+			source.HasStoredStat = true
+			source.HasStoredIdentity = true
+		}
+		return source, true, nil
+	}, func(context.Context, []string) error {
+		syncs++
+		return nil
+	}, nil)
+
+	_, err = poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:growing")
+	assert.Equal(t, now, poller.hot["codex:growing"].lastActivity)
+
+	replacement := history + ".new"
+	require.NoError(t, os.WriteFile(replacement, []byte(oldHint), 0o644))
+	require.NoError(t, os.Rename(replacement, history))
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Hour))
+
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:growing")
+	assert.Equal(t, now, poller.hot["codex:growing"].lastActivity)
+	assert.Equal(t, 2, lookups)
+	assert.Equal(t, 1, syncs)
+}
+
+func TestLiveActivityStopsAfterHintReadCancellation(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	var sources []parser.ActivityHintSource
+	for i := range 3 {
+		path := filepath.Join(dir, fmt.Sprintf("history-%d.jsonl", i))
+		require.NoError(t, os.WriteFile(path, []byte(
+			hintRecord(fmt.Sprintf("id-%d-a", i), now)+
+				hintRecord(fmt.Sprintf("id-%d-b", i), now),
+		), 0o644))
+		sources = append(sources, parser.ActivityHintSource{Path: path})
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	decoder := &cancelingActivityHintDecoder{cancel: cancel}
+	provider := newLiveActivityTestProvider(sources[0].Path)
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    decoder,
+		Sources:  sources,
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		t.Fatal("lookup after hint cancellation")
+		return LiveActivitySource{}, false, nil
+	}, func(context.Context, []string) error {
+		t.Fatal("sync after hint cancellation")
+		return nil
+	}, nil)
+
+	stats, err := poller.PollOnce(ctx, now)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, stats.HintFiles)
+	assert.Equal(t, 1, decoder.decoded)
+	assert.Zero(t, stats.SessionLookups)
+	assert.Zero(t, stats.SourceStats)
+}
+
+func TestLiveActivityStopsAfterLookupCancellation(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	rollout := filepath.Join(dir, "rollout.jsonl")
+	require.NoError(t, os.WriteFile(
+		history, []byte(hintRecord("active", now)), 0o644,
+	))
+	require.NoError(t, os.WriteFile(rollout, []byte("growth"), 0o644))
+	ctx, cancel := context.WithCancel(t.Context())
+	provider := newLiveActivityTestProvider(history)
+	syncs := 0
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		cancel()
+		return LiveActivitySource{Path: rollout}, true, nil
+	}, func(context.Context, []string) error {
+		syncs++
+		return nil
+	}, nil)
+
+	stats, err := poller.PollOnce(ctx, now)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, stats.SessionLookups)
+	assert.Zero(t, stats.SourceStats)
+	assert.Zero(t, stats.SyncPaths)
+	assert.Zero(t, syncs)
 }
 
 func TestLiveActivityThrottlesErrorsWithoutRecordContent(t *testing.T) {

@@ -151,6 +151,9 @@ func (p *LiveActivityPoller) PollOnce(
 	processedSources := 0
 	deferredSource := -1
 	for offset := range min(len(sources), liveActivityMaxCursors) {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		if bytesRemaining == 0 || recordsRemaining == 0 {
 			break
 		}
@@ -178,8 +181,16 @@ func (p *LiveActivityPoller) PollOnce(
 		if err != nil {
 			*cursor = cursorBefore
 			p.markCursorUsed(cursor)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return stats, ctxErr
+			}
 			pollErrors = append(pollErrors, err)
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			*cursor = cursorBefore
+			p.markCursorUsed(cursor)
+			return stats, err
 		}
 		bytesRemaining -= result.BytesRead
 		recordsRemaining -= result.RecordsDecoded
@@ -226,9 +237,15 @@ func (p *LiveActivityPoller) PollOnce(
 
 	attempted := make(map[string]struct{}, len(hinted))
 	for fullID, hint := range hinted {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		attempted[fullID] = struct{}{}
 		stats.SessionLookups++
 		source, found, err := p.lookup(ctx, fullID)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stats, ctxErr
+		}
 		if err != nil {
 			pollErrors = append(pollErrors,
 				fmt.Errorf("lookup live activity session %q: %w", fullID, err))
@@ -255,6 +272,9 @@ func (p *LiveActivityPoller) PollOnce(
 	}
 
 	for fullID, retry := range p.retries {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		if now.Sub(retry.firstSeen) >= liveActivityRetryTTL {
 			delete(p.retries, fullID)
 			continue
@@ -264,6 +284,9 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 		stats.SessionLookups++
 		source, found, err := p.lookup(ctx, fullID)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stats, ctxErr
+		}
 		if err != nil {
 			pollErrors = append(pollErrors,
 				fmt.Errorf("retry live activity session %q: %w", fullID, err))
@@ -275,6 +298,9 @@ func (p *LiveActivityPoller) PollOnce(
 	}
 
 	for fullID, entry := range p.hot {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		retry := entry.refreshRetry
 		if retry == nil {
 			continue
@@ -288,6 +314,9 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 		stats.SessionLookups++
 		source, found, err := p.lookup(ctx, fullID)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stats, ctxErr
+		}
 		if err != nil {
 			pollErrors = append(pollErrors,
 				fmt.Errorf("refresh live activity session %q: %w", fullID, err))
@@ -298,6 +327,9 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
 	p.expireHot(now)
 	if evicted := p.enforceBounds(); evicted > 0 {
 		p.logThrottled("state-overflow", now,
@@ -314,8 +346,14 @@ func (p *LiveActivityPoller) PollOnce(
 	observed := make(map[string]observedSource)
 	changedPaths := make(map[string]struct{})
 	for fullID, entry := range p.hot {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		stats.SourceStats++
 		info, err := os.Stat(entry.source.Path)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stats, ctxErr
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			delete(p.hot, fullID)
 			if hint, ok := hinted[fullID]; ok {
@@ -353,13 +391,25 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
 	paths := sortedLiveActivityKeys(changedPaths)
 	stats.SyncPaths = len(paths)
 	if len(paths) > 0 {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		if err := p.syncPaths(ctx, paths); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return stats, ctxErr
+			}
 			pollErrors = append(pollErrors,
 				fmt.Errorf("sync live activity sources: %w", err))
 		} else {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
 			for _, entry := range p.hot {
 				info, ok := observed[filepath.Clean(entry.source.Path)]
 				if !ok {
@@ -376,6 +426,9 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
 	err := errors.Join(pollErrors...)
 	if err != nil {
 		p.logThrottled("poll-error", now,
@@ -413,13 +466,14 @@ func (p *LiveActivityPoller) addRetry(
 		retry = &liveActivityRetryEntry{
 			target:    target,
 			firstSeen: now,
+			lastHint:  lastHint,
 		}
 		p.retries[fullID] = retry
 	} else if lastHint.After(retry.lastHint) {
 		retry.firstSeen = now
+		retry.target = target
+		retry.lastHint = lastHint
 	}
-	retry.target = target
-	retry.lastHint = lastHint
 }
 
 func (p *LiveActivityPoller) addHotRefreshRetry(
@@ -437,13 +491,14 @@ func (p *LiveActivityPoller) addHotRefreshRetry(
 		retry = &liveActivityRetryEntry{
 			target:    target,
 			firstSeen: now,
+			lastHint:  lastHint,
 		}
 		entry.refreshRetry = retry
 	} else if lastHint.After(retry.lastHint) {
 		retry.firstSeen = now
+		retry.target = target
+		retry.lastHint = lastHint
 	}
-	retry.target = target
-	retry.lastHint = lastHint
 }
 
 func (p *LiveActivityPoller) setHot(
@@ -453,6 +508,19 @@ func (p *LiveActivityPoller) setHot(
 	lastActivity time.Time,
 ) {
 	source.Path = filepath.Clean(source.Path)
+	if entry := p.hot[fullID]; entry != nil {
+		if entry.lastActivity.After(lastActivity) {
+			lastActivity = entry.lastActivity
+		}
+		if retry := entry.refreshRetry; retry != nil &&
+			retry.lastHint.After(lastActivity) {
+			lastActivity = retry.lastHint
+		}
+	}
+	if retry := p.retries[fullID]; retry != nil &&
+		retry.lastHint.After(lastActivity) {
+		lastActivity = retry.lastHint
+	}
 	p.hot[fullID] = &liveActivityHotEntry{
 		target:       target,
 		source:       source,
