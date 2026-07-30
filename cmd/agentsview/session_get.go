@@ -162,7 +162,7 @@ func resolveBareCodebuffID(
 		},
 		rawID,
 	)
-	tryBoth := func(project string) string {
+	tryBothWithErr := func(project string) (string, error) {
 		for _, agent := range []parser.AgentType{
 			parser.AgentCodebuff, parser.AgentFreebuff,
 		} {
@@ -170,7 +170,10 @@ func resolveBareCodebuffID(
 				[]string{string(agent), project, rawID}, ":",
 			)
 			detail, err := svc.Get(ctx, candidateID)
-			if err != nil || detail == nil {
+			if err != nil {
+				return "", err
+			}
+			if detail == nil {
 				continue
 			}
 			if !codebuffMachineMatches(
@@ -178,9 +181,13 @@ func resolveBareCodebuffID(
 			) {
 				continue
 			}
-			return candidateID
+			return candidateID, nil
 		}
-		return ""
+		return "", nil
+	}
+	tryBoth := func(project string) string {
+		v, _ := tryBothWithErr(project)
+		return v
 	}
 	switch len(locations) {
 	case 0:
@@ -188,13 +195,34 @@ func resolveBareCodebuffID(
 	case 1:
 		return tryBoth(locations[0].ProjectHint), nil
 	default:
-		var valid []string
+		var (
+			valid     []string
+			seen      = make(map[string]struct{})
+			lookupErr error
+		)
 		for _, loc := range locations {
-			if v := tryBoth(loc.ProjectHint); v != "" {
-				valid = append(valid, v)
+			v, err := tryBothWithErr(loc.ProjectHint)
+			if err != nil {
+				if lookupErr == nil {
+					lookupErr = err
+				}
+				continue
 			}
+			if v == "" {
+				continue
+			}
+			if _, dup := seen[v]; dup {
+				continue
+			}
+			seen[v] = struct{}{}
+			valid = append(valid, v)
+		}
+		if lookupErr != nil {
+			return "", lookupErr
 		}
 		switch len(valid) {
+		case 0:
+			return "", nil
 		case 1:
 			return valid[0], nil
 		default:

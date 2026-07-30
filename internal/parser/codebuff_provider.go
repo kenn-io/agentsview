@@ -3,11 +3,47 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// CodebuffCompanionFilenames lists the sibling companion files folded into
+// Codebuff's cold-write fingerprint (codebuffFingerprintSource) and the
+// warm-side freshness digest (MultiFileStatHasher, plus the engine's
+// providerStatFreshnessMtime helper). Sharing one list across all three
+// sites keeps the MTimeNS key aligned with the side-table digest so the
+// warm pre-check's max(chat, rs, meta) derivation matches the cold
+// write. Add new companions here rather than inlining them at
+// individual call sites.
+var CodebuffCompanionFilenames = []string{
+	"run-state.json",
+	"chat-meta.json",
+}
+
+// CodebuffCompanionMtime returns the max of chatInfo.ModTime() and
+// sibling companion files declared in CodebuffCompanionFilenames. The
+// engine's warm pre-check uses it to align the skip-cache MTimeNS key
+// with the cold-write fingerprint's same max(chat, rs, meta) stamp,
+// so a cold-to-warm cycle does not drift. Missing companions are
+// silently skipped; the chat file is the floor.
+func CodebuffCompanionMtime(
+	chatPath string, chatInfo os.FileInfo,
+) int64 {
+	mtime := chatInfo.ModTime().UnixNano()
+	dir := filepath.Dir(chatPath)
+	for _, name := range CodebuffCompanionFilenames {
+		if ci, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			if ts := ci.ModTime().UnixNano(); ts > mtime {
+				mtime = ts
+			}
+		}
+	}
+	return mtime
+}
 
 // newCodebuffProviderFactory creates a provider factory for Codebuff.
 // Freebuff sessions are handled through the same provider and distinguished
@@ -50,6 +86,53 @@ func newCodebuffProviderFactory(def AgentDef) ProviderFactory {
 // would leave stale ordinals and missed in-place block updates.
 type codebuffSourceSet struct {
 	singleFileSourceSet
+}
+
+// ComputeMultiFileStatHash implements parser.MultiFileStatHasher. The
+// digest is FNV-1a 64 over (size, mtime) tuples for chat-messages.json
+// plus its sibling companions run-state.json and chat-meta.json, plus
+// (0, dir.MTime) to fold directory-level create/rename/delete into the
+// key. The 0xCB domain separator keeps the digest from colliding with
+// any other FNV digest the engine computes. Missing companions are
+// encoded as (0, 0); that means a deleted companion changes the digest
+// from whatever its prior non-zero tuple was to (0, 0). The chat
+// file's size/mtime are always written first so the resulting digest
+// is fully deterministic across process restarts.
+func (s codebuffSourceSet) ComputeMultiFileStatHash(
+	chatPath string,
+) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte{0xCB})
+	var buf [16]byte
+	writeTuple := func(size, mtime int64) {
+		binary.LittleEndian.PutUint64(buf[:8], uint64(size))
+		binary.LittleEndian.PutUint64(buf[8:16], uint64(mtime))
+		_, _ = h.Write(buf[:])
+	}
+	chatInfo, err := os.Stat(chatPath)
+	if err != nil {
+		chatInfo = nil
+	}
+	if chatInfo != nil {
+		writeTuple(chatInfo.Size(), chatInfo.ModTime().UnixNano())
+	} else {
+		writeTuple(0, 0)
+	}
+	dir := filepath.Dir(chatPath)
+	for _, name := range CodebuffCompanionFilenames {
+		companion := filepath.Join(dir, name)
+		if ci, err := os.Stat(companion); err == nil {
+			writeTuple(ci.Size(), ci.ModTime().UnixNano())
+		} else {
+			writeTuple(0, 0)
+		}
+	}
+	if di, err := os.Stat(dir); err == nil {
+		writeTuple(0, di.ModTime().UnixNano())
+	} else {
+		writeTuple(0, 0)
+	}
+	return h.Sum64()
 }
 
 func (s codebuffSourceSet) Parse(
@@ -191,9 +274,8 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 
-	// Include run-state.json and chat-meta.json in the composite stat.
 	dir := filepath.Dir(src.Path)
-	for _, name := range []string{"run-state.json", "chat-meta.json"} {
+	for _, name := range CodebuffCompanionFilenames {
 		companion := filepath.Join(dir, name)
 		if ci, err := os.Stat(companion); err == nil {
 			fingerprint.Size += ci.Size()
@@ -212,7 +294,7 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
-	for _, name := range []string{"run-state.json", "chat-meta.json"} {
+	for _, name := range CodebuffCompanionFilenames {
 		companion := filepath.Join(dir, name)
 		if ci, err := os.Stat(companion); err == nil {
 			if err := addSiblingMetadataFingerprintPart(

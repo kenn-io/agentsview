@@ -26,6 +26,25 @@ import (
 
 const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1"
 
+// provider_freshnessDDL is the per-component stat-hash side-table for
+// providers with multi-file on-disk layouts (currently Codebuff and
+// Freebuff). The engine uses it to short-circuit warm sync over an
+// unchanged archive without invoking provider.Fingerprint on the hot
+// path. CREATE TABLE IF NOT EXISTS is idempotent, so legacy DBs created
+// before this table existed gain it on the next Open without a version
+// bump.
+const provider_freshnessDDL = `
+CREATE TABLE IF NOT EXISTS provider_freshness (
+    agent         TEXT NOT NULL,
+    file_path     TEXT NOT NULL,
+    stat_hash     INTEGER NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (agent, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
+    ON provider_freshness(updated_at);
+`
+
 // dataVersion tracks parser changes that require a full
 // re-sync. Increment this when parsing logic changes in ways
 // that affect stored data (e.g. new fields extracted, content
@@ -2073,6 +2092,10 @@ func applySchemaColumnMigrations(
 	queryRow func(string, ...any) rowScanner,
 	exec func(string, ...any) (sql.Result, error),
 ) error {
+	if _, err := exec(provider_freshnessDDL); err != nil {
+		return fmt.Errorf(
+			"creating provider_freshness side-table: %w", err)
+	}
 	return applyColumnMigrations(schemaColumnMigrations(), queryRow, exec)
 }
 

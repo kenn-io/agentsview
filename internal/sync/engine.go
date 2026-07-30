@@ -5,6 +5,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/timeutil"
 	"hash/fnv"
 	"log"
 	"maps"
@@ -13,18 +19,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
 	"time"
-
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/signals"
-	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 const (
@@ -309,12 +309,20 @@ type Engine struct {
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
-	ephemeral               bool
-	idPrefix                string
-	pathRewriter            func(string) string
-	emitter                 Emitter
-	providerFactories       map[parser.AgentType]parser.ProviderFactory
-	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
+	ephemeral              bool
+	idPrefix               string
+	pathRewriter           func(string) string
+	emitter                Emitter
+	providerFactories      map[parser.AgentType]parser.ProviderFactory
+	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
+	// providerStatHashers caches the optional MultiFileStatHasher
+	// implementations keyed by AgentType. Populated at engine
+	// construction by type-asserting each constructed provider; nil
+	// entries indicate the provider does not implement
+	// MultiFileStatHasher (single-file agents and providers without a
+	// multi-file layout take the existing stat-only composite path).
+	providerStatHashers map[parser.AgentType]parser.MultiFileStatHasher
+
 	providerWatchRootsMu    gosync.Mutex
 	providerWatchRoots      map[parser.AgentType][]parser.WatchRoot
 	projectIdentityMu       gosync.Mutex
@@ -527,6 +535,8 @@ func NewEngine(
 		emitter:                 cfg.Emitter,
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
+		providerStatHashers: buildProviderStatHashers(
+			providerFactoryMap(providerFactories)),
 		providerWatchRoots:      make(map[parser.AgentType][]parser.WatchRoot),
 		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
 		projectIdentityWritten:  make(map[string]struct{}),
@@ -594,6 +604,48 @@ func providerFactoryMap(
 		out[def.Type] = factory
 	}
 	return out
+}
+
+// buildProviderStatHashers constructs probe providers for each factory
+// and caches the MultiFileStatHasher implementations. Providers that
+// do not implement the interface are absent from the result so the
+// engine's pre-check can fast-path on a missing key. The probe must
+// be side-effect-free: a fresh provider per agent is allocated only
+// for the type assertion, and the probe is discarded immediately.
+func buildProviderStatHashers(
+	factories map[parser.AgentType]parser.ProviderFactory,
+) map[parser.AgentType]parser.MultiFileStatHasher {
+	out := make(map[parser.AgentType]parser.MultiFileStatHasher, len(factories))
+	for agent, factory := range factories {
+		probe := factory.NewProvider(parser.ProviderConfig{
+			Machine: "",
+		})
+		if h, ok := probe.(parser.MultiFileStatHasher); ok {
+			out[agent] = h
+		}
+	}
+	return out
+}
+
+// recordProviderStatHash computes the per-component stat digest for a
+// source and persists it to provider_freshness. Providers without a
+// MultiFileStatHasher implementation are silently skipped (their
+// freshness is owned by the engine's existing skip-cache path). The
+// hasher performs its own os.Stat on the chat path so the caller does
+// not need to supply FileInfo.
+func (e *Engine) recordProviderStatHash(
+	ctx context.Context,
+	agent parser.AgentType,
+	path string,
+) {
+	hasher, ok := e.providerStatHashers[agent]
+	if !ok {
+		return
+	}
+	digest := hasher.ComputeMultiFileStatHash(path)
+	if err := e.db.UpsertProviderStatHash(ctx, agent, path, digest); err != nil {
+		log.Printf("provider_freshness write for %s/%s: %v", agent, path, err)
+	}
 }
 
 // migrateLegacyCodexExecSkips removes skip cache entries
@@ -7293,7 +7345,7 @@ func (e *Engine) processProviderFile(
 	} else if forceReplace {
 		sourceForceReplace = true
 	}
-	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(source, file); fresh {
+	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(ctx, source, file); fresh {
 		return processResult{
 			skip:  true,
 			mtime: freshMtime,
@@ -7656,7 +7708,7 @@ func (e *Engine) processProviderFile(
 			})
 		}
 	}
-	e.applyProviderFilePathPolicies(provider, file.Agent, &res)
+	e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res)
 	if storageStateOK {
 		e.stageOpenCodeStorageTrust(
 			&res, file.Path, storageState, storageSnap,
@@ -7848,8 +7900,10 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 //     current parse no longer emits is added to the exclusion list so the
 //     superseded row is deleted.
 func (e *Engine) applyProviderFilePathPolicies(
+	ctx context.Context,
 	provider parser.Provider,
 	agent parser.AgentType,
+	filePath string,
 	res *processResult,
 ) {
 	if provider.Capabilities().Source.MultiSessionSource == parser.CapabilitySupported {
@@ -7895,22 +7949,72 @@ func (e *Engine) applyProviderFilePathPolicies(
 			agentsToQuery = append(agentsToQuery, string(parser.AgentFreebuff))
 		}
 		var existingIDs []string
+		primaryErr := make(map[string]error, len(agentsToQuery))
 		for _, agentStr := range agentsToQuery {
 			ids, err := e.db.ListSessionIDsByFilePath(lookupPath, agentStr)
 			if err != nil {
-				log.Printf("list session IDs by file path: %v", err)
+				primaryErr[agentStr] = err
 				continue
 			}
 			existingIDs = append(existingIDs, ids...)
 		}
-		if len(existingIDs) == 0 && len(agentsToQuery) > 1 {
-			// Check if the query for the primary agent failed.
-			_, err := e.db.ListSessionIDsByFilePath(lookupPath, string(agent))
-			if err != nil {
-				log.Printf("list session IDs by file path: %v", err)
-				kept = append(kept, result)
-				continue
+		// One-shot retry: any agent that errored on the first call gets
+		// one more chance. Successful retries absorb their IDs into
+		// existingIDs and clear the per-agent error so a transient
+		// primary-agent failure does not propagate as a full-failure.
+		if len(primaryErr) > 0 {
+			for agentStr := range primaryErr {
+				ids, retryErr := e.db.ListSessionIDsByFilePath(lookupPath, agentStr)
+				if retryErr != nil {
+					continue
+				}
+				existingIDs = append(existingIDs, ids...)
+				delete(primaryErr, agentStr)
 			}
+		}
+		// Bail only when EVERY agent's lookup is permanently failing.
+		// A single failing agent that returns partial data is logged
+		// but tolerated, since aborting the file would suppress a real
+		// parse result based on identity data that may have been a
+		// transient DB blip. The full-failure floor prevents silently
+		// treating an unreadable archive as "fresh" (the legacy
+		// log-and-continue bug the review flagged).
+		if len(primaryErr) == len(agentsToQuery) {
+			var failedAgents []string
+			var failedErrs []error
+			for _, agentStr := range agentsToQuery {
+				if err, ok := primaryErr[agentStr]; ok {
+					failedAgents = append(failedAgents, agentStr)
+					failedErrs = append(failedErrs, err)
+				}
+			}
+			sort.Strings(failedAgents)
+			res.err = fmt.Errorf(
+				"list session IDs by file path %q for agents %v: %w",
+				lookupPath, failedAgents, errors.Join(failedErrs...),
+			)
+			res.noCacheSkip = true
+			kept = kept[:0]
+			res.results = kept
+			// Per-event work must drop the digest write too: an error
+			// path must not stamp a row that suppresses real drift on the
+			// next warm sync.
+			return
+		}
+		if len(primaryErr) > 0 {
+			var failedAgents []string
+			var failedErrs []error
+			for _, agentStr := range agentsToQuery {
+				if err, ok := primaryErr[agentStr]; ok {
+					failedAgents = append(failedAgents, agentStr)
+					failedErrs = append(failedErrs, err)
+				}
+			}
+			sort.Strings(failedAgents)
+			log.Printf(
+				"partial session IDs by file path %q missing agents %v: %v",
+				lookupPath, failedAgents, errors.Join(failedErrs...),
+			)
 		}
 
 		// Resurrection guard. The path's identity is removed when a trashed row
@@ -7966,6 +8070,33 @@ func (e *Engine) applyProviderFilePathPolicies(
 		kept = append(kept, result)
 	}
 	res.results = kept
+	if len(kept) > 0 && filePath != "" {
+		// Per-event work gates the digest write by what actually got kept
+		// (an empty kept must not stamp a row that would suppress real
+		// drift on the next warm sync) AND uses the pathRewriter so the
+		// write key matches the warm pre-check's read-side lookup,
+		// which mirrors the same call. For remote-synced sessions
+		// filePath is the temporal chat path on the current host while
+		// targetPath is the canonical "host:/remote/path" the warm pass
+		// resolves; writing under the unrewritten key would never match
+		// and the side-table digest would never short-circuit, so the
+		// MultiFileStatHasher stat cost would be paid on every warm
+		// pass without payoff.
+		//
+		// Note: this records the digest inside processFile BEFORE the
+		// downstream sessions-table write. A rare downstream write
+		// failure would leave a stale digest for one cycle; the next
+		// fingerprint mismatch on real content drift clears it via the
+		// normal warm-path fallback. Future work could move the
+		// write-back into the success side of the actual upsert.
+		targetPath := filePath
+		if e.pathRewriter != nil {
+			targetPath = e.pathRewriter(filePath)
+		}
+		if targetPath != "" {
+			e.recordProviderStatHash(ctx, agent, targetPath)
+		}
+	}
 }
 
 // deleteParserExcludedSessions deletes rows the current parser deliberately
@@ -8782,7 +8913,25 @@ func (e *Engine) providerIncrementalContentChanged(
 	return curHash != storedHash, true
 }
 
+// providerStatFreshnessMtime derives the cache mtime key from the same
+// rule the provider's cold-write fingerprint uses. Codebuff/Freebuff
+// delegate to parser.CodebuffCompanionMtime, which is the single
+// source of truth for the max(chat, run-state, chat-meta) derivation;
+// other MultiFileStatHasher agents fall through to chat-only since
+// they have no sibling companions to fold in.
+func providerStatFreshnessMtime(
+	agent parser.AgentType,
+	lookupPath string,
+	chatInfo os.FileInfo,
+) int64 {
+	if agent != parser.AgentCodebuff && agent != parser.AgentFreebuff {
+		return chatInfo.ModTime().UnixNano()
+	}
+	return parser.CodebuffCompanionMtime(lookupPath, chatInfo)
+}
+
 func (e *Engine) providerSourceFreshBeforeFingerprint(
+	ctx context.Context,
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 ) (int64, bool) {
@@ -8802,6 +8951,33 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		info, err = os.Stat(path)
 		if err != nil {
 			return 0, false
+		}
+	}
+	// Per-component digest pre-check for multi-file providers
+	// (Codebuff/Freebuff). When the provider implements
+	// MultiFileStatHasher and the side-table holds a digest that
+	// matches the current stat snapshot, the source is fresh and we
+	// short-circuit provider.Fingerprint. The side-table is only
+	// populated after a successful parse+write, so its absence falls
+	// through to the existing stat-only composite below for the
+	// first warm sync after the column is introduced.
+	if hasher, ok := e.providerStatHashers[file.Agent]; ok {
+		digest := hasher.ComputeMultiFileStatHash(lookupPath)
+		stored, hasStored, hashErr :=
+			e.db.GetProviderStatHash(ctx, file.Agent, lookupPath)
+		if hashErr != nil {
+			log.Printf(
+				"provider_freshness read for %s/%s: %v",
+				file.Agent, lookupPath, hashErr)
+		} else if hasStored && stored == digest {
+			// Cold writes stamp fingerprint.MTimeNS as the max of
+			// chat + sibling companions (see codebuffFingerprintSource);
+			// the skip cache key/decision must align with that stamp
+			// so a cold→warm cycle does not drift. Only Codebuff/Freebuff
+			// have sibling companions today; other agents implementing
+			// MultiFileStatHasher fall through to chat-only via the
+			// helper.
+			return providerStatFreshnessMtime(file.Agent, lookupPath, info), true
 		}
 	}
 	switch file.Agent {

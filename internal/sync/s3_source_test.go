@@ -1471,6 +1471,10 @@ func TestSyncRootsSinceScopedRemoteRootSyncsNewObject(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
+	// Reset after the engine-construction probe from buildProviderStatHashers
+	// which calls NewProvider with empty roots for the type assertion.
+	factory.roots = nil
+
 	stats := engine.SyncRootsSince(
 		context.Background(), []string{remoteRoot}, time.Time{}, nil,
 	)
