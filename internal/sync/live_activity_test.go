@@ -585,6 +585,64 @@ func TestLiveActivityRetriesRepeatedMissingIndexedPaths(t *testing.T) {
 	assert.Equal(t, []string{canonical}, synced)
 }
 
+func TestLiveActivityOlderReplayPreservesRetryAcrossRepeatedMissingPaths(
+	t *testing.T,
+) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	firstMissing := filepath.Join(dir, "first-missing.jsonl")
+	secondMissing := filepath.Join(dir, "second-missing.jsonl")
+	canonical := filepath.Join(dir, "canonical.jsonl")
+	require.NoError(t, os.WriteFile(
+		history, []byte(hintRecord("move", now)), 0o644,
+	))
+	require.NoError(t, os.WriteFile(canonical, []byte("active\n"), 0o644))
+	provider := newLiveActivityTestProvider(history)
+	lookupPaths := []string{firstMissing, secondMissing, canonical}
+	lookups := 0
+	var synced []string
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
+		assert.Equal(t, "codex:move", id)
+		require.Less(t, lookups, len(lookupPaths))
+		path := lookupPaths[lookups]
+		lookups++
+		return LiveActivitySource{Path: path}, true, nil
+	}, func(_ context.Context, paths []string) error {
+		synced = append(synced, paths...)
+		return nil
+	}, nil)
+
+	_, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:move")
+
+	replacement := history + ".older"
+	require.NoError(t, os.WriteFile(
+		replacement,
+		[]byte(hintRecord("move", now.Add(-time.Hour))),
+		0o644,
+	))
+	require.NoError(t, os.Rename(replacement, history))
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:move")
+	assert.Equal(t, now, poller.retries["codex:move"].firstSeen)
+	assert.Equal(t, now, poller.retries["codex:move"].lastHint)
+
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute+time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, 3, lookups)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, canonical, poller.hot["codex:move"].source.Path)
+	assert.NotContains(t, poller.retries, "codex:move")
+	assert.Equal(t, []string{canonical}, synced)
+}
+
 func TestLiveActivityPreservesRefreshRetryAcrossHotExpiration(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()

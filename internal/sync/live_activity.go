@@ -355,12 +355,13 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			delete(p.hot, fullID)
+			if entry.refreshRetry != nil {
+				p.retries[fullID] = entry.refreshRetry
+			}
 			if hint, ok := hinted[fullID]; ok {
 				p.addRetry(
 					fullID, hint.target, now, hint.lastHint,
 				)
-			} else if entry.refreshRetry != nil {
-				p.retries[fullID] = entry.refreshRetry
 			}
 			continue
 		}
