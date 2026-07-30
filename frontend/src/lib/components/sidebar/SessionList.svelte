@@ -497,7 +497,7 @@
       extraSections={statusFilterSection}
     />
     {#if !ui.isMobileViewport}
-      <SidebarToggleButton />
+      <SidebarToggleButton placement="sidebar" />
     {/if}
     {#snippet statusFilterSection()}
       <div class="filter-section">

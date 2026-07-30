@@ -745,7 +745,7 @@
 <div class="session-breadcrumb">
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
     <div class="sidebar-controls">
-      <SidebarToggleButton />
+      <SidebarToggleButton placement="content" />
       <SessionFilterControl
         showDisplay={false}
         showStarred={false}

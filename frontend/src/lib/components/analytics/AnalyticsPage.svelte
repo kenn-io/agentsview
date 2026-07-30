@@ -511,7 +511,7 @@
   <div class="analytics-toolbar">
     {#if !ui.isMobileViewport && !ui.sidebarOpen}
       <div class="toolbar-filter-anchor">
-        <SidebarToggleButton />
+        <SidebarToggleButton placement="content" />
         <SessionFilterControl
           showDisplay={false}
           showStarred={false}

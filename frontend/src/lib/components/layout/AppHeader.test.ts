@@ -199,6 +199,31 @@ describe("AppHeader export actions", () => {
     expect(ui.sidebarOpen).toBe(false);
   });
 
+  it("opens the sessions drawer from another mobile route", async () => {
+    ui.isMobileViewport = true;
+    ui.sidebarOpen = false;
+    router.route = "usage";
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const sidebarButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle sidebar"]',
+    );
+
+    expect(sidebarButton).not.toBeNull();
+    expect(sidebarButton?.getAttribute("aria-controls")).toBe(
+      "session-sidebar",
+    );
+    expect(sidebarButton?.getAttribute("aria-expanded")).toBe("false");
+
+    sidebarButton!.click();
+    await tick();
+
+    expect(router.route).toBe("sessions");
+    expect(ui.sidebarOpen).toBe(true);
+  });
+
   it("renders every route as a primary-nav tab", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();

@@ -15,8 +15,10 @@ the relocated filter; keep the current mobile hamburger and drawer behavior.
 **Architecture:** Add one shared state-aware sidebar toggle built from kit-ui's
 `IconButton`, then render it at the two session-list boundaries that own the
 filter. The global header keeps the hamburger only on mobile. Session detail
-receives the same closed-state toggle/filter pair in its breadcrumb so closing
-the sidebar never strands the user without a way to reopen it.
+receives the same closed-state toggle/filter pair in its breadcrumb. Focus moves
+to the newly visible counterpart after a keyboard-initiated toggle, and each
+control exposes the sidebar relationship through `aria-expanded` and
+`aria-controls`, so closing the sidebar never strands the user.
 
 **Tech Stack:** Svelte 5, TypeScript, kit-ui, Lucide icons, Paraglide JS, Vitest
 through Vite+
@@ -39,14 +41,16 @@ ______________________________________________________________________
 - Modify: `frontend/src/lib/components/sidebar/SessionList.test.ts`
 - Modify: `frontend/src/lib/components/analytics/AnalyticsPage.test.ts`
 - Modify: `frontend/src/lib/components/layout/SessionBreadcrumb.test.ts`
+- Create: `frontend/src/lib/components/layout/SidebarToggleButton.test.ts`
 
 **Interfaces:**
 
 - Consumes: current `ui.sidebarOpen`, `ui.isMobileViewport`, and rendered filter
   controls.
 
-- Produces: regression coverage for desktop header removal, mobile preservation,
-  open-state filter/collapse order, and closed-state expand/filter order.
+- Produces: regression coverage for desktop header removal, both mobile
+  hamburger branches, open-state filter/collapse order, closed-state
+  expand/filter order, and keyboard focus handoff in both directions.
 
 - [ ] **Step 1: Install the pinned frontend dependencies**
 
@@ -63,18 +67,20 @@ dependency set.
 
 Add tests that query the localized `aria-label` values, compare sibling order
 around `.filter-btn`, click the toggle, and assert the observable
-`ui.sidebarOpen` state change. The mobile AppHeader test must click the retained
-hamburger and observe the existing drawer behavior. Mobile SessionList,
-Analytics, and Breadcrumb tests must prove the relocated controls are absent.
-Each desktop relocated control must retain the existing localized
-`Toggle sidebar (b)` title so the keyboard shortcut remains discoverable.
+`ui.sidebarOpen` state change. Focused-button tests must assert that focus moves
+to the newly visible counterpart after both collapse and reopen. Mobile
+AppHeader tests must cover closing the drawer on the sessions route and
+navigating from another route to open it. Mobile SessionList, Analytics, and
+Breadcrumb tests must prove the relocated controls are absent. Each desktop
+relocated control must retain the existing localized `Toggle sidebar (b)` title
+so the keyboard shortcut remains discoverable.
 
 - [ ] **Step 3: Run the focused tests and verify RED**
 
 Run:
 
 ```bash
-cd frontend && PATH="$(pwd)/node_modules/.bin:$PATH" vp test src/lib/components/layout/AppHeader.test.ts src/lib/components/sidebar/SessionList.test.ts src/lib/components/analytics/AnalyticsPage.test.ts src/lib/components/layout/SessionBreadcrumb.test.ts
+cd frontend && PATH="$(pwd)/node_modules/.bin:$PATH" vp test src/lib/components/layout/AppHeader.test.ts src/lib/components/layout/SidebarToggleButton.test.ts src/lib/components/sidebar/SessionList.test.ts src/lib/components/analytics/AnalyticsPage.test.ts src/lib/components/layout/SessionBreadcrumb.test.ts
 ```
 
 Expected: assertion failures because the desktop hamburger is still global and
@@ -86,7 +92,9 @@ the filter-adjacent controls do not exist.
 
 - Create: `frontend/src/lib/components/layout/SidebarToggleButton.svelte`
 - Modify: `frontend/src/lib/icons.ts`
+- Modify: `frontend/src/lib/icons.test.ts`
 - Modify: `frontend/src/lib/components/layout/AppHeader.svelte`
+- Modify: `frontend/src/lib/components/layout/ThreeColumnLayout.svelte`
 - Modify: `frontend/src/lib/components/sidebar/SessionList.svelte`
 - Modify: `frontend/src/lib/components/analytics/AnalyticsPage.svelte`
 - Modify: `frontend/src/lib/components/layout/SessionBreadcrumb.svelte`
@@ -114,7 +122,11 @@ accurate translation in each catalog.
 Create `SidebarToggleButton.svelte` with kit-ui `IconButton`. It calls
 `ui.toggleSidebar()`, labels itself from the current state, retains
 `m.nav_toggle_sidebar_shortcut()` as its title, and uses `PanelLeftCloseIcon`
-while open and `PanelLeftOpenIcon` while closed.
+while open and `PanelLeftOpenIcon` while closed. Export both icons through the
+app icon facade and add them to its allowlist. Identify whether each toggle is
+in the sidebar or content region, expose `aria-expanded` and `aria-controls`,
+and move keyboard focus to the opposite region's toggle after the state change.
+Give the layout sidebar the stable ID referenced by the controls.
 
 - [ ] **Step 3: Relocate the desktop control**
 
@@ -163,13 +175,19 @@ cd frontend && PATH="$(pwd)/node_modules/.bin:$PATH" vp test src/lib/components/
 
 Expected: all selected tests pass with no failures.
 
-- [ ] **Step 3: Review the diff and commit**
+- [ ] **Step 3: Check the responsive layout visually**
+
+At the minimum desktop width, verify the open and collapsed control groups in
+English and a locale with longer labels. Confirm that the sidebar header and
+analytics toolbar do not overlap, clip, or wrap unexpectedly.
+
+- [ ] **Step 4: Review the diff and commit**
 
 Stage only the plan, component, catalog, and test changes, then create a focused
 conventional commit explaining why the toggle belongs with the panel controls
 and why mobile remains unchanged.
 
-- [ ] **Step 4: Push and open the pull request**
+- [ ] **Step 5: Push and open the pull request**
 
 The user already authorized the commit-push-PR workflow. Push the current
 feature branch to `origin`, run the private-data scrub on the proposed

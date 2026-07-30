@@ -299,6 +299,7 @@
   {/if}
 
   <aside
+    id="session-sidebar"
     class="sidebar"
     class:open={ui.sidebarOpen}
     style:width={isDesktop ? `${sidebarWidth}px` : undefined}
