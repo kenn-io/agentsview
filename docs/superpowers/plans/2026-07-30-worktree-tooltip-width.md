@@ -13,7 +13,7 @@ so ordinary paths stay on one line while oversized paths wrap.
 **Architecture:** Keep kit-ui's generic tooltip sizing unchanged. Pass a
 dedicated class to the existing worktree `Tooltip`, then use the supported class
 hook to override only that popover's maximum width while retaining kit-ui's
-fixed viewport positioning.
+fixed viewport positioning and end-aligning its arrow with the trigger.
 
 **Tech Stack:** Svelte 5, TypeScript, `@kenn-io/kit-ui`, Playwright, Vitest
 
@@ -24,6 +24,8 @@ fixed viewport positioning.
 - Paths that fit within the cap stay on one line; longer paths wrap.
 - The tooltip may extend left of the analysis sidebar but must remain inside the
   viewport.
+- Unbroken path segments must wrap rather than overflow, and the tooltip arrow
+  must remain over the worktree trigger.
 - Preserve the existing LTR-isolated path text, start truncation, hover and
   keyboard behavior, copy control, and empty state.
 
@@ -39,8 +41,8 @@ ______________________________________________________________________
 
 **Interfaces:**
 
-- Consumes: kit-ui `Tooltip`'s supported `class?: string` prop and existing
-  fixed-position viewport clamping.
+- Consumes: kit-ui `Tooltip`'s supported `class?: string` and `align` props plus
+  existing fixed-position viewport clamping.
 
 - Produces: a `worktree-path-tooltip` popover class scoped to the session-vitals
   worktree tooltip.
@@ -52,7 +54,7 @@ In `cmd/testfixture/main.go`, lengthen the showcase session's existing synthetic
 worktree path to exactly this value:
 
 ```go
-Cwd: "/workspace/مشروع/.worktrees/שלום-feature-with-a-deliberately-long-checkout-name-for-tooltip-wrapping",
+Cwd: "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities",
 ```
 
 Update `SHOWCASE_WORKTREE` in `frontend/e2e/session-timing.spec.ts` to the same
@@ -60,7 +62,7 @@ literal:
 
 ```ts
 const SHOWCASE_WORKTREE =
-  "/workspace/مشروع/.worktrees/שלום-feature-with-a-deliberately-long-checkout-name-for-tooltip-wrapping";
+  "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities";
 ```
 
 Add this test after the existing mixed-direction worktree-path regression in
@@ -74,6 +76,7 @@ test("uses available viewport width for the worktree tooltip", async ({
 
   const panel = page.locator("aside.vitals");
   const path = page.locator(".context-value--path");
+  const trigger = page.locator(".context-tooltip .kit-tooltip-trigger");
   await path.hover();
 
   const tooltip = page.getByRole("tooltip");
@@ -89,19 +92,35 @@ test("uses available viewport width for the worktree tooltip", async ({
       (rect) => Math.round(rect.top),
     );
     const rect = element.getBoundingClientRect();
+    const arrowStyle = getComputedStyle(element, "::before");
+    const arrowWidth = Number.parseFloat(arrowStyle.width);
+    const arrowCenter =
+      arrowStyle.left === "auto"
+        ? rect.right - Number.parseFloat(arrowStyle.right) - arrowWidth / 2
+        : rect.left + Number.parseFloat(arrowStyle.left) + arrowWidth / 2;
     return {
+      arrowCenter,
       left: rect.left,
       lineCount: new Set(lineTops).size,
+      right: rect.right,
       viewportWidth: window.innerWidth,
       width: rect.width,
     };
   });
+  const triggerBounds = await trigger.boundingBox();
+  expect(triggerBounds).not.toBeNull();
 
   expect(wideLayout.width).toBeLessThanOrEqual(
     wideLayout.viewportWidth * 0.5 + 1,
   );
   expect(wideLayout.lineCount).toBe(1);
+  expect(wideLayout.left).toBeGreaterThanOrEqual(0);
+  expect(wideLayout.right).toBeLessThanOrEqual(wideLayout.viewportWidth);
   expect(wideLayout.left).toBeLessThan(panelLeft);
+  expect(wideLayout.arrowCenter).toBeGreaterThanOrEqual(triggerBounds!.x);
+  expect(wideLayout.arrowCenter).toBeLessThanOrEqual(
+    triggerBounds!.x + triggerBounds!.width,
+  );
 
   await page.setViewportSize({ width: 1000, height: 900 });
   await expect(path).toBeVisible();
@@ -115,7 +134,11 @@ test("uses available viewport width for the worktree tooltip", async ({
     );
     const rect = element.getBoundingClientRect();
     return {
+      clientWidth: element.clientWidth,
+      left: rect.left,
       lineCount: new Set(lineTops).size,
+      right: rect.right,
+      scrollWidth: element.scrollWidth,
       viewportWidth: window.innerWidth,
       width: rect.width,
     };
@@ -125,6 +148,11 @@ test("uses available viewport width for the worktree tooltip", async ({
     narrowLayout.viewportWidth * 0.5 + 1,
   );
   expect(narrowLayout.lineCount).toBeGreaterThan(1);
+  expect(narrowLayout.scrollWidth).toBeLessThanOrEqual(
+    narrowLayout.clientWidth + 1,
+  );
+  expect(narrowLayout.left).toBeGreaterThanOrEqual(0);
+  expect(narrowLayout.right).toBeLessThanOrEqual(narrowLayout.viewportWidth);
 });
 ```
 
@@ -138,9 +166,10 @@ npm run e2e -- session-timing.spec.ts --project=chromium \
   --grep "uses available viewport width for the worktree tooltip"
 ```
 
-Expected: FAIL because the current 280-pixel maximum wraps the 100-character
-fixture path at the default 1600-pixel viewport, so `wideLayout.lineCount` is
-greater than 1 and the tooltip remains inside the sidebar.
+Expected: FAIL because the current 280-pixel maximum wraps the fixture path at
+the default 1600-pixel viewport, so `wideLayout.lineCount` is greater than 1.
+After adding only the width override, the arrow assertion also fails until the
+tooltip is end-aligned.
 
 - [ ] **Step 3: Add the per-use width override**
 
@@ -151,6 +180,7 @@ class through the existing tooltip:
 <Tooltip
   text={session.cwd}
   focusable
+  align="end"
   class="worktree-path-tooltip"
 >
 ```
@@ -181,7 +211,9 @@ npm run e2e -- session-timing.spec.ts --project=webkit \
 
 Expected: PASS in Chromium and WebKit. The default viewport renders one line and
 positions the tooltip left of the sidebar; the 1000-pixel viewport wraps the
-same complete path without exceeding 500 pixels.
+same complete path without exceeding 500 pixels or overflowing its unbroken
+segment. Both layouts remain viewport-contained, with the arrow over the
+trigger.
 
 - [ ] **Step 5: Run the affected component and integration checks**
 

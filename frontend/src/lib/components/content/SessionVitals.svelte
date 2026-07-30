@@ -346,6 +346,7 @@
                   <Tooltip
                     text={session.cwd}
                     focusable
+                    align="end"
                     class="worktree-path-tooltip"
                   >
                     <div class="context-value context-value--path">

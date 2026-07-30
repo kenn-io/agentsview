@@ -13,7 +13,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 const SHOWCASE = "test-session-duration-showcase";
 const SHOWCASE_WORKTREE =
-  "/workspace/مشروع/.worktrees/שלום-feature-with-a-deliberately-long-checkout-name-for-tooltip-wrapping";
+  "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities";
 
 // The conversation scrolls inside `.message-list-scroll`
 // (`SessionsPage.scroller`). The plan's sketch referenced
@@ -131,6 +131,7 @@ test.describe("Session Vital Signs", () => {
 
     const panel = page.locator("aside.vitals");
     const path = page.locator(".context-value--path");
+    const trigger = page.locator(".context-tooltip .kit-tooltip-trigger");
     await path.hover();
 
     const tooltip = page.getByRole("tooltip");
@@ -146,19 +147,35 @@ test.describe("Session Vital Signs", () => {
         (rect) => Math.round(rect.top),
       );
       const rect = element.getBoundingClientRect();
+      const arrowStyle = getComputedStyle(element, "::before");
+      const arrowWidth = Number.parseFloat(arrowStyle.width);
+      const arrowCenter =
+        arrowStyle.left === "auto"
+          ? rect.right - Number.parseFloat(arrowStyle.right) - arrowWidth / 2
+          : rect.left + Number.parseFloat(arrowStyle.left) + arrowWidth / 2;
       return {
+        arrowCenter,
         left: rect.left,
         lineCount: new Set(lineTops).size,
+        right: rect.right,
         viewportWidth: window.innerWidth,
         width: rect.width,
       };
     });
+    const triggerBounds = await trigger.boundingBox();
+    expect(triggerBounds).not.toBeNull();
 
     expect(wideLayout.width).toBeLessThanOrEqual(
       wideLayout.viewportWidth * 0.5 + 1,
     );
     expect(wideLayout.lineCount).toBe(1);
+    expect(wideLayout.left).toBeGreaterThanOrEqual(0);
+    expect(wideLayout.right).toBeLessThanOrEqual(wideLayout.viewportWidth);
     expect(wideLayout.left).toBeLessThan(panelLeft);
+    expect(wideLayout.arrowCenter).toBeGreaterThanOrEqual(triggerBounds!.x);
+    expect(wideLayout.arrowCenter).toBeLessThanOrEqual(
+      triggerBounds!.x + triggerBounds!.width,
+    );
 
     await page.setViewportSize({ width: 1000, height: 900 });
     await expect(path).toBeVisible();
@@ -172,7 +189,11 @@ test.describe("Session Vital Signs", () => {
       );
       const rect = element.getBoundingClientRect();
       return {
+        clientWidth: element.clientWidth,
+        left: rect.left,
         lineCount: new Set(lineTops).size,
+        right: rect.right,
+        scrollWidth: element.scrollWidth,
         viewportWidth: window.innerWidth,
         width: rect.width,
       };
@@ -182,6 +203,11 @@ test.describe("Session Vital Signs", () => {
       narrowLayout.viewportWidth * 0.5 + 1,
     );
     expect(narrowLayout.lineCount).toBeGreaterThan(1);
+    expect(narrowLayout.scrollWidth).toBeLessThanOrEqual(
+      narrowLayout.clientWidth + 1,
+    );
+    expect(narrowLayout.left).toBeGreaterThanOrEqual(0);
+    expect(narrowLayout.right).toBeLessThanOrEqual(narrowLayout.viewportWidth);
   });
 
   test("slowest-call link scrolls the conversation", async ({
