@@ -418,6 +418,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
+		stopLiveActivity := startLiveActivityPoller(
+			ctx, cfg, database, engine, idleTracker,
+		)
+		defer stopLiveActivity()
 		go startPeriodicSync(
 			ctx, cfg, engine, database, writeLock, idleTracker, validRemotes, emitter,
 		)
