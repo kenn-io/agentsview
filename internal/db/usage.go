@@ -1463,17 +1463,9 @@ func dailyUsageAmounts(
 	cost, savings money.Money,
 	err error,
 ) {
-	reasoningTok := r.reasoningTokens
-	if r.usageSource == "message" {
-		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
-			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-	} else {
-		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			usageEventRowTokens(
-				r.usageSource,
-				r.inputTokens, r.outputTokens,
-				r.cacheCreationInputTokens, r.cacheReadInputTokens)
-	}
+	reasoningTok := 0
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
+		dailyUsageRowTokens(r)
 
 	pricedModel, lookup := pricing.Resolve(
 		r.model, usageLookupModel(r.model, r.ts))
@@ -1529,6 +1521,23 @@ func dailyUsageAmounts(
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("pricing cache savings for model %q: %w", r.model, err)
+	}
+	return
+}
+
+func dailyUsageRowTokens(
+	r dailyUsageScanRow,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
+	reasoningTok = r.reasoningTokens
+	if r.usageSource == "message" {
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
+			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+	} else {
+		inputTok, outputTok, cacheCrTok, cacheRdTok =
+			usageEventRowTokens(
+				r.usageSource,
+				r.inputTokens, r.outputTokens,
+				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 	return
 }

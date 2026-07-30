@@ -255,6 +255,7 @@ func TestFallbackPricing_OverlayOnlyRates(t *testing.T) {
 func TestDecodeFallbackSnapshotFromFS(t *testing.T) {
 	snapshot := []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [
 			{"ModelPattern": "z-model", "InputPerMTok": {"microdollars": 2000000}},
 			{"ModelPattern": "a-model", "InputPerMTok": {"microdollars": 1000000}}
@@ -279,6 +280,7 @@ func TestDecodeFallbackSnapshotFromFS(t *testing.T) {
 func TestDecodeFallbackSnapshotFromFS_SortsPricingBands(t *testing.T) {
 	snapshot := []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{
 			"ModelPattern": "banded-model",
 			"InputPerMTok": {"microdollars": 1000000},
@@ -320,7 +322,7 @@ func TestDecodeFallbackSnapshotFromFS_RejectsInvalidPricingBands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			snapshot := []byte(`{"version":"litellm-test","models":[{"ModelPattern":"model","Bands":` + tt.bands + `}]}`)
+			snapshot := []byte(`{"version":"litellm-test","source_ref":"551e5d097c11f08fd2400a25a651b1844fcf89c2","models":[{"ModelPattern":"model","Bands":` + tt.bands + `}]}`)
 			fys := fstest.MapFS{
 				"snapshot/litellm_snapshot.json.gz": &fstest.MapFile{Data: gzipData(t, snapshot)},
 			}
@@ -364,6 +366,7 @@ func TestDecodeFallbackSnapshotFromFS_RejectsOversizedDecompressedPayload(t *tes
 func TestDecodeFallbackSnapshotFromFS_RejectsEmptyModels(t *testing.T) {
 	snapshot := []byte(`{
 		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": []
 	}`)
 
@@ -376,6 +379,22 @@ func TestDecodeFallbackSnapshotFromFS_RejectsEmptyModels(t *testing.T) {
 	_, err := decodeFallbackSnapshotFromFS(fsys)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing snapshot models")
+}
+
+func TestDecodeFallbackSnapshotFromFSRejectsInvalidSourceRef(t *testing.T) {
+	for _, sourceRef := range []string{"", "main", "ABCDEF"} {
+		t.Run(sourceRef, func(t *testing.T) {
+			snapshot := []byte(`{"version":"litellm-test","source_ref":"` + sourceRef + `","models":[{"ModelPattern":"model"}]}`)
+			fys := fstest.MapFS{
+				"snapshot/litellm_snapshot.json.gz": &fstest.MapFile{Data: gzipData(t, snapshot)},
+			}
+
+			_, err := decodeFallbackSnapshotFromFS(fys)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "missing immutable LiteLLM source ref")
+		})
+	}
 }
 
 func gzipData(t *testing.T, data []byte) []byte {

@@ -86,6 +86,7 @@ func TestUpsertModelPricingPricingBandsReplacesCompleteSet(t *testing.T) {
 	assert.Equal(t, 200_000, got.Bands[0].AboveInputTokens)
 	assert.Equal(t, money.MustParseDollars("3"), got.Bands[0].InputPerMTok)
 	assert.NotEqual(t, "2000-01-01T00:00:00Z", got.UpdatedAt)
+	firstRevision := got.UpdatedAt
 
 	removed := initial
 	removed.Bands = nil
@@ -94,7 +95,7 @@ func TestUpsertModelPricingPricingBandsReplacesCompleteSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Empty(t, got.Bands)
-	assert.NotEmpty(t, got.UpdatedAt)
+	assert.Greater(t, got.UpdatedAt, firstRevision)
 }
 
 func TestFilterChangedModelPricingDetectsPricingBandOnlyChange(t *testing.T) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type pricingQuerier interface {
@@ -29,11 +31,17 @@ func listModelPricingFrom(
 ) ([]ModelPricing, error) {
 	rows, err := q.QueryContext(
 		ctx,
-		`SELECT model_pattern, input_microdollars_per_mtok,
-			output_microdollars_per_mtok, cache_creation_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		 FROM model_pricing
-		 ORDER BY model_pattern`,
+		`SELECT p.model_pattern, p.input_microdollars_per_mtok,
+			p.output_microdollars_per_mtok,
+			p.cache_creation_microdollars_per_mtok,
+			p.cache_read_microdollars_per_mtok, p.updated_at,
+			b.above_input_tokens, b.input_microdollars_per_mtok,
+			b.output_microdollars_per_mtok,
+			b.cache_creation_microdollars_per_mtok,
+			b.cache_read_microdollars_per_mtok, b.updated_at
+		 FROM model_pricing p
+		 LEFT JOIN model_pricing_bands b ON b.model_pattern = p.model_pattern
+		 ORDER BY p.model_pattern, b.above_input_tokens`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -43,8 +51,11 @@ func listModelPricingFrom(
 	defer rows.Close()
 
 	var out []ModelPricing
+	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p ModelPricing
+		var threshold, input, output, cacheCreation, cacheRead sql.NullInt64
+		var bandUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
@@ -52,116 +63,41 @@ func listModelPricingFrom(
 			&p.CacheCreationPerMTok,
 			&p.CacheReadPerMTok,
 			&p.UpdatedAt,
+			&threshold,
+			&input,
+			&output,
+			&cacheCreation,
+			&cacheRead,
+			&bandUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning model pricing: %w", err,
 			)
 		}
-		out = append(out, p)
+		i, exists := byPattern[p.ModelPattern]
+		if !exists {
+			i = len(out)
+			byPattern[p.ModelPattern] = i
+			out = append(out, p)
+		}
+		if threshold.Valid {
+			out[i].Bands = append(out[i].Bands, PricingBand{
+				AboveInputTokens:     int(threshold.Int64),
+				InputPerMTok:         money.Money{Microdollars: input.Int64},
+				OutputPerMTok:        money.Money{Microdollars: output.Int64},
+				CacheCreationPerMTok: money.Money{Microdollars: cacheCreation.Int64},
+				CacheReadPerMTok:     money.Money{Microdollars: cacheRead.Int64},
+				UpdatedAt:            bandUpdatedAt.String,
+			})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf(
 			"iterating model pricing: %w", err,
 		)
 	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("closing model pricing rows: %w", err)
-	}
-
-	bands, err := loadAllPricingBands(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	byPattern := make(map[string]int, len(out))
-	for i := range out {
-		byPattern[out[i].ModelPattern] = i
-	}
-	for _, band := range bands {
-		if i, ok := byPattern[band.modelPattern]; ok {
-			out[i].Bands = append(out[i].Bands, band.PricingBand)
-		}
-	}
 	if out == nil {
 		out = []ModelPricing{}
-	}
-	return out, nil
-}
-
-type storedPricingBand struct {
-	modelPattern string
-	PricingBand
-}
-
-func loadAllPricingBands(
-	ctx context.Context, q pricingQuerier,
-) ([]storedPricingBand, error) {
-	rows, err := q.QueryContext(ctx, `
-		SELECT model_pattern, above_input_tokens,
-			input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		FROM model_pricing_bands
-		ORDER BY model_pattern, above_input_tokens`)
-	if err != nil {
-		return nil, fmt.Errorf("listing model pricing bands: %w", err)
-	}
-	defer rows.Close()
-
-	var out []storedPricingBand
-	for rows.Next() {
-		var band storedPricingBand
-		if err := rows.Scan(
-			&band.modelPattern,
-			&band.AboveInputTokens,
-			&band.InputPerMTok,
-			&band.OutputPerMTok,
-			&band.CacheCreationPerMTok,
-			&band.CacheReadPerMTok,
-			&band.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scanning model pricing band: %w", err)
-		}
-		out = append(out, band)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating model pricing bands: %w", err)
-	}
-	return out, nil
-}
-
-func loadPricingBandsForModel(
-	ctx context.Context, q pricingQuerier, model string,
-) ([]PricingBand, error) {
-	rows, err := q.QueryContext(ctx, `
-		SELECT above_input_tokens,
-			input_microdollars_per_mtok, output_microdollars_per_mtok,
-			cache_creation_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		FROM model_pricing_bands
-		WHERE model_pattern = ?
-		ORDER BY above_input_tokens`, model)
-	if err != nil {
-		return nil, fmt.Errorf("listing pricing bands for %q: %w", model, err)
-	}
-	defer rows.Close()
-
-	var out []PricingBand
-	for rows.Next() {
-		var band PricingBand
-		if err := rows.Scan(
-			&band.AboveInputTokens,
-			&band.InputPerMTok,
-			&band.OutputPerMTok,
-			&band.CacheCreationPerMTok,
-			&band.CacheReadPerMTok,
-			&band.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scanning pricing band for %q: %w", model, err)
-		}
-		out = append(out, band)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating pricing bands for %q: %w", model, err)
 	}
 	return out, nil
 }

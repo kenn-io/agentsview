@@ -218,7 +218,12 @@ func (db *DB) UpsertModelPricing(
 	for _, price := range prices {
 		if _, err := tx.Exec(`
 			UPDATE model_pricing
-			SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			SET updated_at = CASE
+				WHEN updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+				THEN strftime(
+					'%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds')
+				ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			END
 			WHERE model_pattern = ?`, price.ModelPattern); err != nil {
 			return fmt.Errorf(
 				"advancing pricing timestamp for %q: %w",
@@ -373,8 +378,13 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 	defer func() {
 		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
 	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning model pricing copy: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	if _, err := conn.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT OR REPLACE INTO model_pricing
 			(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			 cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
@@ -386,7 +396,7 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 	); err != nil {
 		return fmt.Errorf("copying model pricing: %w", err)
 	}
-	if _, err := conn.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT OR REPLACE INTO model_pricing_bands
 			(model_pattern, above_input_tokens,
 			 input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -399,6 +409,9 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 		FROM old_db.model_pricing_bands`,
 	); err != nil {
 		return fmt.Errorf("copying model pricing bands: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing model pricing copy: %w", err)
 	}
 	return nil
 }
@@ -475,36 +488,16 @@ func (db *DB) HasModelPricingRows(ctx context.Context) (bool, error) {
 func (db *DB) GetModelPricing(
 	model string,
 ) (*ModelPricing, error) {
-	var p ModelPricing
-	err := db.getReader().QueryRow(
-		`SELECT model_pattern, input_microdollars_per_mtok,
-			output_microdollars_per_mtok, cache_creation_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		 FROM model_pricing
-		 WHERE model_pattern = ?`,
-		model,
-	).Scan(
-		&p.ModelPattern,
-		&p.InputPerMTok,
-		&p.OutputPerMTok,
-		&p.CacheCreationPerMTok,
-		&p.CacheReadPerMTok,
-		&p.UpdatedAt,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	prices, err := db.listModelPricing(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf(
 			"getting pricing %q: %w", model, err,
 		)
 	}
-	bands, err := loadPricingBandsForModel(
-		context.Background(), db.getReader(), model,
-	)
-	if err != nil {
-		return nil, err
+	for i := range prices {
+		if prices[i].ModelPattern == model {
+			return &prices[i], nil
+		}
 	}
-	p.Bands = bands
-	return &p, nil
+	return nil, nil
 }

@@ -4468,6 +4468,33 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	assert.Equal(t, "v42", meta, "sentinel meta row copied")
 }
 
+func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "legacy.db")
+	src := testDBAtPath(t, srcPath, "src")
+	require.NoError(t, src.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "model",
+		InputPerMTok: money.MustParseDollars("1"),
+	}}))
+	require.NoError(t, src.Close())
+	execRawSQLite(t, srcPath, `DROP TABLE model_pricing_bands`)
+
+	dst := testDBAtPath(t, filepath.Join(dir, "destination.db"), "dst")
+	defer dst.Close()
+	require.NoError(t, dst.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "model",
+		InputPerMTok: money.MustParseDollars("9"),
+	}}))
+
+	err := dst.CopyModelPricingFrom(srcPath)
+	require.Error(t, err)
+	got, getErr := dst.GetModelPricing("model")
+	require.NoError(t, getErr)
+	require.NotNil(t, got)
+
+	assert.Equal(t, money.MustParseDollars("9"), got.InputPerMTok)
+}
+
 func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

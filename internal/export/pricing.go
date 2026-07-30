@@ -152,7 +152,7 @@ func (r *PricingResolver) Lookup(model string) PricingLookup {
 		return PricingLookup{}
 	}
 	if lookup, ok := r.lookupCache[model]; ok {
-		return lookup
+		return clonePricingLookup(lookup)
 	}
 	match := pricingpkg.ResolveMatch(model, r.byModel)
 	lookup := PricingLookup{
@@ -160,7 +160,12 @@ func (r *PricingResolver) Lookup(model string) PricingLookup {
 		Pattern: match.Pattern,
 		OK:      match.OK,
 	}
-	r.lookupCache[model] = lookup
+	r.lookupCache[model] = clonePricingLookup(lookup)
+	return clonePricingLookup(lookup)
+}
+
+func clonePricingLookup(lookup PricingLookup) PricingLookup {
+	lookup.Rates.Bands = append([]PricingBand(nil), lookup.Rates.Bands...)
 	return lookup
 }
 
@@ -292,7 +297,7 @@ func (r *PricingResolver) record(
 		rec = &pricingRecord{}
 		byPricedModel[pricedModel] = rec
 	}
-	rec.lookup = lookup
+	rec.lookup = clonePricingLookup(lookup)
 	return rec
 }
 

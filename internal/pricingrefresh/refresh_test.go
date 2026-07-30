@@ -52,6 +52,37 @@ func TestEnsureSeedsFallbackAndFetchedModel(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("8"), fetched.OutputPerMTok)
 }
 
+func TestSeedFallbackReseedsBandsWhenStorageVersionIsMissing(t *testing.T) {
+	database := testDB(t)
+	fallback := pricing.FallbackPricing()
+	var gpt pricing.ModelPricing
+	for _, model := range fallback {
+		if model.ModelPattern == "gpt-5.5" {
+			gpt = model
+			break
+		}
+	}
+	require.NotEmpty(t, gpt.Bands)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:         gpt.ModelPattern,
+		InputPerMTok:         gpt.InputPerMTok,
+		OutputPerMTok:        gpt.OutputPerMTok,
+		CacheCreationPerMTok: gpt.CacheCreationPerMTok,
+		CacheReadPerMTok:     gpt.CacheReadPerMTok,
+	}}))
+	require.NoError(t, database.SetPricingMeta(
+		fallbackVersionMetaKey,
+		pricing.FallbackVersion,
+	))
+
+	require.NoError(t, SeedFallback(database))
+	got, err := database.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	assert.NotEmpty(t, got.Bands)
+}
+
 func TestRefreshIfStaleFreshAttemptSkipsFetch(t *testing.T) {
 	database := testDB(t)
 	now := pricingTestNow()

@@ -492,11 +492,7 @@ func (db *DB) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _, _, priceErr :=
-			dailyUsageAmounts(o.scan, rateResolver)
-		if priceErr != nil {
-			return nil, nil, priceErr
-		}
+		_, outputTok, _, _, _ := dailyUsageRowTokens(o.scan)
 		costRow := o.scan
 		var sessionCost *money.Money
 		if o.scan.costSource == CopilotReportedCostSource && o.scan.cost.Valid {

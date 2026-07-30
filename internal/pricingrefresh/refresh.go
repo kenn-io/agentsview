@@ -13,6 +13,8 @@ import (
 const (
 	fallbackVersionMetaKey = "_fallback_version"
 	refreshAttemptMetaKey  = "_litellm_last_attempt"
+	pricingStorageMetaKey  = "_pricing_storage_version"
+	pricingStorageVersion  = "2"
 )
 
 // RefreshCooldown is the minimum interval between upstream fetch attempts.
@@ -29,7 +31,11 @@ func SeedFallback(database *db.DB) error {
 	if err != nil {
 		return err
 	}
-	if stored == pricing.SeedVersion {
+	storageVersion, err := database.GetPricingMeta(pricingStorageMetaKey)
+	if err != nil {
+		return err
+	}
+	if stored == pricing.SeedVersion && storageVersion == pricingStorageVersion {
 		return nil
 	}
 	if err := upsert(database, pricing.FallbackPricing()); err != nil {
@@ -43,9 +49,12 @@ func SeedFallback(database *db.DB) error {
 	); err != nil {
 		return err
 	}
-	return database.SetPricingMeta(
+	if err := database.SetPricingMeta(
 		fallbackVersionMetaKey, pricing.SeedVersion,
-	)
+	); err != nil {
+		return err
+	}
+	return database.SetPricingMeta(pricingStorageMetaKey, pricingStorageVersion)
 }
 
 // Refresh fetches and stores the upstream pricing catalog immediately.

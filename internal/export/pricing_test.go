@@ -498,8 +498,10 @@ func TestPricingResolverDeepClonesPricingBands(t *testing.T) {
 
 	lookup := resolver.Lookup("banded-model")
 	require.True(t, lookup.OK)
+	lookup.Rates.Bands[0].InputPerMTok = money.MustParseDollars("88")
+	second := resolver.Lookup("banded-model")
 
-	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.Bands[0].InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("2"), second.Rates.Bands[0].InputPerMTok)
 }
 
 func TestPricingResolverSourceCanonicalOrder(t *testing.T) {

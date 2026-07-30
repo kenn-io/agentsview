@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ const litellmSnapshotPath = "snapshot/litellm_snapshot.json.gz"
 const maxFallbackSnapshotCompressedBytes = 1 << 20
 const maxFallbackSnapshotJSONBytes = 8 << 20
 const maxFallbackSnapshotModels = 100_000
+
+var immutableFallbackSourceRefPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 //go:generate go run ./cmd/litellm-snapshot -out snapshot/litellm_snapshot.json.gz
 
@@ -144,6 +147,11 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 	if snapshot.Version == "" {
 		return litellmFallbackSnapshot{}, fmt.Errorf(
 			"missing snapshot version",
+		)
+	}
+	if !immutableFallbackSourceRefPattern.MatchString(snapshot.SourceRef) {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"missing immutable LiteLLM source ref",
 		)
 	}
 	if len(snapshot.Models) == 0 {
