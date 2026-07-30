@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/ccoveille/go-safecast/v2"
+
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -50,7 +52,7 @@ func listModelPricingFrom(
 	}
 	defer rows.Close()
 
-	var out []ModelPricing
+	out := make([]ModelPricing, 0)
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p ModelPricing
@@ -81,8 +83,15 @@ func listModelPricingFrom(
 			out = append(out, p)
 		}
 		if threshold.Valid {
+			aboveInputTokens, err := safecast.Convert[int](threshold.Int64)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"converting model pricing threshold for %q: %w",
+					p.ModelPattern, err,
+				)
+			}
 			out[i].Bands = append(out[i].Bands, PricingBand{
-				AboveInputTokens:     int(threshold.Int64),
+				AboveInputTokens:     aboveInputTokens,
 				InputPerMTok:         money.Money{Microdollars: input.Int64},
 				OutputPerMTok:        money.Money{Microdollars: output.Int64},
 				CacheCreationPerMTok: money.Money{Microdollars: cacheCreation.Int64},
@@ -95,9 +104,6 @@ func listModelPricingFrom(
 		return nil, fmt.Errorf(
 			"iterating model pricing: %w", err,
 		)
-	}
-	if out == nil {
-		out = []ModelPricing{}
 	}
 	return out, nil
 }

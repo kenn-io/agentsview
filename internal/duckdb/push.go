@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ccoveille/go-safecast/v2"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -195,7 +197,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 	}
 	defer rows.Close()
 
-	var out []db.ModelPricing
+	out := make([]db.ModelPricing, 0)
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p db.ModelPricing
@@ -224,8 +226,15 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 			out = append(out, p)
 		}
 		if threshold.Valid {
+			aboveInputTokens, err := safecast.Convert[int](threshold.Int64)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"converting duckdb pricing threshold for %q: %w",
+					p.ModelPattern, err,
+				)
+			}
 			out[i].Bands = append(out[i].Bands, db.PricingBand{
-				AboveInputTokens:     int(threshold.Int64),
+				AboveInputTokens:     aboveInputTokens,
 				InputPerMTok:         money.Money{Microdollars: input.Int64},
 				OutputPerMTok:        money.Money{Microdollars: output.Int64},
 				CacheCreationPerMTok: money.Money{Microdollars: cacheCreation.Int64},

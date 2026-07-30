@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ccoveille/go-safecast/v2"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -2908,6 +2910,13 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]duckRates, error) {
 			count++
 		}
 		if threshold.Valid {
+			aboveInputTokens, err := safecast.Convert[int](threshold.Int64)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"converting duckdb pricing threshold for %q: %w",
+					model, err,
+				)
+			}
 			var parsedUpdatedAt *time.Time
 			if parsed, err := time.Parse(
 				time.RFC3339Nano, bandUpdatedAt.String,
@@ -2916,7 +2925,7 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]duckRates, error) {
 				parsedUpdatedAt = &t
 			}
 			stored.bands = append(stored.bands, export.PricingBand{
-				AboveInputTokens:  int(threshold.Int64),
+				AboveInputTokens:  aboveInputTokens,
 				InputPerMTok:      money.Money{Microdollars: input.Int64},
 				OutputPerMTok:     money.Money{Microdollars: output.Int64},
 				CacheWritePerMTok: money.Money{Microdollars: cacheCreation.Int64},

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ccoveille/go-safecast/v2"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -433,7 +435,7 @@ func listPGModelPricing(
 }
 
 func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
-	var out []db.ModelPricing
+	out := make([]db.ModelPricing, 0)
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p db.ModelPricing
@@ -462,8 +464,15 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 			out = append(out, p)
 		}
 		if threshold.Valid {
+			aboveInputTokens, err := safecast.Convert[int](threshold.Int64)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"converting pg pricing threshold for %q: %w",
+					p.ModelPattern, err,
+				)
+			}
 			out[i].Bands = append(out[i].Bands, db.PricingBand{
-				AboveInputTokens: int(threshold.Int64),
+				AboveInputTokens: aboveInputTokens,
 				InputPerMTok: money.Money{
 					Microdollars: input.Int64,
 				},

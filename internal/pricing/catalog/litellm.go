@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ccoveille/go-safecast/v2"
+
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -251,8 +253,8 @@ func parseThreshold(raw string, thousands bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	maxInt := uint64(^uint(0) >> 1)
 	if thousands {
+		maxInt := uint64(^uint(0) >> 1)
 		if value > maxInt/1000 {
 			return 0, strconv.ErrRange
 		}
@@ -261,10 +263,11 @@ func parseThreshold(raw string, thousands bool) (int, error) {
 	if value == 0 {
 		return 0, fmt.Errorf("must be positive")
 	}
-	if value > maxInt {
+	converted, err := safecast.Convert[int](value)
+	if err != nil {
 		return 0, strconv.ErrRange
 	}
-	return int(value), nil
+	return converted, nil
 }
 
 func parseOptionalRate(
