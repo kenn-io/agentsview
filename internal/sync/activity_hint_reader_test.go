@@ -36,6 +36,23 @@ func (literalActivityHintDecoder) DecodeActivityHint(
 	}, true
 }
 
+type countingActivityHintDecoder struct {
+	decoded int
+}
+
+func (d *countingActivityHintDecoder) ActivityHintSources(
+	context.Context,
+) ([]parser.ActivityHintSource, error) {
+	return nil, nil
+}
+
+func (d *countingActivityHintDecoder) DecodeActivityHint(
+	line []byte,
+) (parser.ActivityHint, bool) {
+	d.decoded++
+	return literalActivityHintDecoder{}.DecodeActivityHint(line)
+}
+
 func TestReadActivityHintsBootstrapIsRecentAndBounded(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	path := filepath.Join(t.TempDir(), "history.jsonl")
@@ -48,7 +65,8 @@ func TestReadActivityHintsBootstrapIsRecentAndBounded(t *testing.T) {
 
 	got, err := readActivityHints(t.Context(),
 		parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
@@ -64,7 +82,8 @@ func TestReadActivityHintsRetainsPartialAndDeduplicates(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(hintRecord("first", now)), 0o644))
 	cursor := &activityHintCursor{}
 	_, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
@@ -75,7 +94,8 @@ func TestReadActivityHintsRetainsPartialAndDeduplicates(t *testing.T) {
 	require.NoError(t, file.Close())
 
 	got, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	assert.Empty(t, got.Hints)
 	assert.Equal(t, []byte(partial), cursor.partial)
@@ -86,7 +106,8 @@ func TestReadActivityHintsRetainsPartialAndDeduplicates(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 	got, err = readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
 	assert.Equal(t, "later", got.Hints[0].RawSessionID)
@@ -100,7 +121,8 @@ func TestReadActivityHintsDropsOversizeLine(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	got, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, &activityHintCursor{}, now)
+		literalActivityHintDecoder{}, &activityHintCursor{}, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
@@ -114,7 +136,8 @@ func TestReadActivityHintsIncrementalOverflowKeepsNewestTail(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(hintRecord("seed", now)), 0o644))
 	cursor := &activityHintCursor{}
 	_, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
@@ -125,7 +148,8 @@ func TestReadActivityHintsIncrementalOverflowKeepsNewestTail(t *testing.T) {
 	require.NoError(t, file.Close())
 
 	got, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 
 	require.NoError(t, err)
 	assert.True(t, got.Overflow)
@@ -140,7 +164,8 @@ func TestReadActivityHintsResetsAfterReplacementAndTruncation(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(hintRecord("first", now)), 0o644))
 	cursor := &activityHintCursor{}
 	_, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	oldInfo := cursor.info
 
@@ -148,7 +173,8 @@ func TestReadActivityHintsResetsAfterReplacementAndTruncation(t *testing.T) {
 	require.NoError(t, os.WriteFile(replacement, []byte(hintRecord("replacement", now)), 0o644))
 	require.NoError(t, os.Rename(replacement, path))
 	got, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
 	assert.Equal(t, "replacement", got.Hints[0].RawSessionID)
@@ -156,7 +182,8 @@ func TestReadActivityHintsResetsAfterReplacementAndTruncation(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte(hintRecord("short", now)), 0o644))
 	got, err = readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
 	assert.Equal(t, "short", got.Hints[0].RawSessionID)
@@ -167,7 +194,8 @@ func TestReadActivityHintsMissingThenCreatedAndCancellation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.jsonl")
 	cursor := &activityHintCursor{}
 	got, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	assert.Empty(t, got.Hints)
 	assert.False(t, cursor.initialized)
@@ -176,7 +204,8 @@ func TestReadActivityHintsMissingThenCreatedAndCancellation(t *testing.T) {
 		hintRecord("same", now)+hintRecord("same", now),
 	), 0o644))
 	got, err = readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	require.NoError(t, err)
 	require.Len(t, got.Hints, 1)
 	assert.Equal(t, "same", got.Hints[0].RawSessionID)
@@ -184,7 +213,8 @@ func TestReadActivityHintsMissingThenCreatedAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = readActivityHints(ctx, parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, cursor, now)
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -194,11 +224,75 @@ func TestReadActivityHintsErrorNamesPathWithoutRecordContent(t *testing.T) {
 	require.NoError(t, os.Mkdir(path, 0o755))
 
 	_, err := readActivityHints(t.Context(), parser.ActivityHintSource{Path: path},
-		literalActivityHintDecoder{}, &activityHintCursor{}, now)
+		literalActivityHintDecoder{}, &activityHintCursor{}, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), path)
 	assert.NotContains(t, err.Error(), "private-prompt-sentinel")
+}
+
+func TestReadActivityHintsCapsDecodingAndKeepsNewestRecords(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	var records strings.Builder
+	for i := range activityHintMaxIDsPerPoll + 1 {
+		records.WriteString(hintRecord(fmt.Sprintf("id-%05d", i), now))
+	}
+	require.NoError(t, os.WriteFile(path, []byte(records.String()), 0o644))
+	decoder := &countingActivityHintDecoder{}
+	cursor := &activityHintCursor{}
+
+	got, err := readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		decoder, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, got.Overflow)
+	assert.Equal(t, activityHintMaxIDsPerPoll, got.RecordsDecoded)
+	assert.Equal(t, activityHintMaxIDsPerPoll, decoder.decoded)
+	assert.Len(t, got.Hints, activityHintMaxIDsPerPoll)
+	assert.Equal(t, "id-08192", got.Hints[0].RawSessionID)
+	assert.Equal(t, int64(records.Len()), cursor.offset)
+}
+
+func TestReadActivityHintsDetectsSameInodeTruncateAndRegrow(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	initial := hintRecord("initial", now) + strings.Repeat("x", 256)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+	cursor := &activityHintCursor{}
+	_, err := readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+	require.NoError(t, err)
+	initialInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	rewritten := hintRecord("rewritten", now) + strings.Repeat("y", len(initial)+128)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	require.NoError(t, err)
+	_, err = file.WriteString(rewritten)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	rewrittenInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(initialInfo, rewrittenInfo))
+	require.Greater(t, rewrittenInfo.Size(), int64(len(initial)))
+
+	got, err := readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, got.Hints, 1)
+	assert.Equal(t, "rewritten", got.Hints[0].RawSessionID)
 }
 
 func hintRecord(id string, timestamp time.Time) string {

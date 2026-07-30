@@ -26,8 +26,9 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 	now := time.Date(2026, 7, 29, 15, 30, 0, 0, time.UTC)
 	firstUser := now.Add(-35 * time.Minute)
 	firstAssistant := now.Add(-34 * time.Minute)
-	secondUser := now.Add(-5 * time.Minute)
-	secondAssistant := now.Add(-4 * time.Minute)
+	secondUser := now.Add(-12 * time.Minute)
+	secondAssistant := now.Add(-11 * time.Minute)
+	thirdUser := now.Add(-4 * time.Minute)
 	thirdAssistant := now.Add(-3 * time.Minute)
 
 	base := t.TempDir()
@@ -59,6 +60,8 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 		"rollout-2026-07-29T14-55-00-"+uuid+".jsonl",
 		initial,
 	)
+	initialMTime := firstUser.Add(-time.Hour)
+	require.NoError(t, os.Chtimes(rollout, initialMTime, initialMTime))
 	require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{rollout}))
 
 	before, err := env.db.GetSessionFull(t.Context(), sessionID)
@@ -126,6 +129,11 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 				source.StoredMTimeNS = *session.FileMtime
 				source.HasStoredStat = true
 			}
+			if session.FileInode != nil && session.FileDevice != nil {
+				source.StoredInode = *session.FileInode
+				source.StoredDevice = *session.FileDevice
+				source.HasStoredIdentity = true
+			}
 			return source, true, nil
 		},
 		env.engine.SyncPathsContext,
@@ -158,6 +166,9 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 
 	_, err = appendDescriptor.WriteString(testjsonl.JoinJSONL(
 		testjsonl.CodexMsgJSON(
+			"user", "third", thirdUser.Format(time.RFC3339),
+		),
+		testjsonl.CodexMsgJSON(
 			"assistant", "third answer", thirdAssistant.Format(time.RFC3339),
 		),
 		testjsonl.CodexTokenCountJSON(
@@ -167,9 +178,22 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 	require.NoError(t, err)
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
 	require.NoError(t, err)
+	afterThird, err := env.db.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, afterThird)
+	require.NotNil(t, afterThird.FileSize)
+	assert.Greater(t, *afterThird.FileSize, *afterSecond.FileSize)
+	assert.Equal(t, 6, afterThird.MessageCount)
+	require.NotNil(t, afterThird.EndedAt)
+	assert.Equal(t, thirdAssistant.Format(time.RFC3339), *afterThird.EndedAt)
 	thirdUsage := requireDailyOutputTokens(t, env.db, "2026-07-29")
 	assert.Equal(t, 425, thirdUsage)
 	assert.Greater(t, thirdUsage, secondUsage)
+	requireActivityInterval(
+		t, env.db, now, sessionID,
+		thirdUser.Truncate(5*time.Minute),
+		thirdUser.Truncate(5*time.Minute).Add(5*time.Minute),
+	)
 }
 
 func requireDailyOutputTokens(

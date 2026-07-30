@@ -22,10 +22,13 @@ const (
 )
 
 type LiveActivitySource struct {
-	Path          string
-	StoredSize    int64
-	StoredMTimeNS int64
-	HasStoredStat bool
+	Path              string
+	StoredSize        int64
+	StoredMTimeNS     int64
+	StoredInode       int64
+	StoredDevice      int64
+	HasStoredStat     bool
+	HasStoredIdentity bool
 }
 
 type LiveActivityLookup func(
@@ -108,6 +111,8 @@ func (p *LiveActivityPoller) PollOnce(
 	stats := LiveActivityPollStats{}
 	var pollErrors []error
 	hinted := make(map[string]liveActivityRetryEntry)
+	bytesRemaining := activityHintMaxReadBytes
+	recordsRemaining := activityHintMaxIDsPerPoll
 	for targetIndex, target := range p.targets {
 		for _, source := range target.Sources {
 			stats.HintFiles++
@@ -117,18 +122,25 @@ func (p *LiveActivityPoller) PollOnce(
 				cursor = &activityHintCursor{}
 				p.cursors[key] = cursor
 			}
+			if bytesRemaining == 0 || recordsRemaining == 0 {
+				continue
+			}
 			result, err := readActivityHints(
 				ctx, source, target.Hints, cursor, now,
+				bytesRemaining, recordsRemaining,
 			)
 			stats.HintBytes += result.BytesRead
 			if err != nil {
 				pollErrors = append(pollErrors, err)
 				continue
 			}
+			bytesRemaining -= result.BytesRead
+			recordsRemaining -= result.RecordsDecoded
 			if result.Overflow {
 				p.logThrottled("hint-overflow", now,
-					"live activity hint input exceeded a bounded poll: path=%q bytes=%d ids=%d",
-					source.Path, result.BytesRead, len(result.Hints))
+					"live activity hint input exceeded a bounded poll: path=%q bytes=%d records=%d ids=%d",
+					source.Path, result.BytesRead, result.RecordsDecoded,
+					len(result.Hints))
 			}
 			for _, hint := range result.Hints {
 				fullID := target.Provider.Definition().IDPrefix + hint.RawSessionID
@@ -144,21 +156,25 @@ func (p *LiveActivityPoller) PollOnce(
 	}
 
 	attempted := make(map[string]struct{}, len(hinted))
-	for _, fullID := range sortedLiveActivityKeys(hinted) {
-		hint := hinted[fullID]
+	hotRetryIntent := make(map[string]liveActivityRetryEntry)
+	for fullID, hint := range hinted {
 		attempted[fullID] = struct{}{}
 		stats.SessionLookups++
 		source, found, err := p.lookup(ctx, fullID)
 		if err != nil {
 			pollErrors = append(pollErrors,
 				fmt.Errorf("lookup live activity session %q: %w", fullID, err))
-			if _, hot := p.hot[fullID]; !hot {
+			if _, hot := p.hot[fullID]; hot {
+				hotRetryIntent[fullID] = hint
+			} else {
 				p.addRetry(fullID, hint.target, now, hint.lastHint)
 			}
 			continue
 		}
 		if !found || source.Path == "" {
-			if _, hot := p.hot[fullID]; !hot {
+			if _, hot := p.hot[fullID]; hot {
+				hotRetryIntent[fullID] = hint
+			} else {
 				p.addRetry(fullID, hint.target, now, hint.lastHint)
 			}
 			continue
@@ -166,8 +182,7 @@ func (p *LiveActivityPoller) PollOnce(
 		p.setHot(fullID, hint.target, source, hint.lastHint)
 	}
 
-	for _, fullID := range sortedLiveActivityKeys(p.retries) {
-		retry := p.retries[fullID]
+	for fullID, retry := range p.retries {
 		if now.Sub(retry.firstSeen) >= liveActivityRetryTTL {
 			delete(p.retries, fullID)
 			continue
@@ -197,15 +212,21 @@ func (p *LiveActivityPoller) PollOnce(
 	type observedSource struct {
 		size    int64
 		mtimeNS int64
+		inode   int64
+		device  int64
 	}
 	observed := make(map[string]observedSource)
 	changedPaths := make(map[string]struct{})
-	for _, fullID := range sortedLiveActivityKeys(p.hot) {
-		entry := p.hot[fullID]
+	for fullID, entry := range p.hot {
 		stats.SourceStats++
 		info, err := os.Stat(entry.source.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			delete(p.hot, fullID)
+			if retry, ok := hotRetryIntent[fullID]; ok {
+				p.addRetry(
+					fullID, retry.target, now, retry.lastHint,
+				)
+			}
 			continue
 		}
 		if err != nil {
@@ -213,9 +234,13 @@ func (p *LiveActivityPoller) PollOnce(
 				fmt.Errorf("stat live activity source %q: %w", entry.source.Path, err))
 			continue
 		}
+		inode, device := getFileIdentity(entry.source.Path, info)
 		if entry.source.HasStoredStat &&
 			entry.source.StoredSize == info.Size() &&
-			entry.source.StoredMTimeNS == info.ModTime().UnixNano() {
+			entry.source.StoredMTimeNS == info.ModTime().UnixNano() &&
+			(!entry.source.HasStoredIdentity ||
+				entry.source.StoredInode == inode &&
+					entry.source.StoredDevice == device) {
 			continue
 		}
 		entry.lastActivity = now
@@ -225,6 +250,8 @@ func (p *LiveActivityPoller) PollOnce(
 		observed[path] = observedSource{
 			size:    info.Size(),
 			mtimeNS: info.ModTime().UnixNano(),
+			inode:   inode,
+			device:  device,
 		}
 	}
 
@@ -242,7 +269,10 @@ func (p *LiveActivityPoller) PollOnce(
 				}
 				entry.source.StoredSize = info.size
 				entry.source.StoredMTimeNS = info.mtimeNS
+				entry.source.StoredInode = info.inode
+				entry.source.StoredDevice = info.device
 				entry.source.HasStoredStat = true
+				entry.source.HasStoredIdentity = true
 				entry.pending = false
 			}
 		}
@@ -287,6 +317,8 @@ func (p *LiveActivityPoller) addRetry(
 			firstSeen: now,
 		}
 		p.retries[fullID] = retry
+	} else if lastHint.After(retry.lastHint) {
+		retry.firstSeen = now
 	}
 	retry.target = target
 	retry.lastHint = lastHint

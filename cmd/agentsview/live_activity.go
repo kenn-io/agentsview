@@ -75,6 +75,11 @@ func newLiveActivityLookup(database *db.DB) agentsync.LiveActivityLookup {
 			source.StoredMTimeNS = *session.FileMtime
 			source.HasStoredStat = true
 		}
+		if session.FileInode != nil && session.FileDevice != nil {
+			source.StoredInode = *session.FileInode
+			source.StoredDevice = *session.FileDevice
+			source.HasStoredIdentity = true
+		}
 		return source, true, nil
 	}
 }

@@ -70,14 +70,18 @@ func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	size := int64(123)
 	mtime := int64(456)
+	inode := int64(789)
+	device := int64(1011)
 	require.NoError(t, database.UpsertSession(db.Session{
-		ID:        "codex:exact-id",
-		Project:   "project",
-		Machine:   "local",
-		Agent:     string(parser.AgentCodex),
-		FilePath:  &path,
-		FileSize:  &size,
-		FileMtime: &mtime,
+		ID:         "codex:exact-id",
+		Project:    "project",
+		Machine:    "local",
+		Agent:      string(parser.AgentCodex),
+		FilePath:   &path,
+		FileSize:   &size,
+		FileMtime:  &mtime,
+		FileInode:  &inode,
+		FileDevice: &device,
 	}))
 	lookup := newLiveActivityLookup(database)
 
@@ -86,10 +90,13 @@ func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, found)
 	assert.Equal(t, agentsync.LiveActivitySource{
-		Path:          path,
-		StoredSize:    size,
-		StoredMTimeNS: mtime,
-		HasStoredStat: true,
+		Path:              path,
+		StoredSize:        size,
+		StoredMTimeNS:     mtime,
+		StoredInode:       inode,
+		StoredDevice:      device,
+		HasStoredStat:     true,
+		HasStoredIdentity: true,
 	}, got)
 
 	_, found, err = lookup(t.Context(), "codex:missing-id")

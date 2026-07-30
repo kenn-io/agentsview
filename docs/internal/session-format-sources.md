@@ -130,9 +130,10 @@ Grok section and remove the explicit registry exception in the coverage test.
 ## Codex (`codex`)
 
 - **Format:** Rollout JSONL files, with a separate JSONL session index used for
-  discovery and metadata. The TUI also maintains an append-only
+  discovery and metadata. The TUI also maintains an append-oriented
   `history.jsonl` whose records contain `session_id`, Unix-seconds `ts`, and
-  submitted prompt `text`; Agentsview consumes only the first two fields as a
+  submitted prompt `text`; configured size enforcement can rewrite a retained
+  tail in place. Agentsview consumes only the first two fields as a
   live-activity hint.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/openai/codex.git` at

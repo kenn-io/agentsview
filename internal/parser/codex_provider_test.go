@@ -100,6 +100,7 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 func TestCodexActivityHintsUseConfiguredRootParent(t *testing.T) {
 	base := t.TempDir()
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{
+		"",
 		filepath.Join(base, "sessions"),
 		filepath.Join(base, "archived_sessions"),
 		"s3://bucket/archive/sessions",

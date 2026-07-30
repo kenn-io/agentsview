@@ -68,9 +68,9 @@ func (p *codexProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 func (p *codexProvider) ActivityHintSources(
 	ctx context.Context,
 ) ([]ActivityHintSource, error) {
-	seen := make(map[string]struct{}, len(p.Config.Roots))
-	sources := make([]ActivityHintSource, 0, len(p.Config.Roots))
-	for _, root := range p.Config.Roots {
+	seen := make(map[string]struct{}, len(p.sources.roots))
+	sources := make([]ActivityHintSource, 0, len(p.sources.roots))
+	for _, root := range p.sources.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
