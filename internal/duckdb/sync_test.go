@@ -1302,6 +1302,56 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	assert.Equal(t, "kept", updatedAt)
 }
 
+func TestSyncModelPricingBandsPersistsAndRemovesCompleteSet(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	base := db.ModelPricing{
+		ModelPattern:         "banded-model",
+		InputPerMTok:         money.MustParseDollars("1"),
+		OutputPerMTok:        money.MustParseDollars("2"),
+		CacheCreationPerMTok: money.MustParseDollars("0.5"),
+		CacheReadPerMTok:     money.MustParseDollars("0.1"),
+	}
+	withBand := base
+	withBand.Bands = []db.PricingBand{{
+		AboveInputTokens:     200_000,
+		InputPerMTok:         money.MustParseDollars("2"),
+		OutputPerMTok:        money.MustParseDollars("3"),
+		CacheCreationPerMTok: money.MustParseDollars("1"),
+		CacheReadPerMTok:     money.MustParseDollars("0.2"),
+	}}
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{withBand}))
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	var threshold int
+	var input, output, cacheCreation, cacheRead int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT above_input_tokens,
+			input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok
+		FROM model_pricing_bands
+		WHERE model_pattern = ?`, "banded-model").Scan(
+		&threshold, &input, &output, &cacheCreation, &cacheRead,
+	))
+	assert.Equal(t, 200_000, threshold)
+	assert.Equal(t, int64(2_000_000), input)
+	assert.Equal(t, int64(3_000_000), output)
+	assert.Equal(t, int64(1_000_000), cacheCreation)
+	assert.Equal(t, int64(200_000), cacheRead)
+
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{base}))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	var count int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_pricing_bands
+		WHERE model_pattern = ?`, "banded-model").Scan(&count))
+	assert.Zero(t, count)
+}
+
 func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {

@@ -295,15 +295,18 @@ func (s *Store) mergeDBPricing(
 	if err != nil {
 		return 0, err
 	}
+	fallback := pgFallbackRateMap()
+	usableRows := 0
 	for _, p := range prices {
 		if strings.HasPrefix(p.ModelPattern, "_") {
 			continue
 		}
 		rates := pgModelPricingRates(p)
-		rates.Source = pgModelPricingSource(p, pgFallbackRateMap())
+		rates.Source = pgModelPricingSource(p, fallback)
 		out[p.ModelPattern] = rates
+		usableRows++
 	}
-	return len(prices), nil
+	return usableRows, nil
 }
 
 // applyCustomPricing overlays user-configured rates onto out, letting
@@ -479,6 +482,7 @@ func pgPricingTouchStatement(
 	var b strings.Builder
 	b.WriteString(`UPDATE model_pricing AS p
 		SET updated_at = CASE
+			WHEN p.updated_at = '' THEN v.updated_at
 			WHEN p.updated_at::timestamptz >= v.updated_at::timestamptz
 			THEN to_char(
 				(p.updated_at::timestamptz + INTERVAL '1 microsecond')

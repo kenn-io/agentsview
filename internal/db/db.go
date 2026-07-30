@@ -2346,8 +2346,27 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+	legacyPricing, err := sqliteColumnExists(
+		w, "model_pricing", "input_per_mtok",
+	)
+	if err != nil {
+		return err
+	}
+	if legacyPricing {
+		// schema.sql initializes this PR's new child table before the shipped
+		// exact-money migration rebuilds its legacy parent. Remove the still-empty
+		// child so SQLite cannot retarget its foreign key to the temporary parent
+		// name during ALTER TABLE RENAME.
+		if _, err := w.Exec(`DROP TABLE IF EXISTS model_pricing_bands`); err != nil {
+			return fmt.Errorf(
+				"preparing pricing bands for money migration: %w", err)
+		}
+	}
 	if err := migrateMoneyColumnsLocked(w); err != nil {
 		return err
+	}
+	if _, err := w.Exec(modelPricingBandsSchemaSQL); err != nil {
+		return fmt.Errorf("creating model pricing bands: %w", err)
 	}
 	if _, err := w.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
@@ -2538,6 +2557,20 @@ func (db *DB) migrateColumns() error {
 	}
 	return nil
 }
+
+const modelPricingBandsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS model_pricing_bands (
+    model_pattern TEXT NOT NULL
+        REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
+    above_input_tokens INTEGER NOT NULL CHECK (above_input_tokens > 0),
+    input_microdollars_per_mtok INTEGER NOT NULL,
+    output_microdollars_per_mtok INTEGER NOT NULL,
+    cache_creation_microdollars_per_mtok INTEGER NOT NULL,
+    cache_read_microdollars_per_mtok INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (model_pattern, above_input_tokens)
+);`
 
 const (
 	bootstrapArtifactExportQueueSQL = `

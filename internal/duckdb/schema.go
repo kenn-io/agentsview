@@ -11,10 +11,10 @@ import (
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
-// createSchema. Mirror schema v6 is create-only: there are no in-place
+// createSchema. Mirror schema v7 is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'.
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -407,6 +407,29 @@ var mirrorTables = []tableSpec{
 		)`,
 		columns: []columnSpec{
 			{"model_pattern", "model_pattern TEXT"},
+			{"input_microdollars_per_mtok", "input_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"output_microdollars_per_mtok", "output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"cache_read_microdollars_per_mtok", "cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
+			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+		},
+	},
+	{
+		name: "model_pricing_bands",
+		create: `CREATE TABLE IF NOT EXISTS model_pricing_bands (
+			model_pattern TEXT NOT NULL,
+			above_input_tokens BIGINT NOT NULL,
+			input_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (model_pattern, above_input_tokens),
+			FOREIGN KEY (model_pattern) REFERENCES model_pricing(model_pattern)
+		)`,
+		columns: []columnSpec{
+			{"model_pattern", "model_pattern TEXT"},
+			{"above_input_tokens", "above_input_tokens BIGINT NOT NULL"},
 			{"input_microdollars_per_mtok", "input_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"output_microdollars_per_mtok", "output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},

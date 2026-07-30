@@ -328,6 +328,21 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
 }
 
+func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
+	state := &pricingProbeState{rows: [][]driver.Value{{
+		"_fallback_version", int64(0), int64(0), int64(0), int64(0), "v1",
+		nil, nil, nil, nil, nil, nil,
+	}}}
+	store := &Store{pg: newPricingProbeDB(t, state)}
+
+	rows, err := store.loadPricingMap(context.Background())
+	require.NoError(t, err)
+	byPattern := pricingRowsByPattern(rows)
+
+	assert.NotContains(t, byPattern, "_fallback_version")
+	assert.Contains(t, byPattern, "gpt-5.5")
+}
+
 func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{

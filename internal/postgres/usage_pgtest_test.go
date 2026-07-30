@@ -1292,6 +1292,10 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	assert.Equal(t, int64(5_000_000), bandOutput)
 	assert.Equal(t, int64(7_000_000), bandCacheCreation)
 	assert.Equal(t, int64(1_000_000), bandCacheRead)
+	_, err = store.DB().ExecContext(context.Background(), `
+		UPDATE model_pricing SET updated_at = ''
+		WHERE model_pattern = 'test-model-sync'`)
+	require.NoError(t, err, "set legacy empty pricing revision")
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "test-model-sync",

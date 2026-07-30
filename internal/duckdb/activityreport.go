@@ -706,9 +706,15 @@ func duckActivityReportRowStatus(
 		billableCacheCr, billableCacheRd,
 		explicitCost,
 		r.cost != nil,
+		r.source == "message" || duckActivityUsageHasOrdinal(r.messageOrdinal),
 		pricing,
 	)
 	return savings, cost, priced, contributes, err
+}
+
+func duckActivityUsageHasOrdinal(v any) bool {
+	_, ok := duckUsageOrdinal(v)
+	return ok
 }
 
 func duckActivityUsageCost(

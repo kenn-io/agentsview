@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -58,10 +59,88 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 			)
 		}
 	}
+	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
+		end := min(i+duckPricingUpsertBatch, len(prices))
+		query, args := duckPricingBandDeleteStatement(prices[i:end])
+		if err := s.execMutation(ctx, tx, query, args...); err != nil {
+			return fmt.Errorf(
+				"deleting duckdb pricing bands batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
+	var bands []duckModelPricingBand
+	for _, price := range prices {
+		for _, band := range price.Bands {
+			bands = append(bands, duckModelPricingBand{
+				modelPattern: price.ModelPattern,
+				updatedAt:    price.UpdatedAt,
+				band:         band,
+			})
+		}
+	}
+	for i := 0; i < len(bands); i += duckPricingUpsertBatch {
+		end := min(i+duckPricingUpsertBatch, len(bands))
+		query, args := duckPricingBandInsertStatement(bands[i:end])
+		if err := s.execMutation(ctx, tx, query, args...); err != nil {
+			return fmt.Errorf(
+				"inserting duckdb pricing bands batch starting at %d: %w",
+				i, err,
+			)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb pricing sync: %w", err)
 	}
 	return nil
+}
+
+func duckPricingBandDeleteStatement(prices []db.ModelPricing) (string, []any) {
+	placeholders := make([]string, len(prices))
+	args := make([]any, len(prices))
+	for i, price := range prices {
+		placeholders[i] = "?"
+		args[i] = price.ModelPattern
+	}
+	return `DELETE FROM model_pricing_bands WHERE model_pattern IN (` +
+		strings.Join(placeholders, ", ") + `)`, args
+}
+
+type duckModelPricingBand struct {
+	modelPattern string
+	updatedAt    string
+	band         db.PricingBand
+}
+
+func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO model_pricing_bands (
+		model_pattern, above_input_tokens,
+		input_microdollars_per_mtok, output_microdollars_per_mtok,
+		cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
+		updated_at
+	) VALUES `)
+	args := make([]any, 0, len(bands)*7)
+	for i, item := range bands {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+		updatedAt := item.band.UpdatedAt
+		if updatedAt == "" {
+			updatedAt = item.updatedAt
+		}
+		args = append(args,
+			item.modelPattern,
+			item.band.AboveInputTokens,
+			item.band.InputPerMTok.Microdollars,
+			item.band.OutputPerMTok.Microdollars,
+			item.band.CacheCreationPerMTok.Microdollars,
+			item.band.CacheReadPerMTok.Microdollars,
+			updatedAt,
+		)
+	}
+	return b.String(), args
 }
 
 const duckPricingUpsertBatch = 100
@@ -100,10 +179,16 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, error) {
 	rows, err := s.duck.QueryContext(
 		ctx,
-		`SELECT model_pattern, input_microdollars_per_mtok,
-			output_microdollars_per_mtok, cache_creation_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		 FROM model_pricing`,
+		`SELECT p.model_pattern, p.input_microdollars_per_mtok,
+			p.output_microdollars_per_mtok, p.cache_creation_microdollars_per_mtok,
+			p.cache_read_microdollars_per_mtok, p.updated_at,
+			b.above_input_tokens, b.input_microdollars_per_mtok,
+			b.output_microdollars_per_mtok,
+			b.cache_creation_microdollars_per_mtok,
+			b.cache_read_microdollars_per_mtok, b.updated_at
+		 FROM model_pricing p
+		 LEFT JOIN model_pricing_bands b ON b.model_pattern = p.model_pattern
+		 ORDER BY p.model_pattern, b.above_input_tokens`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing duckdb pricing: %w", err)
@@ -111,8 +196,11 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 	defer rows.Close()
 
 	var out []db.ModelPricing
+	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p db.ModelPricing
+		var threshold, input, output, cacheCreation, cacheRead sql.NullInt64
+		var bandUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
@@ -120,10 +208,31 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 			&p.CacheCreationPerMTok,
 			&p.CacheReadPerMTok,
 			&p.UpdatedAt,
+			&threshold,
+			&input,
+			&output,
+			&cacheCreation,
+			&cacheRead,
+			&bandUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb pricing: %w", err)
 		}
-		out = append(out, p)
+		i, exists := byPattern[p.ModelPattern]
+		if !exists {
+			i = len(out)
+			byPattern[p.ModelPattern] = i
+			out = append(out, p)
+		}
+		if threshold.Valid {
+			out[i].Bands = append(out[i].Bands, db.PricingBand{
+				AboveInputTokens:     int(threshold.Int64),
+				InputPerMTok:         money.Money{Microdollars: input.Int64},
+				OutputPerMTok:        money.Money{Microdollars: output.Int64},
+				CacheCreationPerMTok: money.Money{Microdollars: cacheCreation.Int64},
+				CacheReadPerMTok:     money.Money{Microdollars: cacheRead.Int64},
+				UpdatedAt:            bandUpdatedAt.String,
+			})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating duckdb pricing: %w", err)
@@ -397,6 +506,17 @@ func duckFallbackPricingRows() []db.ModelPricing {
 	out := make([]db.ModelPricing, len(src))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for i, p := range src {
+		bands := make([]db.PricingBand, len(p.Bands))
+		for j, band := range p.Bands {
+			bands[j] = db.PricingBand{
+				AboveInputTokens:     band.AboveInputTokens,
+				InputPerMTok:         band.InputPerMTok,
+				OutputPerMTok:        band.OutputPerMTok,
+				CacheCreationPerMTok: band.CacheCreationPerMTok,
+				CacheReadPerMTok:     band.CacheReadPerMTok,
+				UpdatedAt:            now,
+			}
+		}
 		out[i] = db.ModelPricing{
 			ModelPattern:         p.ModelPattern,
 			InputPerMTok:         p.InputPerMTok,
@@ -404,6 +524,7 @@ func duckFallbackPricingRows() []db.ModelPricing {
 			CacheCreationPerMTok: p.CacheCreationPerMTok,
 			CacheReadPerMTok:     p.CacheReadPerMTok,
 			UpdatedAt:            now,
+			Bands:                bands,
 		}
 	}
 	return out
