@@ -494,6 +494,33 @@ func TestDecodeImportCheckpointBoundsTopLevelFieldState(t *testing.T) {
 	require.ErrorIs(t, err, errFutureArtifactVersion)
 }
 
+func TestPreflightImportCheckpointVersionBoundsAllocations(t *testing.T) {
+	const sessionCount = 1_000
+	var body strings.Builder
+	fmt.Fprintf(&body, `{"origin":%q,"seq":7,"sessions":{`, contractOrigin)
+	for i := range sessionCount {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(
+			&body, "%q:%q",
+			fmt.Sprintf("%s~session-%04d", contractOrigin, i),
+			fmt.Sprintf("%064x", i+1),
+		)
+	}
+	body.WriteString(`},"v":2}`)
+	data := []byte(body.String())
+
+	var version int
+	var decodeErr error
+	allocations := testing.AllocsPerRun(5, func() {
+		version, decodeErr = preflightImportCheckpointVersion(data)
+	})
+	require.NoError(t, decodeErr)
+	assert.Equal(t, checkpointFormatVersion+1, version)
+	assert.Less(t, allocations, 20.0)
+}
+
 func TestDecodeImportCheckpointRejectsCurrentExtraFieldBeforeItsValue(
 	t *testing.T,
 ) {
@@ -535,6 +562,17 @@ func TestDecodeImportCheckpointDefersExtensibleFutureJSON(t *testing.T) {
 			assert.Greater(t, future.Version, checkpointFormatVersion)
 		})
 	}
+}
+
+func TestDecodeImportCheckpointFutureVersionDoesNotMaskMalformedJSON(
+	t *testing.T,
+) {
+	_, err := decodeImportCheckpoint(
+		[]byte(`{"sessions":{"broken":},"v":2}`),
+		contractOrigin, "cp-0000000007.json",
+	)
+	require.ErrorIs(t, err, ErrArtifactInvalid)
+	assert.NotErrorIs(t, err, errFutureArtifactVersion)
 }
 
 func TestReadVerifiedImportArtifactUsesExactBoundedIdentity(t *testing.T) {

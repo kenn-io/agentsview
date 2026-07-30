@@ -243,6 +243,60 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 	}
 }
 
+func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
+	t *testing.T,
+) {
+	const futureSessionCount = artifactImportDrainLimit*2 + 1
+	store := newTestArtifactStore(t)
+	futureSessions := make(map[string]string, futureSessionCount)
+	for i := range futureSessionCount {
+		futureSessions[fmt.Sprintf("%s~future-%03d", contractOrigin, i)] =
+			fmt.Sprintf("%064x", i+1)
+	}
+	futureBody, err := canonicalJSON(checkpoint{
+		Version: checkpointFormatVersion + 1,
+		Origin:  contractOrigin, Sequence: 1, Sessions: futureSessions,
+	})
+	require.NoError(t, err)
+	futureRef := requireContractRef(
+		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
+	)
+	futureEntry := createContractArtifact(
+		t, store, futureRef, futureBody,
+	).Entry
+
+	const supportedOrigin = "contract-d4e5f6"
+	supportedEntry := createImportTestCheckpoint(
+		t, store, supportedOrigin, 1, map[string]string{},
+	)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(
+		destination, store, importLocalOrigin,
+	)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), futureEntry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), supportedEntry))
+
+	result, err := coordinator.Finalize(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Deferred)
+	landing, _, found, err := destination.GetArtifactCheckpointLanding(
+		t.Context(), supportedOrigin,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, landing.Sequence)
+
+	_, err = destination.ArtifactCheckpointStageProgress(
+		t.Context(),
+		db.ArtifactCheckpointLanding{
+			Origin: contractOrigin, Sequence: 1,
+			CheckpointSHA256: futureEntry.Identity.SHA256,
+			CheckpointSize:   futureEntry.Identity.Size,
+		},
+	)
+	require.ErrorIs(t, err, db.ErrArtifactImportConflict)
+}
+
 func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	t *testing.T,
 ) {

@@ -32,7 +32,6 @@ type importCheckpointFieldState struct {
 
 type importCheckpointSessionStream struct {
 	data             []byte
-	checkpoint       []byte
 	fields           importCheckpointFieldState
 	expectedOrigin   string
 	expectedSequence int
@@ -160,19 +159,142 @@ func decodeImportCheckpointHeader(
 				"checkpoint name is invalid: %v", err,
 			)
 	}
+	version, err := preflightImportCheckpointVersion(data)
+	if err != nil {
+		return importCheckpoint{}, importCheckpointSessionStream{}, err
+	}
+	switch {
+	case version > checkpointFormatVersion:
+		return importCheckpoint{}, importCheckpointSessionStream{},
+			&futureArtifactVersionError{
+				Kind: KindCheckpoints, Version: version,
+			}
+	case version < checkpointFormatVersion:
+		return importCheckpoint{}, importCheckpointSessionStream{},
+			invalidImportCheckpointf(
+				"version %d is unsupported", version,
+			)
+	}
 	stream, err := decodeImportCheckpointPrefix(
 		data, expectedOrigin, nameSequence,
 	)
 	if err != nil {
-		if futureErr := futureImportCheckpointError(data); futureErr != nil {
-			return importCheckpoint{}, importCheckpointSessionStream{}, futureErr
-		}
 		return importCheckpoint{}, importCheckpointSessionStream{}, err
 	}
 	return importCheckpoint{
 		Version: checkpointFormatVersion,
 		Origin:  expectedOrigin, Sequence: nameSequence,
 	}, stream, nil
+}
+
+func preflightImportCheckpointVersion(data []byte) (int, error) {
+	// Scan only strings at the top object depth so a trailing version does not
+	// require tokenizing the sessions map. Current-version semantic validation
+	// remains paged; future JSON is structurally validated before it can raise
+	// the version gate, so malformed content still wins over compatibility.
+	offset := skipJSONWhitespace(data, 0)
+	if offset >= len(data) || data[offset] != '{' {
+		return 0, invalidImportCheckpointf("checkpoint must be an object")
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	stringStart := 0
+	rootEnd := 0
+	version := 0
+	versionSeen := false
+scan:
+	for cursor := offset; cursor < len(data); cursor++ {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case data[cursor] == '\\':
+				escaped = true
+			case data[cursor] == '"':
+				inString = false
+				if depth != 1 || !validJSONStringIsVersionField(
+					data[stringStart:cursor],
+				) {
+					continue
+				}
+				colon := skipJSONWhitespace(data, cursor+1)
+				if colon >= len(data) || data[colon] != ':' {
+					continue
+				}
+				valueStart := skipJSONWhitespace(data, colon+1)
+				valueEnd := valueStart
+				for valueEnd < len(data) &&
+					!isImportJSONValueDelimiter(data[valueEnd]) {
+					valueEnd++
+				}
+				if versionSeen {
+					return 0, invalidImportCheckpointf(`duplicate field "v"`)
+				}
+				if valueStart == valueEnd {
+					return 0, invalidImportCheckpointf("version is missing")
+				}
+				if err := json.Unmarshal(
+					data[valueStart:valueEnd], &version,
+				); err != nil {
+					return 0, invalidImportCheckpointf(
+						"version is invalid: %v", err,
+					)
+				}
+				versionSeen = true
+			}
+			continue
+		}
+		switch data[cursor] {
+		case '"':
+			inString = true
+			stringStart = cursor + 1
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				rootEnd = cursor + 1
+				break scan
+			}
+		}
+	}
+
+	if rootEnd == 0 {
+		return 0, invalidImportCheckpointf("checkpoint object is incomplete")
+	}
+	if skipJSONWhitespace(data, rootEnd) != len(data) {
+		return 0, invalidImportCheckpointf("checkpoint has trailing JSON")
+	}
+	if !versionSeen {
+		return 0, invalidImportCheckpointf("version is missing")
+	}
+	if version > checkpointFormatVersion && !json.Valid(data) {
+		return 0, invalidImportCheckpointf("JSON is invalid")
+	}
+	return version, nil
+}
+
+func validJSONStringIsVersionField(data []byte) bool {
+	if len(data) == 1 {
+		return data[0] == 'v'
+	}
+	return len(data) == 6 &&
+		data[0] == '\\' &&
+		data[1] == 'u' &&
+		data[2] == '0' &&
+		data[3] == '0' &&
+		data[4] == '7' &&
+		data[5] == '6'
+}
+
+func isImportJSONValueDelimiter(value byte) bool {
+	switch value {
+	case ' ', '\t', '\r', '\n', ',', '}', ']':
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeImportCheckpointPrefix(
@@ -224,7 +346,7 @@ func decodeImportCheckpointPrefix(
 					invalidImportCheckpointf("field %q has no value", key)
 			}
 			return importCheckpointSessionStream{
-				data: data[valueStart:], checkpoint: data, fields: state,
+				data: data[valueStart:], fields: state,
 				expectedOrigin: expectedOrigin, expectedSequence: expectedSequence,
 			}, nil
 		}
@@ -237,11 +359,10 @@ func decodeImportCheckpointPrefix(
 			return importCheckpointSessionStream{}, err
 		}
 		if state.future {
-			if futureErr := futureImportCheckpointError(data); futureErr != nil {
-				return importCheckpointSessionStream{}, futureErr
-			}
 			return importCheckpointSessionStream{},
-				invalidImportCheckpointf("future checkpoint is malformed")
+				&futureArtifactVersionError{
+					Kind: KindCheckpoints, Version: state.version,
+				}
 		}
 	}
 	return importCheckpointSessionStream{},
@@ -462,16 +583,6 @@ func decodeImportCheckpointField(
 	}
 }
 
-func futureImportCheckpointError(data []byte) error {
-	_, version, future, err := decodeImportCheckpointFields(data)
-	if err != nil || !future {
-		return nil
-	}
-	return &futureArtifactVersionError{
-		Kind: KindCheckpoints, Version: version,
-	}
-}
-
 func skipImportJSONValue(decoder *json.Decoder) error {
 	token, err := decoder.Token()
 	if err != nil {
@@ -541,17 +652,7 @@ func decodeImportCheckpointSessionPage(
 	origin string,
 	offset int64,
 	limit int,
-) (_ []importCheckpointSession, _ int64, _ bool, retErr error) {
-	defer func() {
-		if retErr == nil || !errors.Is(retErr, ErrArtifactInvalid) {
-			return
-		}
-		if futureErr := futureImportCheckpointError(
-			stream.checkpoint,
-		); futureErr != nil {
-			retErr = futureErr
-		}
-	}()
+) ([]importCheckpointSession, int64, bool, error) {
 	if limit < 1 {
 		return nil, 0, false,
 			errors.New("checkpoint session page limit must be positive")
