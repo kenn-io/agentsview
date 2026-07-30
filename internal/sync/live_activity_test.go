@@ -204,6 +204,7 @@ func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
 	assert.False(t, secondCursor.initialized,
 		"a source deferred by the global budget must remain unread")
 
+	appendFile(t, first, firstRecords.String())
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, activityHintMaxIDsPerPoll*2, decoder.decoded)
@@ -312,6 +313,53 @@ func TestLiveActivityRetriesHotSessionAfterLookupFailureAndMove(t *testing.T) {
 	require.Contains(t, poller.hot, "codex:move")
 	assert.Equal(t, second, poller.hot["codex:move"].source.Path)
 	assert.NotContains(t, poller.retries, "codex:move")
+}
+
+func TestLiveActivityRetriesCanonicalRefreshWhileOldPathExists(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	dir := t.TempDir()
+	history := filepath.Join(dir, "history.jsonl")
+	first := filepath.Join(dir, "first.jsonl")
+	second := filepath.Join(dir, "second.jsonl")
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
+	require.NoError(t, os.WriteFile(first, []byte("first\n"), 0o644))
+	require.NoError(t, os.WriteFile(second, []byte("second\n"), 0o644))
+	provider := newLiveActivityTestProvider(history)
+	lookupPath := first
+	lookupErr := error(nil)
+	lookups := 0
+	poller := NewLiveActivityPoller([]LiveActivityTarget{{
+		Provider: provider,
+		Hints:    provider,
+		Sources:  []parser.ActivityHintSource{{Path: history}},
+	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
+		lookups++
+		if lookupErr != nil {
+			return LiveActivitySource{}, false, lookupErr
+		}
+		return LiveActivitySource{Path: lookupPath}, true, nil
+	}, func(context.Context, []string) error {
+		return nil
+	}, nil)
+	_, err := poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+
+	appendFile(t, history, hintRecord("move", now.Add(time.Minute)))
+	lookupErr = errors.New("temporary lookup failure")
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
+	require.Error(t, err)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, first, poller.hot["codex:move"].source.Path)
+	require.NotNil(t, poller.hot["codex:move"].refreshRetry)
+
+	lookupErr = nil
+	lookupPath = second
+	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute+time.Second))
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, second, poller.hot["codex:move"].source.Path)
+	assert.Nil(t, poller.hot["codex:move"].refreshRetry)
+	assert.Equal(t, 3, lookups)
 }
 
 func TestLiveActivityRefreshesCanonicalPathAndDropsMissing(t *testing.T) {

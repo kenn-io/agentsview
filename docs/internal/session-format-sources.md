@@ -169,11 +169,11 @@ Grok section and remove the explicit registry exception in the coverage test.
   compatibility guarantee. Agentsview derives the hint path as
   `<configured-sessions-root>/../history.jsonl`; a custom sessions root
   without that sibling, or `HistoryPersistence::None`, degrades to ordinary
-  watcher behavior. Restart bootstrap reads at most the newest 4 MiB and
-  accepts records from the preceding 24 hours. If a daemon restarts during a
-  longer autonomous run whose last prompt falls outside those bounds, the
-  rollout remains watcher-only until its next prompt or a filesystem
-  notification such as descriptor close.
+  watcher behavior, degraded-coverage polling when applicable, and the daily
+  archive audit. Restart bootstrap reads at most the newest 4 MiB and accepts
+  records from the preceding 24 hours. If a daemon restarts during a longer
+  autonomous run whose last prompt falls outside those bounds, the rollout
+  relies on those fallbacks until its next prompt.
 
 ## GitHub Copilot CLI (`copilot`)
 

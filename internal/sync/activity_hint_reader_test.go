@@ -295,6 +295,48 @@ func TestReadActivityHintsDetectsSameInodeTruncateAndRegrow(t *testing.T) {
 	assert.Equal(t, "rewritten", got.Hints[0].RawSessionID)
 }
 
+func TestReadActivityHintsDetectsSameInodeEqualSizeRewrite(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	initial := hintRecord("initial", now) + strings.Repeat("x", 256)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+	oldMTime := now.Add(-time.Hour)
+	require.NoError(t, os.Chtimes(path, oldMTime, oldMTime))
+	cursor := &activityHintCursor{}
+	_, err := readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+	require.NoError(t, err)
+	initialInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	rewritten := hintRecord("rewrite", now) + strings.Repeat("y", 256)
+	require.Len(t, []byte(rewritten), len(initial))
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	require.NoError(t, err)
+	_, err = file.WriteString(rewritten)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Chtimes(path, now, now))
+	rewrittenInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(initialInfo, rewrittenInfo))
+	require.Equal(t, initialInfo.Size(), rewrittenInfo.Size())
+	require.NotEqual(t, initialInfo.ModTime(), rewrittenInfo.ModTime())
+
+	got, err := readActivityHints(
+		t.Context(), parser.ActivityHintSource{Path: path},
+		literalActivityHintDecoder{}, cursor, now,
+		activityHintMaxReadBytes, activityHintMaxIDsPerPoll,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, got.Hints, 1)
+	assert.Equal(t, "rewrite", got.Hints[0].RawSessionID)
+}
+
 func hintRecord(id string, timestamp time.Time) string {
 	return fmt.Sprintf("%s %d\n", id, timestamp.Unix())
 }

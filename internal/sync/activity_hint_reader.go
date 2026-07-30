@@ -66,9 +66,15 @@ func readActivityHints(
 			info.Size() < cursor.offset) {
 		*cursor = activityHintCursor{}
 	}
-	if cursor.initialized && info.Size() > cursor.offset &&
-		!activityHintBoundaryMatches(source.Path, cursor) {
-		*cursor = activityHintCursor{}
+	if cursor.initialized && info.Size() >= cursor.offset &&
+		(info.Size() > cursor.offset ||
+			cursor.info != nil &&
+				!info.ModTime().Equal(cursor.info.ModTime())) {
+		if !activityHintBoundaryMatches(source.Path, cursor) {
+			*cursor = activityHintCursor{}
+		} else if info.Size() == cursor.offset {
+			cursor.info = info
+		}
 	}
 
 	bootstrap := !cursor.initialized

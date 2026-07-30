@@ -57,6 +57,7 @@ type liveActivityHotEntry struct {
 	source       LiveActivitySource
 	lastActivity time.Time
 	pending      bool
+	refreshRetry *liveActivityRetryEntry
 }
 
 type liveActivityRetryEntry struct {
@@ -80,6 +81,8 @@ type LiveActivityPoller struct {
 	hot     map[string]*liveActivityHotEntry
 	retries map[string]*liveActivityRetryEntry
 	logged  map[string]time.Time
+
+	nextHintSource int
 }
 
 func NewLiveActivityPoller(
@@ -113,50 +116,72 @@ func (p *LiveActivityPoller) PollOnce(
 	hinted := make(map[string]liveActivityRetryEntry)
 	bytesRemaining := activityHintMaxReadBytes
 	recordsRemaining := activityHintMaxIDsPerPoll
+	type pollSource struct {
+		targetIndex int
+		target      LiveActivityTarget
+		source      parser.ActivityHintSource
+	}
+	var sources []pollSource
 	for targetIndex, target := range p.targets {
 		for _, source := range target.Sources {
-			stats.HintFiles++
-			key := liveActivityCursorKey{target: targetIndex, path: source.Path}
-			cursor := p.cursors[key]
-			if cursor == nil {
-				cursor = &activityHintCursor{}
-				p.cursors[key] = cursor
-			}
-			if bytesRemaining == 0 || recordsRemaining == 0 {
-				continue
-			}
-			result, err := readActivityHints(
-				ctx, source, target.Hints, cursor, now,
-				bytesRemaining, recordsRemaining,
-			)
-			stats.HintBytes += result.BytesRead
-			if err != nil {
-				pollErrors = append(pollErrors, err)
-				continue
-			}
-			bytesRemaining -= result.BytesRead
-			recordsRemaining -= result.RecordsDecoded
-			if result.Overflow {
-				p.logThrottled("hint-overflow", now,
-					"live activity hint input exceeded a bounded poll: path=%q bytes=%d records=%d ids=%d",
-					source.Path, result.BytesRead, result.RecordsDecoded,
-					len(result.Hints))
-			}
-			for _, hint := range result.Hints {
-				fullID := target.Provider.Definition().IDPrefix + hint.RawSessionID
-				previous, exists := hinted[fullID]
-				if !exists || hint.Timestamp.After(previous.lastHint) {
-					hinted[fullID] = liveActivityRetryEntry{
-						target:   targetIndex,
-						lastHint: hint.Timestamp,
-					}
+			sources = append(sources, pollSource{
+				targetIndex: targetIndex,
+				target:      target,
+				source:      source,
+			})
+		}
+	}
+	stats.HintFiles = len(sources)
+	start := 0
+	if len(sources) > 0 {
+		start = p.nextHintSource % len(sources)
+		p.nextHintSource = (start + 1) % len(sources)
+	}
+	for offset := range len(sources) {
+		current := sources[(start+offset)%len(sources)]
+		key := liveActivityCursorKey{
+			target: current.targetIndex,
+			path:   current.source.Path,
+		}
+		cursor := p.cursors[key]
+		if cursor == nil {
+			cursor = &activityHintCursor{}
+			p.cursors[key] = cursor
+		}
+		if bytesRemaining == 0 || recordsRemaining == 0 {
+			continue
+		}
+		result, err := readActivityHints(
+			ctx, current.source, current.target.Hints, cursor, now,
+			bytesRemaining, recordsRemaining,
+		)
+		stats.HintBytes += result.BytesRead
+		if err != nil {
+			pollErrors = append(pollErrors, err)
+			continue
+		}
+		bytesRemaining -= result.BytesRead
+		recordsRemaining -= result.RecordsDecoded
+		if result.Overflow {
+			p.logThrottled("hint-overflow", now,
+				"live activity hint input exceeded a bounded poll: path=%q bytes=%d records=%d ids=%d",
+				current.source.Path, result.BytesRead,
+				result.RecordsDecoded, len(result.Hints))
+		}
+		for _, hint := range result.Hints {
+			fullID := current.target.Provider.Definition().IDPrefix +
+				hint.RawSessionID
+			previous, exists := hinted[fullID]
+			if !exists || hint.Timestamp.After(previous.lastHint) {
+				hinted[fullID] = liveActivityRetryEntry{
+					target:   current.targetIndex,
+					lastHint: hint.Timestamp,
 				}
 			}
 		}
 	}
 
 	attempted := make(map[string]struct{}, len(hinted))
-	hotRetryIntent := make(map[string]liveActivityRetryEntry)
 	for fullID, hint := range hinted {
 		attempted[fullID] = struct{}{}
 		stats.SessionLookups++
@@ -165,7 +190,9 @@ func (p *LiveActivityPoller) PollOnce(
 			pollErrors = append(pollErrors,
 				fmt.Errorf("lookup live activity session %q: %w", fullID, err))
 			if _, hot := p.hot[fullID]; hot {
-				hotRetryIntent[fullID] = hint
+				p.addHotRefreshRetry(
+					fullID, hint.target, now, hint.lastHint,
+				)
 			} else {
 				p.addRetry(fullID, hint.target, now, hint.lastHint)
 			}
@@ -173,7 +200,9 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 		if !found || source.Path == "" {
 			if _, hot := p.hot[fullID]; hot {
-				hotRetryIntent[fullID] = hint
+				p.addHotRefreshRetry(
+					fullID, hint.target, now, hint.lastHint,
+				)
 			} else {
 				p.addRetry(fullID, hint.target, now, hint.lastHint)
 			}
@@ -202,6 +231,30 @@ func (p *LiveActivityPoller) PollOnce(
 		}
 	}
 
+	for fullID, entry := range p.hot {
+		retry := entry.refreshRetry
+		if retry == nil {
+			continue
+		}
+		if now.Sub(retry.firstSeen) >= liveActivityRetryTTL {
+			entry.refreshRetry = nil
+			continue
+		}
+		if _, ok := attempted[fullID]; ok {
+			continue
+		}
+		stats.SessionLookups++
+		source, found, err := p.lookup(ctx, fullID)
+		if err != nil {
+			pollErrors = append(pollErrors,
+				fmt.Errorf("refresh live activity session %q: %w", fullID, err))
+			continue
+		}
+		if found && source.Path != "" {
+			p.setHot(fullID, retry.target, source, retry.lastHint)
+		}
+	}
+
 	p.expireHot(now)
 	if evicted := p.enforceBounds(); evicted > 0 {
 		p.logThrottled("state-overflow", now,
@@ -222,10 +275,8 @@ func (p *LiveActivityPoller) PollOnce(
 		info, err := os.Stat(entry.source.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			delete(p.hot, fullID)
-			if retry, ok := hotRetryIntent[fullID]; ok {
-				p.addRetry(
-					fullID, retry.target, now, retry.lastHint,
-				)
+			if entry.refreshRetry != nil {
+				p.retries[fullID] = entry.refreshRetry
 			}
 			continue
 		}
@@ -317,6 +368,30 @@ func (p *LiveActivityPoller) addRetry(
 			firstSeen: now,
 		}
 		p.retries[fullID] = retry
+	} else if lastHint.After(retry.lastHint) {
+		retry.firstSeen = now
+	}
+	retry.target = target
+	retry.lastHint = lastHint
+}
+
+func (p *LiveActivityPoller) addHotRefreshRetry(
+	fullID string,
+	target int,
+	now time.Time,
+	lastHint time.Time,
+) {
+	entry := p.hot[fullID]
+	if entry == nil {
+		return
+	}
+	retry := entry.refreshRetry
+	if retry == nil {
+		retry = &liveActivityRetryEntry{
+			target:    target,
+			firstSeen: now,
+		}
+		entry.refreshRetry = retry
 	} else if lastHint.After(retry.lastHint) {
 		retry.firstSeen = now
 	}
