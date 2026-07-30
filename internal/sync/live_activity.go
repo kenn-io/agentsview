@@ -55,11 +55,12 @@ type LiveActivityPollStats struct {
 }
 
 type liveActivityHotEntry struct {
-	target       int
-	source       LiveActivitySource
-	lastActivity time.Time
-	pending      bool
-	refreshRetry *liveActivityRetryEntry
+	target           int
+	source           LiveActivitySource
+	lastActivity     time.Time
+	pending          bool
+	refreshRetry     *liveActivityRetryEntry
+	retryPendingStat bool
 }
 
 type liveActivityRetryEntry struct {
@@ -278,6 +279,7 @@ func (p *LiveActivityPoller) PollOnce(
 		if _, ok := attempted[fullID]; ok {
 			continue
 		}
+		attempted[fullID] = struct{}{}
 		stats.SessionLookups++
 		source, found, err := p.lookup(ctx, fullID)
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -308,6 +310,7 @@ func (p *LiveActivityPoller) PollOnce(
 		if _, ok := attempted[fullID]; ok {
 			continue
 		}
+		attempted[fullID] = struct{}{}
 		stats.SessionLookups++
 		source, found, err := p.lookup(ctx, fullID)
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -365,6 +368,10 @@ func (p *LiveActivityPoller) PollOnce(
 			pollErrors = append(pollErrors,
 				fmt.Errorf("stat live activity source %q: %w", entry.source.Path, err))
 			continue
+		}
+		if entry.retryPendingStat {
+			entry.refreshRetry = nil
+			entry.retryPendingStat = false
 		}
 		inode, device := getFileIdentity(entry.source.Path, info)
 		if entry.source.HasStoredStat &&
@@ -495,6 +502,7 @@ func (p *LiveActivityPoller) addHotRefreshRetry(
 		retry.target = target
 		retry.lastHint = lastHint
 	}
+	entry.retryPendingStat = false
 }
 
 func (p *LiveActivityPoller) setHot(
@@ -504,6 +512,7 @@ func (p *LiveActivityPoller) setHot(
 	lastActivity time.Time,
 ) {
 	source.Path = filepath.Clean(source.Path)
+	var refreshRetry *liveActivityRetryEntry
 	if entry := p.hot[fullID]; entry != nil {
 		if entry.lastActivity.After(lastActivity) {
 			lastActivity = entry.lastActivity
@@ -512,15 +521,20 @@ func (p *LiveActivityPoller) setHot(
 			retry.lastHint.After(lastActivity) {
 			lastActivity = retry.lastHint
 		}
+		refreshRetry = entry.refreshRetry
 	}
-	if retry := p.retries[fullID]; retry != nil &&
-		retry.lastHint.After(lastActivity) {
-		lastActivity = retry.lastHint
+	if retry := p.retries[fullID]; retry != nil {
+		if retry.lastHint.After(lastActivity) {
+			lastActivity = retry.lastHint
+		}
+		refreshRetry = retry
 	}
 	p.hot[fullID] = &liveActivityHotEntry{
-		target:       target,
-		source:       source,
-		lastActivity: lastActivity,
+		target:           target,
+		source:           source,
+		lastActivity:     lastActivity,
+		refreshRetry:     refreshRetry,
+		retryPendingStat: refreshRetry != nil,
 	}
 	delete(p.retries, fullID)
 }
