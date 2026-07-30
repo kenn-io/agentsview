@@ -97,6 +97,59 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	assert.Len(t, result.Result.Messages, 1)
 }
 
+func TestCodexActivityHintsUseConfiguredRootParent(t *testing.T) {
+	base := t.TempDir()
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{
+		filepath.Join(base, "sessions"),
+		filepath.Join(base, "archived_sessions"),
+		"s3://bucket/archive/sessions",
+	}})
+	require.True(t, ok)
+
+	hints := provider.(ActivityHintProvider)
+	sources, err := hints.ActivityHintSources(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []ActivityHintSource{{
+		Path: filepath.Join(base, "history.jsonl"),
+	}}, sources)
+}
+
+func TestCodexActivityHintDecodesIdentityWithoutPrompt(t *testing.T) {
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots: []string{t.TempDir()},
+	})
+	require.True(t, ok)
+
+	hint, accepted := provider.(ActivityHintProvider).DecodeActivityHint(
+		[]byte(`{"session_id":"019f0000-0000-7000-8000-000000000001",` +
+			`"ts":1785376202,"text":"private prompt sentinel"}`),
+	)
+
+	assert.True(t, accepted)
+	assert.Equal(t, ActivityHint{
+		RawSessionID: "019f0000-0000-7000-8000-000000000001",
+		Timestamp:    time.Unix(1785376202, 0).UTC(),
+	}, hint)
+}
+
+func TestCodexActivityHintRejectsInvalidRecords(t *testing.T) {
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots: []string{t.TempDir()},
+	})
+	require.True(t, ok)
+	hints := provider.(ActivityHintProvider)
+
+	for _, line := range []string{
+		`{`,
+		`{"session_id":"","ts":1785376202}`,
+		`{"session_id":"not-a-uuid","ts":1785376202}`,
+		`{"session_id":"019f0000-0000-7000-8000-000000000001","ts":0}`,
+	} {
+		_, accepted := hints.DecodeActivityHint([]byte(line))
+		assert.Falsef(t, accepted, "line %q", line)
+	}
+}
+
 func TestCodexProviderForceParseReloadsSameStatSessionIndex(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")

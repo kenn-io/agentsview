@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	ProviderFeatureFingerprint = "fingerprint"
-	ProviderFeatureParse       = "parse"
-	ProviderFeatureWatchRoots  = "watch roots"
+	ProviderFeatureFingerprint   = "fingerprint"
+	ProviderFeatureParse         = "parse"
+	ProviderFeatureWatchRoots    = "watch roots"
+	ProviderFeatureActivityHints = "activity hints"
 )
 
 // ErrUnsupportedProviderFeature identifies optional provider behavior that is
@@ -347,6 +348,44 @@ type WatchRoot struct {
 	IncludeGlobs []string
 	ExcludeGlobs []string
 	DebounceKey  string
+}
+
+// ActivityHintSource is one bounded append-only signal a provider exposes to
+// identify sessions with newly submitted activity.
+type ActivityHintSource struct {
+	Path string
+}
+
+// ActivityHint identifies one recently active provider-native session.
+// Raw prompt content is intentionally absent from this cross-package contract.
+type ActivityHint struct {
+	RawSessionID string
+	Timestamp    time.Time
+}
+
+// ActivityHintProvider owns activity-hint path derivation and record decoding.
+// Scheduling, cursors, and retention remain sync-layer responsibilities.
+type ActivityHintProvider interface {
+	ActivityHintSources(context.Context) ([]ActivityHintSource, error)
+	DecodeActivityHint([]byte) (ActivityHint, bool)
+}
+
+// ResolveActivityHintProvider returns the optional activity-hint contract only
+// when the provider explicitly advertises it.
+func ResolveActivityHintProvider(
+	provider Provider,
+) (ActivityHintProvider, bool, error) {
+	if provider.Capabilities().Source.ActivityHints != CapabilitySupported {
+		return nil, false, nil
+	}
+	hints, ok := provider.(ActivityHintProvider)
+	if !ok {
+		return nil, false, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureActivityHints,
+		}
+	}
+	return hints, true, nil
 }
 
 // ChangedPathRequest is passed back to providers for authoritative changed-path

@@ -52,6 +52,7 @@ type SourceCapabilities struct {
 	StreamingDiscovery   CapabilitySupport
 	WatchSources         CapabilitySupport
 	WatchRoots           CapabilitySupport
+	ActivityHints        CapabilitySupport
 	ClassifyChangedPath  CapabilitySupport
 	StoredSourceHints    CapabilitySupport
 	FindSource           CapabilitySupport

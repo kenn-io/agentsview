@@ -2,14 +2,17 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 var _ Provider = (*codexProvider)(nil)
+var _ ActivityHintProvider = (*codexProvider)(nil)
 
 type codexProviderFactory struct {
 	def         AgentDef
@@ -60,6 +63,65 @@ func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) 
 
 func (p *codexProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
+}
+
+func (p *codexProvider) ActivityHintSources(
+	ctx context.Context,
+) ([]ActivityHintSource, error) {
+	seen := make(map[string]struct{}, len(p.Config.Roots))
+	sources := make([]ActivityHintSource, 0, len(p.Config.Roots))
+	for _, root := range p.Config.Roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(root, "s3://") {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(filepath.Clean(root)), "history.jsonl")
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		sources = append(sources, ActivityHintSource{Path: path})
+	}
+	return sources, nil
+}
+
+func (p *codexProvider) DecodeActivityHint(line []byte) (ActivityHint, bool) {
+	var row struct {
+		SessionID string `json:"session_id"`
+		Timestamp int64  `json:"ts"`
+	}
+	if json.Unmarshal(line, &row) != nil ||
+		!isCodexHistorySessionID(row.SessionID) ||
+		row.Timestamp <= 0 {
+		return ActivityHint{}, false
+	}
+	return ActivityHint{
+		RawSessionID: row.SessionID,
+		Timestamp:    time.Unix(row.Timestamp, 0).UTC(),
+	}, true
+}
+
+func isCodexHistorySessionID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i, c := range id {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') ||
+				(c >= 'a' && c <= 'f') ||
+				(c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (p *codexProvider) SourcesForChangedPath(
@@ -811,6 +873,7 @@ func codexProviderCapabilities() Capabilities {
 			DiscoverSources:      CapabilitySupported,
 			StreamingDiscovery:   CapabilitySupported,
 			WatchSources:         CapabilitySupported,
+			ActivityHints:        CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,
 			CompositeFingerprint: CapabilitySupported,
