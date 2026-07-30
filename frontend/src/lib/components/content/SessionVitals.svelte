@@ -344,11 +344,8 @@
               {#if session.cwd}
                 <div class="context-tooltip">
                   <Tooltip text={session.cwd} focusable>
-                    <div
-                      class="context-value context-value--path"
-                      dir="rtl"
-                    >
-                      {session.cwd}
+                    <div class="context-value context-value--path">
+                      <bdi dir="ltr">{session.cwd}</bdi>
                     </div>
                   </Tooltip>
                 </div>
@@ -793,6 +790,7 @@
   }
 
   .context-value--path {
+    direction: rtl;
     text-align: left;
   }
 

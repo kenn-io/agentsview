@@ -449,6 +449,7 @@ func createDurationShowcaseFixture(
 		Project:          project,
 		Machine:          "test-machine",
 		Agent:            "claude",
+		Cwd:              "/workspace/مشروع/.worktrees/שלום-feature-with-a-long-checkout-name",
 		StartedAt:        new(t0.Format(time.RFC3339Nano)),
 		EndedAt:          new(endParent.Format(time.RFC3339Nano)),
 		MessageCount:     len(parentMessages),

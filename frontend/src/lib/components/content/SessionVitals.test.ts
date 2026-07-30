@@ -140,11 +140,6 @@ describe("SessionVitals", () => {
     expect(
       document.querySelector('[title="agentsview"]'),
     ).not.toBeNull();
-    const worktreeValue = rows[1]?.querySelector<HTMLElement>(
-      ".context-value--path",
-    );
-    expect(worktreeValue).not.toBeNull();
-    expect(worktreeValue?.dir).toBe("rtl");
   });
 
   it("reveals the full worktree path in a tooltip", async () => {

@@ -12,6 +12,8 @@ import { test, expect, type Page } from "@playwright/test";
 // shape needed to cover all four section interactions.
 
 const SHOWCASE = "test-session-duration-showcase";
+const SHOWCASE_WORKTREE =
+  "/workspace/مشروع/.worktrees/שלום-feature-with-a-long-checkout-name";
 
 // The conversation scrolls inside `.message-list-scroll`
 // (`SessionsPage.scroller`). The plan's sketch referenced
@@ -60,6 +62,66 @@ test.describe("Session Vital Signs", () => {
     await expect(
       page.locator(".v-section .v-h", { hasText: "Calls" }),
     ).toBeVisible();
+  });
+
+  test("keeps an absolute mixed-direction worktree path ordered", async ({
+    page,
+  }) => {
+    await gotoShowcase(page);
+
+    const path = page.locator(".context-value--path");
+    await expect(path).toHaveText(SHOWCASE_WORKTREE);
+
+    const layout = await path.evaluate((element, expectedPath) => {
+      const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+      );
+      let textNode = walker.nextNode();
+      while (
+        textNode &&
+        !textNode.textContent?.includes(expectedPath)
+      ) {
+        textNode = walker.nextNode();
+      }
+      if (!textNode?.textContent) {
+        throw new Error("worktree path text node not found");
+      }
+
+      const start = textNode.textContent.indexOf(expectedPath);
+      const firstCharacter = document.createRange();
+      firstCharacter.setStart(textNode, start);
+      firstCharacter.setEnd(textNode, start + 1);
+      const lastCharacter = document.createRange();
+      lastCharacter.setStart(
+        textNode,
+        start + expectedPath.length - 1,
+      );
+      lastCharacter.setEnd(textNode, start + expectedPath.length);
+
+      const container = element.getBoundingClientRect();
+      const first = firstCharacter.getBoundingClientRect();
+      const last = lastCharacter.getBoundingClientRect();
+      return {
+        overflows: element.scrollWidth > element.clientWidth,
+        containerLeft: container.left,
+        containerRight: container.right,
+        firstRight: first.right,
+        lastLeft: last.left,
+        lastRight: last.right,
+      };
+    }, SHOWCASE_WORKTREE);
+
+    expect(layout.overflows).toBe(true);
+    expect(layout.firstRight).toBeLessThanOrEqual(
+      layout.containerLeft,
+    );
+    expect(layout.lastLeft).toBeGreaterThanOrEqual(
+      layout.containerLeft,
+    );
+    expect(layout.lastRight).toBeLessThanOrEqual(
+      layout.containerRight,
+    );
   });
 
   test("slowest-call link scrolls the conversation", async ({
